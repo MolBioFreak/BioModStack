@@ -75,10 +75,7 @@ workflow PROTEIN_DESIGN {
 
     def migratedDirectModes = [
         'antibody_child': 'workflows/antibody_child.nf',
-        'antibody_denovo_pipeline': 'workflows/antibody_denovo.nf',
-        'antibody_refinement_pipeline': 'workflows/antibody_denovo.nf',
-        'bindcraft': 'workflows/bindcraft_design.nf',
-        'bindcraft_child': 'workflows/bindcraft_design.nf',
+
         'fampnn_child': 'workflows/fampnn_child.nf',
         'maturation_child': 'workflows/maturation_child.nf',
         'ppiflow_generator': 'workflows/ppiflow_generator_design.nf',
@@ -294,38 +291,19 @@ workflow PROTEIN_DESIGN {
 
             FilterBoltzGen(RunBoltzGen.out.pdbs, RunBoltzGen.out.jsons)
 
-            if (params.run_boltzgen_only) {
-                println("BoltzGen standalone mode complete. Exiting.")
-                FilterBoltzGen.out.pdbs
-                    .flatten()
-                    .collect()
-                    .ifEmpty(file("${params.code_root}/lib/placeholder.pdb"))
-                    .set { final_pdbs }
+            FilterBoltzGen.out.pdbs
+                .flatten()
+                .collect()
+                .set { filt_seq_pdbs }
 
-                rfd_tuples = Channel.empty()
-                filt_rfd_pdbs_jsons = Channel.empty()
-                filt_seq_pdbs = Channel.empty()
-                analysis_input_pdbs = Channel.empty()
-                seq_tuple = Channel.empty()
+            FilterBoltzGen.out.pdbs
+                .flatten()
+                .collect()
+                .set { analysis_input_pdbs }
 
-                params.skip_rfd_seq = true
-                params.skip_rfd_seq_pred = true
-            }
-            else {
-                FilterBoltzGen.out.pdbs
-                    .flatten()
-                    .collect()
-                    .set { filt_seq_pdbs }
-
-                FilterBoltzGen.out.pdbs
-                    .flatten()
-                    .collect()
-                    .set { analysis_input_pdbs }
-
-                rfd_tuples = Channel.empty()
-                filt_rfd_pdbs_jsons = Channel.empty()
-                seq_tuple = Channel.empty()
-            }
+            rfd_tuples = Channel.empty()
+            filt_rfd_pdbs_jsons = Channel.empty()
+            seq_tuple = Channel.empty()
         }
     }
     else if (params.skip_rfd & !params.skip_rfd_seq & !params.skip_rfd_seq_pred) {
@@ -585,7 +563,7 @@ workflow PROTEIN_DESIGN {
             error("Not a valid structure prediction method. Choose from: af2, boltz, rf3, protenix")
         }
     }
-    else if (!params.run_rfd_only && !params.run_boltzgen_only && params.diffusion_method != 'boltzgen') {
+    else if (!params.run_rfd_only && params.diffusion_method != 'boltzgen') {
         println("Skipping Structure Prediction stage as skip_rfd_seq_pred=true.")
         println("Running Analysis Stage only")
         def skipInputDir = params.get('skip_input_dir')
@@ -628,7 +606,7 @@ workflow PROTEIN_DESIGN {
         println("Skipping Structure Prediction stage for BoltzGen diffusion output.")
     }
     else {
-        println("Skipping Structure Prediction stage as run_rfd_only=true or run_boltzgen_only=true.")
+        println("Skipping Structure Prediction stage as run_rfd_only=true.")
     }
 
     if (!params.run_rfd_only) {
@@ -640,7 +618,7 @@ workflow PROTEIN_DESIGN {
             .set { final_pdbs }
     }
     else {
-        println("Skipping Analysis stage as run_rfd_only=true or run_boltzgen_only=true.")
+        println("Skipping Analysis stage as run_rfd_only=true.")
     }
 
     channel.topic('metadata_ch_fold')
@@ -659,13 +637,6 @@ workflow PROTEIN_DESIGN {
     if (params.run_rfd_only) {
         countPdbFiles(rfd_tuples).set { rfd_count }
         countPdbFiles(final_pdbs).set { filter_rfd_count }
-        seq_count = 0
-        filter_seq_count = 0
-        filter_pred_count = 0
-    }
-    else if (params.run_boltzgen_only) {
-        rfd_count = 0
-        filter_rfd_count = 0
         seq_count = 0
         filter_seq_count = 0
         filter_pred_count = 0

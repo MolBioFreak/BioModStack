@@ -1,0 +1,153 @@
+from __future__ import annotations
+
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException
+
+from services.bioxp.errors import ConnectionStateError, ProfileStoreError, TargetPolicyError
+from services.bioxp.connection import mask_target_url
+from services.bioxp.models import BioXpProfile
+from services.bioxp.runtime import BioXpRuntime
+
+from .dependencies import (
+    get_bioxp_runtime,
+    mutations_enabled,
+    operator_token_configured,
+    require_bioxp_mutation_access,
+)
+
+router = APIRouter(dependencies=[Depends(require_bioxp_mutation_access)])
+
+
+def _public_snapshot(snapshot: Any) -> dict[str, Any]:
+    payload = snapshot.model_dump(mode="json")
+    payload["target_url"] = payload.pop("masked_target")
+    payload["fresh"] = payload.pop("observation_fresh")
+    return payload
+
+
+def _safe_profile(runtime: BioXpRuntime) -> dict[str, Any]:
+    try:
+        profile = runtime.connection.load_profile()
+    except ProfileStoreError as exc:
+        return {
+            "configured": True,
+            "valid": False,
+            "display_name": None,
+            "target_url": None,
+            "detail": str(exc),
+        }
+    if profile is None:
+        return {
+            "configured": False,
+            "valid": True,
+            "display_name": None,
+            "target_url": None,
+        }
+    return {
+        "configured": True,
+        "valid": True,
+        "display_name": profile.display_name,
+        "target_url": mask_target_url(profile.api_url),
+    }
+
+
+@router.get("/profile")
+async def get_profile(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str, Any]:
+    return _safe_profile(runtime)
+
+
+@router.put("/profile")
+async def put_profile(
+    profile: BioXpProfile,
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+) -> dict[str, Any]:
+    try:
+        await runtime.connection.save_profile(profile)
+    except (TargetPolicyError, ProfileStoreError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _safe_profile(runtime)
+
+
+@router.delete("/profile")
+async def delete_profile(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str, bool]:
+    await runtime.connection.forget_profile()
+    return {"forgotten": True}
+
+
+@router.get("/status")
+async def get_status(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str, Any]:
+    snapshot = runtime.connection.snapshot()
+    available: list[str] = []
+    unavailable: dict[str, str] = {}
+    for name, definition in runtime.commands.registry.items():
+        reason: str | None = None
+        if not definition.enabled or definition.route_key is None:
+            reason = definition.disabled_reason or "robot mapping is disabled"
+        elif not mutations_enabled():
+            reason = "mutations are disabled"
+        elif not operator_token_configured():
+            reason = "operator credential is not configured"
+        elif not snapshot.active:
+            reason = "connection is not active"
+        elif snapshot.command_active:
+            reason = "another normal command is active"
+        elif definition.requires_fresh_observation and snapshot.observation_fresh is not True:
+            reason = "fresh readiness evidence is unavailable"
+        elif definition.requires_runtime_ready and snapshot.runtime_ready is not True:
+            reason = "runtime is not ready"
+        elif definition.requires_hardware_ready and snapshot.hardware_ready is not True:
+            reason = "hardware is not ready"
+        elif definition.required_capability not in snapshot.capabilities:
+            reason = f"capability {definition.required_capability!r} is unavailable"
+        if reason is None:
+            available.append(name)
+        else:
+            unavailable[name] = reason
+    available_controls: list[str] = []
+    if snapshot.active and mutations_enabled() and operator_token_configured():
+        available_controls.append("emergency_stop")
+    return {
+        "connection": _public_snapshot(snapshot),
+        "available_commands": available,
+        "available_controls": available_controls,
+        "unavailable_commands": unavailable,
+        "emergency_stop": {
+            "delivery_available": "emergency_stop" in available_controls,
+            "physical_effect_verifiable": False,
+        },
+        "startup_warnings": list(runtime.startup_warnings),
+        "legacy_job_migration": runtime.legacy_jobs.model_dump(),
+    }
+
+
+@router.post("/connection/connect")
+async def connect(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str, Any]:
+    try:
+        snapshot = await runtime.connection.connect()
+    except (ConnectionStateError, ProfileStoreError, TargetPolicyError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _public_snapshot(snapshot)
+
+
+@router.post("/connection/disconnect")
+async def disconnect(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str, Any]:
+    return _public_snapshot(await runtime.connection.disconnect())
+
+
+@router.post("/connection/probe")
+async def probe(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str, Any]:
+    try:
+        snapshot = await runtime.connection.probe()
+    except (ConnectionStateError, TargetPolicyError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _public_snapshot(snapshot)
+
+
+@router.get("/logs")
+async def get_local_logs(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str, Any]:
+    return {
+        "scope": "bms-local-command-history",
+        "remote_logs_collected": False,
+        "entries": [entry.model_dump(mode="json") for entry in runtime.commands.history()],
+    }

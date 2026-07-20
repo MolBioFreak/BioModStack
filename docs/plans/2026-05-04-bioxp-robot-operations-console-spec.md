@@ -1,5 +1,11 @@
 # BioXP Robot Operations Console Spec
 
+> **SUPERSEDED — HISTORICAL ONLY.** This proxy/commissioning-console proposal is
+> not the active BioXP architecture. The implemented contract is
+> [`../BioXP_Compact_Control_Plane.md`](../BioXP_Compact_Control_Plane.md), which
+> deliberately omits arbitrary hardware proxy, commissioning, motion, SSH, and
+> robot-lifecycle authority.
+
 > **For Hermes:** Use subagent-driven-development skill to implement approved slices task-by-task.
 
 **Goal:** Build a usable BMS BioXP service/commissioning console on top of the robot-local BioXP API, exposing named safe operations instead of buried raw primitives.

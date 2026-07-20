@@ -4,7 +4,7 @@
  * Clean rewrite replacing OVE with modern component architecture.
  */
 
-import { useState, useEffect, useCallback, useMemo, useRef, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { anyToJson } from '@teselagen/bio-parsers';
 import { SequenceViewer, type ColorPaletteName } from './SequenceViewer';
 import { DEFAULT_VISIBILITY } from './sequenceViewerConstants';
@@ -15,8 +15,35 @@ import { useSequenceOperations } from './hooks/useSequenceOperations';
 import { AlignmentPanel, AssemblyPanel, DigestPanel, HistoryPanel, PCRPanel, PrimerPanel, RnaStructurePanel, FeaturePanel, EditPanel, SearchPanel } from './panels';
 import { AutoAnnotatePanel, type AutoAnnotateSettings } from './AutoAnnotatePanel';
 import { GCContentTrack } from './GCContentTrack';
+import {
+    SelectionActionDialog,
+    type SelectionActionKind,
+    type SelectionFeatureInput,
+    type SelectionPrimerInput,
+} from './SelectionActionDialog';
 import { MolecularInputModal } from './MolecularInputModal';
 import { RnaStructureViewer, type RnaStructureDisplayMode } from './RnaStructureViewer';
+import { getFeatureColor, normalizeFeatureType } from './featureCatalog';
+import {
+    didFocusLeaveContainer,
+    moveMenuFocus,
+    type MenuNavigationKey,
+} from './utils/focusManagement';
+import { clearFeatureAnnotations } from './utils/annotations';
+import {
+    assertAnnotationTopology,
+    resolveAnnotationAlignmentPolicy,
+    resolveAnnotationSequenceAlignment,
+    transformFeatureForAlignment,
+} from './utils/annotationTransfer';
+import {
+    assertAnnotationArtifactChecksum,
+    fetchAnnotationSourceStatus,
+    retrieveAddgeneAnnotationSource,
+    retrieveNcbiAnnotationSource,
+    type AnnotationSourceProvenance,
+    type AnnotationSourceStatus,
+} from './utils/annotationSources';
 import { loadDemoPlasmids } from './demoConstructs';
 import {
     calculatePrimerTm,
@@ -43,16 +70,32 @@ import { EMPTY_SEQUENCE } from './types';
 import {
     calculateGcPercent,
     displayStrandForMoleculeOrientation,
+    hasExplicitNucleotideStrandednessMetadata,
     inferNucleotideMoleculeMetadataFromParsedRecord,
     inferSequenceTypeFromSequence,
     moleculeLabelForNucleotide,
     normalizeSequenceForType,
-    reverseComplementSequence,
     sequenceUnitLabel,
     type NucleotideDisplayStrand,
 } from './utils/nucleotides';
 import { findOpenReadingFrames } from './utils/orfs';
-import { dedupeFeatures, featureBounds } from './utils/features';
+import {
+    dedupeFeatures,
+    featureBounds,
+    featureLength,
+    featureOverlapLength,
+} from './utils/features';
+import {
+    buildSelectionPrimer,
+    buildPrimerTmRequest,
+    createSelectionSnapshot,
+    getPrimerHighlightRegions,
+    normalizeStoredPrimerPlacement,
+    prepareSelectionPrimer,
+    resolvePersistentSelection,
+    type SelectionSnapshot,
+} from './utils/selectionActions';
+import { applyImportedTopology, type ImportTopology } from './utils/topology';
 import {
     MOLBIO_LIBRARY_PANEL_DEFAULT_WIDTH,
     clampMolBioPanelWidth,
@@ -72,7 +115,6 @@ interface SequenceLibraryProps {
     selectedId: string | null;
     onSelect: (id: string) => void;
     onRefresh: () => void;
-    onOpenModal: () => void;
     onLoadDemo: (demo: SequenceData) => void;
     loading: boolean;
     width: number;
@@ -85,7 +127,6 @@ function SequenceLibrary({
     selectedId,
     onSelect,
     onRefresh,
-    onOpenModal,
     onLoadDemo,
     loading,
     width
@@ -112,18 +153,6 @@ function SequenceLibrary({
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                     </svg>
                 </button>
-            </div>
-
-            <div className="p-3 border-b border-slate-700 space-y-3">
-                <button
-                    onClick={onOpenModal}
-                    className="w-full rounded-xl bg-cyan-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-cyan-500"
-                >
-                    Open Molecular Input
-                </button>
-                <div className="rounded-xl border border-slate-700 bg-slate-800/50 p-3 text-xs text-slate-400">
-                    Open saved constructs, import files, paste sequence, or pull primers.
-                </div>
             </div>
 
             <div className="flex-1 overflow-y-auto">
@@ -158,7 +187,7 @@ function SequenceLibrary({
                 {sequences.length === 0 ? (
                     <div className="p-4 text-center text-slate-500 text-sm">
                         <p>No recent constructs</p>
-                        <p className="mt-1 text-xs">Use the molecular input modal to search or create one</p>
+                        <p className="mt-1 text-xs">Use Acquire in the sequence toolbar to search or create one</p>
                     </div>
                 ) : (
                     sequences.map((seq) => (
@@ -251,23 +280,6 @@ function PanelTabs({ active, onChange, sequenceType }: PanelTabsProps) {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// FEATURE COLORS
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function getFeatureColor(type: string): string {
-    const colors: Record<string, string> = {
-        CDS: '#22c55e',
-        gene: '#3b82f6',
-        promoter: '#8b5cf6',
-        terminator: '#ef4444',
-        rep_origin: '#ec4899',
-        primer_bind: '#f59e0b',
-        misc_feature: '#6b7280'
-    };
-    return colors[type] || colors.misc_feature;
-}
-
 function normalizeFeatureList(features: Feature[]): Feature[] {
     return dedupeFeatures(features);
 }
@@ -284,8 +296,7 @@ function normalizeFeatureRecord(feature: Partial<Feature> & Record<string, Untyp
             start: Number(segment?.start ?? segment?.startIndex ?? segment?.rangeBegin ?? feature.start ?? 0),
             end: Number(segment?.end ?? segment?.endIndex ?? segment?.rangeEnd ?? feature.end ?? 0),
         }))
-        .filter((segment: { start: number; end: number }) => Number.isFinite(segment.start) && Number.isFinite(segment.end) && segment.end > segment.start)
-        .sort((left: { start: number; end: number }, right: { start: number; end: number }) => left.start - right.start || left.end - right.end);
+        .filter((segment: { start: number; end: number }) => Number.isFinite(segment.start) && Number.isFinite(segment.end) && segment.end > segment.start);
 
     const start = typeof feature.start === 'number'
         ? feature.start
@@ -294,14 +305,15 @@ function normalizeFeatureRecord(feature: Partial<Feature> & Record<string, Untyp
         ? feature.end
         : (segments[segments.length - 1]?.end ?? 0);
 
+    const normalizedType = normalizeFeatureType(feature.type || 'misc_feature');
     const normalized: Feature = {
         id: feature.id || fallbackId,
         name: feature.name || feature.type || 'feature',
-        type: feature.type || 'misc_feature',
+        type: normalizedType,
         start,
         end,
         strand: feature.strand === -1 ? -1 : 1,
-        color: feature.color || getFeatureColor(feature.type || 'misc_feature'),
+        color: feature.color || getFeatureColor(normalizedType),
         description: feature.description,
         notes: feature.notes,
         qualifiers: feature.qualifiers || feature.notes,
@@ -317,44 +329,21 @@ function normalizeFeatureRecord(feature: Partial<Feature> & Record<string, Untyp
     };
 }
 
-function normalizePrimerRecord(primer: Partial<Primer> & Record<string, UntypedApiValue>, fallbackId: string): Primer {
-    type PrimerSite = NonNullable<Primer['sites']>[number];
-    const rawSites = Array.isArray(primer.sites) ? primer.sites : [];
-    const sites: PrimerSite[] = rawSites
-        .map((site: UntypedApiValue): PrimerSite | null => {
-            const rawStart = Number(site?.start ?? site?.bindingSiteStart ?? primer.start ?? 0);
-            const rawEnd = Number(site?.end ?? site?.bindingSiteEnd ?? primer.end ?? 0);
-            const start = site?.bindingSiteStart != null && site?.start == null ? Math.max(0, rawStart - 1) : rawStart;
-            const end = rawEnd;
-            const strand = site?.strand === -1 || String(site?.strand || '').toLowerCase() === 'bottom' ? -1 : 1;
-            if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
-                return null;
-            }
-            const tm = Number.isFinite(site?.tm)
-                ? Number(site.tm)
-                : Number.isFinite(site?.meltingTemperature)
-                    ? Number(site.meltingTemperature)
-                    : undefined;
-            const note = typeof site?.note === 'string' ? site.note : undefined;
-            return {
-                start,
-                end,
-                strand: strand as 1 | -1,
-                ...(tm !== undefined ? { tm } : {}),
-                ...(note !== undefined ? { note } : {}),
-            };
-        })
-        .filter((site): site is PrimerSite => site !== null);
-
-    const firstSite = sites[0] || null;
+function normalizePrimerRecord(
+    primer: Partial<Primer> & Record<string, UntypedApiValue>,
+    fallbackId: string,
+    sequenceLength: number,
+    circular: boolean,
+): Primer {
+    const placement = normalizeStoredPrimerPlacement(primer, sequenceLength, circular);
     return {
         id: primer.id || fallbackId,
         name: primer.name || 'Primer',
         sequence: (primer.sequence || '').toUpperCase(),
         sequenceType: primer.sequenceType || primer.sequence_type || inferSequenceTypeFromSequence(primer.sequence || ''),
-        start: firstSite?.start ?? primer.start ?? 0,
-        end: firstSite?.end ?? primer.end ?? 0,
-        strand: firstSite?.strand ?? (primer.strand === -1 ? -1 : 1),
+        start: placement.start,
+        end: placement.end,
+        strand: placement.strand,
         tm: primer.tm,
         gc_percent: primer.gc_percent,
         tm_algorithm: primer.tm_algorithm,
@@ -362,7 +351,7 @@ function normalizePrimerRecord(primer: Partial<Primer> & Record<string, UntypedA
         tm_settings: primer.tm_settings,
         notes: primer.notes,
         provenance: primer.provenance,
-        sites: sites.length > 0 ? sites : undefined,
+        sites: placement.sites,
     };
 }
 
@@ -383,6 +372,8 @@ function sequenceDataFromApiRecord(seq: NucleotideSequenceResponse): SequenceDat
         primers: (seq.primers || []).map((primer: Primer, index: number) => normalizePrimerRecord(
             primer as Primer & Record<string, UntypedApiValue>,
             primer.id || `loaded_primer_${index}`,
+            seq.sequence.length,
+            seq.is_circular,
         )),
         translations: [],
         analysisTracks: (seq.analysis_tracks || []).map(trackFromApi),
@@ -463,14 +454,15 @@ function sequencePayloadFromData(sequenceData: SequenceData): NucleotideSequence
     };
 }
 
-interface SelectionRange {
-    start: number;
-    end: number;
-}
-
 interface QuickAddMenuState {
     x: number;
     y: number;
+    snapshot: SelectionSnapshot | null;
+}
+
+interface SelectionActionState {
+    action: SelectionActionKind;
+    snapshot: SelectionSnapshot;
 }
 
 interface WorkspaceTab {
@@ -537,52 +529,6 @@ function WorkspaceTabs({
     );
 }
 
-function getSelectionRanges(
-    selection: SelectionInfo | null,
-    sequenceLength: number,
-    circular: boolean,
-): SelectionRange[] {
-    if (!selection || sequenceLength <= 0) {
-        return [];
-    }
-
-    const rawStart = Math.max(0, Math.min(selection.start, sequenceLength));
-    const rawEnd = Math.max(0, Math.min(selection.end, sequenceLength));
-    if (rawStart === rawEnd) {
-        return [];
-    }
-
-    if (!circular) {
-        return [{ start: Math.min(rawStart, rawEnd), end: Math.max(rawStart, rawEnd) }];
-    }
-
-    if (selection.clockwise && rawStart > rawEnd) {
-        return [
-            { start: rawStart, end: sequenceLength },
-            { start: 0, end: rawEnd },
-        ];
-    }
-
-    if (rawStart > rawEnd) {
-        return [
-            { start: rawStart, end: sequenceLength },
-            { start: 0, end: rawEnd },
-        ];
-    }
-
-    return [{ start: rawStart, end: rawEnd }];
-}
-
-function formatSelectionLabel(ranges: SelectionRange[], circular: boolean): string {
-    if (ranges.length === 0) {
-        return 'No selection';
-    }
-    if (ranges.length === 1) {
-        return `${ranges[0].start + 1} - ${ranges[0].end}${circular ? ' (circular)' : ''}`;
-    }
-    return `${ranges[0].start + 1} - ${ranges[0].end} + ${ranges[1].start + 1} - ${ranges[1].end}`;
-}
-
 function sourceDisplayStrandForSequenceData(sequenceData: SequenceData): NucleotideDisplayStrand {
     if (sequenceData.sequenceType === 'protein') {
         return 'plus';
@@ -603,7 +549,12 @@ export function MolBioToolkitV2() {
     const [activePanel, setActivePanel] = useState<ActivePanel>('view');
     const [selection, setSelection] = useState<SelectionInfo | null>(null);
     const [quickAddMenu, setQuickAddMenu] = useState<QuickAddMenuState | null>(null);
-    const [quickAddBusy, setQuickAddBusy] = useState<'forward_primer' | 'reverse_primer' | 'feature' | null>(null);
+    const quickAddMenuRef = useRef<HTMLDivElement | null>(null);
+    const quickAddInvokerRef = useRef<HTMLDivElement | null>(null);
+    const toolkitRootRef = useRef<HTMLDivElement | null>(null);
+    const [selectionAction, setSelectionAction] = useState<SelectionActionState | null>(null);
+    const [quickAddBusy, setQuickAddBusy] = useState<SelectionActionKind | null>(null);
+    const [selectionActionError, setSelectionActionError] = useState<string | null>(null);
     const [highlightedRegions, setHighlightedRegions] = useState<HighlightedRegion[]>([]);
     const [isDirty, setIsDirty] = useState(false);
     const [colorPalette, setColorPalette] = useState<ColorPaletteName>('classic');
@@ -812,11 +763,15 @@ export function MolBioToolkitV2() {
     // Auto-compute ORFs for display only. Keep them out of persisted undo history.
     useEffect(() => {
         if (sequenceData.sequence && sequenceData.sequence.length > 100) {
-            setDerivedTranslations(findOpenReadingFrames(sequenceData.sequence, 100));
+            setDerivedTranslations(findOpenReadingFrames(
+                sequenceData.sequence,
+                100,
+                sequenceData.circular,
+            ));
         } else {
             setDerivedTranslations([]);
         }
-    }, [sequenceData.sequence]);
+    }, [sequenceData.circular, sequenceData.sequence]);
 
     const viewerSequenceData = useMemo(() => ({
         ...sequenceData,
@@ -919,7 +874,7 @@ export function MolBioToolkitV2() {
     }, [handlePasteSequence]);
 
     // Import file using Teselagen bio-parsers
-    const handleImport = useCallback(async (file: File) => {
+    const handleImport = useCallback(async (file: File, topology: ImportTopology = 'preserve') => {
         try {
             const result = await anyToJson(file, {
                 fileName: file.name,
@@ -942,17 +897,23 @@ export function MolBioToolkitV2() {
             }
 
             const normalizedSequence = normalizeSequenceForType(parsed.sequence || '', inferredType);
+            const importedCircular = applyImportedTopology(Boolean(parsed.circular), topology);
             const sequenceData: SequenceData = {
                 name: parsed.name || file.name.replace(/\.[^.]+$/, ''),
                 description: parsed.description || undefined,
                 sequence: normalizedSequence,
-                circular: parsed.circular ?? false,
+                circular: importedCircular,
                 sequenceType: inferredType,
                 moleculeStrandedness: moleculeMetadata.moleculeStrandedness,
                 moleculeOrientation: moleculeMetadata.moleculeOrientation,
                 moleculeLabel: moleculeMetadata.moleculeLabel,
                 features: normalizeFeatureList((parsed.features || []).map((f: UntypedApiValue, i: number) => normalizeFeatureRecord(f, `f_${i}`))),
-                primers: (parsed.primers || []).map((p: UntypedApiValue, i: number) => normalizePrimerRecord(p, `p_${i}`)),
+                primers: (parsed.primers || []).map((p: UntypedApiValue, i: number) => normalizePrimerRecord(
+                    p,
+                    `p_${i}`,
+                    normalizedSequence.length,
+                    importedCircular,
+                )),
                 translations: [],
                 analysisTracks: [],
                 sourceFile: file.name,
@@ -1014,24 +975,102 @@ export function MolBioToolkitV2() {
         setVisibility(prev => ({ ...prev, [key]: !prev[key] }));
     }, []);
 
-    // Selection handler
+    // Keep a completed range stable across SeqViz cursor/mouse-up emissions.
     const handleSelection = useCallback((sel: SelectionInfo) => {
-        setSelection(sel);
-    }, []);
+        setSelection((current) => resolvePersistentSelection(
+            current,
+            sel,
+            sequenceData.sequence.length,
+        ));
+    }, [sequenceData.sequence.length]);
 
     const closeQuickAddMenu = useCallback(() => {
         setQuickAddMenu(null);
-        setQuickAddBusy(null);
     }, []);
 
-    const handleViewerContextMenu = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
-        event.preventDefault();
-        event.stopPropagation();
-        setQuickAddMenu({
-            x: event.clientX,
-            y: event.clientY,
+    const closeQuickAddMenuAndRestoreFocus = useCallback(() => {
+        setQuickAddMenu(null);
+        window.requestAnimationFrame(() => {
+            quickAddInvokerRef.current?.focus({ preventScroll: true });
         });
     }, []);
+
+    useEffect(() => {
+        if (!quickAddMenu) {
+            return;
+        }
+        const frame = window.requestAnimationFrame(() => {
+            quickAddMenuRef.current
+                ?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')
+                ?.focus();
+        });
+        return () => window.cancelAnimationFrame(frame);
+    }, [quickAddMenu]);
+
+    const handleQuickAddMenuKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            closeQuickAddMenuAndRestoreFocus();
+            return;
+        }
+        if (!['ArrowDown', 'ArrowUp', 'Home', 'End', 'Tab'].includes(event.key)) {
+            return;
+        }
+        const items = Array.from(
+            quickAddMenuRef.current
+                ?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [],
+        );
+        if (!items.length) {
+            return;
+        }
+        if (moveMenuFocus(
+            items,
+            document.activeElement as HTMLButtonElement,
+            event.key as MenuNavigationKey,
+            event.shiftKey,
+        )) {
+            event.preventDefault();
+        }
+    }, [closeQuickAddMenuAndRestoreFocus]);
+
+    const closeSelectionAction = useCallback(() => {
+        if (quickAddBusy) {
+            return;
+        }
+        setSelectionAction(null);
+        setSelectionActionError(null);
+    }, [quickAddBusy]);
+
+    const handleViewerContextMenu = useCallback((
+        event: ReactMouseEvent<HTMLDivElement> | ReactKeyboardEvent<HTMLDivElement>,
+    ) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const bounds = event.currentTarget.getBoundingClientRect();
+        const isPointerPosition = 'clientX' in event && event.clientX > 0 && event.clientY > 0;
+        quickAddInvokerRef.current = event.currentTarget;
+        setQuickAddMenu({
+            x: isPointerPosition ? event.clientX : bounds.left + Math.min(bounds.width / 2, 320),
+            y: isPointerPosition ? event.clientY : bounds.top + Math.min(bounds.height / 2, 240),
+            snapshot: createSelectionSnapshot(
+                selection,
+                sequenceData.sequence,
+                sequenceData.circular,
+            ),
+        });
+    }, [selection, sequenceData.circular, sequenceData.sequence]);
+
+    const openSelectionAction = useCallback((action: SelectionActionKind) => {
+        if (!quickAddMenu?.snapshot) {
+            return;
+        }
+        setSelectionAction({
+            action,
+            snapshot: quickAddMenu.snapshot,
+        });
+        setSelectionActionError(null);
+        setQuickAddMenu(null);
+    }, [quickAddMenu]);
 
     // Add feature handler
     const handleAddFeature = useCallback((feature: Feature) => {
@@ -1100,13 +1139,36 @@ export function MolBioToolkitV2() {
     // Auto-annotation state
     const [isAnnotating, setIsAnnotating] = useState(false);
     const [showAnnotatePanel, setShowAnnotatePanel] = useState(false);
+    const [annotationSourceStatus, setAnnotationSourceStatus] = useState<AnnotationSourceStatus | null>(null);
 
-    // View mode state (for circular view toggle)
+    useEffect(() => {
+        if (!showAnnotatePanel) return;
+        let cancelled = false;
+        setAnnotationSourceStatus(null);
+        void fetchAnnotationSourceStatus()
+            .then((status) => {
+                if (!cancelled) setAnnotationSourceStatus(status);
+            })
+            .catch(() => {
+                if (!cancelled) {
+                    setAnnotationSourceStatus({ ncbi: { available: true }, addgene: { available: false } });
+                }
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [showAnnotatePanel]);
+
+    // Display projection is workspace-local; every newly opened sequence starts in Both.
     type ViewMode = 'linear' | 'circular' | 'both';
     type ResizeHandleSide = 'left' | 'right';
     const initialViewportWidth = typeof window === 'undefined' ? 1440 : window.innerWidth;
-    const [viewMode, setViewMode] = useState<ViewMode>('both');
-    const effectiveViewMode: ViewMode = sequenceData.circular ? viewMode : 'linear';
+    const [workspaceViewModes, setWorkspaceViewModes] = useState<Record<string, ViewMode>>({});
+    const viewMode = workspaceViewModes[activeWorkspaceId] ?? 'both';
+    const setViewMode = useCallback((mode: ViewMode) => {
+        setWorkspaceViewModes((current) => ({ ...current, [activeWorkspaceId]: mode }));
+    }, [activeWorkspaceId]);
+    const effectiveViewMode: ViewMode = viewMode;
     const [isViewerFullscreen, setIsViewerFullscreen] = useState(false);
     const [isLibraryPanelCollapsed, setIsLibraryPanelCollapsed] = useState(() => shouldCollapseMolBioPanelsForViewport(initialViewportWidth));
     const [isToolPanelCollapsed, setIsToolPanelCollapsed] = useState(() => shouldCollapseMolBioPanelsForViewport(initialViewportWidth));
@@ -1120,7 +1182,7 @@ export function MolBioToolkitV2() {
     } | null>(null);
 
     // GC track visibility state
-    const [showGCTrack, setShowGCTrack] = useState(true);
+    const [showGCTrack, setShowGCTrack] = useState(false);
     const [primerTmOptions, setPrimerTmOptions] = useState<PrimerTmOptionsResponse | null>(null);
     const [primerTmSettings, setPrimerTmSettings] = useState<PrimerTmSettings>(DEFAULT_DNA_TM_SETTINGS);
     const viewerLayout = useMemo(() => resolveMolBioViewerLayout({
@@ -1280,6 +1342,155 @@ export function MolBioToolkitV2() {
         setShowAnnotatePanel(true);
     }, []);
 
+    const clearAnnotations = useCallback(() => {
+        const featureCount = sequenceData.features.length;
+        if (featureCount === 0) return;
+        setSequenceData(
+            clearFeatureAnnotations(sequenceData),
+            `Clear ${featureCount} feature annotations`,
+        );
+        setIsDirty(true);
+    }, [sequenceData, setSequenceData]);
+
+    const importAnnotationsFromFile = useCallback(async (
+        file: File,
+        publishedSource?: AnnotationSourceProvenance,
+    ): Promise<string> => {
+        if (!sequenceData.sequence) {
+            throw new Error('Open a construct before importing annotations.');
+        }
+        if (sequenceData.features.length > 0) {
+            throw new Error('This construct already has existing feature annotations. Use Clear all feature annotations before importing a published annotation set; source sets are never silently merged.');
+        }
+
+        const fileBytes = await file.arrayBuffer();
+        const sha256Hex = async (content: BufferSource): Promise<string> => {
+            const digest = await crypto.subtle.digest('SHA-256', content);
+            return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+        };
+        const sourceFileSha256 = await sha256Hex(fileBytes);
+        if (publishedSource) {
+            assertAnnotationArtifactChecksum(publishedSource, sourceFileSha256);
+        }
+
+        const result = await anyToJson(file, {
+            fileName: file.name,
+            inclusive1BasedStart: false,
+            jsonType: 'json',
+        });
+        const results = Array.isArray(result) ? result : [result];
+        const parserMessages = results.flatMap((entry) => Array.isArray(entry?.messages)
+            ? entry.messages.map((message: unknown) => String(message))
+            : []);
+        if (results.some((entry) => entry?.success === false)) {
+            const detail = parserMessages.length > 0 ? `: ${parserMessages.join('; ')}` : '';
+            throw new Error(`The annotated file parser reported a failure${detail}`);
+        }
+        const parsedRecords = results
+            .map((entry) => entry?.parsedSequence)
+            .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+        if (parsedRecords.length === 0) {
+            throw new Error('The annotated file could not be parsed.');
+        }
+        if (parsedRecords.length !== 1) {
+            throw new Error('Annotation transfer requires exactly one sequence record per file.');
+        }
+        const parsed = parsedRecords[0];
+
+        const moleculeMetadata = inferNucleotideMoleculeMetadataFromParsedRecord(parsed);
+        const importedType = parsed.isProtein ? 'protein' : moleculeMetadata.sequenceType;
+        if (importedType === 'protein' || importedType !== sequenceData.sequenceType) {
+            throw new Error(`Annotated-file molecule type (${importedType}) does not match the open ${sequenceData.sequenceType.toUpperCase()} construct.`);
+        }
+
+        const sourceStrandednessExplicit = hasExplicitNucleotideStrandednessMetadata(parsed);
+        const alignmentPolicy = resolveAnnotationAlignmentPolicy(
+            {
+                sequenceType: moleculeMetadata.sequenceType,
+                moleculeStrandedness: moleculeMetadata.moleculeStrandedness ?? 'unknown',
+                strandednessExplicit: sourceStrandednessExplicit,
+            },
+            {
+                sequenceType: sequenceData.sequenceType,
+                moleculeStrandedness: sequenceData.moleculeStrandedness ?? 'unknown',
+                strandednessExplicit: sequenceData.moleculeStrandedness !== undefined,
+            },
+        );
+        assertAnnotationTopology(Boolean(parsed.circular), sequenceData.circular);
+        const importedSequence = String(parsed.sequence || '');
+        const alignment = resolveAnnotationSequenceAlignment(
+            importedSequence,
+            sequenceData.sequence,
+            sequenceData.circular,
+            alignmentPolicy,
+        );
+        const parsedFeatures = parsed.features || [];
+        if (parsedFeatures.length === 0) {
+            throw new Error('The annotated file contains no feature annotations to transfer.');
+        }
+
+        const importedAt = new Date().toISOString();
+        const sourceSequenceSha256 = await sha256Hex(new TextEncoder().encode(importedSequence));
+        const targetSequenceSha256 = await sha256Hex(new TextEncoder().encode(sequenceData.sequence));
+        const importedFeatures = parsedFeatures.map((rawFeature: UntypedApiValue, index: number) => {
+            const fallbackId = `annotation_import_${Date.now()}_${index}`;
+            const normalized = normalizeFeatureRecord(rawFeature, fallbackId);
+            const transformed = transformFeatureForAlignment(normalized, alignment);
+            return {
+                ...transformed,
+                id: fallbackId,
+                provenance: {
+                    ...(transformed.provenance || {}),
+                    annotation_import: {
+                        provider: publishedSource?.provider ?? 'user_file',
+                        source_origin: publishedSource?.source_url ?? 'user_provided_origin_unknown',
+                        source_id: publishedSource?.source_id,
+                        published_source: publishedSource,
+                        source_file: file.name,
+                        source_media_type: file.type || 'application/octet-stream',
+                        source_byte_count: file.size,
+                        source_file_sha256: sourceFileSha256,
+                        source_sequence_sha256: sourceSequenceSha256,
+                        target_sequence_sha256: targetSequenceSha256,
+                        source_topology: parsed.circular ? 'circular' : 'linear',
+                        source_sequence_type: moleculeMetadata.sequenceType,
+                        source_strandedness: moleculeMetadata.moleculeStrandedness,
+                        source_strandedness_explicit: sourceStrandednessExplicit,
+                        parser: '@teselagen/bio-parsers:anyToJson',
+                        parser_version: '0.4.32',
+                        parser_messages: parserMessages,
+                        match_mode: alignment.mode,
+                        rotation_offset: alignment.rotation,
+                        reverse_complement: alignment.reverseComplement,
+                        imported_at: importedAt,
+                        source_feature_record: rawFeature,
+                    },
+                },
+            };
+        });
+
+        const transferredFeatures = normalizeFeatureList(importedFeatures)
+            .sort((left, right) => left.start - right.start || left.end - right.end || left.name.localeCompare(right.name));
+        setSequenceData({
+            ...sequenceData,
+            features: transferredFeatures,
+        }, `Import ${transferredFeatures.length} annotations from ${file.name}`);
+        setIsDirty(true);
+
+        const parserMessage = parserMessages.length > 0 ? ` Parser messages retained: ${parserMessages.length}.` : '';
+        return `Imported ${transferredFeatures.length} feature annotations from ${file.name} using ${alignment.mode.replaceAll('_', ' ')} sequence alignment.${parserMessage}`;
+    }, [sequenceData, setSequenceData]);
+
+    const retrieveNcbiAnnotations = useCallback(async (accession: string): Promise<string> => {
+        const retrieved = await retrieveNcbiAnnotationSource(accession);
+        return importAnnotationsFromFile(retrieved.file, retrieved.source);
+    }, [importAnnotationsFromFile]);
+
+    const retrieveAddgeneAnnotations = useCallback(async (plasmidId: string): Promise<string> => {
+        const retrieved = await retrieveAddgeneAnnotationSource(plasmidId);
+        return importAnnotationsFromFile(retrieved.file, retrieved.source);
+    }, [importAnnotationsFromFile]);
+
     // Run auto-annotation with user settings
     const runAutoAnnotate = useCallback(async (settings: AutoAnnotateSettings) => {
         if (!sequenceData.sequence) return;
@@ -1374,12 +1585,10 @@ export function MolBioToolkitV2() {
                     const sameType = existingF.type === newF.type;
                     if (!sameName || !sameType) return false;
 
-                    // Calculate position overlap
-                    const overlapStart = Math.max(existingF.start, newF.start);
-                    const overlapEnd = Math.min(existingF.end, newF.end);
-                    const overlapLength = Math.max(0, overlapEnd - overlapStart);
-                    const newLength = newF.end - newF.start;
-                    const existingLength = existingF.end - existingF.start;
+                    // Calculate overlap over authoritative segments, not aggregate gaps.
+                    const overlapLength = featureOverlapLength(existingF, newF);
+                    const newLength = featureLength(newF);
+                    const existingLength = featureLength(existingF);
                     const minLength = Math.min(newLength, existingLength);
 
                     // If >80% overlap, consider it duplicate
@@ -1486,46 +1695,13 @@ export function MolBioToolkitV2() {
         rnaStructureResult,
     );
 
-    const selectionRanges = useMemo(
-        () => getSelectionRanges(selection, sequenceData.sequence.length, sequenceData.circular),
-        [selection, sequenceData.circular, sequenceData.sequence.length],
+    const selectionSnapshot = useMemo(
+        () => createSelectionSnapshot(selection, sequenceData.sequence, sequenceData.circular),
+        [selection, sequenceData.circular, sequenceData.sequence],
     );
-    const selectionLength = useMemo(
-        () => selectionRanges.reduce((total, range) => total + Math.max(0, range.end - range.start), 0),
-        [selectionRanges],
-    );
-    const hasRangeSelection = Boolean(selection && selectionLength > 0);
-    const selectedSequenceFragment = useMemo(
-        () => selectionRanges.map((range) => sequenceData.sequence.slice(range.start, range.end)).join(''),
-        [selectionRanges, sequenceData.sequence],
-    );
-    const selectionCoordinateLabel = useMemo(
-        () => formatSelectionLabel(selectionRanges, sequenceData.circular),
-        [selectionRanges, sequenceData.circular],
-    );
-    const selectionCoordinateKey = useMemo(() => {
-        if (selectionRanges.length === 0) {
-            return 'selection';
-        }
-        return selectionRanges.map((range) => `${range.start + 1}_${range.end}`).join('_wrap_');
-    }, [selectionRanges]);
-    const selectionPlacement = useMemo(() => {
-        if (!selection || selectionRanges.length === 0) {
-            return null;
-        }
-        if (sequenceData.circular && selectionRanges.length > 1) {
-            return {
-                start: selection.start,
-                end: selection.end,
-                wrapsOrigin: true,
-            };
-        }
-        return {
-            start: selectionRanges[0].start,
-            end: selectionRanges[selectionRanges.length - 1].end,
-            wrapsOrigin: false,
-        };
-    }, [selection, selectionRanges, sequenceData.circular]);
+    const selectionLength = selectionSnapshot?.length ?? 0;
+    const hasRangeSelection = Boolean(selectionSnapshot);
+    const selectionCoordinateLabel = selectionSnapshot?.coordinateLabel ?? 'No selection';
 
     const handleLoadAssemblyProduct = useCallback((product: SequenceData, savedSequenceId?: string | null) => {
         openWorkspace(product, {
@@ -1538,100 +1714,96 @@ export function MolBioToolkitV2() {
         }
     }, [loadLibrary, openWorkspace]);
 
-    const handleQuickAddPrimer = useCallback(async (strand: 1 | -1) => {
-        if (!selectionPlacement || !selectedSequenceFragment) {
+    const handleQuickAddPrimer = useCallback(async (input: SelectionPrimerInput) => {
+        if (!selectionAction || selectionAction.action === 'feature') {
             return;
         }
 
-        const operation = strand === 1 ? 'forward_primer' : 'reverse_primer';
+        const operation = selectionAction.action;
+        const snapshot = selectionAction.snapshot;
         setQuickAddBusy(operation);
+        setSelectionActionError(null);
 
         try {
-            const primerSequence = strand === 1
-                ? selectedSequenceFragment
-                : reverseComplementSequence(selectedSequenceFragment, sequenceData.sequenceType === 'rna' ? 'rna' : 'dna');
-            const sequenceType = inferSequenceTypeFromSequence(primerSequence);
-            const tmResponse = await calculatePrimerTm({
-                primers: [{
-                    sequence: primerSequence,
-                    sequence_type: sequenceType,
-                }],
-                settings: primerTmSettings,
-            });
+            const preparedPrimer = prepareSelectionPrimer(
+                snapshot,
+                operation === 'reverse_primer' ? 'reverse' : 'forward',
+                sequenceData.sequenceType,
+            );
+            const tmResponse = await calculatePrimerTm(
+                buildPrimerTmRequest(preparedPrimer, primerTmSettings),
+            );
             const tmResult = tmResponse.data[0] ?? null;
 
-            const primer: Primer = {
-                id: `primer_${Date.now().toString(36)}_${strand === 1 ? 'f' : 'r'}`,
-                name: `${strand === 1 ? 'Fwd' : 'Rev'}_${selectionCoordinateKey}`,
-                sequence: primerSequence,
-                sequenceType,
-                start: selectionPlacement.start,
-                end: selectionPlacement.end,
-                strand,
+            const primer = buildSelectionPrimer({
+                id: `primer_${Date.now().toString(36)}_${preparedPrimer.strand === 1 ? 'f' : 'r'}`,
+                name: input.name,
+                notes: input.notes,
+                snapshot,
+                prepared: preparedPrimer,
                 tm: tmResult?.tm ?? undefined,
-                gc_percent: tmResult?.gc_percent ?? calculateGcPercent(primerSequence),
-                tm_algorithm: tmResult?.algorithm,
-                tm_salt_correction: tmResult?.salt_correction,
-                tm_settings: primerTmSettings,
-                notes: {
-                    source: 'quick_add',
-                },
-                provenance: {
-                    workflow: 'quick_add',
-                    wraps_origin: selectionPlacement.wrapsOrigin,
-                },
-            };
+                gcPercent: tmResult?.gc_percent ?? calculateGcPercent(preparedPrimer.sequence),
+                tmAlgorithm: tmResult?.algorithm,
+                tmSaltCorrection: tmResult?.salt_correction,
+                tmSettings: primerTmSettings,
+            });
 
             handleAddPrimer(primer);
-            setHighlightedRegions([{
-                start: primer.start,
-                end: primer.end,
-                color: strand === 1 ? '#22c55e' : '#ef4444',
-                label: primer.name,
-            }]);
-            closeQuickAddMenu();
+            setHighlightedRegions(getPrimerHighlightRegions(
+                primer,
+                preparedPrimer.strand === 1 ? '#22c55e' : '#ef4444',
+                primer.name,
+                sequenceData.sequence.length,
+                sequenceData.circular,
+            ));
+            setSelectionAction(null);
+            setQuickAddBusy(null);
         } catch (error) {
             console.error('Failed to add primer from selection:', error);
-            alert(`Failed to add primer: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            setSelectionActionError(
+                `Failed to add primer: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            );
             setQuickAddBusy(null);
         }
     }, [
-        closeQuickAddMenu,
         handleAddPrimer,
         primerTmSettings,
-        selectedSequenceFragment,
-        selectionCoordinateKey,
-        selectionPlacement,
+        selectionAction,
         sequenceData.sequenceType,
     ]);
 
-    const handleQuickAddFeature = useCallback(() => {
-        if (!selectionPlacement) {
+    const handleQuickAddFeature = useCallback((input: SelectionFeatureInput) => {
+        if (!selectionAction || selectionAction.action !== 'feature') {
             return;
         }
 
         setQuickAddBusy('feature');
-        const segments = selectionRanges.map((range) => ({
+        setSelectionActionError(null);
+        const snapshot = selectionAction.snapshot;
+        const segments = snapshot.ranges.map((range) => ({
             start: range.start,
             end: range.end,
         }));
         const feature: Feature = {
             id: `feature_${Date.now().toString(36)}`,
-            name: `Feature_${selectionCoordinateKey}`,
-            type: 'misc_feature',
-            start: selectionPlacement.start,
-            end: selectionPlacement.end,
-            strand: 1,
-            color: getFeatureColor('misc_feature'),
+            name: input.name,
+            type: input.type,
+            start: snapshot.placement.start,
+            end: snapshot.placement.end,
+            strand: input.strand,
+            color: input.color || getFeatureColor(input.type),
+            description: input.description || undefined,
             notes: {
-                source: 'quick_add',
+                source: 'selection_dialog',
+                ...(input.description ? { note: input.description } : {}),
             },
             qualifiers: {
-                source: 'quick_add',
+                source: 'selection_dialog',
             },
             provenance: {
-                workflow: 'quick_add',
-                wraps_origin: selectionPlacement.wrapsOrigin,
+                workflow: 'selection_dialog',
+                wraps_origin: snapshot.placement.wrapsOrigin,
+                selected_ranges: snapshot.ranges,
             },
             segments: segments.length > 1 ? segments : undefined,
         };
@@ -1646,12 +1818,15 @@ export function MolBioToolkitV2() {
             color: feature.color || '#6b7280',
             label: feature.name,
         })));
-        closeQuickAddMenu();
-    }, [closeQuickAddMenu, handleAddFeature, selectionCoordinateKey, selectionPlacement, selectionRanges]);
+        setSelectionAction(null);
+        setQuickAddBusy(null);
+    }, [handleAddFeature, selectionAction]);
 
     return (
         <>
             <div
+                ref={toolkitRootRef}
+                tabIndex={-1}
                 className={`molbio-toolkit h-full w-full flex bg-slate-900 text-slate-100 overflow-hidden ${isViewerFullscreen ? 'fixed inset-0 z-[70]' : ''}`}
                 data-molbio-viewer-fullscreen={isViewerFullscreen ? 'true' : 'false'}
             >
@@ -1665,7 +1840,6 @@ export function MolBioToolkitV2() {
                             selectedId={selectedSequenceId}
                             onSelect={loadSequence}
                             onRefresh={loadLibrary}
-                            onOpenModal={() => setShowInputModal(true)}
                             onLoadDemo={loadDemo}
                             loading={loading}
                             width={viewerLayout.leftPanelWidth}
@@ -1744,12 +1918,15 @@ export function MolBioToolkitV2() {
                                 {!isViewerFullscreen && showGCTrack && (
                                     <GCContentTrack
                                         sequence={sequenceData.sequence}
+                                        sequenceType={sequenceData.sequenceType === 'rna' ? 'rna' : 'dna'}
+                                        reverseCoordinates={sourceDisplayStrand !== activeDisplayStrand}
                                         circular={sequenceData.circular}
                                         selectedEnzymes={selectedEnzymes}
                                         selection={selection}
                                         onSelectionChange={handleSelection}
+                                        onClearSelection={() => setSelection(null)}
                                         windowSize={Math.max(20, Math.min(100, Math.floor(sequenceData.sequence.length / 50)))}
-                                        height={156}
+                                        height={132}
                                     />
                                 )}
 
@@ -1949,11 +2126,11 @@ export function MolBioToolkitV2() {
                             <EditPanel
                                 sequenceData={sequenceData}
                                 selection={selection}
-                                onSequenceChange={(newData) => {
+                                onSequenceChange={(newData, actionLabel) => {
                                     setSequenceData({
                                         ...newData,
                                         features: normalizeFeatureList(newData.features || []),
-                                    });
+                                    }, actionLabel);
                                     setIsDirty(true);
                                 }}
                             />
@@ -2031,9 +2208,18 @@ export function MolBioToolkitV2() {
                         type="button"
                         aria-label="Close quick add menu"
                         className="fixed inset-0 z-40 cursor-default bg-transparent"
-                        onClick={closeQuickAddMenu}
+                        onClick={closeQuickAddMenuAndRestoreFocus}
                     />
                     <div
+                        ref={quickAddMenuRef}
+                        role="menu"
+                        aria-label="Selection actions"
+                        onKeyDown={handleQuickAddMenuKeyDown}
+                        onBlur={(event) => {
+                            if (didFocusLeaveContainer(event.currentTarget, event.relatedTarget)) {
+                                closeQuickAddMenuAndRestoreFocus();
+                            }
+                        }}
                         className="fixed z-50 w-64 rounded-xl border border-slate-700 bg-slate-900/95 p-2 shadow-2xl backdrop-blur"
                         style={{
                             left: Math.max(12, Math.min(quickAddMenu.x, window.innerWidth - 280)),
@@ -2045,74 +2231,85 @@ export function MolBioToolkitV2() {
                                 Quick Add
                             </div>
                             <div className="mt-1 text-sm text-slate-200">
-                                {hasRangeSelection ? selectionCoordinateLabel : 'No range selected'}
+                                {quickAddMenu.snapshot?.coordinateLabel ?? 'No range selected'}
                             </div>
                             <div className="mt-1 text-[11px] text-slate-500">
-                                {hasRangeSelection
-                                    ? `${selectionLength} ${sequenceUnitLabel(sequenceData.sequenceType === 'rna' ? 'rna' : 'dna')} selected`
+                                {quickAddMenu.snapshot
+                                    ? `${quickAddMenu.snapshot.length} ${sequenceUnitLabel(sequenceData.sequenceType === 'rna' ? 'rna' : 'dna')} selected and locked`
                                     : 'Drag a span in the viewer, then right-click to add primers or features.'}
                             </div>
                         </div>
 
                         <div className="space-y-1 px-1 py-2">
                             <button
-                                onClick={() => void handleQuickAddPrimer(1)}
-                                disabled={!hasRangeSelection || quickAddBusy !== null}
+                                type="button"
+                                role="menuitem"
+                                onClick={() => openSelectionAction('forward_primer')}
+                                disabled={!quickAddMenu.snapshot}
                                 className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm text-slate-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
                             >
-                                <span>Add Forward Primer</span>
-                                {quickAddBusy === 'forward_primer' && <span className="text-xs text-slate-400">Working…</span>}
+                                <span>Configure Forward Primer…</span>
                             </button>
                             <button
-                                onClick={() => void handleQuickAddPrimer(-1)}
-                                disabled={!hasRangeSelection || quickAddBusy !== null}
+                                type="button"
+                                role="menuitem"
+                                onClick={() => openSelectionAction('reverse_primer')}
+                                disabled={!quickAddMenu.snapshot}
                                 className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm text-slate-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
                             >
-                                <span>Add Reverse Primer</span>
-                                {quickAddBusy === 'reverse_primer' && <span className="text-xs text-slate-400">Working…</span>}
+                                <span>Configure Reverse Primer…</span>
                             </button>
                             <button
-                                onClick={handleQuickAddFeature}
-                                disabled={!hasRangeSelection || quickAddBusy !== null}
+                                type="button"
+                                role="menuitem"
+                                onClick={() => openSelectionAction('feature')}
+                                disabled={!quickAddMenu.snapshot}
                                 className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm text-slate-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
                             >
-                                <span>Add Marker / Feature</span>
-                                {quickAddBusy === 'feature' && <span className="text-xs text-slate-400">Working…</span>}
+                                <span>Configure Marker / Feature…</span>
                             </button>
                         </div>
 
                         <div className="border-t border-slate-700 px-1 pt-2">
                             <button
+                                type="button"
+                                role="menuitem"
                                 onClick={() => {
                                     setActivePanel('primers');
-                                    closeQuickAddMenu();
+                                    closeQuickAddMenuAndRestoreFocus();
                                 }}
                                 className="w-full rounded-lg px-3 py-2 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800"
                             >
                                 Open Primer Workspace
                             </button>
                             <button
+                                type="button"
+                                role="menuitem"
                                 onClick={() => {
                                     setActivePanel('features');
-                                    closeQuickAddMenu();
+                                    closeQuickAddMenuAndRestoreFocus();
                                 }}
                                 className="w-full rounded-lg px-3 py-2 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800"
                             >
                                 Open Feature Workspace
                             </button>
                             <button
+                                type="button"
+                                role="menuitem"
                                 onClick={() => {
                                     setActivePanel('assembly');
-                                    closeQuickAddMenu();
+                                    closeQuickAddMenuAndRestoreFocus();
                                 }}
                                 className="w-full rounded-lg px-3 py-2 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800"
                             >
                                 Open Assembly Workspace
                             </button>
                             <button
+                                type="button"
+                                role="menuitem"
                                 onClick={() => {
                                     setSelection(null);
-                                    closeQuickAddMenu();
+                                    closeQuickAddMenuAndRestoreFocus();
                                 }}
                                 className="w-full rounded-lg px-3 py-2 text-left text-sm text-slate-400 transition-colors hover:bg-slate-800"
                             >
@@ -2123,13 +2320,34 @@ export function MolBioToolkitV2() {
                 </>
             )}
 
+            {selectionAction && (
+                <SelectionActionDialog
+                    action={selectionAction.action}
+                    snapshot={selectionAction.snapshot}
+                    sequenceType={sequenceData.sequenceType}
+                    busy={quickAddBusy !== null}
+                    error={selectionActionError}
+                    returnFocusTarget={quickAddInvokerRef.current}
+                    fallbackFocusTarget={toolkitRootRef.current}
+                    onClose={closeSelectionAction}
+                    onConfirmFeature={handleQuickAddFeature}
+                    onConfirmPrimer={(input) => void handleQuickAddPrimer(input)}
+                />
+            )}
+
             {/* Auto-Annotate Settings Panel */}
             <AutoAnnotatePanel
                 isOpen={showAnnotatePanel}
                 onClose={() => setShowAnnotatePanel(false)}
                 onAnnotate={runAutoAnnotate}
+                onClearAnnotations={clearAnnotations}
+                onImportAnnotations={importAnnotationsFromFile}
+                onRetrieveNcbi={retrieveNcbiAnnotations}
+                onRetrieveAddgene={retrieveAddgeneAnnotations}
+                annotationSourceStatus={annotationSourceStatus}
                 isAnnotating={isAnnotating}
                 hasSequence={!!sequenceData.sequence}
+                featureCount={sequenceData.features.length}
                 sequenceLength={sequenceData.sequence.length}
                 isCircular={sequenceData.circular}
             />

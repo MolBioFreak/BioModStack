@@ -53,7 +53,7 @@ BMS is not just a protein-design launcher. The live repo covers:
 - antibody de novo and staged refinement workflows
 - generic structure prediction and validation with AlphaFold2, RF3, Boltz-2,
   and Protenix
-- generic binder generation and redesign with RFdiffusion, BindCraft,
+- generic binder generation and redesign with RFdiffusion, retired binder workflow,
   BoltzGen, and local redesign workflows
 - experimental workflow families including La-Proteina/DISCO protein CAD,
   Protein Hunter Experimental, Caliby Experimental, and Fold-CP Experimental
@@ -62,17 +62,13 @@ BMS is not just a protein-design launcher. The live repo covers:
 - a molecular biology toolkit for DNA/RNA libraries and construct operations
 - a BioXP cockpit plus workstation infra/runtime controls
 
-The BioXP surface in BMS should be read as the current robot-linkage and
-cockpit/proxy layer, not as a full mirror of every robot-local endpoint. The
-robot-local runtime remains the source of truth for OEM-compat control prep,
-including `/oem-compat/capabilities/test-prep`; BMS should surface that as a
-thin operator/control-plane capability matrix rather than infer its own robot
-truth. Live robot-local surfaces such as motion reference-state and
-liquid-handling routes still extend beyond what BMS currently exposes under
-`/api/bioxp/*`, and status surfaces can diverge briefly during
-reconnect/recovery windows. The BioXP3200 hardware is treated as functional
-under OEM control; unresolved native-Linux parity or reconnect work should not
-be framed in BMS as a bad-component verdict.
+The BioXP surface is a compact, status-first control plane, not a generic robot
+proxy. It exposes bounded profile, connection, readiness, offline protocol, local
+job, typed command, and emergency-delivery contracts. Retired motion, liquid,
+thermal, camera, vision, arbitrary proxy, host-lifecycle, and remote-log routes
+are absent. The robot-local OEM-compatible runtime remains authoritative for
+hardware behavior; normal BMS commands stay disabled until their exact live
+contracts are independently verified.
 
 For the full live model inventory, see
 [docs/ai_guidance/Model_Integrations.md](docs/ai_guidance/Model_Integrations.md).

@@ -1,8 +1,9 @@
 // Structure Prediction from Sequence
 // Modules for predicting 3D protein structure directly from amino acid sequence
-// Supported predictors: Boltz-2, RF3 (RoseTTAFold3), Protenix
+// Supported predictors: Boltz-2, RF3 (RoseTTAFold3), Protenix, ESMFold2
 
 include { ProtenixPredict ; ProtenixFromComplex ; PrepProtenixComplex } from './protenix.nf'
+include { ESMFold2Predict } from './esmfold2_experimental.nf'
 
 def resolveBooleanParam(value, defaultValue) {
     if (value == null) {
@@ -46,7 +47,7 @@ process GenerateLocalMSA {
     def gpuServerWaitTimeout = params.msa_gpu_server_wait_timeout ?: 120
     def gpuServerDbLoadMode = params.msa_gpu_server_db_load_mode ?: 2
     def gpuServerStartupWait = params.msa_gpu_server_startup_wait ?: 5.0
-    def msaProvider = params.msa_provider ?: "local"
+    def msaProvider = params.msa_provider ?: "colabfold_api"
     def colabfoldApiHost = params.colabfold_api_host ?: "https://api.colabfold.com"
     def colabfoldApiMinInterval = params.colabfold_api_min_interval ?: 6.0
     def colabfoldApiPollInterval = params.colabfold_api_poll_interval ?: 6.0
@@ -491,7 +492,7 @@ process PrepareComplexWithMSA {
     def msaGpuServerWaitTimeout = params.msa_gpu_server_wait_timeout ?: 120
     def msaGpuServerDbLoadMode = params.msa_gpu_server_db_load_mode ?: 2
     def msaGpuServerStartupWait = params.msa_gpu_server_startup_wait ?: 5.0
-    def msaProvider = params.msa_provider ?: "local"
+    def msaProvider = params.msa_provider ?: "colabfold_api"
     def colabfoldApiHost = params.colabfold_api_host ?: "https://api.colabfold.com"
     def colabfoldApiMinInterval = params.colabfold_api_min_interval ?: 6.0
     def colabfoldApiPollInterval = params.colabfold_api_poll_interval ?: 6.0
@@ -1227,6 +1228,11 @@ workflow structure_prediction_wf {
             // Protenix handles its own MSA via built-in protenix prep or ESM
             ProtenixPredict(input_ch)
             structures = structures.mix(ProtenixPredict.out.cifs)
+        }
+
+        if (pred_method == 'esmfold2') {
+            ESMFold2Predict(input_ch)
+            structures = structures.mix(ESMFold2Predict.out.cifs)
         }
     }
 

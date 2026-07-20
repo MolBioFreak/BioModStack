@@ -51,7 +51,7 @@ process ProtenixPredict {
     path "*.log", emit: logs, optional: true
 
     script:
-    def model_name = params.protenix_model_weights ?: 'protenix_base_20250630_v1.0.0'
+    def model_name = params.protenix_model_weights ?: 'protenix-v2'
     def seeds = params.protenix_seeds ?: '42'
     def n_sample = params.protenix_n_sample ?: 5
     def n_step = params.protenix_n_step ?: 200
@@ -67,16 +67,12 @@ process ProtenixPredict {
     def msa_cache_only_flag = (params.msa_cache_only == true || params.msa_cache_only == 'true') ? '--cache-only' : ''
     def msa_allow_cpu_fallback_flag = msa_allow_cpu_fallback ? '--allow-cpu-fallback' : ''
 
-    // Auto-switch to ESM model if MSA is disabled
+    // V2 is an invariant even when MSA is disabled; do not silently downgrade.
     def use_msa = (params.protenix_use_msa == true || params.protenix_use_msa == 'true' || params.protenix_use_msa == null)
-    def model_aliases = [
-        'protenix_esm_20241211_v0.2.1': 'protenix_mini_esm_v0.5.0',
-        'protenix_base_20241211_v0.2.1': 'protenix_base_default_v1.0.0'
-    ]
-    def effective_model = model_aliases.get(model_name, model_name)
-    if (!use_msa && !(effective_model.contains('esm') || effective_model.contains('ism'))) {
-        effective_model = 'protenix_mini_esm_v0.5.0'
+    if (model_name != 'protenix-v2') {
+        throw new IllegalArgumentException("Protenix is pinned to V2 weights; received ${model_name}")
     }
+    def effective_model = 'protenix-v2'
 
     """
     #!/bin/bash
@@ -398,7 +394,7 @@ process ProtenixFromComplex {
     path "*.log", emit: logs, optional: true
 
     script:
-    def model_name = params.protenix_model_weights ?: 'protenix_base_20250630_v1.0.0'
+    def model_name = params.protenix_model_weights ?: 'protenix-v2'
     def seeds = params.protenix_seeds ?: '42'
     def n_sample = params.protenix_n_sample ?: 5
     def n_step = params.protenix_n_step ?: 200
@@ -420,19 +416,15 @@ process ProtenixFromComplex {
     def epitopeResiduesCsv = params.epitope_residues ?: params.hotspot_residues ?: ''
 
     def use_msa = (params.protenix_use_msa == true || params.protenix_use_msa == 'true' || params.protenix_use_msa == null)
-    def model_aliases = [
-        'protenix_esm_20241211_v0.2.1': 'protenix_mini_esm_v0.5.0',
-        'protenix_base_20241211_v0.2.1': 'protenix_base_default_v1.0.0'
-    ]
+    if (model_name != 'protenix-v2') {
+        throw new IllegalArgumentException("Protenix is pinned to V2 weights; received ${model_name}")
+    }
     def fixedTargetSourcePath = params.fixed_target_source_path ?: ''
     def resolvedFixedTargetSourcePath = fixedTargetSourcePath
     if (fixedTargetSourcePath && !fixedTargetSourcePath.startsWith('/')) {
         resolvedFixedTargetSourcePath = "${params.code_root}/${fixedTargetSourcePath}".replaceAll('/+', '/')
     }
-    def effective_model = model_aliases.get(model_name, model_name)
-    if (!use_msa && !(effective_model.contains('esm') || effective_model.contains('ism'))) {
-        effective_model = 'protenix_mini_esm_v0.5.0'
-    }
+    def effective_model = 'protenix-v2'
 
     """
     #!/bin/bash

@@ -25,6 +25,7 @@ workflow_family:
     - ont_construct_screening
     - ont_methylation_analysis
     - ont_fastq_qc
+    - wf_clone_validation
 
 quality_modes:
   molecule_types:
@@ -81,15 +82,109 @@ sequence_qc_contract:
     - igv_report.html
 
 modes:
+  - id: basecall_dna
+    name: ONT DNA Basecalling
+    description: Dorado DNA basecalling from existing POD5 run outputs. Legacy FAST5 must be converted and model-qualified outside this workflow.
+    params:
+      - pod5_dir
+      - reference_fasta
+      - dorado_model
+      - dorado_device
+      - min_qscore
+      - trim_adapters
+      - emit_summary
+      - dorado_batch_size
+
+  - id: basecall_rna
+    name: ONT RNA Basecalling
+    description: Dorado RNA basecalling from existing ONT run outputs.
+    params:
+      - pod5_dir
+      - reference_fasta
+      - dorado_model
+      - dorado_device
+      - min_qscore
+      - trim_adapters
+      - emit_summary
+      - dorado_batch_size
+
+  - id: plasmid_qc
+    name: ONT Plasmid QC
+    description: Reference-backed plasmid QC from exactly one POD5, BAM, or FASTQ input.
+    params:
+      - pod5_dir
+      - bam_path
+      - fastq_path
+      - reference_fasta
+      - dorado_model
+      - dorado_device
+      - min_qscore
+      - trim_adapters
+      - emit_summary
+      - dorado_batch_size
+      - bam_force_realign
+      - bam_min_mapq
+      - run_fastq_qc
+      - expected_plasmid_size
+      - min_fastq_read_length
+      - fastq_minimap2_preset
+      - fastq_minimap2_allow_secondary
+      - igv_track_window_bp
+      - igv_report_max_sites
+      - igv_report_flanking_bp
+
+  - id: construct_screening
+    name: ONT Construct Screening
+    description: Expected-construct screening from exactly one POD5, BAM, or FASTQ input.
+    params:
+      - pod5_dir
+      - bam_path
+      - fastq_path
+      - reference_fasta
+      - dorado_model
+      - dorado_device
+      - min_qscore
+      - trim_adapters
+      - emit_summary
+      - dorado_batch_size
+      - bam_force_realign
+      - bam_min_mapq
+      - run_fastq_qc
+      - expected_plasmid_size
+      - min_fastq_read_length
+      - fastq_minimap2_preset
+      - fastq_minimap2_allow_secondary
+      - run_assembly
+      - wf_clone_sample
+      - wf_clone_large_construct
+      - wf_clone_approx_size
+      - wf_clone_assm_coverage
+      - wf_clone_trim_length
+      - wf_clone_min_quality
+      - wf_clone_assembly_tool
+
+  - id: fastq_qc
+    name: ONT FASTQ QC
+    description: FASTQ read QC plus reference-backed alignment/plasmid evidence when a reference is supplied.
+    params:
+      - fastq_path
+      - reference_fasta
+      - run_fastq_qc
+      - min_fastq_read_length
+      - fastq_minimap2_preset
+      - fastq_minimap2_allow_secondary
+      - igv_track_window_bp
+      - igv_report_max_sites
+      - igv_report_flanking_bp
+
   - id: methylation_analysis
     name: Methylation Analysis
-    description: POD5/BAM methylation analysis plus optional FASTQ plasmid QC
+    description: POD5/BAM methylation analysis with modkit
     params:
       - pod5_dir
       - bam_path
       - bam_force_realign
       - bam_min_mapq
-      - fastq_path
       - reference_fasta
       - dorado_model
       - dorado_device
@@ -100,20 +195,20 @@ modes:
       - dorado_batch_size
       - run_modkit
       - modkit_filter_threshold
-      - run_fastq_qc
-      - run_multimer_qc
-      - expected_plasmid_size
-      - min_fastq_read_length
-      - fastq_minimap2_preset
-      - fastq_minimap2_allow_secondary
-      - igv_track_window_bp
-      - igv_report_max_sites
-      - igv_report_flanking_bp
-      - run_assembly
-      - wf_clone_workflow_dir
-      - wf_clone_source
-      - wf_clone_revision
-      - wf_clone_profile
+
+  - id: clone_validation
+    name: Clone Validation
+    description: EPI2ME wf-clone-validation assembly with plasmid QC
+    params:
+      - pod5_dir
+      - bam_path
+      - fastq_path
+      - reference_fasta
+      - dorado_model
+      - dorado_device
+      - min_qscore
+      - trim_adapters
+      - emit_summary
       - wf_clone_sample
       - wf_clone_large_construct
       - wf_clone_approx_size
@@ -121,6 +216,7 @@ modes:
       - wf_clone_trim_length
       - wf_clone_min_quality
       - wf_clone_assembly_tool
+      - wf_clone_basecaller_model
 
 params:
   - name: pod5_dir
@@ -162,19 +258,17 @@ params:
 
   - name: dorado_model
     type: string
-    description: Dorado basecalling model preset
+    description: Dorado concrete model identifier or reviewed preset
     required: false
     default: sup
-    enum:
-      - sup
-      - hac
-      - fast
+    pattern: '^[A-Za-z0-9][A-Za-z0-9._@+-]{0,127}$'
 
   - name: dorado_device
     type: string
     description: CUDA device selector passed to Dorado (e.g., cuda:0, cuda:all)
     required: false
     default: cuda:0
+    pattern: '^(?:cuda:(?:all|auto|[0-9]+)|cpu|metal)$'
 
   - name: modified_bases
     type: string
@@ -304,29 +398,6 @@ params:
     required: false
     default: false
 
-  - name: wf_clone_workflow_dir
-    type: string
-    description: Optional local path to wf-clone-validation workflow assets
-    required: false
-
-  - name: wf_clone_source
-    type: string
-    description: EPI2ME workflow source for auto-pull fallback
-    required: false
-    default: epi2me-labs/wf-clone-validation
-
-  - name: wf_clone_revision
-    type: string
-    description: Workflow revision/tag for auto-pull
-    required: false
-    default: v1.8.3
-
-  - name: wf_clone_profile
-    type: string
-    description: Nested Nextflow profile string for wf-clone-validation
-    required: false
-    default: singularity
-
   - name: wf_clone_sample
     type: string
     description: Optional sample name override for wf-clone-validation
@@ -375,6 +446,14 @@ params:
     enum:
       - flye
       - canu
+
+  - name: wf_clone_basecaller_model
+    type: string
+    description: Exact locked upstream basecaller model identity
+    required: false
+    default: dna_r10.4.1_e8.2_400bps_hac@v5.0.0
+    enum:
+      - dna_r10.4.1_e8.2_400bps_hac@v5.0.0
 
 enabled: true
 experimental: true

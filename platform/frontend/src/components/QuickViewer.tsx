@@ -7,10 +7,11 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import MolstarViewer from './MolstarViewer';
+import { StructureWorkbench } from '../structureViewer/StructureWorkbench';
 import { BMS_CONTROL, BMS_CONTROL_GROUP, BMS_FULLSCREEN_FLUSH, BMS_PANEL_SURFACE, BMS_SMALL_CONTROL, BMS_VIEWER_WELL } from './ui/bmsStyle';
 import { fetchJobs } from '../lib/api';
 import type { Job } from '../lib/api';
+import { jobPollingInterval } from '../lib/queryPolling';
 
 const QUICK_VIEWER_COMPACT_KEY = 'bms_dashboard_quick_viewer_compact_v1';
 type QuickViewerSize = 'micro' | 'compact' | 'standard' | 'large' | 'xlarge';
@@ -137,9 +138,9 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
 
     // Fetch jobs
     const { data: jobsData } = useQuery({
-        queryKey: ['jobs'],
-        queryFn: () => fetchJobs(),
-        refetchInterval: 3000,
+        queryKey: ['jobs', 'quick-viewer-summary'],
+        queryFn: () => fetchJobs({ status: 'completed', limit: 100, summary: true }),
+        refetchInterval: (query) => jobPollingInterval(3000, query),
     });
 
     // Get completed jobs with structures
@@ -337,8 +338,8 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
                 style={{ position: 'relative', zIndex: 0 }}
             >
                 {structureUrl ? (
-                    <MolstarViewer
-                        key={`${selectedStructure?.path ?? 'empty'}:${selectedStructure?.type ?? 'pdb'}:${viewerSize}:${hideViewerControls ? 'compact' : 'full'}:${isFullscreen ? 'fs' : 'inline'}`}
+                    <StructureWorkbench
+                        mode="compact"
                         structureUrl={structureUrl}
                         format={selectedStructure?.type || 'pdb'}
                         alphafoldView={true}

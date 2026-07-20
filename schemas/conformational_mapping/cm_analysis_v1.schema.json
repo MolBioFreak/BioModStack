@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://biomodstack.org/schemas/conformational_mapping/cm_analysis_v1.schema.json",
+  "title": "BioModStack conformational mapping analysis v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_name", "schema_version", "analysis_id", "source_ensemble_sha256", "source_landscape_sha256", "formula_version", "expected_strata", "results", "exclusions", "pair_ledger", "support_records", "ranking_policy", "clash_records"],
+  "properties": {
+    "schema_name": {"const": "cm_analysis"}, "schema_version": {"const": 1}, "analysis_id": {"type": "string", "minLength": 1},
+    "source_ensemble_sha256": {"$ref": "#/$defs/sha256"}, "source_landscape_sha256": {"$ref": "#/$defs/sha256"}, "formula_version": {"const": "cm_analysis_v1"},
+    "expected_strata": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "results": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/result"}}, "exclusions": {"type": "array", "items": {"$ref": "#/$defs/exclusion"}},
+    "pair_ledger": {"type": "array", "items": {"type": "object"}},
+    "support_records": {"type": "array", "items": {"type": "object"}},
+    "ranking_policy": {"type": "object"}
+    ,"clash_records": {"type": "array", "items": {"type": "object"}}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "fraction": {"type": "number", "minimum": 0, "maximum": 1},
+    "result": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_row_key", "identity", "status", "expected_coordinate_count", "valid_coordinate_count", "outer_support_fraction", "coordinate_support_fraction", "hierarchical_mean", "hotspot_score", "switch_score", "failure_reason", "components", "sort_keys"],
+      "properties": {
+        "source_row_key": {"type": "string", "minLength": 1}, "status": {"enum": ["robust", "conditional", "insufficient_support"]},
+        "identity": {"$ref": "#/$defs/identity"},
+        "expected_coordinate_count": {"type": "integer", "minimum": 1}, "valid_coordinate_count": {"type": "integer", "minimum": 0},
+        "outer_support_fraction": {"$ref": "#/$defs/fraction"}, "coordinate_support_fraction": {"$ref": "#/$defs/fraction"},
+        "hierarchical_mean": {"type": ["number", "null"]}, "hotspot_score": {"type": ["number", "null"]}, "switch_score": {"type": ["number", "null"]},
+        "failure_reason": {"type": ["string", "null"]},
+        "components": {"type": "object"},
+        "sort_keys": {"type": "object"}
+      }
+    },
+    "identity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["target_id", "entity_instance_id", "auth_asym_id", "auth_seq_id", "insertion_code", "sequence_index", "validated_wt", "substitution"],
+      "properties": {
+        "target_id": {"type": "string", "minLength": 1}, "entity_instance_id": {"type": "string", "minLength": 1},
+        "auth_asym_id": {"type": "string", "minLength": 1}, "auth_seq_id": {"type": "integer"},
+        "insertion_code": {"type": "string", "maxLength": 1}, "sequence_index": {"type": "integer", "minimum": 1},
+        "validated_wt": {"type": "string", "enum": ["A", "C", "D", "E", "F", "G", "H", "I", "K", "L", "M", "N", "P", "Q", "R", "S", "T", "V", "W", "Y"]},
+        "substitution": {"type": "string", "enum": ["A", "C", "D", "E", "F", "G", "H", "I", "K", "L", "M", "N", "P", "Q", "R", "S", "T", "V", "W", "Y"]}
+      }
+    },
+    "exclusion": {
+      "type": "object", "additionalProperties": false, "required": ["coordinate", "reason"],
+      "properties": {"coordinate": {"type": "string", "minLength": 1}, "reason": {"type": "string", "minLength": 1}}
+    }
+  }
+}

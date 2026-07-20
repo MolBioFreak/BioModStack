@@ -71,15 +71,12 @@ The API does more than submit jobs. It currently:
 - exposes system/install-profile/runtime routes
 - proxies workflow launch/cancel/running-job calls to the host workflow adapter
 - exposes mobile update/feed endpoints for optional shell packaging
-- manages BioXP runtime linkage and the currently supported robot-local proxy
-  surface
+- manages the bounded BioXP profile/status/connection/protocol/job control plane
 
-For BioXP specifically, the BMS proxy should be read as the current cockpit
-surface rather than a full mirror of every robot-local endpoint. Current builds
-proxy the reference-state and liquid-handling route families through
-`/api/bioxp/*`; treat older notes claiming those surfaces are robot-only as
-stale, and verify new capability claims against live route parity because the
-robot runtime can still expose additional non-cockpit endpoints.
+For BioXP specifically, BMS is not a robot proxy. The compact route inventory is
+defined in [BioXP Compact Control Plane](BioXP_Compact_Control_Plane.md). Retired
+hardware-family, arbitrary-path, host-lifecycle, shell, and remote-log routes are
+absent; robot-local runtime evidence remains authoritative.
 
 ## Workflow families
 
@@ -90,7 +87,7 @@ The live workflow surface includes:
 - generic structure prediction and validation
 - RFdiffusion-based generation
 - protein local redesign
-- BindCraft
+- retired binder workflow
 - BoltzGen
 - Oligo Designer / RFDpoly
 - docking

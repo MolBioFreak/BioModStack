@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef, type MouseEvent as ReactMouseEvent } from 'react';
 import Plot from 'react-plotly.js';
 import type { Data, Layout } from 'plotly.js';
-import MolstarViewer from './MolstarViewer';
+import { StructureWorkbench } from '../structureViewer/StructureWorkbench';
 import ChainDetailsPanel from './ChainDetailsPanel';
 import ReferenceSelector, { type ReferenceStructure } from './ReferenceSelector';
 import { useThemeColors } from './useThemeColors';
@@ -25,6 +25,9 @@ import {
     type StructureAnalysis,
 } from '../lib/api';
 import { inferDesignAnalysisLens, inferDesignOutputSource, getValidationOutputLabel } from './designOutputSource';
+import { buildMetricLayerFromExplicitMaps } from '../lib/molstar-metrics';
+import type { MolstarResidueMetricLayer } from '../lib/molstar-metrics';
+import type { MetricLayer } from '../structureViewer/metrics/metricContracts.js';
 import {
     buildConforNetsConformerNavigation,
     buildConforNetsConformerSet,
@@ -35,8 +38,8 @@ import {
     getConforNetsDefaultChainId,
     getConforNetsScalarPlddt,
     resolveConforNetsOverlayIds,
+    resolveEffectiveStructureViewerColorMode,
     resolveStructureViewerConfidenceSemantics,
-    type StructureViewerColorMode,
     type StructureViewerOverlayView,
     type StructureViewerQuickViewSpec,
     type StructureViewerSectionId,
@@ -235,6 +238,7 @@ function frustrationColor(value: number): { r: number; g: number; b: number } {
 }
 
 const CHAIN_ACCENT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
+const LEGACY_ANALYTICS_ENABLED = false;
 
 const residueColorKey = (chainId: string, residueNumber: number): string => `${chainId}:${residueNumber}`;
 
@@ -314,6 +318,7 @@ export default function StructureViewerPane({
         typeof window === 'undefined' ? 720 : window.innerHeight
     ));
     const [analyticsPanelOpen, setAnalyticsPanelOpen] = useState(true);
+    const [metricWorkbenchOpen, setMetricWorkbenchOpen] = useState(true);
     const [overlayView, setOverlayView] = useState<OverlayView>('metrics');
     const [conforNetsOverlayIds, setConforNetsOverlayIds] = useState<string[]>([]);
     const [focusedMetricSection, setFocusedMetricSection] = useState<StructureViewerSectionId>('summary');
@@ -397,7 +402,6 @@ export default function StructureViewerPane({
         () => resolveConforNetsOverlayIds(conforNetsConformerSet, conforNetsOverlayIds),
         [conforNetsConformerSet, conforNetsOverlayIds],
     );
-    const conforNetsOverlaySignature = resolvedConforNetsOverlayIds.join('|');
     const conforNetsDefaultChainId = useMemo(
         () => getConforNetsDefaultChainId(selectedDesign ?? null) ?? (conforNetsConformerSet ? 'A' : null),
         [conforNetsConformerSet, selectedDesign],
@@ -705,11 +709,12 @@ export default function StructureViewerPane({
         onRunFampnnPsceProfile();
     }, [designLens, fampnnPsceBusy, fampnnPsceStatus, hasFampnnPsceProfile, onRunFampnnPsceProfile, selectedDesignId]);
 
-    const effectiveColorMode = colorMode === 'plddt' && !hasResidueConfidence
-        ? 'default'
-        : colorMode === 'fampnn_psce' && !hasFampnnPsceProfile
-            ? 'default'
-            : colorMode;
+    const effectiveColorMode = resolveEffectiveStructureViewerColorMode({
+        requestedMode: colorMode,
+        hasResidueConfidence,
+        hasFampnnPsceProfile,
+        hasFrustrationResidues: Boolean(selectedDesign?.frustration_residues?.length),
+    });
     const applyQuickView = useCallback((quickView: StructureViewerQuickViewSpec) => {
         setFocusedMetricSection(quickView.sectionId);
         setOverlayView(quickView.overlayView);
@@ -737,34 +742,7 @@ export default function StructureViewerPane({
             setFocusedMetricSection('confidence');
         }
     }, [effectiveColorMode]);
-    const handleColorModeChange = useCallback((nextColorMode: StructureViewerColorMode) => {
-        setColorMode(nextColorMode);
-        if (nextColorMode === 'plddt') {
-            setOverlayView('plddt');
-            setFocusedMetricSection('confidence');
-            return;
-        }
-        if (nextColorMode === 'fampnn_psce') {
-            if (hasFampnnPsceProfile) {
-                setOverlayView('psce');
-            }
-            setFocusedMetricSection('designability');
-            return;
-        }
-        if (nextColorMode === 'frustration') {
-            setOverlayView('metrics');
-            setFocusedMetricSection('designability');
-            return;
-        }
-        if (nextColorMode === 'cdr') {
-            setOverlayView('metrics');
-            setFocusedMetricSection('confidence');
-            return;
-        }
-        if (overlayView === 'metrics') {
-            setFocusedMetricSection('summary');
-        }
-    }, [hasFampnnPsceProfile, overlayView, setColorMode]);
+
     const isQuickViewActive = useCallback((quickView: StructureViewerQuickViewSpec) => (
         focusedMetricSection === quickView.sectionId
         && overlayView === quickView.overlayView
@@ -789,18 +767,6 @@ export default function StructureViewerPane({
             };
         });
     }, [conforNetsConformerSet, effectiveColorMode, resolvedConforNetsOverlayIds, viewerStructureFormat]);
-
-    useEffect(() => {
-        if (colorMode === 'plddt' && !hasResidueConfidence) {
-            setColorMode('default');
-            setFocusedMetricSection('summary');
-            return;
-        }
-        if (colorMode === 'frustration' && !selectedDesign?.frustration_residues?.length) {
-            setColorMode('default');
-            setFocusedMetricSection('summary');
-        }
-    }, [colorMode, hasResidueConfidence, selectedDesign?.frustration_residues?.length, setColorMode]);
 
     useEffect(() => {
         if (selectedChain && !new Set([...Object.keys(chainMetrics), ...fampnnPsceChainIds]).has(selectedChain)) {
@@ -1052,6 +1018,243 @@ export default function StructureViewerPane({
         return colorMap.size > 0 ? colorMap : undefined;
     })();
 
+    const residueMetricLayer = useMemo<MolstarResidueMetricLayer | undefined>(() => {
+        const source = selectedDesign?.id ? `design:${selectedDesign.id}` : 'design:unknown';
+        if (effectiveColorMode === 'plddt' && plddtResidueColors) {
+            const values = new Map<string, number>();
+            for (const [chainId, metrics] of Object.entries(chainMetrics)) {
+                metrics.residue_numbers.forEach((residueNumber, index) => {
+                    const value = metrics.plddt[index];
+                    if (Number.isFinite(value)) values.set(residueColorKey(chainId, residueNumber), value);
+                });
+            }
+            if (conforNetsDefaultChainId) {
+                residueMetricNumbers.forEach((residueNumber, index) => {
+                    const value = plddtProfile[index];
+                    if (Number.isFinite(value)) values.set(residueColorKey(conforNetsDefaultChainId, residueNumber), value);
+                });
+            }
+            for (const key of plddtResidueColors.keys()) {
+                if (!values.has(key) && Number.isFinite(conforNetsScalarPlddt)) {
+                    values.set(key, conforNetsScalarPlddt as number);
+                }
+            }
+            return buildMetricLayerFromExplicitMaps({
+                descriptor: {
+                    id: 'plddt',
+                    label: bfactorLabel,
+                    semanticType: 'confidence',
+                    units: 'score',
+                    direction: 'higher_is_better',
+                    range: [0, 100],
+                    source: 'BioModStack design analysis',
+                    provenance: { source, method: 'persisted chain_metrics/residue confidence' },
+                },
+                colors: plddtResidueColors,
+                values,
+            });
+        }
+        if (effectiveColorMode === 'frustration' && frustrationResidueColors && selectedDesign?.frustration_residues) {
+            const values = new Map<string, number>();
+            for (const residue of selectedDesign.frustration_residues) {
+                const residueNumbers = chainMetrics[residue.chain]?.residue_numbers || [];
+                const residueNumber = residueNumbers[residue.pos] ?? residueNumbers[residue.pos - 1] ?? residue.pos + 1;
+                values.set(residueColorKey(residue.chain, residueNumber), residue.frust);
+            }
+            return buildMetricLayerFromExplicitMaps({
+                descriptor: {
+                    id: 'frustration-index',
+                    label: 'Frustration index',
+                    semanticType: 'energy',
+                    units: 'dimensionless',
+                    direction: 'higher_is_better',
+                    source: 'BioModStack design analysis',
+                    provenance: { source, method: 'FrustraMPNN' },
+                },
+                colors: frustrationResidueColors,
+                values,
+            });
+        }
+        if (effectiveColorMode === 'fampnn_psce' && fampnnPsceResidueColors) {
+            const values = new Map<string, number>();
+            for (const chainId of fampnnPsceChainIds) {
+                const chain = fampnnPsceChains[chainId];
+                chain?.residue_numbers.forEach((residueNumber, index) => {
+                    const value = chain.psce[index];
+                    if (Number.isFinite(value)) values.set(residueColorKey(chainId, residueNumber), value);
+                });
+            }
+            return buildMetricLayerFromExplicitMaps({
+                descriptor: {
+                    id: 'fampnn-psce',
+                    label: 'FAMPNN pSCE',
+                    semanticType: 'distance',
+                    units: 'Å',
+                    direction: 'lower_is_better',
+                    source: 'BioModStack design analysis',
+                    provenance: { source, method: 'FAMPNN' },
+                },
+                colors: fampnnPsceResidueColors,
+                values,
+            });
+        }
+        return undefined;
+    }, [bfactorLabel, chainMetrics, conforNetsDefaultChainId, conforNetsScalarPlddt, effectiveColorMode, fampnnPsceChainIds, fampnnPsceChains, fampnnPsceResidueColors, frustrationResidueColors, plddtProfile, plddtResidueColors, residueMetricNumbers, selectedDesign]);
+
+    const pairMetricLayers = useMemo<readonly MetricLayer[]>(() => {
+        const layers: MetricLayer[] = [];
+        const maxPairs = 250_000;
+        const indexedResidues = Object.keys(chainMetrics).sort().flatMap((chainId) => (
+            chainMetrics[chainId]?.residue_numbers.map((residueNumber) => ({
+                documentId: 'primary',
+                labelAsymId: chainId,
+                labelSeqId: residueNumber,
+            })) ?? []
+        ));
+        if (paeData && paeMatrix && indexedResidues.length === paeData.size && paeMatrix.length === paeData.size) {
+            const values = [];
+            for (let row = 0; row < paeData.size && values.length < maxPairs; row += 1) {
+                for (let column = 0; column < paeData.size && values.length < maxPairs; column += 1) {
+                    const value = paeMatrix[row]?.[column];
+                    values.push({
+                        identity: { first: indexedResidues[row]!, second: indexedResidues[column]! },
+                        value: typeof value === 'number' && Number.isFinite(value) ? value : null,
+                        ...(typeof value === 'number' && Number.isFinite(value) ? {} : { missingness: 'unavailable' as const }),
+                    });
+                }
+            }
+            layers.push({
+                descriptor: {
+                    id: 'pae', label: 'Predicted aligned error', dimension: 'residue-pair-matrix',
+                    units: 'Å', direction: 'lower_is_better', valueRange: [0, 32],
+                    projectionPolicy: 'none', normalization: 'none',
+                    palette: { colors: ['#2563eb', '#f8fafc', '#dc2626'], domain: [0, 32], missingColor: '#475569' },
+                    provenance: {
+                        source: paeData.source_mode ?? 'persisted PAE artifact',
+                        artifactId: paeData.confidence_file ?? undefined,
+                        parameters: { admitted_pairs: values.length, total_pairs: paeData.size * paeData.size, bounded: values.length < paeData.size * paeData.size },
+                    },
+                },
+                values,
+            });
+        }
+        if (contactMap && contactMap.chain_ids.length === contactMap.size && contactMap.residue_numbers.length === contactMap.size) {
+            const identities = contactMap.residue_numbers.map((residueNumber, index) => ({
+                documentId: 'primary', labelAsymId: contactMap.chain_ids[index]!, labelSeqId: residueNumber,
+            }));
+            const values = [];
+            for (let row = 0; row < contactMap.size && values.length < maxPairs; row += 1) {
+                for (let column = 0; column < contactMap.size && values.length < maxPairs; column += 1) {
+                    const value = contactMap.distance_matrix[row]?.[column];
+                    values.push({
+                        identity: { first: identities[row]!, second: identities[column]! },
+                        value: typeof value === 'number' && Number.isFinite(value) ? value : null,
+                        ...(typeof value === 'number' && Number.isFinite(value) ? {} : { missingness: 'unavailable' as const }),
+                    });
+                }
+            }
+            layers.push({
+                descriptor: {
+                    id: 'contact-distance', label: 'Cα contact distance', dimension: 'residue-pair-matrix',
+                    units: 'Å', direction: 'lower_is_better',
+                    valueRange: [0, 20], projectionPolicy: 'none', normalization: 'none',
+                    palette: { colors: ['#16a34a', '#facc15', '#dc2626'], domain: [0, 20], missingColor: '#475569' },
+                    provenance: { source: 'BioModStack contact-map analysis', parameters: { admitted_pairs: values.length, total_pairs: contactMap.size * contactMap.size, bounded: values.length < contactMap.size * contactMap.size } },
+                },
+                values,
+            });
+        }
+        return layers;
+    }, [chainMetrics, contactMap, paeData, paeMatrix]);
+
+    const structureScalarMetricLayers = useMemo<readonly MetricLayer[]>(() => {
+        const candidates: Array<{
+            id: string;
+            label: string;
+            value: unknown;
+            units: string | null;
+            direction: 'higher_is_better' | 'lower_is_better' | 'neutral';
+            range?: readonly [number, number];
+            description: string;
+        }> = [
+            { id: 'ptm', label: 'pTM', value: selectedDesign?.ptm, units: 'score', direction: 'higher_is_better', range: [0, 1], description: 'Predicted TM-score for the complete structure.' },
+            { id: 'complex-iplddt', label: 'Complex ipLDDT', value: selectedDesign?.complex_iplddt, units: 'score', direction: 'higher_is_better', range: [0, 1], description: 'Complex-level interface confidence reported by the structure producer.' },
+            { id: 'complex-ipde', label: 'Complex ipDE', value: selectedDesign?.complex_ipde, units: 'Å', direction: 'lower_is_better', description: 'Complex-level predicted interface distance error.' },
+            { id: 'gyration-radius', label: 'Radius of gyration', value: structureAnalysis?.gyration_radius, units: 'Å', direction: 'neutral', description: 'Radius of gyration computed by persisted structure analysis.' },
+            { id: 'residue-count', label: 'Residue count', value: structureAnalysis?.residue_count, units: 'residues', direction: 'neutral', description: 'Total residues in the persisted structure analysis.' },
+            { id: 'helix-percent', label: 'Helix content', value: structureAnalysis?.secondary_structure?.helix, units: '%', direction: 'neutral', range: [0, 100], description: 'Percentage of residues assigned as helix.' },
+            { id: 'sheet-percent', label: 'Sheet content', value: structureAnalysis?.secondary_structure?.sheet, units: '%', direction: 'neutral', range: [0, 100], description: 'Percentage of residues assigned as sheet.' },
+            { id: 'coil-percent', label: 'Coil content', value: structureAnalysis?.secondary_structure?.coil, units: '%', direction: 'neutral', range: [0, 100], description: 'Percentage of residues assigned as coil.' },
+        ];
+        return candidates.flatMap((candidate): MetricLayer[] => {
+            if (typeof candidate.value !== 'number' || !Number.isFinite(candidate.value)) return [];
+            return [{
+                descriptor: {
+                    id: candidate.id,
+                    label: candidate.label,
+                    dimension: 'structure-scalar',
+                    units: candidate.units,
+                    direction: candidate.direction,
+                    description: candidate.description,
+                    projectionPolicy: 'none',
+                    normalization: 'none',
+                    ...(candidate.range ? { valueRange: candidate.range } : {}),
+                    provenance: {
+                        source: candidate.id.startsWith('complex-') || candidate.id === 'ptm'
+                            ? 'Persisted structure prediction result'
+                            : 'BioModStack structure_summary analysis',
+                        jobId: activeJob?.id,
+                        artifactId: selectedDesign?.id,
+                    },
+                },
+                values: [{ identity: { documentId: 'primary' }, value: candidate.value }],
+            }];
+        });
+    }, [activeJob?.id, selectedDesign, structureAnalysis]);
+    const subunitMeanPlddtLayer = useMemo<MetricLayer | null>(() => {
+        const eligibleChains = Object.entries(chainMetrics).filter(([, metric]) => (
+            typeof metric.avg_plddt === 'number'
+            && Number.isFinite(metric.avg_plddt)
+            && metric.residue_numbers.length > 0
+        ));
+        if (eligibleChains.length < 2) return null;
+        return {
+            descriptor: {
+                id: 'subunit-mean-plddt',
+                label: 'Subunit mean pLDDT',
+                dimension: 'residue-scalar',
+                units: 'score',
+                direction: 'higher_is_better',
+                description: 'Each chain is colored uniformly by its authoritative chain-level mean pLDDT.',
+                valueRange: [0, 100],
+                projectionPolicy: 'direct',
+                normalization: 'none',
+                provenance: {
+                    source: 'BioModStack persisted chain_metrics analysis',
+                    jobId: activeJob?.id,
+                    artifactId: selectedDesign?.id,
+                },
+            },
+            values: eligibleChains.flatMap(([chainId, metric]) => metric.residue_numbers.map((residueNumber) => ({
+                identity: {
+                    documentId: 'primary',
+                    labelAsymId: chainId,
+                    labelSeqId: residueNumber,
+                },
+                value: metric.avg_plddt as number,
+                displayColor: plddtColor(metric.avg_plddt as number),
+            }))),
+        };
+    }, [activeJob?.id, chainMetrics, selectedDesign?.id]);
+    const allMetricLayers = useMemo<readonly MetricLayer[]>(
+        () => [
+            ...structureScalarMetricLayers,
+            ...(subunitMeanPlddtLayer ? [subunitMeanPlddtLayer] : []),
+            ...pairMetricLayers,
+        ],
+        [pairMetricLayers, structureScalarMetricLayers, subunitMeanPlddtLayer],
+    );
+
     const topFrustratedResidues = (() => {
         if (!selectedDesign?.frustration_residues?.length) return [];
         return [...selectedDesign.frustration_residues]
@@ -1191,7 +1394,9 @@ export default function StructureViewerPane({
     // Listen to fullscreen changes
     useEffect(() => {
         const handleFullscreenChange = () => {
-            setIsFullscreen(!!document.fullscreenElement);
+            const fullscreen = !!document.fullscreenElement;
+            setIsFullscreen(fullscreen);
+            if (!fullscreen) setMetricWorkbenchOpen(true);
         };
         document.addEventListener('fullscreenchange', handleFullscreenChange);
         return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
@@ -1294,29 +1499,6 @@ export default function StructureViewerPane({
             })}
         </div>
     ), [applyQuickView, isQuickViewActive, quickViewById, viewerSections]);
-    const renderQuickViewBar = useCallback((compact = false) => (
-        <div className={`flex flex-wrap items-center gap-1 ${compact ? '' : 'ml-1'}`}>
-            {viewerQuickViews.map((quickView) => {
-                const active = isQuickViewActive(quickView);
-                return (
-                    <button
-                        key={quickView.id}
-                        type="button"
-                        onClick={() => applyQuickView(quickView)}
-                        className={`rounded-lg border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${active
-                            ? 'border-blue-400/60 bg-blue-500/20 text-blue-100'
-                            : compact
-                                ? 'border-slate-700/70 bg-slate-900/75 text-slate-300 hover:border-slate-500 hover:text-white'
-                                : 'border-slate-700 bg-slate-800 text-slate-300 hover:border-slate-500 hover:text-white'
-                            }`}
-                        title={`Focus ${quickView.label.toLowerCase()} signals`}
-                    >
-                        {quickView.label}
-                    </button>
-                );
-            })}
-        </div>
-    ), [applyQuickView, isQuickViewActive, viewerQuickViews]);
 
     // Toggleable Analytics Panel for fullscreen
     const renderFullscreenOverlay = () => (
@@ -1343,12 +1525,12 @@ export default function StructureViewerPane({
                 </div>
                 <button
                     type="button"
-                    aria-label="Close analytics panel"
+                    aria-label="Minimize analytics panel"
                     onClick={() => setAnalyticsPanelOpen(false)}
                     className="border-l border-slate-700/50 px-3 py-2 text-xs font-semibold text-slate-300 transition-colors hover:bg-slate-800/70 hover:text-white"
-                    title="Close analytics panel"
+                    title="Minimize analytics panel"
                 >
-                    ✕
+                    —
                 </button>
             </div>
 
@@ -2546,66 +2728,6 @@ export default function StructureViewerPane({
                 </div>
             )}
 
-            {/* Color Mode */}
-            <select
-                value={effectiveColorMode}
-                onChange={(e) => handleColorModeChange(e.target.value as StructureViewerColorMode)}
-                className={`appearance-none border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white cursor-pointer hover:bg-slate-700 ${isCompact ? 'bg-slate-800/90 backdrop-blur-sm' : 'bg-slate-800'}`}
-            >
-                <option value="default">Chain Colors</option>
-                <option value="plddt" disabled={!hasResidueConfidence}>{bfactorLabel}</option>
-                <option value="fampnn_psce" disabled={!hasFampnnPsceProfile}>FA-MPNN PSCE</option>
-                <option value="frustration" disabled={!selectedDesign?.frustration_residues?.length}>
-                    Frustration
-                </option>
-                <option value="cdr" disabled={!antibodySelections?.length}>
-                    CDR Regions
-                </option>
-            </select>
-
-            {renderQuickViewBar(isCompact)}
-
-            <button
-                type="button"
-                onClick={() => setAnalyticsPanelOpen((open) => !open)}
-                className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${isCompact
-                    ? (analyticsPanelOpen
-                        ? 'bg-slate-800/90 text-slate-100 backdrop-blur-sm hover:bg-slate-700/90'
-                        : 'bg-blue-500/80 text-white backdrop-blur-sm hover:bg-blue-500')
-                    : (analyticsPanelOpen
-                        ? 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-                        : 'bg-blue-500/10 text-blue-300 border border-blue-500/40 hover:bg-blue-500/20')}`}
-                title={analyticsPanelOpen ? 'Hide the analytics panel' : 'Show the analytics panel'}
-            >
-                {analyticsPanelOpen ? 'Hide Analytics' : 'Show Analytics'}
-            </button>
-
-            {/* Color Legend */}
-            {effectiveColorMode === 'plddt' && !isCompact && (
-                <div className="flex items-center gap-1 text-xs text-slate-400">
-                    <span className="text-blue-400">■</span>≥90
-                    <span className="text-cyan-400 ml-1">■</span>≥70
-                    <span className="text-yellow-400 ml-1">■</span>≥50
-                    <span className="text-orange-400 ml-1">■</span>&lt;50
-                </div>
-            )}
-            {effectiveColorMode === 'fampnn_psce' && !isCompact && (
-                <div className="flex items-center gap-1 text-xs text-slate-400">
-                    <span className="text-emerald-400">■</span>≤0.9
-                    <span className="text-cyan-400 ml-1">■</span>≤1.2
-                    <span className="text-amber-400 ml-1">■</span>≤1.6
-                    <span className="text-rose-400 ml-1">■</span>&gt;1.6
-                    <span className="ml-2 text-slate-500">Lower is better</span>
-                </div>
-            )}
-            {effectiveColorMode === 'frustration' && !isCompact && (
-                <div className="flex items-center gap-1 text-xs text-slate-400">
-                    <span className="text-red-400">■</span>high
-                    <span className="text-slate-400 ml-1">■</span>neutral
-                    <span className="text-green-400 ml-1">■</span>minimal
-                </div>
-            )}
-
             {/* Fullscreen Toggle */}
             <button
                 onClick={() => {
@@ -2684,22 +2806,19 @@ export default function StructureViewerPane({
                         }
                         style={isFullscreen ? undefined : { height: viewerLayout.viewerHeight }}
                     >
-                        <MolstarViewer
-                            key={`${selectedDesignId}_${effectiveColorMode}_${conforNetsOverlaySignature}`}
+                        <StructureWorkbench
+                            mode="standard"
                             structureUrl={viewerStructureUrl}
                             format={viewerStructureFormat}
                             alphafoldView={effectiveColorMode === 'plddt' && !plddtResidueColors}
                             selections={effectiveColorMode === 'cdr' ? antibodySelections : undefined}
                             overlayStructures={conforNetsOverlayStructures}
-                            residueColors={
-                                effectiveColorMode === 'plddt'
-                                    ? plddtResidueColors
-                                    : effectiveColorMode === 'fampnn_psce'
-                                        ? fampnnPsceResidueColors
-                                        : effectiveColorMode === 'frustration'
-                                            ? frustrationResidueColors
-                                            : undefined
-                            }
+                            residueMetricLayer={residueMetricLayer}
+                            metricLayers={allMetricLayers}
+                            activeMetricId={overlayView === 'pae' ? 'pae' : residueMetricLayer?.descriptor.id}
+                            showMetricWorkbench={metricWorkbenchOpen}
+                            onMetricWorkbenchVisibilityChange={setMetricWorkbenchOpen}
+                            showSequenceTrack
                             height="100%"
                             backgroundColor={themeColors.bgPrimary}
                         />
@@ -2740,8 +2859,8 @@ export default function StructureViewerPane({
 
                                 {referenceDockMode === 'viewer' && selectedReference ? (
                                     <div className="h-[calc(100%-45px)] p-2">
-                                        <MolstarViewer
-                                            key={`reference:${selectedReference.url}`}
+                                        <StructureWorkbench
+                                            mode="compact"
                                             structureUrl={selectedReference.url}
                                             format={selectedReference.format}
                                             alphafoldView={false}
@@ -2780,11 +2899,11 @@ export default function StructureViewerPane({
                 </div>
 
                 {/* Right Column: Analytics Sidebar - hidden in fullscreen */}
-                {!isFullscreen && analyticsPanelOpen && renderAnalyticsSidebar()}
+                {LEGACY_ANALYTICS_ENABLED && !isFullscreen && analyticsPanelOpen && renderAnalyticsSidebar()}
             </div>
 
             {/* Fullscreen overlay panel - only in fullscreen mode */}
-            {isFullscreen && analyticsPanelOpen && (
+            {LEGACY_ANALYTICS_ENABLED && isFullscreen && analyticsPanelOpen && (
                 <div className={fullscreenAnalyticsLayout.frameClassName}>
                     {renderFullscreenOverlay()}
                 </div>

@@ -14,6 +14,7 @@ import {
     BOLTZ_NUM_SAMPLES_HELP_TEXT,
     BOLTZ_QUALITY_PRESETS,
     DEFAULT_BOLTZ_CP_CONTEXT_QUERY_TILE_TOKENS,
+    DEFAULT_STRUCTURE_MSA_PROVIDER,
     DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MIN_SIZE_GB,
     DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MODE,
     DEFAULT_STRUCTURE_MSA_TARGET_SHARDS,
@@ -141,12 +142,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const { gpuOptions } = useLiveGpuCatalog();
-    const normalizeProtenixModel = (model?: string) => {
-        if (!model) return 'protenix_base_20250630_v1.0.0';
-        if (model === 'protenix_base_20241211_v0.2.1') return 'protenix_base_default_v1.0.0';
-        if (model === 'protenix_esm_20241211_v0.2.1') return 'protenix_mini_esm_v0.5.0';
-        return model;
-    };
+    const normalizeProtenixModel = (_model?: string) => 'protenix-v2';
     const initialPrimaryProteinComponent = resolveInitialPrimaryProteinComponent(initialValues);
     const initialPrimarySequence = initialPrimaryProteinComponent?.sequence || initialValues?.sequence || '';
     const initialPrimaryName = initialPrimaryProteinComponent?.name || initialValues?.sequence_name || 'predicted';
@@ -161,7 +157,6 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
 
     const launchConfig = resolveStructureLaunchConfig(initialValues);
     const isBoltzCpLaunch = launchConfig.variant === 'boltz_cp_experimental';
-    const isEsmFold2Launch = launchConfig.variant === 'esmfold2_experimental';
     const initialBoltzCpSizeCp = Number.parseInt(String(initialValues?.size_cp ?? initialValues?.bcp_size_cp ?? 4), 10);
     const initialBoltzCpShardPlanId = normalizeBoltzCpShardPlanId(
         initialValues?.bcp_shard_plan_id ?? initialValues?.shard_plan_id ?? inferBoltzCpShardPlanId(initialBoltzCpSizeCp)
@@ -170,7 +165,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
 
     // Core state
     const initialGpuPinningState = resolveInitialGpuPinningState(initialValues);
-    const [jobName, setJobName] = useState(initialValues?.name || initialValues?.job_name || (isEsmFold2Launch ? 'esmfold2_prediction' : 'structure_prediction'));
+    const [jobName, setJobName] = useState(initialValues?.name || initialValues?.job_name || 'structure_prediction');
     const [pinnedGpus, setPinnedGpus] = useState(initialGpuPinningState.pinnedGpus);
     const [lockGpus, setLockGpus] = useState(initialGpuPinningState.lockGpus);
     const clearGpuPinning = () => {
@@ -286,7 +281,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     const [msaUseEnv, setMsaUseEnv] = useState<boolean | undefined>(initialValues?.msa_use_env);
     const [msaNumIterations, setMsaNumIterations] = useState<number | undefined>(initialValues?.msa_num_iterations);
     const [msaProvider, setMsaProvider] = useState<'local' | 'colabfold_api'>(
-        initialValues?.msa_provider === 'colabfold_api' ? 'colabfold_api' : 'local'
+        initialValues?.msa_provider === 'local' ? 'local' : DEFAULT_STRUCTURE_MSA_PROVIDER
     );
     const [msaTargetShardMode, setMsaTargetShardMode] = useState<StructureMsaTargetShardMode>(
         normalizeMsaTargetShardMode(initialValues?.msa_target_shard_mode ?? DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MODE)
@@ -590,7 +585,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     const usesBoltz = predictorFamilies.includes('boltz');
     const usesRf3 = predictorFamilies.includes('rf3');
     const usesProtenix = predictorFamilies.includes('protenix');
-    const usesEsmFold2 = predictorFamilies.includes('esmfold2') || isEsmFold2Launch;
+    const usesEsmFold2 = predictorFamilies.includes('esmfold2');
     const msaNeeded =
         (usesBoltz && boltzUseMsa) ||
         (usesRf3 && rf3UseMsa) ||
@@ -654,8 +649,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
             }));
         }
 
-        if (isEsmFold2Launch) {
-            params.structure_launch_variant = 'esmfold2_experimental';
+        if (usesEsmFold2) {
             params.model_variant = esmfold2Variant;
             params.local_files_only = true;
         }
@@ -750,7 +744,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         return Object.fromEntries(
             Object.entries(params).filter(([, value]) => value !== undefined)
         );
-    }, [jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, isBoltzCpLaunch, isEsmFold2Launch, esmfold2Variant, usesBoltz, usesRf3, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpShardPlanId, bcpOutputFormat, bcpWriteFullPae, bcpContextQueryTileTokens, bcpSeed, boltzCpGpuSettings.gpuIds, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, rf3UseMsa, rf3NumRecycles, rf3NumSamples, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
+    }, [jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, isBoltzCpLaunch, esmfold2Variant, usesEsmFold2, usesBoltz, usesRf3, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpShardPlanId, bcpOutputFormat, bcpWriteFullPae, bcpContextQueryTileTokens, bcpSeed, boltzCpGpuSettings.gpuIds, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, rf3UseMsa, rf3NumRecycles, rf3NumSamples, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
     const targetPreview = targetSource
         ? resolveTargetPreviewSource({
             previewUrl: targetPreviewUrl,
@@ -818,12 +812,6 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         setTargetSourcePath(uploadedPath);
         return uploadedPath;
     };
-
-    useEffect(() => {
-        if (numParallelJobs > 1 && msaProvider === 'colabfold_api') {
-            setMsaProvider('local');
-        }
-    }, [numParallelJobs, msaProvider]);
 
     useEffect(() => {
         if (!modalParsedStructure) {
@@ -925,8 +913,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
             }));
         }
 
-        if (isEsmFold2Launch) {
-            params.structure_launch_variant = 'esmfold2_experimental';
+        if (usesEsmFold2) {
             params.model_variant = esmfold2Variant;
             params.local_files_only = true;
         }
@@ -1208,18 +1195,16 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     const showEsmFold2Params = usesEsmFold2;
     const structureTemplateBaseId = isBoltzCpLaunch
         ? 'boltz_cp_experimental'
-        : isEsmFold2Launch
-            ? 'esmfold2_experimental'
-            : 'structure_prediction';
+        : 'structure_prediction';
     const structureDocumentationTopics = useMemo<ModelDocumentationTopic[]>(() => {
         if (isBoltzCpLaunch) return ['fold_cp', 'boltz2'];
-        if (isEsmFold2Launch) return ['esmfold2'];
         const topics: ModelDocumentationTopic[] = [];
         if (usesBoltz) topics.push('boltz2');
         if (usesRf3) topics.push('rf3');
         if (usesProtenix) topics.push('protenix');
+        if (usesEsmFold2) topics.push('esmfold2');
         return topics.length > 0 ? topics : ['boltz2'];
-    }, [isBoltzCpLaunch, isEsmFold2Launch, usesBoltz, usesRf3, usesProtenix]);
+    }, [isBoltzCpLaunch, usesBoltz, usesRf3, usesProtenix, usesEsmFold2]);
 
     return (
         <div className="bg-slate-800/30 border border-slate-700 rounded-xl p-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -1233,8 +1218,8 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                         ← Back
                     </button>
                     <div>
-                        <h2 className="text-lg font-semibold text-slate-200">{isEsmFold2Launch ? 'ESMFold2 Experimental' : 'Structure Prediction'}</h2>
-                        <p className="text-sm text-slate-500">{isEsmFold2Launch ? 'Structure launcher inputs; ESMFold2 local runtime.' : 'Predict 3D structure from amino acid sequence'}</p>
+                        <h2 className="text-lg font-semibold text-slate-200">Structure Prediction</h2>
+                        <p className="text-sm text-slate-500">Predict 3D structure from amino acid sequence</p>
                     </div>
                 </div>
                 {onOpenTemplateManager && (
@@ -1373,13 +1358,11 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                         </div>
                     ) : (
                         <div className="rounded-lg border border-orange-500/30 bg-orange-500/10 px-4 py-3 text-sm text-orange-100">
-                            <div className="font-medium">{isBoltzCpLaunch ? 'Fold-CP Experimental' : isEsmFold2Launch ? 'ESMFold2 Experimental' : 'Fixed predictor'}</div>
+                            <div className="font-medium">{isBoltzCpLaunch ? 'Fold-CP Experimental' : 'Fixed predictor'}</div>
                             <div className="mt-1 text-xs text-orange-100/80">
                                 {isBoltzCpLaunch
                                     ? 'Single-fold Boltz launcher with Fold-CP runtime controls below.'
-                                    : isEsmFold2Launch
-                                        ? 'Uses this structure launcher for sequence, PDB import, and complex components.'
-                                        : 'Fixed predictor variant.'}
+                                    : 'Fixed predictor variant.'}
                             </div>
                         </div>
                     )}
@@ -1996,11 +1979,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                                     onChange={(e) => setProtenixModelWeights(e.target.value)}
                                     className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
                                 >
-                                    <option value="protenix_base_20250630_v1.0.0">Base 2025-06-30 v1.0.0 (Default)</option>
-                                    <option value="protenix-v2">Protenix v2 (Shared weights required)</option>
-                                    <option value="protenix_base_default_v1.0.0">Base Default v1.0.0</option>
-                                    <option value="protenix_mini_esm_v0.5.0">Mini ESM v0.5.0 (Light)</option>
-                                    <option value="protenix_mini_default_v0.5.0">Mini Default v0.5.0</option>
+                                    <option value="protenix-v2">Protenix v2 (required)</option>
                                 </select>
                             </div>
                             <div>
@@ -2008,17 +1987,12 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                                 <select
                                     value={protenixUseMsa ? 'true' : 'false'}
                                     onChange={(e) => {
-                                        const useMsa = e.target.value === 'true';
-                                        setProtenixUseMsa(useMsa);
-                                        // Auto-switch to ESM model when MSA disabled
-                                        if (!useMsa && !protenixModelWeights.includes('esm')) {
-                                            setProtenixModelWeights('protenix_mini_esm_v0.5.0');
-                                        }
+                                        setProtenixUseMsa(e.target.value === 'true');
                                     }}
                                     className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
                                 >
                                     <option value="true">Yes</option>
-                                    <option value="false">No (ESM)</option>
+                                    <option value="false">No (V2 sequence-only mode)</option>
                                 </select>
                             </div>
                             <div>
@@ -2113,9 +2087,9 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                                             onChange={(e) => setMsaProvider(e.target.value as 'local' | 'colabfold_api')}
                                             className="w-full bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
                                         >
-                                            <option value="local">Local MMseqs2 (recommended)</option>
+                                            <option value="local">Local MMseqs2 (manual override)</option>
                                             <option value="colabfold_api" disabled={numParallelJobs > 1}>
-                                                ColabFold API (single-job only)
+                                                ColabFold API (default; single-job only)
                                             </option>
                                         </select>
                                     </div>
@@ -2493,7 +2467,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                         disabled={!sequence.trim() || submitMutation.isPending}
                         className="px-6 py-3 bg-gradient-to-r from-blue-600 to-accent-secondary hover:from-blue-500 hover:to-accent disabled:opacity-50 disabled:grayscale text-white font-bold rounded-lg shadow-lg shadow-accent/20 transition-all transform active:scale-95"
                     >
-                        {submitMutation.isPending ? 'Submitting...' : isEsmFold2Launch ? 'Launch ESMFold2' : 'Launch Prediction'}
+                        {submitMutation.isPending ? 'Submitting...' : 'Launch Prediction'}
                     </button>
                 </div>
             </div>

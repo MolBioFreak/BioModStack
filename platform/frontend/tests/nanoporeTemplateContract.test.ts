@@ -29,10 +29,11 @@ test('Nanopore FASTQ launch is gated on reference input and finite numeric bound
     assert.match(template, /max=\{FASTQ_MAX_IGV_REPORT_MAX_SITES\}/u);
 });
 
-test('Nanopore FASTQ CLI preview points at the NGS entrypoint', () => {
+test('Nanopore FASTQ CLI preview points at the executable standalone entrypoint', () => {
     const template = readSource('src/components/NanoporeTemplate.tsx');
 
-    assert.match(template, /nextflow run ngs\.nf -profile nanopore_methylation/u);
+    assert.match(template, /nextflow run workflows\/ngs\/ont_fastq_qc\.nf -profile ont_fastq_qc,apptainer/u);
+    assert.doesNotMatch(template, /nextflow run ngs\.nf/u);
     assert.doesNotMatch(template, /nextflow run main\.nf/u);
 });
 
@@ -50,8 +51,9 @@ test('NGS runs polling is scoped to Nanopore jobs instead of pulling the whole j
     const api = readSource('src/lib/api.ts');
 
     assert.match(api, /model_id\?: string/u);
-    assert.match(ngsToolkit, /fetchJobs\(\{ include_children: true, model_id: 'nanopore', limit: 100 \}\)/u);
+    assert.match(ngsToolkit, /fetchJobs\(\{ include_children: true, model_id: 'nanopore', limit: 100, summary: true \}\)/u);
     assert.doesNotMatch(ngsToolkit, /fetchJobs\(\{ include_children: true \}\)/u);
+    assert.doesNotMatch(ngsToolkit, /refetchInterval: 5000/u);
 });
 
 test('NGS modkit summary label matches the rendered preview limit', () => {

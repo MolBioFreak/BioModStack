@@ -35,10 +35,16 @@ logger = logging.getLogger(__name__)
 CODE_ROOT = Path(__file__).resolve().parents[3]
 
 from antibody_pipeline_contract import is_antibody_pipeline_mode
-from services.gpu_config import read_scheduler_config, write_scheduler_config
+from services.gpu_config import read_scheduler_config, mutate_scheduler_config
 from services.gpu_metadata import GPU_CAPABILITIES
 from services.gpu_stage_activity import job_uses_assigned_gpu
-from services.stage_review import has_stage_gate, nextflow_history_status, refresh_gate_payload
+from services.stage_review import (
+    has_stage_gate,
+    nextflow_history_status,
+    nextflow_history_status_for_run_dir,
+    refresh_gate_payload,
+    resolve_nextflow_run_dir,
+)
 from services.workflow_adapter import workflow_adapter_enabled
 
 
@@ -109,13 +115,22 @@ VRAM_PROFILES = {
     'msa_batch': {'base': 3000, 'scale': 2},    # MSA Generation (GPU streaming, LOW VRAM)
     'antibody_child': {'base': 6000, 'scale': 25},  # Antibody validation (Boltz + scoring) ~6-8GB
     'maturation_child': {'base': 18500, 'scale': 25},  # PPIFlow child jobs need one-per-24/32GB GPU, not startup VRAM
-    'antibody_denovo': {'base': 6000, 'scale': 25},  # Full antibody pipeline
+    'esmfold2': {'base': 22000, 'scale': 35},  # Canonical ESMFold2 high-pressure profile
+    'esmfold2_experimental': {'base': 22000, 'scale': 35},  # Compatibility alias
+
     'oligo_design': {'base': 7000, 'scale': 20},     # Oligo Designer (RFDpoly + NA-MPNN)
     'default': {'base': 6000, 'scale': 25},     # Conservative fallback
 }
 
 # Models that need heavy GPUs (exclude 5060 Ti)
-HEAVY_MODELS = {'af2', 'rfdiffusion', 'rf3', 'maturation_child'}
+HEAVY_MODELS = {
+    'af2',
+    'rfdiffusion',
+    'rf3',
+    'maturation_child',
+    'esmfold2',
+    'esmfold2_experimental',
+}
 PROTENIX_MODELS = {'protenix', 'protenix_esm', 'protenix_mini_esm'}
 
 # Scheduler-side packing should follow observed live VRAM plus a modest surge
@@ -540,6 +555,62 @@ def _recover_rfantibody_parent_after_child_wait(job: Any, child_wait_success: Di
     }
 
 
+async def _commit_reconciled_job_mutations(session: Any) -> int:
+    """Publish worker recovery mutations only if the row remains active.
+
+    Completion polling works on ORM snapshots that can be stale while an operator
+    cancels a job or opens a review gate.  Expunge those snapshots and replay their
+    changed columns as guarded SQL updates so terminal worker recovery cannot undo
+    a concurrent operator decision.
+    """
+    from sqlalchemy import inspect, update
+    from database import Job
+
+    pending: list[tuple[str, dict[str, Any]]] = []
+    for candidate in list(session.dirty):
+        if not isinstance(candidate, Job):
+            continue
+        state = inspect(candidate)
+        values = {
+            attribute.key: attribute.value
+            for attribute in state.attrs
+            if attribute.history.has_changes()
+        }
+        if values:
+            pending.append((str(candidate.id), values))
+        session.expunge(candidate)
+
+    applied = 0
+    for job_id, values in pending:
+        transition = await session.execute(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.status == "running",
+                Job.queue_status == "running",
+                Job.awaiting_input.is_(False),
+            )
+            .values(**values)
+        )
+        applied += int(transition.rowcount or 0)
+    if pending:
+        await session.commit()
+    return applied
+
+
+def _has_terminal_nextflow_history(history_entry: Any) -> bool:
+    """Return whether persisted Nextflow history is already authoritative.
+
+    GPU activity is only a liveness hint. After an API/reloader restart, an
+    unrelated process can keep the assigned GPU busy after this job's detached
+    Nextflow run has already written a terminal OK/ERR row.
+    """
+    if not history_entry:
+        return False
+    status = history_entry[0] if isinstance(history_entry, (tuple, list)) else history_entry
+    return str(status or "").strip().upper() in {"OK", "ERR"}
+
+
 def _reconcile_terminal_history_without_process(
     job: Any,
     *,
@@ -607,9 +678,10 @@ def _reconcile_terminal_history_without_process(
         return False
 
     bootstrap_artifacts_present = False
-    if getattr(job, "output_dir", None):
+    output_dir = getattr(job, "child_output_dir", None) or getattr(job, "output_dir", None)
+    if output_dir:
         try:
-            out_dir = Path(job.output_dir)
+            out_dir = Path(output_dir)
             bootstrap_artifacts_present = any(
                 (out_dir / candidate).exists()
                 for candidate in ("nextflow.log", ".nextflow.log")
@@ -1232,10 +1304,17 @@ def _gpu_target_fill(gpu_index: int, config: Dict[str, Any]) -> float:
 
 
 def _gpu_safety_margin_mb(gpu_index: int, config: Dict[str, Any]) -> int:
+    global_margin = config.get("global", {}).get("vram_safety_margin_mb", 2048)
     try:
-        return max(0, int(_gpu_override(gpu_index, config).get("vram_safety_margin_mb", 500)))
+        return max(
+            0,
+            int(_gpu_override(gpu_index, config).get("vram_safety_margin_mb", global_margin)),
+        )
     except (TypeError, ValueError):
-        return 500
+        try:
+            return max(0, int(global_margin))
+        except (TypeError, ValueError):
+            return 2048
 
 
 def _gpu_max_concurrent_jobs(gpu_index: int, config: Dict[str, Any]) -> Optional[int]:
@@ -2040,7 +2119,7 @@ class GPUOrchestrator:
                         model_id=job.model_id,
                         mode=job.mode,
                         params={**job.params},  # No gpu_id injected
-                        output_dir=job.output_dir
+                        output_dir=job.child_output_dir or job.output_dir
                     )
                     job.queue_status = "running"
                     job.assigned_gpu = None
@@ -2251,7 +2330,7 @@ class GPUOrchestrator:
                         model_id=job.model_id,
                         mode=job.mode,
                         params={**job.params, 'gpu_id': gpu_id},
-                        output_dir=job.output_dir
+                        output_dir=job.child_output_dir or job.output_dir
                     )
                     
                     # Update job status
@@ -2271,10 +2350,12 @@ class GPUOrchestrator:
                     job.error_message = str(e)
 
             if used_quick_enable_gpu_ids:
-                for gpu_id in used_quick_enable_gpu_ids:
-                    gpu_override = config.setdefault("overrides", {}).setdefault(str(gpu_id), {})
-                    gpu_override["quick_enable"] = False
-                write_scheduler_config(config)
+                def consume_quick_enable_tokens(latest_config: Dict[str, Any]) -> None:
+                    overrides = latest_config.setdefault("overrides", {})
+                    for gpu_id in used_quick_enable_gpu_ids:
+                        overrides.setdefault(str(gpu_id), {})["quick_enable"] = False
+
+                mutate_scheduler_config(consume_quick_enable_tokens)
             
             await session.commit()
     
@@ -2310,6 +2391,17 @@ class GPUOrchestrator:
                 history_status_by_job = _read_nextflow_history_statuses(
                     [str(job.id) for job in running_jobs]
                 )
+                # Per-child workflows use their own output-local .nextflow/history.
+                # Reconcile those histories in this background worker—not in a GET—so
+                # spawn/wait parents cannot be stranded when the code-root history
+                # lacks a child run.
+                for job in running_jobs:
+                    run_dir = resolve_nextflow_run_dir(job.child_output_dir or job.output_dir)
+                    if not run_dir:
+                        continue
+                    status_token = nextflow_history_status_for_run_dir(run_dir, str(job.id))
+                    if status_token in {"OK", "ERR"}:
+                        history_status_by_job[str(job.id)] = (status_token, "")
 
                 # Cross-check against launcher-tracked Nextflow processes.
                 # This prevents stale "completed" reconciliation when ps parsing
@@ -2358,6 +2450,10 @@ class GPUOrchestrator:
 
                 reconciled = 0
                 for job in running_jobs:
+                    # Never carry dirty recovery snapshots into another job's DB work:
+                    # AsyncSession autoflush would otherwise bypass the guarded publisher.
+                    if session.dirty:
+                        await _commit_reconciled_job_mutations(session)
                     job_is_running = False
 
                     # Method 0: Trust launcher's active process registry.
@@ -2371,8 +2467,14 @@ class GPUOrchestrator:
                     elif job.name in all_processes or job.name.replace(' ', '.') in all_processes:
                         job_is_running = True
                     
-                    # Method 2: Check if there's any activity on the job's assigned GPU
-                    if not job_is_running and job.assigned_gpu is not None:
+                    # Method 2: Check if there's any activity on the job's assigned GPU.
+                    # Terminal per-job history is stronger evidence than shared-GPU activity.
+                    terminal_history = history_status_by_job.get(str(job.id))
+                    if (
+                        not job_is_running
+                        and job.assigned_gpu is not None
+                        and not _has_terminal_nextflow_history(terminal_history)
+                    ):
                         if job.assigned_gpu in gpu_has_activity:
                             # GPU has activity - job might be running
                             # But we need to be more specific for FAMPNN
@@ -2382,11 +2484,12 @@ class GPUOrchestrator:
                             else:
                                 job_is_running = True
                     
-                    # Method 3: If job has been running > 1 minute and no process found, reconcile state
+                    # Method 3: Reconcile immediately from terminal per-job history; otherwise
+                    # retain the one-minute grace period for missing-process heuristics.
                     if not job_is_running and job.started_at:
                         age_seconds = (datetime.utcnow() - job.started_at).total_seconds()
-                        if age_seconds > 60:  # Only mark complete if running > 1 min
-                            history_status = history_status_by_job.get(str(job.id))
+                        if age_seconds > 60 or _has_terminal_nextflow_history(terminal_history):
+                            history_status = terminal_history
                             history_outcome = None
                             history_note = None
                             child_wait_success = None
@@ -2405,12 +2508,13 @@ class GPUOrchestrator:
                                 if "waitfor" in current_stage_name and "children" in current_stage_name:
                                     child_wait_success = _read_successful_child_wait_result(job.stage_work_dir)
 
+                            result_output_dir = job.child_output_dir or job.output_dir
                             failure_reason = history_note if history_outcome == "failed" else None
                             if failure_reason is None and job.error_message:
                                 failure_reason = str(job.error_message)
-                            elif failure_reason is None and history_outcome != "completed" and job.output_dir:
+                            elif failure_reason is None and history_outcome != "completed" and result_output_dir:
                                 try:
-                                    out_dir = Path(job.output_dir)
+                                    out_dir = Path(result_output_dir)
                                     nf_log = out_dir / "nextflow.log"
                                     if not nf_log.exists():
                                         nf_log = out_dir / ".nextflow.log"
@@ -2451,32 +2555,56 @@ class GPUOrchestrator:
                                     f"(no process found, age: {age_seconds:.0f}s): {failure_reason}"
                                 )
                             elif history_outcome == "completed":
-                                job.queue_status = "completed"
-                                if job.status == "running":
-                                    job.status = "completed"
-                                job.current_stage = "Complete"
-                                job.stage_progress = None
-                                job.error_message = None
-                                job.completed_at = datetime.utcnow()
+                                # A persisted review gate is an operator decision point, never an
+                                # implicit completion signal from stale scheduler history.
+                                if has_stage_gate(job) or getattr(job, "awaiting_input", False):
+                                    reconciled += 1
+                                    continue
+                                finalization = None
+                                if result_output_dir:
+                                    from services.result_state_integrity import finalize_successful_job
 
+                                    finalization = await finalize_successful_job(job, result_output_dir, session)
+                                    if not finalization.completed:
+                                        logger.warning(
+                                            f"[COMPLETION] Reconciled workflow {job.name} finished, "
+                                            "but result ingestion/validation failed"
+                                        )
+                                        reconciled += 1
+                                        continue
+                                else:
+                                    from services.result_state_integrity import job_expects_design_results
+
+                                    if job_expects_design_results(job):
+                                        job.status = "failed"
+                                        job.queue_status = "failed"
+                                        job.current_stage = "Result Ingestion Failed"
+                                        job.stage_progress = None
+                                        job.error_message = (
+                                            "workflow completed but no job-specific output directory was available "
+                                            "for required result ingestion and validation"
+                                        )
+                                        job.completed_at = datetime.utcnow()
+                                        reconciled += 1
+                                        continue
+                                    job.queue_status = "completed"
+                                    if job.status == "running":
+                                        job.status = "completed"
+                                    job.current_stage = "Complete"
+                                    job.stage_progress = None
+                                    job.error_message = None
+                                    job.completed_at = datetime.utcnow()
+
+                                # The no-output non-result path above mutates the ORM job directly.
+                                # Publish it before hooks that can issue queries/commits in this session.
+                                if session.dirty:
+                                    await _commit_reconciled_job_mutations(session)
                                 try:
-                                    # Best-effort safety net: if a top-level workflow completed but
-                                    # launch task finalization was missed, ingest outputs so Data Viewer
-                                    # is populated instead of showing an empty completed job.
-                                    if job.parent_job_id is None and job.output_dir:
-                                        existing_designs = (
-                                            await session.execute(
-                                                select(func.count(Design.id)).where(Design.job_id == job.id)
-                                            )
-                                        ).scalar() or 0
-                                        if existing_designs == 0:
-                                            from services.result_ingester import ingest_job_results
-
-                                            created = await ingest_job_results(str(job.id), job.output_dir, session)
-                                            logger.info(
-                                                f"[COMPLETION] Ingested {created} designs "
-                                                f"for reconciled top-level job {job.name}"
-                                            )
+                                    if finalization is not None:
+                                        logger.info(
+                                            f"[COMPLETION] Ingested and validated {finalization.design_count} designs "
+                                            f"for reconciled top-level job {job.name}"
+                                        )
                                     from services.analysis_autorun import schedule_viewer_minimum_analyses_for_job
                                     from services.nextflow import (
                                         maybe_trigger_batch_frustrampnn,
@@ -2487,7 +2615,7 @@ class GPUOrchestrator:
                                     await maybe_trigger_mutation_seed_refinement(job, session)
                                 except Exception as ingest_err:
                                     logger.warning(
-                                        f"[COMPLETION] Reconcile ingestion failed for {job.name}: {ingest_err}"
+                                        f"[COMPLETION] Post-ingestion completion hook failed for {job.name}: {ingest_err}"
                                     )
                                 if history_note:
                                     logger.info(
@@ -2542,6 +2670,34 @@ class GPUOrchestrator:
                             else:
                                 history_status = nextflow_history_status(job)
                                 gate_present = has_stage_gate(job)
+                                result_output_dir = job.child_output_dir or job.output_dir
+                                from services.result_state_integrity import job_expects_design_results
+
+                                if history_status == "OK" and job_expects_design_results(job) and not result_output_dir:
+                                    job.status = "failed"
+                                    job.queue_status = "failed"
+                                    job.current_stage = "Result Ingestion Failed"
+                                    job.stage_progress = None
+                                    job.error_message = (
+                                        "terminal workflow history found but no job-specific output directory was "
+                                        "available for required result ingestion and validation"
+                                    )
+                                    job.completed_at = datetime.utcnow()
+                                    reconciled += 1
+                                    continue
+                                finalization = None
+                                if (
+                                    history_status == "OK"
+                                    and not gate_present
+                                    and not getattr(job, "awaiting_input", False)
+                                    and result_output_dir
+                                ):
+                                    from services.result_state_integrity import finalize_successful_job
+
+                                    finalization = await finalize_successful_job(job, result_output_dir, session)
+                                    if not finalization.completed:
+                                        reconciled += 1
+                                        continue
                                 reconciled_now = _reconcile_terminal_history_without_process(
                                     job,
                                     history_status=history_status,
@@ -2553,33 +2709,27 @@ class GPUOrchestrator:
                                     continue
                                 if history_status == "OK" and job.status == "completed":
                                     try:
-                                        if job.parent_job_id is None and job.output_dir:
-                                            existing_designs = (
-                                                await session.execute(
-                                                    select(func.count(Design.id)).where(Design.job_id == job.id)
-                                                )
-                                            ).scalar() or 0
-                                            if existing_designs == 0:
-                                                from services.result_ingester import ingest_job_results
-
-                                                created = await ingest_job_results(str(job.id), job.output_dir, session)
-                                                logger.info(
-                                                    f"[COMPLETION] Ingested {created} designs "
-                                                    f"for terminal OK job {job.name}"
-                                                )
+                                        if finalization is not None:
+                                            logger.info(
+                                                f"[COMPLETION] Ingested and validated {finalization.design_count} designs "
+                                                f"for terminal OK job {job.name}"
+                                            )
                                         from services.analysis_autorun import schedule_viewer_minimum_analyses_for_job
 
                                         schedule_viewer_minimum_analyses_for_job(str(job.id))
                                     except Exception as ingest_err:
                                         logger.warning(
-                                            f"[COMPLETION] Terminal OK ingestion failed for {job.name}: {ingest_err}"
+                                            f"[COMPLETION] Terminal OK post-ingestion hook failed for {job.name}: {ingest_err}"
                                         )
 
                             reconciled += 1
                 
                 if reconciled > 0:
-                    await session.commit()
-                    logger.info(f"[COMPLETION] Reconciled {reconciled} stale running jobs")
+                    applied = await _commit_reconciled_job_mutations(session)
+                    logger.info(
+                        f"[COMPLETION] Reconciled {applied} stale running jobs "
+                        f"({reconciled - applied} superseded by operator state)"
+                    )
                 
         except Exception as e:
             logger.error(f"[COMPLETION] Error checking completions: {e}", exc_info=True)

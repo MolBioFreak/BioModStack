@@ -40,9 +40,9 @@ From the repo root:
 Frontend-only dev mode:
 
 ```bash
-cd platform/frontend
-npm install
-npm run dev -- --host 127.0.0.1 --port 5173
+# From the repository root; the root pnpm lock is authoritative.
+corepack pnpm install
+corepack pnpm --dir platform/frontend dev --host 127.0.0.1 --port 5173
 ```
 
 Default local URL:
@@ -80,13 +80,13 @@ The UI currently provides:
 - sequence library and mol bio editing tools
 - nanopore launch/review flows
 - workstation telemetry/runtime surfaces
-- robotics control via the BioXP cockpit's current linkage/proxy surface
+- status-first BioXP operation through the compact control-plane contract
 - shell-friendly hosted navigation for browser/Electron/mobile wrappers
 
-The frontend BioXP route reflects the currently exposed cockpit contract. It is
-not a promise that every robot-local BioXP endpoint is already mirrored through
-the BMS API, and operators should expect occasional status-semantic drift during
-reconnect/recovery windows.
+The frontend BioXP route consumes only the compact profile/status/connection,
+offline protocol, local job, typed command, and emergency-delivery contract. It
+does not expose retired hardware-family, arbitrary proxy, host-lifecycle, shell,
+or remote-log controls.
 
 ## Important components
 

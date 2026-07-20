@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Iterable, Optional, Sequence
-import asyncio
 import json
 import logging
 
@@ -16,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import async_session, Job
 from schemas import JobStatus
-from services.nextflow import cancel_nextflow_job, launch_nextflow_job
+from services.nextflow import cancel_nextflow_job
 
 logger = logging.getLogger(__name__)
 
@@ -101,10 +100,13 @@ async def cancel_job_lineage(
         raise HTTPException(status_code=404, detail="Job not found")
 
     if not _lineage_has_cancelable_jobs(lineage):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot cancel job with status: {root_job.status}",
-        )
+        # A cancellation request for an already-cancelled lineage is idempotent:
+        # accept it so stale cancellation metadata can be normalized below.
+        if not all(str(job.status or "").strip().lower() == JobStatus.CANCELLED.value for job in lineage):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot cancel job with status: {root_job.status}",
+            )
 
     now = datetime.utcnow()
     for job in lineage:
@@ -117,14 +119,19 @@ async def cancel_job_lineage(
                 logger.warning("[CANCEL] Failed to kill process for %s: %s", job.id, exc)
 
         status = str(job.status or "").strip().lower()
-        if status not in _TERMINAL_JOB_STATUSES or _job_is_cancelable(job):
+        if status == JobStatus.CANCELLED.value or status not in _TERMINAL_JOB_STATUSES or _job_is_cancelable(job):
             job.status = JobStatus.CANCELLED.value
             job.queue_status = "cancelled"
             job.paused = False
             job.assigned_gpu = None
             job.awaiting_input = False
-            job.completed_at = now
-            job.error_message = error_message
+            job.awaiting_stage = None
+            job.awaiting_payload = {}
+            job.retry_count = 0
+            job.current_stage = None
+            job.stage_progress = None
+            job.completed_at = job.completed_at or now
+            job.error_message = job.error_message or error_message
 
     await session.commit()
     return root_job, lineage
@@ -148,27 +155,22 @@ async def _force_launch_with_session(
             detail=f"Job must be {', '.join(allowed_queue_statuses)} to force-run (current: {job.queue_status})",
         )
 
-    params = json.loads(job.params) if isinstance(job.params, str) else (job.params or {})
+    params = json.loads(job.params) if isinstance(job.params, str) else dict(job.params or {})
     params["gpu_id"] = gpu_id
+    params["operator_force_run"] = True
 
-    job.queue_status = "running"
-    job.status = "running"
-    job.assigned_gpu = gpu_id
-    job.started_at = datetime.utcnow()
+    # Manual placement is a scheduler input, not an alternate launcher.  Persist
+    # the pin and return the job to the queue so the GPU orchestrator remains the
+    # sole owner of admission, VRAM/concurrency checks, and process launch.
+    job.params = params
+    job.pinned_gpu = gpu_id
+    job.queue_status = "queued"
+    job.status = "queued"
+    job.assigned_gpu = None
+    job.started_at = None
     job.paused = False
 
     await session.commit()
-
-    asyncio.create_task(
-        launch_nextflow_job(
-            job_id=job.id,
-            model_id=job.model_id,
-            mode=params.get("mode", job.mode),
-            params=params,
-            output_dir=job.output_dir,
-        )
-    )
-
     return job
 
 

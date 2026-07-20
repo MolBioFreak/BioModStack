@@ -16,9 +16,6 @@ These files are still useful as current rollout, guardrail, or follow-on impleme
 - [Caliby finishing changes specification](2026-04-27-caliby-finishing-changes-spec.md)
 - [GPU MMseqs EnvDB fix implementation plan](2026-04-27-gpu-mmseqs-envdb-fix-spec.md)
 - [UI surface channel cutover implementation spec](2026-04-28-ui-surface-channel-cutover-spec.md)
-- [BioXP OEM control-surface replacement implementation plan](2026-05-04-bioxp-oem-control-surface-replacement-spec.md)
-- [BioXP current-control removal and OEM integration path](2026-05-04-bioxp-current-control-removal-and-oem-integration-path.md)
-- [BioXP robot ↔ workstation interlink control panel spec](2026-05-08-bioxp-workstation-interlink-control-panel-spec.md)
 - [ONT MinKNOW instrument-control integration spec and gap assessment](2026-06-08-ont-minknow-instrument-control-integration-spec.md)
 
 ## Archived plans and historical specs
@@ -32,6 +29,10 @@ Recent cleanup keeps this surface time-bounded:
 - superseded 2026-04-21 Fold-CP and local-MSA tranche notes live under `archive/`
 - superseded 2026-04-23 Fold-CP reassessment/worker-pool notes live under `archive/`
 - the 2026-04-24 Fold-CP GPU communication fact note is historical evidence under `archive/`, not an active rollout plan
+- the four 2026-05 BioXP proxy/console/interlink plans remain in place only for
+  traceability and are superseded by
+  [`../BioXP_Compact_Control_Plane.md`](../BioXP_Compact_Control_Plane.md); they
+  are not active implementation contracts
 
 ## How to use this folder
 

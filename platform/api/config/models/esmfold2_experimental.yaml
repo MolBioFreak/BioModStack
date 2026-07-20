@@ -1,9 +1,9 @@
 id: esmfold2_experimental
-name: ESMFold2 Experimental
+name: ESMFold2
 version: "0.2.0"
 category: structure_prediction
 description: >
-  Standalone experimental ESMFold2 path for local all-atom folding of proteins,
+  Standalone ESMFold2 path for local all-atom folding of proteins,
   protein complexes, optional DNA/RNA chains, ligands, and PDB-derived sequence
   sources. The UI reuses the production Structure Prediction launcher while the
   backend maps canonical structure inputs into the ESMFold2 runtime.
@@ -11,7 +11,7 @@ container: esmfold2.sif
 
 ui_icon: sparkles
 ui_color: "#22D3EE"
-experimental: true
+experimental: false
 
 inputs:
   - sequence

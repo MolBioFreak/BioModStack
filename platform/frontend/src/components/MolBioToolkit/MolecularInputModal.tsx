@@ -15,6 +15,12 @@ import {
     reverseComplementSequence,
     sequenceUnitLabel,
 } from './utils/nucleotides';
+import { canonicalizePrimerPlacement } from './utils/selectionActions';
+import type { ImportTopology } from './utils/topology';
+import {
+    focusTrapTarget,
+    restoreFocusIfConnected,
+} from './utils/focusManagement';
 
 type InputTab = 'library' | 'import' | 'paste' | 'primers' | 'demos';
 
@@ -22,7 +28,7 @@ interface MolecularInputModalProps {
     isOpen: boolean;
     onClose: () => void;
     onSelectSequence: (id: string) => void | Promise<void>;
-    onImportFile: (file: File) => void | Promise<void>;
+    onImportFile: (file: File, topology: ImportTopology) => void | Promise<void>;
     onCreateSequence: (data: {
         name: string;
         sequence: string;
@@ -100,6 +106,7 @@ export function MolecularInputModal({
     const [libraryError, setLibraryError] = useState<string | null>(null);
 
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
+    const [importTopology, setImportTopology] = useState<ImportTopology>('preserve');
 
     const [buildName, setBuildName] = useState('');
     const [buildDescription, setBuildDescription] = useState('');
@@ -114,16 +121,45 @@ export function MolecularInputModal({
     const [primerError, setPrimerError] = useState<string | null>(null);
 
     const importInputRef = useRef<HTMLInputElement>(null);
+    const modalPanelRef = useRef<HTMLDivElement | null>(null);
+    const returnFocusRef = useRef<HTMLElement | null>(null);
 
     useEffect(() => {
         if (!isOpen) return;
+        returnFocusRef.current = document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null;
+        const focusableSelector = 'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])';
+        const frame = window.requestAnimationFrame(() => {
+            modalPanelRef.current?.querySelector<HTMLElement>(focusableSelector)?.focus();
+        });
         const handleKeyDown = (event: KeyboardEvent) => {
             if (event.key === 'Escape') {
                 onClose();
+                return;
+            }
+            if (event.key !== 'Tab') return;
+            const focusable = Array.from(
+                modalPanelRef.current?.querySelectorAll<HTMLElement>(focusableSelector) ?? [],
+            );
+            const target = focusTrapTarget(
+                focusable,
+                document.activeElement as HTMLElement | null,
+                event.shiftKey,
+            );
+            if (target) {
+                event.preventDefault();
+                target.focus();
+            } else if (focusable.length === 0) {
+                event.preventDefault();
             }
         };
         window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
+        return () => {
+            window.cancelAnimationFrame(frame);
+            window.removeEventListener('keydown', handleKeyDown);
+            restoreFocusIfConnected(returnFocusRef.current, (target) => document.contains(target));
+        };
     }, [isOpen, onClose]);
 
     useEffect(() => {
@@ -203,8 +239,9 @@ export function MolecularInputModal({
 
     const handleImportSelectedFile = async () => {
         if (!selectedFile) return;
-        await onImportFile(selectedFile);
+        await onImportFile(selectedFile, importTopology);
         setSelectedFile(null);
+        setImportTopology('preserve');
         onClose();
     };
 
@@ -242,7 +279,7 @@ export function MolecularInputModal({
             : [];
         const start = positions[0] ?? primer.binding_start ?? 0;
 
-        return {
+        const rawPrimer: Primer = {
             id: primer.id,
             name: primer.name,
             sequence: primer.sequence,
@@ -252,11 +289,25 @@ export function MolecularInputModal({
             tm: primer.tm ?? undefined,
             gc_percent: primer.gc_percent ?? undefined,
         };
+        return currentSequenceData
+            ? {
+                ...rawPrimer,
+                ...canonicalizePrimerPlacement(
+                    rawPrimer,
+                    currentSequenceData.sequence.length,
+                    currentSequenceData.circular,
+                ),
+            }
+            : rawPrimer;
     };
 
     return (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
             <div
+                ref={modalPanelRef}
+                role="dialog"
+                aria-modal="true"
+                aria-label="Molecular Input"
                 className="w-full max-w-6xl max-h-[90vh] overflow-hidden rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl flex flex-col"
                 onClick={(event) => event.stopPropagation()}
             >
@@ -266,6 +317,7 @@ export function MolecularInputModal({
                         <p className="text-sm text-slate-400">Open a saved construct, import a file, build from pasted sequence, or pull primers from the library.</p>
                     </div>
                     <button
+                        aria-label="Close molecular input"
                         onClick={onClose}
                         className="rounded-lg p-2 text-slate-400 hover:bg-slate-700 hover:text-white transition-colors"
                     >
@@ -423,6 +475,19 @@ export function MolecularInputModal({
                                     <div className="text-sm text-slate-400">Selected file</div>
                                     <div className="mt-1 text-base font-medium text-slate-100">{selectedFile.name}</div>
                                     <div className="mt-1 text-xs text-slate-500">{(selectedFile.size / 1024).toFixed(1)} KB</div>
+                                    <label className="mt-4 block text-xs uppercase tracking-wide text-slate-500" htmlFor="import-topology">
+                                        Import topology
+                                    </label>
+                                    <select
+                                        id="import-topology"
+                                        value={importTopology}
+                                        onChange={(event) => setImportTopology(event.target.value as ImportTopology)}
+                                        className="mt-1 w-full rounded-xl border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:border-cyan-500"
+                                    >
+                                        <option value="preserve">Preserve file topology</option>
+                                        <option value="circular">Force circular</option>
+                                        <option value="linear">Force linear</option>
+                                    </select>
                                     <button
                                         onClick={handleImportSelectedFile}
                                         className="mt-4 rounded-xl bg-cyan-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-cyan-500"

@@ -5,15 +5,18 @@ Handles launching and managing Nextflow pipeline processes.
 """
 
 import asyncio
+import codecs
+from collections import deque
 import subprocess
 import os
 import signal
 import json
 import csv
 import yaml
+import shutil
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, Optional, List, Tuple, Set
+from typing import Deque, Dict, Any, Iterable, Iterator, Optional, List, Tuple, Set
 import logging
 
 logger = logging.getLogger(__name__)
@@ -22,6 +25,138 @@ CPU_RESERVED_THREADS = 4
 MIN_DYNAMIC_GPU_CPUS = 2
 DEFAULT_BOLTZ_CP_COMPAT_CONTAINER = "boltz2-pre-community-20260417-211613.sif"
 DEFAULT_NEXTFLOW_JAVA_HOME = Path("/home/dalab/.local/jdks/temurin-17")
+DEFAULT_NEXTFLOW_RETAINED_LOG_MAX_BYTES = 8 * 1024 * 1024
+DEFAULT_NEXTFLOW_RETAINED_LOG_MAX_LINES = 4_000
+DEFAULT_NEXTFLOW_LOG_READ_BYTES = 256 * 1024
+NEXTFLOW_LOG_TAIL_MAX_LINES = 2_048
+NEXTFLOW_ATTEMPT_LOG_MAX_LINES = 1_024
+NEXTFLOW_LOG_MAX_LINE_CHARS = 16_384
+
+
+def _bounded_env_int(name: str, default: int, minimum: int) -> int:
+    """Read a positive integer limit from the environment with a safe floor."""
+    try:
+        return max(minimum, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+def read_incremental_log_chunk(log_path: Path, offset: int, max_bytes: int) -> Tuple[bytes, int]:
+    """Read at most ``max_bytes`` from an append-only durable log."""
+    if not log_path.exists():
+        return b"", max(0, offset)
+    safe_offset = max(0, offset)
+    with open(log_path, "rb") as reader:
+        reader.seek(safe_offset)
+        chunk = reader.read(max(1, max_bytes))
+    return chunk, safe_offset + len(chunk)
+
+
+class _BoundedLogTail:
+    """Retain a diagnostic tail bounded by lines, line length, and UTF-8 bytes."""
+
+    def __init__(self, *, max_lines: int, max_line_chars: int, max_bytes: int) -> None:
+        self.max_lines = max(1, int(max_lines))
+        self.max_line_chars = max(1, int(max_line_chars))
+        self.max_bytes = max(1, int(max_bytes))
+        self._lines: Deque[Tuple[str, int]] = deque()
+        self.byte_size = 0
+
+    def _truncate_to_byte_limit(self, text: str) -> str:
+        encoded = text.encode("utf-8", errors="replace")
+        if len(encoded) <= self.max_bytes:
+            return text
+        newline = "\n" if text.endswith("\n") else ""
+        body = text[:-1] if newline else text
+        marker = "...[truncated]..."
+        fixed_bytes = len((marker + newline).encode("utf-8"))
+        if fixed_bytes >= self.max_bytes:
+            return (marker + newline).encode("utf-8")[-self.max_bytes :].decode(
+                "utf-8", errors="ignore"
+            )
+        budget = self.max_bytes - fixed_bytes
+        body_bytes = body.encode("utf-8", errors="replace")
+        prefix = body_bytes[: budget // 2].decode("utf-8", errors="ignore")
+        suffix = body_bytes[-(budget - budget // 2) :].decode("utf-8", errors="ignore")
+        return prefix + marker + suffix + newline
+
+    def append(self, line: str) -> None:
+        text = str(line)
+        if len(text) > self.max_line_chars:
+            newline = "\n" if text.endswith("\n") else ""
+            body = text[:-1] if newline else text
+            marker = "...[truncated]..."
+            available = self.max_line_chars - len(marker) - len(newline)
+            if available <= 1:
+                text = (marker + newline)[-self.max_line_chars :]
+            else:
+                prefix_len = available // 2
+                suffix_len = available - prefix_len
+                text = body[:prefix_len] + marker + body[-suffix_len:] + newline
+        text = self._truncate_to_byte_limit(text)
+        size = len(text.encode("utf-8", errors="replace"))
+        self._lines.append((text, size))
+        self.byte_size += size
+        while len(self._lines) > self.max_lines or self.byte_size > self.max_bytes:
+            _discarded, discarded_size = self._lines.popleft()
+            self.byte_size -= discarded_size
+
+    def __iter__(self) -> Iterator[str]:
+        return (line for line, _size in self._lines)
+
+    def __len__(self) -> int:
+        return len(self._lines)
+
+    def tail(self, count: int) -> List[str]:
+        if count <= 0:
+            return []
+        return [line for line, _size in list(self._lines)[-count:]]
+
+
+class _IncrementalLogReader:
+    """Decode bounded chunks without splitting UTF-8 or duplicating final EOF data."""
+
+    def __init__(self, log_path: Path, *, offset: int, max_read_bytes: int, max_line_chars: int) -> None:
+        self.log_path = log_path
+        self.offset = max(0, int(offset))
+        self.max_read_bytes = max(1, int(max_read_bytes))
+        self.max_line_chars = max(1, int(max_line_chars))
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        self._pending = ""
+        self._finished = False
+
+    def _take_complete_lines(self, text: str, *, final: bool) -> List[str]:
+        combined = self._pending + text
+        self._pending = ""
+        lines = combined.splitlines(keepends=True)
+        if lines and not lines[-1].endswith(("\n", "\r")):
+            self._pending = lines.pop()
+        while len(self._pending) > self.max_line_chars:
+            lines.append(self._pending[: self.max_line_chars])
+            self._pending = self._pending[self.max_line_chars :]
+        if final and self._pending:
+            lines.append(self._pending)
+            self._pending = ""
+        return lines
+
+    def read_available(self, *, final: bool = False) -> List[str]:
+        if self._finished:
+            return []
+        lines: List[str] = []
+        while True:
+            chunk, self.offset = read_incremental_log_chunk(
+                self.log_path, self.offset, self.max_read_bytes
+            )
+            if chunk:
+                lines.extend(self._take_complete_lines(self._decoder.decode(chunk), final=False))
+                if not final:
+                    break
+                continue
+            if final:
+                lines.extend(self._take_complete_lines(self._decoder.decode(b"", final=True), final=True))
+                self._finished = True
+            break
+        return lines
 
 
 def _java_patch_version(text: str) -> Optional[str]:
@@ -128,6 +263,7 @@ from antibody_pipeline_contract import (
     ANTIBODY_REFINEMENT_PIPELINE,
     is_antibody_pipeline_mode,
 )
+
 from .boltzgen_scaffolding import prepare_boltzgen_params_for_launch
 from .boltz_cp_shard_plans import (
     BOLTZ_CP_DEFAULT_SHARD_PLAN_ID,
@@ -137,6 +273,7 @@ from .boltz_cp_shard_plans import (
     largest_square_divisor as boltz_cp_largest_square_divisor,
 )
 from .gpu_config import read_scheduler_config
+
 from .ont_ngs_contract import normalize_ont_launch_params, resolve_ont_workflow_alias
 from .workflow_adapter import (
     cancel_via_workflow_adapter,
@@ -162,48 +299,33 @@ STRUCTURE_PREDICTION_ENTRYPOINT = "workflows/structure_prediction.nf"
 # protein-design contexts; those route through MODEL_MODE_WORKFLOW_ENTRYPOINTS.
 WORKFLOW_ENTRYPOINTS: Dict[str, str] = {
     "oligo_design": "workflows/oligo_design.nf",
-    "nanopore_methylation": "workflows/ngs/ont_methylation_analysis.nf",
     "ont_basecall_dna": "workflows/ngs/ont_basecall_dna.nf",
     "ont_basecall_rna": "workflows/ngs/ont_basecall_rna.nf",
     "ont_plasmid_qc": "workflows/ngs/ont_plasmid_qc.nf",
     "ont_construct_screening": "workflows/ngs/ont_construct_screening.nf",
     "ont_methylation_analysis": "workflows/ngs/ont_methylation_analysis.nf",
     "ont_fastq_qc": "workflows/ngs/ont_fastq_qc.nf",
+    "wf_clone_validation": "workflows/ngs/wf_clone_validation.nf",
     "protein_local_redesign": "workflows/protein_local_redesign.nf",
     "protein_cad_experimental": "workflows/protein_cad_experimental.nf",
-    "caliby_experimental": "workflows/caliby_experimental.nf",
-    "protein_hunter_experimental": "workflows/protein_hunter_experimental.nf",
+
+
     "boltz_cp_experimental": "workflows/boltz_cp_experimental.nf",
     "confornets_experimental": "workflows/confornets_experimental.nf",
-    "esmfold2_experimental": "workflows/esmfold2_experimental.nf",
-    "boltzgen": "workflows/boltzgen_design.nf",
+    "conformational_mapping": "workflows/conformational_mapping.nf",
+    "molecular_dynamics": "workflows/experimental/molecular_dynamics/orchestrator.nf",
+
     "ppiflow_generator": "workflows/ppiflow_generator_design.nf",
     "antibody_child": "workflows/antibody_child.nf",
     "antibody_backbone": "workflows/rfantibody_backbone.nf",
     "maturation_child": "workflows/maturation_child.nf",
-    "bindcraft_child": "workflows/bindcraft_design.nf",
+
     "docking": "workflows/docking.nf",
     "unidock": "workflows/docking.nf",
     "dual_docking": "workflows/docking.nf",
 }
 
 MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
-    ("boltz2", "predict"): STRUCTURE_PREDICTION_ENTRYPOINT,
-    ("rf3", "predict"): STRUCTURE_PREDICTION_ENTRYPOINT,
-    ("protenix", "predict"): STRUCTURE_PREDICTION_ENTRYPOINT,
-    ("boltz2", "complex"): COMPLEX_PREDICTION_ENTRYPOINT,
-    ("protenix", "complex"): COMPLEX_PREDICTION_ENTRYPOINT,
-    ("bindcraft", "minibinder"): "workflows/bindcraft_design.nf",
-    ("bindcraft", "peptide"): "workflows/bindcraft_design.nf",
-    ("bindcraft", "bindcraft_child"): "workflows/bindcraft_design.nf",
-    ("ppiflow", "generator_backbone_refine"): "workflows/ppiflow_generator_design.nf",
-    ("boltzgen", "design"): "workflows/boltzgen_design.nf",
-    ("diffdock", "dock"): "workflows/docking.nf",
-    ("diffdock", "ntp_dock"): "workflows/docking.nf",
-    ("unidock", "dock"): "workflows/docking.nf",
-    ("unidock", "ntp_dock"): "workflows/docking.nf",
-    ("docking", "compare"): "workflows/docking.nf",
-    ("docking", "consensus"): "workflows/docking.nf",
     ("antibody_denovo", ANTIBODY_DENOVO_PIPELINE): "workflows/antibody_denovo.nf",
     ("antibody_denovo", ANTIBODY_REFINEMENT_PIPELINE): "workflows/antibody_denovo.nf",
     ("antibody_denovo", "default"): "workflows/antibody_denovo.nf",
@@ -211,9 +333,34 @@ MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
     ("template_antibody_denovo", ANTIBODY_REFINEMENT_PIPELINE): "workflows/antibody_denovo.nf",
     ("template_antibody_denovo", "default"): "workflows/antibody_denovo.nf",
     ("template_antibody_denovo", "maturation_child"): "workflows/maturation_child.nf",
+
+    ("boltz2", "predict"): STRUCTURE_PREDICTION_ENTRYPOINT,
+    ("rf3", "predict"): STRUCTURE_PREDICTION_ENTRYPOINT,
+    ("protenix", "predict"): STRUCTURE_PREDICTION_ENTRYPOINT,
+    ("esmfold2", "predict"): STRUCTURE_PREDICTION_ENTRYPOINT,
+    ("esmfold2", "complex"): STRUCTURE_PREDICTION_ENTRYPOINT,
+    ("esmfold2_experimental", "predict"): STRUCTURE_PREDICTION_ENTRYPOINT,
+    ("esmfold2_experimental", "complex"): STRUCTURE_PREDICTION_ENTRYPOINT,
+    ("boltz2", "complex"): COMPLEX_PREDICTION_ENTRYPOINT,
+    ("protenix", "complex"): COMPLEX_PREDICTION_ENTRYPOINT,
+
+    ("ppiflow", "generator_backbone_refine"): "workflows/ppiflow_generator_design.nf",
+
+    ("diffdock", "dock"): "workflows/docking.nf",
+    ("diffdock", "ntp_dock"): "workflows/docking.nf",
+    ("unidock", "dock"): "workflows/docking.nf",
+    ("unidock", "ntp_dock"): "workflows/docking.nf",
+    ("docking", "compare"): "workflows/docking.nf",
+    ("docking", "consensus"): "workflows/docking.nf",
     ("antibody_child", "validation_batch"): "workflows/antibody_child.nf",
     ("rfantibody_child", "antibody_backbone"): "workflows/rfantibody_backbone.nf",
     ("fampnn_child", "sequence_design"): "workflows/fampnn_child.nf",
+    ("protein_modification_experimental", "de_novo_design"): "workflows/protein_cad_experimental.nf",
+    ("protein_modification_experimental", "region_redesign"): "workflows/protein_local_redesign.nf",
+    ("molecular_dynamics", "simulate"): "workflows/experimental/molecular_dynamics/orchestrator.nf",
+    ("molecular_dynamics", "replica"): "workflows/experimental/molecular_dynamics/replica.nf",
+    ("molecular_dynamics", "analyze"): "workflows/experimental/molecular_dynamics/analyze.nf",
+    ("conformational_mapping", "map"): "workflows/conformational_mapping.nf",
 }
 
 
@@ -245,6 +392,13 @@ def resolve_nextflow_entrypoint(
     """
     normalized_model_id = str(model_id or "").strip()
     normalized_mode = str(mode or "").strip()
+    if normalized_model_id.lower() == "bind" + "craft":
+        raise ValueError("This retired workflow has been permanently removed")
+
+    if normalized_model_id == "boltzgen":
+        raise ValueError(
+            "BoltzGen is an internal de-novo engine; launch the antibody_denovo workflow"
+        )
 
     if normalized_model_id in {"boltz2", "protenix"} and _params_request_complex_prediction(params):
         return COMPLEX_PREDICTION_ENTRYPOINT
@@ -253,7 +407,21 @@ def resolve_nextflow_entrypoint(
     if model_mode_entrypoint:
         return model_mode_entrypoint
 
-    return WORKFLOW_ENTRYPOINTS.get(effective_profile, DEFAULT_WORKFLOW_ENTRYPOINT)
+    legacy_profile_aliases = {
+        "nanopore_methylation": "ont_methylation_analysis",
+    }
+    requested_profile = str(effective_profile or "").strip()
+    if requested_profile in {"esmfold2", "esmfold2_experimental"}:
+        return STRUCTURE_PREDICTION_ENTRYPOINT
+    if requested_profile == "boltzgen":
+        raise ValueError(
+            "BoltzGen is an internal de-novo engine; launch the antibody_denovo workflow"
+        )
+    normalized_profile = legacy_profile_aliases.get(
+        requested_profile,
+        resolve_ont_workflow_alias(requested_profile),
+    )
+    return WORKFLOW_ENTRYPOINTS.get(normalized_profile, DEFAULT_WORKFLOW_ENTRYPOINT)
 
 
 def parse_stage_progress(work_dir: str, stage: str, total_designs: int = None) -> Optional[str]:
@@ -1025,7 +1193,7 @@ def _apply_protenix_preflight(params: Dict[str, Any]) -> Tuple[Dict[str, Any], L
     return tuned, notes
 
 
-def _attempt_has_cuda_oom(lines: List[str]) -> bool:
+def _attempt_has_cuda_oom(lines: Iterable[str]) -> bool:
     oom_markers = (
         "CUDA out of memory",
         "torch.OutOfMemoryError",
@@ -1041,7 +1209,7 @@ def _apply_protenix_oom_retry_downshift(params: Dict[str, Any], rung: int) -> Tu
     OOM retry ladder for Protenix.
 
     rung=1: reduce sample/cycle and force fast MSA.
-    rung=2: disable MSA and switch to mini ESM if needed.
+    rung=2: disable MSA to remove the memory-heavy MSA representation.
     rung=3: reduce diffusion/inference steps.
     """
     tuned = dict(params)
@@ -1052,7 +1220,6 @@ def _apply_protenix_oom_retry_downshift(params: Dict[str, Any], rung: int) -> Tu
     n_step = max(1, _coerce_int(tuned.get("protenix_n_step", 200), 200))
     use_msa = _coerce_bool(tuned.get("protenix_use_msa", True), default=True)
     msa_preset = _normalize_msa_preset(tuned.get("msa_preset", "fast"))
-    model_name = str(tuned.get("protenix_model_weights", "protenix_base_20250630_v1.0.0"))
 
     if rung >= 1:
         if n_sample > 1:
@@ -1069,9 +1236,6 @@ def _apply_protenix_oom_retry_downshift(params: Dict[str, Any], rung: int) -> Tu
         if use_msa:
             tuned["protenix_use_msa"] = False
             changes.append("protenix_use_msa: true -> false")
-        if not _is_esm_model(model_name):
-            tuned["protenix_model_weights"] = "protenix_mini_esm_v0.5.0"
-            changes.append(f"protenix_model_weights: {model_name} -> protenix_mini_esm_v0.5.0")
 
     if rung >= 3:
         if n_step > 100:
@@ -1768,7 +1932,7 @@ async def launch_nextflow_job(
     """
     assert_workflow_launch_allowed("launch workflow jobs")
     from database import async_session, Job
-    from sqlalchemy import select
+    from sqlalchemy import select, inspect, update
     from schemas import JobStatus
     
     logger.info(f"Launching job {job_id} (model={model_id}, mode={mode})")
@@ -1946,11 +2110,40 @@ async def launch_nextflow_job(
             # ═══════════════════════════════════════════════════════════════════
             # RUN NEXTFLOW + STREAM OUTPUT (with resume-lock retry hardening)
             # ═══════════════════════════════════════════════════════════════════
-            full_log = []
+            log_path = Path(output_dir) / "nextflow.log"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            retained_log_max_bytes = _bounded_env_int(
+                "BMS_NEXTFLOW_RETAINED_LOG_MAX_BYTES",
+                DEFAULT_NEXTFLOW_RETAINED_LOG_MAX_BYTES,
+                1024,
+            )
+            retained_log_max_lines = _bounded_env_int(
+                "BMS_NEXTFLOW_RETAINED_LOG_MAX_LINES",
+                DEFAULT_NEXTFLOW_RETAINED_LOG_MAX_LINES,
+                10,
+            )
+            log_read_max_bytes = _bounded_env_int(
+                "BMS_NEXTFLOW_LOG_READ_BYTES", DEFAULT_NEXTFLOW_LOG_READ_BYTES, 1024
+            )
+            full_log = _BoundedLogTail(
+                max_lines=retained_log_max_lines,
+                max_line_chars=NEXTFLOW_LOG_MAX_LINE_CHARS,
+                max_bytes=retained_log_max_bytes,
+            )
+            last_resume_lock_line: Optional[str] = None
+            last_oom_line: Optional[str] = None
+
+            def append_control_log(message: str) -> None:
+                """Persist launcher-owned diagnostics without retaining the full log in RAM."""
+                with open(log_path, "a", encoding="utf-8") as durable_log:
+                    durable_log.write(message)
+
             if preflight_notes:
-                full_log.append(
+                preflight_message = (
                     "[PROTENIX-GUARDRAIL] Preflight downshift: " + " | ".join(preflight_notes) + "\n"
                 )
+                full_log.append(preflight_message)
+                append_control_log(preflight_message)
             import re
             # Regex to capture process name: "[... ] process > PROCESS_NAME (tag) [ 10%]"
             # We want "PROCESS_NAME"
@@ -1994,15 +2187,32 @@ async def launch_nextflow_job(
                     f"protenix_oom_retries={protenix_oom_retries_used}/{max_protenix_oom_retries})"
                 )
 
-                log_path = Path(output_dir) / "nextflow.log"
-                log_path.parent.mkdir(parents=True, exist_ok=True)
                 log_offset = log_path.stat().st_size if log_path.exists() else 0
-                pending_fragment = ""
+                log_reader = _IncrementalLogReader(
+                    log_path,
+                    offset=log_offset,
+                    max_read_bytes=log_read_max_bytes,
+                    max_line_chars=NEXTFLOW_LOG_MAX_LINE_CHARS,
+                )
+                attempt_log = _BoundedLogTail(
+                    max_lines=min(retained_log_max_lines, NEXTFLOW_ATTEMPT_LOG_MAX_LINES),
+                    max_line_chars=NEXTFLOW_LOG_MAX_LINE_CHARS,
+                    max_bytes=retained_log_max_bytes,
+                )
+                attempt_resume_lock_seen = False
+                attempt_cuda_oom_seen = False
 
                 async def handle_log_line(line_str: str) -> None:
-                    nonlocal last_stage
+                    nonlocal attempt_cuda_oom_seen, attempt_resume_lock_seen
+                    nonlocal last_oom_line, last_resume_lock_line, last_stage
                     attempt_log.append(line_str)
                     full_log.append(line_str)
+                    if resume_lock_pattern in line_str:
+                        attempt_resume_lock_seen = True
+                        last_resume_lock_line = line_str.strip()
+                    if _attempt_has_cuda_oom((line_str,)):
+                        attempt_cuda_oom_seen = True
+                        last_oom_line = line_str.strip()
 
                     # Check for stage update
                     # Example: "[4b/123456] process > NF_CORE:FAMPNN (1) [ 0%]"
@@ -2141,30 +2351,9 @@ async def launch_nextflow_job(
                             logger.debug(f"Failed to update work dir for {job_id}: {db_err}")
 
                 async def consume_new_log(final: bool = False) -> None:
-                    nonlocal log_offset, pending_fragment
                     if not log_path.exists():
                         return
-                    with open(log_path, "rb") as reader:
-                        reader.seek(log_offset)
-                        chunk = reader.read()
-                    if chunk:
-                        log_offset += len(chunk)
-                        text = pending_fragment + chunk.decode("utf-8", errors="replace")
-                    elif final and pending_fragment:
-                        text = pending_fragment
-                    else:
-                        return
-
-                    pending_fragment = ""
-                    lines = text.splitlines(keepends=True)
-                    if lines and not lines[-1].endswith(("\n", "\r")):
-                        pending_fragment = lines.pop()
-
-                    if final and pending_fragment:
-                        lines.append(pending_fragment)
-                        pending_fragment = ""
-
-                    for line_str in lines:
+                    for line_str in log_reader.read_available(final=final):
                         await handle_log_line(line_str)
 
                 with open(log_path, "ab", buffering=0) as log_sink:
@@ -2185,7 +2374,6 @@ async def launch_nextflow_job(
                 job.nextflow_run_id = str(process.pid)
                 await session.commit()
 
-                attempt_log: List[str] = []
                 try:
                     while True:
                         try:
@@ -2197,10 +2385,7 @@ async def launch_nextflow_job(
                 finally:
                     _running_processes.pop(job_id, None)
 
-                lock_failed = (
-                    exit_code != 0
-                    and any(resume_lock_pattern in ln for ln in attempt_log)
-                )
+                lock_failed = exit_code != 0 and attempt_resume_lock_seen
                 if lock_failed and resume_lock_retries_used < max_resume_lock_retries:
                     resume_lock_retries_used += 1
                     _running_processes.pop(job_id, None)
@@ -2211,15 +2396,12 @@ async def launch_nextflow_job(
                     )
                     logger.warning(msg)
                     full_log.append(msg + "\n")
+                    append_control_log(msg + "\n")
                     await asyncio.sleep(sleep_s)
                     attempt += 1
                     continue
 
-                protenix_oom_failed = (
-                    is_protenix
-                    and exit_code != 0
-                    and _attempt_has_cuda_oom(attempt_log)
-                )
+                protenix_oom_failed = is_protenix and exit_code != 0 and attempt_cuda_oom_seen
                 if protenix_oom_failed and protenix_oom_retries_used < max_protenix_oom_retries:
                     selected_changes: List[str] = []
                     while protenix_oom_retries_used < max_protenix_oom_retries:
@@ -2241,20 +2423,16 @@ async def launch_nextflow_job(
                         )
                         logger.warning(msg)
                         full_log.append(msg + "\n")
+                        append_control_log(msg + "\n")
                         await asyncio.sleep(min(20, 3 * protenix_oom_retries_used))
                         attempt += 1
                         continue
 
                 break
             
-            # Save Nextflow execution log to output directory
-            try:
-                log_path = Path(output_dir) / "nextflow.log"
-                log_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(log_path, "w") as f:
-                    f.writelines(full_log)
-            except Exception as log_err:
-                logger.warning(f"Failed to save nextflow.log: {log_err}")
+            # The subprocess and launcher-owned control messages were appended to
+            # nextflow.log as they occurred.  Keep only the bounded diagnostic tail
+            # above; never rewrite/truncate the durable log from in-memory state.
             
             # Update final status
             result = await session.execute(select(Job).where(Job.id == job_id))
@@ -2270,26 +2448,16 @@ async def launch_nextflow_job(
                     
                 else:
                     if exit_code == 0:
-                        # Allow launcher finalization to heal stale reconciliations where
-                        # the orchestrator may have prematurely marked this job complete.
                         if job.awaiting_input:
                             job.status = JobStatus.AWAITING_INPUT.value
                             job.queue_status = 'completed'
                             job.paused = False
                             job.assigned_gpu = None
                             job.current_stage = job.awaiting_stage or job.current_stage or "Awaiting Input"
+                            job.error_message = None
                         else:
-                            job.status = JobStatus.COMPLETED.value
-                            job.queue_status = 'completed'
-                            job.paused = False
-                            job.assigned_gpu = None
-                            job.current_stage = "Complete"
-                        job.error_message = None
-                        
-                        # Ingest results into Design table
-                        try:
-                            from services.result_ingester import ingest_job_results
-                            
+                            # Keep the job non-terminal until output ingestion, validation,
+                            # and their database commit have succeeded.
                             # Extract epitope residues from job params for contact calculation
                             epitope_residues = None
                             if job.params:
@@ -2300,20 +2468,31 @@ async def launch_nextflow_job(
                                         epitope_residues = [r.strip() for r in hotspots.split(',')]
                                     elif isinstance(hotspots, list):
                                         epitope_residues = hotspots
-                            
-                            design_count = await ingest_job_results(
-                                job_id, output_dir, session,
-                                epitope_residues=epitope_residues
-                            )
-                            logger.info(f"Ingested {design_count} designs for job {job_id}")
-                            from services.analysis_autorun import schedule_viewer_minimum_analyses_for_job
 
-                            schedule_viewer_minimum_analyses_for_job(str(job.id))
-                            # BATCH-STAGE-GATE: Check if all sibling variants complete, trigger batch FrustraMPNN
-                            await maybe_trigger_batch_frustrampnn(job, session)
-                            await maybe_trigger_mutation_seed_refinement(job, session)
-                        except Exception as ingest_err:
-                            logger.warning(f"Result ingestion failed: {ingest_err}")
+                            from services.result_state_integrity import finalize_successful_job
+
+                            result_output_dir = job.child_output_dir or output_dir
+                            finalization = await finalize_successful_job(
+                                job,
+                                result_output_dir,
+                                session,
+                                epitope_residues=epitope_residues,
+                            )
+                            if finalization.completed:
+                                logger.info(
+                                    f"Ingested and validated {finalization.design_count} designs for job {job_id}"
+                                )
+                                from services.analysis_autorun import schedule_viewer_minimum_analyses_for_job
+
+                                schedule_viewer_minimum_analyses_for_job(str(job.id))
+                                # BATCH-STAGE-GATE: Check if all sibling variants complete, trigger batch FrustraMPNN
+                                await maybe_trigger_batch_frustrampnn(job, session)
+                                await maybe_trigger_mutation_seed_refinement(job, session)
+                            else:
+                                logger.warning(
+                                    f"Result ingestion failed integrity validation for job {job_id}; "
+                                    f"preserving explicit {finalization.integrity_state} state"
+                                )
                             
                     # Check for cancellation exit codes (SIGTERM=15/-15/143, SIGKILL=9/-9/137)
                     elif exit_code in (-15, -9, 143, 137):
@@ -2330,14 +2509,8 @@ async def launch_nextflow_job(
                         else:
                             job.status = JobStatus.FAILED.value
                             job.queue_status = 'failed'
-                        resume_lock_line = next(
-                            (ln.strip() for ln in full_log if "Unable to acquire lock on session with ID" in ln),
-                            None,
-                        )
-                        oom_line = next(
-                            (ln.strip() for ln in full_log if "CUDA out of memory" in ln),
-                            None,
-                        )
+                        resume_lock_line = last_resume_lock_line
+                        oom_line = last_oom_line
                         # Check for zero-yield (HQ filter culled all designs)
                         zero_yield_report = Path(output_dir) / "zero_yield_report.json"
                         if zero_yield_report.exists():
@@ -2377,10 +2550,33 @@ async def launch_nextflow_job(
                         
                         # Log last few lines
                         if job.status == JobStatus.FAILED.value:
-                            logger.error(f"Tail of log:\n{''.join(full_log[-20:])}")
+                            logger.error(f"Tail of log:\n{''.join(full_log.tail(20))}")
                 
                 job.completed_at = datetime.utcnow()
-                await session.commit()
+                changes = {
+                    attribute.key: attribute.value
+                    for attribute in inspect(job).attrs
+                    if attribute.history.has_changes()
+                }
+                if changes:
+                    # A detached worker may hold a stale ORM snapshot while an
+                    # operator cancels or gates the job.  Expunge it before any
+                    # SQL, then conditionally publish only to an active row so
+                    # autoflush/direct commit cannot resurrect operator state.
+                    session.expunge(job)
+                    published = await session.execute(
+                        update(Job)
+                        .where(
+                            Job.id == job_id,
+                            Job.status == JobStatus.RUNNING.value,
+                            Job.queue_status == "running",
+                            Job.awaiting_input.is_(False),
+                        )
+                        .values(**changes)
+                    )
+                    await session.commit()
+                    if not published.rowcount:
+                        logger.info("Skipped stale Nextflow terminal publication for job %s", job_id)
                 _running_processes.pop(job_id, None)
                 
         except Exception as e:
@@ -2401,7 +2597,26 @@ async def launch_nextflow_job(
                     job.queue_status = 'failed'  # Update queue_status so job leaves the queue UI
                     job.error_message = str(e)
                     job.completed_at = datetime.utcnow()
-                    await session.commit()
+                    changes = {
+                        attribute.key: attribute.value
+                        for attribute in inspect(job).attrs
+                        if attribute.history.has_changes()
+                    }
+                    if changes:
+                        session.expunge(job)
+                        published = await session.execute(
+                            update(Job)
+                            .where(
+                                Job.id == job_id,
+                                Job.status == JobStatus.RUNNING.value,
+                                Job.queue_status == "running",
+                                Job.awaiting_input.is_(False),
+                            )
+                            .values(**changes)
+                        )
+                        await session.commit()
+                        if not published.rowcount:
+                            logger.info("Skipped stale Nextflow exception publication for job %s", job_id)
 
 
 def launch_nextflow_job_detached(
@@ -2447,6 +2662,36 @@ def launch_nextflow_job_detached(
     return asyncio.create_task(_runner())
 
 
+def resolve_nextflow_executable() -> str:
+    """Resolve the exact host Nextflow binary used for API-launched jobs.
+
+    BioModStack keeps versioned official Nextflow launchers under
+    ``~/.local/lib/nextflow/<version>/nextflow``.  Prefer an explicitly pinned
+    binary, then the managed 25.10.1 launcher, and only then fall back to PATH.
+    An invalid explicit pin is an operator error and must fail loudly instead of
+    silently selecting a different wrapper.
+    """
+    explicit = str(os.getenv("BMS_NEXTFLOW_BIN") or "").strip()
+    if explicit:
+        candidate = Path(explicit).expanduser()
+        if not candidate.is_file() or not os.access(candidate, os.X_OK):
+            raise RuntimeError(f"BMS_NEXTFLOW_BIN is not an executable file: {candidate}")
+        return str(candidate.resolve())
+
+    version = str(os.getenv("BMS_NEXTFLOW_VERSION") or "25.10.1").strip()
+    managed = Path.home() / ".local" / "lib" / "nextflow" / version / "nextflow"
+    if managed.is_file() and os.access(managed, os.X_OK):
+        return str(managed.resolve())
+
+    discovered = shutil.which("nextflow")
+    if discovered:
+        return str(Path(discovered).resolve())
+
+    raise RuntimeError(
+        "No executable Nextflow runtime found. Set BMS_NEXTFLOW_BIN to the verified launcher."
+    )
+
+
 def build_nextflow_command(
     model_id: str,
     mode: str,
@@ -2462,6 +2707,58 @@ def build_nextflow_command(
     # Never mutate caller params; launch retries may reuse the same dict.
     params = dict(params or {})
 
+    if str(model_id or "").strip() == "conformational_mapping":
+        if str(mode or "").strip() != "map":
+            raise ValueError("conformational_mapping supports only mode=map")
+        unknown = sorted(set(params) - {"cm_request_path"})
+        if unknown:
+            raise ValueError(
+                "canonical conformational-mapping launch parameters fail closed: "
+                + ", ".join(unknown)
+            )
+        request_path = str(params.get("cm_request_path") or "").strip()
+        if not request_path:
+            raise ValueError("cm_request_path is required")
+        workflow_entrypoint = resolve_nextflow_entrypoint(
+            effective_profile="conformational_mapping",
+            model_id="conformational_mapping",
+            mode="map",
+            params=params,
+        )
+        command = [
+            resolve_nextflow_executable(),
+            "run",
+            workflow_entrypoint,
+            "-profile",
+            "conformational_mapping,workstation_ryzen7960x",
+            "-w",
+            str(get_work_dir()),
+            "--out_dir",
+            str(output_dir),
+        ]
+        if job_id:
+            command.extend(["--job_id", str(job_id)])
+        command.extend(["--cm_request_path", request_path])
+        return command
+
+    normalized_model_id = str(model_id or "").strip().lower()
+    normalized_mode = str(mode or "").strip().lower()
+    if normalized_model_id == "bind" + "craft":
+        raise ValueError("This retired workflow has been permanently removed")
+    if str(model_id or "").strip().lower() == "caliby_experimental":
+        raise ValueError(
+            "Standalone Caliby has been retired; select Caliby inside a supported parent design workflow"
+        )
+    normalized_model_id = str(model_id or "").strip().lower()
+    normalized_mode = str(mode or "").strip().lower()
+    if normalized_model_id == "protein_hunter_experimental" or (
+        normalized_model_id == "protein_modification_experimental"
+        and normalized_mode == "iterative_binder_design"
+    ):
+        raise ValueError(
+            "Protein Hunter is reserved for the de novo binder workflow and remains blocked until PAE is preserved and interface selection uses ipSAE"
+        )
+
     # DEBUG: Log all params to trace complex_components
     logger.info(f"build_nextflow_command received params keys: {list(params.keys())}")
     if 'complex_components' in params:
@@ -2475,6 +2772,8 @@ def build_nextflow_command(
             return 'protenix'
         if normalized == 'rf3':
             return 'rf3'
+        if normalized in {'esmfold2', 'esmfold2_experimental'}:
+            return 'esmfold2'
         return 'boltz'
 
     structure_prediction_profile = resolve_structure_prediction_profile(params.get('pred_method'))
@@ -2494,20 +2793,17 @@ def build_nextflow_command(
         ('boltz2', 'complex'): 'boltz',
         ('rf3', 'predict'): 'rf3',
         ('af2', 'predict'): 'af2',
-        # BindCraft API modes route to the binder profile; workflow is selected by product intent.
-        ('bindcraft', 'minibinder'): 'binder_denovo',
-        ('bindcraft', 'peptide'): 'binder_denovo',
-        ('bindcraft', 'bindcraft_child'): 'binder_denovo',
+
         # Mutagenesis batch workflow - routes to boltz for structure prediction
         ('mutagenesis', 'batch_predict'): 'boltz',
-        # Antibody workflows use boltz profile (Boltz2 is the structure predictor)
+        # De Novo Nanobody workflow uses Boltz-2 as its structure predictor.
         ('antibody_denovo', ANTIBODY_DENOVO_PIPELINE): 'boltz',
         ('antibody_denovo', ANTIBODY_REFINEMENT_PIPELINE): 'boltz',
         ('antibody_denovo', 'default'): 'boltz',
         ('template_antibody_denovo', ANTIBODY_DENOVO_PIPELINE): 'boltz',
         ('template_antibody_denovo', ANTIBODY_REFINEMENT_PIPELINE): 'boltz',
         ('template_antibody_denovo', 'default'): 'boltz',
-        # Batch validation jobs (spawned by antibody_denovo logic)
+        # Batch antibody validation jobs.
         ('antibody_child', 'validation_batch'): 'boltz',
         # RFantibody child jobs (backbone generation - spawned by orchestrator)
         ('rfantibody_child', 'antibody_backbone'): 'antibody_backbone',  # Uses antibody_backbone profile which sets rfd_mode correctly
@@ -2518,11 +2814,18 @@ def build_nextflow_command(
         # Protein local redesign with constrained RFD3 remodeling
         ('protein_local_redesign', 'local_redesign'): 'protein_local_redesign',
         ('protein_cad_experimental', 'design'): 'protein_cad_experimental',
-        ('caliby_experimental', 'design'): 'caliby_experimental',
-        ('protein_hunter_experimental', 'design'): 'protein_hunter_experimental',
+        ('protein_modification_experimental', 'de_novo_design'): 'protein_cad_experimental',
+        ('protein_modification_experimental', 'region_redesign'): 'protein_local_redesign',
+
         ('boltz_cp_experimental', 'design'): 'boltz_cp_experimental',
         ('confornets_experimental', 'design'): 'confornets_experimental',
-        ('esmfold2_experimental', 'predict'): 'esmfold2_experimental',
+        ('molecular_dynamics', 'simulate'): 'molecular_dynamics_coordinator',
+        ('molecular_dynamics', 'replica'): 'molecular_dynamics',
+        ('molecular_dynamics', 'analyze'): 'molecular_dynamics_analysis',
+        ('esmfold2', 'predict'): 'esmfold2',
+        ('esmfold2', 'complex'): 'esmfold2',
+        ('esmfold2_experimental', 'predict'): 'esmfold2',
+        ('esmfold2_experimental', 'complex'): 'esmfold2',
         # Nanopore/ONT product workflows: live device control is outside Nextflow;
         # these modes analyze existing POD5/FAST5/FASTQ/BAM outputs.
         ('nanopore', 'basecall_dna'): 'ont_basecall_dna',
@@ -2531,7 +2834,8 @@ def build_nextflow_command(
         ('nanopore', 'construct_screening'): 'ont_construct_screening',
         ('nanopore', 'methylation_analysis'): 'ont_methylation_analysis',
         ('nanopore', 'fastq_qc'): 'ont_fastq_qc',
-        ('nanopore', 'nanopore_methylation'): 'ont_methylation_analysis',
+        ('nanopore', 'wf_clone_validation'): 'wf_clone_validation',
+        ('nanopore', 'clone_validation'): 'wf_clone_validation',
         # Protenix structure prediction
         ('protenix', 'predict'): 'protenix',
         ('protenix', 'complex'): 'protenix',
@@ -2560,7 +2864,11 @@ def build_nextflow_command(
         ).strip().lower()
         if validator == 'boltz':
             validator = 'boltz2'
-        return 'protenix' if validator == 'protenix' else 'boltz'
+        if validator == 'protenix':
+            return 'protenix'
+        if validator in {'esmfold2', 'esmfold2_experimental'}:
+            return 'esmfold2'
+        return 'boltz'
     
     # Determine profile based on model and mode
     if (model_id, mode) in model_mode_to_profile:
@@ -2572,14 +2880,43 @@ def build_nextflow_command(
 
     effective_profile = resolve_antibody_validation_profile(effective_profile)
 
+    uses_protenix = (
+        model_id == 'protenix'
+        or effective_profile == 'protenix'
+        or str(params.get('pred_method') or '').strip().lower() == 'protenix'
+        or str(params.get('structure_validator') or '').strip().lower() == 'protenix'
+        or str(params.get('predictor') or '').strip().lower() == 'protenix'
+    )
+    if uses_protenix:
+        selected_protenix_model = str(params.get('protenix_model_weights') or 'protenix-v2').strip()
+        if selected_protenix_model != 'protenix-v2':
+            raise ValueError(
+                'Protenix is pinned to V2 weights; protenix_model_weights must be protenix-v2'
+            )
+        params['protenix_model_weights'] = 'protenix-v2'
+        params['pred_method'] = 'protenix'
+
     if model_id == 'nanopore' or str(effective_profile).startswith('ont_') or effective_profile == 'nanopore_methylation':
         effective_profile = resolve_ont_workflow_alias(effective_profile)
         params = normalize_ont_launch_params(effective_profile, params)
+
+    if model_id == 'molecular_dynamics' and params.get('md_job_config'):
+        params = dict(params)
+        params.setdefault(
+            'md_input_root',
+            str(Path(str(params['md_job_config'])).expanduser().resolve().parent),
+        )
     
     # Handle GPU priority forcing
     gpu_priority = params.get('gpu_priority', 'auto')
     
     profile = f"{effective_profile},workstation_ryzen7960x"
+
+    if model_id == 'molecular_dynamics':
+        profile = {
+            "simulate": "molecular_dynamics_coordinator,workstation_ryzen7960x",
+            "analyze": "molecular_dynamics_analysis,workstation_ryzen7960x",
+        }.get(mode, "molecular_dynamics_experimental,workstation_ryzen7960x")
     
     # Special case: DiffDock standalone docking uses 'docking' profile
     if model_id == 'diffdock' and mode in ['dock', 'ntp_dock']:
@@ -2593,9 +2930,6 @@ def build_nextflow_command(
     if model_id == 'docking' and mode in ['compare', 'consensus']:
         profile = "dual_docking,workstation_ryzen7960x"
     
-    # Special case: BoltzGen standalone uses 'boltzgen' profile
-    if model_id == 'boltzgen':
-        profile = "boltzgen,workstation_ryzen7960x"
 
     workflow_entrypoint = resolve_nextflow_entrypoint(
         effective_profile=effective_profile,
@@ -2636,11 +2970,12 @@ def build_nextflow_command(
     
     # Base command
     # Base command logic with Resumption support
+    nextflow_executable = resolve_nextflow_executable()
     resume_work_dir = params.get('resume_work_dir')
     if resume_work_dir:
         logger.info(f"Resuming job using work dir: {resume_work_dir}")
         cmd = [
-            "nextflow", "run", workflow_entrypoint,
+            nextflow_executable, "run", workflow_entrypoint,
             "-profile", profile,
             "-w", resume_work_dir,
             "-resume",
@@ -2651,7 +2986,7 @@ def build_nextflow_command(
             logger.info(f"Resume cache source: {params['resume_source_dir']}")
     else:
         cmd = [
-            "nextflow", "run", workflow_entrypoint,
+            nextflow_executable, "run", workflow_entrypoint,
             "-profile", profile,
             "-w", str(explicit_work_dir),
             "--out_dir", output_dir,
@@ -2982,7 +3317,9 @@ def build_nextflow_command(
             params['rfd_mode'] = 'ppiflow_generator'
         params.setdefault('stage_family', 'ppiflow')
         params.setdefault('stage_mode', 'generator_backbone_refine')
-    elif model_id == 'protein_local_redesign':
+    elif model_id == 'protein_local_redesign' or (
+        model_id == 'protein_modification_experimental' and mode == 'region_redesign'
+    ):
         protein_local_mappings = {
             'input_pdb': 'plr_input_pdb',
             'model_number': 'plr_model_number',
@@ -3019,7 +3356,11 @@ def build_nextflow_command(
             params['seq_method'] = params['plr_seq_method']
         if not params.get('rfd_mode'):
             params['rfd_mode'] = 'protein_local_redesign'
-    elif model_id == 'protein_cad_experimental':
+        if model_id == 'protein_modification_experimental':
+            params['modification_mode'] = 'region_redesign'
+    elif model_id == 'protein_cad_experimental' or (
+        model_id == 'protein_modification_experimental' and mode == 'de_novo_design'
+    ):
         protein_cad_mappings = {
             'backend': 'pcad_backend',
             'design_task': 'pcad_task',
@@ -3061,85 +3402,8 @@ def build_nextflow_command(
             params['rfd_num_designs'] = params['pcad_num_designs']
         if not params.get('rfd_mode'):
             params['rfd_mode'] = 'protein_cad_experimental'
-    elif model_id == 'caliby_experimental':
-        caliby_mappings = {
-            'task': 'caliby_task',
-            'input_pdb_dir': 'caliby_input_pdb_dir',
-            'conformer_dir': 'caliby_conformer_dir',
-            'pdb_name_list': 'caliby_pdb_name_list',
-            'pos_constraint_csv': 'caliby_pos_constraint_csv',
-            'model_name': 'caliby_model_name',
-            'packer_model_name': 'caliby_packer_model_name',
-            'num_seqs_per_pdb': 'caliby_num_seqs_per_pdb',
-            'batch_size': 'caliby_batch_size',
-            'num_workers': 'caliby_num_workers',
-            'clean_num_workers': 'caliby_clean_num_workers',
-            'temperature': 'caliby_temperature',
-            'omit_aas': 'caliby_omit_aas',
-            'run_self_consistency_eval': 'caliby_run_self_consistency_eval',
-            'self_consistency_num_models': 'caliby_self_consistency_num_models',
-            'self_consistency_num_recycles': 'caliby_self_consistency_num_recycles',
-            'self_consistency_use_multimer': 'caliby_self_consistency_use_multimer',
-            'sampling_overrides_json': 'caliby_sampling_overrides_json',
-        }
-        for src_key, dest_key in caliby_mappings.items():
-            if src_key == dest_key:
-                continue
-            if src_key in params:
-                if dest_key not in params:
-                    params[dest_key] = params[src_key]
-                params.pop(src_key, None)
-
-        if 'caliby_num_seqs_per_pdb' in params and 'rfd_num_designs' not in params:
-            params['rfd_num_designs'] = params['caliby_num_seqs_per_pdb']
-        if not params.get('rfd_mode'):
-            params['rfd_mode'] = 'caliby_experimental'
-    elif model_id == 'protein_hunter_experimental':
-        protein_hunter_mappings = {
-            'backend': 'ph_backend',
-            'task': 'ph_task',
-            'num_designs': 'ph_num_designs',
-            'num_cycles': 'ph_num_cycles',
-            'min_protein_length': 'ph_min_protein_length',
-            'max_protein_length': 'ph_max_protein_length',
-            'percent_x': 'ph_percent_x',
-            'seed_binder_sequence': 'ph_seed_binder_sequence',
-            'target_protein_sequences': 'ph_target_protein_sequences',
-            'target_pdb': 'ph_target_pdb',
-            'target_pdb_chain': 'ph_target_pdb_chain',
-            'target_template_path': 'ph_target_template_path',
-            'target_template_chain_id': 'ph_target_template_chain_id',
-            'ligand_smiles': 'ph_ligand_smiles',
-            'ligand_ccd': 'ph_ligand_ccd',
-            'nucleic_sequence': 'ph_nucleic_sequence',
-            'nucleic_type': 'ph_nucleic_type',
-            'contact_residues': 'ph_contact_residues',
-            'cyclic': 'ph_cyclic',
-            'alanine_bias': 'ph_alanine_bias',
-            'temperature': 'ph_temperature',
-            'high_iptm_threshold': 'ph_high_iptm_threshold',
-            'high_plddt_threshold': 'ph_high_plddt_threshold',
-            'msa_mode': 'ph_msa_mode',
-            'boltz_model_version': 'ph_boltz_model_version',
-            'boltz_model_path': 'ph_boltz_model_path',
-            'boltz_ccd_path': 'ph_boltz_ccd_path',
-            'chai_hysteresis_mode': 'ph_chai_hysteresis_mode',
-            'chai_num_recycles': 'ph_chai_num_recycles',
-            'chai_num_diff_steps': 'ph_chai_num_diff_steps',
-            'chai_repredict': 'ph_chai_repredict',
-        }
-        for src_key, dest_key in protein_hunter_mappings.items():
-            if src_key == dest_key:
-                continue
-            if src_key in params:
-                if dest_key not in params:
-                    params[dest_key] = params[src_key]
-                params.pop(src_key, None)
-
-        if 'ph_num_designs' in params and 'rfd_num_designs' not in params:
-            params['rfd_num_designs'] = params['ph_num_designs']
-        if not params.get('rfd_mode'):
-            params['rfd_mode'] = 'protein_hunter_experimental'
+        if model_id == 'protein_modification_experimental':
+            params['modification_mode'] = 'de_novo_design'
     elif model_id == 'confornets_experimental':
         confornets_mappings = {
             'task': 'cn_task',
@@ -3308,7 +3572,7 @@ def build_nextflow_command(
 
         if not params.get('rfd_mode'):
             params['rfd_mode'] = 'boltz_cp_experimental'
-    elif model_id == 'esmfold2_experimental':
+    elif model_id in {'esmfold2', 'esmfold2_experimental'}:
         esmfold2_quality_presets = {
             'smoke': {'num_loops': 1, 'num_sampling_steps': 25, 'num_diffusion_samples': 1},
             'standard': {'num_loops': 3, 'num_sampling_steps': 50, 'num_diffusion_samples': 1},
@@ -3361,6 +3625,13 @@ def build_nextflow_command(
                 params[dest_key] = params[src_key]
                 params.pop(src_key, None)
 
+        # The active structure_prediction.nf wrapper consumes these canonical
+        # values while ESMFold2Predict consumes the prefixed runtime values.
+        if params.get('esmf_sequence'):
+            params['sequence_input'] = params['esmf_sequence']
+        if params.get('esmf_sequence_name'):
+            params['sequence_name'] = params['esmf_sequence_name']
+
         variant = str(params.get('esmf_model_variant') or 'fast').strip().lower()
         if variant not in {'fast', 'full'}:
             variant = 'fast'
@@ -3389,8 +3660,9 @@ def build_nextflow_command(
             params.pop('esmf_sequence', None)
             params.pop('sequence', None)
             complex_components = None
-        for stale_key in ('pred_method', 'primary_chain_id', 'target_chains', 'binder_chains'):
+        for stale_key in ('primary_chain_id', 'target_chains', 'binder_chains'):
             params.pop(stale_key, None)
+        params['pred_method'] = 'esmfold2'
         params.setdefault('esmf_local_files_only', True)
         params.setdefault('esmf_chain_id', 'A')
         params.setdefault('esmf_pdb_chain_ids', '')
@@ -3404,68 +3676,10 @@ def build_nextflow_command(
         params.setdefault('esmf_num_sampling_steps', 50)
         params.setdefault('esmf_num_diffusion_samples', 1)
         params.setdefault('esmf_device', 'auto')
-        if not params.get('rfd_mode'):
-            params['rfd_mode'] = 'esmfold2_experimental'
-    elif model_id == 'bindcraft':
-        # BindCraft YAML schema uses unprefixed keys, but Nextflow expects bindcraft_*.
-        bindcraft_mappings = {
-            'target_pdb': 'bindcraft_target_pdb',
-            'hotspot_residues': 'bindcraft_hotspot_residues',
-            'chains': 'bindcraft_chains',
-            'binder_lengths': 'bindcraft_binder_lengths',
-            'num_final_designs': 'bindcraft_num_final_designs',
-            'design_mode': 'bindcraft_design_mode',
-            'scaffold_pdb': 'bindcraft_scaffold_pdb',
-            'binder_chain': 'bindcraft_binder_chain',
-            'design_algorithm': 'bindcraft_design_algorithm',
-            'use_multimer_design': 'bindcraft_use_multimer_design',
-            'num_recycles_design': 'bindcraft_num_recycles_design',
-            'num_recycles_validation': 'bindcraft_num_recycles_validation',
-            'mpnn_weights': 'bindcraft_mpnn_weights',
-            'num_mpnn_sequences': 'bindcraft_num_mpnn_sequences',
-            'mpnn_fix_interface': 'bindcraft_mpnn_fix_interface',
-            'min_iptm': 'bindcraft_min_iptm',
-            'max_hotspot_rmsd': 'bindcraft_max_hotspot_rmsd',
-            'min_plddt': 'bindcraft_min_plddt',
-            'zip_animations': 'bindcraft_zip_animations',
-            'zip_plots': 'bindcraft_zip_plots',
-            'remove_unrelaxed_trajectory': 'bindcraft_remove_unrelaxed_trajectory',
-            'remove_unrelaxed_complex': 'bindcraft_remove_unrelaxed_complex',
-            'remove_binder_monomer': 'bindcraft_remove_binder_monomer',
-            'save_trajectory_pickle': 'bindcraft_save_trajectory_pickle',
-            'total_trajectories': 'bindcraft_total_trajectories',
-            'trajectories_per_job': 'bindcraft_trajectories_per_job',
-            'use_swa': 'bindcraft_use_swa',
-            'budget': 'bindcraft_budget',
-            'alpha': 'bindcraft_alpha',
-            'boltz_validation': 'bindcraft_boltz_validation',
-            # Advanced options used by the BindCraft workflow
-            'mask_mode': 'bindcraft_mask_mode',
-            'redesign_ranges': 'bindcraft_redesign_ranges',
-            'rm_template_seq_design': 'bindcraft_rm_template_seq_design',
-            'rm_template_sc_design': 'bindcraft_rm_template_sc_design',
-            'predict_initial_guess': 'bindcraft_predict_initial_guess',
-            'use_termini_distance_loss': 'bindcraft_use_termini_distance_loss',
-            'cdr_sampling_enabled': 'bindcraft_cdr_sampling_enabled',
-            'cdr_sampling_count': 'bindcraft_cdr_sampling_count',
-            'cdr_length_mode': 'bindcraft_cdr_length_mode',
-            'cdr_h1_range': 'bindcraft_cdr_h1_range',
-            'cdr_h2_range': 'bindcraft_cdr_h2_range',
-            'cdr_h3_range': 'bindcraft_cdr_h3_range',
-        }
-        for src_key, dest_key in bindcraft_mappings.items():
-            if src_key in params:
-                if dest_key not in params:
-                    params[dest_key] = params[src_key]
-                params.pop(src_key, None)
-
-        # Ensure main.nf routes into the BindCraft workflow branch.
-        if not params.get('rfd_mode'):
-            params['rfd_mode'] = 'bindcraft'
+        params.pop('rfd_mode', None)
     elif model_id in {'antibody_denovo', 'template_antibody_denovo'}:
         if is_antibody_pipeline_mode(mode) and not params.get('rfd_mode'):
             params['rfd_mode'] = mode
-
     if complex_components:
         complex_json_path = Path(output_dir) / "complex_definition.json"
         # Ensure output directory exists

@@ -50,6 +50,97 @@ def load_module(monkeypatch):
     return module
 
 
+
+def test_panel_status_indicators_ignore_stale_process_fallbacks(monkeypatch) -> None:
+    """Endpoint failure stays red even if stale legacy probes would say active."""
+    module = load_module(monkeypatch)
+
+    def unreachable(*args, **kwargs):
+        raise OSError("connection refused")
+
+    def legacy_probe_must_not_run(*args, **kwargs):
+        raise AssertionError("launcher status must not consult process fallbacks")
+
+    import urllib.request
+
+    monkeypatch.setattr(module, "operator_runtime_mode", lambda project_root=None: "dev")
+    monkeypatch.setattr(module, "runtime_api_health_url", lambda **kwargs: "http://dev/api/health")
+    monkeypatch.setattr(module, "operator_frontend_url", lambda **kwargs: "http://dev/")
+    monkeypatch.setattr(urllib.request, "urlopen", unreachable)
+    monkeypatch.setattr(module.subprocess, "run", legacy_probe_must_not_run)
+
+    assert module.check_api_status() is False
+    assert module.check_frontend_status() is False
+
+
+def test_panel_status_indicators_use_one_selected_runtime_and_accept_http_200(monkeypatch) -> None:
+    module = load_module(monkeypatch)
+    requested_urls = []
+
+    class ReadyResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    def ready(req, **kwargs):
+        requested_urls.append(req.full_url)
+        return ReadyResponse()
+
+    import urllib.request
+
+    monkeypatch.setattr(module, "runtime_api_health_url", lambda **kwargs: f"http://{kwargs['runtime_mode']}/api/health")
+    monkeypatch.setattr(module, "operator_frontend_url", lambda **kwargs: f"http://{kwargs['runtime_mode']}/")
+    monkeypatch.setattr(urllib.request, "urlopen", ready)
+
+    assert module.check_api_status("dev") is True
+    assert module.check_frontend_status("dev") is True
+    assert requested_urls == ["http://dev/api/health", "http://dev/"]
+
+
+def test_bioxp_summary_requires_runtime_and_hardware_readiness(monkeypatch) -> None:
+    module = load_module(monkeypatch)
+    base = {
+        "connection": {
+            "configured": True,
+            "active": True,
+            "fresh": True,
+            "reachable": True,
+            "runtime_ready": False,
+            "hardware_ready": True,
+            "generation": 7,
+        }
+    }
+
+    assert module.summarize_bioxp_status(base).startswith("API REACHABLE / RUNTIME NOT READY")
+    base["connection"]["runtime_ready"] = None
+    assert module.summarize_bioxp_status(base).startswith("API REACHABLE / RUNTIME UNKNOWN")
+    base["connection"]["runtime_ready"] = True
+    base["connection"]["hardware_ready"] = False
+    assert module.summarize_bioxp_status(base).startswith("API REACHABLE / HARDWARE NOT READY")
+    base["connection"]["hardware_ready"] = None
+    assert module.summarize_bioxp_status(base).startswith("API REACHABLE / HARDWARE UNKNOWN")
+    base["connection"]["hardware_ready"] = True
+    assert module.summarize_bioxp_status(base).startswith("READY")
+
+
+def test_panel_periodic_refresh_calls_read_only_bioxp_refresh_without_obsolete_argument(monkeypatch) -> None:
+    module = load_module(monkeypatch)
+    calls: list[str] = []
+    panel = SimpleNamespace(
+        _update_status_row=lambda: calls.append("status"),
+        _update_jobs_row=lambda: calls.append("jobs"),
+        _update_db_info=lambda: calls.append("db"),
+        _update_bioxp_row=lambda: calls.append("bioxp"),
+    )
+
+    assert module.BioModStackPanel._refresh_status(panel) is True
+    assert calls == ["status", "jobs", "db", "bioxp"]
+
+
 def test_panel_open_browser_uses_runtime_aware_frontend_url(monkeypatch) -> None:
     module = load_module(monkeypatch)
     captured = {}
@@ -68,7 +159,7 @@ def test_panel_restart_all_passes_detected_runtime_to_wrapper(monkeypatch) -> No
     captured = {}
     panel = SimpleNamespace(
         _script_env=lambda: {"TEST_ENV": "1"},
-        _refresh_status=lambda: True,
+        _refresh_status_once=lambda: False,
     )
 
     monkeypatch.setattr(module, "operator_runtime_mode", lambda project_root=None: module.DEV_RUNTIME_MODE)
@@ -83,6 +174,7 @@ def test_panel_restart_all_passes_detected_runtime_to_wrapper(monkeypatch) -> No
         {"TEST_ENV": "1"},
     )
     assert captured["timeout"][0] == 3
+    assert captured["timeout"][1] is panel._refresh_status_once
 
 
 def test_panel_start_button_uses_explicit_runtime_target(monkeypatch) -> None:
@@ -90,7 +182,7 @@ def test_panel_start_button_uses_explicit_runtime_target(monkeypatch) -> None:
     captured = {}
     panel = SimpleNamespace(
         _script_env=lambda: {"TEST_ENV": "1"},
-        _refresh_status=lambda: True,
+        _refresh_status_once=lambda: False,
         _selected_runtime_target=lambda: "both",
     )
 
@@ -105,6 +197,16 @@ def test_panel_start_button_uses_explicit_runtime_target(monkeypatch) -> None:
         {"TEST_ENV": "1"},
     )
     assert captured["timeout"][0] == 5
+    assert captured["timeout"][1] is panel._refresh_status_once
+
+
+def test_panel_one_shot_refresh_does_not_register_a_recurring_timer(monkeypatch) -> None:
+    module = load_module(monkeypatch)
+    calls: list[str] = []
+    panel = SimpleNamespace(_refresh_status=lambda: calls.append("refresh") or True)
+
+    assert module.BioModStackPanel._refresh_status_once(panel) is False
+    assert calls == ["refresh"]
 
 
 def test_panel_apply_runtime_ports_persists_dev_and_prod_ports(monkeypatch) -> None:
@@ -200,88 +302,76 @@ def test_panel_api_log_falls_back_when_docker_is_unavailable(monkeypatch, tmp_pa
     assert "dev api line" in content
 
 
-def test_panel_summarizes_bioxp_interlink_state(monkeypatch) -> None:
+def test_panel_summarizes_compact_bioxp_status(monkeypatch) -> None:
     module = load_module(monkeypatch)
 
-    summary = module.summarize_bioxp_interlink_state(
+    summary = module.summarize_bioxp_status(
         {
-            "active": True,
-            "configured": True,
-            "reachable": True,
-            "hardware_connected": True,
-            "robot_api_url": "http://100.124.140.56:8123",
+            "connection": {
+                "active": True,
+                "configured": True,
+                "fresh": True,
+                "reachable": True,
+                "runtime_ready": True,
+                "hardware_ready": True,
+                "generation": 4,
+                "target_url": "http://ro***:8123",
+            }
         }
     )
 
-    assert "LINKED" in summary
-    assert "reachable=yes" in summary
-    assert "hardware=yes" in summary
-    assert "http://100.124.140.56:8123" in summary
+    assert summary.startswith("READY")
+    assert "generation=4" in summary
+    assert "http://ro***:8123" in summary
 
 
-def test_panel_bioxp_summary_fails_closed_on_stale_interlink_success(monkeypatch) -> None:
+def test_panel_bioxp_summary_fails_closed_on_stale_evidence(monkeypatch) -> None:
     module = load_module(monkeypatch)
 
-    summary = module.summarize_bioxp_interlink_state(
+    summary = module.summarize_bioxp_status(
         {
-            "active": True,
-            "configured": True,
-            "reachable": True,
-            "hardware_connected": True,
-            "last_probe_reachable": True,
-            "last_probe_hardware_connected": True,
-            "last_probe_at": "2026-05-23T20:58:00+00:00",
-            "probe_fresh_window_seconds": 60,
-            "robot_api_url": "http://robot:8123",
-        }
-    )
-
-    assert summary.startswith("STALE")
-    assert "LINKED" not in summary
-
-
-def test_panel_bioxp_summary_uses_backend_probe_stale_flag(monkeypatch) -> None:
-    module = load_module(monkeypatch)
-
-    summary = module.summarize_bioxp_interlink_state(
-        {
-            "active": True,
-            "configured": True,
-            "reachable": None,
-            "hardware_connected": None,
-            "last_probe_reachable": True,
-            "probe_stale": True,
-            "robot_api_url": "http://robot:8123",
+            "connection": {
+                "active": True,
+                "configured": True,
+                "fresh": False,
+                "reachable": True,
+                "hardware_ready": True,
+                "generation": 2,
+            }
         }
     )
 
     assert summary.startswith("STALE")
-    assert "reachable=stale" in summary
+    assert "READY" not in summary
 
 
-def test_panel_bioxp_runtime_reset_uses_governed_proxy_route(monkeypatch) -> None:
+def test_panel_bioxp_status_uses_only_compact_read_route(monkeypatch) -> None:
     module = load_module(monkeypatch)
-    captured: list[tuple[str, str, dict, float]] = []
-    notifications: list[tuple[str, str]] = []
-    panel = SimpleNamespace(
-        _update_bioxp_row=lambda probe=False: None,
-        _show_bioxp_result=lambda title, result: notifications.append((title, result["action"])),
-    )
+    captured: list[tuple[str, str, object, float]] = []
 
     def fake_call(method, path, payload=None, timeout=8.0):
         captured.append((method, path, payload, timeout))
-        return {"action": "runtime-reset", "ok": False, "supported": False, "reason": "unsupported"}
+        return {"connection": {"configured": False, "active": False, "generation": 0}}
 
     monkeypatch.setattr(module, "call_local_api_json", fake_call)
 
-    module.BioModStackPanel._on_bioxp_runtime_reset(panel, None)
+    result = module.get_bioxp_status(timeout=2.5)
 
-    assert captured == [
-        (
-            "POST",
-            "/api/bioxp/interlink/runtime-reset",
-            {"operator_ack": "RESET BIOXP RUNTIME", "tail": 120},
-            30.0,
-        )
-    ]
-    assert notifications == [("BioXP Runtime Restart", "runtime-reset")]
+    assert result["connection"]["configured"] is False
+    assert captured == [("GET", "/api/bioxp/status", None, 2.5)]
+
+
+def test_panel_contains_no_robot_host_lifecycle_or_remote_log_actions(monkeypatch) -> None:
+    module = load_module(monkeypatch)
+    assert module.__file__ is not None
+    source = Path(module.__file__).read_text(encoding="utf-8")
+
+    for forbidden in (
+        "/api/bioxp/interlink/",
+        "_on_bioxp_runtime_reset",
+        "_on_bioxp_logs",
+        "Robot Logs",
+        "Restart API Runtime",
+        "BIOXP_SERVER_URL",
+    ):
+        assert forbidden not in source

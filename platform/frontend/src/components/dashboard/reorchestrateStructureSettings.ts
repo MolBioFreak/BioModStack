@@ -68,7 +68,7 @@ export interface StructureReorchestrateSettings {
 
 const DEFAULTS: StructureReorchestrateSettings = {
     predictors: ['boltz'],
-    msaProvider: 'local',
+    msaProvider: 'colabfold_api',
     msaPreset: 'fast',
     msaTargetShardMode: 'auto',
     msaTargetShards: 4,
@@ -99,7 +99,7 @@ const DEFAULTS: StructureReorchestrateSettings = {
     },
     protenix: {
         useMsa: true,
-        modelWeights: 'protenix_base_20250630_v1.0.0',
+        modelWeights: 'protenix-v2',
         seeds: '42',
         nSample: 5,
         nStep: 200,
@@ -126,7 +126,7 @@ const toInteger = (value: unknown, fallback: number, min = 1): number => {
 };
 
 const normalizeMsaProvider = (value: unknown): StructureMsaProvider => (
-    value === 'colabfold_api' ? 'colabfold_api' : 'local'
+    value === 'local' ? 'local' : 'colabfold_api'
 );
 
 const normalizeMsaPreset = (value: unknown): StructureMsaPreset => {
@@ -144,12 +144,7 @@ const normalizeBoltzCpSeed = (value: unknown): string => {
     return normalized;
 };
 
-const normalizeProtenixModel = (model?: string): string => {
-    if (!model) return DEFAULTS.protenix.modelWeights;
-    if (model === 'protenix_base_20241211_v0.2.1') return 'protenix_base_default_v1.0.0';
-    if (model === 'protenix_esm_20241211_v0.2.1') return 'protenix_mini_esm_v0.5.0';
-    return model;
-};
+const normalizeProtenixModel = (_model?: string): string => 'protenix-v2';
 
 const hasPredictorHints = (params: Record<string, unknown>, predictor: StructurePredictor): boolean => {
     if (predictor === 'boltz') {
@@ -304,7 +299,9 @@ export const buildStructureReorchestrateOverrides = (
         }
     };
 
-    maybeSet('msa_provider', next.msaProvider, previous.msaProvider);
+    // This value comes from an explicit visible control. Always submit it so a
+    // summary-row modal cannot silently inherit the source job's provider.
+    overrides.msa_provider = next.msaProvider;
     maybeSet('msa_preset', next.msaPreset, previous.msaPreset);
     maybeSet('msa_target_shard_mode', next.msaTargetShardMode, previous.msaTargetShardMode);
     maybeSet('msa_target_shards', next.msaTargetShards, previous.msaTargetShards);

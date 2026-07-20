@@ -8,10 +8,7 @@ export const MODEL_DOCUMENTATION_LINKS = {
         { label: 'AlphaFold GitHub', href: 'https://github.com/google-deepmind/alphafold' },
         { label: 'AlphaFold2 Nature DOI', href: 'https://doi.org/10.1038/s41586-021-03819-2' },
     ],
-    bindcraft: [
-        { label: 'BindCraft GitHub', href: 'https://github.com/martinpacesa/BindCraft' },
-        { label: 'BindCraft preprint DOI', href: 'https://doi.org/10.1101/2024.09.30.615802' },
-    ],
+
     boltz2: [
         { label: 'Boltz docs', href: 'https://docs.boltz.bio/' },
         { label: 'Boltz GitHub', href: 'https://github.com/jwohlwend/boltz' },

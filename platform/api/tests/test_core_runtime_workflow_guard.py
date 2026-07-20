@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from fastapi import BackgroundTasks, HTTPException
+from fastapi import BackgroundTasks, HTTPException, Request, Response
 
 
 API_ROOT = Path(__file__).resolve().parents[1]
@@ -100,7 +100,12 @@ async def test_resubmit_job_rejects_workflow_launches_in_core_runtime_mode(monke
     monkeypatch.setenv("BMS_CORE_RUNTIME_MODE", "1")
 
     with pytest.raises(HTTPException) as exc_info:
-        await jobs.resubmit_job("job-123", session=_ExplodingSession())
+        await jobs.resubmit_job(
+            "job-123",
+            request=Request({"type": "http", "method": "POST", "scheme": "http", "path": "/"}),
+            response=Response(),
+            session=_ExplodingSession(),
+        )
 
     assert exc_info.value.status_code == 409
     assert "core-runtime" in str(exc_info.value.detail).lower()
@@ -111,7 +116,12 @@ async def test_resume_job_rejects_workflow_launches_in_core_runtime_mode(monkeyp
     monkeypatch.setenv("BMS_CORE_RUNTIME_MODE", "1")
 
     with pytest.raises(HTTPException) as exc_info:
-        await jobs.resume_job("job-123", session=_ExplodingSession())
+        await jobs.resume_job(
+            "job-123",
+            request_context=Request({"type": "http", "method": "POST", "scheme": "http", "path": "/"}),
+            response=Response(),
+            session=_ExplodingSession(),
+        )
 
     assert exc_info.value.status_code == 409
     assert "resume" in str(exc_info.value.detail).lower()
@@ -148,6 +158,9 @@ async def test_lifespan_skips_gpu_orchestrator_start_in_core_runtime_mode(monkey
     async def fake_init_db() -> None:
         events.append("db-init")
 
+    async def fake_init_molbio_db() -> None:
+        events.append("molbio-db-init")
+
     class FakeGPUOrchestrator:
         def __init__(self, *args, **kwargs) -> None:
             events.append("orchestrator-init")
@@ -169,6 +182,7 @@ async def test_lifespan_skips_gpu_orchestrator_start_in_core_runtime_mode(monkey
             events.append("analysis-stop")
 
     monkeypatch.setattr(api_main, "init_db", fake_init_db)
+    monkeypatch.setattr(api_main, "init_molbio_db", fake_init_molbio_db)
     monkeypatch.setattr(api_main, "GPUOrchestrator", FakeGPUOrchestrator)
     monkeypatch.setattr(api_main, "AnalysisWorker", FakeAnalysisWorker)
     monkeypatch.setattr(api_main, "_orchestrator", None)
@@ -176,6 +190,7 @@ async def test_lifespan_skips_gpu_orchestrator_start_in_core_runtime_mode(monkey
 
     async with api_main.lifespan(api_main.app):
         assert "db-init" in events
+        assert "molbio-db-init" in events
         assert "analysis-start" in events
 
     assert "orchestrator-init" not in events

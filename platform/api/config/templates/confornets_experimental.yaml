@@ -1,7 +1,7 @@
 # Conformational mapping experimental workflow; currently backed by ConforNets.
 
 id: confornets_experimental
-name: Conformational Mapping Experimental
+name: Conformational Mapping
 icon: sparkles
 color: "#F97316"
 experimental: false

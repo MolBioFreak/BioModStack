@@ -1,5 +1,9 @@
 # BioXP Robot ↔ Workstation Interlink Control Panel Spec
 
+> **SUPERSEDED AS THE CURRENT BMS CONTRACT (2026-07-18):** Retained as historical
+> planning evidence only. Do not restore its SSH/systemd/reboot/interlink routes.
+> See [BioXP Compact Control Plane](../BioXP_Compact_Control_Plane.md).
+
 > **For Hermes:** Use subagent-driven-development skill to implement this plan task-by-task after Christian approves the scope.
 
 **Goal:** Add a top-right BMS control-panel button for explicit BioXP robot/workstation interlink setup, connect/disconnect, diagnostics, robot-local runtime reset, and full robot reboot while removing uncontrolled reset surfaces.
@@ -14,8 +18,8 @@
 
 Current BMS already has useful seams but they need to be corrected for the new operator contract:
 
-- `platform/frontend/src/components/Layout.tsx` already imports and renders top-right utility menus such as `StatsToolsMenu` and `DbServiceMenu`.
-- `platform/frontend/src/components/StatsToolsControlPanel.tsx` and `DbServiceControlPanel.tsx` are the correct UI pattern: top-bar button, dropdown panel, state/health, lifecycle buttons, logs, and copyable commands.
+- `platform/frontend/src/components/Layout.tsx` already owns the top-right utility-control region where the BioXP interlink entry belongs.
+- Existing active BioXP controls provide the relevant state/health, lifecycle-action, logs, and copyable-command interaction patterns.
 - `platform/api/routers/system.py` has a local-admin guard pattern via `_require_local_admin(...)` for lifecycle/control routes.
 - `platform/api/routers/bioxp.py` already has `/api/bioxp/linkage`, `/api/bioxp/linkage/disconnect`, `/api/bioxp/runtime/status`, and `/api/bioxp/daemon/status`.
 - Current `bioxp.py` initializes `_GLOBAL_LINKAGE_URL` from persisted state/env at import time. That violates the new requirement because it can make BMS connect/poll after restart without operator intent.
@@ -48,7 +52,7 @@ maintenance_blocked = robot API reported maintenance_state.motion_blocked=true
 
 ### Button placement
 
-Add a top-right utility button in `Layout.tsx`, same visual family as `BMS DB` and `Stats-tools`:
+Add a top-right utility button in `Layout.tsx`, using the existing utility-control visual family:
 
 ```text
 BIOXP LINK
@@ -364,7 +368,7 @@ Implementation notes:
 
 ### Task 5: Topbar control panel component
 
-**Objective:** Add the `BIOXP LINK` menu matching the existing BMS DB / Stats-tools pattern.
+**Objective:** Add the `BIOXP LINK` menu matching the existing top-bar control pattern.
 
 **Files:**
 - Create: `platform/frontend/src/components/BioXpInterlinkControlPanel.tsx`

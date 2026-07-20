@@ -77,16 +77,21 @@ def _parse_pdb_atom_line(line: str) -> dict[str, Any] | None:
 
 def _parse_cif_atom_line(line: str, field_map: dict[str, int]) -> dict[str, Any] | None:
     parts = line.split()
-    residue_name = parts[field_map["label_comp_id"]]
+    # mmCIF commonly quotes nucleic-acid atom names such as "C1'".  Preserve
+    # the apostrophe while removing only the surrounding CIF quote token.
+    def token(name: str) -> str:
+        return parts[field_map[name]].strip('"')
+
+    residue_name = token("label_comp_id")
     residue_seq_num = parts[field_map["label_seq_id"]]
     if residue_seq_num == ".":
         return None
     chain_key = "auth_asym_id" if "auth_asym_id" in field_map else "label_asym_id"
     return {
         "atom_num": int(parts[field_map["id"]]),
-        "atom_name": parts[field_map["label_atom_id"]],
+        "atom_name": token("label_atom_id"),
         "residue_name": residue_name,
-        "chain_id": parts[field_map[chain_key]],
+        "chain_id": token(chain_key),
         "residue_seq_num": int(residue_seq_num),
         "x": float(parts[field_map["Cartn_x"]]),
         "y": float(parts[field_map["Cartn_y"]]),

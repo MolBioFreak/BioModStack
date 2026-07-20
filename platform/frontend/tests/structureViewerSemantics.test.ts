@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import test from 'node:test';
 
 import {
@@ -14,8 +15,11 @@ import {
     getConforNetsScalarPlddt,
     getConforNetsSampleIndex,
     isConforNetsDesign,
+    resolveEffectiveStructureViewerColorMode,
     resolveStructureViewerConfidenceSemantics,
 } from '../src/components/structureViewerSemantics.js';
+
+const STRUCTURE_VIEWER_PANE_PATH = resolve(process.cwd(), 'src/components/StructureViewerPane.tsx');
 
 test('oligo jobs use design-confidence semantics instead of pLDDT wording', () => {
     const semantics = resolveStructureViewerConfidenceSemantics({
@@ -54,6 +58,42 @@ test('validation and protenix outputs keep pLDDT semantics in the viewer', () =>
         }).headlineLabel,
         'RF pLDDT',
     );
+});
+
+test('effective viewer color mode falls back without mutating the requested parent preference', () => {
+    assert.equal(resolveEffectiveStructureViewerColorMode({
+        requestedMode: 'plddt',
+        hasResidueConfidence: false,
+        hasFampnnPsceProfile: false,
+        hasFrustrationResidues: false,
+    }), 'default');
+    assert.equal(resolveEffectiveStructureViewerColorMode({
+        requestedMode: 'plddt',
+        hasResidueConfidence: true,
+        hasFampnnPsceProfile: false,
+        hasFrustrationResidues: false,
+    }), 'plddt');
+    assert.equal(resolveEffectiveStructureViewerColorMode({
+        requestedMode: 'fampnn_psce',
+        hasResidueConfidence: false,
+        hasFampnnPsceProfile: false,
+        hasFrustrationResidues: false,
+    }), 'default');
+    assert.equal(resolveEffectiveStructureViewerColorMode({
+        requestedMode: 'frustration',
+        hasResidueConfidence: false,
+        hasFampnnPsceProfile: false,
+        hasFrustrationResidues: false,
+    }), 'default');
+    assert.equal(resolveEffectiveStructureViewerColorMode({
+        requestedMode: 'cdr',
+        hasResidueConfidence: false,
+        hasFampnnPsceProfile: false,
+        hasFrustrationResidues: false,
+    }), 'cdr');
+
+    const paneSource = readFileSync(STRUCTURE_VIEWER_PANE_PATH, 'utf8');
+    assert.doesNotMatch(paneSource, /if \(colorMode === 'plddt' && !hasResidueConfidence\) \{\s*setColorMode\('default'\)/);
 });
 
 test('viewer sections only appear when their underlying analyses or metrics exist', () => {
@@ -472,7 +512,7 @@ test('ConforNets overlay ids are de-duplicated, valid, sorted, and never include
 
 test('StructureViewerPane wires first-class ConforNets slider, step, and overlay controls', () => {
     const source = readFileSync('src/components/StructureViewerPane.tsx', 'utf8');
-    const molstarSource = readFileSync('src/components/MolstarViewer.tsx', 'utf8');
+    const molstarSource = readFileSync('src/components/MolstarViewerImpl.tsx', 'utf8');
 
     assert.match(source, /data-confornets-conformer-controls/);
     assert.match(source, /type="range"/);
@@ -494,11 +534,15 @@ test('StructureViewerPane wires first-class ConforNets slider, step, and overlay
     assert.match(source, /preferScalarFallback:\s*conforNetsUsesScalarPlddtFallback/);
     assert.match(source, /overlay ready: \$\{bfactorLabel\} residue\/chain map/);
     assert.match(source, /Uniform scalar pLDDT/);
-    assert.match(source, /residueColors=\{/);
+    assert.match(source, /residueMetricLayer=\{/);
     assert.match(source, /plddtResidueColors/);
     assert.match(molstarSource, /overlayStructures/);
-    assert.match(molstarSource, /viewerInstance\.load/);
-    assert.match(molstarSource, /fullLoad:\s*false/);
-    assert.match(molstarSource, /alphafold-view/);
-    assert.match(molstarSource, /residueColors && residueColors\.size > 0 \? 'false'/);
+    assert.match(molstarSource, /new MolstarDirectAdapter/);
+    assert.match(molstarSource, /new StructureSceneController/);
+    assert.match(molstarSource, /controller\.loadScene\(sceneResult\.value\)/);
+    assert.match(molstarSource, /kind:\s*'independent_hypotheses'/);
+    assert.match(molstarSource, /\[adapterEpoch, documents, measurements, molecularDynamics, scenePresentation\]/);
+    assert.match(molstarSource, /alphafoldView:\s*options\.effectiveAlphafoldView/);
+    assert.match(molstarSource, /&& !\(scenePresentation\?\.colorQueries\?\.length\)/);
+    assert.doesNotMatch(molstarSource, /viewerInstance/);
 });

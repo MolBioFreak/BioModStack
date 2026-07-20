@@ -4,7 +4,7 @@ Extract a single chain from a multi-chain PDB file.
 
 This utility is used to filter target PDB files before sending to design pipelines.
 When a user selects a specific chain (e.g., Chain I from 7TLY), only that chain
-should be passed to RFantibody, BindCraft, and BoltzGen.
+should be passed to RFantibody, BoltzGen, and other target-based design workflows.
 
 Usage:
     python extract_chain.py input.pdb output.pdb --chain I

@@ -17,7 +17,7 @@ nextflow.enable.dsl = 2
 // Spawned by parent antibody_denovo workflow in exploration mode.
 // =============================================================================
 
-include { BatchBoltzValidation ; BatchProtenixValidation ; BatchImmunogenicity ; BatchStability } from '../modules/antibody_batch'
+include { BatchBoltzValidation ; BatchProtenixValidation ; BatchESMFold2Validation ; BatchImmunogenicity ; BatchStability } from '../modules/antibody_batch'
 
 def resolveBooleanParam(value, defaultValue = false) {
     if (value == null) {
@@ -42,7 +42,7 @@ workflow ANTIBODY_CHILD {
     def pdb_files = pdb_paths.collect { pathStr -> file(pathStr) }
 
     def structure_validator = (params.structure_validator ?: 'boltz2').toString().toLowerCase()
-    if (!(structure_validator in ['boltz2', 'protenix'])) {
+    if (!(structure_validator in ['boltz2', 'protenix', 'esmfold2'])) {
         log.warn("Unknown structure_validator '${structure_validator}', defaulting to boltz2")
         structure_validator = 'boltz2'
     }
@@ -53,7 +53,11 @@ workflow ANTIBODY_CHILD {
     def validated_pdbs_ch = channel.empty()
     def validation_scores_ch = channel.empty()
 
-    if (structure_validator == 'protenix') {
+    if (structure_validator == 'esmfold2') {
+        BatchESMFold2Validation(pdb_files, msa_file)
+        validated_pdbs_ch = BatchESMFold2Validation.out.pdbs
+        validation_scores_ch = BatchESMFold2Validation.out.metrics
+    } else if (structure_validator == 'protenix') {
         BatchProtenixValidation(pdb_files, msa_file)
         validated_pdbs_ch = BatchProtenixValidation.out.pdbs
         validation_scores_ch = BatchProtenixValidation.out.scores

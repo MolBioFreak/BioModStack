@@ -6,6 +6,10 @@ Run Protenix inference from the repository code path with atom-confidence dumps 
 from __future__ import annotations
 
 import argparse
+import fcntl
+import hashlib
+import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -89,27 +93,100 @@ def _install_exact_template_duplicate_allowlist(allowed_pdb_ids: list[str]) -> N
 def _apply_default_params(args: argparse.Namespace) -> None:
     if not args.use_default_params:
         return
-    if args.model_name in {
-        "protenix_base_default_v0.5.0",
-        "protenix_base_constraint_v0.5.0",
-        "protenix-v2",
-        "protenix_base_default_v1.0.0",
-        "protenix_base_20250630_v1.0.0",
-    }:
-        args.cycle = 10
-        args.step = 200
-    elif args.model_name in {
-        "protenix_mini_esm_v0.5.0",
-        "protenix_mini_ism_v0.5.0",
-        "protenix_mini_default_v0.5.0",
-        "protenix_tiny_default_v0.5.0",
-    }:
-        args.cycle = 4
-        args.step = 5
-        if args.model_name in {"protenix_mini_esm_v0.5.0", "protenix_mini_ism_v0.5.0"}:
-            args.use_msa = False
-    else:
-        raise RuntimeError(f"{args.model_name} is not supported for default inference params")
+    if args.model_name != "protenix-v2":
+        raise RuntimeError("Only the protenix-v2 checkpoint is supported")
+
+
+def _install_coordinate_ledger(ledger_path: Path, context_path: Path) -> None:
+    """Instrument the pinned dumper with runtime seed/sample identities."""
+
+    from runner.dumper import DataDumper
+
+    context = json.loads(context_path.read_text(encoding="utf-8"))
+    if context.get("schema_name") != "cm_protenix_coordinate_context" or context.get("schema_version") != 1:
+        raise RuntimeError("invalid canonical Protenix coordinate context")
+    target_by_pdb_id = context.get("target_by_pdb_id")
+    if not isinstance(target_by_pdb_id, dict) or not target_by_pdb_id:
+        raise RuntimeError("canonical Protenix coordinate context has no target mapping")
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    original = DataDumper.dump_predictions
+
+    def digest(path: Path) -> tuple[str, int]:
+        value = hashlib.sha256()
+        size = 0
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                value.update(chunk)
+                size += len(chunk)
+        return value.hexdigest(), size
+
+    def instrumented(self, pred_dict, dump_dir, pdb_id, atom_array, entity_poly_type, seed):
+        sorted_indices = list(self._get_ranker_indices(data=pred_dict))
+        original(self, pred_dict, dump_dir, pdb_id, atom_array, entity_poly_type, seed)
+        target_id = target_by_pdb_id.get(str(pdb_id))
+        if not isinstance(target_id, str) or not target_id:
+            raise RuntimeError(f"no canonical target mapping for Protenix task {pdb_id!r}")
+        records = []
+        prediction_root = Path(dump_dir) / "predictions"
+        for rank_position, rank_value in enumerate(sorted_indices):
+            rank_index = int(rank_value)
+            structure = prediction_root / f"{pdb_id}_sample_{rank_index}.cif"
+            confidence = prediction_root / f"{pdb_id}_summary_confidence_sample_{rank_index}.json"
+            full_data = prediction_root / f"{pdb_id}_full_data_sample_{rank_index}.json"
+            artifacts = []
+            for role, path in (
+                ("authoritative_cif", structure),
+                ("confidence_json", confidence),
+                ("full_data_json", full_data),
+            ):
+                if not path.is_file() or path.is_symlink():
+                    raise RuntimeError(f"mandatory Protenix output is missing: {path}")
+                file_sha256, size_bytes = digest(path)
+                artifacts.append(
+                    {
+                        "semantic_role": role,
+                        "relative_path": path.resolve().relative_to(Path(self.base_dir).resolve()).as_posix(),
+                        "sha256": file_sha256,
+                        "bytes": size_bytes,
+                    }
+                )
+            records.append(
+                {
+                    "coordinates": {
+                        "backend": "protenix_v2_ensemble",
+                        "target_id": target_id,
+                        "ordered_seed": int(seed),
+                        "sample_index": rank_index,
+                    },
+                    "backend_rank_position": rank_position,
+                    "artifacts": artifacts,
+                }
+            )
+        descriptor = os.open(
+            ledger_path,
+            os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0),
+            0o440,
+        )
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            for record in records:
+                payload = memoryview(
+                    (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+                )
+                while payload:
+                    written = os.write(descriptor, payload)
+                    if written <= 0:
+                        raise OSError("short write while appending Protenix coordinate ledger")
+                    payload = payload[written:]
+            os.fsync(descriptor)
+        finally:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            os.close(descriptor)
+
+    DataDumper.dump_predictions = instrumented
 
 
 def main() -> None:
@@ -121,7 +198,7 @@ def main() -> None:
     parser.add_argument("--step", type=int, default=200, help="Diffusion steps.")
     parser.add_argument("--sample", type=int, default=5, help="Number of samples.")
     parser.add_argument("--dtype", default="bf16", help="Inference dtype.")
-    parser.add_argument("--model_name", default="protenix_base_20250630_v1.0.0", help="Model checkpoint name.")
+    parser.add_argument("--model_name", choices=("protenix-v2",), default="protenix-v2", help="Model checkpoint name (V2 only).")
     parser.add_argument("--use_msa", type=_parse_bool, default=True, help="Whether to use MSA for inference.")
     parser.add_argument("--use_default_params", type=_parse_bool, default=False, help="Use recommended default parameters.")
     parser.add_argument("--trimul_kernel", default="cuequivariance", help="Triangle multiplicative update kernel.")
@@ -149,6 +226,8 @@ def main() -> None:
         default="",
         help="Comma-separated PDB IDs whose exact templates should bypass duplicate-query filtering.",
     )
+    parser.add_argument("--cm-coordinate-ledger", default=None)
+    parser.add_argument("--cm-coordinate-context", default=None)
     args = parser.parse_args()
 
     _apply_default_params(args)
@@ -162,11 +241,17 @@ def main() -> None:
     from runner.batch_inference import get_default_runner, preprocess_input
     from runner.inference import infer_predict
 
+    if bool(args.cm_coordinate_ledger) != bool(args.cm_coordinate_context):
+        raise RuntimeError("canonical coordinate ledger and context must be supplied together")
+    if args.cm_coordinate_ledger:
+        _install_coordinate_ledger(
+            Path(args.cm_coordinate_ledger).resolve(),
+            Path(args.cm_coordinate_context).resolve(),
+        )
+
     inference_configs["dump_dir"] = args.out_dir
-    runner = get_default_runner(
+    runner_options = dict(
         seeds=_parse_int_list(args.seeds),
-        n_cycle=args.cycle,
-        n_step=args.step,
         n_sample=args.sample,
         dtype=args.dtype,
         model_name=args.model_name,
@@ -181,6 +266,9 @@ def main() -> None:
         use_seeds_in_json=args.use_seeds_in_json,
         kalign_binary_path=args.kalign_binary_path,
     )
+    if not args.use_default_params:
+        runner_options.update(n_cycle=args.cycle, n_step=args.step)
+    runner = get_default_runner(**runner_options)
     runner.init_dumper(
         need_atom_confidence=True,
         sorted_by_ranking_score=runner.configs.sorted_by_ranking_score,

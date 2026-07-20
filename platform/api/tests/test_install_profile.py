@@ -4,6 +4,8 @@ import importlib
 import sys
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 API_ROOT = Path(__file__).resolve().parents[1]
@@ -13,6 +15,37 @@ for root in (REPO_ROOT, API_ROOT):
 
 import biomodstack_runtime_profile as runtime_profile
 import paths as api_paths
+
+
+@pytest.fixture(autouse=True)
+def clear_inherited_runtime_environment(monkeypatch) -> None:
+    """Install-profile tests must not inherit the operator's active runtime."""
+    for name in (
+        "BMS_DATA",
+        "BMS_INPUTS",
+        "BMS_DB_PATH",
+        "BMS_CONTAINER_DIR",
+        "BMS_WEIGHTS",
+        "BMS_COLABFOLD_DB",
+        "BMS_MSA_CACHE",
+        "BMS_SABDAB_CACHE",
+        "BMS_WORK",
+        "BMS_STATE_DIR",
+        "BMS_CONTAINER_STATE_PATH",
+        "BMS_INPUTS_CONTAINER_PATH",
+        "BMS_DB_CONTAINER_PATH",
+        "BMS_API_HOST_PORT",
+        "BMS_DEV_API_HOST_PORT",
+        "BMS_DEV_WEB_HOST_PORT",
+        "BMS_WEB_HOST_PORT",
+        "CORS_ORIGINS",
+        "BMS_CORE_RUNTIME_MODE",
+        "BMS_FEATURE_BIOXP",
+        "BMS_FEATURE_MOLECULAR_DYNAMICS",
+        "BMS_WORKFLOW_ADAPTER_URL",
+        "COMPOSE_PROJECT_NAME",
+    ):
+        monkeypatch.delenv(name, raising=False)
 
 
 EXPECTED_CORS_ORIGINS = ",".join(
@@ -43,7 +76,7 @@ def test_save_install_profile_writes_compatibility_exports(tmp_path: Path, monke
             "data_root": "~/BioModStackData",
             "container_state_path": "/var/lib/biomodstack-custom",
             "dev_web_host_port": 5179,
-            "api_host_port": 9000,
+            "api_host_port": 8000,
             "web_host_port": 5174,
         }
     )
@@ -56,7 +89,7 @@ def test_save_install_profile_writes_compatibility_exports(tmp_path: Path, monke
     assert f'export BMS_DATA="${{BMS_DATA:-{resolved_data_root}}}"' in env_text
     assert f'export BMS_STATE_DIR="${{BMS_STATE_DIR:-{resolved_data_root}}}"' in env_text
     assert 'export BMS_DEV_WEB_HOST_PORT="${BMS_DEV_WEB_HOST_PORT:-5179}"' in env_text
-    assert 'export BMS_API_HOST_PORT="${BMS_API_HOST_PORT:-9000}"' in env_text
+    assert 'export BMS_API_HOST_PORT="${BMS_API_HOST_PORT:-8000}"' in env_text
     assert 'export BMS_WEB_HOST_PORT="${BMS_WEB_HOST_PORT:-5174}"' in env_text
     assert f'export CORS_ORIGINS="${{CORS_ORIGINS:-{EXPECTED_CORS_ORIGINS}}}"' in env_text
     assert 'export BMS_WORKFLOW_ADAPTER_URL="${BMS_WORKFLOW_ADAPTER_URL:-http://127.0.0.1:8001}"' in env_text
@@ -79,6 +112,7 @@ def test_save_install_profile_writes_compatibility_exports(tmp_path: Path, monke
     assert "BMS_DEV_WEB_HOST_PORT=5179" in core_runtime_text
     assert f"CORS_ORIGINS={EXPECTED_CORS_ORIGINS}" in core_runtime_text
     assert "BMS_WORKFLOW_ADAPTER_URL=http://127.0.0.1:8001" in core_runtime_text
+    assert core_runtime_env.stat().st_mode & 0o777 == 0o600
 
 
 def test_resolve_runtime_paths_defaults_include_cordova_and_loopback_cors_origins(tmp_path: Path, monkeypatch) -> None:
@@ -97,9 +131,11 @@ def test_resolve_runtime_paths_defaults_include_cordova_and_loopback_cors_origin
     assert resolved["cors_origins"] == EXPECTED_CORS_ORIGINS.split(",")
     assert resolved["dev_web_host_port"] == 5173
     assert resolved["web_host_port"] == 18080
+    assert resolved["dev_data_root"] == str((home_dir / ".biomodstack-dev").resolve())
+    assert resolved["dev_db_path"] == str((home_dir / ".biomodstack-dev" / "biomodstack.db").resolve())
 
 
-def test_install_profile_persists_and_exports_addon_feature_flags(tmp_path: Path, monkeypatch) -> None:
+def test_install_profile_rejects_runtime_port_collisions_before_writing(tmp_path: Path, monkeypatch) -> None:
     home_dir = tmp_path / "home"
     config_home = home_dir / ".config"
     home_dir.mkdir()
@@ -107,30 +143,73 @@ def test_install_profile_persists_and_exports_addon_feature_flags(tmp_path: Path
     monkeypatch.setenv("HOME", str(home_dir))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
 
+    with pytest.raises(ValueError, match="must be distinct"):
+        runtime_profile.save_install_profile({"api_host_port": 8000, "dev_api_host_port": 8000})
+    with pytest.raises(ValueError, match="reserved BioModStack auxiliary port"):
+        runtime_profile.save_install_profile({"web_host_port": 8001})
+    assert not runtime_profile.get_install_profile_path().exists()
+
+
+def test_install_profile_rejects_mutable_container_api_port_before_writing(tmp_path: Path, monkeypatch) -> None:
+    home_dir = tmp_path / "home"
+    config_home = home_dir / ".config"
+    home_dir.mkdir()
+    config_home.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+    with pytest.raises(ValueError, match="fixed.*8000"):
+        runtime_profile.save_install_profile({"api_host_port": 9000})
+
+    assert not runtime_profile.get_install_profile_path().exists()
+
+
+def test_install_profile_persists_only_supported_feature_flags(tmp_path: Path, monkeypatch) -> None:
+    home_dir = tmp_path / "home"
+    config_home = home_dir / ".config"
+    home_dir.mkdir()
+    config_home.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    for env_name in (
+        "BMS_FEATURE_BIOXP",
+        "BMS_FEATURE_MOLECULAR_DYNAMICS",
+    ):
+        monkeypatch.delenv(env_name, raising=False)
+
     saved = runtime_profile.save_install_profile(
         {
             "data_root": "~/BioModStackData",
             "features": {
                 "bioxp": False,
-                "stats_tools": True,
-                "assay_db": False,
+                "sta" + "ts_tools": True,
+                "as" + "say_db": False,
+                "molecular_dynamics": True,
             },
         }
     )
 
-    assert saved["features"] == {"bioxp": False, "stats_tools": True, "assay_db": False}
+    assert saved["features"] == {
+        "bioxp": False,
+        "molecular_dynamics": True,
+    }
     snapshot = runtime_profile.install_profile_snapshot()
-    assert snapshot["resolved"]["features"] == {"bioxp": False, "stats_tools": True, "assay_db": False}
+    assert snapshot["resolved"]["features"] == {
+        "bioxp": False,
+        "molecular_dynamics": True,
+    }
 
     env_text = runtime_profile.get_compat_env_path().read_text(encoding="utf-8")
     assert 'export BMS_FEATURE_BIOXP="${BMS_FEATURE_BIOXP:-0}"' in env_text
-    assert 'export BMS_FEATURE_STATS_TOOLS="${BMS_FEATURE_STATS_TOOLS:-1}"' in env_text
-    assert 'export BMS_FEATURE_ASSAY_DB="${BMS_FEATURE_ASSAY_DB:-0}"' in env_text
+    assert 'export BMS_FEATURE_MOLECULAR_DYNAMICS="${BMS_FEATURE_MOLECULAR_DYNAMICS:-1}"' in env_text
+    assert "BMS_FEATURE_STA" + "TS_TOOLS" not in env_text
+    assert "BMS_FEATURE_AS" + "SAY_DB" not in env_text
 
     core_runtime_text = runtime_profile.get_core_runtime_env_path().read_text(encoding="utf-8")
     assert "BMS_FEATURE_BIOXP=0" in core_runtime_text
-    assert "BMS_FEATURE_STATS_TOOLS=1" in core_runtime_text
-    assert "BMS_FEATURE_ASSAY_DB=0" in core_runtime_text
+    assert "BMS_FEATURE_MOLECULAR_DYNAMICS=1" in core_runtime_text
+    assert "BMS_FEATURE_STA" + "TS_TOOLS" not in core_runtime_text
+    assert "BMS_FEATURE_AS" + "SAY_DB" not in core_runtime_text
 
 
 def test_feature_env_override_wins_over_install_profile(tmp_path: Path, monkeypatch) -> None:
@@ -140,13 +219,27 @@ def test_feature_env_override_wins_over_install_profile(tmp_path: Path, monkeypa
     config_home.mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home_dir))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    for env_name in (
+        "BMS_FEATURE_BIOXP",
+        "BMS_FEATURE_MOLECULAR_DYNAMICS",
+    ):
+        monkeypatch.delenv(env_name, raising=False)
     monkeypatch.setenv("BMS_FEATURE_BIOXP", "1")
 
     resolved = runtime_profile.resolve_runtime_paths(
-        profile={"features": {"bioxp": False, "stats_tools": False, "assay_db": False}}
+        profile={
+            "features": {
+                "bioxp": False,
+                "sta" + "ts_tools": False,
+                "as" + "say_db": False,
+            }
+        }
     )
 
-    assert resolved["features"] == {"bioxp": True, "stats_tools": False, "assay_db": False}
+    assert resolved["features"] == {
+        "bioxp": True,
+        "molecular_dynamics": False,
+    }
     assert runtime_profile.install_feature_enabled("bioxp", profile={"features": {"bioxp": False}}) is True
 
 

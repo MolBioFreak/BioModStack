@@ -7,6 +7,7 @@ and populates the Design table in SQLite.
 
 import csv
 import copy
+import hashlib
 import json
 import math
 import re
@@ -33,6 +34,12 @@ from services.rfantibody_metadata import load_rfantibody_trb_summary
 from services.cdr_annotator import extract_sequence_from_pdb, identify_binder_chains
 from .aligned_error_utils import detect_aligned_error_artifact, load_aligned_error_artifact
 from .ipsae import compute_ipsae_interface
+from .result_contracts import REVIEW_ARTIFACT_SCHEMA, REVIEW_CONTRACT_VERSION, resolve_result_contract
+from .conformational_mapping.persistence import (
+    ConformationalPersistenceError,
+    get_request as get_cm_request,
+    ingest_result_bundle as ingest_cm_result_bundle,
+)
 from .structure_utils import calculate_epitope_contacts, compute_contact_geometry_metrics, compute_gyration_radius, get_per_chain_fampnn_psce
 
 
@@ -189,6 +196,23 @@ def parse_frustration_csv(csv_path: Path, pdb_name_filter: Optional[str] = None)
     except Exception as e:
         print(f"[Ingester] Error parsing frustration CSV: {e}")
         return None
+
+
+def _normalize_boltzgen_design_name(design_name: str) -> str:
+    """Normalize upstream ``rankN_name`` artifacts to the UI/API ``name_N`` contract."""
+    import re
+
+    normalized = str(design_name or "").strip()
+    ranked = re.fullmatch(r"rank(\d+)_(.+)", normalized, flags=re.IGNORECASE)
+    if not ranked:
+        return normalized
+    rank, base_name = ranked.groups()
+    return f"{base_name}_{int(rank)}"
+
+
+def _boltzgen_filtered_output_dir(output_path: Path) -> Optional[Path]:
+    filtered = output_path / "collected" / "boltzgen_filtered"
+    return filtered if filtered.is_dir() else None
 
 
 def parse_backbone_id(design_name: str) -> Optional[int]:
@@ -407,7 +431,14 @@ def _resolve_validation_structure_role_fields(
         target_sequences = extract_sequence_from_pdb(str(target_pdb)) or {}
     except Exception:
         return resolved
-    configured_target_chain_ids = _parse_chain_ids(job_params.get("antigen_chains") or job_params.get("target_chains"))
+    # Source-PDB chain selectors and validated-output role selectors are distinct.
+    # Binder workflows commonly read target chain A and publish it as output chain B.
+    configured_target_chain_ids = _parse_chain_ids(
+        job_params.get("target_source_chain")
+        or job_params.get("target_source_chains")
+        or job_params.get("antigen_source_chains")
+        or job_params.get("antigen_chains")
+    )
     if configured_target_chain_ids:
         target_sequences = {
             chain_id: seq for chain_id, seq in target_sequences.items()
@@ -568,6 +599,123 @@ def _load_json_payload(json_path: Optional[Path]) -> Optional[Dict[str, Any]]:
     return payload if isinstance(payload, dict) else None
 
 
+def _trusted_producer_review_fields(job: Optional[Job], payload: Any) -> Dict[str, Any]:
+    """Accept canonical producer intent only within server-owned job boundaries.
+
+    Request parameters and arbitrary provenance never enter this path. The
+    producer declaration must use the current schema and a profile allowed for
+    the persisted job model. Artifact readiness is deliberately not copied;
+    it is rebuilt from the material Design paths during contract finalization.
+    """
+    if job is None or not isinstance(payload, dict):
+        return {}
+    profile_id = str(payload.get("review_profile_id") or "").strip().lower()
+    source = str(payload.get("review_contract_source") or "").strip().lower()
+    role_map = payload.get("review_role_map")
+    manifest = payload.get("review_artifact_manifest")
+    raw_version = payload.get("review_contract_version")
+    if raw_version is None:
+        return {}
+    try:
+        version = int(str(raw_version))
+    except (TypeError, ValueError):
+        return {}
+    if (
+        not profile_id
+        or source != "producer"
+        or version != REVIEW_CONTRACT_VERSION
+        or not isinstance(role_map, dict)
+        or not isinstance(manifest, dict)
+        or manifest.get("schema") != REVIEW_ARTIFACT_SCHEMA
+    ):
+        return {}
+
+    result_role = role_map.get("result_role")
+    if not isinstance(result_role, str) or not result_role.strip():
+        return {}
+    for role_key, role_value in role_map.items():
+        if not isinstance(role_key, str) or not role_key.strip():
+            return {}
+        if role_key.endswith("_chains") and (
+            not isinstance(role_value, list)
+            or not all(isinstance(chain, str) and chain.strip() for chain in role_value)
+        ):
+            return {}
+
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, dict) or not artifacts:
+        return {}
+    contract = resolve_result_contract(review_profile_id=profile_id)
+    for artifact_name in contract.required_artifacts:
+        descriptor = artifacts.get(artifact_name)
+        if not isinstance(descriptor, dict):
+            return {}
+        if descriptor.get("kind") != artifact_name:
+            return {}
+        if descriptor.get("state") not in {"ready", "missing"}:
+            return {}
+        path = descriptor.get("path")
+        if path is not None and (not isinstance(path, str) or not path.strip()):
+            return {}
+
+    model_id = str(getattr(job, "model_id", None) or "").strip().lower()
+    job_mode = str(getattr(job, "mode", None) or "").strip().lower()
+    job_params = getattr(job, "params", None) or {}
+    modification_mode = str(job_params.get("modification_mode") or "").strip().lower()
+    generator_family = str(payload.get("generator_family") or "").strip().lower()
+    if generator_family == "caliby":
+        if model_id == "binder_design" and job_mode == "rfd3_caliby":
+            allowed_profiles = {"binder_design_v1"}
+
+        else:
+            return {}
+    elif generator_family == "protein_hunter":
+        if model_id != "binder_design" or job_mode != "protein_hunter":
+            return {}
+        allowed_profiles = {"binder_design_v1"}
+    elif model_id == "protein_local_redesign" or (
+        model_id == "protein_modification_experimental"
+        and (job_mode == "region_redesign" or modification_mode == "region_redesign")
+    ):
+        allowed_profiles = {"de_novo_generation_v1"}
+    else:
+        server_contract = resolve_result_contract(model_type=model_id)
+        allowed_profiles = {server_contract.analysis_contract_id} if server_contract.analysis_contract_id else set()
+    if profile_id not in allowed_profiles:
+        return {}
+    if profile_id == "binder_design_v1":
+        raw_ipsae = payload.get("ipsae")
+        if not isinstance(raw_ipsae, (int, float, str)):
+            return {}
+        try:
+            ipsae = float(raw_ipsae)
+        except (TypeError, ValueError):
+            return {}
+        if not math.isfinite(ipsae) or not 0.0 <= ipsae <= 1.0:
+            return {}
+        if (
+            str(payload.get("artifact_class") or "").strip() != "validated_binder_complex"
+            or str(payload.get("result_set") or "").strip() != "binder_candidates"
+            or str(payload.get("stage_family") or "").strip() != "binder_design"
+            or str(payload.get("stage_mode") or "").strip() not in {"rfd3_caliby", "protein_hunter"}
+        ):
+            return {}
+    fields = {
+        "review_profile_id": profile_id,
+        "review_contract_version": REVIEW_CONTRACT_VERSION,
+        "review_contract_source": "producer",
+        "review_role_map": role_map,
+    }
+    if profile_id == "binder_design_v1":
+        fields.update(
+            {
+                "artifact_class": "validated_binder_complex",
+                "artifact_schema_version": 1,
+            }
+        )
+    return fields
+
+
 def _default_fampnn_metrics() -> Dict[str, Any]:
     return {
         "avg_psce": None,
@@ -606,6 +754,8 @@ def _compute_binder_metrics_from_structure(structure_path: Optional[Path]) -> Di
         sequences = extract_sequence_from_pdb(str(structure_path))
         if not sequences:
             return metrics
+        if len(sequences) < 2:
+            return metrics
 
         binder_chains = identify_binder_chains(sequences, str(structure_path))
         ordered_chain_ids = [
@@ -631,10 +781,7 @@ def _compute_binder_metrics_from_structure(structure_path: Optional[Path]) -> Di
             metrics["binder_length"] = len(heavy_chain)
             return metrics
 
-        if len(sequences) == 1:
-            only_sequence = next(iter(sequences.values()))
-            metrics["binder_sequence"] = only_sequence
-            metrics["binder_length"] = len(only_sequence)
+
     except Exception as exc:
         print(f"[Ingester] Failed binder metric extraction for {structure_path}: {exc}")
 
@@ -1099,18 +1246,10 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
     params = _parse_job_params(job.params if job else None)
     model_id = str(job.model_id or "").strip().lower() if job else ""
     mode = str(job.mode or "").strip().lower() if job else ""
-    stage_family = str(
-        params.get("stage_family")
-        or params.get("ppiflow_stage_family")
-        or getattr(job, "stage_family", None)
-        or ""
-    ).strip().lower() or None
-    stage_mode = str(
-        params.get("stage_mode")
-        or params.get("ppiflow_stage_mode")
-        or getattr(job, "stage_mode", None)
-        or ""
-    ).strip().lower() or None
+    # Applicability selectors come only from persisted server-owned Job fields.
+    # Request params may carry workflow inputs, but cannot mint review authority.
+    stage_family = str(getattr(job, "stage_family", None) or "").strip().lower() or None
+    stage_mode = str(getattr(job, "stage_mode", None) or "").strip().lower() or None
     if not stage_family:
         if mode == "maturation_child":
             stage_family = "ppiflow"
@@ -1228,6 +1367,25 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
     )
     artifact_schema_version = ANTIBODY_PIPELINE_CONTRACT_VERSION if artifact_class else None
 
+    inferred_review_contract = resolve_result_contract(
+        model_type=getattr(job, "model_id", None),
+        stage_family=stage_family,
+        stage_mode=stage_mode,
+        artifact_class=artifact_class,
+        provenance={"model_id": getattr(job, "model_id", None)},
+    )
+    review_profile_id = inferred_review_contract.analysis_contract_id
+    review_role_map = None
+    if review_profile_id in {"antibody_backbone_v1", "ppiflow_maturation_v1"}:
+        target_chains = params.get("antigen_chains") or params.get("target_chains")
+        if isinstance(target_chains, str):
+            target_chains = [chain.strip() for chain in target_chains.split(",") if chain.strip()]
+        review_role_map = {
+            "result_role": "antibody_binder",
+            "target_chains": target_chains if isinstance(target_chains, list) else [],
+        }
+    review_contract_source = "job_identity" if review_profile_id else None
+
     provenance = {
         "job_id": getattr(job, "id", None),
         "job_name": getattr(job, "name", None),
@@ -1252,6 +1410,10 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
         "selected_input_schema_version": selected_input_schema_version,
         "artifact_class": artifact_class,
         "artifact_schema_version": artifact_schema_version,
+        "review_profile_id": review_profile_id,
+        "review_contract_source": review_contract_source,
+        "review_role_map": review_role_map,
+        "review_artifact_manifest": None,
         "iteration_action": params.get("iteration_action"),
         "ppiflow_stage_target": params.get("ppiflow_stage_target"),
         "ppiflow_stage_mode": params.get("ppiflow_stage_mode"),
@@ -1274,6 +1436,10 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
         "selected_input_schema_version": selected_input_schema_version,
         "artifact_class": artifact_class,
         "artifact_schema_version": artifact_schema_version,
+        "review_profile_id": review_profile_id,
+        "review_contract_source": review_contract_source,
+        "review_role_map": review_role_map,
+        "review_artifact_manifest": None,
         "provenance": provenance,
         "selection_index": selection_index,
         "source_design_index": source_design_index,
@@ -1446,8 +1612,15 @@ async def _resolve_parent_design_lineage(
     }
 
 
-def _design_lineage_fields(context: Dict[str, Any], lineage: Dict[str, Any]) -> Dict[str, Any]:
-    return {
+def _design_lineage_fields(
+    context: Dict[str, Any],
+    lineage: Dict[str, Any],
+    *,
+    artifact_class_override: Optional[str] = None,
+    producer_job: Optional[Job] = None,
+    producer_payload: Any = None,
+) -> Dict[str, Any]:
+    fields = {
         "lineage_root_job_id": context.get("lineage_root_job_id"),
         "parent_design_id": lineage.get("parent_design_id"),
         "origin_design_id": lineage.get("origin_design_id"),
@@ -1458,9 +1631,15 @@ def _design_lineage_fields(context: Dict[str, Any], lineage: Dict[str, Any]) -> 
         "source_stage_mode": lineage.get("source_stage_mode") or context.get("source_stage_mode"),
         "source_pdb_path": lineage.get("source_pdb_path"),
         "source_design_name": lineage.get("source_design_name"),
-        "artifact_class": context.get("artifact_class"),
+        "artifact_class": artifact_class_override or context.get("artifact_class"),
         "artifact_schema_version": context.get("artifact_schema_version"),
+        "review_profile_id": context.get("review_profile_id"),
+        "review_contract_source": context.get("review_contract_source"),
+        "review_role_map": context.get("review_role_map"),
+        "review_artifact_manifest": context.get("review_artifact_manifest"),
     }
+    fields.update(_trusted_producer_review_fields(producer_job, producer_payload))
+    return fields
 
 
 def _parse_hlt_cdr_lengths(structure_path: Optional[Path]) -> Dict[str, int]:
@@ -1617,8 +1796,10 @@ def _resolve_existing_child_path(root: Path, raw_path: Any) -> Optional[Path]:
 
 def _resolve_esmfold2_final_root(output_path: Path) -> Optional[Path]:
     candidates = [
+        output_path / "final" / "esmfold2" / "esmfold2_results",
         output_path / "final" / "esmfold2",
         output_path / "esmfold2_results",
+        output_path / "pdb_files" / "esmfold2_results",
         output_path,
     ]
     for candidate in candidates:
@@ -1694,6 +1875,8 @@ async def ingest_esmfold2_results(
     output_path: Path,
     session: AsyncSession,
     current_job: Optional[Job] = None,
+    *,
+    commit: bool = True,
 ) -> int:
     final_root = _resolve_esmfold2_final_root(output_path)
     if final_root is None:
@@ -1759,6 +1942,10 @@ async def ingest_esmfold2_results(
             metrics_path=metrics_path,
             structure_path=structure_path,
         )
+        # Historical artifacts may retain the retired standalone workflow ID.
+        # Canonicalize capability provenance without mutating source files.
+        esmfold2_record["workflow"] = "esmfold2"
+        esmfold2_record["engine"] = "esmfold2"
         confidence_metrics = {
             "esmfold2": esmfold2_record,
             "esmfold2_components": combined_payload.get("components"),
@@ -1787,6 +1974,9 @@ async def ingest_esmfold2_results(
             "stage_mode": job_context.get("stage_mode") or "predict",
             "artifact_group": "esmfold2",
             "artifact_class": "structure_prediction",
+            "review_profile_id": job_context.get("review_profile_id"),
+            "review_contract_source": job_context.get("review_contract_source"),
+            "review_role_map": job_context.get("review_role_map"),
             "provenance": provenance,
             "confidence_metrics": confidence_metrics,
             "plddt_overall": plddt_overall,
@@ -1813,7 +2003,7 @@ async def ingest_esmfold2_results(
             ))
         created += 1
 
-    if created > 0:
+    if created > 0 and commit:
         await session.commit()
         print(f"[Ingester] Ingested {created} ESMFold2 designs for job {job_id}")
     return created
@@ -2260,6 +2450,8 @@ async def ingest_confornets_results(
     output_path: Path,
     session: AsyncSession,
     current_job: Optional[Job],
+    *,
+    commit: bool = True,
 ) -> int:
     """Ingest only final ConforNets conformers, not raw/work duplicate structures."""
     final_root = _resolve_confornets_final_root(output_path)
@@ -2418,7 +2610,8 @@ async def ingest_confornets_results(
         processed_count += 1
 
     try:
-        await session.commit()
+        if commit:
+            await session.commit()
         action = "Updated" if had_existing_designs else "Ingested"
         print(f"[Ingester] {action} {processed_count} final ConforNets conformers for job {job_id}")
     except Exception as exc:
@@ -2432,7 +2625,9 @@ async def ingest_job_results(
     job_id: str, 
     output_dir: str, 
     session: AsyncSession,
-    epitope_residues: Optional[list] = None
+    epitope_residues: Optional[list] = None,
+    *,
+    commit: bool = True,
 ) -> int:
     """
     Parse pipeline outputs and populate Design table.
@@ -2460,7 +2655,104 @@ async def ingest_job_results(
 
     job_result = await session.execute(select(Job).where(Job.id == job_id))
     current_job = job_result.scalar_one_or_none()
-    allow_binder_target_metrics = _job_has_explicit_binder_target_roles(current_job)
+    if current_job and str(current_job.model_id or "") == "conformational_mapping":
+        cm_request = await get_cm_request(session, job_id)
+        if cm_request is None:
+            raise ConformationalPersistenceError("canonical job has no typed request record")
+        backend_directory = {
+            "protenix_v2_ensemble": "canonical_protenix",
+            "confornets": "canonical_confornets",
+            "external_import": "canonical_import",
+        }.get(cm_request.backend)
+        if backend_directory is None:
+            raise ConformationalPersistenceError("canonical request backend is unknown")
+        exact_roots = (
+            output_path / "final" / "conformational_mapping" / backend_directory / "canonical_result",
+            output_path / "final" / "conformational_mapping" / backend_directory,
+            output_path / backend_directory / "canonical_result",
+            output_path / backend_directory,
+        )
+        result_root = next((path for path in exact_roots if path.is_dir()), None)
+        if result_root is None:
+            raise ConformationalPersistenceError("canonical result root is absent")
+        try:
+            ensemble = json.loads((result_root / "cm_ensemble_v1.json").read_text(encoding="utf-8"))
+            native = json.loads((result_root / "cm_native_artifacts_v1.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ConformationalPersistenceError(f"canonical manifest is missing or malformed: {exc}") from exc
+        bundle: Dict[str, Any] = {
+            "cm_ensemble_v1": ensemble,
+            "cm_native_artifacts_v1": native,
+        }
+        derived_path = result_root / "cm_derived_index_v1.json"
+        if not derived_path.is_file() or derived_path.is_symlink():
+            raise ConformationalPersistenceError("canonical derived index is absent or unsafe")
+        if derived_path.is_file() and not derived_path.is_symlink():
+            try:
+                loaded_index = json.loads(derived_path.read_text(encoding="utf-8"))
+                if not isinstance(loaded_index, dict):
+                    raise ConformationalPersistenceError("canonical derived index must be an object")
+                derived = dict(loaded_index)
+                supplied = derived.pop("index_sha256")
+                from .conformational_mapping.contracts import canonical_sha256
+
+                if supplied != canonical_sha256(derived):
+                    raise ConformationalPersistenceError("canonical derived index hash mismatch")
+                if derived.get("request_id") != cm_request.request_id:
+                    raise ConformationalPersistenceError("canonical derived index request mismatch")
+                required_index_fields = {
+                    "schema_name", "schema_version", "request_id", "source_ensemble_sha256",
+                    "records", "structure_maps", "landscapes", "analysis", "lineage",
+                    "support", "missingness", "resampling",
+                }
+                if set(derived) != required_index_fields:
+                    raise ConformationalPersistenceError("canonical derived index fields are incomplete or unknown")
+                if derived["schema_name"] != "cm_derived_index" or derived["schema_version"] != 1:
+                    raise ConformationalPersistenceError("canonical derived index schema is unsupported")
+                if derived["source_ensemble_sha256"] != canonical_sha256(ensemble):
+                    raise ConformationalPersistenceError("canonical derived index ensemble hash mismatch")
+                records = derived["records"]
+                if not isinstance(records, list):
+                    raise ConformationalPersistenceError("canonical derived file records must be an array")
+                seen_derived_paths: set[str] = set()
+                for item in records:
+                    if not isinstance(item, dict) or set(item) != {
+                        "relative_path", "sha256", "bytes", "semantic_role", "candidate_id"
+                    }:
+                        raise ConformationalPersistenceError("canonical derived file record is malformed")
+                    relative = Path(str(item["relative_path"]))
+                    relative_text = relative.as_posix()
+                    if (
+                        relative.is_absolute() or relative_text != str(item["relative_path"])
+                        or any(part in {"", ".", ".."} for part in relative.parts)
+                        or "\\" in str(item["relative_path"])
+                        or relative_text in seen_derived_paths
+                    ):
+                        raise ConformationalPersistenceError("canonical derived path is unsafe")
+                    seen_derived_paths.add(relative_text)
+                    artifact = (result_root / relative).resolve(strict=True)
+                    artifact.relative_to(result_root.resolve())
+                    if artifact.is_symlink() or not artifact.is_file():
+                        raise ConformationalPersistenceError("canonical derived artifact is unsafe")
+                    digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+                    if digest != item["sha256"] or artifact.stat().st_size != item["bytes"]:
+                        raise ConformationalPersistenceError("canonical derived artifact identity mismatch")
+                bundle["cm_structure_maps"] = derived.get("structure_maps", [])
+                bundle["cm_frustration_landscapes"] = derived.get("landscapes", [])
+                bundle["cm_analysis_v1"] = derived.get("analysis")
+                bundle["cm_lineage"] = derived.get("lineage")
+                bundle["cm_support"] = derived.get("support")
+                bundle["cm_missingness"] = derived.get("missingness")
+                bundle["cm_resampling_v1"] = derived.get("resampling")
+                bundle["cm_derived_files"] = records
+            except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+                raise ConformationalPersistenceError(
+                    f"canonical derived index is malformed: {exc}"
+                ) from exc
+        await ingest_cm_result_bundle(session, cm_request, bundle=bundle, result_root=result_root)
+        if commit:
+            await session.commit()
+        return len(ensemble["candidates"])
     job_context = _job_stage_context(current_job)
     lineage_cache: Dict[str, Optional[Design]] = {}
     
@@ -2475,7 +2767,7 @@ async def ingest_job_results(
         pass
     
     # Extract PDB files from tar.gz archives
-    pdb_dir = extract_pdb_files(output_path)
+    extract_pdb_files(output_path)
     
     designs_created = 0
 
@@ -2491,10 +2783,10 @@ async def ingest_job_results(
     )
 
     if _is_confornets_job(current_job):
-        return await ingest_confornets_results(job_id, output_path, session, current_job)
+        return await ingest_confornets_results(job_id, output_path, session, current_job, commit=commit)
 
     if _is_esmfold2_job(current_job):
-        return await ingest_esmfold2_results(job_id, output_path, session, current_job)
+        return await ingest_esmfold2_results(job_id, output_path, session, current_job, commit=commit)
     
     # Only try to process CSV if it exists
     if csv_path.exists():
@@ -2624,7 +2916,12 @@ async def ingest_job_results(
                         design.name,
                         cache=lineage_cache,
                     )
-                    for field_name, field_value in _design_lineage_fields(job_context, lineage).items():
+                    for field_name, field_value in _design_lineage_fields(
+                        job_context,
+                        lineage,
+                        producer_job=current_job,
+                        producer_payload=fam_payload,
+                    ).items():
                         setattr(design, field_name, field_value)
                     design.stage_family = job_context.get("stage_family")
                     design.stage_mode = job_context.get("stage_mode")
@@ -2639,7 +2936,8 @@ async def ingest_job_results(
                     session.add(design)
                     designs_created += 1
             
-            await session.commit()
+            if commit:
+                await session.commit()
             print(f"[Ingester] Ingested {designs_created} designs for job {job_id}")
             
         except Exception as e:
@@ -2659,7 +2957,7 @@ async def ingest_job_results(
         designs_created = await ingest_collected_ppiflow_structures(job_id, output_path, session, current_job=current_job)
 
     if designs_created == 0:
-        print(f"[Ingester] No designs found in CSV or CSV missing. Trying loose files...")
+        print("[Ingester] No designs found in CSV or CSV missing. Trying loose files...")
         designs_created = await ingest_loose_files(job_id, output_path, session, current_job=current_job)
 
     # Post-ingestion: Attach supplementary metrics from pipeline stages
@@ -3664,14 +3962,17 @@ async def ingest_collected_ppiflow_structures(
             pdb_path=str(structure_path),
             json_path=str(fam_json_path) if fam_json_path and fam_json_path.exists() else None,
             backbone_id=parse_backbone_id(design_name),
-            **_design_lineage_fields(job_context, lineage),
+            **_design_lineage_fields(
+                job_context,
+                lineage,
+                artifact_class_override=(
+                    infer_antibody_artifact_class_from_stage("ppiflow", ingested_stage_mode)
+                    or job_context.get("artifact_class")
+                ),
+            ),
             stage_family="ppiflow",
             stage_mode=ingested_stage_mode,
             selected_loop_scope=job_context.get("selected_loop_scope"),
-            artifact_class=(
-                infer_antibody_artifact_class_from_stage("ppiflow", ingested_stage_mode)
-                or job_context.get("artifact_class")
-            ),
             provenance={
                 **job_context.get("provenance", {}),
                 "artifact_group": "ppiflow",
@@ -3726,8 +4027,6 @@ async def ingest_frustration_data(
     print(f"[Ingester] Found {len(frustration_csvs)} frustration CSVs to process")
     
     from database import Job
-    import sqlalchemy as sa
-    
     job_info = await session.execute(
         select(Job).where(Job.id == job_id)
     )
@@ -3856,7 +4155,18 @@ async def ingest_loose_files(
 
     plr_final_candidate_dir = job_params.get("plr_final_candidate_dir")
     plr_final_path = None
-    if current_job is not None and str(getattr(current_job, "model_id", "")).strip().lower() == "protein_local_redesign":
+    current_model_id = str(getattr(current_job, "model_id", "") or "").strip().lower() if current_job is not None else ""
+    current_mode = str(getattr(current_job, "mode", "") or "").strip().lower() if current_job is not None else ""
+    if current_job is not None and (
+        current_model_id == "protein_local_redesign"
+        or (
+            current_model_id == "protein_modification_experimental"
+            and (
+                current_mode == "region_redesign"
+                or str(job_params.get("modification_mode") or "").strip().lower() == "region_redesign"
+            )
+        )
+    ):
         raw_final_path = str(plr_final_candidate_dir or "").strip()
         if raw_final_path:
             candidate = Path(raw_final_path).expanduser()
@@ -3865,11 +4175,17 @@ async def ingest_loose_files(
             if candidate.exists():
                 plr_final_path = candidate
 
+    boltzgen_filtered_path = None
+    if current_job is not None and str(getattr(current_job, "model_id", "")).strip().lower() == "boltzgen":
+        boltzgen_filtered_path = _boltzgen_filtered_output_dir(output_path)
+
     # Locations to search for confidence/metrics JSONs
     # Boltz outputs often in pdb_files/predictions/
     # RF3 outputs in pdb_files/rf3/output/*/
     if plr_final_path is not None:
         search_paths = [plr_final_path]
+    elif boltzgen_filtered_path is not None:
+        search_paths = [boltzgen_filtered_path]
     else:
         search_paths = [
             output_path / "pdb_files" / "predictions",
@@ -3880,7 +4196,7 @@ async def ingest_loose_files(
         ]
     
     # Also search RF3 nested output directories
-    if plr_final_path is None:
+    if plr_final_path is None and boltzgen_filtered_path is None:
         rf3_base = output_path / "pdb_files" / "rf3" / "output"
         if rf3_base.exists():
             for subdir in rf3_base.iterdir():
@@ -3892,7 +4208,7 @@ async def ingest_loose_files(
                             search_paths.append(sample_dir)
 
     # Protenix outputs: predictions/{design_name}/ containing .cif + confidence.json
-    if plr_final_path is None:
+    if plr_final_path is None and boltzgen_filtered_path is None:
         protenix_base = output_path / "pdb_files" / "predictions"
         if not protenix_base.exists():
             protenix_base = output_path / "run" / "protenix" / "predictions"
@@ -3926,9 +4242,15 @@ async def ingest_loose_files(
             try:
                 raw_name = json_file.stem
                 if raw_name.endswith("_boltzpred"):
-                    design_name = raw_name.replace("_boltzpred", "")
+                    artifact_name = raw_name.replace("_boltzpred", "")
                 else:
-                    design_name = raw_name.replace("confidence_", "")
+                    artifact_name = raw_name.replace("confidence_", "")
+
+                design_name = (
+                    _normalize_boltzgen_design_name(artifact_name)
+                    if job_context.get("stage_family") == "boltzgen"
+                    else artifact_name
+                )
                 
                 # Skip input templates (no numeric suffix) - these are not actual designs
                 # Actual designs are named like: boltzgen_input_0, boltzgen_input_1, etc.
@@ -3943,11 +4265,15 @@ async def ingest_loose_files(
                 # Look for corresponding Structure (CIF preferred for complexes, PDB fallback)
                 structure_candidates = [
                     search_dir / f"{design_name}.cif",
+                    search_dir / f"{artifact_name}.cif",
                     output_path / "pdb_files" / f"{design_name}.cif",
+                    output_path / "pdb_files" / f"{artifact_name}.cif",
                     search_dir / f"{raw_name}.pdb",
+                    search_dir / f"{artifact_name}.pdb",
                     search_dir / f"{design_name}_boltzpred.pdb",
                     search_dir / f"{design_name}.pdb",
                     output_path / "pdb_files" / f"{raw_name}.pdb",
+                    output_path / "pdb_files" / f"{artifact_name}.pdb",
                     output_path / "pdb_files" / f"{design_name}_boltzpred.pdb",
                     output_path / "pdb_files" / f"{design_name}.pdb",
                     output_path / "pdb_files" / "predictions" / f"{raw_name}.pdb",
@@ -4086,9 +4412,14 @@ async def ingest_loose_files(
                     
                     # Backbone grouping
                     backbone_id=parse_backbone_id(design_name),
-                    **_design_lineage_fields(job_context, lineage),
-                    stage_family=job_context.get("stage_family"),
-                    stage_mode=job_context.get("stage_mode"),
+                    **_design_lineage_fields(
+                        job_context,
+                        lineage,
+                        producer_job=current_job,
+                        producer_payload=metrics,
+                    ),
+                    stage_family=(metrics.get("stage_family") or job_context.get("stage_family")),
+                    stage_mode=(metrics.get("stage_mode") or job_context.get("stage_mode")),
                     selected_loop_scope=job_context.get("selected_loop_scope"),
                     provenance={
                         **job_context.get("provenance", {}),
@@ -4229,7 +4560,12 @@ async def ingest_loose_files(
                     
                     # Backbone grouping
                     backbone_id=parse_backbone_id(design_name),
-                    **_design_lineage_fields(job_context, lineage),
+                    **_design_lineage_fields(
+                        job_context,
+                        lineage,
+                        producer_job=current_job,
+                        producer_payload=metrics,
+                    ),
                     stage_family=job_context.get("stage_family"),
                     stage_mode=job_context.get("stage_mode"),
                     selected_loop_scope=job_context.get("selected_loop_scope"),
@@ -4417,9 +4753,14 @@ async def ingest_loose_files(
                     json_path=str(json_file),
 
                     backbone_id=parse_backbone_id(design_name),
-                    **_design_lineage_fields(job_context, lineage),
-                    stage_family=job_context.get("stage_family"),
-                    stage_mode=job_context.get("stage_mode"),
+                    **_design_lineage_fields(
+                        job_context,
+                        lineage,
+                        producer_job=current_job,
+                        producer_payload=metrics,
+                    ),
+                    stage_family=(metrics.get("stage_family") or job_context.get("stage_family")),
+                    stage_mode=(metrics.get("stage_mode") or job_context.get("stage_mode")),
                     selected_loop_scope=job_context.get("selected_loop_scope"),
                     provenance=job_context.get("provenance", {}),
                     **_geometry_design_fields(geometry_fields),
@@ -4714,9 +5055,14 @@ async def ingest_loose_files(
                     json_path=str(fam_json_path) if fam_json_path and fam_json_path.exists() else None,
                     
                     backbone_id=parse_backbone_id(design_name),
-                    **_design_lineage_fields(job_context, lineage),
-                    stage_family=job_context.get("stage_family"),
-                    stage_mode=job_context.get("stage_mode"),
+                    **_design_lineage_fields(
+                        job_context,
+                        lineage,
+                        producer_job=current_job,
+                        producer_payload=fam_payload,
+                    ),
+                    stage_family=((fam_payload or {}).get("stage_family") or job_context.get("stage_family")),
+                    stage_mode=((fam_payload or {}).get("stage_mode") or job_context.get("stage_mode")),
                     selected_loop_scope=job_context.get("selected_loop_scope"),
                     provenance=design_provenance or None,
                     epitope_contact_count=epitope_contact_count,

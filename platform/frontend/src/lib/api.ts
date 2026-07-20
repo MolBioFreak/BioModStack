@@ -59,6 +59,74 @@ export interface Job {
     selected_cdr_loops?: string[] | null;
 }
 
+export interface MDArtifact {
+    id: string;
+    replica: number;
+    name: string;
+    bytes: number;
+    sha256: string;
+    semantic_role: 'analysis_topology' | 'analysis_trajectory' | 'representative_structure' | null;
+    atom_order_identity: string | null;
+    format: string;
+    content_url: string;
+}
+
+export interface MDSummary {
+    schema: 'bms.md.summary.v1';
+    job_id: string;
+    status: string;
+    source: 'validated_job_owned_manifests';
+    bounded: true;
+    replica_count: number;
+    artifact_count: number;
+    replicas: Array<{ replica: number; status: string; engine: { name?: string; version?: string; platform?: string }; performance: Record<string, number> }>;
+    analysis_status: 'absent' | 'partial' | 'completed';
+    trajectory_playback: { supported: false; reason: string };
+}
+
+export interface MDAnalysisPoint {
+    replica: number;
+    time_ps: number;
+    source_frame: number;
+    rmsd_angstrom: number;
+    radius_of_gyration_angstrom: number;
+}
+
+export interface MDAnalysisReplicaReport {
+    schema: 'bms.md.analysis.v1';
+    status: 'completed' | 'failed';
+    replica?: number;
+    points?: MDAnalysisPoint[];
+    residue_metrics?: Array<{ segid: string; resid: number; resname: string; backbone_rmsf_angstrom: number; backbone_atom_count: number }>;
+    block_statistics?: Array<{ block: number; count: number; mean_rmsd_angstrom: number; mean_radius_of_gyration_angstrom: number }>;
+    summary?: { count: number; min: number; mean: number; max: number; final: number };
+    failure?: { code: string; message: string };
+    inputs: { manifest_sha256: string | null; topology_sha256?: string; trajectory_sha256?: string; atom_order_identity?: string };
+}
+
+export interface MDAnalysisReportSet {
+    schema: 'bms.md.analysis-report-set.v1';
+    job_id: string;
+    status: 'absent' | 'partial' | 'completed';
+    bounded: true;
+    replica_states: Array<{ replica: number; status: 'absent' | 'completed' | 'failed' }>;
+    reports: MDAnalysisReplicaReport[];
+    ensemble: {
+        statistical_unit: 'replica';
+        frame_pooling: false;
+        completed_replicas: number;
+        mean_of_replica_mean_rmsd_angstrom: number | null;
+        sample_stdev_of_replica_mean_rmsd_angstrom: number | null;
+        mean_of_replica_final_rmsd_angstrom: number | null;
+        sample_stdev_of_replica_final_rmsd_angstrom: number | null;
+    };
+    evidence: { status: 'insufficient_evidence'; reason: string; frames_are_independent_replicates: false };
+}
+
+export const fetchMDSummary = (jobId: string) => api.get<MDSummary>(`/api/jobs/${jobId}/md/summary`);
+export const fetchMDArtifacts = (jobId: string) => api.get<{ schema: string; job_id: string; source: string; bounded: true; artifacts: MDArtifact[] }>(`/api/jobs/${jobId}/md/artifacts`);
+export const fetchMDAnalysis = (jobId: string) => api.get<MDAnalysisReportSet>(`/api/jobs/${jobId}/md/analysis`);
+
 // Log data for View Logs modal
 export interface JobLogs {
     job_id: string;
@@ -231,44 +299,6 @@ export interface HardwareDiscoveryResponse {
     timestamp: string;
 }
 
-export interface DbServiceLogicalDatabaseStatus {
-    name: string;
-    role: string;
-    storage_mode: string;
-    status: string;
-    reachable: boolean;
-    note?: string | null;
-}
-
-export interface DbServiceStatus {
-    component: string;
-    service_id: string;
-    display_name: string;
-    service_name?: string | null;
-    container_name?: string | null;
-    optional_at_boot: boolean;
-    control_mode: string;
-    state: string;
-    health: string;
-    runtime_available: boolean;
-    runtime_note?: string | null;
-    offline_message?: string | null;
-    host_agent_available?: boolean;
-    logical_databases?: DbServiceLogicalDatabaseStatus[];
-    commands?: string[];
-    logs?: string;
-    logs_tail?: number;
-    last_action?: string;
-    action_output?: string;
-    action_returncode?: number;
-}
-
-export const fetchDbServiceStatus = () =>
-    api.get<DbServiceStatus>('/api/system/db-service');
-
-export const runDbServiceAction = (action: 'start' | 'restart' | 'health' | 'logs', tail = 120) =>
-    api.post<DbServiceStatus>(`/api/system/db-service/${action}`, { tail });
-
 // API functions
 // API functions
 export const fetchJobs = (params?: {
@@ -279,9 +309,18 @@ export const fetchJobs = (params?: {
     limit?: number;
     offset?: number;
     include_children?: boolean;
-}) => api.get<{ jobs: Job[]; total: number }>('/api/jobs', { params });
+    summary?: boolean;
+}) => api.get<{ jobs: Job[]; total: number }>('/api/jobs', {
+    params: {
+        ...params,
+        limit: Math.min(500, Math.max(1, params?.limit ?? 100)),
+        summary: params?.summary ?? true,
+    },
+});
 export const fetchBoltzCpShardPlans = () => api.get<BoltzCpShardPlanCatalog>('/api/jobs/boltz-cp/shard-plans');
-export const fetchSystemStatus = () => api.get<SystemStatus>('/api/gpu/status');
+// Bound live telemetry requests so a half-open connection cannot permanently
+// occupy the shared collector and suppress its recovery/backoff loop.
+export const fetchSystemStatus = () => api.get<SystemStatus>('/api/gpu/status', { timeout: 10_000 });
 export const fetchJobById = (id: string) => api.get<Job>(`/api/jobs/${id}`);
 export const fetchDesignById = (id: string) => api.get<Design>(`/api/designs/${id}`);
 export interface ProteinBaseBundleImportRequest {
@@ -290,6 +329,55 @@ export interface ProteinBaseBundleImportRequest {
     job_name?: string;
 }
 export const importProteinBaseBundle = (payload: ProteinBaseBundleImportRequest) => api.post<Job>('/api/jobs/imports/proteinbase', payload);
+
+export interface ExternalImportPreview {
+    provider: string;
+    resource_type: string;
+    provider_job_id: string;
+    model: string | null;
+    model_version: string | null;
+    status: string;
+    sample_count: number;
+    entities: Array<Record<string, unknown>>;
+    source_fingerprint: string;
+    run_metadata_sha256: string;
+    archive_sha256: string | null;
+    importable: boolean;
+    error_code: string | null;
+    errors: string[];
+    warnings: string[];
+    provider_metadata: Record<string, unknown>;
+}
+
+export interface ExternalResultImport {
+    id: string;
+    provider_id: string;
+    resource_type: string;
+    provider_job_id: string;
+    state: 'discovered' | 'validating' | 'staging' | 'normalizing' | 'committing' | 'completed' | 'failed';
+    source_fingerprint: string;
+    bms_job_id: string | null;
+    failure_code: string | null;
+    failure_message: string | null;
+    created_at: string;
+    updated_at: string;
+    imported_at: string | null;
+}
+
+export const previewExternalImport = (sourcePath: string) => api.post<ExternalImportPreview>(
+    '/api/jobs/imports/external/preview',
+    { source_path: sourcePath, provider_hint: 'boltz_api' },
+);
+export const createExternalImport = (payload: {
+    source_path: string;
+    provider: 'boltz_api';
+    preview_fingerprint: string;
+    dataset_name: string;
+    job_name?: string;
+}) => api.post<ExternalResultImport>('/api/jobs/imports/external', payload);
+export const fetchExternalImport = (importId: string) => api.get<ExternalResultImport>(
+    `/api/jobs/imports/external/${importId}`,
+);
 export const cancelJob = (id: string) => api.delete(`/api/jobs/${id}`);
 export const deleteJobPermanently = (id: string) => api.delete<{
     message: string;
@@ -360,6 +448,16 @@ export const extractChain = async (
 export const submitJob = (jobData: Partial<Job>) => {
     return api.post('/api/jobs', jobData);
 };
+
+export interface OntNgsSubmitRequest {
+    name?: string;
+    params: Record<string, unknown>;
+    pinned_gpu?: number | null;
+    source_instrument_run_id?: string | null;
+}
+
+export const submitOntNgsJob = (workflowId: string, request: OntNgsSubmitRequest) =>
+    api.post<Job>(`/api/ont/ngs/${workflowId}/submit`, request);
 
 export interface BoltzGenPreviewResponse {
     yaml_text: string;
@@ -531,6 +629,11 @@ export interface SequenceQcArtifact {
     missing_reason?: string | null;
     unavailable_reason?: string | null;
     source_stage?: string | null;
+    declared_sha256?: string | null;
+    actual_sha256?: string | null;
+    integrity_valid?: boolean;
+    declared_size_bytes?: number | null;
+    semantic_validation?: SequenceQcSemanticValidation;
     [key: string]: unknown;
 }
 
@@ -550,10 +653,79 @@ export interface SequenceQcPathSection {
     [key: string]: unknown;
 }
 
+export type ConstructVerificationVerdict = 'PASS' | 'FAIL' | 'REVIEW';
+export type ConstructVerificationCheckStatus = 'pass' | 'fail' | 'review' | 'not_evaluated';
+
+export interface ConstructVerificationCheck {
+    status: ConstructVerificationCheckStatus;
+    reason_codes: string[];
+    metrics: Record<string, unknown>;
+}
+
+export interface ConstructVerificationVariant {
+    id?: string;
+    kind?: 'SNV' | 'INS' | 'DEL' | 'MNV' | 'COMPLEX';
+    position_1based?: number;
+    end_1based?: number;
+    ref?: string;
+    alt?: string;
+    support_status?: 'supported' | 'ambiguous' | 'unsupported' | 'not_evaluated';
+    depth?: number | null;
+    support_fraction?: number | null;
+    circular_event_id?: string | null;
+    [key: string]: unknown;
+}
+
+export interface SequenceQcSemanticValidation {
+    status?: 'valid' | 'invalid' | 'unavailable' | 'not_applicable' | string;
+    validator?: string;
+    reason?: string | null;
+}
+
+export interface ConstructVerificationInputEvidence {
+    state?: string;
+    role?: string;
+    declared_path?: string | null;
+    sha256?: string | null;
+    size_bytes?: number | null;
+    source_kind?: string | null;
+    independent_from_expected?: boolean | null;
+    reason?: string | null;
+    semantic_validation?: SequenceQcSemanticValidation;
+    normalized_sequence_sha256?: string | null;
+    declared_sequence_sha256?: string | null;
+    [key: string]: unknown;
+}
+
+export interface ConstructVerificationThresholdProfile {
+    id?: string;
+    version?: string;
+    sha256?: string;
+    calibration_status?: 'experimental' | 'calibrated';
+    public_accuracy_validated?: boolean;
+    values?: Record<string, unknown>;
+    [key: string]: unknown;
+}
+
 export interface SequenceQcManifest {
     artifact_schema_version: number;
+    schema?: string;
     job_id: string;
     sample_name?: string | null;
+    execution?: {
+        status?: string;
+        exit_code?: number;
+        reason_codes?: string[];
+        [key: string]: unknown;
+    };
+    verdict?: ConstructVerificationVerdict;
+    reason_codes?: string[];
+    threshold_profile?: ConstructVerificationThresholdProfile;
+    inputs?: Partial<Record<'reference' | 'observed' | 'support' | 'alignment' | 'alignment_index' | 'topology', ConstructVerificationInputEvidence>>;
+    checks?: Record<string, ConstructVerificationCheck>;
+    variants?: ConstructVerificationVariant[];
+    summary?: Record<string, unknown>;
+    provenance?: Record<string, unknown>;
     reference?: SequenceQcPathSection;
     consensus?: SequenceQcPathSection;
     artifacts: SequenceQcArtifact[];
@@ -827,6 +999,15 @@ export interface Design {
     source_design_name?: string | null;
     artifact_class?: string | null;
     artifact_schema_version?: number | null;
+    review_profile_id?: string | null;
+    review_contract_version?: number | null;
+    review_contract_source?: string | null;
+    review_artifact_manifest?: {
+        schema?: string;
+        artifacts?: Record<string, { kind?: string; state?: 'ready' | 'missing' | 'invalid'; path?: string | null; reason?: string | null }>;
+        roles?: Record<string, unknown> & { has_binder?: boolean };
+    } | null;
+    review_role_map?: Record<string, unknown> | null;
     result_set?: string | null;
     result_set_label?: string | null;
     analysis_contract_id?: string | null;
@@ -1499,6 +1680,7 @@ export interface SchedulerConfig {
         auto_cpu_thread_job_threshold: number;
         enabled: boolean;
         target_vram_fill: number;
+        vram_safety_margin_mb: number;
         capacity_weight: number;
         emptiness_weight: number;
         max_launches_per_cycle: number;
@@ -1513,7 +1695,7 @@ export interface SchedulerConfig {
         quick_enable?: boolean;
         threshold?: number | null;
         priority_tier?: number | null;
-        vram_safety_margin_mb?: number;
+        vram_safety_margin_mb?: number | null;
         max_concurrent_jobs?: number | null;
     }>;
 }

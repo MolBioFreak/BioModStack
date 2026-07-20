@@ -9,6 +9,8 @@ not get hidden inside a methylation-era pipeline branch.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+from pathlib import Path
 from typing import Any, Mapping
 
 from services.sequence_qc_manifest import (
@@ -21,6 +23,33 @@ ONT_NGS_FAMILY_ID = "ont_ngs"
 ANALYSIS_OWNER = "nextflow_analysis"
 DEVICE_CONTROL_OWNER = "bms_service_api"
 MANIFEST_SCHEMA = "sequence_qc.manifest.v1"
+
+
+def normalized_fasta_sequence_sha256(path: Path) -> str:
+    """Hash one normalized FASTA record without trusting headers or line wrapping."""
+    records = 0
+    chunks: list[str] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.startswith(">"):
+                records += 1
+                if records > 1:
+                    raise ValueError("reference_fasta must contain exactly one record")
+                continue
+            if records != 1:
+                raise ValueError("reference_fasta sequence appears before its header")
+            chunks.append(line.upper())
+    sequence = "".join(chunks)
+    if records != 1 or not sequence:
+        raise ValueError("reference_fasta must contain one non-empty record")
+    invalid = sorted(set(sequence) - set("ACGTN"))
+    if invalid:
+        raise ValueError(f"reference_fasta contains unsupported symbols: {''.join(invalid)}")
+    return hashlib.sha256(sequence.encode("ascii")).hexdigest()
+
 
 ONT_QUALITY_MODE_CONTRACT: dict[str, Any] = {
     "molecule_types": ("dna", "rna"),
@@ -67,6 +96,11 @@ ONT_SEQUENCE_QC_MANIFEST_CONTRACT: dict[str, Any] = {
         "methylation_bed",
         "plasmid_qc_summary",
         "construct_screening_summary",
+        "clone_validation_assembly",
+        "clone_validation_adapter",
+        "clone_validation_report",
+        "clone_validation_runtime_provenance",
+        "construct_verification",
         "igv_track_config",
         "igv_report",
         "igv_track",
@@ -97,24 +131,36 @@ CANONICAL_ONT_WORKFLOWS: dict[str, OntWorkflowSpec] = {
     "ont_basecall_dna": OntWorkflowSpec(
         workflow_id="ont_basecall_dna",
         display_name="ONT DNA Basecalling",
-        description="Dorado DNA basecalling from existing POD5/FAST5 run outputs using configured CUDA resources.",
-        input_modes=("pod5", "fast5"),
-        artifact_kinds=("raw_reads", "basecall_reads", "read_qc_summary"),
-        lifecycle="planned",
+        description="Dorado DNA basecalling from existing POD5 run outputs using configured CUDA resources.",
+        input_modes=("pod5",),
+        artifact_kinds=(
+            "raw_reads",
+            "basecall_reads",
+            "alignment_bam",
+            "alignment_bai",
+            "read_qc_summary",
+        ),
+        lifecycle="seed",
     ),
     "ont_basecall_rna": OntWorkflowSpec(
         workflow_id="ont_basecall_rna",
         display_name="ONT RNA Basecalling",
-        description="Dorado RNA basecalling from existing ONT run outputs with RNA-specific model selection.",
-        input_modes=("pod5", "fast5"),
-        artifact_kinds=("raw_reads", "basecall_reads", "read_qc_summary"),
-        lifecycle="planned",
+        description="Dorado RNA basecalling from existing POD5 run outputs with RNA-specific model selection.",
+        input_modes=("pod5",),
+        artifact_kinds=(
+            "raw_reads",
+            "basecall_reads",
+            "alignment_bam",
+            "alignment_bai",
+            "read_qc_summary",
+        ),
+        lifecycle="seed",
     ),
     "ont_plasmid_qc": OntWorkflowSpec(
         workflow_id="ont_plasmid_qc",
         display_name="ONT Plasmid QC",
-        description="FASTQ-to-reference plasmid QC with per-base support, consensus, and evidence artifacts.",
-        input_modes=("fastq",),
+        description="Reference-optional plasmid QC supporting POD5/BAM/FASTQ input modes with per-base support, consensus, and evidence artifacts.",
+        input_modes=("pod5", "bam", "fastq"),
         artifact_kinds=(
             "basecall_reads",
             "alignment_bam",
@@ -133,24 +179,29 @@ CANONICAL_ONT_WORKFLOWS: dict[str, OntWorkflowSpec] = {
     "ont_construct_screening": OntWorkflowSpec(
         workflow_id="ont_construct_screening",
         display_name="ONT Construct Screening",
-        description="Expected-construct screening over ONT FASTQ reads with truthful consensus/variant evidence contracts.",
-        input_modes=("fastq",),
+        description="Construct screening via CloneValidation over ONT POD5/BAM/FASTQ reads with truthful consensus/variant evidence contracts.",
+        input_modes=("pod5", "bam", "fastq"),
         artifact_kinds=(
+            "raw_reads",
             "basecall_reads",
             "alignment_bam",
             "alignment_bai",
             "reference",
+            "reference_index",
             "per_base_support",
             "consensus",
+            "clone_validation_assembly",
+            "clone_validation_report",
             "construct_screening_summary",
+            "plasmid_qc_summary",
         ),
-        lifecycle="planned",
+        lifecycle="seed",
     ),
     "ont_methylation_analysis": OntWorkflowSpec(
         workflow_id="ont_methylation_analysis",
         display_name="ONT Methylation Analysis",
-        description="Dorado/modkit methylation analysis from POD5/BAM plus optional FASTQ plasmid QC seed behavior.",
-        input_modes=("pod5", "bam", "fastq"),
+        description="Dorado/modkit methylation analysis from POD5/BAM inputs with modified-base tags; FASTQ-only reads do not carry MM/ML tags and are not accepted here.",
+        input_modes=("pod5", "bam"),
         artifact_kinds=(
             "raw_reads",
             "basecall_reads",
@@ -166,26 +217,66 @@ CANONICAL_ONT_WORKFLOWS: dict[str, OntWorkflowSpec] = {
         ),
         lifecycle="seed",
     ),
+    "wf_clone_validation": OntWorkflowSpec(
+        workflow_id="wf_clone_validation",
+        display_name="Wf Clone Validation",
+        description="EPI2ME wf-clone-validation assembly with optional FASTQ plasmid QC — full plasmid QC pipeline with construct screening via assembly.",
+        input_modes=("pod5", "bam", "fastq"),
+        artifact_kinds=(
+            "raw_reads",
+            "basecall_reads",
+            "alignment_bam",
+            "alignment_bai",
+            "reference",
+            "reference_index",
+            "read_qc_summary",
+            "per_base_support",
+            "consensus",
+            "clone_validation_assembly",
+            "clone_validation_adapter",
+            "clone_validation_report",
+            "clone_validation_runtime_provenance",
+            "construct_verification",
+            "construct_screening_summary",
+            "plasmid_qc_summary",
+            "igv_track_config",
+            "igv_report",
+        ),
+        lifecycle="seed",
+    ),
     "ont_fastq_qc": OntWorkflowSpec(
         workflow_id="ont_fastq_qc",
         display_name="ONT FASTQ QC",
         description="Read-length/Q-score/yield and alignment-optional QC from existing FASTQ inputs.",
         input_modes=("fastq",),
-        artifact_kinds=("basecall_reads", "read_qc_summary", "per_base_support"),
-        lifecycle="planned",
+        artifact_kinds=(
+            "basecall_reads",
+            "alignment_bam",
+            "alignment_bai",
+            "reference",
+            "reference_index",
+            "read_qc_summary",
+            "per_base_support",
+            "consensus",
+            "plasmid_qc_summary",
+            "igv_track_config",
+            "igv_report",
+        ),
+        lifecycle="seed",
     ),
 }
 
 CANONICAL_ONT_WORKFLOW_IDS = tuple(CANONICAL_ONT_WORKFLOWS)
 
 ONT_WORKFLOW_ALIASES = {
-    "nanopore_methylation": "ont_methylation_analysis",
-    "methylation_analysis": "ont_methylation_analysis",
     "basecall_dna": "ont_basecall_dna",
     "basecall_rna": "ont_basecall_rna",
     "plasmid_qc": "ont_plasmid_qc",
     "construct_screening": "ont_construct_screening",
+    "methylation_analysis": "ont_methylation_analysis",
     "fastq_qc": "ont_fastq_qc",
+    "wf_clone": "wf_clone_validation",
+    "clone_validation": "wf_clone_validation",
 }
 
 
@@ -228,6 +319,14 @@ WORKFLOW_DEFAULTS: dict[str, dict[str, Any]] = {
         "run_fastq_qc": True,
         "fastq_minimap2_preset": "map-ont",
         "modified_bases": "none",
+    },
+    "wf_clone_validation": {
+        "ont_molecule_type": "dna",
+        "run_modkit": False,
+        "run_fastq_qc": True,
+        "modified_bases": "none",
+        "wf_clone_assembly_tool": "flye",
+        "wf_clone_basecaller_model": "dna_r10.4.1_e8.2_400bps_hac@v5.0.0",
     },
 }
 
@@ -277,9 +376,25 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
     normalized["ont_workflow_id"] = spec.workflow_id
     normalized["ont_molecule_type"] = molecule_type
     normalized["dorado_quality_mode"] = quality_mode
-    normalized["dorado_model"] = normalized.get("dorado_model") or quality_mode
+    if normalized.get("dorado_model"):
+        normalized["dorado_model"] = normalized["dorado_model"]
+    elif molecule_type == "rna":
+        normalized["dorado_model"] = "rna004_130bps_sup@v5.2.0"
+    else:
+        normalized["dorado_model"] = quality_mode
     normalized["dorado_basecall_mode"] = basecall_mode
     normalized["dorado_device"] = normalized.get("dorado_device") or ONT_QUALITY_MODE_CONTRACT["default_device"]
     normalized["manifest_contract"] = MANIFEST_SCHEMA
+
+    if canonical_id == "wf_clone_validation":
+        assembly_tool = str(normalized.get("wf_clone_assembly_tool") or "").strip()
+        if assembly_tool not in {"flye", "canu"}:
+            raise ValueError("wf_clone_assembly_tool must preserve an exact supported value: flye or canu")
+        model_id = str(normalized.get("wf_clone_basecaller_model") or "").strip()
+        accepted_model = "dna_r10.4.1_e8.2_400bps_hac@v5.0.0"
+        if model_id != accepted_model:
+            raise ValueError(f"wf_clone_basecaller_model must equal the locked exact identity {accepted_model}")
+        normalized["wf_clone_assembly_tool"] = assembly_tool
+        normalized["wf_clone_basecaller_model"] = model_id
 
     return normalized

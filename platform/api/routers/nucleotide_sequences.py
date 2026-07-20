@@ -5,17 +5,36 @@ Provides CRUD operations for DNA/RNA sequences with feature annotations.
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Optional, List, Any
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete, or_
-from datetime import datetime
+from sqlalchemy import select, or_
+from datetime import datetime, timezone
+import re
 import uuid
+import math
 
-from database import NucleotideSequence, get_session
+from molbio_database import get_molbio_session
+from molbio_models import NucleotideSequence, Primer
+from services.molbio_persistence import (
+    begin_immediate_molbio_write,
+    record_primer_revision,
+    record_sequence_deletion,
+    record_sequence_revision,
+)
+from services.nucleotide_validation import canonicalize_nucleotide_sequence
 
 
 router = APIRouter(prefix="/api/sequences", tags=["sequences"])
+
+
+def _sortable_timestamp(value: Optional[datetime]) -> datetime:
+    """Return one UTC-aware value so mixed legacy timestamps remain sortable."""
+    if value is None:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -38,6 +57,17 @@ class FeatureSchema(BaseModel):
     segments: Optional[List[dict[str, int]]] = None
 
 
+class PrimerSiteSchema(BaseModel):
+    """Validated binding-site placement while preserving optional provenance."""
+    start: int
+    end: int
+    strand: Optional[int] = None
+    tm: Optional[float] = None
+    note: Optional[str] = None
+
+    model_config = ConfigDict(extra="allow")
+
+
 class PrimerSchema(BaseModel):
     """Primer associated with a sequence."""
     id: str = Field(default_factory=lambda: str(uuid.uuid4())[:8])
@@ -54,7 +84,7 @@ class PrimerSchema(BaseModel):
     tm_settings: Optional[dict] = None
     notes: Optional[dict] = None
     provenance: Optional[dict] = None
-    sites: Optional[List[dict[str, Any]]] = None
+    sites: Optional[List[PrimerSiteSchema]] = None
 
 
 class AnalysisTrackSchema(BaseModel):
@@ -72,6 +102,24 @@ class AnalysisTrackSchema(BaseModel):
     min_value: Optional[float] = None
     max_value: Optional[float] = None
     created_at: Optional[str] = None
+
+    @field_validator("values")
+    @classmethod
+    def values_must_be_finite(
+        cls, values: Optional[List[Optional[float]]]
+    ) -> Optional[List[Optional[float]]]:
+        if values is not None and any(
+            value is not None and not math.isfinite(value) for value in values
+        ):
+            raise ValueError("Analysis track values must be finite")
+        return values
+
+    @field_validator("min_value", "max_value")
+    @classmethod
+    def bounds_must_be_finite(cls, value: Optional[float]) -> Optional[float]:
+        if value is not None and not math.isfinite(value):
+            raise ValueError("Analysis track bounds must be finite")
+        return value
 
 
 class NucleotideSequenceCreate(BaseModel):
@@ -177,15 +225,7 @@ def calculate_gc_content(sequence: str) -> float:
 
 def clean_sequence(sequence: str, seq_type: str = "dna") -> str:
     """Clean, canonicalize, and validate a DNA/RNA nucleotide sequence."""
-    seq = sequence.upper().replace(" ", "").replace("\n", "").replace("\r", "")
-    if seq_type == "rna":
-        seq = seq.replace("T", "U")
-        valid_chars = set("AUCGNRYMKSWHBVD")
-    else:
-        seq = seq.replace("U", "T")
-        valid_chars = set("ATCGNRYMKSWHBVD")
-    cleaned = "".join(c for c in seq if c in valid_chars)
-    return cleaned
+    return canonicalize_nucleotide_sequence(sequence, seq_type, allow_empty=True)
 
 
 def normalize_sequence_type(sequence_type: Optional[str], sequence: str) -> str:
@@ -339,6 +379,21 @@ def normalize_analysis_tracks(
             )
 
         numeric_values = [value for value in values if value is not None]
+        if any(not math.isfinite(value) for value in numeric_values):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Analysis track '{payload.get('name', 'unnamed')}' contains a non-finite value",
+            )
+        for bound_name in ("min_value", "max_value"):
+            bound = payload.get(bound_name)
+            if bound is not None and not math.isfinite(bound):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Analysis track '{payload.get('name', 'unnamed')}' "
+                        f"contains a non-finite {bound_name}"
+                    ),
+                )
         if numeric_values:
             payload["min_value"] = min(numeric_values) if payload.get("min_value") is None else payload["min_value"]
             payload["max_value"] = max(numeric_values) if payload.get("max_value") is None else payload["max_value"]
@@ -346,6 +401,26 @@ def normalize_analysis_tracks(
         normalized.append(payload)
 
     return normalized
+
+
+def normalize_feature_type(feature_type: Optional[str]) -> str:
+    """Normalize common UTR aliases to canonical INSDC feature keys."""
+
+    trimmed = (feature_type or "").strip()
+    if not trimmed:
+        return "misc_feature"
+    compact = (
+        trimmed.replace("′", "'")
+        .replace("’", "'")
+        .replace("`", "'")
+        .lower()
+    )
+    compact = re.sub(r"[\s_'\-]", "", compact)
+    if compact in {"5utr", "5primeutr"}:
+        return "5'UTR"
+    if compact in {"3utr", "3primeutr"}:
+        return "3'UTR"
+    return trimmed
 
 
 def normalize_feature_payloads(
@@ -358,6 +433,7 @@ def normalize_feature_payloads(
     normalized: List[dict] = []
     for raw_feature in features:
         payload = raw_feature.model_dump() if isinstance(raw_feature, BaseModel) else dict(raw_feature)
+        payload["type"] = normalize_feature_type(payload.get("type"))
         segments = payload.get("segments") or []
         if not segments:
             start = payload.get("start")
@@ -382,7 +458,6 @@ def normalize_feature_payloads(
                 )
             normalized_segments.append({"start": start, "end": end})
 
-        normalized_segments.sort(key=lambda item: (item["start"], item["end"]))
         payload["segments"] = normalized_segments
         payload["start"] = min(segment["start"] for segment in normalized_segments)
         payload["end"] = max(segment["end"] for segment in normalized_segments)
@@ -396,13 +471,138 @@ def normalize_feature_payloads(
     return normalized
 
 
+def normalize_primer_payloads(
+    primers: Optional[List[Any]],
+    sequence_length: int,
+    is_circular: bool,
+) -> List[dict]:
+    """Validate primer placement and serialize canonical binding-site segments."""
+
+    if not primers:
+        return []
+    if sequence_length <= 0:
+        raise HTTPException(status_code=400, detail="Primer placement requires a non-empty sequence")
+
+    normalized: List[dict] = []
+    for raw_primer in primers:
+        payload = raw_primer.model_dump() if isinstance(raw_primer, BaseModel) else dict(raw_primer)
+        primer_name = str(payload.get("name") or "unnamed")
+        try:
+            start = int(str(payload.get("start")))
+            end = int(str(payload.get("end")))
+            strand = int(str(payload.get("strand", 1)))
+        except (TypeError, ValueError) as error:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Primer '{primer_name}' has non-integer placement coordinates",
+            ) from error
+
+        if strand not in {-1, 1}:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Primer '{primer_name}' strand must be +1 or -1",
+            )
+        if not (0 <= start < sequence_length and 0 <= end <= sequence_length):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Primer '{primer_name}' placement {start}-{end} exceeds "
+                    f"sequence length {sequence_length}"
+                ),
+            )
+        if start == end:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Primer '{primer_name}' placement must contain at least one base",
+            )
+        if not is_circular and end <= start:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Primer '{primer_name}' cannot wrap on a linear sequence",
+            )
+
+        if start < end:
+            expected_ranges = [(start, end)]
+        else:
+            expected_ranges = [(start, sequence_length)]
+            if end > 0:
+                expected_ranges.append((0, end))
+
+        raw_sites = payload.get("sites") or [
+            {"start": site_start, "end": site_end, "strand": strand}
+            for site_start, site_end in expected_ranges
+        ]
+        normalized_sites: List[dict[str, Any]] = []
+        for raw_site in raw_sites:
+            site = raw_site.model_dump(exclude_none=True) if isinstance(raw_site, BaseModel) else {
+                key: value for key, value in dict(raw_site).items() if value is not None
+            }
+            try:
+                site_start = int(str(site.get("start")))
+                site_end = int(str(site.get("end")))
+                site_strand_value = site.get("strand")
+                site_strand = (
+                    strand
+                    if site_strand_value is None
+                    else int(str(site_strand_value))
+                )
+            except (TypeError, ValueError) as error:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Primer '{primer_name}' contains non-integer site coordinates",
+                ) from error
+            if site_strand not in {-1, 1}:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Primer '{primer_name}' site strand must be +1 or -1",
+                )
+            if site_strand != strand:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Primer '{primer_name}' site strand does not match primer strand",
+                )
+            if not (0 <= site_start < site_end <= sequence_length):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Primer '{primer_name}' site {site_start}-{site_end} exceeds "
+                        f"sequence length {sequence_length} or is empty/reversed"
+                    ),
+                )
+            site["start"] = site_start
+            site["end"] = site_end
+            site["strand"] = site_strand
+            normalized_sites.append(site)
+
+        actual_ranges = [
+            (site["start"], site["end"])
+            for site in normalized_sites
+        ]
+        if actual_ranges != expected_ranges:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Primer '{primer_name}' sites {actual_ranges} do not match "
+                    f"placement {expected_ranges}"
+                ),
+            )
+
+        payload["start"] = start
+        payload["end"] = end
+        payload["strand"] = strand
+        payload["sites"] = normalized_sites
+        normalized.append(payload)
+
+    return normalized
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # API ENDPOINTS
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @router.get("/", response_model=List[NucleotideSequenceListItem])
 async def list_sequences(
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = Depends(get_molbio_session),
     search: Optional[str] = Query(None, description="Search by name, description, accession, organism, or source file"),
     sequence_type: Optional[str] = Query(None, description="Filter by polymer type: dna or rna"),
     topology: str = Query("all", description="Filter by topology: all, circular, linear"),
@@ -446,8 +646,8 @@ async def list_sequences(
         if sort_by == "feature_count":
             return len(seq.features) if seq.features else 0
         if sort_by == "created_at":
-            return seq.created_at or datetime.min
-        return seq.updated_at or seq.created_at or datetime.min
+            return _sortable_timestamp(seq.created_at)
+        return _sortable_timestamp(seq.updated_at or seq.created_at)
 
     sequences = sorted(sequences, key=sort_value, reverse=sort_desc)
     paginated = sequences[offset:offset + limit]
@@ -480,12 +680,15 @@ async def list_sequences(
 @router.post("/", response_model=NucleotideSequenceResponse)
 async def create_sequence(
     data: NucleotideSequenceCreate,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_molbio_session)
 ):
     """Create a new nucleotide sequence."""
     # Clean and validate sequence
     normalized_type = normalize_sequence_type(data.sequence_type, data.sequence)
-    cleaned_seq = clean_sequence(data.sequence, normalized_type)
+    try:
+        cleaned_seq = clean_sequence(data.sequence, normalized_type)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     if not cleaned_seq:
         raise HTTPException(status_code=400, detail="Invalid sequence: no valid nucleotides found")
     
@@ -504,7 +707,11 @@ async def create_sequence(
         is_circular=data.is_circular,
         length=len(cleaned_seq),
         features=normalize_feature_payloads(data.features, len(cleaned_seq)),
-        primers=[p.model_dump() for p in data.primers] if data.primers else [],
+        primers=normalize_primer_payloads(
+            data.primers,
+            len(cleaned_seq),
+            data.is_circular,
+        ),
         analysis_tracks=normalize_analysis_tracks(data.analysis_tracks, len(cleaned_seq)),
         organism=data.organism,
         accession=data.accession,
@@ -513,6 +720,12 @@ async def create_sequence(
     )
     
     session.add(seq)
+    await record_sequence_revision(
+        session,
+        seq,
+        change_kind="create",
+        provenance={"source": "api", "endpoint": "POST /api/sequences/"},
+    )
     await session.commit()
     await session.refresh(seq)
     
@@ -522,7 +735,7 @@ async def create_sequence(
 @router.get("/{sequence_id}", response_model=NucleotideSequenceResponse)
 async def get_sequence(
     sequence_id: str,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_molbio_session)
 ):
     """Get a specific sequence by ID."""
     result = await session.execute(
@@ -540,9 +753,10 @@ async def get_sequence(
 async def update_sequence(
     sequence_id: str,
     data: NucleotideSequenceUpdate,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_molbio_session)
 ):
     """Update an existing sequence."""
+    await begin_immediate_molbio_write(session)
     result = await session.execute(
         select(NucleotideSequence).where(NucleotideSequence.id == sequence_id)
     )
@@ -552,22 +766,58 @@ async def update_sequence(
         raise HTTPException(status_code=404, detail="Sequence not found")
 
     changed = False
+    provided_fields = data.model_fields_set
+
+    next_sequence_type = normalize_sequence_type(
+        data.sequence_type or seq.sequence_type,
+        data.sequence or seq.sequence,
+    )
+    try:
+        next_sequence = clean_sequence(
+            data.sequence if data.sequence is not None else seq.sequence,
+            next_sequence_type,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    if not next_sequence:
+        raise HTTPException(status_code=400, detail="Invalid sequence: no valid nucleotides found")
+    next_is_circular = data.is_circular if data.is_circular is not None else seq.is_circular
+    normalized_primers = normalize_primer_payloads(
+        []
+        if "primers" in provided_fields and data.primers is None
+        else data.primers
+        if data.primers is not None
+        else seq.primers,
+        len(next_sequence),
+        next_is_circular,
+    )
+    normalized_features = normalize_feature_payloads(
+        []
+        if "features" in provided_fields and data.features is None
+        else data.features
+        if data.features is not None
+        else seq.features,
+        len(next_sequence),
+    )
+    normalized_analysis_tracks = (
+        normalize_analysis_tracks(data.analysis_tracks, len(next_sequence))
+        if "analysis_tracks" in provided_fields
+        else []
+        if data.sequence is not None
+        else None
+    )
 
     # Update fields if provided
     if data.name is not None:
         seq.name = data.name
         changed = True
-    if data.description is not None:
+    if "description" in provided_fields:
         seq.description = data.description
         changed = True
-    next_sequence_type = normalize_sequence_type(data.sequence_type or seq.sequence_type, data.sequence or seq.sequence)
-    if data.sequence is not None:
-        cleaned_seq = clean_sequence(data.sequence, next_sequence_type)
-        seq.sequence = cleaned_seq
-        seq.length = len(cleaned_seq)
-        seq.gc_content = calculate_gc_content(cleaned_seq)
-        if data.analysis_tracks is None:
-            seq.analysis_tracks = []
+    if data.sequence is not None or data.sequence_type is not None:
+        seq.sequence = next_sequence
+        seq.length = len(next_sequence)
+        seq.gc_content = calculate_gc_content(next_sequence)
         changed = True
     if data.sequence_type is not None:
         seq.sequence_type = next_sequence_type
@@ -593,27 +843,34 @@ async def update_sequence(
     if data.is_circular is not None:
         seq.is_circular = data.is_circular
         changed = True
-    if data.features is not None:
-        seq.features = normalize_feature_payloads(data.features, seq.length)
+    if "features" in provided_fields or data.sequence is not None:
+        seq.features = normalized_features
         changed = True
-    if data.primers is not None:
-        seq.primers = [p.model_dump() for p in data.primers]
+    if "primers" in provided_fields or data.sequence is not None or data.is_circular is not None:
+        seq.primers = normalized_primers
         changed = True
-    if data.analysis_tracks is not None:
-        seq.analysis_tracks = normalize_analysis_tracks(data.analysis_tracks, seq.length)
+    if normalized_analysis_tracks is not None:
+        seq.analysis_tracks = normalized_analysis_tracks
         changed = True
-    if data.organism is not None:
+    if "organism" in provided_fields:
         seq.organism = data.organism
         changed = True
-    if data.accession is not None:
+    if "accession" in provided_fields:
         seq.accession = data.accession
         changed = True
-    if data.source_file is not None:
+    if "source_file" in provided_fields:
         seq.source_file = data.source_file
         changed = True
 
     if changed:
         seq.version = (seq.version or 1) + 1
+        seq.updated_at = datetime.utcnow()
+        await record_sequence_revision(
+            session,
+            seq,
+            change_kind="update",
+            provenance={"source": "api", "endpoint": "PUT /api/sequences/{sequence_id}"},
+        )
 
     await session.commit()
     await session.refresh(seq)
@@ -624,20 +881,64 @@ async def update_sequence(
 @router.delete("/{sequence_id}")
 async def delete_sequence(
     sequence_id: str,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_molbio_session)
 ):
-    """Delete a sequence."""
+    """Delete a sequence after resolving all restricting projection references."""
+    await begin_immediate_molbio_write(session)
     result = await session.execute(
         select(NucleotideSequence).where(NucleotideSequence.id == sequence_id)
     )
     seq = result.scalar_one_or_none()
-    
+
     if not seq:
         raise HTTPException(status_code=404, detail="Sequence not found")
-    
+
+    child = (
+        await session.execute(
+            select(NucleotideSequence.id)
+            .where(NucleotideSequence.parent_id == sequence_id)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if child is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Sequence has derived child '{child}' and cannot be deleted",
+        )
+
+    dependent_primers = (
+        await session.execute(select(Primer).where(Primer.target_sequence_id == sequence_id))
+    ).scalars().all()
+    active_primers = [primer.id for primer in dependent_primers if primer.deleted_at is None]
+    if active_primers:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Sequence is targeted by active primers: {active_primers}",
+        )
+    for primer in dependent_primers:
+        primer.target_sequence_id = None
+        primer.binding_start = None
+        primer.binding_end = None
+        primer.updated_at = datetime.utcnow()
+        await record_primer_revision(
+            session,
+            primer,
+            change_kind="target_detach",
+            provenance={
+                "source": "api",
+                "endpoint": "DELETE /api/sequences/{sequence_id}",
+                "deleted_target_sequence_id": sequence_id,
+            },
+        )
+
+    await record_sequence_deletion(
+        session,
+        seq,
+        provenance={"source": "api", "endpoint": "DELETE /api/sequences/{sequence_id}"},
+    )
     await session.delete(seq)
     await session.commit()
-    
+
     return {"status": "deleted", "id": sequence_id}
 
 
@@ -645,9 +946,10 @@ async def delete_sequence(
 async def add_feature(
     sequence_id: str,
     feature: FeatureSchema,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_molbio_session)
 ):
     """Add a feature to a sequence."""
+    await begin_immediate_molbio_write(session)
     result = await session.execute(
         select(NucleotideSequence).where(NucleotideSequence.id == sequence_id)
     )
@@ -664,7 +966,15 @@ async def add_feature(
     features = list(seq.features)
     features.append(feature)
     seq.features = normalize_feature_payloads(features, seq.length)
-    
+    seq.version = (seq.version or 1) + 1
+    seq.updated_at = datetime.utcnow()
+    await record_sequence_revision(
+        session,
+        seq,
+        change_kind="feature_add",
+        provenance={"source": "api", "feature_id": feature.id},
+    )
+
     await session.commit()
     await session.refresh(seq)
     
@@ -675,9 +985,10 @@ async def add_feature(
 async def delete_feature(
     sequence_id: str,
     feature_id: str,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_molbio_session)
 ):
     """Delete a feature from a sequence."""
+    await begin_immediate_molbio_write(session)
     result = await session.execute(
         select(NucleotideSequence).where(NucleotideSequence.id == sequence_id)
     )
@@ -687,7 +998,17 @@ async def delete_feature(
         raise HTTPException(status_code=404, detail="Sequence not found")
     
     if seq.features:
+        previous_count = len(seq.features)
         seq.features = [f for f in seq.features if f.get("id") != feature_id]
-        await session.commit()
+        if len(seq.features) != previous_count:
+            seq.version = (seq.version or 1) + 1
+            seq.updated_at = datetime.utcnow()
+            await record_sequence_revision(
+                session,
+                seq,
+                change_kind="feature_delete",
+                provenance={"source": "api", "feature_id": feature_id},
+            )
+            await session.commit()
     
     return {"status": "deleted", "feature_id": feature_id}

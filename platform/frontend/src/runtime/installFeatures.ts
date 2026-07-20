@@ -1,15 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
 
 export const DEFAULT_BMS_FEATURES = {
-    bioxp: true,
-    stats_tools: true,
-    assay_db: true,
+    bioxp: false,
 } as const;
 
 export const DEFAULT_BMS_DEV_FEATURES = {
     bioxp: true,
-    stats_tools: true,
-    assay_db: true,
 } as const;
 
 export type BmsFeatureKey = keyof typeof DEFAULT_BMS_FEATURES;
@@ -54,8 +50,6 @@ export function normalizeBmsFeatures(payload: unknown): BmsFeatures {
 
     return {
         bioxp: coerceFeatureBool(rawFeatures.bioxp, defaults.bioxp),
-        stats_tools: coerceFeatureBool(rawFeatures.stats_tools, defaults.stats_tools),
-        assay_db: coerceFeatureBool(rawFeatures.assay_db, defaults.assay_db),
     };
 }
 
@@ -69,8 +63,6 @@ function normalizeBmsDevFeatures(payload: unknown): BmsFeatures {
 
     return {
         bioxp: coerceFeatureBool(rawFeatures.bioxp, defaults.bioxp),
-        stats_tools: coerceFeatureBool(rawFeatures.stats_tools, defaults.stats_tools),
-        assay_db: coerceFeatureBool(rawFeatures.assay_db, defaults.assay_db),
     };
 }
 
@@ -87,6 +79,12 @@ export function isBmsFeatureEnabled(features: BmsFeatures, feature: BmsFeatureKe
 
 export function isBmsFeatureVisible(state: BmsFeatureState, feature: BmsFeatureKey, showDevFeatures: boolean): boolean {
     return state.features[feature] && (showDevFeatures || !state.devFeatures[feature]);
+}
+
+export function resolveShowDevFeaturesDefault(viteDev: boolean, storedValue: string | null): boolean {
+    if (storedValue === 'true') return true;
+    if (storedValue === 'false') return false;
+    return viteDev;
 }
 
 async function fetchBmsFeatureState(): Promise<BmsFeatureState> {
@@ -116,14 +114,24 @@ export function useBmsFeatures(): BmsFeatures {
     return useBmsFeatureState().features;
 }
 
+export function resolveBmsFeatureQueryState(
+    data: BmsFeatureState | undefined,
+    failed: boolean,
+): BmsFeatureState {
+    if (failed || !data) {
+        return {
+            features: { ...DEFAULT_BMS_FEATURES },
+            devFeatures: { ...DEFAULT_BMS_DEV_FEATURES },
+        };
+    }
+    return data;
+}
+
 export function useBmsFeatureState(): BmsFeatureState {
     const query = useQuery({
         queryKey: ['bms-install-features'],
         queryFn: fetchBmsFeatureState,
         staleTime: 60_000,
     });
-    return query.data ?? {
-        features: { ...DEFAULT_BMS_FEATURES },
-        devFeatures: { ...DEFAULT_BMS_DEV_FEATURES },
-    };
+    return resolveBmsFeatureQueryState(query.data, query.isError);
 }

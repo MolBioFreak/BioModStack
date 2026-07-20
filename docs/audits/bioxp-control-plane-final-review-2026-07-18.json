@@ -1,0 +1,377 @@
+{
+  "access_note": "Christian authorized narrow ACL access to docs/oem and the three files; ownership remains root:root.",
+  "branch": "test",
+  "deferred": [
+    "Live robot connectivity and endpoint contract",
+    "Installed service/unit and listener ownership",
+    "Robot runtime and hardware readiness",
+    "Physical emergency-stop effect",
+    "Reboot/restart recovery on deployed host",
+    "OEM parity and end-to-end integration"
+  ],
+  "dirty_count": 543,
+  "evidence": {
+    "documentation_closure": {
+      "concrete_robot_host_document_occurrences": 0,
+      "regression_test": "test_historical_oem_docs_are_bannered_and_robot_host_is_redacted",
+      "supersession_banners": 3
+    },
+    "frontend": {
+      "failures": 0,
+      "passed": 321,
+      "tests": 321
+    },
+    "frontend_build": {
+      "artifact": "platform/frontend/.artifacts/bioxp-program-final-reviewed-dist",
+      "modules": 4620,
+      "seconds": 34.82,
+      "status": "passed"
+    },
+    "full_api": {
+      "bioxp_failures": 0,
+      "errors": 0,
+      "failure_groups": [
+        "tests.test_molbio_database (1)",
+        "tests.test_core_runtime_workflow_guard (6)",
+        "tests.test_system_router (5; route-free harness/workflow-adapter mismatch)",
+        "tests.test_framework_cdr_router (1)",
+        "tests.test_workflow_adapter (2)"
+      ],
+      "failures": 15,
+      "junit": "/tmp/bioxp-program-final-full-api.xml",
+      "skipped": 4,
+      "tests": 1049,
+      "time_seconds": 61.14
+    },
+    "independent_final_narrow_review": {
+      "adversarial_concurrent_submissions": 24,
+      "delegation": "deleg_dc718f5b",
+      "http_202": 24,
+      "job_ids": 1,
+      "submission_transition_events": 1,
+      "verdict": "PASS"
+    },
+    "route_inventory": {
+      "method_path_operations": 16,
+      "unique_paths": 13
+    },
+    "scoped_backend": {
+      "errors": 0,
+      "failures": 0,
+      "junit": "/tmp/bioxp-program-final-scope.xml",
+      "passed": 146,
+      "skipped": 2,
+      "tests": 148,
+      "time_seconds": 3.747
+    },
+    "static": {
+      "compileall": "passed",
+      "compose": "passed",
+      "diff_check": "passed",
+      "documentation_scan": "passed",
+      "ruff": "passed",
+      "shell_syntax": "passed"
+    }
+  },
+  "head": "8f04468352d78f08055eb1f8eb96b052caab6032",
+  "prohibited_actions_performed": [],
+  "remediations": [
+    "Explicit sanctionable address classes reject IANA special-use ranges even under /0 CIDRs",
+    "One atomic authenticated idempotency reservation spans normal and emergency commands",
+    "Concurrent durable job creation and compound submission transition converge transactionally",
+    "SQLite triggers enforce append-only job-event evidence",
+    "Failed/aged status data cannot expose normal controls",
+    "Optional BioXP feature state fails closed on loading and failed refresh even with cached true data",
+    "Structured FastAPI refusal details and compile/submission errors are operator-visible",
+    "Retired OEM proxy/gripper plans carry prominent supersession banners",
+    "Concrete historical robot host is redacted and protected by regression coverage"
+  ],
+  "schema": "bms.bioxp.compact-control-plane.final-review.v4",
+  "scope_file_count": 70,
+  "scope_manifest": [
+    {
+      "path": ".env.core-runtime.example",
+      "sha256": "d061788d322dc0247a2888b0c3dbc7b326714d2805ac19af5dc17159a74f6570"
+    },
+    {
+      "path": "biomodstack_panel.py",
+      "sha256": "b883b786190c50f6778c6a17e13ab18b9b41bb9ebed5e6ec148cc870edbad497"
+    },
+    {
+      "path": "compose.core-runtime.yml",
+      "sha256": "30849a6207f21e7caff5189decb33bd3a9c6e913ab544548a481457f81b2a703"
+    },
+    {
+      "path": "docs/BioXP_Compact_Control_Plane.md",
+      "sha256": "f084437bf6fc808aa516e0204bf824fb18c74adcee8cb675e78785664ec967b9"
+    },
+    {
+      "path": "docs/Lab_Automation_MolBio_and_Sequencing.md",
+      "sha256": "6b43ac9d8f16dea81f1c530675eea9ad1f242ce956e9da859557b446fc819dd5"
+    },
+    {
+      "path": "docs/Platform_Overview.md",
+      "sha256": "64bc7f4a9735e4ebc30365d2058989ba721fedd5f11560bc71974e18f8e4b270"
+    },
+    {
+      "path": "docs/README.md",
+      "sha256": "639eec2479543592768dbce5eaa8a401c5425a4d009c045e065ed873c8f9a833"
+    },
+    {
+      "path": "docs/oem/bioxp_gripper_gap10_oem_harmonization_phase_plan_20260610.md",
+      "sha256": "f15bb16f0be071a5860328b221978ff26c83e2ad26129044f40edcf88569fc19"
+    },
+    {
+      "path": "docs/oem/bioxp_oem_source_to_target_matrix.md",
+      "sha256": "8760fb10bcb6094a1ccd48b336af15cd3e75e3cabf6b31ee1aef599a22d8f1f8"
+    },
+    {
+      "path": "docs/oem/bioxp_phase3_robot_quarantine_gate_20260609.md",
+      "sha256": "acc46364d82023376d5f1bc02ddc87b63e69f8e707121a989da18bd73a0a6840"
+    },
+    {
+      "path": "docs/plans/2026-05-04-bioxp-current-control-removal-and-oem-integration-path.md",
+      "sha256": "bfb1c7d2ba5c5392f013b74942be1e1e691996f69c9cc71c1fad7b1ab178d984"
+    },
+    {
+      "path": "docs/plans/2026-05-04-bioxp-oem-control-surface-replacement-spec.md",
+      "sha256": "f9f27322dc9572835f14b816f63a8cd3ef0e5b76cd99dafb6ce2bef52497a107"
+    },
+    {
+      "path": "docs/plans/2026-05-04-bioxp-robot-operations-console-spec.md",
+      "sha256": "b66076741fbc7a898b03cb6dc6dcc385ea6418332453c1eab138b4df63b2a7f1"
+    },
+    {
+      "path": "docs/plans/2026-05-08-bioxp-workstation-interlink-control-panel-spec.md",
+      "sha256": "2b52acc0cb3684f69b9c93aafe3c1c432fc44b0f7226bdb9c3e7997a0c6a4433"
+    },
+    {
+      "path": "docs/plans/README.md",
+      "sha256": "dee79f4360c3dbb9ec05deb95ae01886e4ce5aa4507f73ec1c32aa2df2fd9357"
+    },
+    {
+      "path": "platform/api/main.py",
+      "sha256": "3c260186d22c156f24bdd0146f75c65dc3be3ba49bdeb0a075c868d7eaf2e8d0"
+    },
+    {
+      "path": "platform/api/pyproject.toml",
+      "sha256": "17035f526e5d50a01426de067e088e2b6d4712814f833a79860745bdc93c7143"
+    },
+    {
+      "path": "platform/api/routers/bioxp/__init__.py",
+      "sha256": "783fdead6c46fc7790a81aeca6fef47a0928fe7bcb6ad3735ac6f39ff47bc6d2"
+    },
+    {
+      "path": "platform/api/routers/bioxp/commands.py",
+      "sha256": "1a1ce759586fae75b323e67d9f3a1fda771910327c852a20ca92de96daf0f392"
+    },
+    {
+      "path": "platform/api/routers/bioxp/connection.py",
+      "sha256": "5938d6f14caaf8ebcb38f859e484cdbd55b48590499b333758efd6d6c23dfd1d"
+    },
+    {
+      "path": "platform/api/routers/bioxp/dependencies.py",
+      "sha256": "a4d26e3b904ce9f7ecd9889b381baedc00beb6e10c7a76781e00dd65c3aa797e"
+    },
+    {
+      "path": "platform/api/routers/bioxp/jobs.py",
+      "sha256": "e24afc5f670654d03b2dedc7b8b831b948c449507377f474bbed3cb6cd025bc1"
+    },
+    {
+      "path": "platform/api/routers/bioxp/protocols.py",
+      "sha256": "ca91cf85ecddc3f513301d80fc54134e7294abd7516752555a945617aa6f32f1"
+    },
+    {
+      "path": "platform/api/routers/system.py",
+      "sha256": "7d6fae2973d65c78925801f5e770ab226fddf4f6e02edfa547bcfc00c0ffcbef"
+    },
+    {
+      "path": "platform/api/services/bioxp/__init__.py",
+      "sha256": "23ee2efae395b169fe74a479bc87d8a650120746f704af05eec53604dcfed004"
+    },
+    {
+      "path": "platform/api/services/bioxp/command_coordinator.py",
+      "sha256": "f10ce516408809d9eff29166fb435aae2fd84d637e90252b8dd0aeb3d0de987f"
+    },
+    {
+      "path": "platform/api/services/bioxp/command_models.py",
+      "sha256": "2df9b8b0cdbd028a306753e535988c40579c084cab4b8a34759ef9d2033113b7"
+    },
+    {
+      "path": "platform/api/services/bioxp/command_policy.py",
+      "sha256": "37cc237392fe1b4d753a2c961e140c8dd2d5f3ca2adc709ac55ffb0cdc175a31"
+    },
+    {
+      "path": "platform/api/services/bioxp/command_registry.py",
+      "sha256": "cfdf1e1726c226823afbb0b02da226ea36b71913fc2cd9f8fb70506163604cff"
+    },
+    {
+      "path": "platform/api/services/bioxp/connection.py",
+      "sha256": "7af3eb10d153463ce830462c0fe44315b095e211373f0a12487df647afbda74a"
+    },
+    {
+      "path": "platform/api/services/bioxp/errors.py",
+      "sha256": "fe34567d3576862b8501b15ee9a0af6595746cb553a53e13beb11ccc2e8a9b2b"
+    },
+    {
+      "path": "platform/api/services/bioxp/job_store.py",
+      "sha256": "54c316c583d708c7098e3f149d88c6c98c8ffb812a3e30a8899630371786d03b"
+    },
+    {
+      "path": "platform/api/services/bioxp/models.py",
+      "sha256": "2143b27cf676dc7c81d1c21960059b3e938e6e9f1080d31f540732659b4175fb"
+    },
+    {
+      "path": "platform/api/services/bioxp/profile_store.py",
+      "sha256": "f41d1891ecc13d9039c75ee939e7bd3fb40ada824c370eca2f7a0e579e7634ef"
+    },
+    {
+      "path": "platform/api/services/bioxp/protocols.py",
+      "sha256": "958b8c9bc50f83a32f86b43dbd848200658b0a19d079f4071b4f8b5bb04ccf56"
+    },
+    {
+      "path": "platform/api/services/bioxp/robot_client.py",
+      "sha256": "cd4f0efb1baffda94220cf6d7841fdb2eb7b3c6d7648237e4dd5b5fe5ba13e3f"
+    },
+    {
+      "path": "platform/api/services/bioxp/runtime.py",
+      "sha256": "e5509ec32c380a40591db7a4e55a55b8a6ba1f48d373c570adf6602a74ab2a33"
+    },
+    {
+      "path": "platform/api/services/bioxp/target_policy.py",
+      "sha256": "e586677c4cd207b54adbb5e938b88954fd2dd06d3b26defc6c0ec35abfaa355f"
+    },
+    {
+      "path": "platform/api/tests/test_biomodstack_panel.py",
+      "sha256": "b44dd3f4730de57403b945d514d7ce13b0265cfb4776ee83acf4516f52a40a17"
+    },
+    {
+      "path": "platform/api/tests/test_bioxp_command_contract.py",
+      "sha256": "997cb137caa32c4f228719566989de4ac5bc6ebcb109756d93daa177f0656ebf"
+    },
+    {
+      "path": "platform/api/tests/test_bioxp_command_policy.py",
+      "sha256": "2863525294becf79db23c27949d71bed0ab52d6ce3294352e97e1cf27cea6b69"
+    },
+    {
+      "path": "platform/api/tests/test_bioxp_command_serialization.py",
+      "sha256": "ea760183449f848be18c1af9824c48039df19467474eab66d22b5c899fe637f3"
+    },
+    {
+      "path": "platform/api/tests/test_bioxp_compact_api.py",
+      "sha256": "3025f0ad9e0dd44f41db1083a35d137b1d7e048f7497d9dabd0df0ea848dcdf8"
+    },
+    {
+      "path": "platform/api/tests/test_bioxp_compact_api_behavior.py",
+      "sha256": "18305677e2e59657208abb27508a0f9de536d686a4e08a9c2959fc40cf6a5386"
+    },
+    {
+      "path": "platform/api/tests/test_bioxp_connection.py",
+      "sha256": "63485479bd6a49140719270c3bb89b0c91bd3961254630def2cf3f024dd3d4f5"
+    },
+    {
+      "path": "platform/api/tests/test_bioxp_emergency_stop.py",
+      "sha256": "29bae69343437a0ab57442014245696d8726062ed49420c343ba363d867fd318"
+    },
+    {
+      "path": "platform/api/tests/test_bioxp_job_persistence.py",
+      "sha256": "454cc284e68b3f599a882ebaef81c730a6e90719030e4fc225f6c9df891154b8"
+    },
+    {
+      "path": "platform/api/tests/test_bioxp_network_isolation.py",
+      "sha256": "0499db278c5ce51af7c95e9c9f291e3f96c67885e95a811e63f58c38e0e40530"
+    },
+    {
+      "path": "platform/api/tests/test_bioxp_phase1_containment.py",
+      "sha256": "463778c8c815296028378dba6e84cfa9049d2129f470fe8fa8d6f2661641cac7"
+    },
+    {
+      "path": "platform/api/tests/test_bioxp_profile_store.py",
+      "sha256": "ab96599b999cc549d51affe7ea5b9fb55750813e8202568bb6b760b04e06cbe4"
+    },
+    {
+      "path": "platform/api/tests/test_bioxp_protocol_compile.py",
+      "sha256": "c1b22bb18d4a3c3f399d91cc0e86592348a6a6f6401e8e111514c5d2229c4450"
+    },
+    {
+      "path": "platform/api/tests/test_bioxp_robot_client.py",
+      "sha256": "811c2a56f5a3a9a345261b96d21c89a75af53c8bdf8c1090aa7722508cd277a5"
+    },
+    {
+      "path": "platform/api/tests/test_bioxp_target_policy.py",
+      "sha256": "afc764833c0fb9be5969f8e1a0cae071f0f73f6c0d8bb1652c0bea9cf619fbaa"
+    },
+    {
+      "path": "platform/api/tests/test_core_runtime_scaffold.py",
+      "sha256": "e492f0d689e3e943b6468ee98e9bc973f73674441adf1152c72ce48201c11590"
+    },
+    {
+      "path": "platform/api/tests/test_install_feature_gating.py",
+      "sha256": "3aad7a1f8b46bf117077ee17056f31fa85b694bf964c1aafa441b4cd7d152f00"
+    },
+    {
+      "path": "platform/frontend/src/components/BioXpCockpit.tsx",
+      "sha256": "32ef9d78f3b64f8502dec5980bcd9c3182edeef42fb9d2305003bc672b5b7949"
+    },
+    {
+      "path": "platform/frontend/src/components/BioXpInterlinkControlPanel.tsx",
+      "sha256": "3fb6e11d88d36275b45723db4aacf5f5ff0a6bd72dd737bcbd3dec070049be4f"
+    },
+    {
+      "path": "platform/frontend/src/components/bioxpInterlinkStatus.ts",
+      "sha256": "71063d5b9e77492bda67b9d5999566078b0cb40f59884bebcd1c899f0ed5d21c"
+    },
+    {
+      "path": "platform/frontend/src/lib/bioxpClient.ts",
+      "sha256": "9f07fcdd93707e95387914aafc105843c9ebb9611c3ec2e0bf90692e0c3d6dec"
+    },
+    {
+      "path": "platform/frontend/src/runtime/installFeatures.ts",
+      "sha256": "e81e88b5057e8a0e25c1160aa63ae49d424f54eab5fda18fa2dc83cfb3805420"
+    },
+    {
+      "path": "platform/frontend/tests/bioxpAddonGating.test.ts",
+      "sha256": "e6606b87108b954011a41c55472ac17bac4f0f4a9ffa8dfef1998bacd043d5d9"
+    },
+    {
+      "path": "platform/frontend/tests/bioxpClientError.test.ts",
+      "sha256": "0b86653a43aa593e6932c4e2eb5a0a50dfd9a295b8713d9d7ba36148022198bf"
+    },
+    {
+      "path": "platform/frontend/tests/bioxpCockpitSafetySurface.test.ts",
+      "sha256": "1cca8d520212dcb53080cd72974f95413ee96f9b0f3d70bd5caa1e085e73106d"
+    },
+    {
+      "path": "platform/frontend/tests/bioxpConnectionSemantics.test.ts",
+      "sha256": "c99ed33a25eec20e72c194b44693c43fc2546a7483c3214a17f8bd8762720c31"
+    },
+    {
+      "path": "platform/frontend/tests/bioxpControlSurfaceCompliance.test.ts",
+      "sha256": "307c19eca661b19351f3d87722d44f7dde0a0c837d40ce01e18570048162f2b8"
+    },
+    {
+      "path": "platform/frontend/tests/bioxpGripperContract.test.ts",
+      "sha256": "fda03cf401b49b4f97dc5a90e778537b018eae0622253c14bcd126cdb26b4bc0"
+    },
+    {
+      "path": "platform/frontend/tests/bioxpInterlinkMenuContract.test.ts",
+      "sha256": "06f52f8ad091f464f19375fcd88a2e0a419eda037bb49db0282a0db6ca16398f"
+    },
+    {
+      "path": "platform/frontend/tests/bioxpInterlinkStatus.test.ts",
+      "sha256": "4f91d65c55b7ef85599ff51d1354102ba757a31922cd71fbc1cb940f0a7746d7"
+    },
+    {
+      "path": "platform/frontend/tests/installFeatures.test.ts",
+      "sha256": "0e282903c7405e1ab323fad0398eec8ae78a7a767d49d6f5fb46b6fdb8e74949"
+    },
+    {
+      "path": "scripts/check_phase_5.sh",
+      "sha256": "e7c9824969ff1f322133a57732f26da8af6338eaec95a16f8db96819d70e7fcd"
+    }
+  ],
+  "scope_manifest_sha256": "d0e382f97851d8fd521b8b1b91668fa95d8ef593293ce3188101af87364ad337",
+  "status": "OFFLINE_PASS_LIVE_VALIDATION_DEFERRED",
+  "timestamp": "2026-07-18T20:05:36-05:00",
+  "verdict": "PASS for the exact scoped offline implementation, security, frontend, documentation, and independent review gates. Live host/robot evidence remains explicitly deferred. The full shared API suite remains red outside BioXP."
+}

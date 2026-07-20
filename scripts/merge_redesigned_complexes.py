@@ -10,6 +10,54 @@ from typing import Iterable, List
 
 
 ATOM_PREFIXES = ("ATOM", "HETATM")
+REVIEW_ARTIFACT_SCHEMA = "bms.review-artifacts.v1"
+REVIEW_CONTRACT_VERSION = 1
+
+
+def _chain_list(value: object) -> List[str]:
+    if isinstance(value, str):
+        return [token.strip() for token in value.split(",") if token.strip()]
+    if isinstance(value, (list, tuple, set)):
+        return [str(token).strip() for token in value if str(token).strip()]
+    return []
+
+
+def _review_contract_payload(*, structure_name: str, design_chain: str, context_chains: object) -> dict:
+    """Emit producer-owned typed review intent for a merged backbone artifact."""
+    role_map = {
+        "result_role": "locally_redesigned_backbone",
+        "design_chains": [design_chain],
+        "context_chains": _chain_list(context_chains),
+    }
+    return {
+        "review_profile_id": "de_novo_generation_v1",
+        "review_contract_version": REVIEW_CONTRACT_VERSION,
+        "review_contract_source": "producer",
+        "review_role_map": role_map,
+        "review_artifact_manifest": {
+            "schema": REVIEW_ARTIFACT_SCHEMA,
+            "artifacts": {
+                "structure": {
+                    "kind": "structure",
+                    "state": "ready",
+                    "path": structure_name,
+                    "reason": None,
+                },
+                "aligned_error": {
+                    "kind": "aligned_error",
+                    "state": "missing",
+                    "path": None,
+                    "reason": "not produced by local backbone redesign",
+                },
+            },
+            "roles": role_map,
+        },
+        "stage_family": "rfd3",
+        "stage_mode": "backbone_generation",
+        "artifact_class": "generated_complex",
+        "artifact_schema_version": REVIEW_CONTRACT_VERSION,
+        "result_set": "de_novo_backbones",
+    }
 
 
 def _select_structure_lines(pdb_path: Path, model_number: int | None = None) -> List[str]:
@@ -161,6 +209,13 @@ def main() -> None:
             except json.JSONDecodeError:
                 payload = {}
         payload.update(manifest_enrichment)
+        payload.update(
+            _review_contract_payload(
+                structure_name=merged_pdb.name,
+                design_chain=design_chain,
+                context_chains=manifest.get("context_chains", []),
+            )
+        )
         merged_json.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
         print(f"Merged {redesign_pdb.name} -> {merged_pdb.name}")

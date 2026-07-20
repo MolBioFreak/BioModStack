@@ -37,6 +37,7 @@ import {
 } from '../lib/antibodyModes';
 import { useLiveGpuCatalog } from './useLiveGpuCatalog';
 import { ModelDocumentationLinks } from './ModelDocumentationLinks';
+import { createLatestAsyncResourceController } from '../lib/latestAsyncResource';
 
 interface AntibodyDenovoTemplateProps {
     onBack: () => void;
@@ -301,10 +302,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const restoringSelectionRef = useRef<{ chain: string | null; residues: string[]; modelNumber: number | null } | null>(null);
 
     const normalizeProtenixModel = useCallback((model?: string) => {
-        if (!model) return 'protenix_base_20250630_v1.0.0';
-        if (model === 'protenix_base_20241211_v0.2.1') return 'protenix_base_default_v1.0.0';
-        if (model === 'protenix_esm_20241211_v0.2.1') return 'protenix_mini_esm_v0.5.0';
-        return model;
+        void model;
+        return 'protenix-v2';
     }, []);
     const mergeQualitySettingsFromParams = useCallback((params?: Record<string, UntypedApiValue>): QualitySettings => {
         const legacyPresetKey = typeof params?.quality_preset === 'string' && params.quality_preset in PRESETS
@@ -390,8 +389,12 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 ? 'post_fampnn'
                 : 'post_rfantibody'
     );
-    const [structureValidator, setStructureValidator] = useState<'boltz2' | 'protenix'>(
-        initialValues?.structure_validator === 'protenix' ? 'protenix' : 'boltz2'
+    const [structureValidator, setStructureValidator] = useState<'boltz2' | 'protenix' | 'esmfold2'>(
+        initialValues?.structure_validator === 'protenix'
+            ? 'protenix'
+            : initialValues?.structure_validator === 'esmfold2'
+                ? 'esmfold2'
+                : 'boltz2'
     );
     // explorationMode is now always true - parallelism controlled via parallelMode
     const [seqsPerDesign, setSeqsPerDesign] = useState(8); // Number of sequence variants per backbone
@@ -506,7 +509,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const showSequenceDesignerPanel = isRefinementMode || (!deNovoDownstreamLocked && deNovoStageSelection.sequence_design);
     const showQcPanels = isRefinementMode || (!deNovoDownstreamLocked && deNovoStageSelection.qc);
     const showRfQualitySettings = !isRefinementMode && deNovoGenerator === 'rfantibody';
-    const showStructureValidationQualitySettings = effectiveRunStructureValidation;
+    const showStructureValidationQualitySettings = effectiveRunStructureValidation && structureValidator !== 'esmfold2';
     const showFampnnQualitySettings = effectiveSeqDesigner === 'fampnn' || (anyPpiFlowStageEnabled && qualitySettings.maturation_redesign_enabled !== false);
     const showCalibyQualitySettings = effectiveSeqDesigner === 'caliby';
     const showOrchestratorPanel = true;
@@ -588,6 +591,32 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [selectedResidues, setSelectedResidues] = useState<Set<string>>(new Set());
     const [isParsing, setIsParsing] = useState(false);
     const [pdbBlobUrl, setPdbBlobUrl] = useState<string | null>(null);
+    // Blob URLs are renderer resources. These refs make replacement and unmount
+    // ownership explicit rather than relying on asynchronous state snapshots.
+    const pdbBlobUrlRef = useRef<string | null>(null);
+    const frameworkPdbObjectUrlRef = useRef<string | null>(null);
+    const frameworkLoadControllerRef = useRef(createLatestAsyncResourceController());
+    const targetLoadControllerRef = useRef(createLatestAsyncResourceController());
+    const targetParseControllerRef = useRef(createLatestAsyncResourceController());
+    const replacePdbBlobUrl = useCallback((nextUrl: string | null) => {
+        if (pdbBlobUrlRef.current) URL.revokeObjectURL(pdbBlobUrlRef.current);
+        pdbBlobUrlRef.current = nextUrl;
+        setPdbBlobUrl(nextUrl);
+    }, []);
+    const replaceFrameworkPdbUrl = useCallback((nextUrl: string | null) => {
+        if (frameworkPdbObjectUrlRef.current) URL.revokeObjectURL(frameworkPdbObjectUrlRef.current);
+        frameworkPdbObjectUrlRef.current = nextUrl?.startsWith('blob:') ? nextUrl : null;
+        setFrameworkPdbUrl(nextUrl);
+    }, []);
+    useEffect(() => () => {
+        if (pdbBlobUrlRef.current) URL.revokeObjectURL(pdbBlobUrlRef.current);
+        if (frameworkPdbObjectUrlRef.current) URL.revokeObjectURL(frameworkPdbObjectUrlRef.current);
+        pdbBlobUrlRef.current = null;
+        frameworkPdbObjectUrlRef.current = null;
+        frameworkLoadControllerRef.current.dispose();
+        targetLoadControllerRef.current.dispose();
+        targetParseControllerRef.current.dispose();
+    }, []);
     const [show3DViewer, setShow3DViewer] = useState(false);  // 3D viewer toggle, off by default
     const [boltzgenUseFrameworkTemplate, setBoltzgenUseFrameworkTemplate] = useState(
         initialValues?.boltzgen_use_framework_template !== false
@@ -772,6 +801,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     }, []);
 
     const restoreFrameworkPreview = useCallback(async (saved: Record<string, UntypedApiValue>) => {
+        const loadToken = frameworkLoadControllerRef.current.begin();
         const savedFramework = saved.sabdab_framework as SelectedFramework | undefined;
         const savedFrameworkPath = (saved.custom_framework_path || saved.framework_pdb || savedFramework?.filePath || '').trim();
 
@@ -785,10 +815,12 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             if (savedFramework.pdbContent) {
                 const blob = new Blob([savedFramework.pdbContent], { type: 'text/plain' });
                 const url = URL.createObjectURL(blob);
-                setFrameworkPdbUrl(url);
+                replaceFrameworkPdbUrl(url);
                 const fwFile = new File([blob], `${savedFramework.pdbCode || savedFramework.name || 'framework'}.pdb`);
                 const parsed = await parsePDBFile(fwFile);
-                setParsedFrameworkChains(parsed.chains);
+                if (frameworkLoadControllerRef.current.isCurrent(loadToken)) {
+                    setParsedFrameworkChains(parsed.chains);
+                }
                 return;
             }
 
@@ -798,12 +830,18 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 savedFramework.pdbCode,
                 `${savedFramework.pdbCode || savedFramework.name || 'framework'}.pdb`
             );
+            if (!frameworkLoadControllerRef.current.isCurrent(loadToken)) {
+                URL.revokeObjectURL(hydrated.url);
+                return;
+            }
             setSabdabFramework((prev) => prev ? { ...prev, filePath: hydrated.filePath || prev.filePath } : prev);
             setCustomFrameworkPath(hydrated.filePath || preferredSabdabPath);
-            setFrameworkPdbUrl(hydrated.url);
+            replaceFrameworkPdbUrl(hydrated.url);
             const fwFile = hydrated.file;
             const parsed = await parsePDBFile(fwFile);
-            setParsedFrameworkChains(parsed.chains);
+            if (frameworkLoadControllerRef.current.isCurrent(loadToken)) {
+                setParsedFrameworkChains(parsed.chains);
+            }
             return;
         }
 
@@ -813,16 +851,19 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             setViewerMode('framework');
             setShow3DViewer(true);
             const fwUrl = buildFilesApiUrl('download', savedFrameworkPath);
-            setFrameworkPdbUrl(fwUrl);
+            replaceFrameworkPdbUrl(fwUrl);
             const fwFile = await loadPdbFileFromUrl(fwUrl, savedFrameworkPath.split('/').pop() || 'framework.pdb');
+            if (!frameworkLoadControllerRef.current.isCurrent(loadToken)) return;
             setCustomFrameworkFile(fwFile);
             const parsed = await parsePDBFile(fwFile);
-            setParsedFrameworkChains(parsed.chains);
+            if (frameworkLoadControllerRef.current.isCurrent(loadToken)) {
+                setParsedFrameworkChains(parsed.chains);
+            }
             return;
         }
 
         setSabdabFramework(null);
-    }, [buildFilesApiUrl, loadPdbFileFromUrl, loadSabdabFrameworkFile]);
+    }, [buildFilesApiUrl, loadPdbFileFromUrl, loadSabdabFrameworkFile, replaceFrameworkPdbUrl]);
 
     const getSavedResidueSelection = useCallback((saved: Record<string, UntypedApiValue>): string[] => {
         if (Array.isArray(saved.selected_residues)) {
@@ -1184,7 +1225,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         setRefinementPreset(preset);
         setUseManualMutagenesis(preset === 'manual_mutagenesis');
         if (preset === 'manual_mutagenesis') {
-            setManualMutagenesisConfig((current) => ({ ...current, predictor: structureValidator }));
+            setManualMutagenesisConfig((current) => ({
+                ...current,
+                predictor: structureValidator === 'protenix' ? 'protenix' : 'boltz2',
+            }));
             setMutagenesisLaunchMode('seeded_refinement');
             return;
         }
@@ -1398,13 +1442,15 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         }
     }, [initialValues, isRefinementMode, mergeQualitySettingsFromParams, queueRestoredSelection, restoreFrameworkPreview, restoreTargetFromSaved]);
 
-    // Parse the uploaded/selected target structure, preserving all available models.
+    // Parse the uploaded/selected target structure once per source, preserving all available models.
     useEffect(() => {
+        const parseToken = targetParseControllerRef.current.begin();
         if (!targetPdb) {
             setParsedTargetStructure(null);
             setParsedChains([]);
             setSelectedChain(null);
             setSelectedTargetModel(1);
+            setIsParsing(false);
             if (!restoringSelectionRef.current) {
                 setSelectedResidues(new Set());
             }
@@ -1415,36 +1461,36 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
         parsePDBFile(targetPdb)
             .then((result) => {
+                if (!targetParseControllerRef.current.isCurrent(parseToken)) return;
                 setParsedTargetStructure(result);
                 const queuedModel = restoringSelectionRef.current?.modelNumber ?? null;
-                const preferredModel =
-                    queuedModel
-                    ?? getSavedTargetModelNumber(initialValues || {})
-                    ?? selectedTargetModel;
-                const resolvedModel = getModelByNumber(result, preferredModel) ?? result.models[0] ?? null;
-                setSelectedTargetModel(resolvedModel?.modelNumber ?? 1);
-                if (!uploadedPath && !initialValues) setUploadedPath(null);
+                setSelectedTargetModel((currentModel) => {
+                    const preferredModel = queuedModel ?? currentModel;
+                    const resolvedModel = getModelByNumber(result, preferredModel) ?? result.models[0] ?? null;
+                    return resolvedModel?.modelNumber ?? 1;
+                });
                 console.log(
                     '[ANTIBODY_DENOVO] Parsed target PDB models:',
                     result.models.map((model) => `${model.label}:${model.chains.map((c) => `${c.id}:${c.length}aa`).join('|')}`)
                 );
             })
             .catch((err) => {
+                if (!targetParseControllerRef.current.isCurrent(parseToken)) return;
                 console.error('[ANTIBODY_DENOVO] Failed to parse PDB:', err);
                 setParsedTargetStructure(null);
                 setParsedChains([]);
             })
-            .finally(() => setIsParsing(false));
-    }, [getSavedTargetModelNumber, initialValues, selectedTargetModel, targetPdb, uploadedPath]);
+            .finally(() => {
+                if (targetParseControllerRef.current.isCurrent(parseToken)) setIsParsing(false);
+            });
+    }, [targetPdb]);
 
     // Keep the active target chains/viewer content aligned to the currently selected model.
+    // This effect depends only on its input model; functional updates prevent a
+    // state-mutation dependency cycle from continually recreating the blob URL.
     useEffect(() => {
-        if (pdbBlobUrl) {
-            URL.revokeObjectURL(pdbBlobUrl);
-            setPdbBlobUrl(null);
-        }
-
         if (!parsedTargetStructure) {
+            replacePdbBlobUrl(null);
             return;
         }
 
@@ -1452,37 +1498,34 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         if (!activeModel) {
             setParsedChains([]);
             setSelectedChain(null);
+            replacePdbBlobUrl(null);
             return;
         }
 
         const chainIds = activeModel.chains.map((chain) => chain.id);
         const availableResidues = buildAvailableResidueKeySet(activeModel.chains);
         const queuedRestore = restoringSelectionRef.current;
-        const nextResidues = new Set(
-            (queuedRestore?.residues || Array.from(selectedResidues)).filter((key) => availableResidues.has(key))
-        );
 
         setParsedChains(activeModel.chains);
-        setPdbBlobUrl(URL.createObjectURL(new Blob([activeModel.content], { type: 'text/plain' })));
+        replacePdbBlobUrl(URL.createObjectURL(new Blob([activeModel.content], { type: 'text/plain' })));
 
-        if (activeModel.chains.length > 0) {
-            if (queuedRestore?.chain && chainIds.includes(queuedRestore.chain)) {
-                setSelectedChain(queuedRestore.chain);
-                restoringSelectionRef.current = null;
-            } else if (!selectedChain || !chainIds.includes(selectedChain)) {
-                const longestChain = activeModel.chains.reduce((a, b) => (a.length > b.length ? a : b));
-                setSelectedChain(longestChain.id);
+        setSelectedChain((current) => {
+            if (activeModel.chains.length === 0) return null;
+            if (queuedRestore?.chain && chainIds.includes(queuedRestore.chain)) return queuedRestore.chain;
+            if (!current || !chainIds.includes(current)) {
+                return activeModel.chains.reduce((a, b) => (a.length > b.length ? a : b)).id;
             }
-        } else {
-            setSelectedChain(null);
-        }
-
-        setSelectedResidues(nextResidues);
+            return current;
+        });
+        setSelectedResidues((current) => new Set(
+            (queuedRestore?.residues || Array.from(current)).filter((key) => availableResidues.has(key)),
+        ));
         restoringSelectionRef.current = null;
-    }, [parsedTargetStructure, pdbBlobUrl, selectedChain, selectedResidues, selectedTargetModel]);
+    }, [parsedTargetStructure, replacePdbBlobUrl, selectedTargetModel]);
 
     // Parse custom framework PDB for accurate CDR mapping when uploaded.
     useEffect(() => {
+        const loadToken = frameworkLoadControllerRef.current.begin();
         if (frameworkType !== 'custom') return;
         if (!customFrameworkFile) {
             setParsedFrameworkChains([]);
@@ -1490,8 +1533,13 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         }
 
         parsePDBFile(customFrameworkFile)
-            .then((result) => setParsedFrameworkChains(result.chains))
+            .then((result) => {
+                if (frameworkLoadControllerRef.current.isCurrent(loadToken)) {
+                    setParsedFrameworkChains(result.chains);
+                }
+            })
             .catch((err) => {
+                if (!frameworkLoadControllerRef.current.isCurrent(loadToken)) return;
                 console.error('[ANTIBODY_DENOVO] Failed to parse custom framework PDB:', err);
                 setParsedFrameworkChains([]);
             });
@@ -1702,7 +1750,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             if (runPpiFlowMaturation) pipelineSteps.push('ppiflow_maturation');
             if (effectiveUseAntiberty) pipelineSteps.push('antiberty');
             if (effectiveUseThermoMPNN) pipelineSteps.push('thermompnn');
-            if (effectiveRunStructureValidation) pipelineSteps.push(structureValidator === 'protenix' ? 'protenix' : 'boltz2');
+            if (effectiveRunStructureValidation) pipelineSteps.push(structureValidator);
             if (effectiveRunFrustrampnn) pipelineSteps.push('frustrampnn');
 
             // Step 2: Upload custom framework if provided
@@ -2212,7 +2260,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     {([
                         ['sequence_design', 'Sequence Design', 'FAMPNN / AntiFold / ProteinMPNN'],
                         ['ppiflow', 'PPIFlow', 'Backbone refine or maturation'],
-                        ['validation', 'Validation', 'Boltz2 / Protenix'],
+                        ['validation', 'Validation', 'Boltz2 / Protenix / ESMFold2'],
                         ['qc', 'QC + Physics', 'ThermoMPNN / OpenMM / Frustra'],
                     ] as Array<[DeNovoOrchestrationStage, string, string]>).map(([stageKey, label, detail]) => {
                         const disabled = deNovoDownstreamLocked;
@@ -2282,7 +2330,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             </div>
 
             <ModelDocumentationLinks
-                topics={['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2']}
+                topics={['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2', 'esmfold2']}
                 summary="Generator and validator background is linked out; this launcher keeps controls and review gates up front."
                 compact
                 className="mb-6"
@@ -2583,13 +2631,14 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                 value={structureValidator}
                                 onChange={(e) => {
                                     setRefinementPreset('custom');
-                                    setStructureValidator(e.target.value as 'boltz2' | 'protenix');
+                                    setStructureValidator(e.target.value as 'boltz2' | 'protenix' | 'esmfold2');
                                 }}
                                 className="mt-2 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-200 disabled:opacity-50"
                                 disabled={!runStructureValidation}
                             >
                                 <option value="boltz2">Boltz-2</option>
                                 <option value="protenix">Protenix</option>
+                                <option value="esmfold2">ESMFold2</option>
                             </select>
                         </label>
 
@@ -3015,13 +3064,14 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     {/* Target PDB Selection - Now with multiple sources */}
                     {!isRefinementMode && (
                         <TargetAntigenSelector
-                            onSelect={(target) => {
+                            onSelect={async (target) => {
+                                const loadToken = targetLoadControllerRef.current.begin();
                                 if (target) {
                                     if (target.type === 'upload' && target.file) {
+                                        if (!targetLoadControllerRef.current.isCurrent(loadToken)) return;
                                         setTargetPdb(target.file);
                                         setTargetSource({ type: 'upload' });
                                     } else if (target.url) {
-                                        // For URL-based sources (runs, presets, rcsb), we need to fetch and parse
                                         setTargetSource({
                                             type: target.type,
                                             url: target.url,
@@ -3029,19 +3079,19 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                             designId: target.designId,
                                             pdbId: target.pdbId
                                         });
-                                        // Fetch the PDB content and create a File object for parsing
-                                        fetch(target.url)
-                                            .then(res => res.blob())
-                                            .then(blob => {
-                                                const file = new File([blob], target.name + '.pdb', { type: 'chemical/x-pdb' });
-                                                setTargetPdb(file);
-                                            })
-                                            .catch(err => {
-                                                console.error('[ANTIBODY_DENOVO] Failed to fetch PDB:', err);
-                                                alert('Failed to load PDB from source');
-                                            });
+                                        try {
+                                            const res = await fetch(target.url);
+                                            const blob = await res.blob();
+                                            if (!targetLoadControllerRef.current.isCurrent(loadToken)) return;
+                                            const file = new File([blob], target.name + '.pdb', { type: 'chemical/x-pdb' });
+                                            setTargetPdb(file);
+                                        } catch (err) {
+                                            if (!targetLoadControllerRef.current.isCurrent(loadToken)) return;
+                                            console.error('[ANTIBODY_DENOVO] Failed to fetch PDB:', err);
+                                            alert('Failed to load PDB from source');
+                                        }
                                     }
-                                } else {
+                                } else if (targetLoadControllerRef.current.isCurrent(loadToken)) {
                                     setTargetPdb(null);
                                     setTargetSource(null);
                                 }
@@ -3156,7 +3206,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                                             onClick={() => {
                                                                 setSabdabFramework(null);
                                                                 setBoltzgenNanobodyFramework(DEFAULT_BOLTZGEN_VHH_FRAMEWORK);
-                                                                setFrameworkPdbUrl(null);
+                                                                replaceFrameworkPdbUrl(null);
                                                                 setParsedFrameworkChains([]);
                                                                 if (viewerMode === 'framework') {
                                                                     setShow3DViewer(false);
@@ -3185,11 +3235,11 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                                                     setBoltzgenCdrH3Length(scaffoldSelection.nextCdrH3Length);
                                                                 }
                                                                 if (scaffoldSelection.shouldOpenReferencePreview && scaffoldSelection.referencePdbUrl) {
-                                                                    setFrameworkPdbUrl(scaffoldSelection.referencePdbUrl);
+                                                                    replaceFrameworkPdbUrl(scaffoldSelection.referencePdbUrl);
                                                                     setViewerMode('framework');
                                                                     setShow3DViewer(true);
                                                                 } else {
-                                                                    setFrameworkPdbUrl(null);
+                                                                    replaceFrameworkPdbUrl(null);
                                                                     setParsedFrameworkChains([]);
                                                                     if (viewerMode === 'framework') {
                                                                         setShow3DViewer(false);
@@ -3668,7 +3718,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                 ].map((fw) => (
                                     <button
                                         key={fw.id}
-                                        onClick={() => setFrameworkType(fw.id as FrameworkType)}
+                                        onClick={() => {
+                                            frameworkLoadControllerRef.current.begin();
+                                            setFrameworkType(fw.id as FrameworkType);
+                                        }}
                                         className="rounded-lg border p-3 text-left transition-all"
                                         style={
                                             frameworkType === fw.id
@@ -3695,21 +3748,27 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                 <div className="mt-3 p-3 bg-slate-900/50 rounded-lg border border-slate-700">
                                     <FrameworkBrowser
                                         onSelect={(fw) => {
+                                            const loadToken = frameworkLoadControllerRef.current.begin();
                                             setSabdabFramework(fw);
                                             setDetectedCDRs(null); // Clear previous detection
                                             // Set framework PDB URL for 3D preview if pdbCode available
                                             if (fw?.pdbContent) {
                                                 const blob = new Blob([fw.pdbContent], { type: 'text/plain' });
                                                 const url = URL.createObjectURL(blob);
-                                                setFrameworkPdbUrl(url);
+                                                replaceFrameworkPdbUrl(url);
                                                 setViewerMode('framework');
                                                 setShow3DViewer(true);
                                                 setParsedFrameworkChains([]);
 
                                                 const fwFile = new File([blob], `${fw.pdbCode || 'framework'}.pdb`);
                                                 parsePDBFile(fwFile)
-                                                    .then((parsed) => setParsedFrameworkChains(parsed.chains))
+                                                    .then((parsed) => {
+                                                        if (frameworkLoadControllerRef.current.isCurrent(loadToken)) {
+                                                            setParsedFrameworkChains(parsed.chains);
+                                                        }
+                                                    })
                                                     .catch((err) => {
+                                                        if (!frameworkLoadControllerRef.current.isCurrent(loadToken)) return;
                                                         console.error('Failed to parse selected framework PDB:', err);
                                                         setParsedFrameworkChains([]);
                                                     });
@@ -3719,20 +3778,30 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                                 setParsedFrameworkChains([]);
 
                                                 loadSabdabFrameworkFile(fw.pdbCode || fw.id, `${fw.pdbCode || 'framework'}.pdb`)
-                                                    .then(({ file, url, filePath }) => {
+                                                    .then(async ({ file, url, filePath }) => {
+                                                        if (!frameworkLoadControllerRef.current.isCurrent(loadToken)) {
+                                                            URL.revokeObjectURL(url);
+                                                            return null;
+                                                        }
                                                         if (filePath) {
                                                             setSabdabFramework((prev) => prev ? { ...prev, filePath } : prev);
                                                         }
-                                                        setFrameworkPdbUrl(url);
-                                                        return parsePDBFile(file);
+                                                        replaceFrameworkPdbUrl(url);
+                                                        const parsed = await parsePDBFile(file);
+                                                        return frameworkLoadControllerRef.current.isCurrent(loadToken) ? parsed : null;
                                                     })
-                                                    .then((parsed) => setParsedFrameworkChains(parsed.chains))
+                                                    .then((parsed) => {
+                                                        if (parsed && frameworkLoadControllerRef.current.isCurrent(loadToken)) {
+                                                            setParsedFrameworkChains(parsed.chains);
+                                                        }
+                                                    })
                                                     .catch((err) => {
+                                                        if (!frameworkLoadControllerRef.current.isCurrent(loadToken)) return;
                                                         console.error('Failed to parse cached framework PDB:', err);
                                                         setParsedFrameworkChains([]);
                                                     });
                                             } else {
-                                                setFrameworkPdbUrl(null);
+                                                replaceFrameworkPdbUrl(null);
                                                 setParsedFrameworkChains([]);
                                             }
                                         }}
@@ -3918,6 +3987,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                         type="file"
                                         accept=".pdb"
                                         onChange={(e) => {
+                                            frameworkLoadControllerRef.current.begin();
                                             const file = e.target.files?.[0] || null;
                                             setCustomFrameworkFile(file);
                                             setCustomFrameworkPath(null);
@@ -3925,11 +3995,11 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
                                             if (file) {
                                                 const blobUrl = URL.createObjectURL(file);
-                                                setFrameworkPdbUrl(blobUrl);
+                                                replaceFrameworkPdbUrl(blobUrl);
                                                 setViewerMode('framework');
                                                 setShow3DViewer(true);
                                             } else {
-                                                setFrameworkPdbUrl(null);
+                                                replaceFrameworkPdbUrl(null);
                                                 setParsedFrameworkChains([]);
                                             }
                                         }}
@@ -4630,7 +4700,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             </p>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-3 gap-3">
                             <button
                                 type="button"
                                 onClick={() => setStructureValidator('boltz2')}
@@ -4647,11 +4717,21 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             >
                                 Protenix
                             </button>
+                            <button
+                                type="button"
+                                onClick={() => setStructureValidator('esmfold2')}
+                                className="rounded-lg border px-3 py-2 text-sm transition-colors"
+                                style={structureValidator === 'esmfold2' ? themedSelectedStyle('var(--success)') : themedInsetStyle}
+                            >
+                                ESMFold2
+                            </button>
                         </div>
                         <p className="text-xs text-[var(--text-secondary)]">
                             {structureValidator === 'protenix'
                                 ? 'Protenix runtime controls live in Quality Settings; flexible co-fold is default.'
-                                : 'Boltz-2 runtime controls and filters live in Quality Settings.'}
+                                : structureValidator === 'esmfold2'
+                                    ? 'ESMFold2 performs fast MSA-free sequence/complex co-folding. It does not provide ipSAE, and iPTM is not used as a substitute.'
+                                    : 'Boltz-2 runtime controls and filters live in Quality Settings.'}
                         </p>
                     </div>
                     )}
@@ -4668,7 +4748,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         showFampnnSettings={showFampnnQualitySettings}
                         showCalibySettings={showCalibyQualitySettings}
                         showPreValidationFiltering={effectiveSeqDesigner === 'fampnn' && effectiveRunStructureValidation}
-                        showPostValidationFiltering={effectiveRunStructureValidation}
+                        showPostValidationFiltering={effectiveRunStructureValidation && structureValidator !== 'esmfold2'}
                     />
                     )}
 

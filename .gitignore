@@ -24,6 +24,9 @@ __pycache__/
 node_modules/
 node_modules/.tmp/
 dist/
+platform/frontend/.test-dist/
+platform/frontend/.artifacts/
+.artifacts/
 
 # Databases, backups, and local runtime outputs
 *.db
@@ -41,9 +44,19 @@ lib/NO_*
 # Nextflow/local run artifacts
 .nextflow/
 .nextflow.log*
+.nextflow-test-artifacts/
+.pytest-nextflow-*/
 work/
 tmp/
+nxf-tmp.*
+wf_test*/
+
+# Local tool/runtime and exploratory browser-output surfaces
+.ngs-tools/
+dogfood-output/
+/alignment_protenix.log
 
 # Large local container images
 apptainer/*.sif
 apptainer/*.sif.*
+ngs_runtime_fixtures/

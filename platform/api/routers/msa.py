@@ -18,7 +18,9 @@ import hashlib
 import gzip
 import time
 
-from database import Job, NucleotideSequence, get_session
+from database import Job, get_session
+from molbio_database import get_molbio_session
+from molbio_models import NucleotideSequence
 from services.gpu_orchestrator import estimate_vram
 from services.msa_server import (
     DEFAULT_GPUSERVER_DB_LOAD_MODE,
@@ -157,13 +159,17 @@ async def get_msa_cache_info(sequence: str, max_entries: int = 25):
 
 
 @router.post("", response_model=MSAResponse)
-async def create_msa_job(request: MSARequest, session: AsyncSession = Depends(get_session)):
+async def create_msa_job(
+    request: MSARequest,
+    session: AsyncSession = Depends(get_session),
+    molbio_session: AsyncSession = Depends(get_molbio_session),
+):
     sequences = []
 
     if request.sequences:
         sequences = [{"name": s.name, "sequence": s.sequence} for s in request.sequences]
     elif request.sequence_id:
-        result = await session.execute(
+        result = await molbio_session.execute(
             select(NucleotideSequence).where(NucleotideSequence.id == request.sequence_id)
         )
         seq = result.scalar_one_or_none()

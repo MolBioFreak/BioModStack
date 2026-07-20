@@ -42,11 +42,26 @@ from services.result_ingester import (
     _infer_antibody_type_from_job_params,
     _inherit_source_design_metrics,
     _job_has_explicit_binder_target_roles,
+    _boltzgen_filtered_output_dir,
+    _normalize_boltzgen_design_name,
     _parse_ppiflow_sample_index,
     parse_backbone_id,
 )
 from services.stage_review import _dedupe_review_structures, _load_caliby_review_metrics, refresh_gate_payload
 from services.structure_utils import get_per_chain_fampnn_psce
+
+
+def test_boltzgen_ranked_output_name_normalizes_for_ingestion() -> None:
+    assert _normalize_boltzgen_design_name("rank1_boltzgen_input") == "boltzgen_input_1"
+    assert _normalize_boltzgen_design_name("rank12_target_design") == "target_design_12"
+    assert _normalize_boltzgen_design_name("boltzgen_input_5") == "boltzgen_input_5"
+
+
+def test_boltzgen_filtered_output_directory_is_authoritative(tmp_path: Path) -> None:
+    assert _boltzgen_filtered_output_dir(tmp_path) is None
+    filtered = tmp_path / "collected" / "boltzgen_filtered"
+    filtered.mkdir(parents=True)
+    assert _boltzgen_filtered_output_dir(tmp_path) == filtered
 
 
 def test_review_payload_merge_preserves_saved_filter_sets() -> None:
@@ -478,42 +493,32 @@ def test_infer_antibody_type_from_job_params_maps_boltzgen_nanobody_mode_to_vhh(
 
 
 @pytest.mark.asyncio
-async def test_hydrate_review_job_materializes_stage_rows_even_with_parent_designs(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_hydrate_review_job_is_read_only_and_uses_child_root(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeSession:
-        def __init__(self) -> None:
-            self.scalar_calls = 0
-            self.committed = False
-
         async def scalar(self, _query):
-            self.scalar_calls += 1
-            return 0
+            raise AssertionError("GET review hydration must not query or materialize rows")
 
         async def commit(self):
-            self.committed = True
+            raise AssertionError("GET review hydration must not commit")
 
-    session = FakeSession()
-    ensured: list[str] = []
-
-    async def _fake_ensure_stage_review_rows(_session, job):
-        ensured.append(job.id)
-        return 25
-
-    monkeypatch.setattr("routers.designs.load_review_gate_snapshot", lambda *_args, **_kwargs: ("post_fampnn", {}))
-    monkeypatch.setattr("routers.designs.ensure_stage_review_rows", _fake_ensure_stage_review_rows)
-
+    observed_roots: list[str] = []
+    monkeypatch.setattr(
+        "routers.designs.load_review_gate_snapshot",
+        lambda root, *_args, **_kwargs: (observed_roots.append(root) or ("post_fampnn", {})),
+    )
     job = SimpleNamespace(
         id="job-1",
-        output_dir="/tmp/demo",
+        output_dir="/tmp/parent",
+        child_output_dir="/tmp/child",
         awaiting_stage="post_fampnn",
         awaiting_payload={},
         awaiting_input=True,
     )
 
-    review_stage = await _hydrate_review_job(session, job)
-
-    assert review_stage == "post_fampnn"
-    assert ensured == ["job-1"]
-    assert session.committed is True
+    assert await _hydrate_review_job(FakeSession(), job) == "post_fampnn"
+    assert observed_roots == ["/tmp/child"]
+    assert job.awaiting_payload == {}
+    assert job.awaiting_input is True
 
 
 def test_dedupe_review_structures_prefers_pdb_for_same_design() -> None:
@@ -1084,8 +1089,8 @@ def test_derive_source_stage_payload_prefers_selected_design_stage_metadata(tmp_
     selection_dir.mkdir()
     source_job = SimpleNamespace(
         id="parent-job",
-        model_id="template_antibody_denovo",
-        mode="template_antibody_denovo",
+        model_id="antibody_child",
+        mode="antibody_child",
         params={},
         child_stage=None,
         stage_family=None,
@@ -1112,8 +1117,8 @@ def test_derive_source_stage_payload_falls_back_to_review_stage_metadata(tmp_pat
     selection_dir.mkdir()
     source_job = SimpleNamespace(
         id="parent-job",
-        model_id="template_antibody_denovo",
-        mode="template_antibody_denovo",
+        model_id="antibody_child",
+        mode="antibody_child",
         params={},
         child_stage=None,
         stage_family=None,
@@ -1276,8 +1281,8 @@ def test_build_antibody_iteration_job_rejects_recursive_ppiflow_backbone_refine(
     )
     source_job = SimpleNamespace(
         id="source-job",
-        model_id="template_antibody_denovo",
-        mode="template_antibody_denovo",
+        model_id="antibody_child",
+        mode="antibody_child",
         params={},
         child_stage=None,
         stage_family="ppiflow",
@@ -1320,8 +1325,8 @@ def test_build_antibody_iteration_job_allows_ppiflow_backbone_outputs_to_feed_fa
     )
     source_job = SimpleNamespace(
         id="source-job",
-        model_id="template_antibody_denovo",
-        mode="template_antibody_denovo",
+        model_id="antibody_child",
+        mode="antibody_child",
         params={},
         child_stage=None,
         stage_family="ppiflow",
@@ -1371,8 +1376,8 @@ def test_build_antibody_iteration_job_rejects_direct_ppiflow_maturation_from_ppi
     )
     source_job = SimpleNamespace(
         id="source-job",
-        model_id="template_antibody_denovo",
-        mode="template_antibody_denovo",
+        model_id="antibody_child",
+        mode="antibody_child",
         params={},
         child_stage=None,
         stage_family="ppiflow",
@@ -1417,8 +1422,8 @@ def test_build_antibody_iteration_job_accepts_rfantibody_review_rows_with_source
     )
     source_job = SimpleNamespace(
         id="source-job",
-        model_id="template_antibody_denovo",
-        mode="antibody_denovo_pipeline",
+        model_id="antibody_child",
+        mode="antibody_refinement_pipeline",
         params={"interactive_gate_stage": "post_rfantibody"},
         child_stage=None,
         stage_family=None,
@@ -1479,8 +1484,8 @@ def test_build_antibody_iteration_job_allows_post_ppiflow_backbone_reattempt(tmp
     )
     source_job = SimpleNamespace(
         id="source-job",
-        model_id="template_antibody_denovo",
-        mode="template_antibody_denovo",
+        model_id="antibody_child",
+        mode="antibody_child",
         params={},
         child_stage=None,
         stage_family="ppiflow",
@@ -1532,8 +1537,8 @@ def test_build_antibody_iteration_job_rejects_post_ppiflow_backbone_reattempt_fo
     )
     source_job = SimpleNamespace(
         id="source-job",
-        model_id="template_antibody_denovo",
-        mode="template_antibody_denovo",
+        model_id="antibody_child",
+        mode="antibody_child",
         params={},
         child_stage=None,
         stage_family="fampnn",
@@ -1580,8 +1585,8 @@ def test_build_antibody_iteration_job_accepts_explicit_sequence_designed_artifac
     )
     source_job = SimpleNamespace(
         id="source-job",
-        model_id="template_antibody_denovo",
-        mode="template_antibody_denovo",
+        model_id="antibody_child",
+        mode="antibody_child",
         params={},
         child_stage=None,
         stage_family=None,

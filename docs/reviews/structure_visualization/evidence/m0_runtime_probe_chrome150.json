@@ -1,0 +1,793 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-18T22:36:50.173Z",
+  "command": "BMS_M0_CYCLES=55 node browser-tests/runMolstarRuntimeProbe.mjs docs/reviews/structure_visualization/evidence/m0_runtime_probe_chrome150.json",
+  "url": "http://127.0.0.1:37573/browser-tests/molstar-runtime-probe.html",
+  "chromeBinary": "/usr/bin/google-chrome",
+  "pageReport": {
+    "schemaVersion": 1,
+    "runtime": {
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+      "reactStrictMode": true,
+      "requestedCycles": 55
+    },
+    "rawDisconnect": {
+      "ready": true,
+      "disposedAfterDisconnect": false,
+      "canvasCountAfterDisconnect": 1,
+      "cleanupDisposed": true
+    },
+    "cycles": [
+      {
+        "cycle": 1,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 2,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 3,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 4,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 5,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 6,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 7,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 8,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 9,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 10,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 11,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 12,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 13,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 14,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 15,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 16,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 17,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 18,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 19,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 20,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 21,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 22,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 23,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 24,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 25,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 26,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 27,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 28,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 29,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 30,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 31,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 32,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 33,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 34,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 35,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 36,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 37,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 38,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 39,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 40,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 41,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 42,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 43,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 44,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 45,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 46,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 47,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 48,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 49,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 50,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 51,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 52,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 53,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 54,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      },
+      {
+        "cycle": 55,
+        "ready": true,
+        "usable": true,
+        "disposedAfterUnmount": true
+      }
+    ],
+    "samples": [
+      {
+        "label": "baseline-after-runtime-load",
+        "atMs": 479,
+        "hosts": 0,
+        "canvases": 0,
+        "taggedWebglCanvases": 0,
+        "webglContextRequests": 0,
+        "activeTimeouts": 0,
+        "activeIntervals": 0,
+        "activeAnimationFrames": 0,
+        "activeBlobUrls": 1,
+        "listenerAdds": 141,
+        "listenerRemoves": 1,
+        "listenerOperationDelta": 140,
+        "consoleErrors": 0,
+        "consoleWarnings": 0,
+        "usedJsHeapBytes": 39918608
+      },
+      {
+        "label": "after-raw-disconnect-cleanup",
+        "atMs": 1588,
+        "hosts": 0,
+        "canvases": 0,
+        "taggedWebglCanvases": 0,
+        "webglContextRequests": 1,
+        "activeTimeouts": 1,
+        "activeIntervals": 1,
+        "activeAnimationFrames": 0,
+        "activeBlobUrls": 1,
+        "listenerAdds": 292,
+        "listenerRemoves": 20,
+        "listenerOperationDelta": 272,
+        "consoleErrors": 0,
+        "consoleWarnings": 0,
+        "usedJsHeapBytes": 53155053
+      },
+      {
+        "label": "after-cycle-1",
+        "atMs": 2496,
+        "hosts": 0,
+        "canvases": 0,
+        "taggedWebglCanvases": 0,
+        "webglContextRequests": 2,
+        "activeTimeouts": 1,
+        "activeIntervals": 1,
+        "activeAnimationFrames": 0,
+        "activeBlobUrls": 1,
+        "listenerAdds": 442,
+        "listenerRemoves": 39,
+        "listenerOperationDelta": 403,
+        "consoleErrors": 0,
+        "consoleWarnings": 0,
+        "usedJsHeapBytes": 48305157
+      },
+      {
+        "label": "after-cycle-5",
+        "atMs": 5799,
+        "hosts": 0,
+        "canvases": 0,
+        "taggedWebglCanvases": 0,
+        "webglContextRequests": 6,
+        "activeTimeouts": 1,
+        "activeIntervals": 1,
+        "activeAnimationFrames": 0,
+        "activeBlobUrls": 1,
+        "listenerAdds": 1042,
+        "listenerRemoves": 115,
+        "listenerOperationDelta": 927,
+        "consoleErrors": 0,
+        "consoleWarnings": 0,
+        "usedJsHeapBytes": 57620924
+      },
+      {
+        "label": "after-cycle-10",
+        "atMs": 9728,
+        "hosts": 0,
+        "canvases": 0,
+        "taggedWebglCanvases": 0,
+        "webglContextRequests": 11,
+        "activeTimeouts": 1,
+        "activeIntervals": 1,
+        "activeAnimationFrames": 0,
+        "activeBlobUrls": 1,
+        "listenerAdds": 1792,
+        "listenerRemoves": 210,
+        "listenerOperationDelta": 1582,
+        "consoleErrors": 0,
+        "consoleWarnings": 0,
+        "usedJsHeapBytes": 69319342
+      },
+      {
+        "label": "after-cycle-15",
+        "atMs": 13016,
+        "hosts": 0,
+        "canvases": 0,
+        "taggedWebglCanvases": 0,
+        "webglContextRequests": 16,
+        "activeTimeouts": 1,
+        "activeIntervals": 1,
+        "activeAnimationFrames": 0,
+        "activeBlobUrls": 1,
+        "listenerAdds": 2542,
+        "listenerRemoves": 305,
+        "listenerOperationDelta": 2237,
+        "consoleErrors": 0,
+        "consoleWarnings": 0,
+        "usedJsHeapBytes": 79607432
+      },
+      {
+        "label": "after-cycle-20",
+        "atMs": 16020,
+        "hosts": 0,
+        "canvases": 0,
+        "taggedWebglCanvases": 0,
+        "webglContextRequests": 21,
+        "activeTimeouts": 2,
+        "activeIntervals": 1,
+        "activeAnimationFrames": 0,
+        "activeBlobUrls": 1,
+        "listenerAdds": 3292,
+        "listenerRemoves": 400,
+        "listenerOperationDelta": 2892,
+        "consoleErrors": 0,
+        "consoleWarnings": 0,
+        "usedJsHeapBytes": 89727932
+      },
+      {
+        "label": "after-cycle-25",
+        "atMs": 19600,
+        "hosts": 0,
+        "canvases": 0,
+        "taggedWebglCanvases": 0,
+        "webglContextRequests": 26,
+        "activeTimeouts": 1,
+        "activeIntervals": 1,
+        "activeAnimationFrames": 0,
+        "activeBlobUrls": 1,
+        "listenerAdds": 4042,
+        "listenerRemoves": 495,
+        "listenerOperationDelta": 3547,
+        "consoleErrors": 0,
+        "consoleWarnings": 0,
+        "usedJsHeapBytes": 99856964
+      },
+      {
+        "label": "after-cycle-30",
+        "atMs": 22258,
+        "hosts": 0,
+        "canvases": 0,
+        "taggedWebglCanvases": 0,
+        "webglContextRequests": 31,
+        "activeTimeouts": 2,
+        "activeIntervals": 2,
+        "activeAnimationFrames": 0,
+        "activeBlobUrls": 1,
+        "listenerAdds": 4792,
+        "listenerRemoves": 590,
+        "listenerOperationDelta": 4202,
+        "consoleErrors": 0,
+        "consoleWarnings": 0,
+        "usedJsHeapBytes": 109679582
+      },
+      {
+        "label": "after-cycle-35",
+        "atMs": 24361,
+        "hosts": 0,
+        "canvases": 0,
+        "taggedWebglCanvases": 0,
+        "webglContextRequests": 36,
+        "activeTimeouts": 2,
+        "activeIntervals": 2,
+        "activeAnimationFrames": 0,
+        "activeBlobUrls": 1,
+        "listenerAdds": 5542,
+        "listenerRemoves": 685,
+        "listenerOperationDelta": 4857,
+        "consoleErrors": 0,
+        "consoleWarnings": 0,
+        "usedJsHeapBytes": 119638416
+      },
+      {
+        "label": "after-cycle-40",
+        "atMs": 27904,
+        "hosts": 0,
+        "canvases": 0,
+        "taggedWebglCanvases": 0,
+        "webglContextRequests": 41,
+        "activeTimeouts": 1,
+        "activeIntervals": 1,
+        "activeAnimationFrames": 0,
+        "activeBlobUrls": 1,
+        "listenerAdds": 6292,
+        "listenerRemoves": 780,
+        "listenerOperationDelta": 5512,
+        "consoleErrors": 0,
+        "consoleWarnings": 0,
+        "usedJsHeapBytes": 129792535
+      },
+      {
+        "label": "after-cycle-45",
+        "atMs": 31846,
+        "hosts": 0,
+        "canvases": 0,
+        "taggedWebglCanvases": 0,
+        "webglContextRequests": 46,
+        "activeTimeouts": 1,
+        "activeIntervals": 1,
+        "activeAnimationFrames": 0,
+        "activeBlobUrls": 1,
+        "listenerAdds": 7042,
+        "listenerRemoves": 875,
+        "listenerOperationDelta": 6167,
+        "consoleErrors": 0,
+        "consoleWarnings": 0,
+        "usedJsHeapBytes": 139899753
+      },
+      {
+        "label": "after-cycle-50",
+        "atMs": 34610,
+        "hosts": 0,
+        "canvases": 0,
+        "taggedWebglCanvases": 0,
+        "webglContextRequests": 51,
+        "activeTimeouts": 1,
+        "activeIntervals": 1,
+        "activeAnimationFrames": 0,
+        "activeBlobUrls": 1,
+        "listenerAdds": 7792,
+        "listenerRemoves": 970,
+        "listenerOperationDelta": 6822,
+        "consoleErrors": 0,
+        "consoleWarnings": 0,
+        "usedJsHeapBytes": 150001231
+      },
+      {
+        "label": "after-cycle-55",
+        "atMs": 37488,
+        "hosts": 0,
+        "canvases": 0,
+        "taggedWebglCanvases": 0,
+        "webglContextRequests": 56,
+        "activeTimeouts": 2,
+        "activeIntervals": 1,
+        "activeAnimationFrames": 0,
+        "activeBlobUrls": 1,
+        "listenerAdds": 8542,
+        "listenerRemoves": 1065,
+        "listenerOperationDelta": 7477,
+        "consoleErrors": 0,
+        "consoleWarnings": 0,
+        "usedJsHeapBytes": 160139214
+      },
+      {
+        "label": "final-live-viewer",
+        "atMs": 38314,
+        "hosts": 1,
+        "canvases": 1,
+        "taggedWebglCanvases": 1,
+        "webglContextRequests": 57,
+        "activeTimeouts": 1,
+        "activeIntervals": 2,
+        "activeAnimationFrames": 1,
+        "activeBlobUrls": 1,
+        "listenerAdds": 8692,
+        "listenerRemoves": 1065,
+        "listenerOperationDelta": 7627,
+        "consoleErrors": 0,
+        "consoleWarnings": 0,
+        "usedJsHeapBytes": 165012672
+      }
+    ],
+    "finalLiveViewer": {
+      "ready": true,
+      "usable": true,
+      "disposed": false,
+      "hostCount": 1,
+      "canvasCount": 1
+    },
+    "failures": []
+  },
+  "cleanupSample": {
+    "label": "after-final-cleanup",
+    "atMs": 38630,
+    "hosts": 0,
+    "canvases": 0,
+    "taggedWebglCanvases": 0,
+    "webglContextRequests": 57,
+    "activeTimeouts": 1,
+    "activeIntervals": 1,
+    "activeAnimationFrames": 0,
+    "activeBlobUrls": 0,
+    "listenerAdds": 8692,
+    "listenerRemoves": 1084,
+    "listenerOperationDelta": 7608,
+    "consoleErrors": 0,
+    "consoleWarnings": 0,
+    "usedJsHeapBytes": 161950531
+  },
+  "acceptance": {
+    "retentionFailures": [
+      "CDP live listener growth after cleanup: 8355",
+      "renderer heap growth after cleanup: 119015244 bytes"
+    ],
+    "severeBrowserEventCount": 0,
+    "listenerGrowth": 8355,
+    "documentListenerGrowth": 2,
+    "heapGrowth": 119015244
+  },
+  "cdp": {
+    "domBefore": {
+      "documents": 1,
+      "nodes": 33,
+      "jsEventListeners": 6
+    },
+    "heapBefore": {
+      "usedSize": 3971876,
+      "totalSize": 4968448,
+      "embedderHeapUsedSize": 353904,
+      "backingStorageSize": 3735742
+    },
+    "documentListenersBefore": {
+      "total": 0,
+      "byType": {}
+    },
+    "domWithLiveViewer": {
+      "documents": 1,
+      "nodes": 4556,
+      "jsEventListeners": 8380
+    },
+    "heapWithLiveViewer": {
+      "usedSize": 125899784,
+      "totalSize": 128552960,
+      "embedderHeapUsedSize": 7288048,
+      "backingStorageSize": 38959155
+    },
+    "documentListenersWithLiveViewer": {
+      "total": 4,
+      "byType": {
+        "pointerlockchange": 1,
+        "pointerlockerror": 1,
+        "selectionchange": 2
+      }
+    },
+    "domAfterCleanup": {
+      "documents": 1,
+      "nodes": 4556,
+      "jsEventListeners": 8361
+    },
+    "heapAfterCleanup": {
+      "usedSize": 122987120,
+      "totalSize": 124882944,
+      "embedderHeapUsedSize": 6965680,
+      "backingStorageSize": 38959155
+    },
+    "documentListenersAfterCleanup": {
+      "total": 2,
+      "byType": {
+        "selectionchange": 2
+      }
+    },
+    "browserEvents": [
+      {
+        "method": "Log.entryAdded",
+        "params": {
+          "entry": {
+            "source": "network",
+            "level": "error",
+            "text": "Failed to load resource: the server responded with a status of 404 (Not Found)",
+            "timestamp": 1784414171474.428,
+            "url": "http://127.0.0.1:37573/favicon.ico",
+            "networkRequestId": "2116470.21"
+          }
+        }
+      },
+      {
+        "method": "Log.entryAdded",
+        "params": {
+          "entry": {
+            "source": "rendering",
+            "level": "warning",
+            "text": "[.WebGL-0x38ac000f8200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+            "timestamp": 1784414172260.284,
+            "url": "http://127.0.0.1:37573/browser-tests/molstar-runtime-probe.html"
+          }
+        }
+      },
+      {
+        "method": "Log.entryAdded",
+        "params": {
+          "entry": {
+            "source": "rendering",
+            "level": "warning",
+            "text": "[.WebGL-0x38ac000f8200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+            "timestamp": 1784414172292.231,
+            "url": "http://127.0.0.1:37573/browser-tests/molstar-runtime-probe.html"
+          }
+        }
+      },
+      {
+        "method": "Log.entryAdded",
+        "params": {
+          "entry": {
+            "source": "rendering",
+            "level": "warning",
+            "text": "[.WebGL-0x38ac000f8200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+            "timestamp": 1784414172345.545,
+            "url": "http://127.0.0.1:37573/browser-tests/molstar-runtime-probe.html"
+          }
+        }
+      },
+      {
+        "method": "Log.entryAdded",
+        "params": {
+          "entry": {
+            "source": "rendering",
+            "level": "warning",
+            "text": "[.WebGL-0x38ac000f8200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)",
+            "timestamp": 1784414172357.49,
+            "url": "http://127.0.0.1:37573/browser-tests/molstar-runtime-probe.html"
+          }
+        }
+      }
+    ]
+  },
+  "logs": {
+    "vite": [
+      "  VITE v6.4.1  ready in 174 ms",
+      "  ➜  Local:   http://127.0.0.1:37573/",
+      "[BABEL] Note: The code generator has deoptimised the styling of /tmp/bms-m0-molstar-ODJLA9/vite-cache/deps/chunk-YKNUTTZU.js?v=3cf3478b as it exceeds the max of 500KB."
+    ],
+    "chrome": [
+      "[2116421:2116421:0718/173612.098311:ERROR:gpu/command_buffer/service/gl_utils.cc:430] [.WebGL-0x38ac000f8200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[2116421:2116421:0718/173612.261420:ERROR:gpu/command_buffer/service/gl_utils.cc:430] [.WebGL-0x38ac000f8200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[2116421:2116421:0718/173612.294448:ERROR:gpu/command_buffer/service/gl_utils.cc:430] [.WebGL-0x38ac000f8200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[2116421:2116421:0718/173612.346498:ERROR:gpu/command_buffer/service/gl_utils.cc:430] [.WebGL-0x38ac000f8200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)",
+      "[2116378:2116406:0718/173613.216278:ERROR:google_apis/gcm/engine/registration_request.cc:291] Registration response error message: DEPRECATED_ENDPOINT",
+      "Created TensorFlow Lite XNNPACK delegate for CPU.",
+      "[2116378:2116406:0718/173643.021337:ERROR:google_apis/gcm/engine/registration_request.cc:291] Registration response error message: DEPRECATED_ENDPOINT"
+    ]
+  }
+}

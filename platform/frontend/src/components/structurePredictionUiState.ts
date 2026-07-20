@@ -2,7 +2,7 @@ export type StructurePredictionMode = 'predict' | 'complex';
 export type StructurePredictorFamily = 'boltz' | 'rf3' | 'protenix' | 'esmfold2';
 export type StructurePredictorSelection = StructurePredictorFamily | 'both' | 'all' | 'boltz_protenix';
 export type BoltzQualityPresetId = 'quick' | 'balanced' | 'max' | 'custom';
-export type StructureLaunchVariant = 'default' | 'boltz_cp_experimental' | 'esmfold2_experimental';
+export type StructureLaunchVariant = 'default' | 'boltz_cp_experimental';
 export type StructureMsaProvider = 'local' | 'colabfold_api';
 export type StructureMsaPreset = 'maximum' | 'balanced' | 'fast';
 export type StructureMsaTargetShardMode = 'auto' | 'required' | 'off';
@@ -53,7 +53,7 @@ export interface TargetPreviewSourceInput {
 
 export interface StructureLaunchConfig {
     variant: StructureLaunchVariant;
-    submitModelId: 'boltz2' | 'boltz_cp_experimental' | 'esmfold2_experimental';
+    submitModelId: 'boltz2' | 'boltz_cp_experimental';
     submitMode: 'predict' | 'design';
     allowPredictorSelection: boolean;
     showParallelJobs: boolean;
@@ -78,7 +78,7 @@ export interface BoltzCpShardPlanDefinition {
 }
 
 export interface StructureSubmitTarget {
-    modelId: 'boltz2' | 'rf3' | 'protenix' | 'boltz_cp_experimental' | 'esmfold2_experimental';
+    modelId: 'boltz2' | 'rf3' | 'protenix' | 'esmfold2' | 'boltz_cp_experimental';
     mode: 'predict' | 'complex' | 'design';
 }
 
@@ -114,6 +114,7 @@ type StructureMsaSubmitParams = Record<string, string | number | boolean>;
 export const DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MODE: StructureMsaTargetShardMode = 'auto';
 export const DEFAULT_STRUCTURE_MSA_TARGET_SHARDS = 4;
 export const DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MIN_SIZE_GB = 1;
+export const DEFAULT_STRUCTURE_MSA_PROVIDER: StructureMsaProvider = 'colabfold_api';
 
 export const BOLTZ_CP_DEFAULT_SHARD_PLAN_ID: BoltzCpShardPlanId = '2x2';
 export const DEFAULT_BOLTZ_CP_CONTEXT_QUERY_TILE_TOKENS = 512;
@@ -190,7 +191,6 @@ const toStructureLaunchVariant = (initialValues?: StructureInitialValues | null)
         || ''
     ).trim().toLowerCase();
     if (normalized === 'boltz_cp_experimental') return 'boltz_cp_experimental';
-    if (normalized === 'esmfold2_experimental') return 'esmfold2_experimental';
     return 'default';
 };
 
@@ -252,18 +252,6 @@ export const resolveStructureLaunchConfig = (initialValues?: StructureInitialVal
         };
     }
 
-    if (variant === 'esmfold2_experimental') {
-        return {
-            variant,
-            submitModelId: 'esmfold2_experimental',
-            submitMode: 'predict',
-            allowPredictorSelection: false,
-            showParallelJobs: false,
-            showSequenceBatch: false,
-            showMsaControls: false,
-            forcedPredictor: 'esmfold2',
-        };
-    }
 
     return {
         variant: 'default',
@@ -328,7 +316,9 @@ export const resolveStructureSubmitTarget = ({
             ? 'rf3'
             : resolvedSelection.canonicalSelection === 'protenix'
                 ? 'protenix'
-                : 'boltz2',
+                : resolvedSelection.canonicalSelection === 'esmfold2'
+                    ? 'esmfold2'
+                    : 'boltz2',
         mode: predictionMode,
     };
 };
@@ -395,6 +385,7 @@ const PREDICT_MODE_OPTIONS: StructurePredictorOption[] = [
     { id: 'boltz', name: 'Boltz-2', desc: 'Fast, SOTA accuracy', color: 'blue' },
     { id: 'rf3', name: 'RoseTTAFold3', desc: 'Open-source AF3 alt.', color: 'green' },
     { id: 'protenix', name: 'Protenix', desc: 'AF3-level, multi-modal', color: 'violet' },
+    { id: 'esmfold2', name: 'ESMFold2', desc: 'Fast local all-atom folding', color: 'blue' },
     { id: 'both', name: 'Boltz + RF3', desc: 'Ensemble (2)', color: 'purple' },
     { id: 'all', name: 'All Three', desc: 'Full ensemble', color: 'amber' },
 ];
@@ -403,6 +394,7 @@ const COMPLEX_MODE_OPTIONS: StructurePredictorOption[] = [
     { id: 'boltz', name: 'Boltz-2', desc: 'Complex prediction with target conditioning', color: 'blue' },
     { id: 'rf3', name: 'RoseTTAFold3', desc: 'Predict-only; unavailable for complexes', color: 'green', disabled: true, disabledReason: COMPLEX_RF3_DISABLED_REASON },
     { id: 'protenix', name: 'Protenix', desc: 'Template-guided complex prediction', color: 'violet' },
+    { id: 'esmfold2', name: 'ESMFold2', desc: 'Fast MSA-free complex co-folding', color: 'blue' },
     { id: 'boltz_protenix', name: 'Boltz + Protenix', desc: 'Truthful complex ensemble', color: 'amber' },
 ];
 

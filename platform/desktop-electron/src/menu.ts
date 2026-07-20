@@ -24,18 +24,21 @@ type MenuDeps = {
   resetZoom?: () => void;
   isAlwaysOnTop?: () => boolean;
   toggleAlwaysOnTop?: () => void;
+  reportActionError?: (error: unknown) => void;
 };
 
-function fireAndForget(action: () => Promise<void> | void): () => void {
+function fireAndForget(action: () => Promise<void> | void, reportError?: (error: unknown) => void): () => void {
   return () => {
     try {
       const result = action();
       if (result && typeof (result as Promise<void>).catch === 'function') {
         void (result as Promise<void>).catch((error) => {
+          reportError?.(error);
           console.error(error);
         });
       }
     } catch (error) {
+      reportError?.(error);
       console.error(error);
     }
   };
@@ -65,24 +68,33 @@ function buildServicesSubmenu(
 ): MenuItemConstructorOptions[] {
   return [
     {
-      label: 'Start Services',
-      click: fireAndForget(() => serviceControl.startAll(context.runtimeMode)),
+      label: 'Start Current Environment',
+      click: fireAndForget(() => serviceControl.startAll(context.runtimeMode), deps.reportActionError),
     },
     {
-      label: 'Start Dev + Stable Services',
-      click: fireAndForget(() => serviceControl.startRuntimeTarget('both')),
+      label: 'Start Production (Stable Containers)',
+      click: fireAndForget(() => serviceControl.startRuntimeTarget('prod'), deps.reportActionError),
     },
     {
-      label: 'Stop Services',
-      click: fireAndForget(() => serviceControl.stopAll(context.runtimeMode)),
+      label: 'Start Development (Hot Reload)',
+      click: fireAndForget(() => serviceControl.startRuntimeTarget('dev'), deps.reportActionError),
     },
     {
-      label: 'Restart Services',
-      click: fireAndForget(() => serviceControl.restartAll(context.runtimeMode)),
+      label: 'Start Both Environments',
+      click: fireAndForget(() => serviceControl.startRuntimeTarget('both'), deps.reportActionError),
+    },
+    { type: 'separator' },
+    {
+      label: 'Stop Current Environment',
+      click: fireAndForget(() => serviceControl.stopAll(context.runtimeMode), deps.reportActionError),
     },
     {
-      label: 'Restart API',
-      click: fireAndForget(() => serviceControl.restartApi(context.runtimeMode)),
+      label: 'Restart Current Environment',
+      click: fireAndForget(() => serviceControl.restartAll(context.runtimeMode), deps.reportActionError),
+    },
+    {
+      label: 'Restart Current API',
+      click: fireAndForget(() => serviceControl.restartApi(context.runtimeMode), deps.reportActionError),
     },
     { type: 'separator' },
     {

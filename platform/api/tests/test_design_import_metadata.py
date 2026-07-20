@@ -187,14 +187,21 @@ def test_design_response_exposes_registry_capabilities_for_known_streams() -> No
 
     assert response.result_set == "ppiflow_passed"
     assert response.analysis_contract_id == "ppiflow_maturation_v1"
-    assert response.supported_analyzers == ["ppiflow_maturation_v1"]
+    assert response.supported_analyzers == [
+        "structure_summary",
+        "contact_map",
+        "chain_metrics",
+        "pae_matrix",
+        "ipsae_interface",
+        "antibody_annotation_pack",
+    ]
     assert "ppiflow_maturation_metrics" in response.viewer_capabilities
     assert "rosetta_interface_score" in response.required_fields
     assert response.result_contract_schema_version == 1
-    assert response.result_contract_source == "registry"
+    assert response.result_contract_source == "legacy_result_set"
 
 
-def test_ppiflow_children_inherit_source_binder_length_from_embedded_source_uuid() -> None:
+def test_ppiflow_children_do_not_inherit_untyped_binder_shaped_source_metadata() -> None:
     source = Design(
         id="39c69ef1-3e4f-465f-870a-bbf79f5363cf",
         job_id="source-job",
@@ -217,6 +224,45 @@ def test_ppiflow_children_inherit_source_binder_length_from_embedded_source_uuid
         cdr_h1_length=None,
         cdr_h2_length=None,
         cdr_h3_length=None,
+        artifact_class="sequence_designed_complex",
+        stage_family="ppiflow",
+        stage_mode="maturation",
+        ppiflow_filter_passed=False,
+        provenance={"maturation_filter_passed": False},
+        is_favorite=False,
+        created_at=datetime(2026, 4, 14, 18, 0, 0),
+    )
+
+    responses = [_design_to_response(source), _design_to_response(child)]
+    _enrich_design_responses_from_sources(responses)
+
+    assert responses[1].binder_length is None
+    assert responses[1].cdr_h1_length is None
+    assert responses[1].cdr_h2_length is None
+    assert responses[1].cdr_h3_length is None
+
+
+def test_ppiflow_children_inherit_explicit_antibody_source_metadata() -> None:
+    source = Design(
+        id="39c69ef1-3e4f-465f-870a-bbf79f5363cf",
+        job_id="source-job",
+        name="job0_001_f731565d-9c96-4721-8953-0f7af8a2084a_seq_0",
+        binder_length=111,
+        cdr_h1_length=8,
+        cdr_h2_length=7,
+        cdr_h3_length=13,
+        review_profile_id="antibody_backbone_v1",
+        review_role_map={"chain_roles": {"H": "antibody_heavy", "A": "target"}},
+        artifact_class="backbone_complex",
+        stage_family="rfantibody",
+        stage_mode="backbone_generation",
+        is_favorite=False,
+        created_at=datetime(2026, 4, 14, 18, 0, 0),
+    )
+    child = Design(
+        id="49e43d95-e26a-44ac-a6d0-e5f9076c5fcf",
+        job_id="child-job",
+        name="job0_001_f731565d-9c96-4721-8953-0f7af8a2084a_seq_0_ppiflow_seq_3_sample0",
         artifact_class="sequence_designed_complex",
         stage_family="ppiflow",
         stage_mode="maturation",

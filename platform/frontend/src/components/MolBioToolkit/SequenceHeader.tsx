@@ -239,8 +239,8 @@ export function SequenceHeader({
                     </button>
                 </div>
 
-                {/* View Mode Toggle (only show for circular sequences) */}
-                {sequenceData.circular && onViewModeChange && (
+                {/* View controls change projection only, never stored topology. */}
+                {onViewModeChange && (
                     <div className="flex items-center border-r border-slate-600 pr-2 mr-2">
                         <div className="flex rounded overflow-hidden border border-slate-600">
                             <button
@@ -259,7 +259,7 @@ export function SequenceHeader({
                                     ? 'bg-accent text-white'
                                     : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
                                     }`}
-                                title="Both views split"
+                                title="Raw sequence and circular map projection"
                             >
                                 Both
                             </button>
@@ -269,7 +269,7 @@ export function SequenceHeader({
                                     ? 'bg-accent text-white'
                                     : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
                                     }`}
-                                title="Circular view only"
+                                title={sequenceData.circular ? 'Circular map only' : 'Circular projection only (stored topology remains linear)'}
                             >
                                 Circular
                             </button>

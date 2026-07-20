@@ -129,6 +129,55 @@ class JobList(BaseModel):
     total: int
 
 
+class ExternalImportPreviewRequest(BaseModel):
+    source_path: str = Field(..., min_length=1, max_length=1000)
+    provider_hint: str = Field(default="boltz_api", max_length=64)
+
+
+class ExternalImportCreateRequest(BaseModel):
+    source_path: str = Field(..., min_length=1, max_length=1000)
+    provider: str = Field(default="boltz_api", max_length=64)
+    preview_fingerprint: str = Field(..., min_length=64, max_length=64)
+    dataset_name: str = Field(..., min_length=1, max_length=255)
+    job_name: Optional[str] = Field(default=None, max_length=255)
+
+
+class ExternalImportPreviewResponse(BaseModel):
+    provider: str
+    resource_type: str
+    provider_job_id: str
+    model: Optional[str] = None
+    model_version: Optional[str] = None
+    status: str
+    sample_count: int
+    entities: List[dict]
+    source_fingerprint: str
+    run_metadata_sha256: str
+    archive_sha256: Optional[str] = None
+    importable: bool
+    error_code: Optional[str] = None
+    errors: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+    provider_metadata: dict = Field(default_factory=dict)
+
+
+class ExternalImportResponse(BaseModel):
+    id: str
+    provider_id: str
+    resource_type: str
+    provider_job_id: str
+    state: str
+    source_fingerprint: str
+    bms_job_id: Optional[str] = None
+    failure_code: Optional[str] = None
+    failure_message: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    imported_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 # --- Design Schemas ---
 
 class DesignResponse(BaseModel):
@@ -189,6 +238,11 @@ class DesignResponse(BaseModel):
     source_design_name: Optional[str] = None
     artifact_class: Optional[str] = None
     artifact_schema_version: Optional[int] = None
+    review_profile_id: Optional[str] = None
+    review_contract_version: Optional[int] = None
+    review_contract_source: Optional[str] = None
+    review_artifact_manifest: Optional[Any] = None
+    review_role_map: Optional[Any] = None
     selected_loop_scope: Optional[Any] = None
     provenance: Optional[Any] = None
     

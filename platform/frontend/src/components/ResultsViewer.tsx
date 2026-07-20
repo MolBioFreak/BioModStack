@@ -28,7 +28,6 @@ import type {
 import {
     getOutputSourceBadgeClass,
     getOutputSourceLabel,
-    inferDesignAnalysisLens,
     inferDesignResultSet,
     inferDesignOutputSource,
     inferJobOutputSource,
@@ -37,15 +36,19 @@ import {
     type OutputSourceFilter,
     type ResultSetFilter,
 } from './designOutputSource';
-import { isAntibodyPipelineMode } from '../lib/antibodyModes';
+import { isAntibodyRefinementMode } from '../lib/antibodyRefinementMode';
+import { getClientDerivedResultsPolicy } from '../lib/clientDerivedResultsPolicy';
+import { jobPollingInterval } from '../lib/queryPolling';
 import {
+    getReviewColumnCapabilities,
     getUnsupportedResultReason,
+    getVisibleReviewTabs,
+    isAnalyzerAvailable,
     isUnsupportedResult,
     supportsAnalyzer,
     supportsViewerCapability,
 } from '../lib/resultCapabilities';
 import MolstarViewer from './MolstarViewer';
-// FloatingViewer - unused, kept for reference
 import { StabilityHeatmap } from './MetricCharts';
 import { BatchComparePane } from './BatchComparePane';
 import { DesignComparePane } from './DesignComparePane';
@@ -53,13 +56,16 @@ import { DataViewerLanding } from './DataViewerLanding';
 // ReferenceSelector and MetricOverlay - unused, kept for reference
 import { AnalyticsDashboard } from './AnalyticsDashboard';
 import StructureViewerPane from './StructureViewerPane';
+import MDResultsPane from './MDResultsPane';
+import { ConformationalMappingViewer } from './conformationalMapping/ConformationalMappingViewer';
 import {
     saveAntibodyRefinementLaunchState,
     type AntibodyRefinementLaunchState,
 } from '../lib/refinementLaunchState';
 
-// Tab definitions
-const TABS = [
+
+// Presentation metadata only; applicability comes from the authoritative review profile.
+const REVIEW_TAB_DEFINITIONS = [
     { id: 'overview', label: 'Overview', icon: 'View' },
     { id: 'charts', label: 'Charts', icon: 'Chart' },
     { id: 'structure', label: 'Structure', icon: '3D' },
@@ -69,8 +75,8 @@ const TABS = [
     { id: 'compare', label: 'Compare Jobs', icon: 'Vs' },
 ] as const;
 
-type TabId = typeof TABS[number]['id'];
-const MAX_BULK_SELECTION_DESIGNS = 50000;
+type TabId = typeof REVIEW_TAB_DEFINITIONS[number]['id'];
+const MAX_BULK_SELECTION_DESIGNS = 500;
 const SERVER_SORT_FIELDS = new Set<DesignSortField>([
     'name',
     'plddt',
@@ -521,7 +527,7 @@ const hasExplicitBinderTargetRoles = (job: Job | null | undefined): boolean => {
     const rfdMode = String(params.rfd_mode || '').toLowerCase();
 
     return (
-        isAntibodyPipelineMode(rfdMode) ||
+        isAntibodyRefinementMode(rfdMode) ||
         modelId.includes('antibody') ||
         mode.includes('antibody') ||
         Boolean(params.antibody_chains)
@@ -1131,6 +1137,52 @@ const getLineageFamily = (job: Job): string => {
     const lens = inferPreferredAnalysisLens(job, []);
     return lens ?? 'child';
 };
+
+const getAuthoritativeDesignLens = (design: Design | null | undefined): AnalysisLens | null => {
+    const profileId = String(design?.analysis_contract_id || design?.review_profile_id || '').trim().toLowerCase();
+    if (profileId === 'antibody_backbone_v1') return 'rfantibody';
+    if (profileId === 'ppiflow_maturation_v1') return 'ppiflow';
+    if (profileId === 'de_novo_generation_v1') return 'boltzgen';
+    if (profileId === 'sequence_design_v1') return 'fampnn';
+    if (profileId === 'structure_prediction_v1') return 'validation';
+    return null;
+};
+
+const sanitizeDesignForReview = (design: Design): Design => {
+    const sanitized = { ...design } as Design & Record<string, unknown>;
+    const capabilities = new Set(design.viewer_capabilities ?? []);
+    const clear = (prefixes: string[], names: string[] = []) => {
+        Object.keys(sanitized).forEach((key) => {
+            if (names.includes(key) || prefixes.some((prefix) => key.startsWith(prefix))) {
+                sanitized[key] = null;
+            }
+        });
+    };
+    if (!capabilities.has('complex_interface_metrics')) {
+        clear(['binder_', 'epitope_', 'target_', 'ipsae'], [
+            'plddt_binder', 'plddt_target', 'pae_interaction', 'rmsd_binder', 'rmsd_target',
+            'iptm', 'protein_iptm', 'ligand_iptm', 'pair_chains_iptm', 'affinity_score',
+            'binder_probability', 'detected_target_chain',
+        ]);
+    }
+    if (!capabilities.has('antibody_backbone_metrics')) {
+        clear(['antibody_', 'cdr_', 'rfa_'], ['detected_antibody_chains']);
+    }
+    if (!capabilities.has('ppiflow_maturation_metrics')) {
+        clear(['maturation_', 'ppiflow_', 'rosetta_interface_']);
+    }
+    if (!capabilities.has('sequence_design_metrics')) {
+        clear(['fampnn_'], ['mpnn_score']);
+    }
+    if (sanitized.provenance && typeof sanitized.provenance === 'object') {
+        const provenance = { ...(sanitized.provenance as Record<string, unknown>) };
+        if (!capabilities.has('ppiflow_maturation_metrics')) delete provenance.ppiflow;
+        if (!capabilities.has('antibody_backbone_metrics')) delete provenance.rfantibody;
+        sanitized.provenance = provenance;
+    }
+    return sanitized;
+};
+
 const getLineageGroupLabel = (job: Job): string => {
     const family = getLineageFamily(job);
     if (family === 'imported') return 'Imported';
@@ -1714,7 +1766,7 @@ export function ResultsViewer() {
     const [appliedSavedFilterSetId, setAppliedSavedFilterSetId] = useState<string | null>(null);
     const [savedReviewFilterSetsOverride, setSavedReviewFilterSetsOverride] = useState<SavedReviewFilterSet[] | null>(null);
     const [sequenceCopyFeedback, setSequenceCopyFeedback] = useState<'full' | 'fasta' | 'error' | null>(null);
-    const PAGE_SIZE_OPTIONS = [50, 100, 250, 500, 1000, 0]; // 0 = All
+    const PAGE_SIZE_OPTIONS = [50, 100, 250, 500]; // Bounded browser-side table windows
     const [filterDraft, setFilterDraft] = useState<FilterDraftState>({
         sortField: 'name',
         sortDir: 'asc',
@@ -1743,26 +1795,25 @@ export function ResultsViewer() {
 
     // Fetch jobs list (include children for aggregation)
     const { data: jobsData, isLoading: jobsLoading } = useQuery({
-        queryKey: ['jobs', 'include_children'],
-        queryFn: () => fetchJobs({ include_children: true, limit: 2000 }),
+        queryKey: ['jobs', 'include_children', 'summary'],
+        queryFn: () => fetchJobs({ include_children: true, limit: 500, summary: true }),
     });
-    const jobFromList = useMemo(
-        () => (jobId ? (jobsData?.data.jobs ?? []).find((job: Job) => job.id === jobId) : undefined),
-        [jobId, jobsData?.data.jobs],
-    );
     const { data: routedJobData, isLoading: routedJobLoading } = useQuery({
         queryKey: ['job', jobId, 'direct'],
         queryFn: () => fetchJobById(jobId!),
-        enabled: Boolean(jobId) && !jobFromList,
+        enabled: Boolean(jobId),
         retry: false,
     });
     const routedJob = routedJobData?.data;
     const jobs = useMemo(() => {
         const baseJobs = jobsData?.data.jobs ?? [];
-        if (!routedJob || baseJobs.some((job: Job) => job.id === routedJob.id)) {
+        if (!routedJob) {
             return baseJobs;
         }
-        return [routedJob, ...baseJobs];
+        if (!baseJobs.some((job: Job) => job.id === routedJob.id)) {
+            return [routedJob, ...baseJobs];
+        }
+        return baseJobs.map((job: Job) => job.id === routedJob.id ? routedJob : job);
     }, [jobsData?.data.jobs, routedJob]);
     const nonNgsJobs = useMemo(() => jobs.filter((j: Job) => !isNgsJob(j)), [jobs]);
     const jobsById = useMemo(
@@ -2009,28 +2060,13 @@ export function ResultsViewer() {
         if (!activeJob) return false;
         const modelId = (activeJob.model_id || '').toLowerCase();
         const mode = (activeJob.mode || '').toLowerCase();
-        const name = (activeJob.name || '').toLowerCase();
-        const rfdMode = String(activeJob.params?.rfd_mode || '').toLowerCase();
-        const boltzgenMode = String(activeJob.params?.boltzgen_mode || activeJob.mode || '').toLowerCase();
-        const frameworkType = String(activeJob.params?.framework_type || '').toLowerCase();
-        const antibodyChains = String(activeJob.params?.antibody_chains || '').trim();
-        const isPpiFlowSeededAntibody = modelId === 'ppiflow' && (
-            mode === 'generator_backbone_refine' ||
-            frameworkType === 'nanobody' ||
-            Boolean(antibodyChains)
-        );
-        const isBoltzGenNanobody = modelId === 'boltzgen' && (
-            boltzgenMode === 'nanobody_binder' ||
-            frameworkType === 'nanobody'
-        );
         return (
-            modelId.includes('antibody') ||
+            modelId === 'rfantibody' ||
+            modelId === 'rfantibody2' ||
             modelId === 'fampnn_child' ||
-            mode.includes('antibody') ||
-            name.includes('antibody') ||
-            isAntibodyPipelineMode(rfdMode) ||
-            isBoltzGenNanobody ||
-            isPpiFlowSeededAntibody
+            modelId === 'ppiflow' ||
+            (modelId === 'boltzgen' && mode === 'nanobody_binder') ||
+            isAntibodyRefinementMode(mode)
         );
     }, [activeJob]);
     const isProteinLocalRedesignContext = useMemo(() => {
@@ -2273,14 +2309,6 @@ export function ResultsViewer() {
     const isPostRFantibodyReview = isAntibodyContext && isPostRfantibodyStage(activeJob);
     const hasExplicitReviewSelection = !isPostRFantibodyReview || rfReviewSet !== null;
     const reviewSelectionRequired = isPostRFantibodyReview && !hasExplicitReviewSelection;
-    const availableSortOptions = useMemo(
-        () => SORT_OPTIONS
-            .filter((option) => !isPostRFantibodyReview || option.value !== 'binding_tier')
-            .map((option) => option.value === 'plddt_overall' && isPostRFantibodyReview
-                ? { ...option, label: 'RF pLDDT' }
-                : option),
-        [isPostRFantibodyReview],
-    );
     const activeRfArtifactGroup = isPostRFantibodyReview && rfReviewSet ? rfReviewSet : undefined;
     const activeSavedSubsetDesignIds = hasExplicitReviewSelection && appliedSavedReviewFilterSet?.design_ids?.length
         ? appliedSavedReviewFilterSet.design_ids
@@ -2299,7 +2327,7 @@ export function ResultsViewer() {
     const useClientSourcePagination = outputSourceFilter !== 'all' || resultSetFilter !== 'all';
     const requiresClientOnlySort = useClientRenderedValueSort
         || (!SERVER_SORT_FIELDS.has(sortField as DesignSortField) && isTableColumnSortable(sortField));
-    const forceBulkLoadForSorting = useClientSourcePagination || pageSize === 0 || requiresClientOnlySort;
+    const forceBulkLoadForSorting = useClientSourcePagination || requiresClientOnlySort;
     const isReviewStageJob = isStageReviewJob(activeJob);
     const designQueryFilters = useMemo<DesignFilters>(() => ({
         job_id: selectedJobId,
@@ -2341,11 +2369,21 @@ export function ResultsViewer() {
     const { data: designsData, isLoading: designsLoading } = useQuery({
         queryKey: ['designs', designQueryFilters],
         queryFn: () => fetchDesigns(designQueryFilters),
-        enabled: !!activeJob && !reviewSelectionRequired,
+        enabled: !!activeJob && activeJob.model_id !== 'molecular_dynamics' && !reviewSelectionRequired,
     });
-    const rawDesigns = useMemo(() => designsData?.data.designs ?? [], [designsData?.data.designs]);
+    const rawDesigns = useMemo(
+        () => (designsData?.data.designs ?? []).map(sanitizeDesignForReview),
+        [designsData?.data.designs],
+    );
     const serverTotalDesigns = designsData?.data.total ?? rawDesigns.length;
-    const canClientSortLoadedDesigns = forceBulkLoadForSorting || serverTotalDesigns <= rawDesigns.length;
+    const clientDerivedResultsPolicy = getClientDerivedResultsPolicy({
+        total: serverTotalDesigns,
+        loaded: rawDesigns.length,
+        requiresClientDerivation: useClientSourcePagination || requiresClientOnlySort,
+    });
+    const clientDerivedResultsBlocked = !clientDerivedResultsPolicy.allowed;
+    const canClientSortLoadedDesigns = clientDerivedResultsPolicy.allowed
+        && (forceBulkLoadForSorting || serverTotalDesigns <= rawDesigns.length);
     const designs = useMemo(() => {
         const deduped: typeof rawDesigns = [];
         const validationIndices = new Map<string, number>();
@@ -2376,6 +2414,9 @@ export function ResultsViewer() {
         if (!canClientSortLoadedDesigns) return designs;
         return [...designs].sort((left, right) => compareDesignsByField(left, right, sortField, sortDir));
     }, [canClientSortLoadedDesigns, designs, sortDir, sortField]);
+    const showPpiflowColumns = orderedDesigns.some((design) =>
+        supportsViewerCapability(design, 'ppiflow_maturation_metrics')
+    );
 
     const { data: selectedDesignDetailData } = useQuery({
         queryKey: ['design', selectedDesignId],
@@ -2387,15 +2428,69 @@ export function ResultsViewer() {
     const selectedDesignUnsupported = isUnsupportedResult(selectedDesign);
     const selectedDesignUnsupportedReason = getUnsupportedResultReason(selectedDesign);
     const selectedDesignSupportsStructureViewer = supportsViewerCapability(selectedDesign, 'structure_viewer');
-    const selectedDesignSupportsAntibodyAnalysis = supportsAnalyzer(selectedDesign, 'antibody_backbone_v1') || supportsViewerCapability(selectedDesign, 'antibody_backbone_metrics');
-    const selectedDesignSupportsPpiFlowAnalysis = supportsAnalyzer(selectedDesign, 'ppiflow_maturation_v1') || supportsViewerCapability(selectedDesign, 'ppiflow_maturation_metrics');
-    const selectedDesignSupportsSequenceAnalysis = supportsAnalyzer(selectedDesign, 'sequence_design_v1') || supportsViewerCapability(selectedDesign, 'sequence_design_metrics');
-    const selectedDesignLens = useMemo<AnalysisLens | null>(() => {
-        if (selectedDesign) {
-            return inferDesignAnalysisLens(selectedDesign as UntypedApiValue);
+    const selectedDesignSupportsAntibodyAnalysis = supportsViewerCapability(selectedDesign, 'antibody_backbone_metrics');
+    const selectedDesignSupportsPpiFlowAnalysis = supportsViewerCapability(selectedDesign, 'ppiflow_maturation_metrics');
+    const selectedDesignSupportsSequenceAnalysis = supportsViewerCapability(selectedDesign, 'sequence_design_metrics');
+    const selectedDesignReviewCapabilities = getReviewColumnCapabilities(selectedDesign);
+    const selectedDesignSupportsStructureSummary = supportsAnalyzer(selectedDesign, 'structure_summary');
+    const selectedDesignSupportsAntibodyAnalyzer = supportsAnalyzer(selectedDesign, 'antibody_annotation_pack');
+    const selectedDesignSupportsChainMetrics = supportsAnalyzer(selectedDesign, 'chain_metrics');
+    const selectedDesignSupportsIpsae = supportsAnalyzer(selectedDesign, 'ipsae_interface');
+    const selectedDesignSupportsPaeMatrix = supportsAnalyzer(selectedDesign, 'pae_matrix');
+    const selectedDesignSupportsContactMap = supportsAnalyzer(selectedDesign, 'contact_map');
+    const selectedDesignCanRunStructureSummary = isAnalyzerAvailable(selectedDesign, 'structure_summary');
+    const selectedDesignCanRunAntibodyAnalysis = isAnalyzerAvailable(selectedDesign, 'antibody_annotation_pack');
+    const selectedDesignCanRunChainMetrics = isAnalyzerAvailable(selectedDesign, 'chain_metrics');
+    const selectedDesignCanRunSequenceAnalysis = isAnalyzerAvailable(selectedDesign, 'fampnn_psce_profile');
+    const selectedDesignCanRunIpsae = isAnalyzerAvailable(selectedDesign, 'ipsae_interface');
+    const selectedDesignCanRunPaeMatrix = isAnalyzerAvailable(selectedDesign, 'pae_matrix');
+    const selectedDesignCanRunContactMap = isAnalyzerAvailable(selectedDesign, 'contact_map');
+    const visibleReviewTabs = useMemo(() => {
+        const visibleIds = new Set(getVisibleReviewTabs(selectedDesign));
+        return REVIEW_TAB_DEFINITIONS.filter((tab) => visibleIds.has(tab.id));
+    }, [selectedDesign]);
+    const tableReviewCapabilities = useMemo(
+        () => orderedDesigns.reduce(
+            (combined, design) => {
+                const current = getReviewColumnCapabilities(design);
+                return {
+                    antibody: combined.antibody || current.antibody,
+                    interface: combined.interface || current.interface,
+                    sequenceDesign: combined.sequenceDesign || current.sequenceDesign,
+                };
+            },
+            { antibody: false, interface: false, sequenceDesign: false },
+        ),
+        [orderedDesigns],
+    );
+    const availableSortOptions = useMemo(
+        () => SORT_OPTIONS
+            .filter((option) => {
+                const key = option.value;
+                if (/^(binding_tier|binder_|cdr_|epitope_|target_|affinity_score|rfa_)/.test(key)) {
+                    return tableReviewCapabilities.antibody;
+                }
+                if (/^(ipsae|iptm|ligand_iptm|rmsd_binder|rmsd_target|maturation_|ppiflow_)/.test(key)) {
+                    return tableReviewCapabilities.interface || showPpiflowColumns;
+                }
+                if (key === 'fampnn_psce') return tableReviewCapabilities.sequenceDesign;
+                return true;
+            })
+            .filter((option) => !isPostRFantibodyReview || option.value !== 'binding_tier')
+            .map((option) => option.value === 'plddt_overall' && isPostRFantibodyReview
+                ? { ...option, label: 'RF pLDDT' }
+                : option),
+        [isPostRFantibodyReview, showPpiflowColumns, tableReviewCapabilities],
+    );
+    useEffect(() => {
+        if (!visibleReviewTabs.some((tab) => tab.id === activeTab)) {
+            setActiveTab('overview');
         }
-        return inferPreferredAnalysisLens(activeJob, designs as UntypedApiValue) ?? null;
-    }, [activeJob, designs, selectedDesign]);
+    }, [activeTab, visibleReviewTabs]);
+    const selectedDesignLens = useMemo<AnalysisLens | null>(
+        () => getAuthoritativeDesignLens(selectedDesign),
+        [selectedDesign],
+    );
 
     // Fetch backbone summary for toggle UI
     const { data: backboneSummaryData } = useQuery({
@@ -2516,10 +2611,10 @@ export function ResultsViewer() {
                 ? fetchDesignAnalysis<StructureAnalysis>(selectedDesignId, 'structure_summary').then((response) => response.data)
                 : null
         ),
-        enabled: !!selectedDesignId && selectedDesignSupportsStructureViewer && (activeTab === 'structure' || activeTab === 'overview'),
+        enabled: !!selectedDesignId && selectedDesignCanRunStructureSummary && (activeTab === 'structure' || activeTab === 'overview'),
         refetchInterval: (query) => {
             const status = (query.state.data as PersistedAnalysisRun<StructureAnalysis> | null | undefined)?.status;
-            return status === 'queued' || status === 'running' ? 1500 : false;
+            return status === 'queued' || status === 'running' ? jobPollingInterval(1500, query) : false;
         },
     });
     const structureAnalysis = structureAnalysisRun?.status === 'completed'
@@ -2549,11 +2644,11 @@ export function ResultsViewer() {
                 ? fetchDesignAnalysis<AntibodyData>(selectedDesignId, 'antibody_annotation_pack').then((response) => response.data)
                 : null
         ),
-        enabled: !!selectedDesignId && selectedDesignSupportsAntibodyAnalysis && (activeTab === 'antibody' || activeTab === 'structure' || activeTab === 'overview'),
+        enabled: !!selectedDesignId && selectedDesignCanRunAntibodyAnalysis && (activeTab === 'antibody' || activeTab === 'structure' || activeTab === 'overview'),
         retry: false,
         refetchInterval: (query) => {
             const status = (query.state.data as PersistedAnalysisRun<AntibodyData> | null | undefined)?.status;
-            return status === 'queued' || status === 'running' ? 1500 : false;
+            return status === 'queued' || status === 'running' ? jobPollingInterval(1500, query) : false;
         },
     });
     const antibodyData = antibodyAnalysisRun?.status === 'completed'
@@ -2586,12 +2681,12 @@ export function ResultsViewer() {
                     : 'Not computed';
     const autoTriggeredAntibodyAnalysisRef = useRef<Set<string>>(new Set());
     useEffect(() => {
-        if (activeTab !== 'antibody' || !selectedDesignId || !selectedDesignSupportsAntibodyAnalysis) return;
+        if (activeTab !== 'antibody' || !selectedDesignId || !selectedDesignCanRunAntibodyAnalysis) return;
         if (antibodyAnalysisStatus !== 'missing' || antibodyAnalysisBusy) return;
         if (autoTriggeredAntibodyAnalysisRef.current.has(selectedDesignId)) return;
         autoTriggeredAntibodyAnalysisRef.current.add(selectedDesignId);
         runAntibodyAnalysis.mutate();
-    }, [activeTab, selectedDesignId, selectedDesignSupportsAntibodyAnalysis, antibodyAnalysisBusy, antibodyAnalysisStatus, runAntibodyAnalysis]);
+    }, [activeTab, selectedDesignId, selectedDesignCanRunAntibodyAnalysis, antibodyAnalysisBusy, antibodyAnalysisStatus, runAntibodyAnalysis]);
 
     const { data: chainMetricsAnalysisRun, error: chainMetricsAnalysisQueryError } = useQuery({
         queryKey: ['design-analysis', 'chain_metrics', selectedDesignId],
@@ -2600,11 +2695,11 @@ export function ResultsViewer() {
                 ? fetchDesignAnalysis<Record<string, ChainMetric>>(selectedDesignId, 'chain_metrics').then((response) => response.data)
                 : null
         ),
-        enabled: structureViewerAnalysisEnabled,
+        enabled: structureViewerAnalysisEnabled && selectedDesignCanRunChainMetrics,
         staleTime: 60000,
         refetchInterval: (query) => {
             const status = (query.state.data as PersistedAnalysisRun<Record<string, ChainMetric>> | null | undefined)?.status;
-            return status === 'queued' || status === 'running' ? 1500 : false;
+            return status === 'queued' || status === 'running' ? jobPollingInterval(1500, query) : false;
         },
     });
     const chainMetricsAnalysis = chainMetricsAnalysisRun?.status === 'completed'
@@ -2633,11 +2728,11 @@ export function ResultsViewer() {
                 ? fetchDesignAnalysis<FampnnPsceProfile>(selectedDesignId, 'fampnn_psce_profile').then((response) => response.data)
                 : null
         ),
-        enabled: structureViewerAnalysisEnabled && selectedDesignLens === 'fampnn',
+        enabled: structureViewerAnalysisEnabled && selectedDesignCanRunSequenceAnalysis && selectedDesignLens === 'fampnn',
         staleTime: 60000,
         refetchInterval: (query) => {
             const status = (query.state.data as PersistedAnalysisRun<FampnnPsceProfile> | null | undefined)?.status;
-            return status === 'queued' || status === 'running' ? 1500 : false;
+            return status === 'queued' || status === 'running' ? jobPollingInterval(1500, query) : false;
         },
     });
     const fampnnPsceProfileAnalysis = fampnnPsceProfileAnalysisRun?.status === 'completed'
@@ -2666,11 +2761,11 @@ export function ResultsViewer() {
                 ? fetchDesignAnalysis<IpsaeInterfaceAnalysis>(selectedDesignId, 'ipsae_interface').then((response) => response.data)
                 : null
         ),
-        enabled: structureViewerAnalysisEnabled,
+        enabled: structureViewerAnalysisEnabled && selectedDesignCanRunIpsae,
         staleTime: 60000,
         refetchInterval: (query) => {
             const status = (query.state.data as PersistedAnalysisRun<IpsaeInterfaceAnalysis> | null | undefined)?.status;
-            return status === 'queued' || status === 'running' ? 1500 : false;
+            return status === 'queued' || status === 'running' ? jobPollingInterval(1500, query) : false;
         },
     });
     const ipsaeAnalysis = ipsaeAnalysisRun?.status === 'completed'
@@ -2699,11 +2794,11 @@ export function ResultsViewer() {
                 ? fetchDesignAnalysis<PAEData>(selectedDesignId, 'pae_matrix', { max_size: 200 }).then((response) => response.data)
                 : null
         ),
-        enabled: structureViewerAnalysisEnabled,
+        enabled: structureViewerAnalysisEnabled && selectedDesignCanRunPaeMatrix,
         staleTime: 60000,
         refetchInterval: (query) => {
             const status = (query.state.data as PersistedAnalysisRun<PAEData> | null | undefined)?.status;
-            return status === 'queued' || status === 'running' ? 1500 : false;
+            return status === 'queued' || status === 'running' ? jobPollingInterval(1500, query) : false;
         },
     });
     const paeMatrixAnalysis = paeMatrixAnalysisRun?.status === 'completed'
@@ -2732,11 +2827,11 @@ export function ResultsViewer() {
                 ? fetchDesignAnalysis<ContactMapData>(selectedDesignId, 'contact_map', { max_size: 300 }).then((response) => response.data)
                 : null
         ),
-        enabled: structureViewerAnalysisEnabled,
+        enabled: structureViewerAnalysisEnabled && selectedDesignCanRunContactMap,
         staleTime: 60000,
         refetchInterval: (query) => {
             const status = (query.state.data as PersistedAnalysisRun<ContactMapData> | null | undefined)?.status;
-            return status === 'queued' || status === 'running' ? 1500 : false;
+            return status === 'queued' || status === 'running' ? jobPollingInterval(1500, query) : false;
         },
     });
     const contactMapAnalysis = contactMapAnalysisRun?.status === 'completed'
@@ -2765,7 +2860,7 @@ export function ResultsViewer() {
                 ? fetchChainPairIptm(selectedDesignId).then((response) => response.data)
                 : null
         ),
-        enabled: structureViewerAnalysisEnabled,
+        enabled: structureViewerAnalysisEnabled && selectedDesignCanRunIpsae,
         staleTime: 60000,
     });
 
@@ -2797,27 +2892,27 @@ export function ResultsViewer() {
     const structureViewerAnalyses = useMemo(() => ({
         structureAnalysisRun: structureAnalysisRun ?? null,
         structureAnalysis: structureAnalysis ?? null,
-        onRunStructureAnalysis: selectedDesignId ? onRunStructureSummaryAnalysis : undefined,
+        onRunStructureAnalysis: selectedDesignId && selectedDesignCanRunStructureSummary ? onRunStructureSummaryAnalysis : undefined,
         structureAnalysisBusy,
         chainMetricsRun: chainMetricsAnalysisRun ?? null,
         chainMetrics: chainMetricsAnalysis ?? null,
-        onRunChainMetrics: selectedDesignId ? onRunChainMetricsAnalysis : undefined,
+        onRunChainMetrics: selectedDesignId && selectedDesignCanRunChainMetrics ? onRunChainMetricsAnalysis : undefined,
         chainMetricsBusy: chainMetricsAnalysisBusy,
         fampnnPsceProfileRun: fampnnPsceProfileAnalysisRun ?? null,
         fampnnPsceProfile: fampnnPsceProfileAnalysis ?? null,
-        onRunFampnnPsceProfile: selectedDesignId ? onRunFampnnPsceProfileAnalysis : undefined,
+        onRunFampnnPsceProfile: selectedDesignId && selectedDesignCanRunSequenceAnalysis ? onRunFampnnPsceProfileAnalysis : undefined,
         fampnnPsceBusy: fampnnPsceProfileAnalysisBusy,
         paeMatrixRun: paeMatrixAnalysisRun ?? null,
         paeMatrixData: paeMatrixAnalysis ?? null,
-        onRunPaeMatrix: selectedDesignId ? onRunPaeMatrixAnalysis : undefined,
+        onRunPaeMatrix: selectedDesignId && selectedDesignCanRunPaeMatrix ? onRunPaeMatrixAnalysis : undefined,
         paeMatrixBusy: paeMatrixAnalysisBusy,
         ipsaeInterfaceRun: ipsaeAnalysisRun ?? null,
         ipsaeInterface: ipsaeAnalysis ?? null,
-        onRunIpsaeInterface: selectedDesignId ? onRunIpsaeAnalysis : undefined,
+        onRunIpsaeInterface: selectedDesignId && selectedDesignCanRunIpsae ? onRunIpsaeAnalysis : undefined,
         ipsaeInterfaceBusy: ipsaeAnalysisBusy,
         contactMapRun: contactMapAnalysisRun ?? null,
         contactMap: contactMapAnalysis ?? null,
-        onRunContactMap: selectedDesignId ? onRunContactMapAnalysis : undefined,
+        onRunContactMap: selectedDesignId && selectedDesignCanRunContactMap ? onRunContactMapAnalysis : undefined,
         contactMapBusy: contactMapAnalysisBusy,
         chainPairIptm: chainPairIptmData ?? null,
         chainPairIptmLoading,
@@ -2846,6 +2941,12 @@ export function ResultsViewer() {
         paeMatrixAnalysisBusy,
         paeMatrixAnalysisRun,
         selectedDesignId,
+        selectedDesignCanRunChainMetrics,
+        selectedDesignCanRunContactMap,
+        selectedDesignCanRunIpsae,
+        selectedDesignCanRunPaeMatrix,
+        selectedDesignCanRunSequenceAnalysis,
+        selectedDesignCanRunStructureSummary,
         structureAnalysis,
         structureAnalysisBusy,
         structureAnalysisRun,
@@ -2876,14 +2977,14 @@ export function ResultsViewer() {
 
     const analyticsChartDesigns = designs;
     const preferredAnalysisLens = useMemo<AnalysisLens | 'auto'>(() => {
-        if (isAnalysisLensOutputSource(outputSourceFilter) && designs.some((design) => inferDesignOutputSource(design as UntypedApiValue) === outputSourceFilter)) {
+        if (isAnalysisLensOutputSource(outputSourceFilter) && designs.some((design) => getAuthoritativeDesignLens(design) === outputSourceFilter)) {
             return outputSourceFilter;
         }
-        if (isAnalysisLensOutputSource(antibodySourceFilter) && designs.some((design) => inferDesignOutputSource(design as UntypedApiValue) === antibodySourceFilter)) {
+        if (isAnalysisLensOutputSource(antibodySourceFilter) && designs.some((design) => getAuthoritativeDesignLens(design) === antibodySourceFilter)) {
             return antibodySourceFilter;
         }
-        return inferPreferredAnalysisLens(activeJob, designs as UntypedApiValue) ?? 'auto';
-    }, [activeJob, antibodySourceFilter, designs, outputSourceFilter]);
+        return designs.map(getAuthoritativeDesignLens).find((lens): lens is AnalysisLens => lens !== null) ?? 'auto';
+    }, [antibodySourceFilter, designs, outputSourceFilter]);
     const selectedDesignSet = useMemo(() => new Set(selectedDesignIds), [selectedDesignIds]);
     const resultSetCounts = useMemo(() => {
         const counts = new Map<ResultSetFilter, number>();
@@ -2896,12 +2997,13 @@ export function ResultsViewer() {
         return counts;
     }, [orderedDesigns]);
     const sourceScopedDesigns = useMemo(() => {
+        if (clientDerivedResultsBlocked) return [];
         const sourceFiltered = outputSourceFilter === 'all'
             ? orderedDesigns
             : orderedDesigns.filter((design) => inferDesignOutputSource(design as UntypedApiValue) === outputSourceFilter);
         if (resultSetFilter === 'all') return sourceFiltered;
         return sourceFiltered.filter((design) => inferDesignResultSet(design as UntypedApiValue) === resultSetFilter);
-    }, [orderedDesigns, outputSourceFilter, resultSetFilter]);
+    }, [clientDerivedResultsBlocked, orderedDesigns, outputSourceFilter, resultSetFilter]);
     const boltzgenScopedDesigns = useMemo(
         () => sourceScopedDesigns.filter((design) => inferDesignOutputSource(design as UntypedApiValue) === 'boltzgen'),
         [sourceScopedDesigns],
@@ -2918,9 +3020,6 @@ export function ResultsViewer() {
         const start = Math.max(0, (currentPage - 1) * pageSize);
         return sourceScopedDesigns.slice(start, start + pageSize);
     }, [currentPage, pageSize, sourceScopedDesigns, useClientSourcePagination]);
-    const showPpiflowColumns = outputSourceFilter === 'ppiflow'
-        || preferredAnalysisLens === 'ppiflow'
-        || orderedDesigns.some((design) => inferDesignOutputSource(design as UntypedApiValue) === 'ppiflow');
     const visibleDesignIds = useMemo(() => tableDesigns.map((design) => design.id), [tableDesigns]);
     const visibleSelectionRef = useRef<HTMLInputElement | null>(null);
     const tableScrollViewportRef = useRef<HTMLDivElement | null>(null);
@@ -3231,9 +3330,10 @@ export function ResultsViewer() {
     const antibodyDesignGroups = useMemo(() => {
         const grouped: Record<OutputSourceFilter, typeof designs> = { all: [], rfantibody: [], boltzgen: [], fampnn: [], caliby: [], ppiflow: [], confornets: [], esmfold2: [], imported: [], validation: [] };
         for (const design of orderedDesigns) {
+            if (!supportsViewerCapability(design, 'antibody_backbone_metrics')) continue;
             const source = inferDesignOutputSource(design);
-            if (source === 'all') grouped.all.push(design);
-            else grouped[source].push(design);
+            grouped.all.push(design);
+            if (source !== 'all') grouped[source].push(design);
         }
         grouped.ppiflow.sort((a, b) => {
             const ordinalDelta = (getPpiflowSourceOrdinal(a) ?? Number.MAX_SAFE_INTEGER) - (getPpiflowSourceOrdinal(b) ?? Number.MAX_SAFE_INTEGER);
@@ -3245,9 +3345,9 @@ export function ResultsViewer() {
         return grouped;
     }, [orderedDesigns]);
     const antibodyTabDesigns = useMemo(() => {
-        if (antibodySourceFilter === 'all') return orderedDesigns;
+        if (antibodySourceFilter === 'all') return antibodyDesignGroups.all;
         return antibodyDesignGroups[antibodySourceFilter] || [];
-    }, [orderedDesigns, antibodyDesignGroups, antibodySourceFilter]);
+    }, [antibodyDesignGroups, antibodySourceFilter]);
     const selectedDesignSource = selectedDesign ? inferDesignOutputSource(selectedDesign) : 'all';
     const selectedDesignProvenance = useMemo(() => asRecord(selectedDesign?.provenance), [selectedDesign?.provenance]);
     const selectedDesignFampnnPayload = useMemo(() => (
@@ -3524,7 +3624,7 @@ export function ResultsViewer() {
             .map(([label, value]) => [label, String(value)] as const);
     }, [activeJob?.lineage_root_job_id, activeJob?.selection_dataset_name, activeJob?.source_selection_count, activeJob?.source_selection_manifest_path, activeJob?.source_stage_family, activeJob?.source_stage_job_id, activeJob?.source_stage_mode, selectedDesign]);
     const selectedDesignPpiflowLoopRows = useMemo(() => {
-        if (!selectedDesignHasPpiflowLens || !selectedDesign) return [] as Array<{
+        if (!selectedDesignSupportsPpiFlowAnalysis || !selectedDesign) return [] as Array<{
             loopId: string;
             selected: boolean;
             objectiveScore: number | null;
@@ -3546,11 +3646,11 @@ export function ResultsViewer() {
             epitopeContactDelta: typeof metrics.epitope_contact_delta === 'number' ? metrics.epitope_contact_delta : null,
             epitopeDistanceDelta: typeof metrics.epitope_distance_delta === 'number' ? metrics.epitope_distance_delta : null,
         }));
-    }, [selectedDesign, selectedDesignHasPpiflowLens]);
+    }, [selectedDesign, selectedDesignSupportsPpiFlowAnalysis]);
 
     const selectedDesignMetricCards = useMemo(() => {
         if (!selectedDesign) return [];
-        if (selectedDesignHasPpiflowLens) {
+        if (selectedDesignSupportsPpiFlowAnalysis) {
             const ppiflowScore = selectedDesignPpiflowRecord?.maturation_score
                 ?? selectedDesignPpiflowRecord?.partial_flow_score
                 ?? selectedDesignPpiflowRecord?.maturation_filter?.score_data
@@ -3634,8 +3734,10 @@ export function ResultsViewer() {
                                 ? 'text-emerald-300'
                                 : 'text-cyan-300',
             },
-            { label: 'Binder Type', value: (selectedDesign.antibody_type ?? antibodyData?.antibody_type)?.toUpperCase() || '—', tone: 'text-slate-200' },
-            ...(selectedDesignSource === 'fampnn'
+            ...(selectedDesignSupportsAntibodyAnalysis ? [
+                { label: 'Binder Type', value: (selectedDesign.antibody_type ?? antibodyData?.antibody_type)?.toUpperCase() || '—', tone: 'text-slate-200' },
+            ] : []),
+            ...(selectedDesignSupportsSequenceAnalysis && selectedDesignSource === 'fampnn'
                 ? [
                     {
                         label: 'Avg PSCE',
@@ -3648,7 +3750,7 @@ export function ResultsViewer() {
                         tone: getMetricColor('fampnn_max_residue_psce', selectedDesignFampnnMaxResiduePsce),
                     },
                 ]
-                : selectedDesignSource === 'caliby'
+                : selectedDesignSupportsSequenceAnalysis && selectedDesignSource === 'caliby'
                     ? [
                         {
                             label: 'Potts Energy',
@@ -3668,85 +3770,94 @@ export function ResultsViewer() {
                     value: formatMetric(selectedDesign.plddt_overall, 1),
                     tone: getMetricColor('plddt_overall', selectedDesign.plddt_overall),
                 }]),
-            ...(selectedDesignSource === 'caliby'
+            ...(selectedDesignSupportsSequenceAnalysis && selectedDesignSource === 'caliby'
                 ? [{
                     label: 'SC RMSD',
                     value: selectedDesignCalibyScRmsd != null ? `${selectedDesignCalibyScRmsd.toFixed(2)} Å` : '—',
                     tone: selectedDesignCalibyScRmsd != null ? 'text-cyan-300' : 'text-slate-500',
                 } as const]
                 : []),
-            ...(selectedDesignSource === 'rfantibody'
+            ...(selectedDesignSupportsAntibodyAnalysis && selectedDesignSource === 'rfantibody'
                 ? [{
                     label: 'RF pLDDT Selected',
                     value: selectedDesign.rfa_plddt_selected != null ? selectedDesign.rfa_plddt_selected.toFixed(1) : '—',
                     tone: getMetricColor('plddt_overall', selectedDesign.rfa_plddt_selected ?? null),
                 } as const]
                 : []),
-            { label: 'iPTM', value: formatMetric(selectedDesign.iptm, 2), tone: getMetricColor('ptm', selectedDesign.iptm ?? null) },
-            {
-                label: selectedDesignSource === 'rfantibody' ? rfMetricLabels.epitope : 'Epitope Contacts',
-                value: selectedDesignSource === 'rfantibody'
-                    ? (getRfHeadlineMetricValue(selectedDesign, rfMetricScope, 'epitope_contact_count') ?? '—')
-                    : (selectedDesign.epitope_contact_count ?? '—'),
-                tone: 'text-slate-200',
-            },
-            {
-                label: selectedDesignSource === 'rfantibody' ? `${rfMetricLabels.short} Epitope Dist` : 'Epitope Dist',
-                value: (() => {
-                    const metricValue = selectedDesignSource === 'rfantibody'
-                        ? getRfHeadlineMetricValue(selectedDesign, rfMetricScope, 'epitope_min_distance')
-                        : selectedDesign.epitope_min_distance;
-                    return metricValue != null ? `${metricValue.toFixed(2)} Å` : '—';
-                })(),
-                tone: 'text-slate-200',
-            },
-            {
-                label: selectedDesignSource === 'rfantibody' ? rfMetricLabels.distance : 'Any-Target Dist',
-                value: (() => {
-                    const metricValue = selectedDesignSource === 'rfantibody'
-                        ? getRfHeadlineMetricValue(selectedDesign, rfMetricScope, 'target_min_distance')
-                        : selectedDesign.target_min_distance;
-                    return metricValue != null ? `${metricValue.toFixed(2)} Å` : '—';
-                })(),
-                tone: 'text-slate-200',
-            },
-            {
-                label: selectedDesignSource === 'rfantibody' ? `${rfMetricLabels.short} Epi Atom Dist` : 'Epitope Atom Dist',
-                value: (() => {
-                    const metricValue = selectedDesignSource === 'rfantibody'
-                        ? getRfHeadlineMetricValue(selectedDesign, rfMetricScope, 'epitope_min_atom_distance')
-                        : selectedDesign.epitope_min_atom_distance;
-                    return metricValue != null ? `${metricValue.toFixed(2)} Å` : '—';
-                })(),
-                tone: 'text-slate-200',
-            },
-            {
-                label: selectedDesignSource === 'rfantibody' ? `${rfMetricLabels.short} Target Atom Dist` : 'Target Atom Dist',
-                value: (() => {
-                    const metricValue = selectedDesignSource === 'rfantibody'
-                        ? getRfHeadlineMetricValue(selectedDesign, rfMetricScope, 'target_min_atom_distance')
-                        : selectedDesign.target_min_atom_distance;
-                    return metricValue != null ? `${metricValue.toFixed(2)} Å` : '—';
-                })(),
-                tone: 'text-slate-200',
-            },
+            ...(selectedDesignReviewCapabilities.interface ? [
+                { label: 'iPTM', value: formatMetric(selectedDesign.iptm, 2), tone: getMetricColor('ptm', selectedDesign.iptm ?? null) },
+            ] : []),
+            ...(selectedDesignSupportsAntibodyAnalysis ? [
+                {
+                    label: selectedDesignSource === 'rfantibody' ? rfMetricLabels.epitope : 'Epitope Contacts',
+                    value: selectedDesignSource === 'rfantibody'
+                        ? (getRfHeadlineMetricValue(selectedDesign, rfMetricScope, 'epitope_contact_count') ?? '—')
+                        : (selectedDesign.epitope_contact_count ?? '—'),
+                    tone: 'text-slate-200',
+                },
+                {
+                    label: selectedDesignSource === 'rfantibody' ? `${rfMetricLabels.short} Epitope Dist` : 'Epitope Dist',
+                    value: (() => {
+                        const metricValue = selectedDesignSource === 'rfantibody'
+                            ? getRfHeadlineMetricValue(selectedDesign, rfMetricScope, 'epitope_min_distance')
+                            : selectedDesign.epitope_min_distance;
+                        return metricValue != null ? `${metricValue.toFixed(2)} Å` : '—';
+                    })(),
+                    tone: 'text-slate-200',
+                },
+                {
+                    label: selectedDesignSource === 'rfantibody' ? rfMetricLabels.distance : 'Any-Target Dist',
+                    value: (() => {
+                        const metricValue = selectedDesignSource === 'rfantibody'
+                            ? getRfHeadlineMetricValue(selectedDesign, rfMetricScope, 'target_min_distance')
+                            : selectedDesign.target_min_distance;
+                        return metricValue != null ? `${metricValue.toFixed(2)} Å` : '—';
+                    })(),
+                    tone: 'text-slate-200',
+                },
+                {
+                    label: selectedDesignSource === 'rfantibody' ? `${rfMetricLabels.short} Epi Atom Dist` : 'Epitope Atom Dist',
+                    value: (() => {
+                        const metricValue = selectedDesignSource === 'rfantibody'
+                            ? getRfHeadlineMetricValue(selectedDesign, rfMetricScope, 'epitope_min_atom_distance')
+                            : selectedDesign.epitope_min_atom_distance;
+                        return metricValue != null ? `${metricValue.toFixed(2)} Å` : '—';
+                    })(),
+                    tone: 'text-slate-200',
+                },
+                {
+                    label: selectedDesignSource === 'rfantibody' ? `${rfMetricLabels.short} Target Atom Dist` : 'Target Atom Dist',
+                    value: (() => {
+                        const metricValue = selectedDesignSource === 'rfantibody'
+                            ? getRfHeadlineMetricValue(selectedDesign, rfMetricScope, 'target_min_atom_distance')
+                            : selectedDesign.target_min_atom_distance;
+                        return metricValue != null ? `${metricValue.toFixed(2)} Å` : '—';
+                    })(),
+                    tone: 'text-slate-200',
+                },
+                { label: 'Val RMSD Bd', value: selectedDesign.rmsd_binder != null ? `${selectedDesign.rmsd_binder.toFixed(2)} Å` : '—', tone: 'text-slate-200' },
+                { label: 'Humanness', value: antibodyData?.humanness_score != null ? `${(antibodyData.humanness_score * 100).toFixed(0)}%` : '—', tone: antibodyData?.humanness_score != null ? ((antibodyData.humanness_score > 0.8) ? 'text-emerald-300' : (antibodyData.humanness_score > 0.6 ? 'text-amber-300' : 'text-red-300')) : 'text-slate-500' },
+            ] : []),
             { label: 'Val RMSD All', value: selectedDesign.rmsd_overall != null ? `${selectedDesign.rmsd_overall.toFixed(2)} Å` : '—', tone: 'text-slate-200' },
-            { label: 'Val RMSD Bd', value: selectedDesign.rmsd_binder != null ? `${selectedDesign.rmsd_binder.toFixed(2)} Å` : '—', tone: 'text-slate-200' },
-            { label: 'Humanness', value: antibodyData?.humanness_score != null ? `${(antibodyData.humanness_score * 100).toFixed(0)}%` : '—', tone: antibodyData?.humanness_score != null ? ((antibodyData.humanness_score > 0.8) ? 'text-emerald-300' : (antibodyData.humanness_score > 0.6 ? 'text-amber-300' : 'text-red-300')) : 'text-slate-500' },
             { label: 'High Frust %', value: selectedDesign.frustration_pct_high != null ? `${selectedDesign.frustration_pct_high.toFixed(1)}%` : '—', tone: 'text-amber-300' },
             { label: 'High Frust Count', value: selectedDesign.frustration_high_count ?? '—', tone: 'text-amber-300' },
-            { label: 'Maturation ΔIface', value: (selectedDesign.maturation_selected_delta_interface ?? selectedDesign.maturation_delta_interface) != null ? (selectedDesign.maturation_selected_delta_interface ?? selectedDesign.maturation_delta_interface)!.toFixed(2) : '—', tone: 'text-fuchsia-300' },
+            ...(selectedDesignSupportsPpiFlowAnalysis ? [
+                { label: 'Maturation ΔIface', value: (selectedDesign.maturation_selected_delta_interface ?? selectedDesign.maturation_delta_interface) != null ? (selectedDesign.maturation_selected_delta_interface ?? selectedDesign.maturation_delta_interface)!.toFixed(2) : '—', tone: 'text-fuchsia-300' },
+            ] : []),
         ];
-    }, [antibodyData?.antibody_type, antibodyData?.humanness_score, rfMetricLabels.distance, rfMetricLabels.epitope, rfMetricLabels.short, rfMetricScope, selectedDesign, selectedDesignCalibyPottsEnergy, selectedDesignCalibyScPlddt, selectedDesignCalibyScRmsd, selectedDesignFampnnMaxResiduePsce, selectedDesignHasPpiflowLens, selectedDesignPpiflowRecord, selectedDesignProvenance?.selected_loop_scope, selectedDesignSource]);
+    }, [antibodyData?.antibody_type, antibodyData?.humanness_score, rfMetricLabels.distance, rfMetricLabels.epitope, rfMetricLabels.short, rfMetricScope, selectedDesign, selectedDesignCalibyPottsEnergy, selectedDesignCalibyScPlddt, selectedDesignCalibyScRmsd, selectedDesignFampnnMaxResiduePsce, selectedDesignPpiflowRecord, selectedDesignProvenance?.selected_loop_scope, selectedDesignReviewCapabilities.interface, selectedDesignSource, selectedDesignSupportsAntibodyAnalysis, selectedDesignSupportsPpiFlowAnalysis, selectedDesignSupportsSequenceAnalysis]);
     const overviewAnalysisItems = useMemo(() => ([
         {
             key: 'structure_summary',
+            supported: selectedDesignSupportsStructureSummary,
             label: 'Structure Summary',
             scope: 'selected output',
             status: structureAnalysisRun?.status ?? 'missing',
             busy: structureAnalysisBusy,
             error: structureAnalysisRun?.error_message ?? formatApiErrorMessage(structureAnalysisQueryError, ''),
-            unavailableReason: formatApiErrorMessage(structureAnalysisQueryError, ''),
+            unavailableReason: !selectedDesignCanRunStructureSummary
+                ? 'Required structure artifact is unavailable.'
+                : formatApiErrorMessage(structureAnalysisQueryError, ''),
             summary: structureAnalysis
                 ? `${structureAnalysis.residue_count} residues • ${structureAnalysis.chain_ids?.length ?? 0} chains`
                 : null,
@@ -3754,12 +3865,15 @@ export function ResultsViewer() {
         },
         {
             key: 'antibody_annotation_pack',
+            supported: selectedDesignSupportsAntibodyAnalyzer,
             label: 'ANARCII / Annotation Pack',
             scope: 'selected output',
             status: antibodyAnalysisRun?.status ?? 'missing',
             busy: antibodyAnalysisBusy,
             error: antibodyAnalysisRun?.error_message ?? formatApiErrorMessage(antibodyAnalysisQueryError, ''),
-            unavailableReason: formatApiErrorMessage(antibodyAnalysisQueryError, ''),
+            unavailableReason: !selectedDesignCanRunAntibodyAnalysis
+                ? 'Required structure artifact is unavailable.'
+                : formatApiErrorMessage(antibodyAnalysisQueryError, ''),
             summary: antibodyData
                 ? `${Object.values(antibodyData.cdr_lengths || {}).filter((value) => typeof value === 'number').length} annotated loops`
                 : null,
@@ -3767,12 +3881,15 @@ export function ResultsViewer() {
         },
         {
             key: 'chain_metrics',
+            supported: selectedDesignSupportsChainMetrics,
             label: 'Chain Metrics',
             scope: 'selected output',
             status: chainMetricsAnalysisRun?.status ?? 'missing',
             busy: chainMetricsAnalysisBusy,
             error: chainMetricsAnalysisRun?.error_message ?? formatApiErrorMessage(chainMetricsAnalysisQueryError, ''),
-            unavailableReason: formatApiErrorMessage(chainMetricsAnalysisQueryError, ''),
+            unavailableReason: !selectedDesignCanRunChainMetrics
+                ? 'Required structure artifact is unavailable.'
+                : formatApiErrorMessage(chainMetricsAnalysisQueryError, ''),
             summary: chainMetricsAnalysis
                 ? `${Object.keys(chainMetricsAnalysis).length} chains cached`
                 : null,
@@ -3780,12 +3897,15 @@ export function ResultsViewer() {
         },
         {
             key: 'ipsae_interface',
+            supported: selectedDesignSupportsIpsae,
             label: 'ipSAE Interface',
             scope: 'selected output',
             status: ipsaeAnalysisRun?.status ?? 'missing',
             busy: ipsaeAnalysisBusy,
             error: ipsaeAnalysisRun?.error_message ?? formatApiErrorMessage(ipsaeAnalysisQueryError, ''),
-            unavailableReason: formatApiErrorMessage(ipsaeAnalysisQueryError, ''),
+            unavailableReason: !selectedDesignCanRunIpsae
+                ? 'Required structure and aligned-error artifacts are unavailable.'
+                : formatApiErrorMessage(ipsaeAnalysisQueryError, ''),
             summary: ipsaeAnalysis
                 ? `${formatMetric(ipsaeAnalysis.ipsae, 2)} ${ipsaeAnalysis.ipsae_chain_pair ? `• ${ipsaeAnalysis.ipsae_chain_pair}` : ''}`
                 : null,
@@ -3793,12 +3913,15 @@ export function ResultsViewer() {
         },
         {
             key: 'pae_matrix',
+            supported: selectedDesignSupportsPaeMatrix,
             label: 'PAE Matrix',
             scope: 'selected output',
             status: paeMatrixAnalysisRun?.status ?? 'missing',
             busy: paeMatrixAnalysisBusy,
             error: paeMatrixAnalysisRun?.error_message ?? formatApiErrorMessage(paeMatrixAnalysisQueryError, ''),
-            unavailableReason: formatApiErrorMessage(paeMatrixAnalysisQueryError, ''),
+            unavailableReason: !selectedDesignCanRunPaeMatrix
+                ? 'Required aligned-error artifact is unavailable.'
+                : formatApiErrorMessage(paeMatrixAnalysisQueryError, ''),
             summary: paeMatrixAnalysis
                 ? `${paeMatrixAnalysis.size} × ${paeMatrixAnalysis.size} matrix`
                 : null,
@@ -3806,18 +3929,21 @@ export function ResultsViewer() {
         },
         {
             key: 'contact_map',
+            supported: selectedDesignSupportsContactMap,
             label: 'Contact Map',
             scope: 'selected output',
             status: contactMapAnalysisRun?.status ?? 'missing',
             busy: contactMapAnalysisBusy,
             error: contactMapAnalysisRun?.error_message ?? formatApiErrorMessage(contactMapAnalysisQueryError, ''),
-            unavailableReason: formatApiErrorMessage(contactMapAnalysisQueryError, ''),
+            unavailableReason: !selectedDesignCanRunContactMap
+                ? 'Required structure artifact is unavailable.'
+                : formatApiErrorMessage(contactMapAnalysisQueryError, ''),
             summary: contactMapAnalysis
                 ? `${contactMapAnalysis.size} × ${contactMapAnalysis.size} matrix`
                 : null,
             run: () => runContactMapAnalysis.mutateAsync(),
         },
-    ]), [structureAnalysisRun?.status, structureAnalysisRun?.error_message, structureAnalysisQueryError, structureAnalysisBusy, structureAnalysis, antibodyAnalysisRun?.status, antibodyAnalysisRun?.error_message, antibodyAnalysisQueryError, antibodyAnalysisBusy, antibodyData, chainMetricsAnalysisRun?.status, chainMetricsAnalysisRun?.error_message, chainMetricsAnalysisQueryError, chainMetricsAnalysisBusy, chainMetricsAnalysis, ipsaeAnalysisRun?.status, ipsaeAnalysisRun?.error_message, ipsaeAnalysisQueryError, ipsaeAnalysisBusy, ipsaeAnalysis, paeMatrixAnalysisRun?.status, paeMatrixAnalysisRun?.error_message, paeMatrixAnalysisQueryError, paeMatrixAnalysisBusy, paeMatrixAnalysis, contactMapAnalysisRun?.status, contactMapAnalysisRun?.error_message, contactMapAnalysisQueryError, contactMapAnalysisBusy, contactMapAnalysis, runStructureAnalysis, runAntibodyAnalysis, runChainMetricsAnalysis, runIpsaeAnalysis, runPaeMatrixAnalysis, runContactMapAnalysis]);
+    ].filter((item) => item.supported)), [structureAnalysisRun?.status, structureAnalysisRun?.error_message, structureAnalysisQueryError, structureAnalysisBusy, structureAnalysis, antibodyAnalysisRun?.status, antibodyAnalysisRun?.error_message, antibodyAnalysisQueryError, antibodyAnalysisBusy, antibodyData, chainMetricsAnalysisRun?.status, chainMetricsAnalysisRun?.error_message, chainMetricsAnalysisQueryError, chainMetricsAnalysisBusy, chainMetricsAnalysis, ipsaeAnalysisRun?.status, ipsaeAnalysisRun?.error_message, ipsaeAnalysisQueryError, ipsaeAnalysisBusy, ipsaeAnalysis, paeMatrixAnalysisRun?.status, paeMatrixAnalysisRun?.error_message, paeMatrixAnalysisQueryError, paeMatrixAnalysisBusy, paeMatrixAnalysis, contactMapAnalysisRun?.status, contactMapAnalysisRun?.error_message, contactMapAnalysisQueryError, contactMapAnalysisBusy, contactMapAnalysis, selectedDesignCanRunAntibodyAnalysis, selectedDesignCanRunChainMetrics, selectedDesignCanRunContactMap, selectedDesignCanRunIpsae, selectedDesignCanRunPaeMatrix, selectedDesignCanRunStructureSummary, selectedDesignSupportsAntibodyAnalyzer, selectedDesignSupportsChainMetrics, selectedDesignSupportsContactMap, selectedDesignSupportsIpsae, selectedDesignSupportsPaeMatrix, selectedDesignSupportsStructureSummary, runStructureAnalysis, runAntibodyAnalysis, runChainMetricsAnalysis, runIpsaeAnalysis, runPaeMatrixAnalysis, runContactMapAnalysis]);
     const overviewAnalysisCounts = useMemo(() => {
         if (!selectedDesignId) {
             return { cached: 0, running: 0, missing: 0, attention: 0 };
@@ -4873,6 +4999,13 @@ export function ResultsViewer() {
         .map((entry) => entry.trim())
         .filter(Boolean).length;
     const showDataHubLanding = !activeJob && !(jobsLoading || (jobId && routedJobLoading));
+    const viewerShellClassName = showDataHubLanding
+        ? 'mx-auto w-full max-w-[1180px]'
+        : 'w-full';
+
+    if (activeJob?.model_id === 'conformational_mapping') {
+        return <ConformationalMappingViewer requestId={activeJob.id} title={activeJob.name} />;
+    }
 
     return (
         <div className="min-h-screen bg-slate-950 text-slate-200">
@@ -4882,7 +5015,7 @@ export function ResultsViewer() {
                 <div className="absolute bottom-0 right-0 w-1/2 h-1/2 bg-violet-500/5 rounded-full blur-[150px]" />
             </div>
 
-            <div className="relative z-10 w-full px-3 sm:px-4 lg:px-5 xl:px-6 2xl:px-8">
+            <div className={`relative z-10 px-3 sm:px-4 lg:px-5 xl:px-6 2xl:px-8 ${viewerShellClassName}`}>
                 {/* Header */}
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
                     <div>
@@ -4917,12 +5050,12 @@ export function ResultsViewer() {
                     </div>
 
                     {/* Smart Job Selector */}
-                    <div className="flex items-center gap-3">
-                        <div className="relative" ref={jobSelectorRef}>
+                    <div className="flex w-full items-center gap-3 md:w-auto">
+                        <div className="relative w-full md:w-auto" ref={jobSelectorRef}>
                             <button
                                 type="button"
                                 onClick={() => setShowJobSelectorMenu((current) => !current)}
-                                className="flex min-w-[420px] items-center justify-between gap-3 rounded-xl border border-slate-600 bg-slate-800/80 px-4 py-3 text-left shadow-lg transition-all hover:border-slate-500"
+                                className="flex w-full items-center justify-between gap-3 rounded-2xl border border-slate-700 bg-slate-900/80 px-4 py-3 text-left shadow-xl shadow-slate-950/30 transition-all hover:border-cyan-500/40 hover:bg-slate-900 md:w-[420px] md:min-w-[420px]"
                             >
                                 <div className="min-w-0">
                                     <div className="truncate text-sm font-medium text-white">
@@ -4945,7 +5078,7 @@ export function ResultsViewer() {
                             </button>
 
                             {showJobSelectorMenu && (
-                                <div className="absolute right-0 z-50 mt-2 w-[520px] overflow-hidden rounded-2xl border border-slate-700 bg-slate-900/98 shadow-2xl shadow-slate-950/70 backdrop-blur">
+                                <div className="absolute right-0 z-50 mt-2 w-[min(520px,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-slate-700 bg-slate-900/98 shadow-2xl shadow-slate-950/70 backdrop-blur">
                                     <div className="border-b border-slate-800 p-3">
                                         <input
                                             autoFocus
@@ -5027,6 +5160,9 @@ export function ResultsViewer() {
                 )}
 
                 {activeJob && (
+                    activeJob.model_id === 'molecular_dynamics' ? (
+                        <MDResultsPane jobId={activeJob.id} />
+                    ) : (
                     <>
                         {activeLineageRootJob && (
                             <div className={`mb-4 rounded-xl border p-4 ${isPostRFantibodyReview ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-sky-500/20 bg-sky-500/5'}`}>
@@ -5038,7 +5174,7 @@ export function ResultsViewer() {
                                                 : `Viewing persisted downstream outputs from ${activeLineageRootJob.name}`}
                                         </div>
                                         <div className="text-xs text-slate-300">
-                                            {isPostRFantibodyReview ? (
+                                            {selectedDesignSupportsAntibodyAnalysis && isPostRFantibodyReview ? (
                                                 <>
                                                     Review this stage by backbone family first. The UI is using existing <span className="font-mono text-emerald-300">backbone_id</span> as the first family primitive.
                                                 </>
@@ -5174,9 +5310,15 @@ export function ResultsViewer() {
                             </div>
                         )}
 
+                        {clientDerivedResultsBlocked && (
+                            <div role="alert" className="mb-4 rounded-lg border border-amber-500/50 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+                                {clientDerivedResultsPolicy.message}
+                            </div>
+                        )}
+
                         {/* Tabs */}
                         <div className="flex gap-1 mb-6 border-b border-slate-800 pb-px">
-                            {TABS.map(tab => (
+                            {visibleReviewTabs.map(tab => (
                                 <button
                                     key={tab.id}
                                     onClick={() => setActiveTab(tab.id)}
@@ -5191,8 +5333,8 @@ export function ResultsViewer() {
                             ))}
                         </div>
 
-                        {/* Global Pagination Bar - visible on all tabs */}
-                        {totalDesigns > 0 && (
+                        {/* Global Pagination Bar - table/chart working sets only */}
+                        {totalDesigns > 0 && activeTab !== 'structure' && (
                             <div className="flex items-center justify-between px-4 py-2 mb-2 bg-gradient-to-r from-slate-800/60 to-slate-900/60 rounded-lg border border-slate-700/50">
                                 <div className="flex items-center gap-3">
                                     <span className="text-xs text-slate-400">
@@ -5500,6 +5642,7 @@ export function ResultsViewer() {
                                                                         Refine Dataset
                                                                     </button>
                                                                     )}
+
                                                                     <button
                                                                         type="button"
                                                                         onClick={() => {
@@ -5574,10 +5717,6 @@ export function ResultsViewer() {
                                                         ? `Open antibody refinement from the loaded saved dataset '${loadedSavedReviewFilterSet.name}'.`
                                                         : 'Load a saved dataset or select outputs before opening antibody refinement.'}
                                             >
-                                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                                                </svg>
                                                 Open Antibody Refinement
                                             </button>
                                         ) : (
@@ -6241,7 +6380,7 @@ export function ResultsViewer() {
                                     {activeTab === 'overview' && overviewStats && (
                                         <div className="p-6 space-y-6">
                                             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
-                                                {isPostRFantibodyReview ? (
+                                                {selectedDesignSupportsAntibodyAnalysis && isPostRFantibodyReview ? (
                                                     <>
                                                         <StatCard label="Outputs in Set" value={overviewStats.total.toLocaleString()} />
                                                         <StatCard
@@ -6256,7 +6395,7 @@ export function ResultsViewer() {
                                                         <StatCard label="Avg Tgt Dist" value={overviewStats.avgTargetDistance != null ? `${overviewStats.avgTargetDistance.toFixed(1)} Å` : '—'} color="text-cyan-300" />
                                                         <StatCard label="Avg Hotspot Cov" value={formatMetric(overviewStats.avgHotspotCoverage, 1)} color="text-violet-300" />
                                                     </>
-                                                ) : preferredAnalysisLens === 'ppiflow' ? (
+                                                ) : selectedDesignSupportsPpiFlowAnalysis ? (
                                                     <>
                                                         <StatCard label="Total Outputs" value={overviewStats.total.toLocaleString()} />
                                                         <StatCard label="Source Backbones" value={overviewStats.ppiflowUniqueSources ?? 0} color="text-cyan-300" />
@@ -6272,24 +6411,30 @@ export function ResultsViewer() {
                                                         <StatCard label="Total Designs" value={overviewStats.total.toLocaleString()} />
                                                         <StatCard label="Favorites" value={overviewStats.favorites} color="text-yellow-400" />
                                                         <StatCard label="Avg pLDDT" value={formatMetric(overviewStats.avgPlddt, 1)} color="text-blue-400" />
-                                                        {(preferredAnalysisLens === 'validation' || preferredAnalysisLens === 'protenix') ? (
+                                                        {tableReviewCapabilities.interface ? (
                                                             <>
                                                                 <StatCard label="Avg iPTM" value={formatMetric(overviewStats.avgIptm, 2)} color="text-fuchsia-300" />
                                                                 <StatCard label="Avg ipSAE" value={formatMetric(overviewStats.avgIpsae, 3)} color="text-cyan-300" />
                                                                 <StatCard label="Avg pTM" value={formatMetric(overviewStats.avgPtm, 2)} color="text-violet-400" />
                                                                 <StatCard label="Avg PAE" value={formatMetric(overviewStats.avgPae, 1)} color="text-amber-300" />
-                                                                <StatCard label="Avg Contacts" value={formatMetric(overviewStats.avgEpitopeContacts, 1)} color="text-lime-400" />
-                                                                <StatCard label="High Contacts" value={overviewStats.highContacts} subtitle="≥5 epitope" color="text-lime-400" />
+                                                                {tableReviewCapabilities.antibody && (
+                                                                    <>
+                                                                        <StatCard label="Avg Contacts" value={formatMetric(overviewStats.avgEpitopeContacts, 1)} color="text-lime-400" />
+                                                                        <StatCard label="High Contacts" value={overviewStats.highContacts} subtitle="≥5 epitope" color="text-lime-400" />
+                                                                    </>
+                                                                )}
                                                             </>
-                                                        ) : (
+                                                        ) : tableReviewCapabilities.antibody ? (
                                                             <>
                                                                 <StatCard label="Avg pSCE" value={formatMetric(overviewStats.avgPsce, 2)} subtitle="FAMPNN" color="text-cyan-400" />
                                                                 <StatCard label="Avg Affinity" value={formatMetric(overviewStats.avgAffinity, 2)} color="text-emerald-400" />
                                                                 <StatCard label="Avg Binder %" value={overviewStats.avgBinderProb ? (overviewStats.avgBinderProb * 100).toFixed(0) + '%' : '—'} color="text-emerald-400" />
-                                                                <StatCard label="Avg pTM" value={formatMetric(overviewStats.avgPtm, 2)} color="text-violet-400" />
                                                                 <StatCard label="Avg Contacts" value={formatMetric(overviewStats.avgEpitopeContacts, 1)} color="text-lime-400" />
-                                                                <StatCard label="High Contacts" value={overviewStats.highContacts} subtitle="≥5 epitope" color="text-lime-400" />
                                                             </>
+                                                        ) : tableReviewCapabilities.sequenceDesign ? (
+                                                            <StatCard label="Avg pSCE" value={formatMetric(overviewStats.avgPsce, 2)} subtitle="Sequence design" color="text-cyan-400" />
+                                                        ) : (
+                                                            <StatCard label="Avg pTM" value={formatMetric(overviewStats.avgPtm, 2)} color="text-violet-400" />
                                                         )}
                                                         {overviewStats.annotatedWithFrustration > 0 && (
                                                             <>
@@ -6307,7 +6452,7 @@ export function ResultsViewer() {
                                             )}
 
                                             <div className="bg-gradient-to-br from-slate-800/60 to-slate-900/60 rounded-xl p-5 border border-slate-700/50">
-                                                {isPostRFantibodyReview ? (
+                                                {selectedDesignSupportsAntibodyAnalysis && isPostRFantibodyReview ? (
                                                     <>
                                                         <h3 className="text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2">
                                                             <span>🧭</span>
@@ -6410,7 +6555,7 @@ export function ResultsViewer() {
                                                             <span>Average pSCE captures overall sidechain confidence; worst-residue pSCE surfaces local outliers. Lower is better for both.</span>
                                                         </div>
                                                     </>
-                                                ) : preferredAnalysisLens === 'ppiflow' ? (
+                                                ) : selectedDesignSupportsPpiFlowAnalysis ? (
                                                     <>
                                                         <h3 className="text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2">
                                                             <span>🌀</span>
@@ -6443,7 +6588,7 @@ export function ResultsViewer() {
                                                             <span>Lower ΔIface is better. Use RMSD and CA clash to separate local refinement from bad backbone drift.</span>
                                                         </div>
                                                     </>
-                                                ) : (
+                                                ) : (tableReviewCapabilities.antibody || tableReviewCapabilities.interface) ? (
                                                     <>
                                                         <h3 className="text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2">
                                                             <span>🔗</span>
@@ -6477,6 +6622,10 @@ export function ResultsViewer() {
                                                             <span className="text-amber-500/80">{overviewStats.bindingMetricDetail}</span>
                                                         </div>
                                                     </>
+                                                ) : (
+                                                    <div className="text-sm text-slate-400">
+                                                        Binding-quality tiers are not applicable to this review profile.
+                                                    </div>
                                                 )}
                                             </div>
                                             {pageSize !== 0 && totalDesigns > designs.length && (
@@ -6582,7 +6731,7 @@ export function ResultsViewer() {
                                                         </div>
                                                     </div>
                                                     <div className="relative flex items-center gap-2 self-start" ref={overviewAnalysisMenuRef}>
-                                                        {isAntibodyContext && (
+                                                        {tableReviewCapabilities.antibody && (
                                                             <button
                                                                 type="button"
                                                                 onClick={() => runAntibodyAnalysis.mutate()}
@@ -6694,131 +6843,8 @@ export function ResultsViewer() {
                                     )}
 
                                     {/* STRUCTURE TAB - Fullscreen-Aware with Overlays */}
-                                    {activeTab === 'structure' && (
+                                    {activeTab === 'structure' && selectedDesignSupportsStructureViewer && (
                                         <div className="p-4 space-y-3">
-                                            <div className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-3">
-                                                <div className="flex flex-wrap items-center gap-3">
-                                                    <label className="flex items-center gap-2 text-xs text-slate-400">
-                                                        <span>Sort by</span>
-                                                        <select
-                                                            value={filterDraft.sortField}
-                                                            onChange={(e) => {
-                                                                const field = e.target.value;
-                                                                setFilterDraft((current) => ({
-                                                                    ...current,
-                                                                    sortField: field,
-                                                                    sortDir: getDefaultSortDirection(field),
-                                                                }));
-                                                            }}
-                                                            className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white"
-                                                        >
-                                                            {availableSortOptions.map((option) => (
-                                                                <option key={option.value} value={option.value}>{option.label}</option>
-                                                            ))}
-                                                        </select>
-                                                    </label>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => updateFilterDraft('sortDir', filterDraft.sortDir === 'asc' ? 'desc' : 'asc')}
-                                                        className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-200"
-                                                    >
-                                                        {filterDraft.sortDir === 'asc' ? 'Asc ↑' : 'Desc ↓'}
-                                                    </button>
-                                                    <label className="flex items-center gap-2 text-xs text-slate-400">
-                                                        <span>Epi Cts ≥</span>
-                                                        <input
-                                                            type="number"
-                                                            min="0"
-                                                            value={filterDraft.contactsMin}
-                                                            onChange={(e) => updateFilterDraft('contactsMin', Number(e.target.value || 0))}
-                                                            onKeyDown={handleDraftFilterKeyDown}
-                                                            className="w-14 rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-xs text-white"
-                                                        />
-                                                    </label>
-                                                    <label className="flex items-center gap-2 text-xs text-slate-400">
-                                                        <span>Any Tgt Cts ≥</span>
-                                                        <input
-                                                            type="number"
-                                                            min="0"
-                                                            value={filterDraft.targetContactsMin}
-                                                            onChange={(e) => updateFilterDraft('targetContactsMin', Number(e.target.value || 0))}
-                                                            onKeyDown={handleDraftFilterKeyDown}
-                                                            className="w-14 rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-xs text-white"
-                                                        />
-                                                    </label>
-                                                    <label className="flex items-center gap-2 text-xs text-slate-400">
-                                                        <span>Epi Dist ≤</span>
-                                                        <input
-                                                            type="number"
-                                                            min="0"
-                                                            step="0.5"
-                                                            value={filterDraft.epitopeMaxDist}
-                                                            onChange={(e) => updateFilterDraft('epitopeMaxDist', e.target.value)}
-                                                            onKeyDown={handleDraftFilterKeyDown}
-                                                            className="w-16 rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-xs text-white"
-                                                        />
-                                                    </label>
-                                                    <label className="flex items-center gap-2 text-xs text-slate-400">
-                                                        <span>Any-Tgt Dist ≤</span>
-                                                        <input
-                                                            type="number"
-                                                            min="0"
-                                                            step="0.5"
-                                                            value={filterDraft.targetMaxDist}
-                                                            onChange={(e) => updateFilterDraft('targetMaxDist', e.target.value)}
-                                                            onKeyDown={handleDraftFilterKeyDown}
-                                                            className="w-16 rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-xs text-white"
-                                                        />
-                                                    </label>
-                                                    <label className="flex items-center gap-2 text-xs text-slate-400">
-                                                        <span>H3</span>
-                                                        <input
-                                                            type="number"
-                                                            min="0"
-                                                            value={filterDraft.cdrH3Min}
-                                                            onChange={(e) => updateFilterDraft('cdrH3Min', e.target.value)}
-                                                            onKeyDown={handleDraftFilterKeyDown}
-                                                            placeholder="min"
-                                                            className="w-14 rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-xs text-white"
-                                                        />
-                                                        <span>–</span>
-                                                        <input
-                                                            type="number"
-                                                            min="0"
-                                                            value={filterDraft.cdrH3Max}
-                                                            onChange={(e) => updateFilterDraft('cdrH3Max', e.target.value)}
-                                                            onKeyDown={handleDraftFilterKeyDown}
-                                                            placeholder="max"
-                                                            className="w-14 rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-xs text-white"
-                                                        />
-                                                    </label>
-                                                    <button
-                                                        type="button"
-                                                        onClick={applyDraftFilters}
-                                                        disabled={!filterDraftDirty}
-                                                        className={`rounded border px-2 py-1 text-xs transition-colors ${filterDraftDirty ? 'border-blue-500/50 bg-blue-500/10 text-blue-200 hover:bg-blue-500/20' : 'border-slate-700 bg-slate-900 text-slate-500'}`}
-                                                    >
-                                                        Apply Filters
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        onClick={clearRfaFilters}
-                                                        className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-300"
-                                                    >
-                                                        Clear
-                                                    </button>
-                                                    <span className="ml-auto text-[11px] text-slate-500">
-                                                        {pageSize === 0
-                                                            ? `${tableDesigns.length} structures in current structure set`
-                                                            : `${tableDesigns.length} loaded on this page • ${totalDesigns.toLocaleString()} total`}
-                                                    </span>
-                                                </div>
-                                                <div className="mt-2 text-[11px] text-slate-500">
-                                                    {isPostRFantibodyReview
-                                                        ? `RF lens: ${rfMetricLabels.short}. Toggle loop/whole-antibody in review.`
-                                                        : 'Any-Target: whole target. Epitope: selected residues.'}
-                                                </div>
-                                            </div>
                                             <StructureViewerPane
                                                 selectedDesignId={selectedDesignId}
                                                 setSelectedDesignId={setSelectedDesignId}
@@ -6839,7 +6865,7 @@ export function ResultsViewer() {
                                     )}
 
                                     {/* ANTIBODY TAB */}
-                                    {activeTab === 'antibody' && (
+                                    {activeTab === 'antibody' && selectedDesignSupportsAntibodyAnalysis && (
                                         <div className="p-6 space-y-6">
                                             {!selectedDesign ? (
                                                 <div className="flex flex-col items-center justify-center py-20 text-slate-500">
@@ -6848,6 +6874,11 @@ export function ResultsViewer() {
                                                 </div>
                                             ) : (
                                                 <>
+                                                    {!selectedDesignCanRunAntibodyAnalysis && (
+                                                        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100">
+                                                            Antibody review applies to this result, but the required structure artifact is unavailable. Analysis actions are disabled.
+                                                        </div>
+                                                    )}
                                                     <div className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
                                                         <div className="flex flex-col gap-4">
                                                             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -6880,7 +6911,7 @@ export function ResultsViewer() {
                                                             </div>
                                                             <div className="flex flex-wrap gap-2">
                                                                 {OUTPUT_SOURCE_FILTER_ORDER.map((source) => {
-                                                                    const count = source === 'all' ? designs.length : antibodyDesignGroups[source].length;
+                                                                    const count = source === 'all' ? antibodyDesignGroups.all.length : antibodyDesignGroups[source].length;
                                                                     if (source !== 'all' && count === 0) return null;
                                                                     const active = antibodySourceFilter === source;
                                                                     return (
@@ -7429,7 +7460,6 @@ export function ResultsViewer() {
                                                             {getFriendlyDesignName(selectedDesign)} • {antibodyData?.imgt_pdb_url ? 'IMGT Renumbered Structure' : 'Original Structure'}
                                                         </div>
                                                         <MolstarViewer
-                                                            key={selectedDesignId + '_ab'}
                                                             structureUrl={antibodyData?.imgt_pdb_url || (selectedDesignId ? `/api/designs/${selectedDesignId}/pdb` : undefined)}
                                                             format="pdb"
                                                             alphafoldView={false}
@@ -7648,6 +7678,8 @@ export function ResultsViewer() {
                                                         />
                                                         <span className="text-xs text-blue-400 font-mono w-8">{filterDraft.plddtMin}</span>
                                                     </div>
+                                                    {tableReviewCapabilities.interface && (
+                                                        <>
                                                     <div className="flex items-center gap-2">
                                                         <span className="text-xs text-slate-500">iPTM ≥</span>
                                                         <input
@@ -7724,6 +7756,10 @@ export function ResultsViewer() {
                                                             className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono"
                                                         />
                                                     </div>
+                                                        </>
+                                                    )}
+                                                    {tableReviewCapabilities.antibody && (
+                                                        <>
                                                     <div className="flex items-center gap-2">
                                                         <span className="text-xs text-slate-500">Size</span>
                                                         <input
@@ -7820,6 +7856,8 @@ export function ResultsViewer() {
                                                             className="w-14 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono"
                                                         />
                                                     </div>
+                                                        </>
+                                                    )}
                                                     <div className="flex items-center gap-2">
                                                         <span className="text-xs text-slate-500">RoG</span>
                                                         <input
@@ -7907,7 +7945,10 @@ export function ResultsViewer() {
                                                 </span>
                                             </div>
                                             <div className="mb-4 flex flex-wrap items-center gap-2">
-                                                {OUTPUT_SOURCE_BUTTON_LABELS.map(([value, label]) => (
+                                                {OUTPUT_SOURCE_BUTTON_LABELS.filter(([value]) => (
+                                                    (value !== 'rfantibody' || tableReviewCapabilities.antibody)
+                                                    && (value !== 'ppiflow' || showPpiflowColumns)
+                                                )).map(([value, label]) => (
                                                     <button
                                                         key={value}
                                                         type="button"
@@ -7926,7 +7967,11 @@ export function ResultsViewer() {
                                                     </button>
                                                 ))}
                                                 <span className="mx-1 h-5 w-px bg-slate-700" aria-hidden="true" />
-                                                {RESULT_SET_BUTTON_LABELS.map(([value, label]) => {
+                                                {RESULT_SET_BUTTON_LABELS.filter(([value]) => (
+                                                    (value !== 'rfantibody_backbones' || tableReviewCapabilities.antibody)
+                                                    && (value !== 'ppiflow_candidates' || showPpiflowColumns)
+                                                    && (value !== 'sequence_designs' || tableReviewCapabilities.sequenceDesign)
+                                                )).map(([value, label]) => {
                                                     const count = value === 'all' ? orderedDesigns.length : (resultSetCounts.get(value) || 0);
                                                     const disabled = value !== 'all' && count === 0;
                                                     return (
@@ -7955,7 +8000,8 @@ export function ResultsViewer() {
                                                         ? `${tableDesigns.length} rows in current output set`
                                                         : `${tableDesigns.length} rows loaded in current output set • ${totalDesigns.toLocaleString()} total after filters`}
                                                 </span>
-                                                <span className="flex items-center gap-1.5 ml-auto">
+                                                {tableReviewCapabilities.antibody && (
+                                                    <span className="flex items-center gap-1.5 ml-auto">
                                                     <button
                                                         type="button"
                                                         onClick={() => exportFasta('binder')}
@@ -7976,7 +8022,8 @@ export function ResultsViewer() {
                                                         <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
                                                         CDR FASTA
                                                     </button>
-                                                </span>
+                                                    </span>
+                                                )}
                                             </div>
                                             {/* Table */}
                                             <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-700/50 bg-slate-900/40 px-3 py-2 text-[11px] text-slate-400">
@@ -8009,50 +8056,58 @@ export function ResultsViewer() {
                                                                     )
                                                                 },
                                                                 { key: 'name', label: 'Output' },
-                                                                { key: 'binding_tier', label: isPostRFantibodyReview ? 'Screen' : 'Binding' },
-                                                                { key: 'binder_length', label: 'Size' },
-                                                                { key: 'cdr_h1_length', label: 'CDR-H1' },
-                                                                { key: 'cdr_h2_length', label: 'CDR-H2' },
-                                                                { key: 'cdr_h3_length', label: 'CDR-H3' },
-                                                                { key: 'epitope_contact_count', label: isPostRFantibodyReview ? 'CDR Epi Cts' : 'Epi Cts' },
-                                                                { key: 'target_contact_count', label: isPostRFantibodyReview ? 'CDR Tgt Cts' : 'Any Tgt Cts' },
-                                                                { key: 'epitope_min_distance', label: isPostRFantibodyReview ? 'CDR Epi Dist' : 'Epi Dist' },
-                                                                { key: 'target_min_distance', label: isPostRFantibodyReview ? 'CDR-Tgt Dist' : 'Any-Tgt Dist' },
-                                                                { key: 'epitope_centroid_distance', label: isPostRFantibodyReview ? 'CDR Epi Cent' : 'Epi Cent' },
-                                                                { key: 'target_centroid_distance', label: isPostRFantibodyReview ? 'CDR Tgt Cent' : 'Any-Tgt Cent' },
-                                                                { key: 'affinity_score', label: 'Affinity' },
-                                                                { key: 'binder_probability', label: 'Binder %' },
-                                                                { key: 'fampnn_psce', label: 'pSCE' },
-                                                                { key: 'ipsae', label: 'ipSAE' },
+                                                                ...(tableReviewCapabilities.antibody ? [
+                                                                    { key: 'binding_tier', label: isPostRFantibodyReview ? 'Screen' : 'Binding' },
+                                                                    { key: 'binder_length', label: 'Size' },
+                                                                    { key: 'cdr_h1_length', label: 'CDR-H1' },
+                                                                    { key: 'cdr_h2_length', label: 'CDR-H2' },
+                                                                    { key: 'cdr_h3_length', label: 'CDR-H3' },
+                                                                    { key: 'epitope_contact_count', label: isPostRFantibodyReview ? 'CDR Epi Cts' : 'Epi Cts' },
+                                                                    { key: 'target_contact_count', label: isPostRFantibodyReview ? 'CDR Tgt Cts' : 'Any Tgt Cts' },
+                                                                    { key: 'epitope_min_distance', label: isPostRFantibodyReview ? 'CDR Epi Dist' : 'Epi Dist' },
+                                                                    { key: 'target_min_distance', label: isPostRFantibodyReview ? 'CDR-Tgt Dist' : 'Any-Tgt Dist' },
+                                                                    { key: 'epitope_centroid_distance', label: isPostRFantibodyReview ? 'CDR Epi Cent' : 'Epi Cent' },
+                                                                    { key: 'target_centroid_distance', label: isPostRFantibodyReview ? 'CDR Tgt Cent' : 'Any-Tgt Cent' },
+                                                                    { key: 'affinity_score', label: 'Affinity' },
+                                                                    { key: 'binder_probability', label: 'Binder %' },
+                                                                ] : []),
+                                                                ...(tableReviewCapabilities.sequenceDesign ? [
+                                                                    { key: 'fampnn_psce', label: 'pSCE' },
+                                                                ] : []),
+                                                                ...(tableReviewCapabilities.interface ? [
+                                                                    { key: 'ipsae', label: 'ipSAE' },
+                                                                ] : []),
                                                                 { key: 'plddt_overall', label: isPostRFantibodyReview ? 'RF pLDDT Glob' : 'pLDDT' },
                                                                 ...(isPostRFantibodyReview ? [
                                                                     { key: 'rfa_plddt_selected', label: 'RF pLDDT Sel' },
                                                                 ] : []),
-                                                                ...(showBinderTargetConfidence ? [
+                                                                ...(showBinderTargetConfidence && tableReviewCapabilities.antibody ? [
                                                                     { key: 'plddt_binder', label: 'pLDDT Binder' },
                                                                     { key: 'plddt_target', label: 'pLDDT Target' },
                                                                 ] : []),
                                                                 { key: 'pae_overall', label: 'PAE' },
-                                                                { key: 'pae_interaction', label: 'iPAE' },
                                                                 { key: 'ptm', label: 'pTM' },
-                                                                { key: 'iptm', label: 'iPTM' },
-                                                                { key: 'ligand_iptm', label: 'Lig iPTM' },
+                                                                ...(tableReviewCapabilities.interface ? [
+                                                                    { key: 'pae_interaction', label: 'iPAE' },
+                                                                    { key: 'iptm', label: 'iPTM' },
+                                                                    { key: 'ligand_iptm', label: 'Lig iPTM' },
+                                                                    { key: 'rmsd_binder', label: 'Val RMSD Bd' },
+                                                                    { key: 'rmsd_target', label: 'Val RMSD Tgt' },
+                                                                ] : []),
                                                                 { key: 'conf_score', label: 'Conf' },
-                                                                { key: 'rmsd_binder', label: 'Val RMSD Bd' },
                                                                 { key: 'rmsd_overall', label: 'Val RMSD All' },
-                                                                { key: 'rmsd_target', label: 'Val RMSD Tgt' },
-                                                                { key: 'screening_reason', label: 'RFA Screen' },
+                                                                ...(tableReviewCapabilities.antibody ? [
+                                                                    { key: 'screening_reason', label: 'RFA Screen' },
+                                                                ] : []),
                                                                 { key: 'frustration_high_count', label: 'Frust High' },
                                                                 { key: 'frustration_pct_high', label: '% High Frust' },
                                                                 { key: 'has_clash', label: 'Clash' },
-                                                                { key: 'maturation_selected_delta_interface', label: 'ΔIface Sel' },
-                                                                { key: 'maturation_delta_interface', label: 'ΔIface Glob' },
-                                                                { key: 'maturation_selected_rmsd', label: 'RMSD Sel' },
-                                                                { key: 'maturation_rmsd', label: 'RMSD Glob' },
-                                                                { key: 'rog', label: 'RoG' },
-                                                                { key: 'rfd_rog', label: 'RFD RoG' },
-                                                                { key: 'fr2_contacts', label: 'FR2' },
-                                                                { key: 'is_favorite', label: '★' },
+                                                                ...(showPpiflowColumns ? [
+                                                                    { key: 'maturation_selected_delta_interface', label: 'ΔIface Sel' },
+                                                                    { key: 'maturation_delta_interface', label: 'ΔIface Glob' },
+                                                                    { key: 'maturation_selected_rmsd', label: 'RMSD Sel' },
+                                                                    { key: 'maturation_rmsd', label: 'RMSD Glob' },
+                                                                ] : []),
                                                                 ...(showPpiflowColumns ? [
                                                                     { key: 'ppiflow_source_name', label: 'PPI Src' },
                                                                     { key: 'ppiflow_sample_index', label: 'Sample' },
@@ -8069,6 +8124,12 @@ export function ResultsViewer() {
                                                                     { key: 'ppiflow_anchor_count', label: 'Anchors' },
                                                                     { key: 'ppiflow_clash_count', label: 'CA Clash' },
                                                                 ] : []),
+                                                                { key: 'rog', label: 'RoG' },
+                                                                { key: 'rfd_rog', label: 'RFD RoG' },
+                                                                ...(tableReviewCapabilities.antibody ? [
+                                                                    { key: 'fr2_contacts', label: 'FR2' },
+                                                                ] : []),
+                                                                { key: 'is_favorite', label: '★' },
                                                             ].map(col => {
                                                                 const sortable = isTableColumnSortable(
                                                                     col.key,
@@ -8131,6 +8192,8 @@ export function ResultsViewer() {
                                                                     </div>
                                                                 </td>
 
+                                                                {tableReviewCapabilities.antibody && (
+                                                                    <>
                                                                 {/* Binding Quality Tier */}
                                                                 <td className="px-3 py-2">
                                                                     {(() => {
@@ -8221,13 +8284,19 @@ export function ResultsViewer() {
                                                                     d.binder_probability != null && d.binder_probability > 0.5 ? 'text-amber-400' : 'text-slate-500'}`}>
                                                                     {d.binder_probability ? (d.binder_probability * 100).toFixed(0) + '%' : '—'}
                                                                 </td>
+                                                                    </>
+                                                                )}
 
-                                                                <td className={`px-3 py-2 font-mono ${getMetricColor('fampnn_psce', d.fampnn_psce)}`}>
-                                                                    {formatMetric(d.fampnn_psce, 2)}
-                                                                </td>
-                                                                <td className={`px-3 py-2 font-mono ${getMetricColor('ipsae', d.ipsae)}`}>
-                                                                    {formatMetric(d.ipsae, 2)}
-                                                                </td>
+                                                                {tableReviewCapabilities.sequenceDesign && (
+                                                                    <td className={`px-3 py-2 font-mono ${getMetricColor('fampnn_psce', d.fampnn_psce)}`}>
+                                                                        {formatMetric(d.fampnn_psce, 2)}
+                                                                    </td>
+                                                                )}
+                                                                {tableReviewCapabilities.interface && (
+                                                                    <td className={`px-3 py-2 font-mono ${getMetricColor('ipsae', d.ipsae)}`}>
+                                                                        {formatMetric(d.ipsae, 2)}
+                                                                    </td>
+                                                                )}
                                                                 <td className={`px-3 py-2 font-mono ${getMetricColor('plddt_overall', d.plddt_overall)}`}>
                                                                     {formatMetric(d.plddt_overall, 1)}
                                                                 </td>
@@ -8236,7 +8305,7 @@ export function ResultsViewer() {
                                                                         {formatMetric(d.rfa_plddt_selected, 1)}
                                                                     </td>
                                                                 )}
-                                                                {showBinderTargetConfidence && (
+                                                                {showBinderTargetConfidence && tableReviewCapabilities.antibody && (
                                                                     <>
                                                                         <td className={`px-3 py-2 font-mono ${getMetricColor('plddt_binder', d.plddt_binder)}`}>
                                                                             {formatMetric(d.plddt_binder, 1)}
@@ -8249,32 +8318,33 @@ export function ResultsViewer() {
                                                                 <td className={`px-3 py-2 font-mono ${getMetricColor('pae_overall', d.pae_overall)}`}>
                                                                     {formatMetric(d.pae_overall, 1)}
                                                                 </td>
-                                                                <td className={`px-3 py-2 font-mono ${getMetricColor('pae_interaction', d.pae_interaction)}`}>
-                                                                    {formatMetric(d.pae_interaction, 1)}
-                                                                </td>
                                                                 <td className={`px-3 py-2 font-mono ${getMetricColor('ptm', d.ptm)}`}>
                                                                     {formatMetric(d.ptm, 2)}
                                                                 </td>
-
-                                                                {/* iPTM (basic interface pTM) */}
-                                                                <td className={`px-3 py-2 font-mono ${d.iptm != null && d.iptm > 0.7 ? 'text-emerald-400' : d.iptm != null && d.iptm > 0.5 ? 'text-blue-400' : 'text-slate-500'}`}>
-                                                                    {formatMetric(d.iptm, 2)}
-                                                                </td>
-
-                                                                {/* Ligand iPTM */}
-                                                                <td className={`px-3 py-2 font-mono ${d.ligand_iptm != null && d.ligand_iptm > 0.8 ? 'text-emerald-400' : 'text-slate-500'}`}>
-                                                                    {formatMetric(d.ligand_iptm, 2)}
-                                                                </td>
-
+                                                                {tableReviewCapabilities.interface && (
+                                                                    <>
+                                                                        <td className={`px-3 py-2 font-mono ${getMetricColor('pae_interaction', d.pae_interaction)}`}>
+                                                                            {formatMetric(d.pae_interaction, 1)}
+                                                                        </td>
+                                                                        <td className={`px-3 py-2 font-mono ${d.iptm != null && d.iptm > 0.7 ? 'text-emerald-400' : d.iptm != null && d.iptm > 0.5 ? 'text-blue-400' : 'text-slate-500'}`}>
+                                                                            {formatMetric(d.iptm, 2)}
+                                                                        </td>
+                                                                        <td className={`px-3 py-2 font-mono ${d.ligand_iptm != null && d.ligand_iptm > 0.8 ? 'text-emerald-400' : 'text-slate-500'}`}>
+                                                                            {formatMetric(d.ligand_iptm, 2)}
+                                                                        </td>
+                                                                        <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rmsd_binder, 2)}</td>
+                                                                        <td className="px-3 py-2 font-mono text-slate-300">{formatMetric((d as UntypedApiValue).rmsd_target, 2)}</td>
+                                                                    </>
+                                                                )}
                                                                 <td className={`px-3 py-2 font-mono ${getMetricColor('conf_score', d.conf_score)}`}>
                                                                     {formatMetric(d.conf_score, 2)}
                                                                 </td>
-                                                                <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rmsd_binder, 2)}</td>
                                                                 <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rmsd_overall, 2)}</td>
-                                                                <td className="px-3 py-2 font-mono text-slate-300">{formatMetric((d as UntypedApiValue).rmsd_target, 2)}</td>
-                                                                <td className="px-3 py-2 max-w-[180px] truncate text-xs text-slate-400" title={(d as UntypedApiValue).screening_reason ?? ''}>
-                                                                    {(d as UntypedApiValue).screening_reason ?? '—'}
-                                                                </td>
+                                                                {tableReviewCapabilities.antibody && (
+                                                                    <td className="px-3 py-2 max-w-[180px] truncate text-xs text-slate-400" title={(d as UntypedApiValue).screening_reason ?? ''}>
+                                                                        {(d as UntypedApiValue).screening_reason ?? '—'}
+                                                                    </td>
+                                                                )}
                                                                 <td className={`px-3 py-2 font-mono ${d.frustration_high_count != null
                                                                     ? d.frustration_high_count > 5
                                                                         ? 'text-red-400'
@@ -8294,18 +8364,22 @@ export function ResultsViewer() {
                                                                 <td className={`px-3 py-2 font-mono ${d.has_clash ? 'text-red-400' : d.has_clash === false ? 'text-green-400' : 'text-slate-500'}`}>
                                                                     {d.has_clash == null ? '—' : d.has_clash ? '✗' : '✓'}
                                                                 </td>
-                                                                <td className={`px-3 py-2 font-mono ${d.maturation_selected_delta_interface != null && d.maturation_selected_delta_interface < 0 ? 'text-emerald-400' :
-                                                                    d.maturation_selected_delta_interface != null && d.maturation_selected_delta_interface > 0 ? 'text-red-400' : 'text-slate-500'}`}
-                                                                    title={d.maturation_selected_delta_interface != null ? `Selected ΔInterface: ${d.maturation_selected_delta_interface.toFixed(1)} REU` : '—'}>
-                                                                    {formatMetric(d.maturation_selected_delta_interface ?? rowPpiflowScore?.selected_delta_interface_score, 1)}
-                                                                </td>
-                                                                <td className={`px-3 py-2 font-mono ${d.maturation_delta_interface != null && d.maturation_delta_interface < 0 ? 'text-emerald-400' :
-                                                                    d.maturation_delta_interface != null && d.maturation_delta_interface > 0 ? 'text-red-400' : 'text-slate-500'}`}
-                                                                    title={d.maturation_delta_interface != null ? `Global ΔInterface: ${d.maturation_delta_interface.toFixed(1)} REU` : '—'}>
-                                                                    {formatMetric(d.maturation_delta_interface, 1)}
-                                                                </td>
-                                                                <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.maturation_selected_rmsd ?? rowPpiflowScore?.selected_rmsd_backbone, 2)}</td>
-                                                                <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.maturation_rmsd, 2)}</td>
+                                                                {showPpiflowColumns && (
+                                                                    <>
+                                                                        <td className={`px-3 py-2 font-mono ${d.maturation_selected_delta_interface != null && d.maturation_selected_delta_interface < 0 ? 'text-emerald-400' :
+                                                                            d.maturation_selected_delta_interface != null && d.maturation_selected_delta_interface > 0 ? 'text-red-400' : 'text-slate-500'}`}
+                                                                            title={d.maturation_selected_delta_interface != null ? `Selected ΔInterface: ${d.maturation_selected_delta_interface.toFixed(1)} REU` : '—'}>
+                                                                            {formatMetric(d.maturation_selected_delta_interface ?? rowPpiflowScore?.selected_delta_interface_score, 1)}
+                                                                        </td>
+                                                                        <td className={`px-3 py-2 font-mono ${d.maturation_delta_interface != null && d.maturation_delta_interface < 0 ? 'text-emerald-400' :
+                                                                            d.maturation_delta_interface != null && d.maturation_delta_interface > 0 ? 'text-red-400' : 'text-slate-500'}`}
+                                                                            title={d.maturation_delta_interface != null ? `Global ΔInterface: ${d.maturation_delta_interface.toFixed(1)} REU` : '—'}>
+                                                                            {formatMetric(d.maturation_delta_interface, 1)}
+                                                                        </td>
+                                                                        <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.maturation_selected_rmsd ?? rowPpiflowScore?.selected_rmsd_backbone, 2)}</td>
+                                                                        <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.maturation_rmsd, 2)}</td>
+                                                                    </>
+                                                                )}
                                                                 {showPpiflowColumns && (
                                                                     <>
                                                                         <td className="px-3 py-2 max-w-[200px] truncate text-xs text-slate-300" title={getPpiflowSourceName(d as UntypedApiValue) ?? ''}>
@@ -8346,9 +8420,11 @@ export function ResultsViewer() {
                                                                 )}
                                                                 <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rog, 1)}</td>
                                                                 <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rfd_rog, 1)}</td>
-                                                                <td className="px-3 py-2 font-mono text-accent" title={`FR2: ${d.fr2_contacts || '—'}`}>
-                                                                    {d.fr2_contacts || '—'}
-                                                                </td>
+                                                                {tableReviewCapabilities.antibody && (
+                                                                    <td className="px-3 py-2 font-mono text-accent" title={`FR2: ${d.fr2_contacts || '—'}`}>
+                                                                        {d.fr2_contacts || '—'}
+                                                                    </td>
+                                                                )}
                                                                 <td className="px-3 py-2">{d.is_favorite ? '★' : ''}</td>
                                                             </tr>
                                                         )})}
@@ -8447,8 +8523,8 @@ export function ResultsViewer() {
                             )}
                         </div>
                     </>
-                )
-                }
+                    )
+                )}
             </div >
         </div >
     );

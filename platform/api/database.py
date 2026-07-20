@@ -4,13 +4,13 @@ Database models and initialization for BioModStack Control Platform.
 Uses SQLAlchemy with async SQLite.
 """
 
-from sqlalchemy import Column, String, Text, Integer, Float, Boolean, DateTime, JSON, ForeignKey, text
+from sqlalchemy import Column, String, Text, Integer, Float, Boolean, DateTime, JSON, ForeignKey, UniqueConstraint, text, event
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
+from sqlalchemy.types import TypeDecorator
 from datetime import datetime
-from pathlib import Path
-import os
-
+import json
+from types import SimpleNamespace
 from paths import get_db_path, get_db_url
 
 # Database path - resolved via paths helper (supports env overrides)
@@ -26,6 +26,35 @@ async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False
 Base = declarative_base()
 
 
+class LenientSQLiteDateTime(TypeDecorator):
+    """SQLite datetime adapter tolerant of legacy RFC3339 ``Z`` strings.
+
+    SQLAlchemy's SQLite ``DateTime`` processor accepts its own emitted
+    ``YYYY-MM-DD HH:MM:SS.ffffff`` form but rejects rows imported as
+    ``YYYY-MM-DDTHH:MM:SS.ffffffZ``. One such imported job row must not brick
+    the whole jobs list.
+    """
+
+    impl = String
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value.isoformat(sep=" ")
+        return str(value)
+
+    def process_result_value(self, value, dialect):
+        if value is None or isinstance(value, datetime):
+            return value
+        raw = str(value)
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return datetime.fromisoformat(raw)
+
+
 class Job(Base):
     """Pipeline job record."""
     __tablename__ = "jobs"
@@ -37,9 +66,9 @@ class Job(Base):
     mode = Column(String(100), nullable=False)  # monomer_denovo, binder_denovo, etc.
     params = Column(JSON, nullable=False)
     
-    created_at = Column(DateTime, default=datetime.utcnow)
-    started_at = Column(DateTime, nullable=True)
-    completed_at = Column(DateTime, nullable=True)
+    created_at = Column(LenientSQLiteDateTime, default=datetime.utcnow)
+    started_at = Column(LenientSQLiteDateTime, nullable=True)
+    completed_at = Column(LenientSQLiteDateTime, nullable=True)
     
     output_dir = Column(String(500), nullable=True)
     nextflow_run_id = Column(String(100), nullable=True)
@@ -118,12 +147,47 @@ class Job(Base):
     designs = relationship("Design", back_populates="job", cascade="all, delete-orphan")
 
 
+class ExternalResultImport(Base):
+    """Durable state for importing one immutable external-provider result."""
+
+    __tablename__ = "external_result_imports"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider_id",
+            "resource_type",
+            "provider_job_id",
+            name="uq_external_result_import_identity",
+        ),
+    )
+
+    id = Column(String(36), primary_key=True)
+    provider_id = Column(String(64), nullable=False, index=True)
+    resource_type = Column(String(128), nullable=False, index=True)
+    provider_job_id = Column(String(128), nullable=False, index=True)
+    state = Column(String(32), nullable=False, default="discovered", index=True)
+    source_path = Column(String(1000), nullable=False)
+    source_fingerprint = Column(String(64), nullable=False)
+    run_metadata_sha256 = Column(String(64), nullable=False)
+    archive_sha256 = Column(String(64), nullable=True)
+    normalized_manifest_path = Column(String(1000), nullable=True)
+    bms_job_id = Column(String(36), ForeignKey("jobs.id"), nullable=True, index=True)
+    dataset_name = Column(String(255), nullable=False)
+    job_name = Column(String(255), nullable=True)
+    failure_code = Column(String(64), nullable=True)
+    failure_message = Column(Text, nullable=True)
+    provider_metadata = Column(JSON, nullable=False, default=dict)
+    schema_version = Column(Integer, nullable=False, default=1)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    imported_at = Column(DateTime, nullable=True)
+
+
 class Design(Base):
     """Individual protein design result."""
     __tablename__ = "designs"
     
     id = Column(String(36), primary_key=True)
-    job_id = Column(String(36), ForeignKey("jobs.id"), nullable=False)
+    job_id = Column(String(36), ForeignKey("jobs.id"), nullable=False, index=True)
     name = Column(String(255), nullable=False)
     pdb_path = Column(String(500), nullable=False)
     json_path = Column(String(500), nullable=True)
@@ -141,6 +205,16 @@ class Design(Base):
     source_design_name = Column(String(255), nullable=True)
     artifact_class = Column(String(64), nullable=True, index=True)
     artifact_schema_version = Column(Integer, nullable=True)
+
+    # Authoritative Data Review identity and typed artifact/role envelope.
+    # Producer-declared values win; legacy rows are explicitly marked as
+    # ingestion/backfill rather than silently reinterpreted by the frontend.
+    review_profile_id = Column(String(64), nullable=True, index=True)
+    review_contract_version = Column(Integer, nullable=True)
+    review_contract_source = Column(String(32), nullable=True)
+    review_artifact_manifest = Column(JSON, nullable=True)
+    review_role_map = Column(JSON, nullable=True)
+
     selected_loop_scope = Column(JSON, nullable=True)
     provenance = Column(JSON, nullable=True)
     
@@ -335,6 +409,22 @@ class Design(Base):
     job = relationship("Job", back_populates="designs")
 
 
+@event.listens_for(Design, "before_insert")
+def _finalize_design_review_contract_before_insert(_mapper, _connection, target):
+    from services.result_contracts import apply_review_contract_to_design
+
+    apply_review_contract_to_design(target)
+
+
+@event.listens_for(Design, "before_update")
+def _refresh_inferred_design_review_contract_before_update(_mapper, _connection, target):
+    from services.result_contracts import apply_review_contract_to_design
+
+    if getattr(target, "review_contract_source", None) != "producer":
+        target.review_artifact_manifest = None
+    apply_review_contract_to_design(target)
+
+
 class AnalysisRun(Base):
     """Persisted on-demand analysis run for a design or job subject."""
     __tablename__ = "analysis_runs"
@@ -365,6 +455,130 @@ class AnalysisRun(Base):
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
     last_accessed_at = Column(DateTime, nullable=True)
+
+
+class ConformationalMappingRequest(Base):
+    """Durable canonical request and lifecycle authority."""
+
+    __tablename__ = "conformational_mapping_requests"
+
+    request_id = Column(String(36), primary_key=True)
+    job_id = Column(String(36), ForeignKey("jobs.id"), nullable=False, unique=True, index=True)
+    principal_id = Column(String(255), nullable=False, index=True)
+    backend = Column(String(64), nullable=False, index=True)
+    status = Column(String(32), nullable=False, default="prepared", index=True)
+    request_sha256 = Column(String(64), nullable=False, unique=True, index=True)
+    coordinate_plan_sha256 = Column(String(64), nullable=False)
+    resume_key = Column(String(64), nullable=False, index=True)
+    result_contract_id = Column(String(64), nullable=False)
+    request_json = Column(JSON, nullable=False)
+    coordinate_plan_json = Column(JSON, nullable=False)
+    progress_json = Column(JSON, nullable=False, default=dict)
+    failure_receipt_json = Column(JSON, nullable=True)
+    retry_of_request_id = Column(String(36), nullable=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    terminal_at = Column(DateTime, nullable=True)
+
+
+class ConformationalMappingSource(Base):
+    """Server-owned source registry for snapshots, uploads and references."""
+
+    __tablename__ = "conformational_mapping_sources"
+
+    source_id = Column(String(80), primary_key=True)
+    principal_id = Column(String(255), nullable=False, index=True)
+    source_kind = Column(String(64), nullable=False, index=True)
+    storage_root = Column(String(2000), nullable=False)
+    relative_path = Column(String(1000), nullable=False)
+    content_sha256 = Column(String(64), nullable=False, index=True)
+    size_bytes = Column(Integer, nullable=False)
+    metadata_json = Column(JSON, nullable=False, default=dict)
+    immutable = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ConformationalMappingRecord(Base):
+    """Content-addressed canonical records for every CM product plane."""
+
+    __tablename__ = "conformational_mapping_records"
+    __table_args__ = (
+        UniqueConstraint("request_id", "record_type", "record_key", name="uq_cm_record_identity"),
+    )
+
+    id = Column(String(36), primary_key=True)
+    request_id = Column(
+        String(36),
+        ForeignKey("conformational_mapping_requests.request_id"),
+        nullable=False,
+        index=True,
+    )
+    record_type = Column(String(64), nullable=False, index=True)
+    record_key = Column(String(255), nullable=False)
+    content_sha256 = Column(String(64), nullable=False, index=True)
+    payload_json = Column(JSON, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ConformationalMappingArtifact(Base):
+    """Registered native/canonical file identity; paths are never public authority."""
+
+    __tablename__ = "conformational_mapping_artifacts"
+    __table_args__ = (
+        UniqueConstraint("request_id", "relative_path", name="uq_cm_artifact_path"),
+    )
+
+    artifact_id = Column(String(96), primary_key=True)
+    request_id = Column(
+        String(36),
+        ForeignKey("conformational_mapping_requests.request_id"),
+        nullable=False,
+        index=True,
+    )
+    candidate_id = Column(String(128), nullable=True, index=True)
+    role = Column(String(64), nullable=False, index=True)
+    relative_path = Column(String(1000), nullable=False)
+    storage_path = Column(String(2000), nullable=False)
+    content_sha256 = Column(String(64), nullable=False, index=True)
+    size_bytes = Column(Integer, nullable=False)
+    media_type = Column(String(128), nullable=False)
+    metadata_json = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ConformationalMappingLandscapeRow(Base):
+    """Range/page-backed exact substitution row storage."""
+
+    __tablename__ = "conformational_mapping_landscape_rows"
+    __table_args__ = (
+        UniqueConstraint(
+            "request_id", "candidate_id", "entity_instance_id", "auth_asym_id",
+            "auth_seq_id", "insertion_code", "sequence_index", "mutation_aa",
+            name="uq_cm_landscape_slot",
+        ),
+    )
+
+    id = Column(String(36), primary_key=True)
+    request_id = Column(
+        String(36),
+        ForeignKey("conformational_mapping_requests.request_id"),
+        nullable=False,
+        index=True,
+    )
+    candidate_id = Column(String(128), nullable=False, index=True)
+    entity_instance_id = Column(String(128), nullable=False, index=True)
+    auth_asym_id = Column(String(128), nullable=False)
+    auth_seq_id = Column(String(64), nullable=False)
+    insertion_code = Column(String(16), nullable=False, default="")
+    sequence_index = Column(Integer, nullable=False)
+    wt = Column(String(1), nullable=False)
+    mutation_aa = Column(String(1), nullable=False)
+    score = Column(Float, nullable=True)
+    score_class = Column(String(32), nullable=True)
+    scoreable = Column(Boolean, nullable=False)
+    status = Column(String(32), nullable=False, index=True)
+    reason = Column(Text, nullable=True)
+    provenance_json = Column(JSON, nullable=False, default=dict)
 
 
 class InputFile(Base):
@@ -477,7 +691,7 @@ class Primer(Base):
     tm_settings = Column(JSON, nullable=True)
     
     # Primer type and usage
-    primer_type = Column(String(50), default="general")  # general, forward, reverse, sequencing, qpcr
+    primer_type = Column(String(50), default="general")  # general, forward, reverse, sequencing, quantitative PCR
     description = Column(Text, nullable=True)
     
     # Target binding info (optional)
@@ -519,8 +733,94 @@ async def _ensure_schema(conn):
     await _ensure_table_columns(conn, "jobs", Job.__table__.columns)
     await _ensure_table_columns(conn, "designs", Design.__table__.columns)
     await _ensure_table_columns(conn, "analysis_runs", AnalysisRun.__table__.columns)
+    await _ensure_table_columns(conn, "conformational_mapping_requests", ConformationalMappingRequest.__table__.columns)
+    await _ensure_table_columns(conn, "conformational_mapping_sources", ConformationalMappingSource.__table__.columns)
+    await _ensure_table_columns(conn, "conformational_mapping_records", ConformationalMappingRecord.__table__.columns)
+    await _ensure_table_columns(conn, "conformational_mapping_artifacts", ConformationalMappingArtifact.__table__.columns)
+    await _ensure_table_columns(conn, "conformational_mapping_landscape_rows", ConformationalMappingLandscapeRow.__table__.columns)
     await _ensure_table_columns(conn, "nucleotide_sequences", NucleotideSequence.__table__.columns)
     await _ensure_table_columns(conn, "primers", Primer.__table__.columns)
+    await _backfill_design_review_contracts(conn)
+    await _ensure_sqlite_indexes(conn)
+
+
+async def _backfill_design_review_contracts(conn):
+    """Persist deterministic compatibility profiles; ambiguous rows fail closed."""
+    from services.result_contracts import (
+        REVIEW_CONTRACT_VERSION,
+        build_review_artifact_manifest,
+        resolve_result_contract,
+    )
+
+    result = await conn.execute(text(
+        "SELECT d.id, d.stage_family, d.stage_mode, d.artifact_class, d.pdb_path, "
+        "d.aligned_error_path, d.aligned_error_format, "
+        "d.review_profile_id, d.review_contract_version, d.review_contract_source, "
+        "d.review_artifact_manifest, d.review_role_map, "
+        "j.model_id AS job_model_id, j.mode AS job_mode, "
+        "j.stage_family AS job_stage_family, j.stage_mode AS job_stage_mode "
+        "FROM designs d LEFT JOIN jobs j ON j.id = d.job_id "
+        "WHERE d.review_profile_id IS NULL "
+        "OR d.review_profile_id = 'unsupported_legacy' "
+        "OR d.review_artifact_manifest IS NULL"
+    ))
+    for row in result.mappings().all():
+        values = dict(row)
+        stage_family = values.get("stage_family") or values.get("job_stage_family")
+        stage_mode = values.get("stage_mode") or values.get("job_stage_mode") or values.get("job_mode")
+        persisted_profile = values.get("review_profile_id")
+        stale_unsupported = persisted_profile in (None, "", "unsupported_legacy")
+        contract = resolve_result_contract(
+            review_profile_id=None if stale_unsupported else persisted_profile,
+            model_type=values.get("job_model_id") or stage_family,
+            stage_family=stage_family,
+            stage_mode=stage_mode,
+            artifact_class=values.get("artifact_class"),
+            provenance={"model_id": values.get("job_model_id")},
+        )
+        profile_id = (
+            contract.analysis_contract_id or "unsupported_legacy"
+            if stale_unsupported
+            else persisted_profile
+        )
+        role_map = values.get("review_role_map")
+        if isinstance(role_map, str):
+            try:
+                role_map = json.loads(role_map)
+            except json.JSONDecodeError:
+                role_map = None
+        design_values = {
+            **values,
+            "review_profile_id": profile_id,
+            "review_role_map": role_map if isinstance(role_map, dict) else {},
+            "pae_matrix": None,
+        }
+        design = SimpleNamespace(**design_values)
+        manifest = build_review_artifact_manifest(design)
+        await conn.execute(
+            text(
+                "UPDATE designs SET review_profile_id = :profile_id, "
+                "review_contract_version = :contract_version, "
+                "review_contract_source = CASE "
+                "WHEN review_contract_source IS NULL OR review_contract_source = 'unsupported_legacy' "
+                "THEN :contract_source ELSE review_contract_source END, "
+                "review_artifact_manifest = :artifact_manifest, "
+                "review_role_map = COALESCE(review_role_map, :role_map) WHERE id = :design_id"
+            ),
+            {
+                "profile_id": profile_id,
+                "contract_version": values.get("review_contract_version") or REVIEW_CONTRACT_VERSION,
+                "contract_source": "legacy_backfill" if contract.analysis_contract_id else "unsupported_legacy",
+                "artifact_manifest": json.dumps(manifest, sort_keys=True),
+                "role_map": json.dumps(design.review_role_map, sort_keys=True),
+                "design_id": values["id"],
+            },
+        )
+
+
+async def _ensure_sqlite_indexes(conn):
+    """Install indexes required by high-volume list/count paths on legacy DBs."""
+    await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_designs_job_id ON designs (job_id)"))
 
 
 async def _ensure_table_columns(conn, table_name: str, columns):

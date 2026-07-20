@@ -14,6 +14,27 @@ from sqlalchemy.orm import load_only
 from database import Design, Job
 from paths import resolve_runtime_data_path
 from services.aligned_error_utils import fingerprint_aligned_error_artifact
+from services.result_contracts import resolve_result_contract
+
+
+def _persisted_job_design_contract(design: Design):
+    return resolve_result_contract(review_profile_id=design.review_profile_id)
+
+
+def _design_supports_binder_metrics(design: Design) -> bool:
+    capabilities = _persisted_job_design_contract(design).viewer_capabilities
+    return "antibody_backbone_metrics" in capabilities or "complex_interface_metrics" in capabilities
+
+
+def _design_supports_job_analysis(design: Design, analysis_type: str) -> bool:
+    contract = _persisted_job_design_contract(design)
+    if not contract.analysis_contract_id or contract.analysis_contract_id == "unsupported_legacy":
+        return False
+    if analysis_type in {JOB_AA_COMPOSITION_ANALYSIS, JOB_CDR_LOGO_PACK_ANALYSIS}:
+        return "antibody_backbone_metrics" in contract.viewer_capabilities
+    if analysis_type == JOB_CORRELATION_MATRIX_ANALYSIS:
+        return _design_supports_binder_metrics(design)
+    return False
 
 
 STRUCTURE_SUMMARY_ANALYSIS = "structure_summary"
@@ -217,8 +238,10 @@ def build_ipsae_interface_signature(design: Design, params: dict[str, Any], _ses
         "analysis_type": IPSAE_INTERFACE_ANALYSIS,
         "source": _aligned_error_source_fingerprint(design),
         "params": params,
-        "binder_chains": design.detected_antibody_chains,
-        "target_chain": design.detected_target_chain,
+        "review_profile_id": design.review_profile_id,
+        "review_role_map": design.review_role_map if isinstance(design.review_role_map, dict) else {},
+        "detected_antibody_chains": design.detected_antibody_chains,
+        "detected_target_chain": design.detected_target_chain,
     })
 
 
@@ -245,7 +268,7 @@ async def _job_design_scope_rows(
 
     query = (
         select(Design)
-        .options(load_only(*columns))
+        .options(load_only(*columns, Design.review_profile_id))
         .where(Design.job_id.in_(job_ids))
         .order_by(Design.id.asc())
     )
@@ -278,6 +301,7 @@ async def build_job_correlation_signature(job: Job, params: dict[str, Any], sess
             Design.binder_probability,
         ),
     )
+    designs = [design for design in designs if _design_supports_job_analysis(design, JOB_CORRELATION_MATRIX_ANALYSIS)]
     payload = {
         "analysis_type": JOB_CORRELATION_MATRIX_ANALYSIS,
         "job_id": str(job.id),
@@ -286,18 +310,18 @@ async def build_job_correlation_signature(job: Job, params: dict[str, Any], sess
             {
                 "id": design.id,
                 "plddt_overall": design.plddt_overall,
-                "plddt_binder": design.plddt_binder,
+                "plddt_binder": design.plddt_binder if _design_supports_binder_metrics(design) else None,
                 "pae_overall": design.pae_overall,
-                "pae_interaction": design.pae_interaction,
-                "rmsd_binder": design.rmsd_binder,
+                "pae_interaction": design.pae_interaction if _design_supports_binder_metrics(design) else None,
+                "rmsd_binder": design.rmsd_binder if _design_supports_binder_metrics(design) else None,
                 "rmsd_overall": design.rmsd_overall,
                 "mpnn_score": design.mpnn_score,
                 "conf_score": design.conf_score,
                 "ptm": design.ptm,
                 "rog": design.rog,
-                "ligand_iptm": design.ligand_iptm,
-                "affinity_score": design.affinity_score,
-                "binder_probability": design.binder_probability,
+                "ligand_iptm": design.ligand_iptm if _design_supports_binder_metrics(design) else None,
+                "affinity_score": design.affinity_score if _design_supports_binder_metrics(design) else None,
+                "binder_probability": design.binder_probability if _design_supports_binder_metrics(design) else None,
             }
             for design in designs
         ],
@@ -321,6 +345,7 @@ async def build_job_aa_composition_signature(job: Job, params: dict[str, Any], s
             Design.cdr_l3,
         ),
     )
+    designs = [design for design in designs if _design_supports_job_analysis(design, JOB_AA_COMPOSITION_ANALYSIS)]
     payload = {
         "analysis_type": JOB_AA_COMPOSITION_ANALYSIS,
         "job_id": str(job.id),
@@ -357,6 +382,7 @@ async def build_job_cdr_logo_signature(job: Job, params: dict[str, Any], session
             Design.cdr_l3,
         ),
     )
+    designs = [design for design in designs if _design_supports_job_analysis(design, JOB_CDR_LOGO_PACK_ANALYSIS)]
     payload = {
         "analysis_type": JOB_CDR_LOGO_PACK_ANALYSIS,
         "job_id": str(job.id),

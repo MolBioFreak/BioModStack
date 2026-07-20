@@ -48,7 +48,7 @@ Current oversized NGS module:
 
 Existing top-level `workflows/` directory contains many non-NGS workflow files already:
 
-- Antibody/design/structure/experimental workflows such as `antibody_denovo.nf`, `structure_prediction.nf`, `boltzgen_design.nf`, `protein_local_redesign.nf`, etc.
+- Antibody/design/structure/experimental workflows such as `antibody_child.nf`, `structure_prediction.nf`, `boltzgen_design.nf`, `protein_local_redesign.nf`, etc.
 - Current NGS workflow is a peer at `workflows/nanopore_methylation.nf`.
 
 The target plan must therefore **not** pretend `workflows/` is empty or purely NGS-owned. NGS should move into a subdirectory instead of flattening more NGS files into the already crowded shared root.

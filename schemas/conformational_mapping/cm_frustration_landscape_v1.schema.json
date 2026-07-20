@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://biomodstack.org/schemas/conformational_mapping/cm_frustration_landscape_v1.schema.json",
+  "title": "BioModStack FrustraMPNN landscape v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_name", "schema_version", "target_id", "candidate_id", "raw_csv_sha256", "checkpoint_id", "checkpoint_sha256", "tool_id", "tool_sha256", "threshold_policy_id", "threshold_policy_sha256", "input_issues", "residues"],
+  "properties": {
+    "schema_name": {"const": "cm_frustration_landscape"}, "schema_version": {"const": 1},
+    "target_id": {"type": "string", "minLength": 1}, "candidate_id": {"type": "string", "minLength": 1},
+    "raw_csv_sha256": {"$ref": "#/$defs/sha256"}, "checkpoint_id": {"type": "string", "minLength": 1}, "checkpoint_sha256": {"$ref": "#/$defs/sha256"},
+    "tool_id": {"type": "string", "minLength": 1}, "tool_sha256": {"$ref": "#/$defs/sha256"},
+    "threshold_policy_id": {"const": "frustrampnn_class_v1"}, "threshold_policy_sha256": {"$ref": "#/$defs/sha256"},
+    "input_issues": {"type": "array", "items": {"$ref": "#/$defs/input_issue"}},
+    "residues": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/residue"}}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "aa": {"type": "string", "enum": ["A", "C", "D", "E", "F", "G", "H", "I", "K", "L", "M", "N", "P", "Q", "R", "S", "T", "V", "W", "Y"]},
+    "slot": {
+      "type": "object", "additionalProperties": false,
+      "required": ["wt", "mutation_aa", "score", "class", "scoreable", "status", "reason", "native"],
+      "properties": {
+        "wt": {"$ref": "#/$defs/aa"}, "mutation_aa": {"$ref": "#/$defs/aa"}, "score": {"type": ["number", "null"]},
+        "class": {"enum": ["high", "neutral", "minimally_frustrated", null]}, "scoreable": {"type": "boolean"},
+        "status": {"enum": ["ok", "unscoreable_residue", "missing_row", "duplicate_row", "malformed_row", "nonfinite_score", "mapping_failed", "conformer_missing"]},
+        "reason": {"type": ["string", "null"]}, "native": {"type": "boolean"}
+      },
+      "allOf": [
+        {"if": {"properties": {"status": {"const": "ok"}}}, "then": {"properties": {"score": {"type": "number"}, "scoreable": {"const": true}}}},
+        {"if": {"not": {"properties": {"status": {"const": "ok"}}}}, "then": {"properties": {"score": {"type": "null"}}}}
+      ]
+    },
+    "input_issue": {
+      "type": "object", "additionalProperties": false,
+      "required": ["line_number", "status", "reason", "raw_identity"],
+      "properties": {
+        "line_number": {"type": "integer", "minimum": 2},
+        "status": {"enum": ["malformed_row", "mapping_failed"]},
+        "reason": {"type": "string", "minLength": 1},
+        "raw_identity": {"type": "object"}
+      }
+    },
+    "residue": {
+      "type": "object", "additionalProperties": false,
+      "required": ["entity_instance_id", "auth_asym_id", "auth_seq_id", "insertion_code", "sequence_index", "wt", "slots"],
+      "properties": {
+        "entity_instance_id": {"type": "string", "minLength": 1}, "auth_asym_id": {"type": "string", "minLength": 1}, "auth_seq_id": {"type": "integer"},
+        "insertion_code": {"type": "string", "maxLength": 1}, "sequence_index": {"type": "integer", "minimum": 1}, "wt": {"$ref": "#/$defs/aa"},
+        "slots": {"type": "array", "minItems": 20, "maxItems": 20, "items": {"$ref": "#/$defs/slot"}}
+      }
+    }
+  }
+}

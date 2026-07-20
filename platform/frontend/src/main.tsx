@@ -7,18 +7,31 @@ import { ThemeProvider } from './components/ThemeProvider'
 import './index.css'
 import App from './App.tsx'
 import { signalCordovaAppReady } from './runtime/cordovaShell'
-import { getRouterBasename, isAppPath } from './runtime/navigation'
+import { isAppPath, resolveRouterBasenameForLocation } from './runtime/navigation'
+import { buildIdentity } from './lib/buildIdentity'
+
+console.info('[BioModStack build]', buildIdentity)
 
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 1000 * 60, // 1 minute
+      // Large result payloads must not remain in an inactive renderer indefinitely.
+      gcTime: 1000 * 60 * 10,
       retry: 1,
+      retryDelay: (attempt) => Math.min(30_000, 1000 * 2 ** attempt),
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: true,
+      // Preserve polling ownership while hidden; TanStack resumes it on focus.
+      refetchIntervalInBackground: false,
     },
   },
 })
 
-const routerBasename = getRouterBasename({ envBaseUrl: import.meta.env.BASE_URL })
+const routerBasename = resolveRouterBasenameForLocation(
+  typeof window === 'undefined' ? '/' : window.location.pathname,
+  { envBaseUrl: import.meta.env.BASE_URL },
+)
 const isDesigner = typeof window !== 'undefined' && isAppPath(window.location.pathname, '/designer', routerBasename)
 const AppTree = isDesigner ? (
   <App />

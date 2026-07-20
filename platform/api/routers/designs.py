@@ -15,16 +15,17 @@ from typing import Optional, List, Dict, Any, Union
 from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 import math
 import re
 
 from database import get_session, Design, Job
 from paths import resolve_runtime_data_path, to_allowed_relative
 from services.analysis_runs import get_matching_design_analysis_run, load_analysis_result
-from services.cdr_annotator import extract_sequence_from_pdb, identify_binder_chains
-from services.stage_review import REVIEWABLE_STAGES, ensure_stage_review_rows, load_review_gate_snapshot
+from services.cdr_annotator import extract_sequence_from_pdb
+from services.stage_review import REVIEWABLE_STAGES, load_review_gate_snapshot
 from services.structure_utils import get_per_chain_fampnn_psce
-from services.result_contracts import resolve_result_contract
+from services.result_contracts import REVIEW_CONTRACT_VERSION, build_review_artifact_manifest, resolve_result_contract, validate_design_analysis_request
 from services.design_metrics import build_design_metric_completeness, build_design_metric_provenance
 from antibody_pipeline_contract import infer_antibody_artifact_class_from_stage, normalize_antibody_artifact_class
 
@@ -95,41 +96,21 @@ def _merge_review_payload(
     return merged
 
 
-async def _hydrate_review_job(session: AsyncSession, job: Optional[Job]) -> Optional[str]:
+async def _hydrate_review_job(_session: AsyncSession, job: Optional[Job]) -> Optional[str]:
+    """Read the persisted review state for a result view without mutating it.
+
+    Gate restoration and review-row materialization are worker/repair duties;
+    GET handlers must not modify database state as a side effect of rendering.
+    """
     if job is None:
         return None
 
-    gate_stage, gate_payload = load_review_gate_snapshot(job.output_dir, job.awaiting_stage)
-    gate_payload = _merge_review_payload(gate_payload, job.awaiting_payload or {})
+    gate_stage, _gate_payload = load_review_gate_snapshot(
+        job.child_output_dir or job.output_dir,
+        job.awaiting_stage,
+    )
     review_stage = str(job.awaiting_stage or gate_stage or "").strip().lower()
-    changed = False
-
-    if gate_stage and job.awaiting_stage != gate_stage:
-        job.awaiting_stage = gate_stage
-        review_stage = gate_stage
-        changed = True
-    if gate_payload and gate_payload != (job.awaiting_payload or {}):
-        job.awaiting_payload = gate_payload
-        changed = True
-    if review_stage in REVIEWABLE_STAGES and not bool(job.awaiting_input):
-        job.awaiting_input = True
-        changed = True
-
-    if review_stage in REVIEWABLE_STAGES and bool(job.awaiting_input):
-        existing_review_design_count = await session.scalar(
-            select(func.count()).select_from(Design).where(
-                Design.job_id == job.id,
-                Design.source_stage == review_stage,
-            )
-        )
-        if not existing_review_design_count:
-            await ensure_stage_review_rows(session, job)
-            changed = True
-
-    if changed:
-        await session.commit()
-
-    return review_stage if review_stage in REVIEWABLE_STAGES else None
+    return review_stage if job.awaiting_input and review_stage in REVIEWABLE_STAGES else None
 
 
 def _should_force_review_stage_listing(job: Optional[Job], review_stage: Optional[str]) -> bool:
@@ -248,8 +229,9 @@ class DesignResponse(BaseModel):
     cdr_l2_length: Optional[int] = None
     cdr_l3_length: Optional[int] = None
     
-    # User annotations
-    is_favorite: bool
+    # User annotations. SQLite legacy/import rows may contain NULL despite the
+    # modern ORM default, so the serializer normalizes that state to false.
+    is_favorite: bool = False
     notes: Optional[str]
 
     # Lineage / provenance
@@ -267,6 +249,11 @@ class DesignResponse(BaseModel):
     source_design_name: Optional[str] = None
     artifact_class: Optional[str] = None
     artifact_schema_version: Optional[int] = None
+    review_profile_id: Optional[str] = None
+    review_contract_version: Optional[int] = None
+    review_contract_source: Optional[str] = None
+    review_artifact_manifest: Optional[Dict[str, Any]] = None
+    review_role_map: Optional[Dict[str, Any]] = None
     result_set: Optional[str] = None
     result_set_label: Optional[str] = None
     analysis_contract_id: Optional[str] = None
@@ -378,7 +365,8 @@ class DesignResponse(BaseModel):
     rosetta_interface_analyzer_used: Optional[bool] = None
     rosetta_interface_warning: Optional[str] = None
     
-    created_at: datetime
+    # Imported rows can legitimately predate timestamp backfills.
+    created_at: Optional[datetime] = None
     
     model_config = ConfigDict(from_attributes=True)
 
@@ -472,14 +460,20 @@ class PlotlyMetricsResponse(BaseModel):
 class PlotlyMetricsRequest(BaseModel):
     include_children: bool = True
     design_ids: Optional[List[str]] = None
-    limit: int = 10000
-    offset: int = 0
+    limit: int = Field(10000, ge=1, le=10000)
+    offset: int = Field(0, ge=0)
+
+
+# Analytics may return a larger, still bounded payload because this path uses
+# a narrow numeric SQL projection rather than the ordinary design-list schema.
+ANALYTICS_MAX_DESIGNS = 10000
 
 
 ANALYTICS_LOAD_ONLY_COLUMNS = (
     Design.id,
     Design.name,
     Design.created_at,
+    Design.review_profile_id,
     Design.plddt_overall,
     Design.plddt_binder,
     Design.plddt_target,
@@ -584,6 +578,14 @@ DESIGN_LIST_LOAD_ONLY_COLUMNS = (
     Design.job_id,
     Design.name,
     Design.pdb_path,
+    Design.aligned_error_path,
+    Design.aligned_error_format,
+    Design.aligned_error_key,
+    Design.review_profile_id,
+    Design.review_contract_version,
+    Design.review_contract_source,
+    Design.review_role_map,
+    Design.review_artifact_manifest,
     Design.num_helices,
     Design.num_strands,
     Design.rog,
@@ -794,6 +796,33 @@ def _inject_metric(metrics: Dict[str, float], key: str, value: Any) -> None:
     metrics[f"{key}_n"] = float(len(flattened))
 
 
+def _review_metric_allowed(design: Design, key: str) -> bool:
+    normalized = key.strip().lower()
+    if normalized in {
+        "ipsae",
+        "ipsae_binder_to_target",
+        "ipsae_target_to_binder",
+        "ipsae_d0chn",
+        "ipsae_d0dom",
+    }:
+        return True
+    capabilities = resolve_result_contract(
+        review_profile_id=design.review_profile_id,
+    ).viewer_capabilities
+    if any(token in normalized for token in (
+        "binder", "interface", "interaction", "iptm", "ipsae", "affinity",
+        "epitope", "target_contact", "target_distance", "hotspot",
+    )):
+        return "complex_interface_metrics" in capabilities
+    if any(token in normalized for token in ("cdr_", "antibody", "rfa_", "frustration")):
+        return "antibody_backbone_metrics" in capabilities
+    if any(token in normalized for token in ("maturation", "ppiflow", "selected_loop")):
+        return "ppiflow_maturation_metrics" in capabilities
+    if any(token in normalized for token in ("fampnn", "mpnn")):
+        return "sequence_design_metrics" in capabilities
+    return True
+
+
 def _build_plotly_metrics(design: Design) -> Dict[str, float]:
     """Build a dense, plot-ready numeric metric map for a design."""
     metrics: Dict[str, float] = {}
@@ -867,13 +896,15 @@ def _build_plotly_metrics(design: Design) -> Dict[str, float]:
     }
     _inject_metric(metrics, "screening_reason_present", 1.0 if design.screening_reason else None)
     for key, value in base_metrics.items():
-        _inject_metric(metrics, key, value)
+        if _review_metric_allowed(design, key):
+            _inject_metric(metrics, key, value)
     if design.has_clash is not None:
         metrics["has_clash"] = 1.0 if design.has_clash else 0.0
 
     raw_conf = design.confidence_metrics if isinstance(design.confidence_metrics, dict) else {}
     for key, value in raw_conf.items():
-        _inject_metric(metrics, key, value)
+        if _review_metric_allowed(design, key):
+            _inject_metric(metrics, key, value)
 
     confornets_sample = raw_conf.get("confornets_sample") if isinstance(raw_conf.get("confornets_sample"), dict) else {}
     confornets_ensemble = raw_conf.get("confornets_ensemble") if isinstance(raw_conf.get("confornets_ensemble"), dict) else {}
@@ -972,7 +1003,8 @@ def _build_plotly_metrics(design: Design) -> Dict[str, float]:
         "ppiflow_objective_score": design.ppiflow_objective_score if design.ppiflow_objective_score is not None else ppiflow_score.get("objective_score"),
     }
     for key, value in ppiflow_metrics.items():
-        _inject_metric(metrics, key, value)
+        if _review_metric_allowed(design, key):
+            _inject_metric(metrics, key, value)
 
     return metrics
 
@@ -1348,6 +1380,9 @@ def _infer_design_result_set(
     """
     family = _normalize_stage_token(stage_family)
     mode = _normalize_stage_token(stage_mode)
+    raw_artifact = _normalize_stage_token(artifact_class)
+    if raw_artifact == "validated_binder_complex" or family == "binder_design":
+        return "validated_binder_complex", "binder_candidates", "Binder candidates"
     normalized_artifact = normalize_antibody_artifact_class(artifact_class)
     if normalized_artifact is None:
         normalized_artifact = normalize_antibody_artifact_class(
@@ -1357,7 +1392,10 @@ def _infer_design_result_set(
     if family == "rfantibody" or normalized_artifact == "backbone_complex":
         return normalized_artifact, "rfantibody_backbones", "RFA/backbone"
 
-    if family in {"boltzgen", "fampnn", "proteinmpnn", "antifold", "frustrampnn", "caliby"}:
+    if family == "boltzgen":
+        return normalized_artifact, "de_novo_backbones", "De-novo backbones"
+
+    if family in {"fampnn", "proteinmpnn", "antifold", "frustrampnn", "caliby"}:
         return normalized_artifact, "sequence_designs", "Sequence designs"
 
     if family == "ppiflow" or (mode and ("ppiflow" in mode or "maturation" in mode)):
@@ -1659,56 +1697,22 @@ def _compute_fampnn_response_metrics(
     }
 
 
-def _compute_binder_sequence_response_value(
-    design: Design,
-    *,
-    include_structure_fallback: bool = False,
-) -> Optional[str]:
-    payload_records = _fampnn_payload_records(design)
-    for record in payload_records:
+def _compute_binder_sequence_response_value(design: Design) -> Optional[str]:
+    persisted = getattr(design, "binder_sequence", None)
+    if isinstance(persisted, str) and persisted.strip():
+        return persisted.strip()
+
+    # Binder identity must be explicit. Generic input `sequence` fields and
+    # single-chain structure guesses are lineage/input data, not binder roles.
+    for record in _fampnn_payload_records(design):
         binder_sequence = _text_record_value(record, "binder_sequence")
         if binder_sequence:
             return binder_sequence
 
     for record in _import_payload_records(design):
-        binder_sequence = _text_record_value(record, "binder_sequence", "sequence")
+        binder_sequence = _text_record_value(record, "binder_sequence")
         if binder_sequence:
             return binder_sequence
-
-    if not include_structure_fallback or not design.pdb_path:
-        return None
-
-    structure_path = resolve_runtime_data_path(design.pdb_path)
-    if not structure_path.exists():
-        return None
-
-    try:
-        sequences = extract_sequence_from_pdb(str(structure_path))
-        if not sequences:
-            return None
-
-        binder_chains = identify_binder_chains(sequences, str(structure_path))
-        ordered_chain_ids = [
-            chain_id
-            for chain_id in dict.fromkeys(binder_chains.values())
-            if isinstance(chain_id, str) and chain_id in sequences and sequences.get(chain_id)
-        ]
-        if ordered_chain_ids:
-            binder_sequences = [sequences[chain_id].strip() for chain_id in ordered_chain_ids if isinstance(sequences.get(chain_id), str) and sequences[chain_id].strip()]
-            if binder_sequences:
-                return "|".join(binder_sequences)
-
-        heavy_chain = sequences.get("H")
-        if isinstance(heavy_chain, str) and heavy_chain.strip():
-            return heavy_chain.strip()
-
-        if len(sequences) == 1:
-            only_sequence = next(iter(sequences.values()))
-            if isinstance(only_sequence, str) and only_sequence.strip():
-                return only_sequence.strip()
-    except Exception:
-        return None
-
     return None
 
 
@@ -1727,14 +1731,14 @@ def _compute_binder_length_response_value(
             return rounded_length
 
     for record in _fampnn_payload_records(design):
-        payload_length = _numeric_record_value(record, "binder_length", "length")
+        payload_length = _numeric_record_value(record, "binder_length")
         if payload_length is not None:
             rounded_length = int(round(payload_length))
             if rounded_length > 0:
                 return rounded_length
 
     for record in _import_payload_records(design):
-        payload_length = _numeric_record_value(record, "binder_length", "length_aa")
+        payload_length = _numeric_record_value(record, "binder_length")
         if payload_length is not None:
             rounded_length = int(round(payload_length))
             if rounded_length > 0:
@@ -1776,6 +1780,12 @@ def _design_to_response(
             data[field_name] = None
             continue
         data[field_name] = getattr(design, field_name, None)
+    data["is_favorite"] = bool(data.get("is_favorite"))
+    # These are internal review-manifest inputs rather than public top-level
+    # response fields. List queries load them explicitly; preserve them here so
+    # fail-closed readiness is rebuilt from real persisted artifacts.
+    for field_name in ("aligned_error_path", "aligned_error_format", "aligned_error_key"):
+        data[field_name] = None if field_name in unloaded else getattr(design, field_name, None)
     data["frustration_csv_relpath"] = None if "frustration_csv_path" in unloaded else _safe_allowed_relative(design.frustration_csv_path)
     fampnn_metrics = _compute_fampnn_response_metrics(
         design,
@@ -1789,7 +1799,8 @@ def _design_to_response(
         isinstance(flat_scope, dict) and flat_scope.get("metric_family") == "rfantibody_plddt"
     ) or str(getattr(design, "source_stage", "") or getattr(design, "stage_family", "")).lower().find("rfantibody") >= 0
     rfa_metrics = nested_rfa_metrics if nested_rfa_metrics is not None else (confidence_metrics if looks_like_flat_rfa else None)
-    first_present = lambda *values: next((value for value in values if value is not None), None)
+    def first_present(*values: object) -> object | None:
+        return next((value for value in values if value is not None), None)
     if isinstance(rfa_metrics, dict):
         rfa_confidence_scope = rfa_metrics.get("confidence_scope") if isinstance(rfa_metrics.get("confidence_scope"), dict) else None
         rfa_plddt = rfa_confidence_scope.get("plddt") if isinstance(rfa_confidence_scope, dict) and isinstance(rfa_confidence_scope.get("plddt"), dict) else {}
@@ -1837,15 +1848,6 @@ def _design_to_response(
     for field_name, fallback_value in fallback_fields.items():
         if data.get(field_name) in (None, "", [], {}, ()):
             data[field_name] = fallback_value
-    binder_sequence = _compute_binder_sequence_response_value(
-        design,
-        include_structure_fallback=include_fampnn_structure_fallback,
-    )
-    data["binder_sequence"] = binder_sequence
-    data["binder_length"] = _compute_binder_length_response_value(
-        design,
-        binder_sequence=binder_sequence,
-    )
     artifact_class, result_set, result_set_label = _infer_design_result_set(
         stage_family=data.get("stage_family"),
         stage_mode=data.get("stage_mode"),
@@ -1859,20 +1861,84 @@ def _design_to_response(
         data["artifact_schema_version"] = 1
     data["result_set"] = result_set
     data["result_set_label"] = result_set_label
+    legacy_contract_result_set = (
+        result_set
+        if result_set in {"ppiflow_candidates", "ppiflow_passed", "ppiflow_rejected"}
+        else None
+    )
     contract = resolve_result_contract(
-        result_set=result_set,
-        stage_family=data.get("stage_family"),
-        stage_mode=data.get("stage_mode"),
-        artifact_class=data.get("artifact_class"),
-        provenance=data.get("provenance") if isinstance(data.get("provenance"), dict) else None,
+        review_profile_id=data.get("review_profile_id"),
+        result_set=legacy_contract_result_set,
     )
     data["analysis_contract_id"] = contract.analysis_contract_id
+    if contract.analysis_contract_id:
+        data["review_profile_id"] = contract.analysis_contract_id
+        data["review_contract_version"] = data.get("review_contract_version") or contract.schema_version
+        data["review_contract_source"] = data.get("review_contract_source") or contract.contract_source
+    else:
+        data["review_profile_id"] = "unsupported_legacy"
+        data["review_contract_version"] = data.get("review_contract_version") or REVIEW_CONTRACT_VERSION
+        data["review_contract_source"] = "unsupported_legacy"
     data["supported_analyzers"] = contract.supported_analyzers
     data["viewer_capabilities"] = contract.viewer_capabilities
     data["required_fields"] = contract.required_fields
     data["required_artifacts"] = contract.required_artifacts
     data["result_contract_schema_version"] = contract.schema_version
     data["result_contract_source"] = contract.contract_source
+
+    # List queries intentionally project a bounded column set. Rebuild readiness
+    # from already-loaded response values so this synchronous serializer never
+    # triggers async SQLAlchemy lazy IO.
+    artifact_manifest: Dict[str, Any] = build_review_artifact_manifest(SimpleNamespace(**data))
+    roles_value = artifact_manifest.get("roles")
+    roles: Dict[str, Any] = dict(roles_value) if isinstance(roles_value, dict) else {}
+    if not contract.analysis_contract_id:
+        roles = {"has_binder": False}
+        data["review_role_map"] = {}
+        artifact_manifest = {**artifact_manifest, "roles": roles}
+    elif contract.analysis_contract_id in {"antibody_backbone_v1", "ppiflow_maturation_v1"}:
+        roles = {**roles, "has_binder": True}
+        artifact_manifest = {**artifact_manifest, "roles": roles}
+    data["review_artifact_manifest"] = artifact_manifest
+
+    binder_applicable = (
+        "antibody_backbone_metrics" in contract.viewer_capabilities
+        and roles.get("has_binder") is True
+    )
+    if binder_applicable:
+        binder_sequence = _compute_binder_sequence_response_value(design)
+        data["binder_sequence"] = binder_sequence
+        data["binder_length"] = _compute_binder_length_response_value(
+            design,
+            binder_sequence=binder_sequence,
+        )
+    else:
+        data["binder_sequence"] = None
+        data["binder_length"] = None
+
+    capabilities = set(contract.viewer_capabilities)
+
+    def clear_review_fields(*, prefixes: tuple[str, ...] = (), names: tuple[str, ...] = ()) -> None:
+        for field_name in tuple(data):
+            if field_name in names or any(field_name.startswith(prefix) for prefix in prefixes):
+                data[field_name] = None
+
+    if "complex_interface_metrics" not in capabilities:
+        clear_review_fields(
+            prefixes=("binder_", "epitope_", "target_", "ipsae"),
+            names=(
+                "plddt_binder", "plddt_target", "pae_interaction", "rmsd_binder", "rmsd_target",
+                "iptm", "protein_iptm", "ligand_iptm", "pair_chains_iptm", "affinity_score",
+                "binder_probability", "detected_target_chain",
+            ),
+        )
+    if "antibody_backbone_metrics" not in capabilities:
+        clear_review_fields(prefixes=("antibody_", "cdr_", "rfa_"), names=("detected_antibody_chains",))
+    if "ppiflow_maturation_metrics" not in capabilities:
+        clear_review_fields(prefixes=("maturation_", "ppiflow_", "rosetta_interface_"))
+    if "sequence_design_metrics" not in capabilities:
+        clear_review_fields(prefixes=("fampnn_",), names=("mpnn_score",))
+
     if not isinstance(data.get("metric_provenance"), dict):
         data["metric_provenance"] = build_design_metric_provenance({**data, "pdb_path": data.get("pdb_path")})
     if not isinstance(data.get("metric_completeness"), dict):
@@ -1922,7 +1988,11 @@ def _enrich_design_responses_from_sources(responses: List[DesignResponse]) -> No
         for candidate_id in _source_design_ids_from_child_name(candidate.name):
             by_source_token.setdefault(candidate_id, candidate)
     for response in responses:
-        if response.result_set not in {"ppiflow_candidates", "ppiflow_passed", "ppiflow_rejected"}:
+        if (
+            response.result_set not in {"ppiflow_candidates", "ppiflow_passed", "ppiflow_rejected"}
+            or response.analysis_contract_id != "ppiflow_maturation_v1"
+            or "antibody_backbone_metrics" not in response.viewer_capabilities
+        ):
             continue
         source: Optional[DesignResponse] = None
         if response.parent_design_id:
@@ -1934,6 +2004,16 @@ def _enrich_design_responses_from_sources(responses: List[DesignResponse]) -> No
                     source = candidate
                     break
         if source is None:
+            continue
+        source_manifest = source.review_artifact_manifest if isinstance(source.review_artifact_manifest, dict) else {}
+        source_roles_value = source_manifest.get("roles")
+        source_roles = source_roles_value if isinstance(source_roles_value, dict) else {}
+        if (
+            "antibody_backbone_metrics" not in (source.viewer_capabilities or [])
+            or source_roles.get("has_binder") is not True
+        ):
+            # Source metadata is lineage only unless the source itself declares
+            # binder/antibody applicability through its persisted review profile.
             continue
         for field_name in _INHERITED_SOURCE_METADATA_FIELDS:
             current = getattr(response, field_name, None)
@@ -1951,6 +2031,9 @@ async def _get_cached_design_analysis_payload(
     analysis_type: str,
     raw_params: Optional[dict[str, Any]] = None,
 ) -> Any:
+    contract_error = validate_design_analysis_request(design, analysis_type)
+    if contract_error:
+        raise HTTPException(status_code=409, detail=contract_error)
     try:
         run, _definition, _params, _cache_key = await get_matching_design_analysis_run(
             session,
@@ -2101,8 +2184,8 @@ async def list_designs(
     source_stage_family: Optional[str] = Query(None, description="Filter by source stage family"),
     sort_by: Optional[str] = Query(None, description="Sort field for table ordering"),
     sort_desc: bool = Query(True, description="Sort descending"),
-    limit: int = Query(100, le=50000),
-    offset: int = Query(0),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_session)
 ):
     """
@@ -2276,7 +2359,7 @@ async def list_designs(
     if rfd_rog_max is not None:
         conditions.append(Design.rfd_rog <= rfd_rog_max)
     if favorites_only:
-        conditions.append(Design.is_favorite == True)
+        conditions.append(Design.is_favorite.is_(True))
     if artifact_group:
         conditions.append(Design.artifact_group == artifact_group)
     if artifact_class:
@@ -2662,8 +2745,8 @@ async def update_notes(
 async def get_designs_for_job(
     job_id: str,
     include_children: bool = Query(True, description="Include designs from child jobs (for parent jobs)"),
-    limit: int = Query(100, le=50000),
-    offset: int = Query(0),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_session)
 ):
     """
@@ -2718,7 +2801,7 @@ async def get_plotly_metrics_for_job(
     job_id: str,
     include_children: bool = Query(True, description="Include child jobs when collecting metrics"),
     design_ids: Optional[str] = Query(None, description="Comma-separated design ids to restrict the analytics payload"),
-    limit: int = Query(10000, ge=1, le=50000),
+    limit: int = Query(ANALYTICS_MAX_DESIGNS, ge=1, le=ANALYTICS_MAX_DESIGNS),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_session)
 ):
@@ -2745,7 +2828,7 @@ async def post_plotly_metrics_for_job(
         job_id=job_id,
         include_children=request.include_children,
         requested_design_ids=request.design_ids,
-        limit=max(1, min(request.limit, 50000)),
+        limit=request.limit,
         offset=max(0, request.offset),
         session=session,
     )
@@ -2790,22 +2873,7 @@ async def get_structure_analysis(
     if not structure_path.exists():
         raise HTTPException(status_code=404, detail="Structure file not found on disk")
     
-    try:
-        run, _definition, _params, _cache_key = await get_matching_design_analysis_run(
-            session,
-            design,
-            "structure_summary",
-            raw_params={},
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-
-    if run is None:
-        raise HTTPException(status_code=404, detail="Structure analysis not computed yet")
-    if run.status != "completed":
-        raise HTTPException(status_code=409, detail=f"Structure analysis status is {run.status}")
-
-    payload = load_analysis_result(run)
+    payload = await _get_cached_design_analysis_payload(session, design, "structure_summary", {})
     if not isinstance(payload, dict):
         raise HTTPException(status_code=500, detail="Cached structure analysis payload is unavailable")
     return StructureAnalysis.model_validate(payload)
@@ -2841,6 +2909,10 @@ async def compare_structures(
         raise HTTPException(status_code=404, detail=f"Design {design_id} not found")
     if not design2:
         raise HTTPException(status_code=404, detail=f"Design {other_design_id} not found")
+    for candidate in (design1, design2):
+        contract_error = validate_design_analysis_request(candidate, "structure_summary")
+        if contract_error:
+            raise HTTPException(status_code=409, detail=contract_error)
     
     if not design1.pdb_path or not design2.pdb_path:
         raise HTTPException(status_code=404, detail="One or both designs missing structure files")
@@ -3071,22 +3143,12 @@ async def get_contact_map(
     if not structure_path.exists():
         raise HTTPException(status_code=404, detail="Structure file not found on disk")
     
-    try:
-        run, _definition, _params, _cache_key = await get_matching_design_analysis_run(
-            session,
-            design,
-            "contact_map",
-            raw_params={"max_size": max_size},
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-
-    if run is None:
-        raise HTTPException(status_code=404, detail="Contact map not computed yet")
-    if run.status != "completed":
-        raise HTTPException(status_code=409, detail=f"Contact map status is {run.status}")
-
-    payload = load_analysis_result(run)
+    payload = await _get_cached_design_analysis_payload(
+        session,
+        design,
+        "contact_map",
+        {"max_size": max_size},
+    )
     if not isinstance(payload, dict):
         raise HTTPException(status_code=500, detail="Cached contact-map payload is unavailable")
     return ContactMapData.model_validate(payload)
@@ -3117,6 +3179,12 @@ async def get_chain_pair_iptm(
     
     if not design:
         raise HTTPException(status_code=404, detail="Design not found")
+    contract = resolve_result_contract(review_profile_id=design.review_profile_id)
+    if "complex_interface_metrics" not in contract.viewer_capabilities:
+        raise HTTPException(
+            status_code=409,
+            detail="chain-pair interface metrics are not allowed by this review profile",
+        )
     
     pair_data = _normalize_chain_matrix(design.pair_chains_iptm)
     chains_ptm = _normalize_chain_scalar_map(design.chains_ptm)
@@ -3184,15 +3252,16 @@ async def export_fasta(
 
     job_result = await session.execute(select(Job).where(Job.id == job_id))
     job_obj = job_result.scalar_one_or_none()
-    target_chains: set[str] = set()
-    if job_obj:
-        job_params = job_obj.params if isinstance(job_obj.params, dict) else {}
-        raw_antigen = job_params.get("antigen_chains") or ""
-        if isinstance(raw_antigen, str):
-            target_chains = {c.strip() for c in raw_antigen.split(",") if c.strip()}
 
     lines: list[str] = []
     for d in designs:
+        contract = resolve_result_contract(review_profile_id=d.review_profile_id)
+        manifest = build_review_artifact_manifest(d)
+        roles_value = manifest.get("roles")
+        roles = dict(roles_value) if isinstance(roles_value, dict) else {}
+        if "antibody_backbone_metrics" not in contract.viewer_capabilities or roles.get("has_binder") is not True:
+            continue
+
         name_lower = (d.name or "").lower()
         if "normalized_target" in name_lower or "target" == name_lower:
             continue
@@ -3210,7 +3279,7 @@ async def export_fasta(
                 lines.append("".join(seq for _, seq in cdr_parts))
                 continue
 
-        seq = _compute_binder_sequence_response_value(d, include_structure_fallback=True)
+        seq = _compute_binder_sequence_response_value(d)
         if d.pdb_path:
             try:
                 structure_path = resolve_runtime_data_path(d.pdb_path)
@@ -3221,28 +3290,11 @@ async def export_fasta(
                         for chain_id in str(getattr(d, "detected_antibody_chains", "") or "").split(",")
                         if chain_id.strip()
                     }
-                    detected_target_chains = {
-                        chain_id.strip()
-                        for chain_id in str(getattr(d, "detected_target_chain", "") or "").split(",")
-                        if chain_id.strip()
-                    }
-
                     if detected_binder_chains:
                         binder_seqs = [
                             sequences[cid].strip()
                             for cid in detected_binder_chains
                             if isinstance(sequences.get(cid), str) and sequences[cid].strip()
-                        ]
-                        if binder_seqs:
-                            seq = "|".join(binder_seqs)
-                    elif not seq:
-                        excluded_chains = detected_target_chains or target_chains
-                        binder_seqs = [
-                            sequences[cid].strip()
-                            for cid in sequences
-                            if cid not in excluded_chains
-                            and isinstance(sequences.get(cid), str)
-                            and sequences[cid].strip()
                         ]
                         if binder_seqs:
                             seq = "|".join(binder_seqs)
