@@ -23,7 +23,6 @@ export function BioXpInterlinkMenu() {
     const [open, setOpen] = useState(false);
     const [displayName, setDisplayName] = useState('BioXP 3200');
     const [apiUrl, setApiUrl] = useState('');
-    const [operatorToken, setOperatorToken] = useState('');
     const [nowMs, setNowMs] = useState(() => Date.now());
     const rootRef = useRef<HTMLDivElement>(null);
     const statusQuery = useBioXpStatus(true);
@@ -99,15 +98,6 @@ export function BioXpInterlinkMenu() {
                     <div className="mb-4 rounded border border-slate-800 p-3">
                         <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Profile</p>
                         <input
-                            type="password"
-                            value={operatorToken}
-                            onChange={(event) => setOperatorToken(event.target.value)}
-                            autoComplete="off"
-                            placeholder="Transient operator token"
-                            className="mb-2 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1.5 text-xs"
-                            aria-label="BioXP transient operator token"
-                        />
-                        <input
                             value={displayName}
                             onChange={(event) => setDisplayName(event.target.value)}
                             className="mb-2 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1.5 text-xs"
@@ -129,26 +119,23 @@ export function BioXpInterlinkMenu() {
                         <div className="mt-2 flex gap-2">
                             <button
                                 type="button"
-                                disabled={pending || !apiUrl.trim() || !operatorToken}
-                                onClick={() => saveProfile.mutate({
-                                    profile: { display_name: displayName, api_url: apiUrl },
-                                    token: operatorToken,
-                                })}
+                                disabled={pending || !apiUrl.trim()}
+                                onClick={() => saveProfile.mutate({ display_name: displayName, api_url: apiUrl })}
                                 className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-xs disabled:opacity-40"
                             >Save</button>
                             <button
                                 type="button"
-                                disabled={pending || !connection?.configured || !operatorToken}
-                                onClick={() => forgetProfile.mutate(operatorToken)}
+                                disabled={pending || !connection?.configured}
+                                onClick={() => forgetProfile.mutate(undefined)}
                                 className="flex items-center gap-1 rounded border border-red-700 px-2 py-1 text-xs text-red-300 disabled:opacity-40"
                             >Forget</button>
                         </div>
                     </div>
 
                     <div className="flex flex-wrap gap-2">
-                        <button type="button" disabled={pending || !operatorToken || !connection?.configured || connection?.active} onClick={() => connect.mutate(operatorToken)} className="flex items-center gap-1 rounded bg-emerald-700 px-2 py-1 text-xs disabled:opacity-40">Connect</button>
-                        <button type="button" disabled={pending || !operatorToken || !connection?.active} onClick={() => disconnect.mutate(operatorToken)} className="flex items-center gap-1 rounded bg-slate-700 px-2 py-1 text-xs disabled:opacity-40">Disconnect</button>
-                        <button type="button" disabled={pending || !operatorToken || !connection?.active} onClick={() => probe.mutate(operatorToken)} className="flex items-center gap-1 rounded bg-slate-700 px-2 py-1 text-xs disabled:opacity-40">Probe</button>
+                        <button type="button" disabled={pending || !connection?.configured || connection?.active} onClick={() => connect.mutate(undefined)} className="flex items-center gap-1 rounded bg-emerald-700 px-2 py-1 text-xs disabled:opacity-40">Connect</button>
+                        <button type="button" disabled={pending || !connection?.active} onClick={() => disconnect.mutate(undefined)} className="flex items-center gap-1 rounded bg-slate-700 px-2 py-1 text-xs disabled:opacity-40">Disconnect</button>
+                        <button type="button" disabled={pending || !connection?.active} onClick={() => probe.mutate(undefined)} className="flex items-center gap-1 rounded bg-slate-700 px-2 py-1 text-xs disabled:opacity-40">Probe</button>
                     </div>
                     <p className="mt-3 text-[11px] text-slate-500">Connecting activates an API client only. It does not prove runtime readiness or hardware state.</p>
                     {statusQuery.isError && <p className="mt-2 text-xs text-red-300">Status unavailable; cached readiness is suppressed.</p>}

@@ -13,7 +13,6 @@ def _load():
 
 def _allow_context(Context, **changes):
     values = {
-        "token_authorized": True,
         "mutations_enabled": True,
         "active": True,
         "generation": 7,
@@ -39,7 +38,6 @@ def test_policy_table_allows_verified_definition_and_denies_each_missing_gate() 
     assert evaluate(request, verified, _allow_context(Context)).allowed is True
 
     cases = [
-        ({"token_authorized": False}, "operator credential"),
         ({"mutations_enabled": False}, "disabled"),
         ({"active": False}, "active target"),
         ({"generation": 8}, "generation"),

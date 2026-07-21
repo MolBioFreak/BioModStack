@@ -9,7 +9,6 @@ from .models import ControlDecision
 
 @dataclass(frozen=True)
 class CommandAdmissionContext:
-    token_authorized: bool
     mutations_enabled: bool
     active: bool
     generation: int
@@ -25,8 +24,6 @@ def evaluate_command(
     context: CommandAdmissionContext,
 ) -> ControlDecision:
     reasons: list[str] = []
-    if not context.token_authorized:
-        reasons.append("Valid operator credential is required")
     if not context.mutations_enabled:
         reasons.append("BioXP mutations are disabled by the server kill switch")
     if not context.active:
