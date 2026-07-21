@@ -633,3 +633,18 @@ def test_cm3_008_confornets_experimental_unchanged(
     assert TemplateRegistry(API_ROOT / "config" / "templates").get_template(
         "confornets_experimental"
     ) is not None
+
+
+def test_published_conformational_mapping_replaces_legacy_experimental_copy() -> None:
+    models = ModelRegistry()
+    templates = TemplateRegistry(API_ROOT / "config" / "templates")
+
+    canonical_model = models.get_model("conformational_mapping")
+    canonical_template = templates.get_template("conformational_mapping")
+    legacy_model = models.get_model("confornets_experimental")
+    legacy_template = templates.get_template("confornets_experimental")
+
+    assert canonical_model is not None and canonical_model.experimental is False
+    assert canonical_template is not None and canonical_template.experimental is False
+    assert legacy_model is not None and legacy_model.experimental is True
+    assert legacy_template is not None and legacy_template.experimental is True
