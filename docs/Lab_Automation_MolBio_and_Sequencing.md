@@ -120,18 +120,12 @@ Runtime dependencies:
 - network reachability from BMS to the explicitly saved robot-local BioXP profile
 - a robot-local BioXP runtime supervised outside BMS (for example
   `bioxp-api.service`)
-- an allowlisted host/CIDR and explicit operator credential before enabling
-  robot-facing mutations
+- an allowlisted host/CIDR before enabling robot-facing mutations
 
 Important env vars:
 
 - `BMS_BIOXP_MUTATIONS_ENABLED`
   defaults to `0`; robot-facing commands remain unavailable until explicitly enabled
-- `BMS_BIOXP_OPERATOR_TOKEN_FILE`
-  preferred credential source with strict precedence; an invalid configured file
-  fails closed without falling back to the environment token
-- `BMS_BIOXP_OPERATOR_TOKEN`
-  local fallback credential source; never commit or embed a real token
 - `BMS_BIOXP_ALLOWED_HOSTS` / `BMS_BIOXP_ALLOWED_CIDRS`
   explicit target allowlists used when validating the saved profile
 

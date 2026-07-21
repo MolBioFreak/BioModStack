@@ -63,7 +63,6 @@ export function BioXpCockpit() {
     const executeCommand = useBioXpCommand();
     const emergencyStop = useBioXpEmergencyStop();
     const [protocolName, setProtocolName] = useState('BioXP offline validation');
-    const [operatorToken, setOperatorToken] = useState('');
     const [initialCheckAck, setInitialCheckAck] = useState('');
     const [nowMs, setNowMs] = useState(() => Date.now());
 
@@ -137,9 +136,6 @@ export function BioXpCockpit() {
 
             <section className="rounded-xl border border-slate-800 bg-slate-950/70 p-5">
                 <h2 className="text-lg font-semibold">Normal Commands</h2>
-                <label className="mt-3 block max-w-xl text-sm">Transient operator token
-                    <input type="password" value={operatorToken} onChange={(event) => setOperatorToken(event.target.value)} autoComplete="off" className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-3 py-2" />
-                </label>
                 {!status?.available_commands.length && (
                     <div className="mt-3 flex gap-2 rounded border border-amber-600/40 bg-amber-500/10 p-3 text-sm text-amber-200">
                         No normal OEM commands are available. The current robot runtime has not yet advertised an admitted command capability.
@@ -162,8 +158,8 @@ export function BioXpCockpit() {
                                 )}
                                 <button
                                     type="button"
-                                    disabled={!available || !operatorToken || !ackReady || executeCommand.isPending}
-                                    onClick={() => executeCommand.mutate({ payload: commandPayload(command), token: operatorToken })}
+                                    disabled={!available || !ackReady || executeCommand.isPending}
+                                    onClick={() => executeCommand.mutate(commandPayload(command))}
                                     className={`mt-3 rounded px-3 py-2 text-sm font-semibold disabled:opacity-40 ${tone === 'query' ? 'bg-cyan-700' : 'bg-amber-700'}`}
                                 >{label}</button>
                                 {!available && <p className="mt-2 text-xs text-slate-500">Blocked: {blockedReason}</p>}
@@ -178,8 +174,7 @@ export function BioXpCockpit() {
                 <section className="rounded-xl border border-red-700/60 bg-red-950/20 p-5">
                     <h2 className="flex items-center gap-2 text-lg font-semibold text-red-200">Emergency Stop Delivery</h2>
                     <p className="mt-2 text-sm text-red-100">This separate action attempts a short-timeout delivery. A transport response does not prove physical effect.</p>
-                    <input type="password" value={operatorToken} onChange={(event) => setOperatorToken(event.target.value)} autoComplete="off" placeholder="Transient operator token" className="mt-3 w-full max-w-md rounded border border-red-800 bg-slate-950 px-3 py-2" />
-                    <button type="button" disabled={!operatorToken || emergencyStop.isPending} onClick={() => emergencyStop.mutate({ token: operatorToken, generation: connection.generation })} className="mt-3 block rounded bg-red-700 px-4 py-2 font-semibold disabled:opacity-40">Attempt emergency-stop delivery</button>
+                    <button type="button" disabled={emergencyStop.isPending} onClick={() => emergencyStop.mutate({ generation: connection.generation })} className="mt-3 block rounded bg-red-700 px-4 py-2 font-semibold disabled:opacity-40">Attempt emergency-stop delivery</button>
                     {emergencyStop.data && (
                         <dl className="mt-3 grid gap-2 text-sm md:grid-cols-3">
                             <div><dt>delivery_attempted</dt><dd>{String(emergencyStop.data.delivery_attempted)}</dd></div>
@@ -197,7 +192,7 @@ export function BioXpCockpit() {
                 <input value={protocolName} onChange={(event) => setProtocolName(event.target.value)} className="mt-3 w-full max-w-lg rounded border border-slate-700 bg-slate-900 px-3 py-2" />
                 <div className="mt-3 flex gap-2">
                     <button type="button" onClick={() => compileProtocol.mutate(protocol)} className="rounded bg-slate-700 px-3 py-2 text-sm">Validate offline</button>
-                    <button type="button" disabled={!operatorToken || submitProtocol.isPending} onClick={() => submitProtocol.mutate({ protocol, idempotencyKey: crypto.randomUUID(), token: operatorToken })} className="rounded bg-blue-700 px-3 py-2 text-sm disabled:opacity-40">Save blocked local job</button>
+                    <button type="button" disabled={submitProtocol.isPending} onClick={() => submitProtocol.mutate({ protocol, idempotencyKey: crypto.randomUUID() })} className="rounded bg-blue-700 px-3 py-2 text-sm disabled:opacity-40">Save blocked local job</button>
                 </div>
                 {compileProtocol.data && <p className="mt-3 text-sm text-emerald-300">{compileProtocol.data.validation_status}: {compileProtocol.data.compiled_hash.slice(0, 16)}… · executable={String(compileProtocol.data.executable)}</p>}
                 {compileProtocol.error && <p className="mt-2 text-sm text-red-300">{bioXpErrorText(compileProtocol.error)}</p>}

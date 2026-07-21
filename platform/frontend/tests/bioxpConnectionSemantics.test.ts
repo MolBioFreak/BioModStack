@@ -34,7 +34,7 @@ test('failed refreshes and aged cached evidence fail closed in both operator sur
     assert.match(cockpit, /isBioXpCommandAvailable\(status\?\.available_commands, command, derived\?\.label\)/);
     assert.match(status, /displayState === 'HARDWARE NOT READY'/);
     assert.doesNotMatch(status, /displayState === 'STALE'/);
-    assert.match(cockpit, /!available \|\| !operatorToken/);
+    assert.match(cockpit, /!available \|\| !ackReady/);
     assert.match(cockpit, /cached readiness and controls are suppressed/i);
 });
 
