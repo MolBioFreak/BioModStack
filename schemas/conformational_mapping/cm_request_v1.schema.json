@@ -39,6 +39,7 @@
     "confornets": {"$ref": "#/$defs/confornets"},
     "protenix_snapshot_id": {"type": "string", "minLength": 1},
     "import_receipt_id": {"type": "string", "minLength": 1},
+    "source_snapshot_sha256": {"$ref": "#/$defs/sha256"},
     "source": {
       "type": "object",
       "additionalProperties": false,
