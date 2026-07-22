@@ -15,6 +15,11 @@ if str(API_DIR) not in sys.path:
 import routers.ont_runs as ont_runs
 
 
+@pytest.fixture(autouse=True)
+def _unit_contract_paths_are_prevalidated(monkeypatch):
+    monkeypatch.setattr(ont_runs, "_confine_submitted_path", lambda value, _label, **_kwargs: str(value))
+
+
 def _request() -> Request:
     return Request({"type": "http", "method": "POST", "scheme": "http", "path": "/", "headers": []})
 

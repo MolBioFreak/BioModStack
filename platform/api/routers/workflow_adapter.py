@@ -224,20 +224,24 @@ async def workflow_adapter_runtime_action(
 
 
 @router.post("/launch", response_model=WorkflowAdapterLaunchResponse, status_code=202)
-async def workflow_adapter_launch(request: WorkflowAdapterLaunchRequest) -> WorkflowAdapterLaunchResponse:
-    require_molecular_dynamics_feature(request.model_id)
+async def workflow_adapter_launch(
+    payload: WorkflowAdapterLaunchRequest,
+    request: Request,
+) -> WorkflowAdapterLaunchResponse:
+    _require_local_adapter_request(request)
+    require_molecular_dynamics_feature(payload.model_id)
     nextflow.launch_nextflow_job_detached(
-        job_id=request.job_id,
-        model_id=request.model_id,
-        mode=request.mode,
-        params=request.params,
-        output_dir=request.output_dir,
+        job_id=payload.job_id,
+        model_id=payload.model_id,
+        mode=payload.mode,
+        params=payload.params,
+        output_dir=payload.output_dir,
         allow_running_job=True,
     )
     return WorkflowAdapterLaunchResponse(
         accepted=True,
-        job_id=request.job_id,
-        nextflow_run_id=request.job_id,
+        job_id=payload.job_id,
+        nextflow_run_id=payload.job_id,
         launch_mode="native-host",
     )
 

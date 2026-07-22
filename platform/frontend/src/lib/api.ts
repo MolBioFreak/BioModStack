@@ -342,6 +342,35 @@ export interface OntNgsSubmitRequest {
 export const submitOntNgsJob = (workflowId: string, request: OntNgsSubmitRequest) =>
     api.post<Job>(`/api/ont/ngs/${workflowId}/submit`, request);
 
+export interface OntBarcodeUnit {
+    schema: 'biomodstack.ont_barcode_resubmission_unit.v1';
+    unit_id: string;
+    bam_path: string;
+    bam_sha256: string;
+    read_count: number;
+    manifest_sha256: string;
+    unit_manifest_sha256: string;
+}
+
+export const fetchOntBarcodeUnits = (jobId: string) =>
+    api.get<{ job_id: string; units: OntBarcodeUnit[] }>(
+        `/api/jobs/${encodeURIComponent(jobId)}/barcode-units`,
+    );
+
+export const submitOntBarcodeUnit = (
+    jobId: string,
+    unitId: string,
+    request: {
+        target_workflow: 'ont_plasmid_qc' | 'ont_construct_screening';
+        reference_fasta: string;
+        name?: string;
+        pinned_gpu?: number | null;
+    },
+) => api.post<Job>(
+    `/api/jobs/${encodeURIComponent(jobId)}/barcode-units/${encodeURIComponent(unitId)}/submit`,
+    request,
+);
+
 export interface BoltzGenPreviewResponse {
     yaml_text: string;
     scaffold_specs: Array<Record<string, UntypedApiValue>>;
