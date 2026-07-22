@@ -28,7 +28,12 @@ from database import (
     Job,
     get_session,
 )
-from paths import get_data_root, get_results_dir, get_container_dir, get_weights_root
+from paths import (
+    get_data_root,
+    get_results_dir,
+    get_container_dir,
+    get_weights_root,
+)
 from services.conformational_mapping.contracts import candidate_id, canonical_sha256, validate_schema
 from services.conformational_mapping.import_stager import (
     ImportStagingError,
@@ -1302,6 +1307,93 @@ async def request_lineage(
     return {"request_id": request_id, "lineage": [row.payload_json for row in rows]}
 
 
+def _resolve_artifact_runtime_alias(path: str | Path) -> Path:
+    """Translate a known data-root prefix without dereferencing the artifact leaf."""
+    candidate = Path(os.path.abspath(os.path.expanduser(str(path))))
+    current_root = Path(os.path.abspath(str(get_data_root())))
+    alias_roots = [current_root]
+    for variable in ("BMS_CONTAINER_STATE_PATH", "BMS_STATE_DIR", "BMS_DATA"):
+        configured_root = os.getenv(variable, "").strip()
+        if configured_root:
+            alias_roots.append(Path(configured_root))
+    alias_roots.extend((Path("/mnt/BioModStack"), Path.home() / ".biomodstack"))
+
+    seen: set[str] = set()
+    for raw_root in alias_roots:
+        alias_root = Path(os.path.abspath(os.path.expanduser(str(raw_root))))
+        if str(alias_root) in seen:
+            continue
+        seen.add(str(alias_root))
+        try:
+            relative_path = candidate.relative_to(alias_root)
+        except ValueError:
+            continue
+        remapped = current_root / relative_path
+        if remapped.exists() or remapped.is_symlink():
+            return remapped
+    return candidate
+
+
+def _open_verified_artifact_descriptor(
+    *, storage_path: str, root_path: str, size_bytes: int, content_sha256: str,
+) -> int:
+    """Open one persisted artifact through the active runtime's data-root alias."""
+    root = _resolve_artifact_runtime_alias(root_path).resolve(strict=True)
+    lexical_path = _resolve_artifact_runtime_alias(storage_path)
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(lexical_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        opened = Path(f"/proc/self/fd/{descriptor}").resolve(strict=True)
+        opened.relative_to(root)
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_size != size_bytes:
+            raise OSError("artifact is not the registered regular file")
+        digest = hashlib.sha256()
+        while chunk := os.read(descriptor, 1024 * 1024):
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
+        ) or digest.hexdigest() != content_sha256:
+            raise OSError("artifact identity changed")
+        return descriptor
+    except (OSError, ValueError):
+        if descriptor is not None:
+            os.close(descriptor)
+        raise
+
+
+def _artifact_byte_range(supplied_range: str | None, size_bytes: int) -> tuple[int, int, int]:
+    """Resolve one HTTP byte range, clamping a satisfiable end at EOF."""
+    if not supplied_range:
+        return 0, size_bytes - 1, 200
+    try:
+        unit, value = supplied_range.split("=", 1)
+        left, right = value.split("-", 1)
+        if unit != "bytes" or "," in value or size_bytes <= 0:
+            raise ValueError
+        if left:
+            start = int(left)
+            if start < 0 or start >= size_bytes:
+                raise ValueError
+            end = min(int(right), size_bytes - 1) if right else size_bytes - 1
+            if end < start:
+                raise ValueError
+        else:
+            suffix_bytes = int(right)
+            if suffix_bytes <= 0:
+                raise ValueError
+            start = max(0, size_bytes - suffix_bytes)
+            end = size_bytes - 1
+        return start, end, 206
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=416,
+            detail="invalid artifact byte range",
+            headers={"Content-Range": f"bytes */{size_bytes}"},
+        )
+
+
 @router.get("/requests/{request_id}/artifacts/{artifact_id}")
 async def download_artifact(
     request_id: str, artifact_id: str, request: Request,
@@ -1315,48 +1407,23 @@ async def download_artifact(
     job = await session.get(Job, record.job_id if record else "")
     if job is None or not job.output_dir:
         raise HTTPException(status_code=409, detail="artifact storage authority is unavailable")
-    root = Path(job.output_dir).resolve(strict=True)
-    lexical_path = Path(artifact.storage_path)
     try:
-        descriptor = os.open(lexical_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-        opened = Path(f"/proc/self/fd/{descriptor}").resolve(strict=True)
-        opened.relative_to(root)
-        before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode) or before.st_size != artifact.size_bytes:
-            raise OSError("artifact is not the registered regular file")
-        digest = hashlib.sha256()
-        while chunk := os.read(descriptor, 1024 * 1024):
-            digest.update(chunk)
-        after = os.fstat(descriptor)
-        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
-            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
-        ) or digest.hexdigest() != artifact.content_sha256:
-            raise OSError("artifact identity changed")
+        descriptor = _open_verified_artifact_descriptor(
+            storage_path=artifact.storage_path,
+            root_path=job.output_dir,
+            size_bytes=artifact.size_bytes,
+            content_sha256=artifact.content_sha256,
+        )
     except (OSError, ValueError):
-        if "descriptor" in locals():
-            os.close(descriptor)
         raise HTTPException(status_code=409, detail="artifact byte identity is unavailable")
 
-    start, end, status_code = 0, artifact.size_bytes - 1, 200
-    supplied_range = request.headers.get("range")
-    if supplied_range:
-        try:
-            unit, value = supplied_range.split("=", 1)
-            left, right = value.split("-", 1)
-            if unit != "bytes" or "," in value:
-                raise ValueError
-            if left:
-                start = int(left)
-                end = int(right) if right else end
-            else:
-                suffix_bytes = int(right)
-                start = max(0, artifact.size_bytes - suffix_bytes)
-            if start < 0 or end < start or end >= artifact.size_bytes:
-                raise ValueError
-            status_code = 206
-        except ValueError:
-            os.close(descriptor)
-            raise HTTPException(status_code=416, detail="invalid artifact byte range")
+    try:
+        start, end, status_code = _artifact_byte_range(
+            request.headers.get("range"), artifact.size_bytes,
+        )
+    except HTTPException:
+        os.close(descriptor)
+        raise
     os.lseek(descriptor, start, os.SEEK_SET)
     remaining = end - start + 1
 

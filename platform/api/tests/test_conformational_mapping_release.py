@@ -9,8 +9,14 @@ import subprocess
 import sys
 
 import pytest
+from fastapi import HTTPException
 
-from routers.conformational_mapping import _cm_job_admission
+from routers import conformational_mapping as cm_router
+from routers.conformational_mapping import (
+    _artifact_byte_range,
+    _cm_job_admission,
+    _open_verified_artifact_descriptor,
+)
 from scripts.run_conformational_mapping_analysis_plane import (
     _frustrampnn_command,
     _open_verified_container,
@@ -22,6 +28,69 @@ from scripts.probes.conformational_mapping.phase_review_common import PhaseRevie
 
 KEY = b"current-run-evidence-key-32-bytes-minimum"
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_artifact_download_resolves_host_storage_path_before_descriptor_pinning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    artifact = runtime_root / "final" / "native.cif"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"data_authoritative_structure\n")
+    persisted_host_root = Path("/mnt/BioModStack")
+
+    monkeypatch.setattr(cm_router, "get_data_root", lambda: runtime_root)
+    descriptor = _open_verified_artifact_descriptor(
+        storage_path=str(persisted_host_root / "final" / "native.cif"),
+        root_path=str(persisted_host_root),
+        size_bytes=artifact.stat().st_size,
+        content_sha256=hashlib.sha256(artifact.read_bytes()).hexdigest(),
+    )
+    try:
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        assert os.read(descriptor, artifact.stat().st_size) == artifact.read_bytes()
+    finally:
+        os.close(descriptor)
+
+    symlink = runtime_root / "final" / "symlink.cif"
+    symlink.symlink_to(artifact)
+    with pytest.raises(OSError):
+        _open_verified_artifact_descriptor(
+            storage_path=str(persisted_host_root / "final" / "symlink.cif"),
+            root_path=str(persisted_host_root),
+            size_bytes=artifact.stat().st_size,
+            content_sha256=hashlib.sha256(artifact.read_bytes()).hexdigest(),
+        )
+
+
+def test_artifact_download_resolves_custom_state_root_and_http_ranges(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    artifact = runtime_root / "final" / "native.cif"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"0123456789")
+    custom_host_root = Path("/srv/custom-biomodstack-state")
+    monkeypatch.setattr(cm_router, "get_data_root", lambda: runtime_root)
+    monkeypatch.setenv("BMS_STATE_DIR", str(custom_host_root))
+
+    descriptor = _open_verified_artifact_descriptor(
+        storage_path=str(custom_host_root / "final" / "native.cif"),
+        root_path=str(custom_host_root),
+        size_bytes=artifact.stat().st_size,
+        content_sha256=hashlib.sha256(artifact.read_bytes()).hexdigest(),
+    )
+    os.close(descriptor)
+
+    assert _artifact_byte_range(None, 10) == (0, 9, 200)
+    assert _artifact_byte_range("bytes=2-5", 10) == (2, 5, 206)
+    assert _artifact_byte_range("bytes=2-", 10) == (2, 9, 206)
+    assert _artifact_byte_range("bytes=-3", 10) == (7, 9, 206)
+    assert _artifact_byte_range("bytes=2-999", 10) == (2, 9, 206)
+    with pytest.raises(HTTPException) as raised:
+        _artifact_byte_range("bytes=10-12", 10)
+    assert raised.value.status_code == 416
+    assert raised.value.headers == {"Content-Range": "bytes */10"}
 
 
 def test_cm_analysis_runs_contracts_on_host_and_only_scores_in_container() -> None:
