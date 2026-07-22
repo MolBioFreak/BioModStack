@@ -39,7 +39,7 @@ export const createViewerEvent = <TPayload>(input: ViewerEventInput<TPayload>): 
     sceneId: input.scene.sceneId,
     generation: input.scene.generation,
     documentId: input.documentId,
-    resourceId: input.resourceId,
+    resourceId: input.resourceId ?? null,
     origin: input.origin,
     payload: input.payload,
     emittedAt: input.emittedAt,
