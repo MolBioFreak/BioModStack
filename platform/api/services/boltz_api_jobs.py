@@ -14,7 +14,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from database import Design, ExternalResultImport, Job
@@ -29,6 +30,7 @@ BOLTZ_API_POLL_INTERVAL_SECONDS = 15.0
 TERMINAL_PROVIDER_STATES = {"failed", "stopped"}
 SUPPORTED_COMPONENT_TYPES = {"protein", "peptide", "dna", "rna", "ligand", "ion"}
 logger = logging.getLogger(__name__)
+ACTIVE_BOLTZ_JOB_STATUSES = ("queued", "running")
 
 
 class BoltzApiJobError(RuntimeError):
@@ -37,6 +39,45 @@ class BoltzApiJobError(RuntimeError):
         self.code = code
         self.status_code = status_code
         self.retryable = retryable
+
+
+def _validate_idempotent_replay(
+    existing: Job,
+    *,
+    client_request_id: str,
+    model: str,
+    provider_input: dict[str, Any],
+    approved_estimate_fingerprint: str,
+) -> Job:
+    existing_params = dict(existing.params or {})
+    if (
+        existing.model_id != "boltz_api"
+        or existing_params.get("client_request_id") != client_request_id
+        or existing_params.get("provider_model") != model
+        or existing_params.get("provider_input") != provider_input
+        or existing_params.get("approved_estimate_fingerprint") != approved_estimate_fingerprint
+    ):
+        raise BoltzApiJobError(
+            "BOLTZ_API_IDEMPOTENCY_CONFLICT",
+            "This client request ID is already bound to a different submission",
+            status_code=409,
+        )
+    return existing
+
+
+async def _commit_active_job_transition(
+    session: AsyncSession,
+    job_id: str,
+    **values: Any,
+) -> bool:
+    result = await session.execute(
+        update(Job)
+        .where(Job.id == job_id, Job.status.in_(ACTIVE_BOLTZ_JOB_STATUSES))
+        .values(**values)
+        .execution_options(synchronize_session=False)
+    )
+    await session.commit()
+    return result.rowcount == 1
 
 
 def _canonical_json(value: Any) -> str:
@@ -305,20 +346,13 @@ async def queue_boltz_api_job(
     job_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"biomodstack:boltz-api:{client_request_id}"))
     existing = await session.get(Job, job_id)
     if existing is not None:
-        existing_params = dict(existing.params or {})
-        if (
-            existing.model_id != "boltz_api"
-            or existing_params.get("client_request_id") != client_request_id
-            or existing_params.get("provider_model") != model
-            or existing_params.get("provider_input") != provider_input
-            or existing_params.get("approved_estimate_fingerprint") != approved_estimate_fingerprint
-        ):
-            raise BoltzApiJobError(
-                "BOLTZ_API_IDEMPOTENCY_CONFLICT",
-                "This client request ID is already bound to a different submission",
-                status_code=409,
-            )
-        return existing
+        return _validate_idempotent_replay(
+            existing,
+            client_request_id=client_request_id,
+            model=model,
+            provider_input=provider_input,
+            approved_estimate_fingerprint=approved_estimate_fingerprint,
+        )
 
     estimate, current_fingerprint = await estimate_boltz_api_cost(model=model, provider_input=provider_input)
     if approved_estimate_fingerprint != current_fingerprint:
@@ -357,7 +391,20 @@ async def queue_boltz_api_job(
         retry_count=0,
     )
     session.add(job)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        existing = await session.get(Job, job_id)
+        if existing is None:
+            raise
+        return _validate_idempotent_replay(
+            existing,
+            client_request_id=client_request_id,
+            model=model,
+            provider_input=provider_input,
+            approved_estimate_fingerprint=approved_estimate_fingerprint,
+        )
     await session.refresh(job)
     return job
 
@@ -450,12 +497,15 @@ async def process_boltz_api_job(session: AsyncSession, job: Job) -> None:
             return
         params = dict(job.params or {})
         params.update({"provider_job_id": provider_job_id, "provider_state": "submitted"})
-        job.params = params
-        job.status = "running"
-        job.queue_status = "running"
-        job.started_at = datetime.utcnow()
-        job.error_message = None
-        await session.commit()
+        await _commit_active_job_transition(
+            session,
+            job.id,
+            params=params,
+            status="running",
+            queue_status="running",
+            started_at=datetime.utcnow(),
+            error_message=None,
+        )
         return
 
     if state in {"submitted", "running"}:
@@ -470,21 +520,24 @@ async def process_boltz_api_job(session: AsyncSession, job: Job) -> None:
         provider_state = str(response.get("status") or "").strip().lower()
         params["provider_last_status"] = provider_state
         if provider_state in TERMINAL_PROVIDER_STATES:
-            job.params = params
-            job.status = "failed"
-            job.queue_status = "failed"
-            job.completed_at = datetime.utcnow()
-            job.error_message = str(response.get("error") or f"Boltz API job ended in state {provider_state}")[:2000]
-            await session.commit()
+            await _commit_active_job_transition(
+                session,
+                job.id,
+                params=params,
+                status="failed",
+                queue_status="failed",
+                completed_at=datetime.utcnow(),
+                error_message=str(response.get("error") or f"Boltz API job ended in state {provider_state}")[:2000],
+            )
             return
         if provider_state != "succeeded":
             params["provider_state"] = "running"
-            job.params = params
-            await session.commit()
+            await _commit_active_job_transition(session, job.id, params=params)
             return
         params["provider_state"] = "downloading"
-        job.params = params
-        await session.commit()
+        transitioned = await _commit_active_job_transition(session, job.id, params=params)
+        if not transitioned:
+            return
         state = "downloading"
 
     if state == "downloading":
@@ -512,9 +565,12 @@ async def process_boltz_api_job(session: AsyncSession, job: Job) -> None:
             "downloaded_run_path": str(run_dir),
             "external_import_id": record.id,
         })
-        job.params = params
-        job.output_dir = str(run_dir)
-        await session.commit()
+        await _commit_active_job_transition(
+            session,
+            job.id,
+            params=params,
+            output_dir=str(run_dir),
+        )
 
 
 class BoltzApiJobWorker:
@@ -573,14 +629,15 @@ class BoltzApiJobWorker:
                             retryable = True
                         params["provider_attempts"] = attempts
                         params["provider_last_error_code"] = code
-                        job.params = params
                         retryable = retryable and attempts < int(job.max_retries or 3)
-                        job.error_message = message
+                        values: dict[str, Any] = {"params": params, "error_message": message}
                         if not retryable:
-                            job.status = "failed"
-                            job.queue_status = "failed"
-                            job.completed_at = datetime.utcnow()
-                        await session.commit()
+                            values.update({
+                                "status": "failed",
+                                "queue_status": "failed",
+                                "completed_at": datetime.utcnow(),
+                            })
+                        await _commit_active_job_transition(session, job.id, **values)
             return processed
 
     async def _run(self) -> None:

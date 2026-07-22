@@ -155,6 +155,20 @@ def _role_map(entities: list[dict[str, Any]]) -> dict[str, Any]:
     return {"has_binder": False, "chains": chains, "entities": entities}
 
 
+async def _complete_linked_job_if_active(
+    session: AsyncSession,
+    job_id: str,
+    values: dict[str, Any],
+) -> bool:
+    result = await session.execute(
+        update(Job)
+        .where(Job.id == job_id, Job.status.in_(("queued", "running")))
+        .values(**values)
+        .execution_options(synchronize_session=False)
+    )
+    return result.rowcount == 1
+
+
 async def _claim_import(
     session: AsyncSession,
     import_id: str,
@@ -250,35 +264,40 @@ async def process_external_import(
                 "data_deleted_at": provider.get("data_deleted_at"),
             }
         }
+        job_values = {
+            "status": "completed",
+            "queue_status": "completed",
+            "model_id": "boltz2",
+            "mode": "external_import",
+            "params": imported_params,
+            "started_at": _provider_timestamp(provider.get("started_at")) or (existing_job.started_at if existing_job else None),
+            "completed_at": completed_at,
+            "output_dir": str(final_root),
+            "stage_family": "validation",
+            "stage_mode": "boltz_api_structure_import",
+            "selection_source_type": "external_api",
+            "selection_dataset_name": record.dataset_name,
+            "source_selection_manifest_path": str(manifest_path),
+            "source_selection_count": len(manifest["samples"]),
+            "provenance": imported_provenance,
+            "completed_stages": ["external_import"],
+            "stage_outputs": {"external_import": [item["path"] for item in manifest["artifacts"]]},
+            "error_message": None,
+        }
         if existing_job is None:
             job = Job(
                 id=job_id,
                 name=record.job_name or f"Boltz API {record.provider_job_id}",
                 created_at=_provider_timestamp(provider.get("created_at")) or record.created_at,
+                **job_values,
             )
             session.add(job)
         else:
-            job = existing_job
-            prior_params = dict(job.params or {})
+            prior_params = dict(existing_job.params or {})
             imported_params = {**prior_params, **imported_params, "provider_state": "completed"}
-        job.status = "completed"
-        job.queue_status = "completed"
-        job.model_id = "boltz2"
-        job.mode = "external_import"
-        job.params = imported_params
-        job.started_at = _provider_timestamp(provider.get("started_at")) or job.started_at
-        job.completed_at = completed_at
-        job.output_dir = str(final_root)
-        job.stage_family = "validation"
-        job.stage_mode = "boltz_api_structure_import"
-        job.selection_source_type = "external_api"
-        job.selection_dataset_name = record.dataset_name
-        job.source_selection_manifest_path = str(manifest_path)
-        job.source_selection_count = len(manifest["samples"])
-        job.provenance = imported_provenance
-        job.completed_stages = ["external_import"]
-        job.stage_outputs = {"external_import": [item["path"] for item in manifest["artifacts"]]}
-        job.error_message = None
+            job_values["params"] = imported_params
+            if not await _complete_linked_job_if_active(session, job_id, job_values):
+                raise BoltzImportError("BMS_JOB_CANCELLED", "linked BioModStack job was cancelled")
 
         roles = _role_map(manifest["input"]["entities"])
         for sample in manifest["samples"]:
