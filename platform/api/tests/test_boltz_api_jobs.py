@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -284,5 +285,109 @@ async def test_worker_propagates_failed_ingestion_to_the_original_job(tmp_path: 
             assert failed_job.status == "failed"
             assert failed_job.params["provider_last_error_code"] == "PAE_INVALID"
             assert failed_job.error_message == "canonical PAE validation failed"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_http_replay_returns_the_same_job_without_integrity_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'replay.sqlite'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    provider_input = {"entities": [{"type": "protein", "value": "ACDE", "chain_ids": ["A"]}], "num_samples": 1}
+    estimate = {"amount": 0.25, "currency": "USD"}
+    fingerprint = estimate_fingerprint(model=BOLTZ_API_MODEL, provider_input=provider_input, estimate=estimate)
+    both_estimating = asyncio.Event()
+    estimate_calls = 0
+
+    async def fake_estimate(*, model: str, provider_input: dict):
+        nonlocal estimate_calls
+        estimate_calls += 1
+        if estimate_calls == 2:
+            both_estimating.set()
+        await both_estimating.wait()
+        return estimate, estimate_fingerprint(model=model, provider_input=provider_input, estimate=estimate)
+
+    async def submit() -> Job:
+        async with Session() as session:
+            return await queue_boltz_api_job(
+                session,
+                name="concurrent replay",
+                client_request_id="33333333-3333-4333-8333-333333333333",
+                model=BOLTZ_API_MODEL,
+                provider_input=provider_input,
+                approved_estimate_fingerprint=fingerprint,
+            )
+
+    monkeypatch.setattr(boltz_api_jobs, "estimate_boltz_api_cost", fake_estimate)
+    try:
+        first, second = await asyncio.gather(submit(), submit())
+        assert first.id == second.id
+        async with Session() as session:
+            assert await session.get(Job, first.id) is not None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cancellation_committed_after_worker_refresh_cannot_be_overwritten(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'cancel.sqlite'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    BaseSession = async_sessionmaker(engine, expire_on_commit=False)
+    interleave = False
+    provider_input = {"entities": [{"type": "protein", "value": "ACDE", "chain_ids": ["A"]}], "num_samples": 1}
+    original_transition = boltz_api_jobs._commit_active_job_transition
+
+    async def cancel_then_transition(session, job_id: str, **values):
+        nonlocal interleave
+        if interleave:
+            interleave = False
+            async with BaseSession() as cancellation_session:
+                cancelled = await cancellation_session.get(Job, "job-cancel-race")
+                cancelled.status = "cancelled"
+                cancelled.queue_status = "cancelled"
+                await cancellation_session.commit()
+        return await original_transition(session, job_id, **values)
+
+    async def fake_payload(provider_input: dict, operation: str, *, model: str, idempotency_key: str | None = None):
+        return {"id": "sab_pred_cancel_race", "status": "pending"}
+
+    monkeypatch.setattr(boltz_api_jobs, "_with_payload_file", fake_payload)
+    monkeypatch.setattr(boltz_api_jobs, "_commit_active_job_transition", cancel_then_transition)
+    try:
+        async with BaseSession() as session:
+            session.add(Job(
+                id="job-cancel-race",
+                name="cancel race",
+                status="queued",
+                queue_status="queued",
+                model_id="boltz_api",
+                mode="external_api",
+                params={
+                    "provider_state": "submitting",
+                    "provider_model": BOLTZ_API_MODEL,
+                    "provider_input": provider_input,
+                    "provider_idempotency_key": "bms-cancel-race",
+                },
+            ))
+            await session.commit()
+
+        async with BaseSession() as session:
+            job = await session.get(Job, "job-cancel-race")
+            interleave = True
+            await process_boltz_api_job(session, job)
+
+        async with BaseSession() as session:
+            cancelled = await session.get(Job, "job-cancel-race")
+            assert cancelled.status == "cancelled"
+            assert cancelled.queue_status == "cancelled"
     finally:
         await engine.dispose()
