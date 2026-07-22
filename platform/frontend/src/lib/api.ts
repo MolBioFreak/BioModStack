@@ -67,6 +67,10 @@ export interface MDArtifact {
     sha256: string;
     semantic_role: 'analysis_topology' | 'analysis_trajectory' | 'representative_structure' | null;
     atom_order_identity: string | null;
+    selection_method?: string | null;
+    source_frame?: number | null;
+    time_ps?: number | null;
+    source_trajectory_sha256?: string | null;
     format: string;
     content_url: string;
 }
@@ -75,8 +79,10 @@ export interface MDSummary {
     schema: 'bms.md.summary.v1';
     job_id: string;
     status: string;
+    result_state: 'partial' | 'completed' | null;
     source: 'validated_job_owned_manifests';
     bounded: true;
+    aggregate_manifest_sha256: string;
     replica_count: number;
     artifact_count: number;
     replicas: Array<{ replica: number; status: string; engine: { name?: string; version?: string; platform?: string }; performance: Record<string, number> }>;
@@ -121,11 +127,13 @@ export interface MDAnalysisReportSet {
         sample_stdev_of_replica_final_rmsd_angstrom: number | null;
     };
     evidence: { status: 'insufficient_evidence'; reason: string; frames_are_independent_replicates: false };
+    retry: { eligible: boolean; active: boolean; reason: string };
 }
 
 export const fetchMDSummary = (jobId: string) => api.get<MDSummary>(`/api/jobs/${jobId}/md/summary`);
 export const fetchMDArtifacts = (jobId: string) => api.get<{ schema: string; job_id: string; source: string; bounded: true; artifacts: MDArtifact[] }>(`/api/jobs/${jobId}/md/artifacts`);
 export const fetchMDAnalysis = (jobId: string) => api.get<MDAnalysisReportSet>(`/api/jobs/${jobId}/md/analysis`);
+export const retryMDAnalysis = (jobId: string) => api.post<{ schema: 'bms.md.analysis-retry.v1'; status: string; created_child_ids: string[] }>(`/api/jobs/${jobId}/md/analysis/retry`);
 
 // Log data for View Logs modal
 export interface JobLogs {

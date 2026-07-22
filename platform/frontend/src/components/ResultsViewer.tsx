@@ -5161,7 +5161,7 @@ export function ResultsViewer() {
 
                 {activeJob && (
                     activeJob.model_id === 'molecular_dynamics' ? (
-                        <MDResultsPane jobId={activeJob.id} />
+                        <MDResultsPane key={activeJob.id} jobId={activeJob.id} />
                     ) : (
                     <>
                         {activeLineageRootJob && (
