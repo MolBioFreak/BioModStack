@@ -16,6 +16,7 @@ from migrations.add_saved_selection_sets import migrate as migrate_saved_selecti
 from migrations.add_external_result_imports import migrate as migrate_external_result_imports
 from migrations.add_sequence_provenance import migrate as migrate_sequence_provenance
 from migrations.add_conformational_mapping import migrate as migrate_conformational_mapping
+from migrations.add_viewer_snapshots import migrate as migrate_viewer_snapshots
 from run_migration import migrate as migrate_stage_tracking
 
 
@@ -37,6 +38,7 @@ MIGRATIONS: List[Migration] = [
     Migration(8, "add_saved_selection_sets", migrate_saved_selection_sets),
     Migration(9, "add_external_result_imports", migrate_external_result_imports),
     Migration(10, "add_conformational_mapping", migrate_conformational_mapping),
+    Migration(11, "add_viewer_snapshots", migrate_viewer_snapshots),
 ]
 
 
