@@ -4,7 +4,7 @@
     "path": "../../patches/wf-clone-validation-v1.8.4-nextflow25.patch",
     "result_commit": "7e6b7f0dfe31ee855ec1342c5ea8c5a73021d5a4",
     "result_tree": "6d76e709d6ba599f30854fc0478da555c924e18e",
-    "sha256": "a7c0cc4a19d5bc3195c96a8fb842bb5031adb37ab6a126f33669b020f756bc95"
+    "sha256": "7b55ee6095de960db21863295272c2f2c2cd9ffcd3e50f6a76c56af14fef3b9b"
   },
   "containers": {
     "cache_dir": "/mnt/BioModStack/apptainer/singularity_cache",
