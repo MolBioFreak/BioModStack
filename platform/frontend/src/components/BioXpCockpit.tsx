@@ -24,9 +24,13 @@ function EvidenceValue({ value }: { value: boolean | null }) {
 type CommissioningCommandName =
     | 'activate_usb_for_service'
     | 'collect_hardware_snapshot'
-    | 'construct_pipettes'
-    | 'initialize_without_motion'
-    | 'run_initial_check';
+    | 'initialize_oem_environment';
+
+const OEM_STARTUP_STAGES = [
+    'constructor_pipette_stage',
+    'initialization_without_motion',
+    'initial_check',
+] as const;
 
 const COMMISSIONING_COMMANDS: ReadonlyArray<{
     command: CommissioningCommandName;
@@ -48,25 +52,10 @@ const COMMISSIONING_COMMANDS: ReadonlyArray<{
         tone: 'query',
     },
     {
-        command: 'construct_pipettes',
-        label: 'Initialize/Verify Four Pipette Controllers',
-        detail: 'Runs the OEM four-channel wake, WR, shared completion, pressure-offset, firmware, condition, and status sequence. No axis motion.',
+        command: 'initialize_oem_environment',
+        label: 'Initialize BioXP OEM Environment',
+        detail: 'One OEM-mirrored startup action: initializes and verifies all four pipettes, configures controllers and thermal boards without motion, then runs initialCheck. It stops before initializeSystem, homing, or axis motion.',
         tone: 'write',
-        lifecycleStage: 'constructor_pipette_stage',
-    },
-    {
-        command: 'initialize_without_motion',
-        label: 'Initialize Controllers Without Motion',
-        detail: 'Runs the literal OEM controller, heater, chiller, thermal, and final white-LED sequence. No axis motion.',
-        tone: 'write',
-        lifecycleStage: 'initialization_without_motion',
-    },
-    {
-        command: 'run_initial_check',
-        label: 'Run OEM Initial Check',
-        detail: 'Repeatable OEM check: CAN_READY wait, white LED, door/latch and 24 V checks, then board deactivate/activate. No axis motion.',
-        tone: 'write',
-        lifecycleStage: 'initial_check',
     },
 ];
 
@@ -78,7 +67,7 @@ export function BioXpCockpit() {
     const executeCommand = useBioXpCommand();
     const emergencyStop = useBioXpEmergencyStop();
     const [protocolName, setProtocolName] = useState('BioXP offline validation');
-    const [initialCheckAck, setInitialCheckAck] = useState('');
+    const [oemStartupAck, setOemStartupAck] = useState('');
     const [nowMs, setNowMs] = useState(() => Date.now());
 
     useEffect(() => {
@@ -110,8 +99,8 @@ export function BioXpCockpit() {
             expected_generation: connection?.generation ?? 0,
             idempotency_key: crypto.randomUUID(),
         };
-        return command === 'run_initial_check'
-            ? { ...base, mode: 'live', operator_ack: initialCheckAck }
+        return command === 'initialize_oem_environment'
+            ? { ...base, mode: 'live', operator_ack: oemStartupAck }
             : base;
     };
 
@@ -168,7 +157,10 @@ export function BioXpCockpit() {
                     <span className="text-sm text-slate-400">{connection?.startup_lifecycle?.state ?? 'unavailable'}</span>
                 </div>
                 <div className="mt-3 grid gap-3 lg:grid-cols-3">
-                    {Object.entries(connection?.startup_lifecycle?.stages ?? {}).map(([name, stage]) => (
+                    {OEM_STARTUP_STAGES.map((name) => {
+                        const stage = connection?.startup_lifecycle?.stages[name];
+                        if (!stage) return null;
+                        return (
                         <article key={name} className="rounded border border-slate-800 p-3 text-sm">
                             <h3 className="font-mono text-xs text-cyan-300">{name}</h3>
                             <p className="mt-1 font-semibold">{stage.state}</p>
@@ -176,7 +168,8 @@ export function BioXpCockpit() {
                             {stage.prerequisite && <p className="text-xs text-slate-500">requires={stage.prerequisite}</p>}
                             {stage.error && <p className="mt-1 text-xs text-red-300">{stage.error}</p>}
                         </article>
-                    ))}
+                        );
+                    })}
                 </div>
                 {!connection?.startup_lifecycle && <p className="mt-3 text-sm text-amber-300">Collect a hardware snapshot or probe the active robot to load lifecycle evidence.</p>}
             </section>
@@ -192,7 +185,7 @@ export function BioXpCockpit() {
                     {COMMISSIONING_COMMANDS.map(({ command, label, detail, tone, lifecycleStage }) => {
                         const available = mutationAccessEnabled
                             && isBioXpCommandAvailable(status?.available_commands, command, derived?.label);
-                        const ackReady = command !== 'run_initial_check' || initialCheckAck === 'INITIALIZE';
+                        const ackReady = command !== 'initialize_oem_environment' || oemStartupAck === 'INITIALIZE';
                         const stage = lifecycleStage ? connection?.startup_lifecycle?.stages[lifecycleStage] : undefined;
                         const blockedReason = status?.unavailable_commands?.[command]
                             ?? (statusQuery.isError ? 'Status is unavailable.' : 'Command is not admitted by the server.');
@@ -201,9 +194,9 @@ export function BioXpCockpit() {
                                 <h3 className="font-semibold">{label}</h3>
                                 <p className="mt-1 text-sm text-slate-300">{detail}</p>
                                 {stage && <p className="mt-2 text-xs text-cyan-300">stage={stage.state} · attempts={stage.attempt_count ?? 0}</p>}
-                                {command === 'run_initial_check' && (
-                                    <label className="mt-3 block text-xs text-amber-200">Type INITIALIZE to acknowledge the live board-cycle stage
-                                        <input value={initialCheckAck} onChange={(event) => setInitialCheckAck(event.target.value)} autoComplete="off" className="mt-1 w-full rounded border border-amber-700 bg-slate-950 px-2 py-1.5 text-sm" />
+                                {command === 'initialize_oem_environment' && (
+                                    <label className="mt-3 block text-xs text-amber-200">Type INITIALIZE to acknowledge the complete OEM non-motion startup sequence
+                                        <input value={oemStartupAck} onChange={(event) => setOemStartupAck(event.target.value)} autoComplete="off" className="mt-1 w-full rounded border border-amber-700 bg-slate-950 px-2 py-1.5 text-sm" />
                                     </label>
                                 )}
                                 <button
