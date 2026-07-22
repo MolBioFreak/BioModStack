@@ -449,6 +449,44 @@ export const submitJob = (jobData: Partial<Job>) => {
     return api.post('/api/jobs', jobData);
 };
 
+export interface BoltzApiStructureRequest {
+    name: string;
+    client_request_id: string;
+    model: 'boltz-2.1';
+    sequence: string;
+    primary_chain_id: string;
+    complex_components: Array<Record<string, unknown>>;
+    num_samples: number;
+    use_msa: boolean;
+}
+
+export interface BoltzApiEstimateResponse {
+    model: string;
+    provider_input: Record<string, unknown>;
+    estimate: Record<string, unknown>;
+    estimate_fingerprint: string;
+}
+
+export interface BoltzApiProviderStatus {
+    available: boolean;
+    cli_available: boolean;
+    credential_configured: boolean;
+    model: string;
+    message: string;
+}
+
+export const fetchBoltzApiProviderStatus = () => (
+    api.get<BoltzApiProviderStatus>('/api/jobs/boltz-api/status')
+);
+
+export const estimateBoltzApiJob = (payload: BoltzApiStructureRequest) => (
+    api.post<BoltzApiEstimateResponse>('/api/jobs/boltz-api/estimate', payload)
+);
+
+export const submitBoltzApiJob = (
+    payload: BoltzApiStructureRequest & { approved_estimate_fingerprint: string },
+) => api.post<Job>('/api/jobs/boltz-api', payload);
+
 export interface OntNgsSubmitRequest {
     name?: string;
     params: Record<string, unknown>;
