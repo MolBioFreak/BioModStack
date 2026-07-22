@@ -6,7 +6,9 @@ import {
     StructureSelection,
 } from 'molstar/lib/mol-model/structure';
 import type { Structure } from 'molstar/lib/mol-model/structure';
+import { MoleculeType } from 'molstar/lib/mol-model/structure/model/types';
 import { StructureQuery } from 'molstar/lib/mol-model/structure/query/query';
+import { getElementMoleculeType } from 'molstar/lib/mol-model/structure/util';
 import {
     clearStructureOverpaint,
     setStructureOverpaint,
@@ -23,7 +25,7 @@ import { StateSelection } from 'molstar/lib/mol-state';
 import { createDirectMolstarEngineOwner } from '../runtime/createDirectMolstarEngineOwner';
 import type { MolstarEngineOwner } from '../runtime/MolstarEngineOwner';
 import { assessMeasurement, type ViewerMeasurement } from '../contracts/measurements';
-import type { StructureCameraState } from '../contracts/scenePresentation';
+import type { StructureCameraState, StructureComponentType } from '../contracts/scenePresentation';
 import {
     viewerCancelled,
     viewerError,
@@ -59,6 +61,7 @@ export interface MolstarDirectQuery {
     readonly auth_atoms?: readonly string[];
     readonly atom_id?: readonly number[];
     readonly alt_loc_id?: string;
+    readonly component_types?: readonly StructureComponentType[];
     readonly color?: string | number | { r: number; g: number; b: number };
     readonly focus?: boolean;
     readonly tooltip?: string;
@@ -69,6 +72,7 @@ export interface MolstarDirectPresentation {
     readonly colorSelections?: readonly MolstarDirectQuery[];
     readonly nonSelectedColor?: string | number | { r: number; g: number; b: number };
     readonly tooltipSelections?: readonly MolstarDirectQuery[];
+    readonly hiddenSelections?: readonly MolstarDirectQuery[];
 }
 
 export interface MolstarDirectResidueClick {
@@ -95,6 +99,29 @@ const adapterRegistry = new WeakMap<HTMLElement, MolstarDirectAdapter>();
 const isPluginDisposed = (plugin: PluginUIContext | undefined): boolean => (
     (plugin as unknown as { disposed?: boolean } | undefined)?.disposed === true
 );
+
+const componentTypeForLocation = (location: StructureElement.Location): StructureComponentType => {
+    const entityType = StructureProperties.entity.type(location);
+    const subtype = StructureProperties.entity.subtype(location).toLowerCase();
+    if (entityType === 'water') return 'water';
+    if (entityType === 'branched' || subtype.includes('oligosaccharide')) return 'glycan';
+    if (subtype === 'ion') return 'ion';
+    if (entityType === 'polymer') {
+        if (/polypeptide|cyclic-pseudo-peptide|peptide-like/.test(subtype)) return 'protein';
+        if (subtype === 'polydeoxyribonucleotide') return 'dna';
+        if (subtype === 'polyribonucleotide') return 'rna';
+    }
+    switch (getElementMoleculeType(location.unit, location.element)) {
+        case MoleculeType.Protein: return 'protein';
+        case MoleculeType.DNA: return 'dna';
+        case MoleculeType.RNA: return 'rna';
+        case MoleculeType.Saccharide: return 'glycan';
+        case MoleculeType.Ion: return 'ion';
+        case MoleculeType.Water: return 'water';
+        case MoleculeType.Other: return entityType === 'non-polymer' ? 'ligand' : 'unknown';
+        default: return 'unknown';
+    }
+};
 
 const queryLoci = (params: readonly MolstarDirectQuery[], structure: Structure): StructureElement.Loci => {
     const queries = params.map((param) => {
@@ -135,9 +162,11 @@ const queryLoci = (params: readonly MolstarDirectQuery[], structure: Structure):
                     return true;
                 },
             } : {}),
-            ...((param.atoms || param.auth_atoms || param.atom_id || param.alt_loc_id !== undefined) ? {
+            ...((param.atoms || param.auth_atoms || param.atom_id || param.alt_loc_id !== undefined || param.component_types?.length) ? {
                 atomTest: (location) => (
-                    (!param.atoms
+                    (!param.component_types?.length
+                        || param.component_types.includes(componentTypeForLocation(location.element)))
+                    && (!param.atoms
                         || param.atoms.includes(StructureProperties.atom.label_atom_id(location.element)))
                     && (!param.auth_atoms
                         || param.auth_atoms.includes(StructureProperties.atom.auth_atom_id(location.element)))
@@ -436,9 +465,11 @@ export class MolstarDirectAdapter {
             const plugin = this.requirePlugin();
             const colors = presentation.colorSelections ?? [];
             const tooltips = presentation.tooltipSelections ?? [];
+            const hidden = presentation.hiddenSelections ?? [];
 
-            if (colors.length > 0) {
+            if (colors.length > 0 || hidden.length > 0) {
                 await this.applyColorSelections(plugin, colors, presentation.nonSelectedColor);
+                await this.applyHiddenSelections(plugin, hidden);
                 this.hasSelection = true;
             } else if (this.hasSelection) {
                 await this.clearColorSelections(plugin);
@@ -572,6 +603,27 @@ export class MolstarDirectAdapter {
             }
         }
         if (focusLoci.length > 0) plugin.managers.camera.focusLoci(focusLoci);
+    }
+
+    private async applyHiddenSelections(
+        plugin: PluginUIContext,
+        selections: readonly MolstarDirectQuery[],
+    ): Promise<void> {
+        if (selections.length === 0) return;
+        for (const structureRef of plugin.managers.structure.hierarchy.current.structures) {
+            const structure = structureRef.cell.obj?.data;
+            if (!structure) continue;
+            const documentId = this.documentStructures.get(structure);
+            const documentSelections = selections.filter((selection) => !selection.document_id || selection.document_id === documentId);
+            for (const selection of documentSelections) {
+                await setStructureTransparency(
+                    plugin,
+                    structureRef.components,
+                    1,
+                    async (root) => queryLoci([selection], root),
+                );
+            }
+        }
     }
 
     private async applyTooltips(

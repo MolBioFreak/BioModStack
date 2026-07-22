@@ -1300,7 +1300,7 @@ export const fetchDesignResidueMetrics = (designId: string) =>
     api.get<ResidueMetrics>(`/api/designs/${designId}/residue-metrics`);
 
 export interface ChainMetric {
-    type: 'protein' | 'dna' | 'rna' | 'ligand';
+    type: 'protein' | 'dna' | 'rna' | 'ligand' | 'unknown';
     length: number;
     avg_plddt: number | null;
     plddt: number[];
@@ -1443,14 +1443,27 @@ export interface IpsaeInterfacePairScore {
     ipsae_d0dom_max: number | null;
     iptm_d0chn_asym: number | null;
     iptm_d0chn_max: number | null;
-    n0res: number | null;
     n0chn: number | null;
     n0dom: number | null;
-    d0res: number | null;
+    n0dom_max: number | null;
+    n0res: number | null;
+    n0res_max: number | null;
     d0chn: number | null;
     d0dom: number | null;
-    residue_label_asym: string | null;
-    residue_label_max: string | null;
+    d0dom_max: number | null;
+    d0res: number | null;
+    d0res_max: number | null;
+    residue_label_iptm_asym: string | null;
+    residue_label_ipsae_d0chn_asym: string | null;
+    residue_label_ipsae_d0dom_asym: string | null;
+    residue_label_ipsae_d0res_asym: string | null;
+    residue_label_ipsae_d0res_max: string | null;
+    interface_residue_count_chain_1: number | null;
+    interface_residue_count_chain_2: number | null;
+    interface_dist_residue_count_chain_1: number | null;
+    interface_dist_residue_count_chain_2: number | null;
+    valid_pair_count: number | null;
+    dist_valid_pair_count: number | null;
 }
 
 export interface IpsaeInterfaceAnalysis {

@@ -28,6 +28,7 @@ import { inferDesignAnalysisLens, inferDesignOutputSource, getValidationOutputLa
 import { buildMetricLayerFromExplicitMaps } from '../lib/molstar-metrics';
 import type { MolstarResidueMetricLayer } from '../lib/molstar-metrics';
 import type { MetricLayer } from '../structureViewer/metrics/metricContracts.js';
+import type { DerivedStructureComponent } from '../structureViewer/contracts/complexAnalysis.js';
 import {
     buildConforNetsConformerNavigation,
     buildConforNetsConformerSet,
@@ -1122,9 +1123,125 @@ export default function StructureViewerPane({
                 },
                 values,
             });
+            const proximityThresholdAngstrom = 8;
+            const maxProximities = 10_000;
+            const proximities = [];
+            for (let row = 0; row < contactMap.size && proximities.length < maxProximities; row += 1) {
+                for (let column = row + 1; column < contactMap.size && proximities.length < maxProximities; column += 1) {
+                    if (contactMap.chain_ids[row] === contactMap.chain_ids[column]) continue;
+                    const distance = contactMap.distance_matrix[row]?.[column];
+                    if (typeof distance !== 'number' || !Number.isFinite(distance) || distance > proximityThresholdAngstrom) continue;
+                    const first = identities[row]!;
+                    const second = identities[column]!;
+                    proximities.push({
+                        identity: {
+                            annotationId: `ca-proximity:${first.labelAsymId}:${first.labelSeqId}:${second.labelAsymId}:${second.labelSeqId}`,
+                            documentId: 'primary',
+                            residues: [first, second],
+                        },
+                        value: distance,
+                    });
+                }
+            }
+            if (proximities.length > 0) {
+                layers.push({
+                    descriptor: {
+                        id: 'interchain-ca-proximity',
+                        label: `Inter-chain Cα proximity (≤${proximityThresholdAngstrom} Å)`,
+                        dimension: 'geometry-annotation',
+                        units: 'Å',
+                        direction: 'neutral',
+                        description: 'Display-only thresholding of persisted Cα distances. These records are proximities, not inferred hydrogen bonds, clashes, or chemical interactions.',
+                        projectionPolicy: 'none',
+                        normalization: 'none',
+                        provenance: {
+                            source: 'BioModStack persisted contact-map analysis',
+                            parameters: {
+                                threshold_angstrom: proximityThresholdAngstrom,
+                                admitted: proximities.length,
+                                bounded: proximities.length === maxProximities,
+                            },
+                        },
+                    },
+                    values: proximities,
+                });
+            }
         }
         return layers;
     }, [chainMetrics, contactMap, paeData, paeMatrix]);
+
+    const derivedComponents = useMemo<readonly DerivedStructureComponent[]>(() => (
+        Object.entries(chainMetrics ?? {}).map(([chainId, metric]) => ({
+            documentId: 'primary',
+            chainId,
+            componentType: metric.type,
+            length: metric.length,
+            provenance: 'BioModStack persisted chain_metrics structure analysis',
+            identityScope: 'derived-chain' as const,
+        }))
+    ), [chainMetrics]);
+
+    const interfaceMetricLayers = useMemo<readonly MetricLayer[]>(() => {
+        if (ipsaeInterfaceRun?.status && ipsaeInterfaceRun.status !== 'completed') return [];
+        if (!ipsaeInterface?.pair_scores?.length) return [];
+        const fields = [
+            { key: 'ipsae_d0res_max', id: 'ipsae-d0res-max', label: 'ipSAE residue-normalized maximum' },
+            { key: 'ipsae_d0chn_max', id: 'ipsae-d0chn-max', label: 'ipSAE chain-normalized maximum' },
+            { key: 'ipsae_d0dom_max', id: 'ipsae-d0dom-max', label: 'ipSAE domain-normalized maximum' },
+        ] as const;
+        return fields.flatMap(({ key, id, label }): MetricLayer[] => {
+            const seenPairs = new Set<string>();
+            let duplicatePairs = 0;
+            const values = ipsaeInterface.pair_scores.flatMap((pair) => {
+                const value = pair[key];
+                if (typeof value !== 'number' || !Number.isFinite(value)) return [];
+                const pairKey = `${pair.chain_1}\u0000${pair.chain_2}`;
+                if (seenPairs.has(pairKey)) {
+                    duplicatePairs += 1;
+                    return [];
+                }
+                seenPairs.add(pairKey);
+                return [{
+                    identity: {
+                        documentId: 'primary',
+                        firstChainId: pair.chain_1,
+                        secondChainId: pair.chain_2,
+                    },
+                    value,
+                    provenance: {
+                        source: 'BioModStack persisted interface-ipSAE analysis',
+                        jobId: activeJob?.id,
+                        artifactId: ipsaeInterfaceRun?.run_id ?? undefined,
+                        parameters: { pair_type: pair.pair_type },
+                    },
+                }];
+            });
+            if (values.length === 0) return [];
+            return [{
+                descriptor: {
+                    id,
+                    label,
+                    dimension: 'chain-pair-scalar',
+                    units: 'score',
+                    direction: 'higher_is_better',
+                    description: 'Persisted ipSAE interface score for the exact declared chain pair. This is not iPTM.',
+                    projectionPolicy: 'none',
+                    normalization: 'none',
+                    provenance: {
+                        source: 'BioModStack persisted interface-ipSAE analysis',
+                        jobId: activeJob?.id,
+                        artifactId: ipsaeInterfaceRun?.run_id ?? undefined,
+                        parameters: {
+                            pae_cutoff: ipsaeInterface.pae_cutoff,
+                            distance_cutoff: ipsaeInterface.dist_cutoff,
+                            duplicate_pair_rows_not_admitted: duplicatePairs,
+                        },
+                    },
+                },
+                values,
+            }];
+        });
+    }, [activeJob?.id, ipsaeInterface, ipsaeInterfaceRun?.run_id, ipsaeInterfaceRun?.status]);
 
     const structureScalarMetricLayers = useMemo<readonly MetricLayer[]>(() => {
         const candidates: Array<{
@@ -1210,8 +1327,9 @@ export default function StructureViewerPane({
             ...structureScalarMetricLayers,
             ...(subunitMeanPlddtLayer ? [subunitMeanPlddtLayer] : []),
             ...pairMetricLayers,
+            ...interfaceMetricLayers,
         ],
-        [pairMetricLayers, structureScalarMetricLayers, subunitMeanPlddtLayer],
+        [interfaceMetricLayers, pairMetricLayers, structureScalarMetricLayers, subunitMeanPlddtLayer],
     );
 
 
@@ -2740,6 +2858,7 @@ export default function StructureViewerPane({
                             overlayStructures={conforNetsOverlayStructures}
                             residueMetricLayer={residueMetricLayer}
                             metricLayers={allMetricLayers}
+                            derivedComponents={derivedComponents}
                             activeMetricId={overlayView === 'pae' ? 'pae' : residueMetricLayer?.descriptor.id}
                             showMetricWorkbench={metricWorkbenchOpen}
                             onMetricWorkbenchVisibilityChange={setMetricWorkbenchOpen}
