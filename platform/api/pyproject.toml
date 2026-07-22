@@ -29,6 +29,7 @@ dependencies = [
     "minknow-api>=6.10.1",
     "openpyxl>=3.1.5",
     "pillow>=12.1.0",  # Desktop tray icon rendering
+    "rfc8785>=0.1.4,<1",
 ]
 
 [tool.uv]

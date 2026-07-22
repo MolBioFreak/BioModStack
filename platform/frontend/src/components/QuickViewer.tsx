@@ -344,6 +344,7 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
                         format={selectedStructure?.type || 'pdb'}
                         alphafoldView={true}
                         hideControls={hideViewerControls}
+                        jobId={selectedJobId ?? undefined}
                         height={viewerHeight}
                         backgroundColor="#0f172a"
                     />
