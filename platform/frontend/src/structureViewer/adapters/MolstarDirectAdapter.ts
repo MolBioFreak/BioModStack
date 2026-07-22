@@ -6,7 +6,6 @@ import {
     StructureSelection,
 } from 'molstar/lib/mol-model/structure';
 import type { Structure } from 'molstar/lib/mol-model/structure';
-import { MoleculeType } from 'molstar/lib/mol-model/structure/model/types';
 import { StructureQuery } from 'molstar/lib/mol-model/structure/query/query';
 import { getElementMoleculeType } from 'molstar/lib/mol-model/structure/util';
 import {
@@ -100,6 +99,18 @@ const isPluginDisposed = (plugin: PluginUIContext | undefined): boolean => (
     (plugin as unknown as { disposed?: boolean } | undefined)?.disposed === true
 );
 
+// MoleculeType is an ambient const enum in Mol* 4.5 and has no runtime export.
+// Keep the pinned discriminants local so Vite never emits an invalid ESM import.
+const MOLSTAR_45_MOLECULE_TYPE = Object.freeze({
+    Other: 1,
+    Water: 2,
+    Ion: 3,
+    Protein: 5,
+    RNA: 6,
+    DNA: 7,
+    Saccharide: 9,
+});
+
 const componentTypeForLocation = (location: StructureElement.Location): StructureComponentType => {
     const entityType = StructureProperties.entity.type(location);
     const subtype = StructureProperties.entity.subtype(location).toLowerCase();
@@ -112,13 +123,13 @@ const componentTypeForLocation = (location: StructureElement.Location): Structur
         if (subtype === 'polyribonucleotide') return 'rna';
     }
     switch (getElementMoleculeType(location.unit, location.element)) {
-        case MoleculeType.Protein: return 'protein';
-        case MoleculeType.DNA: return 'dna';
-        case MoleculeType.RNA: return 'rna';
-        case MoleculeType.Saccharide: return 'glycan';
-        case MoleculeType.Ion: return 'ion';
-        case MoleculeType.Water: return 'water';
-        case MoleculeType.Other: return entityType === 'non-polymer' ? 'ligand' : 'unknown';
+        case MOLSTAR_45_MOLECULE_TYPE.Protein: return 'protein';
+        case MOLSTAR_45_MOLECULE_TYPE.DNA: return 'dna';
+        case MOLSTAR_45_MOLECULE_TYPE.RNA: return 'rna';
+        case MOLSTAR_45_MOLECULE_TYPE.Saccharide: return 'glycan';
+        case MOLSTAR_45_MOLECULE_TYPE.Ion: return 'ion';
+        case MOLSTAR_45_MOLECULE_TYPE.Water: return 'water';
+        case MOLSTAR_45_MOLECULE_TYPE.Other: return entityType === 'non-polymer' ? 'ligand' : 'unknown';
         default: return 'unknown';
     }
 };
