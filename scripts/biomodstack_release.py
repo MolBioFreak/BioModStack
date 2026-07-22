@@ -52,6 +52,22 @@ IMAGE_DEFAULTS = {
 }
 
 
+def _read_runtime_env(path: Path) -> dict[str, str]:
+    """Read literal KEY=VALUE assignments with the runtime launcher's semantics."""
+    if not path.is_file():
+        return {}
+    values: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            values[key] = value
+    return values
+
+
 class ReleaseValidationError(RuntimeError):
     """The newly restarted runtime did not satisfy release acceptance."""
 
@@ -178,8 +194,20 @@ class ProductionReleaseBackend:
             "BMS_RELEASE_BROWSER_URL", "http://127.0.0.1:18080/bms/"
         )
         self.allow_first_install = allow_first_install
+        self.runtime_env_file = Path(
+            os.environ.get(
+                "BMS_CORE_RUNTIME_ENV_FILE",
+                Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+                / "biomodstack"
+                / "core-runtime.env",
+            )
+        ).expanduser().resolve()
+        runtime_env = _read_runtime_env(self.runtime_env_file)
         self.image_refs = {
-            service: os.environ.get(IMAGE_REFS[service], IMAGE_DEFAULTS[service])
+            service: runtime_env.get(
+                IMAGE_REFS[service],
+                os.environ.get(IMAGE_REFS[service], IMAGE_DEFAULTS[service]),
+            )
             for service in BUILD_SERVICES
         }
         self.identity: BuildIdentity | None = None
@@ -261,12 +289,27 @@ class ProductionReleaseBackend:
         with tempfile.TemporaryDirectory(prefix="biomodstack-release-source-") as temporary:
             materialized_root = Path(temporary)
             _materialize_git_revision(self.repo_root, identity.revision, materialized_root)
-            self._build_materialized_images(materialized_root, identity)
+            self._build_materialized_images(
+                materialized_root,
+                identity,
+                image_refs=self.image_refs,
+            )
 
     @staticmethod
-    def _build_materialized_images(materialized_root: Path, identity: BuildIdentity) -> None:
+    def _build_materialized_images(
+        materialized_root: Path,
+        identity: BuildIdentity,
+        *,
+        image_refs: Mapping[str, str],
+    ) -> None:
         merged_env = os.environ.copy()
         merged_env.update(identity.as_environment())
+        merged_env.update(
+            {
+                IMAGE_REFS[service]: image_ref
+                for service, image_ref in image_refs.items()
+            }
+        )
         subprocess.run(
             [
                 "docker",
