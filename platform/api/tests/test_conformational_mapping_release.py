@@ -3,14 +3,251 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
+from routers.conformational_mapping import _cm_job_admission
+from scripts.run_conformational_mapping_analysis_plane import (
+    _frustrampnn_command,
+    _open_verified_container,
+    _sha256_fd,
+)
+from services.nextflow import build_nextflow_command
 from scripts.probes.conformational_mapping.phase_review_common import PhaseReviewError, adjudicate
 
 
 KEY = b"current-run-evidence-key-32-bytes-minimum"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_cm_analysis_runs_contracts_on_host_and_only_scores_in_container() -> None:
+    module = (REPO_ROOT / "modules/conformational_mapping_frustrampnn.nf").read_text()
+    config = (REPO_ROOT / "nextflow.config").read_text()
+
+    assert "label 'cm_gpu'" in module
+    assert "label 'gpu'" not in module
+    assert "\n    container " not in module
+    assert "\n    containerOptions " not in module
+    assert "${params.api_python} ${params.code_root}/scripts/run_conformational_mapping_analysis_plane.py" in module
+    assert "--frustrampnn-container ${params.container_dir}/frustrampnn.sif" in module
+    assert "--gpu-id '${assigned_gpu}'" in module
+    assert "export CUDA_VISIBLE_DEVICES='${assigned_gpu}'" in module
+    assert "api_python = System.getenv('BMS_API_PYTHON')" in config
+    assert "withLabel: cm_gpu" not in config
+
+
+def test_cm_scheduler_admission_and_nonzero_gpu_reach_contained_frustrampnn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    admission = _cm_job_admission(
+        "external_import", {"targets": [{"target_id": "imported"}]}
+    )
+    assert admission == {"vram_estimate_mb": 12_000, "sequence_length": 300}
+
+    monkeypatch.setenv("BMS_NEXTFLOW_BIN", "/usr/local/bin/nextflow")
+    command = build_nextflow_command(
+        "conformational_mapping", "map",
+        {"cm_request_path": "/srv/request/cm_request_v1.json", "gpu_id": 3},
+        "/srv/results", job_id="cm-job",
+    )
+    assert command[command.index("--gpu_id") + 1] == "3"
+
+    root = tmp_path.resolve()
+    argv = _frustrampnn_command(
+        apptainer="apptainer", container=root / "frustrampnn.sif",
+        tool="/opt/venv/bin/frustrampnn", normalized=root / "normalized.pdb",
+        checkpoint=Path("/opt/frustrampnn_weights/megascale.ckpt"),
+        raw=root / "raw.csv", output_root=root, gpu_id=3,
+    )
+    assert argv[argv.index("CUDA_VISIBLE_DEVICES=3") - 1] == "--env"
+    assert "--containall" in argv
+    assert argv[argv.index("--bind") + 1] == f"{root}:{root}"
+
+
+def test_cm_nextflow_module_emits_assigned_gpu_into_runner_and_apptainer(
+    tmp_path: Path,
+) -> None:
+    nextflow = Path(os.environ.get("BMS_NEXTFLOW_BIN", "/usr/local/bin/nextflow"))
+    if not (nextflow.is_file() and os.access(nextflow, os.X_OK)):
+        pytest.skip(f"real Nextflow launcher unavailable: {nextflow}")
+
+    request_root = tmp_path / "request"
+    canonical = tmp_path / "canonical"
+    fake_root = tmp_path / "fake-code"
+    for directory in (request_root, canonical, fake_root / "scripts"):
+        directory.mkdir(parents=True)
+    for name in (
+        "cm_request_v1.json", "cm_runtime_registry_v1.json", "cm_complex_snapshots_v1.json",
+    ):
+        (request_root / name).write_text("{}", encoding="utf-8")
+    capture = tmp_path / "runner-capture.json"
+    fake_runner = fake_root / "scripts/run_conformational_mapping_analysis_plane.py"
+    fake_runner.write_text(
+        "import json, os, pathlib, sys\n"
+        f"pathlib.Path({str(capture)!r}).write_text(json.dumps({{'argv': sys.argv[1:], 'cuda': os.environ.get('CUDA_VISIBLE_DEVICES')}}))\n"
+        "out = pathlib.Path(sys.argv[sys.argv.index('--out') + 1]); out.mkdir()\n"
+        "for name in ('cm_native_artifacts_v1.json','cm_ensemble_v1.json','cm_derived_index_v1.json'): (out / name).write_text('{}')\n",
+        encoding="utf-8",
+    )
+    harness = tmp_path / "harness.nf"
+    module = (REPO_ROOT / "modules/conformational_mapping_frustrampnn.nf").as_posix()
+    harness.write_text(
+        "nextflow.enable.dsl=2\n"
+        f"include {{ CanonicalConformationalAnalysisPlane }} from '{module}'\n"
+        "workflow {\n"
+        "  inputs = Channel.of(tuple('request-1', 'external_import', file(params.request_root), file(params.canonical_dir), '/checkpoint'))\n"
+        "  CanonicalConformationalAnalysisPlane(inputs)\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["NXF_HOME"] = str(Path.home() / ".nextflow")
+    env["NXF_OFFLINE"] = "true"
+    env.pop("SSL_CERT_FILE", None)
+    env.pop("CURL_CA_BUNDLE", None)
+    subprocess.run(
+        [
+            str(nextflow), "run", str(harness),
+            "--request_root", str(request_root), "--canonical_dir", str(canonical),
+            "--gpu_id", "3", "--api_python", sys.executable,
+            "--code_root", str(fake_root), "--container_dir", str(tmp_path),
+            "--out_dir", str(tmp_path / "published"),
+            "-work-dir", str(tmp_path / "work"),
+        ],
+        check=True, cwd=tmp_path, env=env, text=True, capture_output=True,
+    )
+    emitted = json.loads(capture.read_text(encoding="utf-8"))
+    assert emitted["cuda"] == "3"
+    gpu_id = emitted["argv"][emitted["argv"].index("--gpu-id") + 1]
+    assert gpu_id == "3"
+    argv = _frustrampnn_command(
+        apptainer="apptainer", container=tmp_path / "frustrampnn.sif",
+        tool="/opt/venv/bin/frustrampnn", normalized=tmp_path / "normalized.pdb",
+        checkpoint=Path("/opt/frustrampnn_weights/megascale.ckpt"),
+        raw=tmp_path / "raw.csv", output_root=tmp_path, gpu_id=int(gpu_id),
+    )
+    assert "CUDA_VISIBLE_DEVICES=3" in argv
+
+    injection_marker = tmp_path / "gpu-injection-proof"
+    malicious_gpu = f"3'; touch {injection_marker}; #"
+    rejected = subprocess.run(
+        [
+            str(nextflow), "run", str(harness),
+            "--request_root", str(request_root), "--canonical_dir", str(canonical),
+            "--gpu_id", malicious_gpu, "--api_python", sys.executable,
+            "--code_root", str(fake_root), "--container_dir", str(tmp_path),
+            "--out_dir", str(tmp_path / "rejected-published"),
+            "-work-dir", str(tmp_path / "rejected-work"),
+        ],
+        check=False, cwd=tmp_path, env=env, text=True, capture_output=True,
+    )
+    assert rejected.returncode != 0
+    assert "canonical non-negative integer" in (rejected.stdout + rejected.stderr)
+    assert not injection_marker.exists()
+
+
+@pytest.mark.parametrize("gpu_id", [True, -1, 3.0, 3.7, "3.7", "-1", " 3"])
+def test_cm_scheduler_gpu_id_rejects_noncanonical_values(
+    monkeypatch: pytest.MonkeyPatch, gpu_id: object
+) -> None:
+    monkeypatch.setenv("BMS_NEXTFLOW_BIN", "/usr/local/bin/nextflow")
+    with pytest.raises(ValueError, match="non-negative integer"):
+        build_nextflow_command(
+            "conformational_mapping", "map",
+            {"cm_request_path": "/tmp/cm_request_v1.json", "gpu_id": gpu_id},
+            "/tmp/cm-output", "cm-job",
+        )
+
+def test_cm_frustrampnn_image_digest_is_verified_before_execution(tmp_path: Path) -> None:
+    image = tmp_path / "frustrampnn.sif"
+    image.write_bytes(b"qualified-image")
+    digest = hashlib.sha256(image.read_bytes()).hexdigest()
+    fd, actual = _open_verified_container(image, digest)
+    assert actual == digest
+    os.close(fd)
+    with pytest.raises(RuntimeError, match="does not match installed bytes"):
+        _open_verified_container(image, "0" * 64)
+    with pytest.raises(RuntimeError, match="SHA-256 is malformed"):
+        _open_verified_container(image, "not-a-digest")
+
+
+def test_cm_frustrampnn_image_rejects_all_symlinks_and_pins_open_generation(
+    tmp_path: Path,
+) -> None:
+    real_parent = tmp_path / "real"
+    real_parent.mkdir()
+    image = real_parent / "frustrampnn.sif"
+    image.write_bytes(b"qualified-image")
+    digest = hashlib.sha256(image.read_bytes()).hexdigest()
+    leaf_link = real_parent / "linked.sif"
+    leaf_link.symlink_to(image)
+    parent_link = tmp_path / "linked-parent"
+    parent_link.symlink_to(real_parent, target_is_directory=True)
+    for linked in (leaf_link, parent_link / image.name):
+        with pytest.raises(RuntimeError, match="contain no symlinks"):
+            _open_verified_container(linked, digest)
+
+    fd, actual = _open_verified_container(image, digest)
+    assert actual == digest
+    image.unlink()
+    image.write_bytes(b"replacement-image")
+    try:
+        assert _sha256_fd(fd) == digest
+        assert _sha256_fd(fd) != hashlib.sha256(image.read_bytes()).hexdigest()
+        argv = _frustrampnn_command(
+            apptainer="apptainer", container=Path(f"/proc/self/fd/{fd}"),
+            tool="/opt/venv/bin/frustrampnn", normalized=tmp_path / "normalized.pdb",
+            checkpoint=Path("/opt/frustrampnn_weights/megascale.ckpt"),
+            raw=tmp_path / "raw.csv", output_root=tmp_path, gpu_id=3,
+        )
+        assert f"/proc/self/fd/{fd}" in argv
+    finally:
+        os.close(fd)
+
+
+def test_cm_frustrampnn_image_openat_walk_survives_interposed_ancestor_swap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trusted = tmp_path / "trusted"
+    trusted.mkdir()
+    image = trusted / "frustrampnn.sif"
+    image.write_bytes(b"qualified-image")
+    digest = hashlib.sha256(image.read_bytes()).hexdigest()
+    attacker = tmp_path / "attacker"
+    attacker.mkdir()
+    (attacker / image.name).write_bytes(b"attacker-image")
+    moved = tmp_path / "trusted-open-generation"
+    real_open = os.open
+    swapped = False
+
+    def interposed_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal swapped
+        if path == image.name and dir_fd is not None and not swapped:
+            trusted.rename(moved)
+            trusted.symlink_to(attacker, target_is_directory=True)
+            swapped = True
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", interposed_open)
+    fd, actual = _open_verified_container(image, digest)
+    try:
+        assert swapped
+        assert trusted.is_symlink()
+        assert actual == digest
+        assert _sha256_fd(fd) == digest
+        assert hashlib.sha256((trusted / image.name).read_bytes()).hexdigest() != digest
+    finally:
+        os.close(fd)
 
 
 def _canonical(value: object) -> bytes:

@@ -13,6 +13,7 @@ import stat
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, Mapping
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
@@ -125,6 +126,30 @@ _SOURCE_MAX_BYTES = {
     "confornets_checkpoint": 2 * 1024 * 1024 * 1024,
     "confornets_state": 2 * 1024 * 1024 * 1024,
 }
+_CM_VRAM_ESTIMATE_MB = {
+    "external_import": 12_000,
+    "confornets": 16_000,
+    "protenix_v2_ensemble": 24_000,
+}
+_FRUSTRAMPNN_IMAGE_SHA256 = "c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da"
+
+
+def _cm_job_admission(backend: str, request_payload: Mapping[str, Any]) -> dict[str, int]:
+    sequence_length = 0
+    for target in request_payload["targets"]:
+        direct_sequence = str(target.get("sequence") or "")
+        if direct_sequence:
+            sequence_length += len(direct_sequence)
+            continue
+        sequence_length += sum(
+            len(str(entity.get("sequence") or ""))
+            for entity in target.get("entities", [])
+            if entity.get("entity_type") == "protein"
+        )
+    return {
+        "vram_estimate_mb": _CM_VRAM_ESTIMATE_MB[backend],
+        "sequence_length": sequence_length or 300,
+    }
 
 
 def _validated_source_suffix(source_kind: str, filename: str) -> str:
@@ -189,8 +214,18 @@ def _server_confornets_identity() -> dict[str, str]:
 
 
 def _runtime_registry(backend: str) -> dict[str, Any]:
+    analysis_image = get_container_dir() / "frustrampnn.sif"
+    if not analysis_image.is_file() or analysis_image.is_symlink():
+        raise HTTPException(status_code=503, detail="registered FrustraMPNN runtime is unavailable")
+    analysis_runtime = {
+        "container_name": "frustrampnn.sif",
+        "container_sha256": _FRUSTRAMPNN_IMAGE_SHA256,
+    }
     if backend == "confornets":
-        return {"schema_name": "cm_runtime_registry", "schema_version": 1, **_server_confornets_identity()}
+        return {
+            "schema_name": "cm_runtime_registry", "schema_version": 1,
+            "analysis_runtime": analysis_runtime, **_server_confornets_identity(),
+        }
     if backend == "protenix_v2_ensemble":
         image = get_container_dir() / "protenix.sif"
         checkpoint = get_weights_root() / "protenix" / "checkpoint" / "protenix-v2.pt"
@@ -203,12 +238,14 @@ def _runtime_registry(backend: str) -> dict[str, Any]:
             "container_digest": f"sha256:{_sha256_path(image)}",
             "checkpoint_sha256": _sha256_path(checkpoint),
             "checkpoint_relative_path": "checkpoint/protenix-v2.pt",
+            "analysis_runtime": analysis_runtime,
         }
     return {
         "schema_name": "cm_runtime_registry", "schema_version": 1,
         "backend_version": "1", "backend_commit": "biomodstack-import-v1",
         "runtime_identity": "descriptor-safe-import-v1", "model_id": "external-import",
         "container_digest": "sha256:" + "0" * 64, "checkpoint_sha256": "0" * 64,
+        "analysis_runtime": analysis_runtime,
     }
 
 
@@ -237,7 +274,7 @@ async def register_source(
     request: Request, source_kind: str = Form(...), metadata_json: str = Form("{}"),
     file: UploadFile = File(...), session: AsyncSession = Depends(get_session),
 ):
-    principal_id = _principal(request)
+    principal_id = _mutation_principal(request)
     if source_kind not in _SOURCE_KINDS:
         raise HTTPException(status_code=422, detail="unsupported conformational-mapping source kind")
     try:
@@ -362,6 +399,54 @@ async def register_source(
     }
 
 
+def _trusted_application_boundary(request: Request) -> bool:
+    proxy_secret = os.getenv("BMS_CM_TRUSTED_PROXY_SECRET", "")
+    supplied_proxy_secret = request.headers.get(_APPLICATION_PROXY_HEADER, "")
+    return bool(
+        proxy_secret
+        and supplied_proxy_secret
+        and secrets.compare_digest(proxy_secret, supplied_proxy_secret)
+    )
+
+
+def _require_same_origin_proxy_mutation(request: Request) -> None:
+    if not _trusted_application_boundary(request):
+        return
+    origin = request.headers.get("origin", "").strip()
+    forwarded_proto = request.headers.get("x-forwarded-proto", "").partition(",")[0].strip().lower()
+    scheme = forwarded_proto or request.url.scheme.lower()
+    host = (
+        request.headers.get("x-forwarded-host")
+        or request.headers.get("host", "")
+    ).partition(",")[0].strip().lower()
+    try:
+        parsed = urlsplit(origin)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail="same-origin mutation proof required") from exc
+    allowed_origins = {
+        value.strip().lower().rstrip("/")
+        for value in os.getenv(
+            "BMS_CM_ALLOWED_ORIGINS",
+            "http://127.0.0.1:18080,http://localhost:18080",
+        ).split(",")
+        if value.strip()
+    }
+    normalized_origin = f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
+    if (
+        scheme not in {"http", "https"}
+        or not host
+        or parsed.scheme.lower() != scheme
+        or parsed.netloc.lower() != host
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+        or normalized_origin not in allowed_origins
+    ):
+        raise HTTPException(status_code=403, detail="same-origin mutation proof required")
+
+
 def _principal(request: Request) -> str:
     principal = getattr(request.state, "authenticated_principal", None)
     if principal is not None:
@@ -374,20 +459,19 @@ def _principal(request: Request) -> str:
         role_set = {str(role).strip().lower() for role in roles}
         if principal_id and role_set.intersection({"operator", "scientist", "admin"}):
             return str(principal_id)
-    proxy_secret = os.getenv("BMS_CM_TRUSTED_PROXY_SECRET", "")
-    supplied_proxy_secret = request.headers.get(_APPLICATION_PROXY_HEADER, "")
-    trusted_application_boundary = bool(
-        proxy_secret
-        and supplied_proxy_secret
-        and secrets.compare_digest(proxy_secret, supplied_proxy_secret)
-    )
-    if trusted_application_boundary:
+    if _trusted_application_boundary(request):
         return "local-application-operator"
     configured = os.getenv("BMS_CM_OPERATOR_TOKEN", "")
     supplied = request.headers.get(_OPERATOR_HEADER, "")
     if configured and supplied and secrets.compare_digest(configured, supplied):
         return "configured-cm-operator"
     raise HTTPException(status_code=401, detail="authenticated conformational-mapping principal required")
+
+
+def _mutation_principal(request: Request) -> str:
+    principal = _principal(request)
+    _require_same_origin_proxy_mutation(request)
+    return principal
 
 
 def _request_token(request: Request, request_id: str) -> str | None:
@@ -403,10 +487,14 @@ async def _authorized_record(
     request_id: str,
     request: Request,
     session: AsyncSession,
+    *,
+    mutation: bool = False,
 ):
     record = await get_request(session, request_id)
     if record is None:
         raise HTTPException(status_code=404, detail="conformational-mapping request not found")
+    if mutation:
+        _require_same_origin_proxy_mutation(request)
     principal: str | None
     try:
         principal = _principal(request)
@@ -530,7 +618,7 @@ async def submit_request(
     response: Response,
     session: AsyncSession = Depends(get_session),
 ):
-    principal_id = _principal(request)
+    principal_id = _mutation_principal(request)
     params: dict[str, Any] = {
         "backend": body.backend,
         "ordered_seeds": body.ordered_seeds,
@@ -706,6 +794,7 @@ async def submit_request(
         )
         request_payload = json.loads(materialized.request_path.read_text(encoding="utf-8"))
         coordinate_plan = json.loads(materialized.coordinate_plan_path.read_text(encoding="utf-8"))
+        analysis_targets = request_payload["targets"]
         if body.backend == "external_import":
             if staged_import is None:
                 raise ImportSnapshotError("external import staging did not produce an immutable receipt")
@@ -715,6 +804,7 @@ async def submit_request(
                 targets=request_payload["targets"],
                 coordinates=coordinate_plan["coordinates"],
             )
+            analysis_targets = import_snapshots
             (root / "cm_complex_snapshots_v1.json").write_text(
                 json.dumps(import_snapshots, sort_keys=True, separators=(",", ":")),
                 encoding="utf-8",
@@ -731,6 +821,7 @@ async def submit_request(
                 source_sha256=sequence_source.content_sha256,
                 coordinates=coordinate_plan["coordinates"],
             )
+            analysis_targets = [confor_snapshot]
             (root / "cm_complex_snapshots_v1.json").write_text(
                 json.dumps([confor_snapshot], sort_keys=True, separators=(",", ":")),
                 encoding="utf-8",
@@ -746,6 +837,7 @@ async def submit_request(
         job = Job(
             id=request_id, name=body.name.strip(), status="queued", model_id="conformational_mapping",
             mode="map", params=materialized.launch_params, output_dir=str(root), queue_status="queued",
+            **_cm_job_admission(body.backend, {"targets": analysis_targets}),
             lineage_root_job_id=request_id, stage_family="conformational_mapping", stage_mode=body.backend,
             provenance={
                 "cm_request_sha256": request_payload["request_sha256"],
@@ -797,33 +889,29 @@ async def request_status(
 ):
     record = await _authorized_record(request_id, request, session)
     job = await session.get(Job, record.job_id)
+    status = record.status
+    progress = record.progress_json
+    failure_receipt = record.failure_receipt_json
     if job is not None and record.status not in {"completed", "failed", "cancelled"}:
         job_state = str(job.status or job.queue_status or "").lower()
         if job_state == "running" and record.status == "queued":
-            await transition_request(
-                session, record, status="running",
-                progress={"phase": "running", "job_stage": job.current_stage},
-            )
-            await session.commit()
+            status = "running"
+            progress = {"phase": "running", "job_stage": job.current_stage}
         elif job_state in {"failed", "cancelled"}:
-            failure = {
+            status = job_state
+            progress = {"phase": job_state}
+            failure_receipt = {
                 "schema_name": "cm_failure_receipt", "schema_version": 1,
                 "request_id": record.request_id, "job_id": job.id,
                 "terminal_state": job_state,
                 "message": str(job.error_message or f"canonical job {job_state}"),
                 "recorded_at": datetime.utcnow().isoformat() + "Z",
             }
-            await transition_request(
-                session, record, status=job_state,
-                progress={"phase": job_state},
-                failure_receipt=failure if job_state == "failed" else None,
-            )
-            await session.commit()
     return {
         "request_id": record.request_id, "job_id": record.job_id, "backend": record.backend,
-        "status": record.status, "job_status": job.status if job else None,
-        "progress": record.progress_json, "failure_receipt": record.failure_receipt_json,
-        "retry_eligible": record.status in {"failed", "cancelled"},
+        "status": status, "job_status": job.status if job else None,
+        "progress": progress, "failure_receipt": failure_receipt,
+        "retry_eligible": status in {"failed", "cancelled"},
         "result_contract_id": record.result_contract_id,
     }
 
@@ -893,7 +981,7 @@ async def prepare_mutagenesis_handoff(
     request_id: str, body: HandoffRequest, request: Request,
     session: AsyncSession = Depends(get_session),
 ):
-    await _authorized_record(request_id, request, session)
+    await _authorized_record(request_id, request, session, mutation=True)
     ensemble = (await _canonical_record(session, request_id, "ensemble", "primary")).payload_json
     analysis = (await _canonical_record(session, request_id, "analysis")).payload_json
     structure_map = (
@@ -958,7 +1046,7 @@ async def launch_resampling(
 ):
     """Atomically materialize and queue one idempotent matched WT/mutant launch."""
 
-    source_record = await _authorized_record(request_id, request, session)
+    source_record = await _authorized_record(request_id, request, session, mutation=True)
     principal_id = source_record.principal_id
     handoff_row = await _canonical_record(session, request_id, "handoff", body.handoff_key)
     handoff = handoff_row.payload_json
@@ -1031,6 +1119,7 @@ async def launch_resampling(
             id=child_request_id, name=f"CM resampling {handoff['mutation_set_string']}",
             status="queued", model_id="conformational_mapping", mode="map",
             params=materialized.launch_params, output_dir=str(root), queue_status="queued",
+            **_cm_job_admission("protenix_v2_ensemble", request_payload),
             parent_job_id=source_job.id, lineage_root_job_id=source_job.lineage_root_job_id or source_job.id,
             stage_family="conformational_mapping", stage_mode="resampling",
             provenance={"cm_pair_id": pair["pair_id"], "cm_handoff_key": body.handoff_key},
@@ -1070,7 +1159,7 @@ async def launch_resampling(
 async def cancel_request(
     request_id: str, request: Request, session: AsyncSession = Depends(get_session)
 ):
-    record = await _authorized_record(request_id, request, session)
+    record = await _authorized_record(request_id, request, session, mutation=True)
     if record.status not in {"prepared", "queued", "running"}:
         raise HTTPException(status_code=409, detail="request is not cancellable")
     await cancel_job_lineage(record.job_id, session, error_message="Cancelled through typed CM API")
@@ -1083,12 +1172,26 @@ async def cancel_request(
 async def retry_request(
     request_id: str, request: Request, session: AsyncSession = Depends(get_session)
 ):
-    record = await _authorized_record(request_id, request, session)
-    if record.status not in {"failed", "cancelled"}:
-        raise HTTPException(status_code=409, detail="request is not retry eligible")
+    record = await _authorized_record(request_id, request, session, mutation=True)
+    if record.status == "completed":
+        raise HTTPException(status_code=409, detail="completed request authority cannot be retried")
     job = await session.get(Job, record.job_id)
     if job is None:
         raise HTTPException(status_code=409, detail="request job is missing")
+    if record.status not in {"failed", "cancelled"}:
+        job_state = str(job.status or job.queue_status or "").lower()
+        if job_state not in {"failed", "cancelled"}:
+            raise HTTPException(status_code=409, detail="request is not retry eligible")
+        await transition_request(
+            session, record, status=job_state, progress={"phase": job_state},
+            failure_receipt={
+                "schema_name": "cm_failure_receipt", "schema_version": 1,
+                "request_id": record.request_id, "job_id": job.id,
+                "terminal_state": job_state,
+                "message": str(job.error_message or f"canonical job {job_state}"),
+                "recorded_at": datetime.utcnow().isoformat() + "Z",
+            } if job_state == "failed" else None,
+        )
     job.status = "queued"
     job.queue_status = "queued"
     job.error_message = None

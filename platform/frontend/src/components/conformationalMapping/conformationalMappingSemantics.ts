@@ -229,7 +229,8 @@ export const canonicalEnsemble = (results: CmResults): CmEnsemble => {
         if (coordinates.backend !== payload.backend) throw new Error('Candidate backend coordinate is inconsistent');
         string(candidate.authoritative_structure_path, 'Candidate structure authority is missing');
         sha(candidate.authoritative_structure_sha256, 'Candidate structure hash is malformed');
-        if (!Array.isArray(candidate.sidecar_paths) || candidate.sidecar_paths.length === 0
+        const expectedSidecarCount = payload.backend === 'external_import' ? 0 : 2;
+        if (!Array.isArray(candidate.sidecar_paths) || candidate.sidecar_paths.length !== expectedSidecarCount
             || candidate.sidecar_paths.some((item) => typeof item !== 'string' || !item)) {
             throw new Error('Candidate sidecar authority is malformed');
         }

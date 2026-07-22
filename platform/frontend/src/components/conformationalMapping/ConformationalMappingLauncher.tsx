@@ -21,6 +21,10 @@ import { ModelDocumentationLinks } from '../ModelDocumentationLinks';
 interface Props {
     onBack?: () => void;
     initialValues?: Record<string, unknown>;
+    services?: {
+        listSources?: typeof listCmSources;
+        submitRequest?: typeof submitCmRequest;
+    };
 }
 
 interface LauncherState {
@@ -170,7 +174,7 @@ const integerList = (value: string): number[] | null => {
 const inputClass = 'w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-orange-400 disabled:cursor-not-allowed disabled:opacity-50';
 const checkClass = 'h-4 w-4 rounded border-slate-600 bg-slate-950 text-orange-500 focus:ring-orange-500';
 
-export function ConformationalMappingLauncher({ onBack, initialValues }: Props) {
+export function ConformationalMappingLauncher({ onBack, initialValues, services }: Props) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const [form, setForm] = useState<LauncherState>(() => hydrateState(initialValues));
@@ -194,7 +198,7 @@ export function ConformationalMappingLauncher({ onBack, initialValues }: Props) 
         }
     }, [form.featureMode, form.proteinMsa, form.rnaMsa, form.templates]);
 
-    const sources = useQuery({ queryKey: ['cm-sources'], queryFn: listCmSources });
+    const sources = useQuery({ queryKey: ['cm-sources'], queryFn: services?.listSources || listCmSources });
     const byKind = (kind: CmSourceKind) => (sources.data || []).filter((source) => source.source_kind === kind);
     const structureSources = useMemo(
         () => (sources.data || []).filter((source) => (
@@ -203,6 +207,17 @@ export function ConformationalMappingLauncher({ onBack, initialValues }: Props) 
         )),
         [sources.data],
     );
+    useEffect(() => {
+        if (!sources.data) return;
+        const admissible = new Set(structureSources.map((source) => source.source_id));
+        setForm((current) => {
+            if (current.backend !== 'external_import') return current;
+            const next = current.importIds.filter((id) => admissible.has(id)).slice(0, 1);
+            if (next.length === current.importIds.length
+                && next.every((id, index) => id === current.importIds[index])) return current;
+            return { ...current, importIds: next };
+        });
+    }, [sources.data, structureSources]);
     const selectedSnapshot = (sources.data || []).find((source) => source.source_id === form.snapshotId);
     const seedValues = useMemo(() => integerList(form.seeds), [form.seeds]);
     const stepValues = useMemo(() => integerList(form.savedSteps), [form.savedSteps]);
@@ -354,7 +369,7 @@ export function ConformationalMappingLauncher({ onBack, initialValues }: Props) 
     };
 
     const submit = useMutation({
-        mutationFn: async () => submitCmRequest(buildPayload()),
+        mutationFn: async () => (services?.submitRequest || submitCmRequest)(buildPayload()),
         onSuccess: (receipt) => {
             setIdempotencyKey(crypto.randomUUID());
             navigate(`/designs/${receipt.request_id}`, { state: { cmSubmissionReceipt: receipt } });

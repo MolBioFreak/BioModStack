@@ -49,6 +49,20 @@ class ConformationalPersistenceError(ValueError):
     """Canonical state could not be persisted without partial visibility."""
 
 
+def _landscape_provenance(landscape: Mapping[str, Any]) -> dict[str, str]:
+    """Preserve legacy v1 truth: retain image identity when present, never invent it."""
+
+    provenance = {
+        "raw_csv_sha256": str(landscape["raw_csv_sha256"]),
+        "checkpoint_sha256": str(landscape["checkpoint_sha256"]),
+        "tool_sha256": str(landscape["tool_sha256"]),
+        "threshold_policy_sha256": str(landscape["threshold_policy_sha256"]),
+    }
+    if landscape.get("container_sha256") is not None:
+        provenance["container_sha256"] = str(landscape["container_sha256"])
+    return provenance
+
+
 def issue_request_capability() -> tuple[str, str]:
     token = secrets.token_urlsafe(32)
     return token, hashlib.sha256(token.encode("utf-8")).hexdigest()
@@ -263,12 +277,7 @@ async def persist_landscape_matrix(
                 sequence_index=residue["sequence_index"], wt=residue["wt"],
                 mutation_aa=slot["mutation_aa"], score=slot["score"], score_class=slot["class"],
                 scoreable=slot["scoreable"], status=slot["status"], reason=slot["reason"],
-                provenance_json={
-                    "raw_csv_sha256": landscape["raw_csv_sha256"],
-                    "checkpoint_sha256": landscape["checkpoint_sha256"],
-                    "tool_sha256": landscape["tool_sha256"],
-                    "threshold_policy_sha256": landscape["threshold_policy_sha256"],
-                },
+                provenance_json=_landscape_provenance(landscape),
             ))
 
 
@@ -470,12 +479,7 @@ async def ingest_result_bundle(
                         wt=residue["wt"], mutation_aa=slot["mutation_aa"], score=slot["score"],
                         score_class=slot["class"], scoreable=slot["scoreable"],
                         status=slot["status"], reason=slot["reason"],
-                        provenance_json={
-                            "raw_csv_sha256": landscape["raw_csv_sha256"],
-                            "checkpoint_sha256": landscape["checkpoint_sha256"],
-                            "tool_sha256": landscape["tool_sha256"],
-                            "threshold_policy_sha256": landscape["threshold_policy_sha256"],
-                        },
+                        provenance_json=_landscape_provenance(landscape),
                     )
                 )
     record.status = "completed"

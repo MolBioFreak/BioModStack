@@ -52,8 +52,9 @@ const sharedProvenance = (
     const rawCsvSha256 = provenanceString(first, 'raw_csv_sha256');
     const checkpointSha256 = provenanceString(first, 'checkpoint_sha256');
     const toolSha256 = provenanceString(first, 'tool_sha256');
+    const containerSha256 = provenanceString(first, 'container_sha256');
     const thresholdPolicySha256 = provenanceString(first, 'threshold_policy_sha256');
-    const expected = { raw_csv_sha256: rawCsvSha256, checkpoint_sha256: checkpointSha256, tool_sha256: toolSha256, threshold_policy_sha256: thresholdPolicySha256 };
+    const expected = { raw_csv_sha256: rawCsvSha256, checkpoint_sha256: checkpointSha256, tool_sha256: toolSha256, container_sha256: containerSha256, threshold_policy_sha256: thresholdPolicySha256 };
     for (const residue of residues) {
         for (const slot of residue.slots) {
             for (const [key, value] of Object.entries(expected)) {
@@ -70,6 +71,7 @@ const sharedProvenance = (
         parameters: {
             checkpoint_sha256: checkpointSha256 ?? null,
             tool_sha256: toolSha256 ?? null,
+            container_sha256: containerSha256 ?? null,
             threshold_policy_sha256: thresholdPolicySha256 ?? null,
         },
     };
