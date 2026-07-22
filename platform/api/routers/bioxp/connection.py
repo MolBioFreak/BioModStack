@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from services.bioxp.errors import ConnectionStateError, ProfileStoreError, TargetPolicyError
 from services.bioxp.connection import mask_target_url
+from services.bioxp.command_policy import lifecycle_stage_reasons
 from services.bioxp.models import BioXpProfile
 from services.bioxp.runtime import BioXpRuntime
 
@@ -22,6 +23,8 @@ def _public_snapshot(snapshot: Any) -> dict[str, Any]:
     payload = snapshot.model_dump(mode="json")
     payload["target_url"] = payload.pop("masked_target")
     payload["fresh"] = payload.pop("observation_fresh")
+    payload["hardware_fresh"] = payload.pop("hardware_observation_fresh")
+    payload["hardware_stale"] = payload.pop("hardware_observation_stale")
     return payload
 
 
@@ -89,13 +92,17 @@ async def get_status(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict
             reason = "connection is not active"
         elif snapshot.command_active:
             reason = "another normal command is active"
+        elif lifecycle_reasons := lifecycle_stage_reasons(definition, snapshot.startup_lifecycle):
+            reason = "; ".join(lifecycle_reasons)
         elif definition.requires_fresh_observation and snapshot.observation_fresh is not True:
             reason = "fresh readiness evidence is unavailable"
         elif definition.requires_runtime_ready and snapshot.runtime_ready is not True:
             reason = "runtime is not ready"
         elif definition.requires_hardware_ready and snapshot.hardware_ready is not True:
             reason = "hardware is not ready"
-        elif definition.required_capability not in snapshot.capabilities:
+        elif definition.requires_runtime_inactive and snapshot.runtime_ready is True:
+            reason = "USB runtime is already active for the managed service"
+        elif definition.required_capability is not None and definition.required_capability not in snapshot.capabilities:
             reason = f"capability {definition.required_capability!r} is unavailable"
         if reason is None:
             available.append(name)
@@ -114,6 +121,11 @@ async def get_status(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict
             "physical_effect_verifiable": False,
         },
         "startup_warnings": list(runtime.startup_warnings),
+        "mutation_access": {
+            "enabled": mutations_enabled(),
+            "server_setting": "BMS_BIOXP_MUTATIONS_ENABLED=1",
+            "secret_required": False,
+        },
         "legacy_job_migration": runtime.legacy_jobs.model_dump(),
     }
 
