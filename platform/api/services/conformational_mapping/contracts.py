@@ -87,10 +87,24 @@ _CANDIDATE_ROLES = {
 _GLOBAL_ROLES = {
     "protenix_v2_ensemble": {
         "runtime_input", "feature_policy", "log", "runtime_config", "composition_audit",
+        "coordinate_ledger", "coordinate_context", "preprocessing_record", "msa_record",
+        "template_record", "preprocess", "optional_analytics", "native_state",
     },
     "confornets": {
         "request", "preprocess", "native_state", "loss", "optional_analytics",
-        "command_log", "runtime_provenance",
+        "command_log", "runtime_provenance", "coordinate_ledger", "coordinate_context",
+    },
+    "external_import": {"receipt"},
+}
+_REQUIRED_GLOBAL_ROLES = {
+    "protenix_v2_ensemble": {
+        "runtime_input", "feature_policy", "log", "runtime_config", "composition_audit",
+        "coordinate_ledger", "coordinate_context", "preprocessing_record", "msa_record",
+        "template_record",
+    },
+    "confornets": {
+        "request", "preprocess", "command_log", "runtime_provenance",
+        "coordinate_ledger", "coordinate_context",
     },
     "external_import": {"receipt"},
 }
@@ -755,10 +769,10 @@ def validate_native_artifacts(instance: Mapping[str, Any]) -> None:
         scoped_roles.append(key)
         if candidate is not None:
             candidate_scoped_roles.add(key)
-    required_global = {("<global>", role) for role in _GLOBAL_ROLES[backend]}
+    required_global = {("<global>", role) for role in _REQUIRED_GLOBAL_ROLES[backend]}
     actual_global = {key for key in scoped_roles if key[0] == "<global>"}
-    if actual_global != required_global:
-        raise ContractValidationError("native manifest global role multiplicity is incomplete or extra")
+    if not required_global.issubset(actual_global):
+        raise ContractValidationError("native manifest required global roles are incomplete")
     required_candidate = {
         (candidate, role)
         for candidate in candidate_ids
@@ -813,6 +827,9 @@ def validate_analysis(instance: Mapping[str, Any]) -> None:
         if key in result_keys:
             raise ContractValidationError("analysis result source-row keys must be unique")
         result_keys.add(key)
+        identity = result["identity"]
+        if key != analysis_source_row_key(identity):
+            raise ContractValidationError("analysis source-row key does not bind its identity")
         expected = result["expected_coordinate_count"]
         valid = result["valid_coordinate_count"]
         if valid > expected:
@@ -850,14 +867,21 @@ def handoff_mutation_identity(instance: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def handoff_evidence_key(instance: Mapping[str, Any]) -> str:
-    identity = handoff_mutation_identity(instance)
-    return ":".join(
-        str(identity[field])
-        for field in (
-            "target_id", "entity_instance_id", "auth_asym_id", "auth_seq_id",
-            "insertion_code", "sequence_index", "validated_wt", "substitution",
-        )
-    )
+    return analysis_source_row_key(handoff_mutation_identity(instance))
+
+
+def analysis_source_row_key(identity: Mapping[str, Any]) -> str:
+    normalized = {
+        "target_id": str(identity["target_id"]),
+        "entity_instance_id": str(identity["entity_instance_id"]),
+        "auth_asym_id": str(identity["auth_asym_id"]),
+        "auth_seq_id": int(identity["auth_seq_id"]),
+        "insertion_code": str(identity.get("insertion_code") or ""),
+        "sequence_index": int(identity["sequence_index"]),
+        "validated_wt": str(identity["validated_wt"]),
+        "substitution": str(identity["substitution"]),
+    }
+    return "cm_row_" + canonical_sha256(normalized)
 
 
 def validate_handoff(instance: Mapping[str, Any]) -> None:
@@ -990,6 +1014,8 @@ def validate_contract_bundle(bundle: Mapping[str, Any], *, resume_descriptor: Ma
         raise ContractValidationError("handoff source ensemble hash mismatch")
     if snapshot and handoff and handoff["source_complex_sha256"] != canonical_sha256(snapshot):
         raise ContractValidationError("handoff source complex hash mismatch")
+    if structure_map and handoff and handoff["source_structure_map_sha256"] != canonical_sha256(structure_map):
+        raise ContractValidationError("handoff source structure-map hash mismatch")
     if analysis and handoff and handoff["source_analysis_sha256"] != canonical_sha256(analysis):
         raise ContractValidationError("handoff source analysis hash mismatch")
     if resume_descriptor is not None:
@@ -1207,6 +1233,9 @@ class FeaturePolicy(_StrictModel):
     per_entity_hashes: dict[
         str, Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     ] | None = None
+    protein_msa_enabled: bool | None = None
+    templates_enabled: bool | None = None
+    rna_msa_enabled: bool | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1218,6 +1247,16 @@ class FeaturePolicy(_StrictModel):
         ):
             raise ValueError("per_entity_hashes must be an object when present")
         return value
+
+    @model_validator(mode="after")
+    def validate_disabled_control(self) -> "FeaturePolicy":
+        if self.mode == "features_disabled_control_v1" and any(
+            value is True for value in (
+                self.protein_msa_enabled, self.templates_enabled, self.rna_msa_enabled
+            )
+        ):
+            raise ValueError("feature-disabled control cannot enable MSA or templates")
+        return self
 
 
 def validate_feature_policy(value: Any) -> dict[str, Any]:

@@ -9,9 +9,6 @@ from fastapi.testclient import TestClient
 from routers import bioxp
 from services.bioxp.runtime import create_bioxp_runtime
 
-TOKEN_HEADER = "X-BMS-BioXP-Operator-Token"
-
-
 def _client(runtime) -> TestClient:
     app = FastAPI()
     app.state.bioxp_runtime = runtime
@@ -25,12 +22,10 @@ def test_startup_is_disconnected_and_unverified_commands_are_not_advertised(
 ) -> None:
     monkeypatch.setenv("BMS_BIOXP_ALLOWED_HOSTS", "robot")
     monkeypatch.setenv("BMS_BIOXP_MUTATIONS_ENABLED", "1")
-    monkeypatch.setenv("BMS_BIOXP_OPERATOR_TOKEN", "profile-token")
     runtime = create_bioxp_runtime(data_root=tmp_path)
     with _client(runtime) as client:
         saved = client.put(
             "/api/bioxp/profile",
-            headers={TOKEN_HEADER: "profile-token"},
             json={"schema_version": 1, "display_name": "Lab robot", "api_url": "http://robot:8123"},
         )
         status = client.get("/api/bioxp/status")
@@ -71,10 +66,8 @@ def test_offline_compile_is_open_but_local_submission_requires_mutation_authoriz
             json={"protocol": protocol, "idempotency_key": "offline-submit-1"},
         )
         monkeypatch.setenv("BMS_BIOXP_MUTATIONS_ENABLED", "1")
-        monkeypatch.setenv("BMS_BIOXP_OPERATOR_TOKEN", "submit-token")
         submitted = client.post(
             "/api/bioxp/protocols/submit",
-            headers={TOKEN_HEADER: "submit-token"},
             json={"protocol": protocol, "idempotency_key": "offline-submit-1"},
         )
         job_id = submitted.json()["job"]["job_id"]
@@ -107,16 +100,13 @@ def test_robot_facing_operations_fail_closed_then_default_registry_still_denies(
         disabled_stop = client.post("/api/bioxp/emergency-stop", json=emergency)
 
         monkeypatch.setenv("BMS_BIOXP_MUTATIONS_ENABLED", "1")
-        monkeypatch.setenv("BMS_BIOXP_OPERATOR_TOKEN", "operator-test-token")
         authorized_command = client.post(
             "/api/bioxp/commands",
             json=command,
-            headers={TOKEN_HEADER: "operator-test-token"},
         )
         authorized_stop = client.post(
             "/api/bioxp/emergency-stop",
             json=emergency,
-            headers={TOKEN_HEADER: "operator-test-token"},
         )
     asyncio.run(runtime.close())
 
@@ -128,46 +118,18 @@ def test_robot_facing_operations_fail_closed_then_default_registry_still_denies(
     assert "active target" in authorized_stop.json()["detail"]
 
 
-def test_configured_invalid_token_file_never_falls_back_to_environment(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("BMS_BIOXP_MUTATIONS_ENABLED", "1")
-    monkeypatch.setenv("BMS_BIOXP_OPERATOR_TOKEN", "environment-token")
-    monkeypatch.setenv("BMS_BIOXP_OPERATOR_TOKEN_FILE", str(tmp_path / "missing-token"))
-    runtime = create_bioxp_runtime(data_root=tmp_path)
-    with _client(runtime) as client:
-        response = client.post(
-            "/api/bioxp/commands",
-            json={
-                "command": "initialize_motors",
-                "expected_generation": 1,
-                "idempotency_key": "token-file-test-1",
-            },
-            headers={TOKEN_HEADER: "environment-token"},
-        )
-    asyncio.run(runtime.close())
-
-    assert response.status_code == 503
-    assert "credential file is missing" in response.json()["detail"]
-
-
 def test_malformed_persisted_profile_is_sanitized_without_auto_connect(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("BMS_BIOXP_MUTATIONS_ENABLED", "1")
-    monkeypatch.setenv("BMS_BIOXP_OPERATOR_TOKEN", "connect-token")
     runtime = create_bioxp_runtime(data_root=tmp_path)
     profile_path = tmp_path / "bioxp" / "profile.json"
     profile_path.write_text('{"api_url":"http://robot:8123","secret":"do-not-leak"}', encoding="utf-8")
     with _client(runtime) as client:
         profile = client.get("/api/bioxp/profile")
         status = client.get("/api/bioxp/status")
-        connect = client.post(
-            "/api/bioxp/connection/connect",
-            headers={TOKEN_HEADER: "connect-token"},
-        )
+        connect = client.post("/api/bioxp/connection/connect")
     asyncio.run(runtime.close())
 
     assert profile.status_code == 200

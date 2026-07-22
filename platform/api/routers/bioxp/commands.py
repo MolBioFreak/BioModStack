@@ -11,11 +11,12 @@ from services.bioxp.command_coordinator import (
     IdempotencyConflictError,
 )
 from services.bioxp.command_models import parse_command_request
+from services.bioxp.errors import ConnectionStateError, TargetPolicyError
 from services.bioxp.runtime import BioXpRuntime
 
-from .dependencies import get_bioxp_runtime
+from .dependencies import get_bioxp_runtime, require_bioxp_mutation_access
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_bioxp_mutation_access)])
 
 
 class EmergencyStopRequest(BaseModel):
@@ -34,9 +35,13 @@ async def execute_command(
         request = parse_command_request(payload)
         result = await runtime.commands.execute(
             request,
-            token_authorized=True,
             mutations_enabled=True,
         )
+        if request.command in {"activate_usb_for_service", "collect_hardware_snapshot"} and result.remote_acknowledged:
+            try:
+                await runtime.connection.probe()
+            except (ConnectionStateError, TargetPolicyError):
+                pass
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except (CommandBusyError, CommandDeniedError, IdempotencyConflictError) as exc:
@@ -69,7 +74,6 @@ async def emergency_stop(
         result = await runtime.commands.emergency_stop(
             expected_generation=request.expected_generation,
             idempotency_key=request.idempotency_key,
-            token_authorized=True,
             mutations_enabled=True,
         )
     except (CommandDeniedError, IdempotencyConflictError) as exc:

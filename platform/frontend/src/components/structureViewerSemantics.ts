@@ -518,7 +518,7 @@ export const buildStructureViewerQuickViews = ({
             label: 'Designability',
             sectionId: 'designability',
             overlayView: hasFampnnPsceProfile ? 'psce' : 'metrics',
-            colorMode: hasFampnnPsceProfile ? 'fampnn_psce' : hasFrustrationSummary ? 'frustration' : 'default',
+            colorMode: hasFampnnPsceProfile ? 'fampnn_psce' : 'default',
         });
     }
 

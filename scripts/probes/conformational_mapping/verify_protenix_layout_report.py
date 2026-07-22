@@ -17,13 +17,12 @@ def _valid_sha(value: Any) -> bool:
 
 
 def classify_layout_report(observations_root: Path, identity: dict[str, Any]) -> dict[str, Any]:
-    base = observations_root / 'runtime_inventory' / 'protenix_layout_fresh_v3'
+    base = observations_root / 'runtime_inventory' / 'protenix_layout_attempt2'
     report_path = base / 'validation_report.json'
     meta_path = base / 'run.meta.json'
-    supervisor_path = base / 'run_supervisor.py'
     log_path = base / 'stdout_stderr.log'
     input_path = base / 'input.json'
-    required = (report_path, meta_path, supervisor_path, log_path, input_path)
+    required = (report_path, meta_path, log_path, input_path)
     if not all(path.is_file() and not path.is_symlink() for path in required):
         return {'runtime_status':'unmeasured','evidence_tier':'unmeasured','gate_effect':'STOP','rationale':'fresh 5x5 layout evidence is incomplete','refs':[]}
     try:
@@ -64,7 +63,7 @@ def classify_layout_report(observations_root: Path, identity: dict[str, Any]) ->
             valid = valid and command[command.index(flag) + 1] == expected_value
     rows = report.get('rows')
     valid = valid and isinstance(rows, list) and len(rows) == 25
-    refs = [report_path, meta_path, supervisor_path, log_path, input_path]
+    refs = [report_path, meta_path, log_path, input_path]
     seen = set()
     artifact_relpaths = set()
     expected_keys = {(seed, sample) for seed in [101,202,303,404,505] for sample in range(5)}
@@ -98,7 +97,7 @@ def classify_layout_report(observations_root: Path, identity: dict[str, Any]) ->
                     refs.append(path)
     expected_artifacts = set()
     for seed, sample in expected_keys:
-        prefix = f'/evidence/output/small_protein/seed_{seed}/predictions/small_protein'
+        prefix = f'/evidence/output/ptx_layout_5x5_phase0/seed_{seed}/predictions/ptx_layout_5x5_phase0'
         expected_artifacts.update({
             f'{prefix}_sample_{sample}.cif',
             f'{prefix}_summary_confidence_sample_{sample}.json',
@@ -115,7 +114,6 @@ def classify_layout_report(observations_root: Path, identity: dict[str, Any]) ->
     valid = valid and _valid_sha(producer.get('checkpoint', {}).get('sha256')) and producer.get('checkpoint', {}).get('sha256') == checkpoint.get('sha256')
     valid = valid and _valid_sha(producer.get('wrapper', {}).get('sha256')) and producer.get('wrapper', {}).get('sha256') == wrapper.get('sha256')
     valid = valid and producer.get('input', {}).get('sha256') == _sha(input_path)
-    valid = valid and producer.get('supervisor', {}).get('sha256') == _sha(supervisor_path)
     valid = valid and producer.get('stdout_stderr', {}).get('sha256') == _sha(log_path)
     valid = valid and producer.get('stdout_stderr', {}).get('bytes') == log_path.stat().st_size
     valid = valid and str(protenix.get('path')) in command

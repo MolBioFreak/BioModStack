@@ -1,6 +1,7 @@
 {
   "frontendCheckout": "../..",
   "apiBaseUrl": "https://compute-node.taileb3a90.ts.net",
+  "remoteUiUrl": "https://compute-node.taileb3a90.ts.net/",
   "routerBasename": "/",
   "mobileInitialScale": 0.55,
   "mobileMinimumScale": 0.25,

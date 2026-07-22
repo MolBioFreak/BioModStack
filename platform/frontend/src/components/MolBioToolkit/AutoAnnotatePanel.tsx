@@ -5,6 +5,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
+import type { AnnotationSourceStatus } from './utils/annotationSources';
 import {
     focusTrapTarget,
     restoreFocusIfConnected,
@@ -26,8 +27,14 @@ interface AutoAnnotatePanelProps {
     isOpen: boolean;
     onClose: () => void;
     onAnnotate: (settings: AutoAnnotateSettings) => void;
+    onClearAnnotations: () => void;
+    onImportAnnotations: (file: File) => Promise<string>;
+    onRetrieveNcbi: (accession: string) => Promise<string>;
+    onRetrieveAddgene: (plasmidId: string) => Promise<string>;
+    annotationSourceStatus: AnnotationSourceStatus | null;
     isAnnotating: boolean;
     hasSequence: boolean;
+    featureCount: number;
     sequenceLength: number;
     isCircular: boolean;
 }
@@ -36,14 +43,65 @@ export function AutoAnnotatePanel({
     isOpen,
     onClose,
     onAnnotate,
+    onClearAnnotations,
+    onImportAnnotations,
+    onRetrieveNcbi,
+    onRetrieveAddgene,
+    annotationSourceStatus,
     isAnnotating,
     hasSequence,
+    featureCount,
     sequenceLength,
     isCircular
 }: AutoAnnotatePanelProps) {
     const [settings, setSettings] = useState<AutoAnnotateSettings>(DEFAULT_SETTINGS);
+    const [confirmingClear, setConfirmingClear] = useState(false);
+    const [isImporting, setIsImporting] = useState(false);
+    const [retrievingSource, setRetrievingSource] = useState<'ncbi' | 'addgene' | null>(null);
+    const [ncbiAccession, setNcbiAccession] = useState('');
+    const [addgenePlasmidId, setAddgenePlasmidId] = useState('');
+    const [importMessage, setImportMessage] = useState<string | null>(null);
+    const [importError, setImportError] = useState<string | null>(null);
     const panelRef = useRef<HTMLDivElement | null>(null);
     const returnFocusRef = useRef<HTMLElement | null>(null);
+
+    useEffect(() => {
+        if (!isOpen) return;
+        setConfirmingClear(false);
+        setImportMessage(null);
+        setImportError(null);
+    }, [isOpen]);
+
+    const handleAnnotationFile = async (file: File | undefined) => {
+        if (!file) return;
+        setIsImporting(true);
+        setImportMessage(null);
+        setImportError(null);
+        try {
+            setImportMessage(await onImportAnnotations(file));
+        } catch (error) {
+            setImportError(error instanceof Error ? error.message : 'Annotation import failed.');
+        } finally {
+            setIsImporting(false);
+        }
+    };
+
+    const handlePublishedSource = async (
+        provider: 'ncbi' | 'addgene',
+        value: string,
+        retrieve: (identifier: string) => Promise<string>,
+    ) => {
+        setRetrievingSource(provider);
+        setImportMessage(null);
+        setImportError(null);
+        try {
+            setImportMessage(await retrieve(value));
+        } catch (error) {
+            setImportError(error instanceof Error ? error.message : 'Published annotation retrieval failed.');
+        } finally {
+            setRetrievingSource(null);
+        }
+    };
 
     useEffect(() => {
         if (!isOpen) return;
@@ -92,7 +150,7 @@ export function AutoAnnotatePanel({
                 role="dialog"
                 aria-modal="true"
                 aria-label="Auto-Annotate Settings"
-                className="bg-slate-800 rounded-lg shadow-xl w-full max-w-md p-6 border border-slate-600"
+                className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-lg border border-slate-600 bg-slate-800 p-6 shadow-xl"
                 onClick={e => e.stopPropagation()}
             >
                 {/* Header */}
@@ -192,6 +250,131 @@ export function AutoAnnotatePanel({
                     <strong>Databases:</strong> SnapGene, SwissProt, UniProt
                     <br />
                     <strong>Detects:</strong> Origins (ori), Resistance genes (KanR, AmpR), Promoters, Tags, CDS
+                </div>
+
+                <div className="mt-4 space-y-3 rounded-lg border border-slate-600 bg-slate-900/70 p-3">
+                    <div>
+                        <div className="text-sm font-medium text-slate-200">Published annotations</div>
+                        <div className="mt-1 text-xs text-slate-400">
+                            Transfer features from an authoritative annotated file only when its topology and sequence match this construct exactly. Unique circular rotations and reverse complements are aligned automatically.
+                        </div>
+                    </div>
+                    <label className={`flex w-full items-center justify-center rounded border border-cyan-600 px-3 py-2 text-sm font-medium text-cyan-200 transition-colors ${isImporting || !hasSequence ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:bg-cyan-950/60'}`}>
+                        <input
+                            type="file"
+                            accept=".dna,.gb,.gbk,.genbank"
+                            className="sr-only"
+                            disabled={isImporting || !hasSequence}
+                            onChange={(event) => {
+                                void handleAnnotationFile(event.target.files?.[0]);
+                                event.target.value = '';
+                            }}
+                        />
+                        {isImporting ? 'Checking annotated file…' : 'Import SnapGene / GenBank annotations'}
+                    </label>
+                    <div className="space-y-2 rounded border border-slate-700 bg-slate-950/50 p-3">
+                        <label className="block text-xs font-medium text-slate-300" htmlFor="annotation-source-ncbi">
+                            NCBI nucleotide accession
+                        </label>
+                        <div className="flex gap-2">
+                            <input
+                                id="annotation-source-ncbi"
+                                type="text"
+                                value={ncbiAccession}
+                                onChange={(event) => setNcbiAccession(event.target.value)}
+                                placeholder="e.g. J01749.1"
+                                disabled={retrievingSource !== null || !hasSequence}
+                                className="min-w-0 flex-1 rounded border border-slate-600 bg-slate-900 px-2 py-2 text-sm text-slate-100"
+                            />
+                            <button
+                                type="button"
+                                disabled={retrievingSource !== null || !hasSequence || !ncbiAccession.trim()}
+                                onClick={() => void handlePublishedSource('ncbi', ncbiAccession, onRetrieveNcbi)}
+                                className="rounded border border-cyan-700 px-3 py-2 text-xs text-cyan-200 disabled:cursor-not-allowed disabled:opacity-40"
+                            >Retrieve NCBI annotations</button>
+                        </div>
+                    </div>
+                    <div className="space-y-2 rounded border border-slate-700 bg-slate-950/50 p-3">
+                        <label className="block text-xs font-medium text-slate-300" htmlFor="annotation-source-addgene">
+                            Addgene plasmid ID
+                        </label>
+                        <div className="flex gap-2">
+                            <input
+                                id="annotation-source-addgene"
+                                type="text"
+                                inputMode="numeric"
+                                value={addgenePlasmidId}
+                                onChange={(event) => setAddgenePlasmidId(event.target.value)}
+                                placeholder="e.g. 10878"
+                                disabled={retrievingSource !== null || !hasSequence || annotationSourceStatus?.addgene.available !== true}
+                                className="min-w-0 flex-1 rounded border border-slate-600 bg-slate-900 px-2 py-2 text-sm text-slate-100"
+                            />
+                            <button
+                                type="button"
+                                disabled={retrievingSource !== null || !hasSequence || !addgenePlasmidId.trim() || annotationSourceStatus?.addgene.available !== true}
+                                onClick={() => void handlePublishedSource('addgene', addgenePlasmidId, onRetrieveAddgene)}
+                                className="rounded border border-cyan-700 px-3 py-2 text-xs text-cyan-200 disabled:cursor-not-allowed disabled:opacity-40"
+                            >Retrieve Addgene annotations</button>
+                        </div>
+                        {annotationSourceStatus?.addgene.available === false && (
+                            <div className="text-xs text-amber-300">Addgene API token is not configured on the server.</div>
+                        )}
+                        {annotationSourceStatus === null && (
+                            <div className="text-xs text-slate-500">Checking Addgene API availability…</div>
+                        )}
+                    </div>
+                    {retrievingSource && (
+                        <div role="status" className="text-xs text-cyan-300">
+                            Retrieving {retrievingSource === 'ncbi' ? 'NCBI' : 'Addgene'} GenBank annotations…
+                        </div>
+                    )}
+                    {importMessage && (
+                        <div role="status" className="rounded border border-emerald-700 bg-emerald-950/40 px-3 py-2 text-xs text-emerald-300">
+                            {importMessage}
+                        </div>
+                    )}
+                    {importError && (
+                        <div role="alert" className="rounded border border-red-700 bg-red-950/40 px-3 py-2 text-xs text-red-300">
+                            {importError}
+                        </div>
+                    )}
+                </div>
+
+                <div className="mt-4 rounded-lg border border-red-900/70 bg-red-950/20 p-3">
+                    {!confirmingClear ? (
+                        <button
+                            type="button"
+                            onClick={() => setConfirmingClear(true)}
+                            disabled={featureCount === 0 || isAnnotating || isImporting}
+                            className="w-full rounded border border-red-700 px-3 py-2 text-sm font-medium text-red-300 transition-colors hover:bg-red-950/60 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                            Clear all feature annotations ({featureCount})
+                        </button>
+                    ) : (
+                        <div>
+                            <div className="text-sm font-medium text-red-200">Clear {featureCount} feature annotations?</div>
+                            <div className="mt-1 text-xs text-red-300/80">Primers and sequence bases will be preserved. This action can be undone.</div>
+                            <div className="mt-3 flex justify-end gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setConfirmingClear(false)}
+                                    className="rounded px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-700"
+                                >
+                                    Keep annotations
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        onClearAnnotations();
+                                        setConfirmingClear(false);
+                                    }}
+                                    className="rounded bg-red-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-600"
+                                >
+                                    Confirm clear
+                                </button>
+                            </div>
+                        </div>
+                    )}
                 </div>
 
                 {/* Actions */}

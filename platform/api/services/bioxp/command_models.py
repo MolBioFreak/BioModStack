@@ -12,6 +12,28 @@ class _CommandBase(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
+class CollectHardwareSnapshotCommand(_CommandBase):
+    command: Literal["collect_hardware_snapshot"]
+
+
+class ActivateUsbForServiceCommand(_CommandBase):
+    command: Literal["activate_usb_for_service"]
+
+
+class ConstructPipettesCommand(_CommandBase):
+    command: Literal["construct_pipettes"]
+
+
+class InitializeWithoutMotionCommand(_CommandBase):
+    command: Literal["initialize_without_motion"]
+
+
+class RunInitialCheckCommand(_CommandBase):
+    command: Literal["run_initial_check"]
+    mode: Literal["live"]
+    operator_ack: Literal["INITIALIZE"]
+
+
 class InitializeMotorsCommand(_CommandBase):
     command: Literal["initialize_motors"]
 
@@ -41,7 +63,12 @@ class RecoverRuntimeCommand(_CommandBase):
 
 
 CommandRequest: TypeAlias = Annotated[
-    InitializeMotorsCommand
+    ActivateUsbForServiceCommand
+    | CollectHardwareSnapshotCommand
+    | ConstructPipettesCommand
+    | InitializeWithoutMotionCommand
+    | RunInitialCheckCommand
+    | InitializeMotorsCommand
     | StartJobCommand
     | PauseJobCommand
     | ResumeJobCommand

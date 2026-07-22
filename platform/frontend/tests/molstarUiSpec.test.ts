@@ -30,6 +30,6 @@ test('full viewers expose Molstar settings while compact viewers can explicitly 
     assert.match(source, /left:\s*hideControls\s*\?\s*'none'/);
     assert.match(source, /right:\s*hideControls\s*\?\s*'none'/);
     assert.match(viewerSource, /hideControls\s*=\s*false/);
-    assert.match(paneSource, /<MolstarViewer[\s\S]*?height="100%"/);
-    assert.doesNotMatch(paneSource, /<MolstarViewer[\s\S]{0,500}?hideControls=\{true\}/);
+    assert.match(paneSource, /<StructureWorkbench[\s\S]*?mode="standard"[\s\S]*?height="100%"/);
+    assert.doesNotMatch(paneSource, /<StructureWorkbench[\s\S]{0,500}?mode="standard"[\s\S]{0,500}?hideControls/);
 });

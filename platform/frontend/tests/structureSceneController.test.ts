@@ -22,12 +22,29 @@ const scene = (sceneId: string, generation: number): StructureSceneState => ({
     provenance: { createdBy: 'test', createdAt: '2026-07-18T00:00:00.000Z' },
 });
 
+const diagnostics = () => ({
+    engineName: 'molstar' as const,
+    engineVersion: '4.5.0',
+    wrapper: 'bms-direct' as const,
+    disposed: false,
+    structureCount: 0,
+    completedSceneGeneration: 0,
+    measurementCount: 0,
+    hasCanvas3d: false,
+});
+
+const clickSubscription = () => () => undefined;
+
 test('stale scene completion cannot commit over a newer generation', async () => {
     const first = deferred<ViewerResult<void>>();
     const second = deferred<ViewerResult<void>>();
     let calls = 0;
+    const reconcileScene = async () => (++calls === 1 ? first.promise : second.promise);
     const adapter: StructureSceneEngineAdapter = {
-        loadScene: async () => (++calls === 1 ? first.promise : second.promise),
+        loadScene: reconcileScene,
+        reconcileScene,
+        subscribeResidueClicks: clickSubscription,
+        diagnostics,
         dispose: async () => undefined,
     };
     const controller = new StructureSceneController(adapter);
@@ -51,8 +68,12 @@ test('stale scene completion cannot commit over a newer generation', async () =>
 test('dispose cancels in-flight work and emits one scoped terminal event', async () => {
     const pending = deferred<ViewerResult<void>>();
     let disposeCalls = 0;
+    const reconcileScene = async () => pending.promise;
     const adapter: StructureSceneEngineAdapter = {
-        loadScene: async () => pending.promise,
+        loadScene: reconcileScene,
+        reconcileScene,
+        subscribeResidueClicks: clickSubscription,
+        diagnostics,
         dispose: async () => { disposeCalls += 1; },
     };
     const controller = new StructureSceneController(adapter);

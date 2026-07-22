@@ -87,6 +87,22 @@ export function normalizeConfig(raw) {
 
   const frontendCheckout = String(raw.frontendCheckout || '').trim();
   const apiBaseUrl = String(raw.apiBaseUrl || '').trim().replace(/\/+$/, '');
+  const remoteUiUrlInput = String(raw.remoteUiUrl || '').trim();
+  let remoteUiUrl = '';
+  if (remoteUiUrlInput) {
+    const parsedRemoteUiUrl = new URL(remoteUiUrlInput);
+    if (
+      parsedRemoteUiUrl.protocol !== 'https:'
+      || parsedRemoteUiUrl.username
+      || parsedRemoteUiUrl.password
+      || parsedRemoteUiUrl.search
+      || parsedRemoteUiUrl.hash
+      || (parsedRemoteUiUrl.pathname && parsedRemoteUiUrl.pathname !== '/')
+    ) {
+      throw new Error('remoteUiUrl must be an exact HTTPS origin');
+    }
+    remoteUiUrl = parsedRemoteUiUrl.origin + '/';
+  }
   const routerBasename = String(raw.routerBasename || '/').trim() || '/';
   const uiUpdateChannel = normalizeUiUpdateChannel(raw.uiUpdateChannel, 'phone');
   const uiUpdateManifestPath = String(raw.uiUpdateManifestPath || buildUiUpdateManifestPath(uiUpdateChannel)).trim()
@@ -104,6 +120,7 @@ export function normalizeConfig(raw) {
   return {
     frontendCheckout,
     apiBaseUrl,
+    remoteUiUrl,
     routerBasename,
     mobileInitialScale: clampNumber(Number(raw.mobileInitialScale ?? 0.82), 0.55, 1.1, 0.82),
     mobileMinimumScale: clampNumber(Number(raw.mobileMinimumScale ?? 0.25), 0.25, 1.1, 0.25),
@@ -134,6 +151,16 @@ export function buildRuntimeConfigScript(runtimeConfig) {
   return `window.__BMS_CORDOVA_DEFAULT_RUNTIME__ = ${JSON.stringify(runtimeConfig, null, 2)};
 (() => {
   const storageKey = 'bms.cordova.runtimeOverrides';
+
+  // Cordova opens the shell at /index.html, but the frontend router owns the root path.
+  // Normalize before any React entry module is injected so the initial route resolves.
+  if (window.location && window.location.pathname === '/index.html' && window.history) {
+    window.history.replaceState(
+      window.history.state,
+      '',
+      '/' + (window.location.search || '') + (window.location.hash || ''),
+    );
+  }
 
   function clampNumber(value, minimum, maximum, fallback) {
     const numericValue = Number(value);
@@ -627,7 +654,49 @@ export function buildUpdateLoaderScript(bundledDescriptor = { version: 'bundled'
   }
 
   function bootBundledUi() {
+    const runtime = window.__BMS_CORDOVA_RUNTIME__ || {};
+    const remoteUiUrl = String(runtime.remoteUiUrl || '').trim();
+    if (remoteUiUrl) {
+      return bootRemoteUi(remoteUiUrl);
+    }
     return bootDescriptor(bundledDescriptor, { source: 'bundled', basePath: './' });
+  }
+
+  function bootRemoteUi(remoteUiUrl) {
+    bootStatus.source = 'remote';
+    bootStatus.ready = false;
+    bootStatus.descriptor = { version: remoteUiUrl, shellApiVersion: bundledDescriptor.shellApiVersion, entryCss: [], entryJs: [] };
+    bootStatus.basePath = remoteUiUrl;
+    bootStatus.error = null;
+    bootStatus.detail = null;
+
+    let frame = document.getElementById('bms-cordova-remote-ui');
+    if (!frame) {
+      frame = document.createElement('iframe');
+      frame.id = 'bms-cordova-remote-ui';
+      frame.title = 'BioModStack live UI';
+      frame.src = remoteUiUrl;
+      frame.setAttribute('allow', 'clipboard-read; clipboard-write; fullscreen');
+      frame.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;border:0;background:#020617;z-index:0;';
+      frame.addEventListener('load', () => {
+        bootStatus.ready = true;
+        bootStatus.detail = { mode: 'remote', url: remoteUiUrl };
+      }, { once: true });
+      frame.addEventListener('error', () => {
+        bootStatus.error = 'The live BioModStack UI could not be loaded.';
+      }, { once: true });
+      const mountFrame = () => {
+        if (document.body && !frame.isConnected) {
+          document.body.appendChild(frame);
+        }
+      };
+      if (document.body) {
+        mountFrame();
+      } else {
+        document.addEventListener('DOMContentLoaded', mountFrame, { once: true });
+      }
+    }
+    return bootStatus;
   }
 
   function armReadyTimeout(source) {
@@ -1732,6 +1801,7 @@ export async function main(argv = process.argv.slice(2)) {
   console.log(`Building Vite assets into: ${outDir}`);
   run('pnpm', ['exec', 'vite', 'build', '--base', './', '--outDir', outDir, '--emptyOutDir'], {
     cwd: frontendDir,
+    env: process.env,
   });
 
   await fs.rm(wwwDir, { recursive: true, force: true });

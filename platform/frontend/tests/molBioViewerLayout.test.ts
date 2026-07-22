@@ -137,11 +137,41 @@ test('mol bio toolkit source wires fullscreen and side-panel collapse controls',
     assert.match(source, /onToggleToolPanel/);
 });
 
-test('linear imported constructs force the sequence viewer out of plasmid/circular mode', () => {
-    const source = readFileSync(TOOLKIT_PATH, 'utf8');
+test('all constructs default to both linear sequence and circular map projection', () => {
+    const toolkitSource = readFileSync(TOOLKIT_PATH, 'utf8');
+    const viewerSource = readFileSync(VIEWER_PATH, 'utf8');
+    const headerSource = readFileSync(HEADER_PATH, 'utf8');
 
-    assert.match(source, /const effectiveViewMode: ViewMode = sequenceData\.circular \? viewMode : 'linear';/);
-    assert.equal((source.match(/viewMode=\{effectiveViewMode\}/g) || []).length, 3);
+    assert.match(toolkitSource, /workspaceViewModes\[activeWorkspaceId\] \?\? 'both'/);
+    assert.match(toolkitSource, /\[activeWorkspaceId\]: mode/);
+    assert.match(toolkitSource, /const effectiveViewMode: ViewMode = viewMode;/);
+    assert.equal((toolkitSource.match(/viewMode=\{effectiveViewMode\}/g) || []).length, 3);
+    assert.match(viewerSource, /const resolvedViewerMode = viewMode \|\| 'both';/);
+    assert.match(viewerSource, /data-linear-circular-projection/);
+    assert.match(viewerSource, /data-linear-break-marker/);
+    assert.match(viewerSource, /LINEAR BREAK/);
+    assert.match(viewerSource, /sequenceData\.sequence\.length\.toLocaleString\(\)/);
+    assert.match(viewerSource, /Linear projection/);
+    assert.match(viewerSource, /break:.*end.*1/i);
+    assert.doesNotMatch(headerSource, /sequenceData\.circular && onViewModeChange/);
+});
+
+test('both-view default remains unclipped and analytics remain opt-in', () => {
+    const toolkitSource = readFileSync(TOOLKIT_PATH, 'utf8');
+    const viewerSource = readFileSync(VIEWER_PATH, 'utf8');
+
+    assert.match(toolkitSource, /workspaceViewModes\[activeWorkspaceId\] \?\? 'both'/);
+    assert.match(toolkitSource, /GC track visibility state[\s\S]*useState\(false\)/);
+    assert.match(viewerSource, /overflowY: resolvedViewerMode === 'both' \? 'auto' : 'hidden'/);
+});
+
+test('SeqViz pointer drags publish one committed selection after pointer-up', () => {
+    const source = readFileSync(VIEWER_PATH, 'utf8');
+
+    assert.match(source, /pendingPointerSelectionRef/);
+    assert.match(source, /flushPendingPointerSelection/);
+    assert.match(source, /window\.requestAnimationFrame\(flushPendingPointerSelection\)/);
+    assert.doesNotMatch(source, /if \(sourceSelection\) \{\s*onSelection\(sourceSelection\);\s*\}/);
 });
 
 test('sequence viewer does not add a separate linear drag overlay over SeqViz', () => {
@@ -188,4 +218,13 @@ test('mol bio toolkit source gives mobile resize handles touch-safe hit targets'
     assert.match(source, /touch-none/);
     assert.match(source, /w-4/);
     assert.match(source, /md:w-1\.5/);
+});
+
+test('construct acquisition has one canonical button instead of duplicate shelf and header actions', () => {
+    const toolkitSource = readFileSync(TOOLKIT_PATH, 'utf8');
+    const headerSource = readFileSync(HEADER_PATH, 'utf8');
+
+    assert.doesNotMatch(toolkitSource, /Open Molecular Input/);
+    assert.doesNotMatch(toolkitSource, /onOpenModal/);
+    assert.match(headerSource, />\s*Acquire\s*</);
 });

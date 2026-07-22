@@ -52,6 +52,22 @@ export function getRouterBasename(options: RouterBasenameOptions = {}): string {
   return normalizeRouterBasename(basenameCandidate)
 }
 
+export function resolveRouterBasenameForLocation(
+  pathname: string,
+  options: RouterBasenameOptions = {},
+): string {
+  const configuredBasename = getRouterBasename(options)
+  if (configuredBasename !== '/') {
+    return configuredBasename
+  }
+
+  const normalizedPathname = normalizeAppPath(pathname)
+  if (normalizedPathname === '/bms' || normalizedPathname.startsWith('/bms/')) {
+    return '/bms/'
+  }
+  return '/'
+}
+
 export function getCurrentAppPath(pathname: string, basename: string = getRouterBasename()): string {
   const normalizedPathname = normalizeAppPath(pathname)
   const normalizedBasename = normalizeRouterBasename(basename)

@@ -6,6 +6,10 @@ type BioXpConnectionSnapshot = {
     reachable: boolean | null;
     runtime_ready: boolean | null;
     hardware_ready: boolean | null;
+    hardware_observed_at: string | null;
+    hardware_fresh: boolean | null;
+    hardware_stale: boolean;
+    hardware_evidence_error: string | null;
     capabilities: string[];
     observed_at: string | null;
     freshness_budget_seconds: number;
@@ -17,10 +21,11 @@ type BioXpConnectionSnapshot = {
 export type BioXpDisplayState =
     | 'NOT CONFIGURED'
     | 'SAVED / DISCONNECTED'
+    | 'UNKNOWN'
     | 'STALE'
     | 'UNREACHABLE'
-    | 'UNKNOWN'
     | 'RUNTIME NOT READY'
+    | 'RUNTIME READY'
     | 'HARDWARE NOT READY'
     | 'READY';
 
@@ -29,6 +34,30 @@ export interface BioXpDerivedStatus {
     ready: boolean;
     tone: 'neutral' | 'warning' | 'danger' | 'success';
     detail: string;
+}
+
+export function isBioXpCommandAvailable(
+    availableCommands: readonly string[] | undefined,
+    command: string,
+    displayState: BioXpDisplayState | undefined,
+): boolean {
+    void displayState;
+    const serverAdmitted = availableCommands?.includes(command) === true;
+    // The server has already evaluated lifecycle, freshness, runtime,
+    // hardware, capability, and mutation policy. Display labels are operator
+    // summaries and must not impose a second, broader admission policy.
+    return serverAdmitted;
+}
+
+export function deriveBioXpNoCommandsMessage(
+    commandActive: boolean,
+    availableCommands: readonly string[] | undefined,
+): string | null {
+    if ((availableCommands?.length ?? 0) > 0) return null;
+    if (commandActive) {
+        return 'Hardware snapshot or another OEM command is in progress; commands are temporarily locked.';
+    }
+    return 'No normal OEM commands are available. The current robot runtime has not yet advertised an admitted command capability.';
 }
 
 export function deriveBioXpStatus(
@@ -109,6 +138,14 @@ export function deriveBioXpStatus(
             ready: false,
             tone: 'warning',
             detail: 'API reachability is known, but runtime readiness is unknown.',
+        };
+    }
+    if (connection.hardware_fresh === false || connection.hardware_stale) {
+        return {
+            label: 'RUNTIME READY',
+            ready: false,
+            tone: 'warning',
+            detail: 'Runtime is reachable and ready. Hardware evidence is stale; collect an explicit snapshot before hardware-dependent writes.',
         };
     }
     if (connection.hardware_ready === false) {

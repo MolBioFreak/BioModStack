@@ -7,7 +7,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import MolstarViewer from './MolstarViewer';
+import { StructureWorkbench } from '../structureViewer/StructureWorkbench';
 import { BMS_CONTROL, BMS_CONTROL_GROUP, BMS_FULLSCREEN_FLUSH, BMS_PANEL_SURFACE, BMS_SMALL_CONTROL, BMS_VIEWER_WELL } from './ui/bmsStyle';
 import { fetchJobs } from '../lib/api';
 import type { Job } from '../lib/api';
@@ -338,8 +338,8 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
                 style={{ position: 'relative', zIndex: 0 }}
             >
                 {structureUrl ? (
-                    <MolstarViewer
-                        key={`${selectedStructure?.path ?? 'empty'}:${selectedStructure?.type ?? 'pdb'}:${viewerSize}:${hideViewerControls ? 'compact' : 'full'}:${isFullscreen ? 'fs' : 'inline'}`}
+                    <StructureWorkbench
+                        mode="compact"
                         structureUrl={structureUrl}
                         format={selectedStructure?.type || 'pdb'}
                         alphafoldView={true}

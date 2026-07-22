@@ -278,8 +278,6 @@ Relevant env vars include:
 
 - `BMS_FEATURE_BIOXP`
 - `BMS_BIOXP_MUTATIONS_ENABLED` (default `0`)
-- `BMS_BIOXP_OPERATOR_TOKEN_FILE` (strict precedence)
-- `BMS_BIOXP_OPERATOR_TOKEN` (local fallback only)
 - `BMS_BIOXP_ALLOWED_HOSTS`
 - `BMS_BIOXP_ALLOWED_CIDRS`
 

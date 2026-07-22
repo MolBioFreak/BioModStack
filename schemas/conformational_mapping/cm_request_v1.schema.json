@@ -39,6 +39,7 @@
     "confornets": {"$ref": "#/$defs/confornets"},
     "protenix_snapshot_id": {"type": "string", "minLength": 1},
     "import_receipt_id": {"type": "string", "minLength": 1},
+    "source_snapshot_sha256": {"$ref": "#/$defs/sha256"},
     "source": {
       "type": "object",
       "additionalProperties": false,
@@ -67,7 +68,10 @@
         "per_entity_hashes": {
           "type": "object",
           "additionalProperties": {"$ref": "#/$defs/sha256"}
-        }
+        },
+        "protein_msa_enabled": {"type": "boolean"},
+        "templates_enabled": {"type": "boolean"},
+        "rna_msa_enabled": {"type": "boolean"}
       }
     },
     "runtime_policy": {

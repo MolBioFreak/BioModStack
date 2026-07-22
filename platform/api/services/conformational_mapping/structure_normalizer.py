@@ -8,6 +8,7 @@ identity to audit every normalized protein residue and its N/CA/C/O atoms.
 from __future__ import annotations
 
 import hashlib
+import copy
 import math
 import os
 import shlex
@@ -21,12 +22,52 @@ from typing import Any, Iterable, Mapping, Sequence
 from .contracts import (
     canonical_json_bytes,
     canonical_json_loads,
+    canonical_sha256,
     validate_schema,
     validate_structure_map_snapshot_binding,
 )
 
 
 BACKBONE_ATOMS = ("N", "CA", "C", "O")
+
+
+def _protein_atom_names(
+    heavy_atoms: str, hydrogen_atoms: str,
+) -> frozenset[str]:
+    names = set(heavy_atoms.split()) | set(hydrogen_atoms.split())
+    names.add("HXT")
+    # Accept both current suffix-numbered and legacy PDB prefix-numbered
+    # hydrogen spelling (HB2 / 2HB, HH11 / 1HH1).
+    names.update(
+        f"{name[-1]}{name[:-1]}"
+        for name in tuple(names)
+        if name.startswith("H") and name[-1].isdigit()
+    )
+    return frozenset(names)
+
+
+STANDARD_PROTEIN_ATOMS = {
+    "ALA": _protein_atom_names("N CA C O OXT CB", "H H1 H2 H3 HA HB1 HB2 HB3"),
+    "ARG": _protein_atom_names("N CA C O OXT CB CG CD NE CZ NH1 NH2", "H H1 H2 H3 HA HB2 HB3 HG2 HG3 HD2 HD3 HE HH11 HH12 HH21 HH22"),
+    "ASN": _protein_atom_names("N CA C O OXT CB CG OD1 ND2", "H H1 H2 H3 HA HB2 HB3 HD21 HD22"),
+    "ASP": _protein_atom_names("N CA C O OXT CB CG OD1 OD2", "H H1 H2 H3 HA HB2 HB3 HD2"),
+    "CYS": _protein_atom_names("N CA C O OXT CB SG", "H H1 H2 H3 HA HB2 HB3 HG"),
+    "GLN": _protein_atom_names("N CA C O OXT CB CG CD OE1 NE2", "H H1 H2 H3 HA HB2 HB3 HG2 HG3 HE21 HE22"),
+    "GLU": _protein_atom_names("N CA C O OXT CB CG CD OE1 OE2", "H H1 H2 H3 HA HB2 HB3 HG2 HG3 HE2"),
+    "GLY": _protein_atom_names("N CA C O OXT", "H H1 H2 H3 HA2 HA3"),
+    "HIS": _protein_atom_names("N CA C O OXT CB CG ND1 CD2 CE1 NE2", "H H1 H2 H3 HA HB2 HB3 HD1 HD2 HE1 HE2"),
+    "ILE": _protein_atom_names("N CA C O OXT CB CG1 CG2 CD1", "H H1 H2 H3 HA HB HG12 HG13 HG21 HG22 HG23 HD11 HD12 HD13"),
+    "LEU": _protein_atom_names("N CA C O OXT CB CG CD1 CD2", "H H1 H2 H3 HA HB2 HB3 HG HD11 HD12 HD13 HD21 HD22 HD23"),
+    "LYS": _protein_atom_names("N CA C O OXT CB CG CD CE NZ", "H H1 H2 H3 HA HB2 HB3 HG2 HG3 HD2 HD3 HE2 HE3 HZ1 HZ2 HZ3"),
+    "MET": _protein_atom_names("N CA C O OXT CB CG SD CE", "H H1 H2 H3 HA HB2 HB3 HG2 HG3 HE1 HE2 HE3"),
+    "PHE": _protein_atom_names("N CA C O OXT CB CG CD1 CD2 CE1 CE2 CZ", "H H1 H2 H3 HA HB2 HB3 HD1 HD2 HE1 HE2 HZ"),
+    "PRO": _protein_atom_names("N CA C O OXT CB CG CD", "H1 H2 H3 HA HB2 HB3 HG2 HG3 HD2 HD3"),
+    "SER": _protein_atom_names("N CA C O OXT CB OG", "H H1 H2 H3 HA HB2 HB3 HG"),
+    "THR": _protein_atom_names("N CA C O OXT CB OG1 CG2", "H H1 H2 H3 HA HB HG1 HG21 HG22 HG23"),
+    "TRP": _protein_atom_names("N CA C O OXT CB CG CD1 CD2 NE1 CE2 CE3 CZ2 CZ3 CH2", "H H1 H2 H3 HA HB2 HB3 HD1 HE1 HE3 HZ2 HZ3 HH2"),
+    "TYR": _protein_atom_names("N CA C O OXT CB CG CD1 CD2 CE1 CE2 CZ OH", "H H1 H2 H3 HA HB2 HB3 HD1 HD2 HE1 HE2 HH"),
+    "VAL": _protein_atom_names("N CA C O OXT CB CG1 CG2", "H H1 H2 H3 HA HB HG11 HG12 HG13 HG21 HG22 HG23"),
+}
 STANDARD_PROTEIN_RESIDUES = frozenset(
     {
         "ALA",
@@ -662,13 +703,75 @@ def _pdb_atom_name(atom_name: str, element: str) -> str:
     return f"{atom_name:>4}"
 
 
+def validate_pdb_atom_representability(
+    *,
+    atom_name: str,
+    element: str,
+    residue_name: str,
+    residue_id: int,
+    insertion_code: str,
+    x: float,
+    y: float,
+    z: float,
+    occupancy: float,
+    b_factor: float,
+) -> None:
+    """Reject atom fields that the mandatory fixed-width ASCII PDB cannot encode."""
+
+    for field, value in (
+        ("atom name", atom_name),
+        ("element", element),
+        ("residue name", residue_name),
+        ("insertion code", insertion_code),
+    ):
+        if not value.isascii():
+            raise StructureMapError(f"PDB {field} must be ASCII")
+    if len(element) > 2:
+        raise StructureMapError(f"PDB element field cannot represent {element!r}")
+    if len(residue_name) > 3:
+        raise StructureMapError(f"PDB residue name cannot represent {residue_name!r}")
+    if len(insertion_code) > 1:
+        raise StructureMapError("PDB insertion code exceeds one character")
+    allowed_atoms = STANDARD_PROTEIN_ATOMS.get(residue_name)
+    if allowed_atoms is not None:
+        if atom_name not in allowed_atoms:
+            raise StructureMapError(
+                f"atom name {atom_name!r} is not valid for standard residue {residue_name}"
+            )
+        expected_element = next(
+            (character for character in atom_name if character.isalpha()), ""
+        )
+        if expected_element != element:
+            raise StructureMapError(
+                f"atom name {atom_name!r} is inconsistent with element {element!r}"
+            )
+    if not -999 <= residue_id <= 9999:
+        raise StructureMapError(f"PDB residue number field cannot represent {residue_id}")
+    _pdb_atom_name(atom_name, element)
+    _pdb_field(x, 8, 3, "x coordinate")
+    _pdb_field(y, 8, 3, "y coordinate")
+    _pdb_field(z, 8, 3, "z coordinate")
+    _pdb_field(occupancy, 6, 2, "occupancy")
+    _pdb_field(b_factor, 6, 2, "B factor")
+
+
 def _pdb_atom_line(
     atom: _AtomSite, *, serial: int, chain_id: str, residue_id: int, insertion_code: str
 ) -> str:
     if not 1 <= serial <= 99999:
         raise StructureMapError(f"PDB atom serial field overflow: {serial}")
-    if not -999 <= residue_id <= 9999:
-        raise StructureMapError(f"PDB residue number field cannot represent {residue_id}")
+    validate_pdb_atom_representability(
+        atom_name=atom.atom_name,
+        element=atom.element,
+        residue_name=atom.residue_name,
+        residue_id=residue_id,
+        insertion_code=insertion_code,
+        x=atom.x,
+        y=atom.y,
+        z=atom.z,
+        occupancy=atom.occupancy,
+        b_factor=atom.b_factor,
+    )
     record = "HETATM" if atom.record_type == "HETATM" else "ATOM  "
     line = (
         f"{record}{serial:5d} "
@@ -1018,10 +1121,80 @@ def normalize_conformational_mapping_structure(
     return structure_map
 
 
+def bind_candidate_complex_snapshot(
+    snapshot: Mapping[str, Any], *, candidate_id: str, structure_path: Path | str
+) -> dict[str, Any]:
+    """Bind declared instances to one mmCIF output without filename inference."""
+
+    structure = Path(structure_path)
+    try:
+        validate_schema("cm_complex_snapshot_v1", snapshot)
+        observed: dict[str, tuple[str, str]] = {}
+        if structure.suffix.lower() in {".cif", ".mmcif"}:
+            from Bio.PDB.MMCIF2Dict import MMCIF2Dict
+
+            cif = MMCIF2Dict(str(structure))
+
+            def values(name: str) -> list[str]:
+                value = cif.get(name, [])
+                return [str(item) for item in value] if isinstance(value, list) else [str(value)]
+
+            auth = values("_atom_site.auth_asym_id")
+            label = values("_atom_site.label_asym_id")
+            entity = values("_atom_site.label_entity_id")
+            if not auth or len({len(auth), len(label), len(entity)}) != 1:
+                raise StructureMapError("candidate mmCIF has incomplete output hierarchy identity")
+            for auth_id, label_id, entity_id in zip(auth, label, entity, strict=True):
+                identity = (label_id, entity_id)
+                previous = observed.setdefault(auth_id, identity)
+                if previous != identity:
+                    raise StructureMapError("candidate mmCIF maps one author chain ambiguously")
+        elif structure.suffix.lower() == ".pdb":
+            from Bio.PDB import PDBParser
+
+            model = next(PDBParser(QUIET=True).get_structure("candidate", str(structure)).get_models())
+            observed = {str(chain.id): (str(chain.id), "") for chain in model.get_chains()}
+            if not observed:
+                raise StructureMapError("candidate PDB has no output chains")
+        else:
+            raise StructureMapError("candidate structure format is unsupported")
+    except Exception as exc:
+        raise StructureMapError(f"cannot bind candidate output hierarchy: {exc}") from exc
+    bound = copy.deepcopy(dict(snapshot))
+    entity_by_source = {item["source_entity_id"]: item for item in bound["entities"]}
+    unique_mappings: list[dict[str, Any]] = []
+    seen_source_keys: set[tuple[str, str]] = set()
+    for mapping in bound["instance_mappings"]:
+        source_key = (mapping["source_entity_id"], mapping["source_instance_id"])
+        if source_key in seen_source_keys:
+            continue
+        seen_source_keys.add(source_key)
+        unique_mappings.append(mapping)
+    bound["instance_mappings"] = unique_mappings
+    for mapping in bound["instance_mappings"]:
+        declared_auth = str(mapping.get("output_auth_asym_id") or mapping["source_instance_id"])
+        output = observed.get(declared_auth) or observed.get(mapping["source_instance_id"])
+        source_entity = entity_by_source[mapping["source_entity_id"]]
+        if output is None:
+            if source_entity["entity_type"] == "protein":
+                raise StructureMapError("candidate mmCIF omits an authorized protein instance")
+        else:
+            mapping["output_label_asym_id"] = output[0]
+            mapping["output_entity_id"] = output[1] or mapping["source_entity_id"]
+            mapping["output_auth_asym_id"] = declared_auth if declared_auth in observed else mapping["source_instance_id"]
+        mapping["candidate_id"] = candidate_id
+    bound["normalized_source_sha256"] = canonical_sha256(
+        {key: value for key, value in bound.items() if key != "normalized_source_sha256"}
+    )
+    validate_schema("cm_complex_snapshot_v1", bound)
+    return bound
+
+
 __all__ = [
     "NORMALIZER_VERSION",
     "StructureMapError",
     "load_authoritative_complex_snapshot",
+    "bind_candidate_complex_snapshot",
     "normalize_conformational_mapping_structure",
     "validate_coordinate_mmcif",
     "validate_rendered_pdb_mapping",

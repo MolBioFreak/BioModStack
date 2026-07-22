@@ -19,6 +19,7 @@ import {
 import {
     type BmsFeatureKey,
     isBmsFeatureVisible,
+    resolveShowDevFeaturesDefault,
     setBmsFeature as putBmsFeature,
     useBmsFeatureState,
     useBmsFeatures,
@@ -157,9 +158,12 @@ function readShowSystemAnalyticsTab(): boolean {
 
 function readShowDevFeatures(): boolean {
     try {
-        return localStorage.getItem(SHOW_DEV_FEATURES_KEY) === 'true';
+        return resolveShowDevFeaturesDefault(
+            Boolean(import.meta.env.DEV),
+            localStorage.getItem(SHOW_DEV_FEATURES_KEY),
+        );
     } catch {
-        return false;
+        return Boolean(import.meta.env.DEV);
     }
 }
 

@@ -37,7 +37,11 @@ def create_bioxp_runtime(*, data_root: Path | None = None) -> BioXpRuntime:
         legacy_path=root / "bioxp_interlink_profile.json",
     )
     policy = BioXpTargetPolicy.from_environment()
-    connection = BioXpConnectionService(profile_store=profile_store, target_policy=policy)
+    connection = BioXpConnectionService(
+        profile_store=profile_store,
+        target_policy=policy,
+        active_probe_interval_seconds=10.0,
+    )
     jobs = BioXpJobStore(state_root / "jobs.sqlite3")
     runtime = BioXpRuntime(
         connection=connection,
