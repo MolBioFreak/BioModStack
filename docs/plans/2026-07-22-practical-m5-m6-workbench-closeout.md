@@ -1,20 +1,20 @@
 # Practical Structure Workbench Closeout
 
-**Goal:** Make the existing direct Mol* workbench useful and trustworthy for one BioModStack operator.
+**Goal:** Make the existing direct Mol* workbench useful and trustworthy for the small BioModStack team.
 
-**Approach:** Keep one BMS-owned Mol* canvas and one controller. Persist only the information needed to reopen a view. Use real supplied structure, map, label, and MD artifacts. Do not build a general multi-user platform, a compute cluster, or browser-side scientific analysis.
+**Approach:** Keep one BMS-owned Mol* canvas and one controller. Persist only the information needed to reopen a view. Use real supplied structure, map, label, and MD artifacts. Do not build enterprise-scale tenancy, a compute cluster, or browser-side scientific analysis.
 
 ## Product boundary
 
-This is single-user local software behind the existing trusted local proxy. It needs a narrow safety boundary, not enterprise identity machinery:
+This is a small-team local deployment behind the existing trusted local proxy. It needs a narrow safety boundary, not enterprise identity machinery:
 
-- The local proxy identifies the operator; ordinary browser code never receives its proxy secret.
+- The local proxy identifies the trusted local team boundary; ordinary browser code never receives its proxy secret.
 - Saved state records artifact IDs and SHA-256 hashes, never local paths or signed URLs.
 - A restore refuses changed or missing source data rather than silently loading something else.
 - The browser renders supplied data. It does not invent density, segmentation, registration, RMSD, PCA, clustering, or dynamics.
 - One direct Mol* plugin remains the only viewer owner.
 
-That is enough to keep a single-user workflow reproducible and scientifically honest.
+That is enough to keep a small-team workflow reproducible and scientifically honest.
 
 ## Already working
 
