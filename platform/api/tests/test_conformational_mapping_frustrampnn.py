@@ -36,7 +36,7 @@ def _rows() -> list[dict]:
 
 def _finalize(path: Path, rows: list[dict] | None = None) -> dict:
     _write(path, rows or _rows())
-    return finalize_landscape(path, _structure_map(), checkpoint_id="ckpt", checkpoint_sha256="a" * 64, tool_id="FrustraMPNN", tool_sha256="b" * 64)
+    return finalize_landscape(path, _structure_map(), checkpoint_id="ckpt", checkpoint_sha256="a" * 64, tool_id="FrustraMPNN", tool_sha256="b" * 64, container_sha256="c" * 64)
 
 
 def test_real_1ubq_frustrampnn_output_replays_through_authoritative_map(tmp_path: Path) -> None:
@@ -64,7 +64,7 @@ def test_real_1ubq_frustrampnn_output_replays_through_authoritative_map(tmp_path
         checkpoint_id="megascale.ckpt",
         checkpoint_sha256="a" * 64,
         tool_id="FrustraMPNN",
-        tool_sha256="b" * 64,
+        tool_sha256="b" * 64, container_sha256="c" * 64,
     )
     assert hashlib.sha256(raw.read_bytes()).hexdigest() == "2084353640cbe5f06847bc78c0787f1062edb2c891d3808adfe2d6aa57b0fa36"
     assert len(landscape["residues"]) == 76
@@ -118,6 +118,33 @@ def test_cm7_007_raw_csv_retained(tmp_path: Path) -> None:
     raw = tmp_path / "raw.csv"
     result = _finalize(raw)
     assert result["raw_csv_sha256"] == hashlib.sha256(raw.read_bytes()).hexdigest()
+
+
+def test_cm7_007b_raw_csv_digest_binds_exact_parsed_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw = tmp_path / "raw.csv"
+    _write(raw, _rows())
+    captured = raw.read_bytes()
+    with raw.open("a", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["chain", "position", "insertion_code", "wt", "mutation", "score"],
+        )
+        writer.writerow(_rows()[0])
+    original_read_bytes = Path.read_bytes
+
+    def immutable_capture(path: Path) -> bytes:
+        return captured if path == raw else original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", immutable_capture)
+    result = finalize_landscape(
+        raw, _structure_map(), checkpoint_id="ckpt", checkpoint_sha256="a" * 64,
+        tool_id="FrustraMPNN", tool_sha256="b" * 64, container_sha256="c" * 64,
+    )
+
+    assert result["raw_csv_sha256"] == hashlib.sha256(captured).hexdigest()
+    assert all(slot["status"] == "ok" for slot in result["residues"][0]["slots"])
 
 
 def test_cm7_008_mapping_join_to_source(tmp_path: Path) -> None:
@@ -183,7 +210,7 @@ def test_cm7_010_1ubq_zero_based_positions_map_to_authoritative_residues_1_throu
         checkpoint_id="installed-megascale",
         checkpoint_sha256="a" * 64,
         tool_id="FrustraMPNN",
-        tool_sha256="b" * 64,
+        tool_sha256="b" * 64, container_sha256="c" * 64,
     )
 
     assert len(result["residues"]) == 76
@@ -234,7 +261,7 @@ def test_zero_based_positions_do_not_shift_after_unscoreable_rows_or_across_chai
         checkpoint_id="checkpoint",
         checkpoint_sha256="a" * 64,
         tool_id="FrustraMPNN",
-        tool_sha256="b" * 64,
+        tool_sha256="b" * 64, container_sha256="c" * 64,
     )
 
     assert [(row["auth_asym_id"], row["auth_seq_id"]) for row in result["residues"]] == [

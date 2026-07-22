@@ -28,6 +28,7 @@ from services.conformational_mapping.request_builder import (  # noqa: E402
     bind_materialized_source_snapshot,
     ConformationalMappingRequestError,
     build_confornets_coordinate_plan,
+    MaterializedRequest,
     materialize_trusted_internal_request,
     validate_request_params,
 )
@@ -104,6 +105,58 @@ def test_snapshot_reseal_rejects_invalid_existing_request_and_plan_authority(tmp
         tampered.coordinate_plan_path.write_bytes(canonical_json_bytes(tampered_plan))
         with pytest.raises(ConformationalMappingRequestError, match="trusted authority"):
             bind_materialized_source_snapshot(tampered, source_snapshot_sha256="a" * 64)
+
+
+@pytest.mark.parametrize(
+    ("keep_old_plan_binding", "add_coordinate_field", "message"),
+    [
+        (True, False, "request and coordinate plan are not bound"),
+        (False, True, "coordinate plan does not match request authority"),
+    ],
+)
+def test_snapshot_reseal_fully_resigned_replacement_reaches_cross_contract_checks(
+    tmp_path: Path,
+    keep_old_plan_binding: bool,
+    add_coordinate_field: bool,
+    message: str,
+) -> None:
+    materialized = materialize_trusted_internal_request(
+        _request_params("external_import"),
+        output_dir=tmp_path / ("binding" if keep_old_plan_binding else "coordinate"),
+        request_id=(
+            "00000000-0000-4000-8000-000000000706"
+            if keep_old_plan_binding else "00000000-0000-4000-8000-000000000707"
+        ),
+    )
+    request = json.loads(materialized.request_path.read_text(encoding="utf-8"))
+    plan = json.loads(materialized.coordinate_plan_path.read_text(encoding="utf-8"))
+    old_request_sha256 = request["request_sha256"]
+
+    request["analysis_policy"]["outer_support_minimum"] = 0.75
+    request["request_sha256"] = canonical_sha256({
+        key: value for key, value in request.items() if key != "request_sha256"
+    })
+    if not keep_old_plan_binding:
+        plan["request_sha256"] = request["request_sha256"]
+    else:
+        assert plan["request_sha256"] == old_request_sha256
+    if add_coordinate_field:
+        plan["coordinates"][0]["unexpected"] = "fully-resigned"
+    plan["coordinate_plan_sha256"] = canonical_sha256({
+        key: value for key, value in plan.items() if key != "coordinate_plan_sha256"
+    })
+    materialized.request_path.write_bytes(canonical_json_bytes(request))
+    materialized.coordinate_plan_path.write_bytes(canonical_json_bytes(plan))
+    replacement = MaterializedRequest(
+        request_path=materialized.request_path,
+        coordinate_plan_path=materialized.coordinate_plan_path,
+        launch_params=materialized.launch_params,
+        request_sha256=request["request_sha256"],
+        coordinate_plan_sha256=plan["coordinate_plan_sha256"],
+    )
+
+    with pytest.raises(ConformationalMappingRequestError, match=message):
+        bind_materialized_source_snapshot(replacement, source_snapshot_sha256="a" * 64)
 
 
 def _request_params(backend: str = "protenix_v2_ensemble") -> dict[str, object]:

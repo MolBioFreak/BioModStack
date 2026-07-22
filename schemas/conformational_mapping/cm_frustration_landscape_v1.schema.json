@@ -9,7 +9,7 @@
     "schema_name": {"const": "cm_frustration_landscape"}, "schema_version": {"const": 1},
     "target_id": {"type": "string", "minLength": 1}, "candidate_id": {"type": "string", "minLength": 1},
     "raw_csv_sha256": {"$ref": "#/$defs/sha256"}, "checkpoint_id": {"type": "string", "minLength": 1}, "checkpoint_sha256": {"$ref": "#/$defs/sha256"},
-    "tool_id": {"type": "string", "minLength": 1}, "tool_sha256": {"$ref": "#/$defs/sha256"},
+    "tool_id": {"type": "string", "minLength": 1}, "tool_sha256": {"$ref": "#/$defs/sha256"}, "container_sha256": {"$ref": "#/$defs/sha256"},
     "threshold_policy_id": {"const": "frustrampnn_class_v1"}, "threshold_policy_sha256": {"$ref": "#/$defs/sha256"},
     "input_issues": {"type": "array", "items": {"$ref": "#/$defs/input_issue"}},
     "residues": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/residue"}}
