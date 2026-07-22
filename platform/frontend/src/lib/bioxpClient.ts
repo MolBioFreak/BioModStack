@@ -10,12 +10,35 @@ export interface BioXpConnectionSnapshot {
     reachable: boolean | null;
     runtime_ready: boolean | null;
     hardware_ready: boolean | null;
+    hardware_observed_at: string | null;
+    hardware_fresh: boolean | null;
+    hardware_stale: boolean;
+    hardware_evidence_error: string | null;
     capabilities: string[];
     observed_at: string | null;
     freshness_budget_seconds: number;
     fresh: boolean | null;
     last_error: string | null;
     command_active: boolean;
+    startup_lifecycle: BioXpStartupLifecycle | null;
+}
+
+export interface BioXpStartupStage {
+    name?: string;
+    state: string;
+    prerequisite?: string | null;
+    repeatable?: boolean;
+    attempt_count?: number;
+    started_at?: string | null;
+    completed_at?: string | null;
+    error?: string | null;
+    evidence?: unknown;
+}
+
+export interface BioXpStartupLifecycle {
+    state?: string;
+    next_stage?: string | null;
+    stages: Record<string, BioXpStartupStage>;
 }
 
 export interface BioXpStatusResponse {
@@ -28,10 +51,29 @@ export interface BioXpStatusResponse {
         physical_effect_verifiable: false;
     };
     startup_warnings: string[];
+    mutation_access?: {
+        enabled: boolean;
+        server_setting: string;
+        secret_required: false;
+    };
     legacy_job_migration: {
         migrated: number;
         quarantined: number;
     };
+}
+
+export interface BioXpCommandRecord {
+    command_id: string;
+    command: string;
+    idempotency_key: string;
+    generation: number;
+    status: 'acknowledged' | 'delivered_unacknowledged' | 'delivery_failed';
+    started_at: string;
+    finished_at: string;
+    remote_acknowledged: boolean;
+    physical_effect_verified: false;
+    detail: string;
+    handler_response: Record<string, unknown> | null;
 }
 
 export interface BioXpProfileView {
@@ -216,7 +258,7 @@ export const useSubmitBioXpProtocol = () => useRefreshMutation(
 
 export const useBioXpCommand = () => useRefreshMutation(
     async (payload: Record<string, unknown>) => (
-        await api.post('/api/bioxp/commands', payload)
+        await api.post<BioXpCommandRecord>('/api/bioxp/commands', payload)
     ).data,
 );
 

@@ -113,7 +113,7 @@ def test_robot_client_routes_only_current_compact_commissioning_contracts() -> N
     asyncio.run(client.close())
 
 
-def test_probe_renews_advertised_stale_hardware_evidence_through_query_only_collector() -> None:
+def test_probe_never_posts_hidden_snapshot_when_hardware_evidence_is_stale() -> None:
     target = ValidatedBioXpTarget(
         api_url="http://robot:8123",
         scheme="http",
@@ -126,10 +126,8 @@ def test_probe_renews_advertised_stale_hardware_evidence_through_query_only_coll
 
     payload = asyncio.run(client.probe())
 
-    assert payload["cache_state"] == "fresh"
+    assert payload["cache_state"] == "stale"
     assert [(request.method, request.url.path) for request in transport.requests] == [
-        ("GET", "/status"),
-        ("POST", "/hardware/snapshot/collect"),
         ("GET", "/status"),
     ]
     asyncio.run(client.close())
@@ -153,7 +151,7 @@ def test_probe_does_not_collect_when_advertised_hardware_evidence_is_fresh() -> 
     asyncio.run(client.close())
 
 
-def test_probe_renews_fresh_hardware_evidence_before_half_life_expires() -> None:
+def test_probe_never_posts_hidden_snapshot_at_freshness_half_life() -> None:
     target = ValidatedBioXpTarget(
         api_url="http://robot:8123",
         scheme="http",
@@ -167,8 +165,6 @@ def test_probe_renews_fresh_hardware_evidence_before_half_life_expires() -> None
     asyncio.run(client.probe())
 
     assert [(request.method, request.url.path) for request in transport.requests] == [
-        ("GET", "/status"),
-        ("POST", "/hardware/snapshot/collect"),
         ("GET", "/status"),
     ]
     asyncio.run(client.close())

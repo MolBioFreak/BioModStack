@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from typing import Any, cast
 
 from routers import bioxp
@@ -26,11 +27,14 @@ EXPECTED = {
 
 
 def _effective_routes() -> tuple[Any, ...]:
-    return tuple(
-        route
-        for included_router in bioxp.router.routes
-        for route in cast(Any, included_router).effective_candidates()
-    )
+    rows: list[Any] = []
+    for included_route in bioxp.router.routes:
+        candidates = getattr(included_route, "effective_candidates", None)
+        if callable(candidates):
+            rows.extend(cast(tuple[Any, ...], candidates()))
+        else:
+            rows.append(cast(Any, included_route))
+    return tuple(rows)
 
 
 def _inventory() -> set[tuple[str, str]]:
@@ -78,3 +82,15 @@ def test_retired_proxy_lifecycle_and_commissioning_routes_are_absent() -> None:
         "/oem/runtime/commands/{command_name}",
     }
     assert forbidden.isdisjoint(paths)
+
+
+def test_snapshot_completion_refreshes_status_and_lifecycle_reasons_are_operator_first() -> None:
+    from routers.bioxp import commands, connection
+
+    command_source = inspect.getsource(commands.execute_command)
+    assert '{"activate_usb_for_service", "collect_hardware_snapshot"}' in command_source
+    assert "await runtime.connection.probe()" in command_source
+
+    status_source = inspect.getsource(connection.get_status)
+    assert status_source.index("lifecycle_stage_reasons") < status_source.index("requires_hardware_ready")
+    assert status_source.index("lifecycle_stage_reasons") < status_source.index("required_capability")
