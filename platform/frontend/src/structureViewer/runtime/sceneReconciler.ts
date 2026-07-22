@@ -32,6 +32,7 @@ export const reconcileSceneState = (
     presentationChanged: !previous
         || stable(previous.presentation?.colorQueries) !== stable(next.presentation?.colorQueries)
         || stable(previous.presentation?.tooltipQueries) !== stable(next.presentation?.tooltipQueries)
+        || stable(previous.presentation?.hiddenQueries) !== stable(next.presentation?.hiddenQueries)
         || stable(previous.presentation?.nonSelectedColor) !== stable(next.presentation?.nonSelectedColor),
     molecularDynamicsChanged: !previous || stable(previous.molecularDynamics) !== stable(next.molecularDynamics),
 });

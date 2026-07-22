@@ -4,7 +4,7 @@ import {
     type MolstarDirectPresentation,
     type MolstarDirectQuery,
 } from '../adapters/MolstarDirectAdapter';
-import type { StructurePresentationQuery } from '../contracts/scenePresentation.js';
+import type { StructureComponentType, StructurePresentationQuery } from '../contracts/scenePresentation.js';
 import type { StructureSceneState } from '../contracts/sceneState.js';
 import type { MDPlaybackState, MDSourceFrameRef } from '../contracts/mdTrajectory.js';
 import {
@@ -31,17 +31,31 @@ const toDirectQuery = (query: StructurePresentationQuery): MolstarDirectQuery =>
     atoms: query.labelAtomIds,
     auth_atoms: query.authAtomIds,
     alt_loc_id: query.altLoc,
+    component_types: query.componentTypes,
     color: query.color ?? undefined,
     focus: query.focus,
     tooltip: query.tooltip,
     opacity: query.opacity,
 });
 
-const toDirectPresentation = (state: StructureSceneState): MolstarDirectPresentation => ({
-    colorSelections: state.presentation?.colorQueries?.map(toDirectQuery) ?? [],
-    tooltipSelections: state.presentation?.tooltipQueries?.map(toDirectQuery) ?? [],
-    nonSelectedColor: state.presentation?.nonSelectedColor,
-});
+const STRUCTURE_COMPONENT_TYPES: readonly StructureComponentType[] = ['protein', 'dna', 'rna', 'ligand', 'glycan', 'ion', 'water', 'unknown'];
+
+const toDirectPresentation = (state: StructureSceneState): MolstarDirectPresentation => {
+    const visibleTypes = state.presentation?.filters?.entityTypes;
+    const visible = new Set(visibleTypes ?? STRUCTURE_COMPONENT_TYPES);
+    const hiddenTypes = visibleTypes === undefined
+        ? []
+        : STRUCTURE_COMPONENT_TYPES.filter((componentType) => !visible.has(componentType));
+    return {
+        colorSelections: state.presentation?.colorQueries?.map(toDirectQuery) ?? [],
+        tooltipSelections: state.presentation?.tooltipQueries?.map(toDirectQuery) ?? [],
+        hiddenSelections: [
+            ...(state.presentation?.hiddenQueries?.map(toDirectQuery) ?? []),
+            ...(hiddenTypes.length > 0 ? [{ component_types: hiddenTypes }] : []),
+        ],
+        nonSelectedColor: state.presentation?.nonSelectedColor,
+    };
+};
 
 export class MolstarDirectSceneEngineAdapter implements MolstarEngineAdapter {
     private readonly adapter: MolstarDirectAdapter;

@@ -1,6 +1,8 @@
 import type { ViewerMeasurement } from './measurements.js';
 import type { ResidueRef } from './structureIdentity.js';
 
+export type StructureComponentType = 'protein' | 'dna' | 'rna' | 'ligand' | 'glycan' | 'ion' | 'water' | 'unknown';
+
 export type StructureRepresentationKind = 'cartoon' | 'surface' | 'ball-and-stick' | 'spacefill' | 'line' | 'gaussian-surface';
 
 export interface StructureRepresentationState {
@@ -37,6 +39,7 @@ export interface StructurePresentationQuery {
     readonly labelAtomIds?: readonly string[] | undefined;
     readonly authAtomIds?: readonly string[] | undefined;
     readonly altLoc?: string | undefined;
+    readonly componentTypes?: readonly StructureComponentType[] | undefined;
     readonly color?: StructureRgbColor | string | number | null | undefined;
     readonly focus?: boolean | undefined;
     readonly tooltip?: string | undefined;
@@ -50,7 +53,7 @@ export interface StructureSelectionSet {
 }
 
 export interface StructureFilterState {
-    readonly entityTypes?: readonly ('protein' | 'dna' | 'rna' | 'ligand' | 'glycan' | 'ion' | 'water' | 'unknown')[];
+    readonly entityTypes?: readonly StructureComponentType[];
     readonly chainIds?: readonly string[];
     readonly residueRange?: readonly [number, number];
     readonly metricId?: string;
@@ -77,5 +80,7 @@ export interface StructureScenePresentation {
     readonly measurements?: readonly ViewerMeasurement[];
     readonly colorQueries?: readonly StructurePresentationQuery[];
     readonly tooltipQueries?: readonly StructurePresentationQuery[];
+    /** Exact structure components that remain loaded but are hidden from presentation. */
+    readonly hiddenQueries?: readonly StructurePresentationQuery[];
     readonly nonSelectedColor?: StructureRgbColor | string | number;
 }
