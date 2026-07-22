@@ -27,7 +27,7 @@ export interface ViewerEventInput<TPayload> {
     readonly type: ViewerEventType;
     readonly scene: StructureSceneRef;
     readonly documentId: string | null;
-    readonly resourceId: string | null;
+    readonly resourceId?: string | null;
     readonly origin: ViewerEventOrigin;
     readonly payload: TPayload;
     readonly emittedAt: string;

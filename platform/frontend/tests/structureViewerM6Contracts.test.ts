@@ -139,8 +139,16 @@ test('scene controller owns governed volume lifecycle through the one adapter', 
     const controller = new StructureSceneController(adapter as never);
     assert.equal((await controller.loadScene(scene())).status, 'ok');
     assert.equal((await controller.loadVolume(volume(), presentation())).status, 'ok');
-    assert.equal((await controller.removeVolume(VOLUME_ID)).status, 'ok');
-    assert.deepEqual(calls, ['scene', 'volume', 'presentation', 'remove']);
+    assert.equal((await controller.setCamera({ mode: 'perspective', position: [10, 20, 30] })).status, 'ok');
+    assert.equal((await controller.setVolumePresentation({ ...presentation(), opacity: 0.7 })).status, 'ok', 'presentation-only scene updates must retain governed volume ownership');
+    const refreshedDocumentScene = {
+        ...controller.currentScene!,
+        ref: { ...controller.currentScene!.ref, generation: controller.currentScene!.ref.generation + 1 },
+        documents: [{ ...controller.currentScene!.documents[0]!, sourceUrl: '/api/files/doc-1?refresh=1' }],
+    };
+    assert.equal((await controller.loadScene(refreshedDocumentScene)).status, 'ok');
+    assert.equal((await controller.setVolumePresentation({ ...presentation(), opacity: 0.6 })).status, 'unsupported', 'document reloads must clear controller volume ownership with the adapter');
+    assert.deepEqual(calls, ['scene', 'volume', 'presentation', 'scene', 'presentation', 'scene']);
     const priorGeneration = controller.currentScene!.ref.generation;
 
     const nextScene = scene();
