@@ -59,21 +59,27 @@ def finalize_landscape(
     if not isinstance(map_rows, list):
         raise FrustrationLandscapeError("structure map has no residue rows")
     mapped: dict[tuple[str, int, str], Mapping[str, Any]] = {}
+    indexed_mapped: dict[tuple[str, int], tuple[str, int, str]] = {}
+    chain_counts: dict[str, int] = {}
     scoreable_keys: list[tuple[str, int, str]] = []
     for row in map_rows:
+        chain = str(row.get("pdb_chain_id") or "")
+        chain_index = chain_counts.get(chain, 0)
+        chain_counts[chain] = chain_index + 1
         if row.get("status") != "mapped":
             continue
         backbone = row.get("backbone_atoms")
         if not isinstance(backbone, dict) or set(backbone) != {"N", "CA", "C", "O"}:
             continue
         key = (
-            str(row["pdb_chain_id"]),
+            chain,
             int(row["pdb_residue_id"]),
             str(row.get("pdb_insertion_code") or ""),
         )
         if key in mapped:
             raise FrustrationLandscapeError("structure map has duplicate normalized residue identity")
         mapped[key] = row
+        indexed_mapped[(chain, chain_index)] = key
         scoreable_keys.append(key)
 
     observed: dict[tuple[str, int, str, str], dict[str, Any]] = {}
@@ -104,11 +110,12 @@ def finalize_landscape(
                     "raw_identity": {"chain": chain, "position": position, "insertion_code": insertion_code, "mutation_aa": mutation},
                 })
                 continue
-            residue_key = (chain, position, insertion_code)
-            if residue_key not in mapped:
+            indexed_key = (chain, position)
+            residue_key = indexed_mapped.get(indexed_key)
+            if insertion_code or residue_key is None:
                 input_issues.append({
                     "line_number": line_number, "status": "mapping_failed",
-                    "reason": "raw residue has no authoritative structure-map row",
+                    "reason": "zero-based FrustraMPNN chain position has no authoritative structure-map row",
                     "raw_identity": {"chain": chain, "position": position, "insertion_code": insertion_code, "mutation_aa": mutation},
                 })
                 continue

@@ -16,6 +16,7 @@ export type CmTask = 'diversity' | 'mse' | 'transfer';
 export interface CmSource {
     source_id: string;
     source_kind: CmSourceKind;
+    format: string;
     sha256: string;
     bytes: number;
     metadata: Record<string, unknown>;

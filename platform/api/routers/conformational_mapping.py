@@ -37,6 +37,11 @@ from services.conformational_mapping.import_stager import (
     stage_registered_assets,
     verify_registered_artifact,
 )
+from services.conformational_mapping.import_snapshot import (
+    ImportSnapshotError,
+    MAX_IMPORT_MMCIF_BYTES,
+    build_staged_import_snapshots,
+)
 from services.conformational_mapping.persistence import (
     ConformationalPersistenceError,
     capability_matches,
@@ -51,6 +56,7 @@ from services.conformational_mapping.mutagenesis_handoff import MutagenesisHando
 from services.conformational_mapping.resampling import ResamplingError, materialize_resampling_pair
 from services.conformational_mapping.request_builder import (
     ConformationalMappingRequestError,
+    bind_materialized_source_snapshot,
     materialize_trusted_internal_request,
     validate_request_params,
 )
@@ -59,6 +65,7 @@ from services.job_control import cancel_job_lineage
 
 router = APIRouter(prefix="/api/conformational-mapping", tags=["conformational-mapping"])
 _OPERATOR_HEADER = "X-BMS-CM-Operator-Token"
+_APPLICATION_PROXY_HEADER = "X-BMS-CM-Proxy-Secret"
 _COOKIE_PREFIX = "bms_cm_access_"
 
 
@@ -113,11 +120,39 @@ _SOURCE_MAX_BYTES = {
     "complex_snapshot": 64 * 1024 * 1024,
     "protein_sequence": 16 * 1024 * 1024,
     "confornets_config": 16 * 1024 * 1024,
-    "structure_upload": 2 * 1024 * 1024 * 1024,
-    "structure_artifact": 2 * 1024 * 1024 * 1024,
+    "structure_upload": MAX_IMPORT_MMCIF_BYTES,
+    "structure_artifact": MAX_IMPORT_MMCIF_BYTES,
     "confornets_checkpoint": 2 * 1024 * 1024 * 1024,
     "confornets_state": 2 * 1024 * 1024 * 1024,
 }
+
+
+def _validated_source_suffix(source_kind: str, filename: str) -> str:
+    source_suffix = Path(filename).suffix.lower()
+    allowed_suffixes = {
+        "structure_upload": {".cif", ".mmcif"},
+        "structure_artifact": {".cif", ".mmcif"},
+        "complex_snapshot": {".json"},
+        "protein_sequence": {".txt", ".fa", ".fasta", ""},
+        "confornets_checkpoint": {".pt", ".pth", ".ckpt"},
+        "confornets_config": {".json", ".yaml", ".yml"},
+        "confornets_state": {".pt", ".pth", ".ckpt"},
+    }.get(source_kind)
+    if allowed_suffixes is None or source_suffix not in allowed_suffixes:
+        detail = (
+            "structure sources must be mmCIF (.cif or .mmcif); PDB is not accepted"
+            if source_kind in {"structure_upload", "structure_artifact"}
+            else "registered source extension is unsupported"
+        )
+        raise HTTPException(status_code=422, detail=detail)
+    return source_suffix
+
+
+def _registered_source_format(relative_path: str) -> str:
+    suffix = Path(relative_path).suffix.lower()
+    if suffix in {".cif", ".mmcif"}:
+        return "mmcif"
+    return suffix.removeprefix(".") or "unknown"
 
 
 def _sha256_path(path: Path) -> str:
@@ -190,6 +225,7 @@ async def list_sources(request: Request, session: AsyncSession = Depends(get_ses
     ).scalars().all()
     return {"sources": [
         {"source_id": row.source_id, "source_kind": row.source_kind,
+         "format": _registered_source_format(row.relative_path),
          "sha256": row.content_sha256, "bytes": row.size_bytes,
          "metadata": row.metadata_json, "created_at": row.created_at.isoformat() + "Z"}
         for row in rows
@@ -254,6 +290,7 @@ async def register_source(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {
             "source_id": source_id, "source_kind": source_kind,
+            "format": _registered_source_format(existing.relative_path),
             "sha256": content_sha256, "bytes": size, "metadata": existing.metadata_json,
         }
     destination_dir = registry / source_id
@@ -262,20 +299,12 @@ async def register_source(
     except FileExistsError as exc:
         temporary.unlink(missing_ok=True)
         raise HTTPException(status_code=409, detail="registered source publication raced or is ambiguous") from exc
-    source_suffix = Path(file.filename or "").suffix.lower()
-    allowed_suffixes = {
-        "structure_upload": {".cif", ".mmcif", ".pdb"},
-        "structure_artifact": {".cif", ".mmcif", ".pdb"},
-        "complex_snapshot": {".json"},
-        "protein_sequence": {".txt", ".fa", ".fasta", ""},
-        "confornets_checkpoint": {".pt", ".pth", ".ckpt"},
-        "confornets_config": {".json", ".yaml", ".yml"},
-        "confornets_state": {".pt", ".pth", ".ckpt"},
-    }[source_kind]
-    if source_suffix not in allowed_suffixes:
+    try:
+        source_suffix = _validated_source_suffix(source_kind, file.filename or "")
+    except HTTPException:
         temporary.unlink(missing_ok=True)
         destination_dir.rmdir()
-        raise HTTPException(status_code=422, detail="registered source extension is unsupported")
+        raise
     destination = destination_dir / f"content{source_suffix}"
     created_destination = False
     try:
@@ -326,7 +355,11 @@ async def register_source(
         destination_dir.rmdir()
         raise
     destination_dir.chmod(0o550)
-    return {"source_id": source_id, "source_kind": source_kind, "sha256": content_sha256, "bytes": size, "metadata": metadata}
+    return {
+        "source_id": source_id, "source_kind": source_kind,
+        "format": _registered_source_format(destination.name),
+        "sha256": content_sha256, "bytes": size, "metadata": metadata,
+    }
 
 
 def _principal(request: Request) -> str:
@@ -341,6 +374,15 @@ def _principal(request: Request) -> str:
         role_set = {str(role).strip().lower() for role in roles}
         if principal_id and role_set.intersection({"operator", "scientist", "admin"}):
             return str(principal_id)
+    proxy_secret = os.getenv("BMS_CM_TRUSTED_PROXY_SECRET", "")
+    supplied_proxy_secret = request.headers.get(_APPLICATION_PROXY_HEADER, "")
+    trusted_application_boundary = bool(
+        proxy_secret
+        and supplied_proxy_secret
+        and secrets.compare_digest(proxy_secret, supplied_proxy_secret)
+    )
+    if trusted_application_boundary:
+        return "local-application-operator"
     configured = os.getenv("BMS_CM_OPERATOR_TOKEN", "")
     supplied = request.headers.get(_OPERATOR_HEADER, "")
     if configured and supplied and secrets.compare_digest(configured, supplied):
@@ -396,6 +438,31 @@ def _registered(source: ConformationalMappingSource) -> RegisteredArtifact:
         storage_root=Path(source.storage_root), relative_path=source.relative_path,
         content_sha256=source.content_sha256, size_bytes=source.size_bytes,
     )
+
+
+def _external_import_target_ids(
+    sources: list[ConformationalMappingSource],
+    *,
+    registered_snapshot_id: str | None,
+) -> list[str]:
+    if registered_snapshot_id:
+        raise HTTPException(
+            status_code=422,
+            detail="external-import snapshots are derived automatically from staged mmCIF bytes",
+        )
+    if len(sources) != 1:
+        raise HTTPException(status_code=422, detail="external import currently requires exactly one mmCIF structure")
+    target_ids: list[str] = []
+    for source in sources:
+        if Path(source.relative_path).suffix.lower() not in {".cif", ".mmcif"}:
+            raise HTTPException(status_code=422, detail="external import accepts mmCIF structures only")
+        target_id = str((source.metadata_json or {}).get("target_id") or source.source_id).strip()
+        if not target_id:
+            raise HTTPException(status_code=422, detail="external import target identity is empty")
+        target_ids.append(target_id)
+    if len(set(target_ids)) != len(target_ids):
+        raise HTTPException(status_code=422, detail="external import target identities must be unique")
+    return target_ids
 
 
 def _read_registered_json(source: ConformationalMappingSource) -> Any:
@@ -508,24 +575,21 @@ async def submit_request(
             or body.registered_transfer_id
         ):
             raise HTTPException(status_code=422, detail="inactive backend fields are forbidden")
-        snapshot_source = await _source(
-            session, body.registered_snapshot_id, principal_id, {"complex_snapshot"}
-        )
         if not body.registered_artifact_ids:
             raise HTTPException(status_code=422, detail="at least one registered structure is required")
         import_sources = [
             await _source(session, source_id, principal_id, {"structure_upload", "structure_artifact"})
             for source_id in body.registered_artifact_ids
         ]
+        target_ids = _external_import_target_ids(
+            import_sources,
+            registered_snapshot_id=body.registered_snapshot_id,
+        )
         if body.ordered_seeds != [0] or body.samples_per_seed != 1:
             raise HTTPException(status_code=422, detail="external import requires ordered_seeds [0] and samples_per_seed 1")
-        snapshots = _read_registered_json(snapshot_source)
-        snapshots = snapshots if isinstance(snapshots, list) else [snapshots]
-        if len(snapshots) != len(import_sources):
-            raise HTTPException(status_code=422, detail="import snapshot targets must equal ordered import cardinality")
         params["targets"] = [
-            {"target_id": str(snapshot["target_id"]), "target_order": index}
-            for index, snapshot in enumerate(snapshots)
+            {"target_id": target_id, "target_order": index}
+            for index, target_id in enumerate(target_ids)
         ]
         params["ordered_seeds"] = [0]
         params["samples_per_seed"] = 1
@@ -632,6 +696,7 @@ async def submit_request(
             staged_import = stage_registered_artifacts(
                 [_registered(source) for source in import_sources], principal_id=principal_id,
                 request_id=request_id, destination_root=root / "registered_import",
+                maximum_bytes=MAX_IMPORT_MMCIF_BYTES,
             )
             params["import_receipt_id"] = staged_import.receipt["receipt_sha256"]
             params["resolved_import_entries"] = staged_import.receipt["entries"]
@@ -641,6 +706,23 @@ async def submit_request(
         )
         request_payload = json.loads(materialized.request_path.read_text(encoding="utf-8"))
         coordinate_plan = json.loads(materialized.coordinate_plan_path.read_text(encoding="utf-8"))
+        if body.backend == "external_import":
+            if staged_import is None:
+                raise ImportSnapshotError("external import staging did not produce an immutable receipt")
+            import_snapshots = build_staged_import_snapshots(
+                staged_root=staged_import.root,
+                entries=staged_import.receipt["entries"],
+                targets=request_payload["targets"],
+                coordinates=coordinate_plan["coordinates"],
+            )
+            (root / "cm_complex_snapshots_v1.json").write_text(
+                json.dumps(import_snapshots, sort_keys=True, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            request_payload, coordinate_plan = bind_materialized_source_snapshot(
+                materialized,
+                source_snapshot_sha256=canonical_sha256(import_snapshots[0]),
+            )
         if body.backend == "confornets":
             confor_snapshot = _confornets_snapshot(
                 target_id=request_payload["targets"][0]["target_id"],
@@ -695,7 +777,15 @@ async def submit_request(
         await session.rollback()
         _remove_request_root(root)
         raise
-    except (ConformationalMappingRequestError, ImportStagingError, ConformationalPersistenceError, OSError, KeyError, TypeError) as exc:
+    except (
+        ConformationalMappingRequestError,
+        ImportStagingError,
+        ImportSnapshotError,
+        ConformationalPersistenceError,
+        OSError,
+        KeyError,
+        TypeError,
+    ) as exc:
         await session.rollback()
         _remove_request_root(root)
         raise HTTPException(status_code=422, detail=str(exc)) from exc

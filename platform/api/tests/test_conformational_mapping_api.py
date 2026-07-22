@@ -4,13 +4,14 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException, Request
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from database import Base, ConformationalMappingRecord, ConformationalMappingRequest, Job
-from routers.conformational_mapping import SubmitRequest
+from routers.conformational_mapping import SubmitRequest, _principal, _registered_source_format
 from services.conformational_mapping.persistence import (
     ConformationalPersistenceError,
     capability_matches,
@@ -28,6 +29,91 @@ def _body() -> dict:
         "runtime_policy": {"use_default_params": True},
         "analysis_policy": {"sign_zero_epsilon": 1e-6, "clash_detector_id": "bms_sidechain_clash_v1", "clash_detector_version": "1", "outer_support_minimum": 1.0, "inner_support_minimum": 1.0, "sign_consistency_minimum": 1.0, "clash_free_minimum": 1.0, "rank_stability_minimum": 1.0, "minimum_common_ranked_universe_size": 3},
     }
+
+
+def _http_request(
+    *,
+    client_host: str,
+    headers: dict[str, str] | None = None,
+) -> Request:
+    return Request({
+        "type": "http",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/api/conformational-mapping/sources",
+        "query_string": b"",
+        "headers": [
+            (name.lower().encode("ascii"), value.encode("ascii"))
+            for name, value in (headers or {}).items()
+        ],
+        "client": (client_host, 42000),
+        "server": ("127.0.0.1", 8000),
+    })
+
+
+def test_registered_source_format_is_server_normalized() -> None:
+    assert _registered_source_format("source/content.cif") == "mmcif"
+    assert _registered_source_format("source/content.MMCIF") == "mmcif"
+    assert _registered_source_format("legacy/content.pdb") == "pdb"
+
+
+def test_cm_application_principal_requires_server_authenticated_proxy_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("BMS_CM_OPERATOR_TOKEN", raising=False)
+    monkeypatch.delenv("BMS_CM_TRUSTED_PROXY_SECRET", raising=False)
+    with pytest.raises(HTTPException) as denied:
+        _principal(_http_request(client_host="127.0.0.1"))
+    assert denied.value.status_code == 401
+
+    monkeypatch.setenv("BMS_CM_TRUSTED_PROXY_SECRET", "server-only-proxy-secret")
+    request = _http_request(
+        client_host="127.0.0.1",
+        headers={"X-BMS-CM-Proxy-Secret": "server-only-proxy-secret"},
+    )
+    assert _principal(request) == "local-application-operator"
+
+
+def test_cm_application_principal_ignores_unverifiable_tailscale_login(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("BMS_CM_OPERATOR_TOKEN", raising=False)
+    monkeypatch.setenv("BMS_CM_TRUSTED_PROXY_SECRET", "server-only-proxy-secret")
+    base_headers = {
+        "X-BMS-CM-Proxy-Secret": "server-only-proxy-secret",
+        "Tailscale-User-Login": "Christian@Example.COM",
+    }
+    request = _http_request(client_host="::1", headers=base_headers)
+    assert _principal(request) == "local-application-operator"
+
+
+def test_cm_application_principal_uses_server_proof_after_forwarded_client_rewrite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("BMS_CM_OPERATOR_TOKEN", raising=False)
+    monkeypatch.setenv("BMS_CM_TRUSTED_PROXY_SECRET", "server-only-proxy-secret")
+    forwarded = _http_request(
+        client_host="100.64.0.12",
+        headers={"X-BMS-CM-Proxy-Secret": "server-only-proxy-secret"},
+    )
+    assert _principal(forwarded) == "local-application-operator"
+    for client_host, headers in (
+        ("127.0.0.1", {"X-BMS-CM-Proxy-Secret": "wrong"}),
+        ("127.0.0.1", {"Tailscale-User-Login": "forged@example.com"}),
+    ):
+        with pytest.raises(HTTPException) as denied:
+            _principal(_http_request(client_host=client_host, headers=headers))
+        assert denied.value.status_code == 401
+
+
+def test_cm_proxy_contract_strips_browser_operator_token_and_injects_server_secret() -> None:
+    root = Path(__file__).resolve().parents[3]
+    nginx = (root / "docker/web/nginx.conf").read_text(encoding="utf-8")
+    compose = (root / "compose.core-runtime.yml").read_text(encoding="utf-8")
+    assert 'proxy_set_header X-BMS-CM-Operator-Token "";' in nginx
+    assert 'proxy_set_header Tailscale-User-Login "";' in nginx
+    assert 'proxy_set_header X-BMS-CM-Proxy-Secret "${BMS_CM_TRUSTED_PROXY_SECRET}";' in nginx
+    assert compose.count("      BMS_CM_TRUSTED_PROXY_SECRET:") == 2
 
 
 def test_cm11_api_typed_submission_rejects_unknown_fields() -> None:
