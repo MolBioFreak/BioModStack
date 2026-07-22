@@ -53,7 +53,7 @@ type PredictorOption = {
 test('predict mode keeps all surfaced predictor combinations available', () => {
     const options = getStructurePredictorOptions('predict');
 
-    assert.deepEqual(options.map((option: PredictorOption) => option.id), ['boltz', 'rf3', 'protenix', 'esmfold2', 'both', 'all']);
+    assert.deepEqual(options.map((option: PredictorOption) => option.id), ['boltz', 'boltz_api', 'rf3', 'protenix', 'esmfold2', 'both', 'all']);
     assert.equal(options.every((option: PredictorOption) => option.disabled !== true), true);
 });
 
@@ -61,7 +61,7 @@ test('complex mode only exposes truthful predictor choices and disables RF3 expl
     const options = getStructurePredictorOptions('complex');
     const rf3Option = options.find((option: PredictorOption) => option.id === 'rf3');
 
-    assert.deepEqual(options.map((option: PredictorOption) => option.id), ['boltz', 'rf3', 'protenix', 'esmfold2', 'boltz_protenix']);
+    assert.deepEqual(options.map((option: PredictorOption) => option.id), ['boltz', 'boltz_api', 'rf3', 'protenix', 'esmfold2', 'boltz_protenix']);
     assert.equal(rf3Option?.disabled, true);
     assert.match(rf3Option?.disabledReason || '', /predict-only/i);
 });
@@ -118,6 +118,14 @@ test('esmfold2 compatibility IDs no longer create dedicated structure launch var
 
 test('structure submit target preserves native predictor routing but forces boltz cp experimental onto its workflow identity', () => {
     const defaultConfig = resolveStructureLaunchConfig({ template_model_id: 'boltz2' });
+    assert.deepEqual(
+        resolveStructureSubmitTarget({
+            launchConfig: defaultConfig,
+            predictionMode: 'complex',
+            predictorSelection: 'boltz_api',
+        }),
+        { modelId: 'boltz_api', mode: 'complex' },
+    );
     assert.deepEqual(
         resolveStructureSubmitTarget({
             launchConfig: defaultConfig,
