@@ -20,6 +20,8 @@ platform/api/.venv
 platform/api/.pytest_cache
 work
 .nextflow
+nxf-tmp.*
+platform/mobile-cordova/.cache
 .pytest-nextflow-*
 output
 backups
