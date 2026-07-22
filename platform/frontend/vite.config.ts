@@ -109,6 +109,7 @@ function molstarCommonJsBuildResolver(): Plugin {
 }
 
 const devApiTarget = process.env.BMS_DEV_API_PROXY_TARGET || 'http://127.0.0.1:8002'
+const devApiProxySecret = process.env.BMS_DEV_API_PROXY_SECRET?.trim() || ''
 const buildRevision = /^[0-9a-f]{40}$/.test(process.env.VITE_BMS_BUILD_SHA?.trim() || '')
   ? process.env.VITE_BMS_BUILD_SHA!.trim()
   : 'unknown'
@@ -205,6 +206,7 @@ export default defineConfig(({ mode }) => ({
       '/api': {
         target: devApiTarget,
         changeOrigin: true,
+        ...(devApiProxySecret ? { headers: { 'X-BMS-CM-Proxy-Secret': devApiProxySecret } } : {}),
       }
     }
   }
