@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import MolstarViewerImpl from '../components/MolstarViewerImpl';
 import type { MolstarViewerProps } from '../components/MolstarViewerImpl';
@@ -12,12 +12,14 @@ import { ComplexAnalysisPanel } from './extensions/complex/ComplexAnalysisPanel'
 import { FilterPanel } from './extensions/filters/FilterPanel';
 import { MetricLegendPanel } from './extensions/metrics/MetricLegendPanel';
 import { MeasurementPanel } from './extensions/measurements/MeasurementPanel';
+import { M6WorkbenchPanel } from './extensions/m6/M6WorkbenchPanel';
 import { PairMatrixExtension } from './extensions/pairMatrix/PairMatrixExtension';
 import { ViewerResourceOwner } from './runtime/resourceOwnership.js';
 import { SequenceTrackExtension } from './extensions/sequence/SequenceTrackExtension';
 import type { MetricLayer, MetricSelection, MetricValue, ResiduePairIdentity } from './metrics/metricContracts.js';
 import { MetricRegistry } from './metrics/MetricRegistry.js';
 import { projectResidueMetricLayer } from './metrics/metricProjection.js';
+import type { StructureSceneController } from './runtime/StructureSceneController.js';
 
 export interface StructureViewerHostProps extends MolstarViewerProps {
     readonly metricLayers?: readonly MetricLayer[];
@@ -34,6 +36,8 @@ export interface StructureViewerHostProps extends MolstarViewerProps {
     readonly showComplexWorkbench?: boolean;
     readonly derivedComponents?: readonly DerivedStructureComponent[];
     readonly onMeasurementsChange?: (measurements: readonly ViewerMeasurement[]) => void;
+    readonly jobId?: string;
+    readonly showM6Workbench?: boolean;
 }
 
 const EMPTY_METRIC_LAYERS: readonly MetricLayer[] = [];
@@ -94,11 +98,14 @@ export default function StructureViewerHost({
     onMeasurementsChange,
     showMeasurements = true,
     showComplexWorkbench = true,
+    showM6Workbench = true,
+    jobId,
     derivedComponents = [],
     residueMetricLayer: compatibilityLayer,
     residueColors: compatibilityColors,
     selections: callerSelections,
     onResidueClick: callerResidueClick,
+    onControllerReady: callerControllerReady,
     ...viewerProps
 }: StructureViewerHostProps) {
     const [ownedStructureUrl, setOwnedStructureUrl] = useState<string | undefined>(undefined);
@@ -121,6 +128,11 @@ export default function StructureViewerHost({
     const [layerVisible, setLayerVisible] = useState(true);
     const [layerOpacity, setLayerOpacity] = useState(1);
     const [cameraResetToken, setCameraResetToken] = useState(0);
+    const [controller, setController] = useState<StructureSceneController | null>(null);
+    const handleControllerReady = useCallback((next: StructureSceneController | null) => {
+        setController(next);
+        callerControllerReady?.(next);
+    }, [callerControllerReady]);
     const filters = controlledFilters ?? localFilters;
     const measurements = controlledMeasurements ?? localMeasurements;
     useEffect(() => {
@@ -323,11 +335,19 @@ export default function StructureViewerHost({
     const chainPairLayers = registry.list().filter((layer) => layer.descriptor.dimension === 'chain-pair-scalar') as readonly Extract<MetricLayer, { descriptor: { dimension: 'chain-pair-scalar' } }>[];
     const geometryLayers = registry.list().filter((layer) => layer.descriptor.dimension === 'geometry-annotation') as readonly Extract<MetricLayer, { descriptor: { dimension: 'geometry-annotation' } }>[];
     const hasComplexAnalysis = derivedComponents.length > 0 || chainPairLayers.length > 0 || geometryLayers.length > 0;
-    const hasWorkbenchContent = Boolean(activeLayer || structureSummaryLayers.length > 0 || showMeasurements || (showComplexWorkbench && hasComplexAnalysis));
+    const exportRows = useMemo(() => registry.list().flatMap((layer) => layer.values.map((entry) => ({
+        metric_id: layer.descriptor.id,
+        metric_label: layer.descriptor.label,
+        units: layer.descriptor.units ?? null,
+        identity: entry.identity,
+        value: entry.missingness === undefined ? entry.value : null,
+        missingness: entry.missingness ?? null,
+    }))), [registry]);
+    const hasWorkbenchContent = Boolean(showM6Workbench || activeLayer || structureSummaryLayers.length > 0 || showMeasurements || (showComplexWorkbench && hasComplexAnalysis));
 
     return (
         <div className="relative h-full w-full" data-bms-structure-viewer-host="direct-4.5.0">
-            <MolstarViewerImpl {...viewerProps} structureUrl={ownedStructureUrl ?? viewerProps.structureUrl} selections={selections} residueMetricLayer={residueMetricLayer} measurements={measurements} scenePresentation={scenePresentation} cameraResetToken={cameraResetToken} onResidueClick={handleResidueClick} />
+            <MolstarViewerImpl {...viewerProps} artifactJobId={jobId} structureUrl={ownedStructureUrl ?? viewerProps.structureUrl} selections={selections} residueMetricLayer={residueMetricLayer} measurements={measurements} scenePresentation={scenePresentation} cameraResetToken={cameraResetToken} onResidueClick={handleResidueClick} onControllerReady={handleControllerReady} />
             {!showMetricWorkbench && hasWorkbenchContent && onMetricWorkbenchVisibilityChange && (
                 <button
                     type="button"
@@ -337,8 +357,8 @@ export default function StructureViewerHost({
                     Show metrics
                 </button>
             )}
-            {(showMetricWorkbench || showLinkedSequence) && hasWorkbenchContent && (
-                <aside className="absolute bottom-2 right-2 z-30 max-h-[55%] w-[min(28rem,calc(100%-1rem))] space-y-2 overflow-auto rounded bg-slate-950/90 p-2 shadow-xl" aria-label={showMetricWorkbench ? 'Structure metric workbench' : 'Linked sequence overlay'}>
+            {(showMetricWorkbench || showLinkedSequence || showM6Workbench) && hasWorkbenchContent && (
+                <aside className="absolute bottom-2 right-2 z-30 max-h-[55%] w-[min(28rem,calc(100%-1rem))] space-y-2 overflow-auto rounded bg-slate-950/90 p-2 shadow-xl" aria-label={showMetricWorkbench ? 'Structure metric workbench' : showM6Workbench ? 'Structure reproducibility workbench' : 'Linked sequence overlay'}>
                     {showMetricWorkbench && (
                         <div className="flex items-center justify-between border-b border-slate-700/70 pb-2 text-xs font-semibold text-slate-200">
                             <span>Metrics</span>
@@ -378,6 +398,7 @@ export default function StructureViewerHost({
                     {showMetricWorkbench && pairLayer && <PairMatrixExtension layer={pairLayer} onSelection={commitSelection} />}
                     {showMetricWorkbench && showComplexWorkbench && <ComplexAnalysisPanel components={derivedComponents} chainPairLayers={chainPairLayers} geometryLayers={geometryLayers} onSelection={commitSelection} />}
                     {showMetricWorkbench && showMeasurements && <MeasurementPanel documentId="primary" measurements={measurements} onChange={setMeasurements} />}
+                    {showM6Workbench && <M6WorkbenchPanel controller={controller} jobId={jobId} tableRows={exportRows} />}
                     {showMetricWorkbench && (registryState.issues.length > 0 || (projected && projected.status !== 'ok')) && <div role="alert" className="rounded bg-red-950/80 p-2 text-xs text-red-200">{[...registryState.issues, ...(projected && projected.status !== 'ok' ? [projected.status === 'error' ? projected.error.message : projected.reason] : [])].join(' · ')}</div>}
                 </aside>
             )}

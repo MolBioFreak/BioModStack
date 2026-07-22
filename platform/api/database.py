@@ -147,6 +147,21 @@ class Job(Base):
     designs = relationship("Design", back_populates="job", cascade="all, delete-orphan")
 
 
+class ViewerSnapshotRecord(Base):
+    """Immutable, job-owned M6A viewer snapshot metadata and canonical JSON."""
+
+    __tablename__ = "viewer_snapshots"
+
+    id = Column(String(36), primary_key=True)
+    job_id = Column(String(36), ForeignKey("jobs.id"), nullable=False, index=True)
+    label = Column(String(120), nullable=False)
+    created_by = Column(String(128), nullable=False)
+    schema_version = Column(Integer, nullable=False, default=2)
+    snapshot_sha256 = Column(String(64), nullable=False, index=True)
+    snapshot_json = Column(JSON, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
 class ExternalResultImport(Base):
     """Durable state for importing one immutable external-provider result."""
 
