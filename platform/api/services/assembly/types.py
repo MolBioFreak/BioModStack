@@ -8,6 +8,8 @@ from typing import Any, Literal, Optional
 EndType = Literal["blunt", "sticky_5", "sticky_3"]
 AssemblyMode = Literal["ligation", "gibson", "golden_gate"]
 FragmentOrientation = Literal["forward", "reverse"]
+FragmentPreparation = Literal["pcr", "ready_linear"]
+PrimerDirection = Literal["forward", "reverse"]
 
 
 class AssemblyError(ValueError):
@@ -31,6 +33,7 @@ class AssemblyFragment:
     role: Optional[str] = None
     source_sequence_id: Optional[str] = None
     source_name: Optional[str] = None
+    source_revision: Optional[int] = None
     source_start: Optional[int] = None
     source_end: Optional[int] = None
     source_wraps_origin: bool = False
@@ -50,6 +53,7 @@ class OrientedFragment:
     right_end: Optional[FragmentEnd]
     source_sequence_id: Optional[str]
     source_name: Optional[str]
+    source_revision: Optional[int]
     source_start: Optional[int]
     source_end: Optional[int]
     source_wraps_origin: bool
@@ -82,4 +86,62 @@ class AssemblyProduct:
     junctions: list[AssemblyJunction]
     warnings: list[str] = field(default_factory=list)
     validation_notes: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class GeneratedPrimer:
+    id: str
+    fragment_id: str
+    fragment_name: str
+    direction: PrimerDirection
+    full_sequence: str
+    annealing_sequence: str
+    tail_sequence: str
+    tm: float
+    warnings: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class DesignedFragment:
+    id: str
+    name: str
+    preparation: FragmentPreparation
+    sequence: str
+    checksum: str
+    primer_ids: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class GibsonCandidate:
+    checksum: str
+    product: AssemblyProduct
+    exact_match: bool
+
+    @property
+    def sequence(self) -> str:
+        return self.product.sequence
+
+    @property
+    def circular(self) -> bool:
+        return self.product.circular
+
+    @property
+    def junctions(self) -> list[AssemblyJunction]:
+        return self.product.junctions
+
+
+@dataclass(slots=True)
+class GibsonDesignResult:
+    engine: str
+    engine_version: str
+    circular: bool
+    overlap: int
+    target_tm: float
+    min_anneal: int
+    primers: list[GeneratedPrimer]
+    designed_fragments: list[DesignedFragment]
+    candidates: list[GibsonCandidate]
+    selected_candidate_checksum: Optional[str]
+    warnings: list[str]
+    source_provenance: list[dict[str, Any]]
 

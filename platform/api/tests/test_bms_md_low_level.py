@@ -634,7 +634,7 @@ elif subcommand == "mdrun":
     prefix = Path(value("-deffnm"))
     prefix.parent.mkdir(parents=True, exist_ok=True)
     outputs = {
-        ".gro": "coordinates\n",
+        ".gro": "fixture\n1\n    1ALA      N    1   0.000   0.000   0.000\n   1.0   1.0   1.0\n",
         ".edr": "energy\n",
         ".log": "Time: 80.000 10.000 800.0\nPerformance: 432.000 0.056\nFinished mdrun\n",
     }

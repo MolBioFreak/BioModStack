@@ -602,6 +602,14 @@ def test_landscape_slot_semantics_and_nonempty_residues() -> None:
         validate_schema("cm_frustration_landscape_v1", empty)
 
 
+def test_legacy_v1_landscape_without_container_digest_remains_replayable() -> None:
+    fixtures = _json(SCHEMA_FIXTURES / "positive" / "all_schemas.json")
+    assert isinstance(fixtures, dict)
+    landscape = copy.deepcopy(fixtures["cm_frustration_landscape_v1"])
+    landscape.pop("container_sha256")
+    validate_schema("cm_frustration_landscape_v1", landscape)
+
+
 def test_analysis_count_status_and_handoff_lineage_invariants() -> None:
     fixtures = _json(SCHEMA_FIXTURES / "positive" / "all_schemas.json")
     analysis = fixtures["cm_analysis_v1"]

@@ -1,15 +1,14 @@
 id: conformational_mapping
 name: Conformational Mapping
-version: "0.3.0"
+version: "1.0.0"
 category: structure_prediction
 description: >
-  Canonical contract-first conformational-mapping router with a request-bound
-  internal ConforNets adapter. Public generic launch is disabled, current pinned
-  ConforNets execution is STOP pending authoritative coordinate instrumentation,
-  and Protenix/import branches remain fail-closed stubs.
-container: conformational-mapping-unimplemented.sif
+  Authenticated conformational mapping for complete-complex Protenix ensembles,
+  canonical-only instrumented ConforNets hypotheses, and immutable registered
+  structure imports. Submission uses the dedicated typed API.
+container: conformational_mapping.sif
 workflow: conformational_mapping
-experimental: true
+experimental: false
 enabled: true
 ui_icon: route
 ui_color: "#F97316"
@@ -19,8 +18,8 @@ outputs: [json, cif]
 
 modes:
   - id: map
-    name: Validate canonical mapping request
-    description: Internal validation only; public generic launch is disabled and no current backend is advertised complete.
+    name: Map conformational hypotheses
+    description: Dedicated typed submission with backend-specific validation and durable lifecycle control.
     params:
       - backend
       - targets
@@ -30,8 +29,13 @@ modes:
       - runtime_policy
       - analysis_policy
       - confornets
-      - protenix_snapshot_id
-      - import_receipt_id
+      - registered_snapshot_id
+      - registered_artifact_ids
+      - registered_sequence_id
+      - registered_reference_ids
+      - registered_checkpoint_id
+      - registered_config_id
+      - registered_transfer_id
 
 params:
   - {name: backend, type: string, description: Explicit canonical backend; no automatic substitution., required: true, enum: [protenix_v2_ensemble, confornets, external_import]}
@@ -44,5 +48,12 @@ params:
   - {name: runtime_policy, type: object, description: Mutually exclusive default or explicit runtime policy., required: true, hidden: true}
   - {name: analysis_policy, type: object, description: Versioned support and ranking policy., required: true, hidden: true}
   - {name: confornets, type: object, description: Strict single-chain ConforNets coordinate-plan controls., hidden: true}
-  - {name: protenix_snapshot_id, type: string, description: Future approved complete-complex snapshot identity; execution remains unimplemented.}
-  - {name: import_receipt_id, type: string, description: Future authorized staged-import receipt identity; arbitrary paths are not accepted.}
+  - {name: registered_snapshot_id, type: string, description: Principal-owned complete-complex snapshot registry ID.}
+  - {name: registered_artifact_ids, type: object, description: Ordered principal-owned import structure registry IDs.}
+  - {name: registered_sequence_id, type: string, description: Principal-owned ConforNets protein-sequence registry ID.}
+  - {name: registered_reference_ids, type: object, description: Ordered zero-to-two ConforNets reference registry IDs.}
+  - {name: registered_checkpoint_id, type: string, description: Principal-owned ConforNets checkpoint registry ID.}
+  - {name: registered_config_id, type: string, description: Optional principal-owned ConforNets config registry ID.}
+  - {name: registered_transfer_id, type: string, description: Optional principal-owned ConforNets transfer-state registry ID.}
+  - {name: protenix_snapshot_id, type: string, description: Server-owned complete-complex snapshot identity., hidden: true}
+  - {name: import_receipt_id, type: string, description: Immutable server-owned import receipt identity., hidden: true}

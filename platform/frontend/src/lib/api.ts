@@ -59,6 +59,82 @@ export interface Job {
     selected_cdr_loops?: string[] | null;
 }
 
+export interface MDArtifact {
+    id: string;
+    replica: number;
+    name: string;
+    bytes: number;
+    sha256: string;
+    semantic_role: 'analysis_topology' | 'analysis_trajectory' | 'representative_structure' | null;
+    atom_order_identity: string | null;
+    selection_method?: string | null;
+    source_frame?: number | null;
+    time_ps?: number | null;
+    source_trajectory_sha256?: string | null;
+    format: string;
+    content_url: string;
+}
+
+export interface MDSummary {
+    schema: 'bms.md.summary.v1';
+    job_id: string;
+    status: string;
+    result_state: 'partial' | 'completed' | null;
+    source: 'validated_job_owned_manifests';
+    bounded: true;
+    aggregate_manifest_sha256: string;
+    replica_count: number;
+    artifact_count: number;
+    replicas: Array<{ replica: number; status: string; engine: { name?: string; version?: string; platform?: string }; performance: Record<string, number> }>;
+    analysis_status: 'absent' | 'partial' | 'completed';
+    trajectory_playback: { supported: false; reason: string };
+}
+
+export interface MDAnalysisPoint {
+    replica: number;
+    time_ps: number;
+    source_frame: number;
+    rmsd_angstrom: number;
+    radius_of_gyration_angstrom: number;
+}
+
+export interface MDAnalysisReplicaReport {
+    schema: 'bms.md.analysis.v1';
+    status: 'completed' | 'failed';
+    replica?: number;
+    points?: MDAnalysisPoint[];
+    residue_metrics?: Array<{ segid: string; resid: number; resname: string; backbone_rmsf_angstrom: number; backbone_atom_count: number }>;
+    block_statistics?: Array<{ block: number; count: number; mean_rmsd_angstrom: number; mean_radius_of_gyration_angstrom: number }>;
+    summary?: { count: number; min: number; mean: number; max: number; final: number };
+    failure?: { code: string; message: string };
+    inputs: { manifest_sha256: string | null; topology_sha256?: string; trajectory_sha256?: string; atom_order_identity?: string };
+}
+
+export interface MDAnalysisReportSet {
+    schema: 'bms.md.analysis-report-set.v1';
+    job_id: string;
+    status: 'absent' | 'partial' | 'completed';
+    bounded: true;
+    replica_states: Array<{ replica: number; status: 'absent' | 'completed' | 'failed' }>;
+    reports: MDAnalysisReplicaReport[];
+    ensemble: {
+        statistical_unit: 'replica';
+        frame_pooling: false;
+        completed_replicas: number;
+        mean_of_replica_mean_rmsd_angstrom: number | null;
+        sample_stdev_of_replica_mean_rmsd_angstrom: number | null;
+        mean_of_replica_final_rmsd_angstrom: number | null;
+        sample_stdev_of_replica_final_rmsd_angstrom: number | null;
+    };
+    evidence: { status: 'insufficient_evidence'; reason: string; frames_are_independent_replicates: false };
+    retry: { eligible: boolean; active: boolean; reason: string };
+}
+
+export const fetchMDSummary = (jobId: string) => api.get<MDSummary>(`/api/jobs/${jobId}/md/summary`);
+export const fetchMDArtifacts = (jobId: string) => api.get<{ schema: string; job_id: string; source: string; bounded: true; artifacts: MDArtifact[] }>(`/api/jobs/${jobId}/md/artifacts`);
+export const fetchMDAnalysis = (jobId: string) => api.get<MDAnalysisReportSet>(`/api/jobs/${jobId}/md/analysis`);
+export const retryMDAnalysis = (jobId: string) => api.post<{ schema: 'bms.md.analysis-retry.v1'; status: string; created_child_ids: string[] }>(`/api/jobs/${jobId}/md/analysis/retry`);
+
 // Log data for View Logs modal
 export interface JobLogs {
     job_id: string;
@@ -261,6 +337,55 @@ export interface ProteinBaseBundleImportRequest {
     job_name?: string;
 }
 export const importProteinBaseBundle = (payload: ProteinBaseBundleImportRequest) => api.post<Job>('/api/jobs/imports/proteinbase', payload);
+
+export interface ExternalImportPreview {
+    provider: string;
+    resource_type: string;
+    provider_job_id: string;
+    model: string | null;
+    model_version: string | null;
+    status: string;
+    sample_count: number;
+    entities: Array<Record<string, unknown>>;
+    source_fingerprint: string;
+    run_metadata_sha256: string;
+    archive_sha256: string | null;
+    importable: boolean;
+    error_code: string | null;
+    errors: string[];
+    warnings: string[];
+    provider_metadata: Record<string, unknown>;
+}
+
+export interface ExternalResultImport {
+    id: string;
+    provider_id: string;
+    resource_type: string;
+    provider_job_id: string;
+    state: 'discovered' | 'validating' | 'staging' | 'normalizing' | 'committing' | 'completed' | 'failed';
+    source_fingerprint: string;
+    bms_job_id: string | null;
+    failure_code: string | null;
+    failure_message: string | null;
+    created_at: string;
+    updated_at: string;
+    imported_at: string | null;
+}
+
+export const previewExternalImport = (sourcePath: string) => api.post<ExternalImportPreview>(
+    '/api/jobs/imports/external/preview',
+    { source_path: sourcePath, provider_hint: 'boltz_api' },
+);
+export const createExternalImport = (payload: {
+    source_path: string;
+    provider: 'boltz_api';
+    preview_fingerprint: string;
+    dataset_name: string;
+    job_name?: string;
+}) => api.post<ExternalResultImport>('/api/jobs/imports/external', payload);
+export const fetchExternalImport = (importId: string) => api.get<ExternalResultImport>(
+    `/api/jobs/imports/external/${importId}`,
+);
 export const cancelJob = (id: string) => api.delete(`/api/jobs/${id}`);
 export const deleteJobPermanently = (id: string) => api.delete<{
     message: string;
@@ -331,6 +456,44 @@ export const extractChain = async (
 export const submitJob = (jobData: Partial<Job>) => {
     return api.post('/api/jobs', jobData);
 };
+
+export interface BoltzApiStructureRequest {
+    name: string;
+    client_request_id: string;
+    model: 'boltz-2.1';
+    sequence: string;
+    primary_chain_id: string;
+    complex_components: Array<Record<string, unknown>>;
+    num_samples: number;
+    use_msa: boolean;
+}
+
+export interface BoltzApiEstimateResponse {
+    model: string;
+    provider_input: Record<string, unknown>;
+    estimate: Record<string, unknown>;
+    estimate_fingerprint: string;
+}
+
+export interface BoltzApiProviderStatus {
+    available: boolean;
+    cli_available: boolean;
+    credential_configured: boolean;
+    model: string;
+    message: string;
+}
+
+export const fetchBoltzApiProviderStatus = () => (
+    api.get<BoltzApiProviderStatus>('/api/jobs/boltz-api/status')
+);
+
+export const estimateBoltzApiJob = (payload: BoltzApiStructureRequest) => (
+    api.post<BoltzApiEstimateResponse>('/api/jobs/boltz-api/estimate', payload)
+);
+
+export const submitBoltzApiJob = (
+    payload: BoltzApiStructureRequest & { approved_estimate_fingerprint: string },
+) => api.post<Job>('/api/jobs/boltz-api', payload);
 
 export interface OntNgsSubmitRequest {
     name?: string;
@@ -1212,7 +1375,7 @@ export const fetchDesignResidueMetrics = (designId: string) =>
     api.get<ResidueMetrics>(`/api/designs/${designId}/residue-metrics`);
 
 export interface ChainMetric {
-    type: 'protein' | 'dna' | 'rna' | 'ligand';
+    type: 'protein' | 'dna' | 'rna' | 'ligand' | 'unknown';
     length: number;
     avg_plddt: number | null;
     plddt: number[];
@@ -1355,14 +1518,27 @@ export interface IpsaeInterfacePairScore {
     ipsae_d0dom_max: number | null;
     iptm_d0chn_asym: number | null;
     iptm_d0chn_max: number | null;
-    n0res: number | null;
     n0chn: number | null;
     n0dom: number | null;
-    d0res: number | null;
+    n0dom_max: number | null;
+    n0res: number | null;
+    n0res_max: number | null;
     d0chn: number | null;
     d0dom: number | null;
-    residue_label_asym: string | null;
-    residue_label_max: string | null;
+    d0dom_max: number | null;
+    d0res: number | null;
+    d0res_max: number | null;
+    residue_label_iptm_asym: string | null;
+    residue_label_ipsae_d0chn_asym: string | null;
+    residue_label_ipsae_d0dom_asym: string | null;
+    residue_label_ipsae_d0res_asym: string | null;
+    residue_label_ipsae_d0res_max: string | null;
+    interface_residue_count_chain_1: number | null;
+    interface_residue_count_chain_2: number | null;
+    interface_dist_residue_count_chain_1: number | null;
+    interface_dist_residue_count_chain_2: number | null;
+    valid_pair_count: number | null;
+    dist_valid_pair_count: number | null;
 }
 
 export interface IpsaeInterfaceAnalysis {
@@ -1839,6 +2015,7 @@ export interface AssemblyFragmentInput {
     role?: string;
     source_sequence_id?: string;
     source_name?: string;
+    source_revision?: number;
     source_start?: number;
     source_end?: number;
     source_wraps_origin?: boolean;
@@ -1854,6 +2031,7 @@ export interface AssemblyFragmentResult {
     role?: string | null;
     source_sequence_id?: string | null;
     source_name?: string | null;
+    source_revision?: number | null;
     source_start?: number | null;
     source_end?: number | null;
     source_wraps_origin?: boolean;
@@ -1910,6 +2088,66 @@ export interface GibsonAssemblyRequest {
     maximum_overlap?: number | null;
     new_name?: string;
     save_description?: string;
+}
+
+export interface GibsonDesignFragmentInput extends AssemblyFragmentInput {
+    preparation: 'pcr' | 'ready_linear';
+}
+
+export interface GibsonDesignRequest {
+    fragments: GibsonDesignFragmentInput[];
+    circular?: boolean;
+    overlap?: number;
+    target_tm?: number;
+    min_anneal?: number;
+    selected_candidate_checksum?: string;
+    new_name?: string;
+    save_description?: string;
+}
+
+export interface GibsonDesignedPrimer {
+    id: string;
+    fragment_id: string;
+    fragment_name: string;
+    direction: 'forward' | 'reverse';
+    full_sequence: string;
+    annealing_sequence: string;
+    tail_sequence: string;
+    tm: number;
+    warnings: string[];
+}
+
+export interface GibsonDesignedFragment {
+    id: string;
+    name: string;
+    preparation: 'pcr' | 'ready_linear';
+    sequence: string;
+    checksum: string;
+    primer_ids: string[];
+}
+
+export interface GibsonDesignCandidate {
+    checksum: string;
+    product: AssemblyProduct;
+    exact_match: boolean;
+}
+
+export interface GibsonDesignResponse {
+    engine: string;
+    engine_version: string;
+    circular: boolean;
+    overlap: number;
+    target_tm: number;
+    min_anneal: number;
+    primers: GibsonDesignedPrimer[];
+    designed_fragments: GibsonDesignedFragment[];
+    candidates: GibsonDesignCandidate[];
+    selected_candidate_checksum: string;
+    selected_product: AssemblyProduct;
+    warnings: string[];
+    source_provenance: Array<Record<string, unknown>>;
+    saved_sequence?: NucleotideSequence | null;
+    message: string;
 }
 
 export interface GoldenGateAssemblyRequest {
@@ -2243,6 +2481,12 @@ export const simulateGibsonAssembly = (data: GibsonAssemblyRequest) =>
 
 export const saveGibsonAssembly = (data: GibsonAssemblyRequest) =>
     api.post<AssemblyOperationResponse>('/api/molbio/assembly/gibson/save', data);
+
+export const designGibsonAssembly = (data: GibsonDesignRequest) =>
+    api.post<GibsonDesignResponse>('/api/molbio/assembly/gibson/design', data);
+
+export const saveDesignedGibsonAssembly = (data: GibsonDesignRequest) =>
+    api.post<GibsonDesignResponse>('/api/molbio/assembly/gibson/design/save', data);
 
 export const fetchGoldenGateAssemblyOptions = () =>
     api.get<GoldenGateAssemblyOptionsResponse>('/api/molbio/assembly/golden-gate/options');

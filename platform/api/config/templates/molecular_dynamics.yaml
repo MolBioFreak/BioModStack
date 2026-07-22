@@ -11,7 +11,7 @@ description: >
   a separate validation backend rather than silently substituted.
 goal: >
   Validate a versioned MD job specification, prepare deterministic topology and
-  restart artifacts, execute independent replicas, and publish convergence,
+  restart artifacts, execute independent replicas, and publish checksum-bound
   trajectory, structure, and provenance artifacts.
 status: >
   Experimental alpha. Protein systems are supported first. Protein-DNA and
@@ -29,12 +29,9 @@ stages:
   - name: Simulate
     tool: Nextflow Replica Workers
     description: Run independent restart-safe replicas with isolated work and publish directories.
-  - name: Analyze
-    tool: BMS MD Analytics
-    description: Calculate energy, force, RMSD, radius-of-gyration, and replica convergence evidence.
   - name: Publish
     tool: BMS Result Contract
-    description: Publish normalized structures, trajectories, logs, checksums, provenance, and an artifact manifest.
+    description: Publish normalized structures, trajectories, logs, checksums, provenance, and an artifact manifest. Analysis availability is reported separately and never implied by this launch template.
 
 preset_params:
   template_model_id: molecular_dynamics

@@ -13,7 +13,6 @@ import {
     trimRetainedSamples,
     type LiveSample,
 } from '../src/components/infraTelemetryHistory.js';
-import { disposeMolstarHost } from '../src/components/molstarLifecycle.js';
 
 const STORAGE_KEY = 'bms_infra_live_telemetry_v1';
 const PREFERENCES_STORAGE_KEY = 'bms_infra_live_telemetry_preferences_v1';
@@ -218,21 +217,4 @@ test('preference writes preserve samples already written by another mounted cons
             value: previousWindow,
         });
     }
-});
-
-test('Molstar host disposal owns the plugin exactly once across repeated cleanup', () => {
-    let disposeCalls = 0;
-    const host = {
-        viewerInstance: {
-            plugin: {
-                dispose: () => {
-                    disposeCalls += 1;
-                },
-            },
-        },
-    } as unknown as HTMLElement;
-
-    disposeMolstarHost(host);
-    disposeMolstarHost(host);
-    assert.equal(disposeCalls, 1);
 });

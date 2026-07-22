@@ -5,6 +5,7 @@ import test from 'node:test';
 
 import {
     displayStrandForMoleculeOrientation,
+    hasExplicitNucleotideStrandednessMetadata,
     inferNucleotideMoleculeMetadataFromParsedRecord,
     inferSequenceTypeFromParsedRecord,
     normalizeSequenceForType,
@@ -42,6 +43,16 @@ test('GenBank RNA parser metadata resolves to RNA even when parsed.type is absen
         }),
         'dna',
     );
+});
+
+test('explicit strandedness evidence is distinguished from parser DNA defaults', () => {
+    assert.equal(hasExplicitNucleotideStrandednessMetadata({
+        sequenceTypeFromLocus: 'DNA',
+        isDoubleStrandedDNA: true,
+    }), false);
+    assert.equal(hasExplicitNucleotideStrandednessMetadata({ sequenceTypeFromLocus: 'ds-DNA' }), true);
+    assert.equal(hasExplicitNucleotideStrandednessMetadata({ sequenceTypeFromLocus: 'ss-DNA' }), true);
+    assert.equal(hasExplicitNucleotideStrandednessMetadata({ isDoubleStrandedDNA: true }), false);
 });
 
 test('explicit locus DNA metadata wins over RNA-virus-looking names', () => {

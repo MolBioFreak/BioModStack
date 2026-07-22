@@ -4,34 +4,13 @@ nextflow.enable.dsl = 2
 import groovy.json.JsonSlurper
 
 include { CONFORMATIONAL_MAPPING_CONFORNETS } from '../modules/conformational_mapping_confornets.nf'
+include { CONFORMATIONAL_MAPPING_PROTENIX } from '../modules/conformational_mapping_protenix.nf'
+include { CONFORMATIONAL_MAPPING_IMPORT } from '../modules/conformational_mapping_import.nf'
+include { CONFORMATIONAL_MAPPING_ANALYSIS_PLANE as PROTENIX_ANALYSIS_PLANE } from '../modules/conformational_mapping_frustrampnn.nf'
+include { CONFORMATIONAL_MAPPING_ANALYSIS_PLANE as CONFORNETS_ANALYSIS_PLANE } from '../modules/conformational_mapping_frustrampnn.nf'
+include { CONFORMATIONAL_MAPPING_ANALYSIS_PLANE as IMPORT_ANALYSIS_PLANE } from '../modules/conformational_mapping_frustrampnn.nf'
 
 params.cm_request_path = null
-
-process CM_PROTENIX_UNIMPLEMENTED {
-    tag "cm-protenix:${target_meta.target_id}"
-
-    input:
-    tuple val(target_meta), path(request_json), val(staged_assets)
-
-    script:
-    """
-    echo 'Canonical Protenix conformational mapping is not implemented in Phase 3.' >&2
-    exit 64
-    """
-}
-
-process CM_IMPORT_UNIMPLEMENTED {
-    tag "cm-import:${target_meta.target_id}"
-
-    input:
-    tuple val(target_meta), path(request_json), val(staged_assets)
-
-    script:
-    """
-    echo 'Canonical conformational import is not implemented in Phase 3.' >&2
-    exit 64
-    """
-}
 
 workflow {
     if (!params.cm_request_path) {
@@ -49,31 +28,27 @@ workflow {
         error 'cm_request ordered_seeds must be nonempty'
     }
 
-    def targetTuples = request.targets.collect { target ->
+    request.targets.each { target ->
         if (!(target.target_id instanceof String) || target.target_id.isEmpty()) {
             error 'Every target requires target_id'
         }
-        tuple(
-            [request_id: request.request_id, backend: request.backend, target_id: target.target_id, target_order: target.target_order],
-            requestPath,
-            null,
-        )
     }
-    def dispatch = Channel.fromList(targetTuples)
+    def requestRootPath = file(requestPath.parent.toString(), checkIfExists: true)
+    def requestTuples = Channel.value(tuple(request.request_id, requestRootPath))
+    // The pinned FrustraMPNN image is self-contained; do not require or stage a
+    // second host checkpoint that can drift from the image-embedded model.
+    def frustrationCheckpoint = '/opt/frustrampnn_weights/megascale.ckpt'
 
     switch (request.backend) {
         case 'protenix_v2_ensemble':
-            CM_PROTENIX_UNIMPLEMENTED(dispatch)
+            CONFORMATIONAL_MAPPING_PROTENIX(requestTuples)
+            PROTENIX_ANALYSIS_PLANE(
+                CONFORMATIONAL_MAPPING_PROTENIX.out.canonical.map { request_id, canonical_dir ->
+                    tuple(request_id, 'canonical_protenix', requestRootPath, canonical_dir, frustrationCheckpoint)
+                }
+            )
             break
         case 'confornets':
-            def coordinatePlanPath = file(
-                "${requestPath.parent}/cm_coordinate_plan_v1.json",
-                checkIfExists: true,
-            )
-            def requestRootPath = file(
-                requestPath.parent.toString(),
-                checkIfExists: true,
-            )
             def confornetsTuples = request.targets.collect { target ->
                 tuple(
                     [request_id: request.request_id, backend: request.backend, target_id: target.target_id, target_order: target.target_order],
@@ -81,9 +56,19 @@ workflow {
                 )
             }
             CONFORMATIONAL_MAPPING_CONFORNETS(Channel.fromList(confornetsTuples))
+            CONFORNETS_ANALYSIS_PLANE(
+                CONFORMATIONAL_MAPPING_CONFORNETS.out.canonical_dir.map { canonical_dir ->
+                    tuple(request.request_id, 'canonical_confornets', requestRootPath, canonical_dir, frustrationCheckpoint)
+                }
+            )
             break
         case 'external_import':
-            CM_IMPORT_UNIMPLEMENTED(dispatch)
+            CONFORMATIONAL_MAPPING_IMPORT(requestTuples)
+            IMPORT_ANALYSIS_PLANE(
+                CONFORMATIONAL_MAPPING_IMPORT.out.canonical.map { request_id, canonical_dir ->
+                    tuple(request_id, 'canonical_import', requestRootPath, canonical_dir, frustrationCheckpoint)
+                }
+            )
             break
         default:
             error "Unknown conformational-mapping backend: ${request.backend}"

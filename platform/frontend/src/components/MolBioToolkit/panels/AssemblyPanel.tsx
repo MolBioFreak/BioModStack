@@ -13,6 +13,7 @@ import {
     type GoldenGateAssemblyOptionsResponse,
 } from '../../../lib/api';
 import type { SequenceData, SelectionInfo } from '../types';
+import { GibsonDesignWorkspace } from './GibsonDesignWorkspace';
 
 interface AssemblyPanelProps {
     sequenceData: SequenceData;
@@ -155,6 +156,8 @@ export function AssemblyPanel({
 }: AssemblyPanelProps) {
     const [mode, setMode] = useState<AssemblyMode>('ligation');
     const [fragments, setFragments] = useState<AssemblyFragmentInput[]>([]);
+    const [gibsonWorkflow, setGibsonWorkflow] = useState<'design' | 'validate'>('design');
+    const [gibsonPreparations, setGibsonPreparations] = useState<Record<string, 'pcr' | 'ready_linear'>>({});
     const [saveName, setSaveName] = useState('');
     const [saveDescription, setSaveDescription] = useState('');
     const [goldenGateOptions, setGoldenGateOptions] = useState<GoldenGateAssemblyOptionsResponse | null>(null);
@@ -246,6 +249,22 @@ export function AssemblyPanel({
 
     const removeFragment = (fragmentId: string) => {
         setFragments((current) => current.filter((fragment) => fragment.id !== fragmentId));
+        setGibsonPreparations((current) => {
+            const next = { ...current };
+            delete next[fragmentId];
+            return next;
+        });
+    };
+
+    const moveFragment = (index: number, direction: -1 | 1) => {
+        setFragments((current) => {
+            const target = index + direction;
+            if (target < 0 || target >= current.length) return current;
+            const next = [...current];
+            [next[index], next[target]] = [next[target], next[index]];
+            return next;
+        });
+        setResult(null);
     };
 
     const resetForMode = (nextMode: AssemblyMode) => {
@@ -362,6 +381,25 @@ export function AssemblyPanel({
                 ))}
             </div>
 
+            {mode === 'gibson' && (
+                <div className="grid grid-cols-2 gap-2 rounded-xl border border-slate-700 bg-slate-900/50 p-1.5">
+                    <button
+                        type="button"
+                        onClick={() => { setGibsonWorkflow('design'); setResult(null); setError(null); }}
+                        className={`rounded-lg px-3 py-2 text-xs font-medium ${gibsonWorkflow === 'design' ? 'bg-violet-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}
+                    >
+                        Design from raw fragments
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => { setGibsonWorkflow('validate'); setResult(null); setError(null); }}
+                        className={`rounded-lg px-3 py-2 text-xs font-medium ${gibsonWorkflow === 'validate' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`}
+                    >
+                        Validate pre-overlapped
+                    </button>
+                </div>
+            )}
+
             <div className="space-y-3 rounded-xl border border-slate-700 bg-slate-900/50 p-3">
                 <div className="flex flex-wrap gap-2">
                     <button
@@ -404,7 +442,7 @@ export function AssemblyPanel({
                 </div>
             </div>
 
-            {mode === 'gibson' && (
+            {mode === 'gibson' && gibsonWorkflow === 'validate' && (
                 <div className="grid gap-3 rounded-xl border border-slate-700 bg-slate-900/50 p-3 sm:grid-cols-3">
                     <label className="space-y-1">
                         <span className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Minimum overlap</span>
@@ -459,13 +497,33 @@ export function AssemblyPanel({
                                     {fragment.source_name ? ` • ${fragment.source_name}` : ''}
                                 </div>
                             </div>
-                            <button
-                                type="button"
-                                onClick={() => removeFragment(fragment.id)}
-                                className="rounded px-2 py-1 text-xs text-red-300 transition-colors hover:bg-red-500/10"
-                            >
-                                Remove
-                            </button>
+                            <div className="flex items-center gap-1">
+                                <button
+                                    type="button"
+                                    onClick={() => moveFragment(index, -1)}
+                                    disabled={index === 0}
+                                    className="rounded px-2 py-1 text-xs text-slate-400 hover:bg-slate-800 disabled:opacity-30"
+                                    aria-label={`Move ${fragment.name} up`}
+                                >
+                                    Move up
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => moveFragment(index, 1)}
+                                    disabled={index === fragments.length - 1}
+                                    className="rounded px-2 py-1 text-xs text-slate-400 hover:bg-slate-800 disabled:opacity-30"
+                                    aria-label={`Move ${fragment.name} down`}
+                                >
+                                    Move down
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => removeFragment(fragment.id)}
+                                    className="rounded px-2 py-1 text-xs text-red-300 transition-colors hover:bg-red-500/10"
+                                >
+                                    Remove
+                                </button>
+                            </div>
                         </div>
 
                         <div className="grid gap-2 sm:grid-cols-[minmax(0,0.8fr)_120px_120px]">
@@ -492,6 +550,23 @@ export function AssemblyPanel({
                                 <option value="reverse">Reverse</option>
                             </select>
                         </div>
+
+                        {mode === 'gibson' && gibsonWorkflow === 'design' && (
+                            <label className="block space-y-1">
+                                <span className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Preparation</span>
+                                <select
+                                    value={gibsonPreparations[fragment.id] || 'pcr'}
+                                    onChange={(event) => setGibsonPreparations((current) => ({
+                                        ...current,
+                                        [fragment.id]: event.target.value as 'pcr' | 'ready_linear',
+                                    }))}
+                                    className="w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-xs"
+                                >
+                                    <option value="pcr">PCR — design primers and overlap tails</option>
+                                    <option value="ready_linear">Ready linear DNA — no primers</option>
+                                </select>
+                            </label>
+                        )}
 
                         <div className="grid gap-3 sm:grid-cols-2">
                             <EndEditor
@@ -525,7 +600,8 @@ export function AssemblyPanel({
                     placeholder="Optional description or provenance notes"
                     className="w-full rounded border border-slate-600 bg-slate-800 px-3 py-2 text-xs"
                 />
-                <div className="flex gap-2">
+                {!(mode === 'gibson' && gibsonWorkflow === 'design') && (
+                    <div className="flex gap-2">
                     <button
                         type="button"
                         onClick={() => void execute('simulate')}
@@ -542,16 +618,28 @@ export function AssemblyPanel({
                     >
                         {loading === 'save' ? 'Saving…' : 'Validate + Save'}
                     </button>
-                </div>
+                    </div>
+                )}
             </div>
 
-            {error && (
+            {mode === 'gibson' && gibsonWorkflow === 'design' && (
+                <GibsonDesignWorkspace
+                    fragments={fragments}
+                    preparations={gibsonPreparations}
+                    saveName={saveName}
+                    saveDescription={saveDescription}
+                    sequenceName={sequenceData.name}
+                    onLoadProduct={onLoadProduct}
+                />
+            )}
+
+            {!(mode === 'gibson' && gibsonWorkflow === 'design') && error && (
                 <div className="rounded border border-red-800 bg-red-900/30 px-3 py-2 text-sm text-red-300">
                     {error}
                 </div>
             )}
 
-            {result && (
+            {!(mode === 'gibson' && gibsonWorkflow === 'design') && result && (
                 <div className="space-y-3 rounded-xl border border-slate-700 bg-slate-900/50 p-3">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                         <div>

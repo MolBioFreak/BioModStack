@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import uuid
@@ -16,6 +17,7 @@ from .contracts import (
     validate_schema,
     validate_seed_sources,
 )
+from .clash import CLASH_DETECTOR_ID, CLASH_DETECTOR_VERSION
 
 
 BACKENDS = frozenset({"protenix_v2_ensemble", "confornets", "external_import"})
@@ -33,6 +35,7 @@ _TOP_LEVEL_FIELDS = frozenset(
         "confornets",
         "protenix_snapshot_id",
         "import_receipt_id",
+        "resolved_import_entries",
     }
 )
 _CONFORNETS_FIELDS = frozenset(
@@ -80,6 +83,8 @@ class MaterializedRequest:
     request_path: Path
     coordinate_plan_path: Path
     launch_params: dict[str, str]
+    request_sha256: str
+    coordinate_plan_sha256: str
 
 
 def _strict_object(
@@ -227,7 +232,6 @@ def _normalize_confornets_settings(settings: Mapping[str, Any]) -> dict[str, Any
         raise ConformationalMappingRequestError(
             "ConforNets MSE requires a non-null staged reference"
         )
-
     transfer = config["transfer_source"]
     normalized_transfer: dict[str, Any] | None = None
     if transfer is not None:
@@ -367,7 +371,11 @@ def build_confornets_coordinate_plan(
     config = _normalize_confornets_settings(settings)
     task = config["task"]
     test_case_id = config["test_case_id"]
-    reference_ids = [reference["reference_id"] for reference in config["references"]] or [None]
+    reference_ids = (
+        [reference["reference_id"] for reference in config["references"]]
+        if task == "mse"
+        else [None]
+    )
     runs = config["runs"]
     confornet_count = config["confornet_count"]
     samples = config["samples"]
@@ -452,6 +460,13 @@ def validate_request_params(params: Mapping[str, Any]) -> ValidatedRequest:
         "runtime_policy": values["runtime_policy"],
         "analysis_policy": values["analysis_policy"],
     }
+    analysis_policy = values["analysis_policy"]
+    if (
+        not isinstance(analysis_policy, Mapping)
+        or analysis_policy.get("clash_detector_id") != CLASH_DETECTOR_ID
+        or analysis_policy.get("clash_detector_version") != CLASH_DETECTOR_VERSION
+    ):
+        raise ConformationalMappingRequestError("requested clash detector is not installed")
 
     coordinate_plan: list[dict[str, Any]] = []
     if backend == "confornets":
@@ -500,13 +515,66 @@ def validate_request_params(params: Mapping[str, Any]) -> ValidatedRequest:
             "import_receipt_id is invalid for the selected backend"
         )
     if backend == "protenix_v2_ensemble" and values.get("protenix_snapshot_id") not in (None, ""):
+        feature_policy = values["feature_policy"]
+        if not isinstance(feature_policy, Mapping) or any(
+            key not in feature_policy
+            for key in ("protein_msa_enabled", "templates_enabled", "rna_msa_enabled")
+        ):
+            raise ConformationalMappingRequestError(
+                "Protenix requires explicit protein-MSA, template, and RNA-MSA controls"
+            )
+        if any(not isinstance(feature_policy[key], bool) for key in (
+            "protein_msa_enabled", "templates_enabled", "rna_msa_enabled"
+        )):
+            raise ConformationalMappingRequestError("Protenix feature controls must be booleans")
+        if feature_policy.get("mode") == "features_disabled_control_v1" and any(
+            feature_policy[key] for key in ("protein_msa_enabled", "templates_enabled", "rna_msa_enabled")
+        ):
+            raise ConformationalMappingRequestError("feature-disabled control cannot enable features")
         request_fields["protenix_snapshot_id"] = _strict_nonempty_string(
             values["protenix_snapshot_id"], field="protenix_snapshot_id"
         )
+        if not targets:
+            raise ConformationalMappingRequestError("Protenix requires at least one target")
+        for target in targets:
+            if not isinstance(target, Mapping) or not isinstance(target.get("target_id"), str):
+                raise ConformationalMappingRequestError("Protenix target identity is invalid")
+            for seed in ordered_seeds:
+                for sample_index in range(samples_per_seed):
+                    coordinate_plan.append(
+                        {
+                            "backend": "protenix_v2_ensemble",
+                            "target_id": target["target_id"],
+                            "ordered_seed": seed,
+                            "sample_index": sample_index,
+                        }
+                    )
+    elif backend == "protenix_v2_ensemble":
+        raise ConformationalMappingRequestError("a registered complete-complex snapshot is required")
     if backend == "external_import" and values.get("import_receipt_id") not in (None, ""):
         request_fields["import_receipt_id"] = _strict_nonempty_string(
             values["import_receipt_id"], field="import_receipt_id"
         )
+        entries = values.get("resolved_import_entries")
+        if not isinstance(entries, list) or len(entries) != len(targets) or not entries:
+            raise ConformationalMappingRequestError("import receipt entries must match ordered targets")
+        receipt_sha256 = _sha256(
+            values["import_receipt_id"], field="import_receipt_id"
+        )
+        for target, entry in zip(targets, entries, strict=True):
+            if not isinstance(target, Mapping) or not isinstance(entry, Mapping):
+                raise ConformationalMappingRequestError("import coordinate authority is invalid")
+            coordinate_plan.append(
+                {
+                    "backend": "external_import",
+                    "target_id": _strict_nonempty_string(target.get("target_id"), field="target_id"),
+                    "staged_index": _strict_nonnegative_int(entry.get("staged_index"), field="staged_index"),
+                    "source_content_sha256": _sha256(entry.get("source_content_sha256"), field="source_content_sha256"),
+                    "staged_receipt_sha256": receipt_sha256,
+                }
+            )
+    elif backend == "external_import":
+        raise ConformationalMappingRequestError("an immutable registered import receipt is required")
 
     # Exercise the Phase 1 executable schema with a temporary valid identity/hash.
     preview = {
@@ -706,4 +774,88 @@ def materialize_trusted_internal_request(
         request_path=request_path,
         coordinate_plan_path=coordinate_plan_path,
         launch_params={"cm_request_path": str(request_path)},
+        request_sha256=request["request_sha256"],
+        coordinate_plan_sha256=plan["coordinate_plan_sha256"],
     )
+
+
+def bind_materialized_source_snapshot(
+    materialized: MaterializedRequest,
+    *,
+    source_snapshot_sha256: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Atomically bind a server-generated snapshot into request and plan hashes."""
+
+    if len(source_snapshot_sha256) != 64 or any(value not in "0123456789abcdef" for value in source_snapshot_sha256):
+        raise ConformationalMappingRequestError("source snapshot identity must be a lowercase SHA-256")
+    request = json.loads(materialized.request_path.read_text(encoding="utf-8"))
+    plan = json.loads(materialized.coordinate_plan_path.read_text(encoding="utf-8"))
+    try:
+        validate_schema("cm_request_v1", request)
+    except ContractValidationError as exc:
+        raise ConformationalMappingRequestError(str(exc)) from exc
+    expected_request_sha256 = canonical_sha256({
+        key: value for key, value in request.items() if key != "request_sha256"
+    })
+    if request.get("request_sha256") != expected_request_sha256:
+        raise ConformationalMappingRequestError("materialized request self-hash is invalid")
+    if request.get("request_sha256") != materialized.request_sha256:
+        raise ConformationalMappingRequestError("materialized request no longer matches trusted authority")
+    allowed_plan_fields = {
+        "schema_name", "schema_version", "request_id", "backend", "request_sha256",
+        "expected_cardinality", "coordinates", "coordinate_plan_sha256",
+    }
+    if set(plan) != allowed_plan_fields:
+        raise ConformationalMappingRequestError("materialized coordinate plan has unexpected fields")
+    expected_plan_sha256 = canonical_sha256({
+        key: value for key, value in plan.items() if key != "coordinate_plan_sha256"
+    })
+    if plan.get("coordinate_plan_sha256") != expected_plan_sha256:
+        raise ConformationalMappingRequestError("materialized coordinate-plan self-hash is invalid")
+    if plan.get("coordinate_plan_sha256") != materialized.coordinate_plan_sha256:
+        raise ConformationalMappingRequestError("materialized coordinate plan no longer matches trusted authority")
+    if (
+        plan.get("schema_name") != "cm_coordinate_plan"
+        or plan.get("schema_version") != 1
+        or plan.get("request_id") != request.get("request_id")
+        or plan.get("request_sha256") != request.get("request_sha256")
+    ):
+        raise ConformationalMappingRequestError("materialized request and coordinate plan are not bound")
+    targets = request.get("targets")
+    coordinates = plan.get("coordinates")
+    if not isinstance(targets, list) or not isinstance(coordinates, list):
+        raise ConformationalMappingRequestError("materialized coordinate plan does not match request authority")
+    if plan.get("expected_cardinality") != len(coordinates) or len(coordinates) != len(targets):
+        raise ConformationalMappingRequestError("materialized coordinate plan does not match request authority")
+    if request.get("backend") == "external_import" and any(
+        not isinstance(coordinate, Mapping)
+        or set(coordinate) != {
+            "backend", "target_id", "staged_index", "source_content_sha256",
+            "staged_receipt_sha256",
+        }
+        or coordinate.get("backend") != "external_import"
+        or coordinate.get("target_id") != target.get("target_id")
+        or coordinate.get("staged_index") != index
+        or coordinate.get("staged_receipt_sha256") != request.get("import_receipt_id")
+        for index, (target, coordinate) in enumerate(zip(targets, coordinates, strict=True))
+    ):
+        raise ConformationalMappingRequestError(
+            "materialized coordinate plan does not match request authority"
+        )
+    if request.get("backend") != "external_import" or plan.get("backend") != "external_import":
+        raise ConformationalMappingRequestError("source snapshot binding is external-import only")
+    if "source_snapshot_sha256" in request:
+        raise ConformationalMappingRequestError("source snapshot identity is already bound")
+    request["source_snapshot_sha256"] = source_snapshot_sha256
+    request["request_sha256"] = canonical_sha256({
+        key: value for key, value in request.items() if key != "request_sha256"
+    })
+    validate_schema("cm_request_v1", request)
+    plan["request_sha256"] = request["request_sha256"]
+    plan.pop("coordinate_plan_sha256", None)
+    plan["coordinate_plan_sha256"] = canonical_sha256(plan)
+    _publish_canonical_json_pair(
+        materialized.request_path, request,
+        materialized.coordinate_plan_path, plan,
+    )
+    return request, plan

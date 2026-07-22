@@ -49,7 +49,6 @@ def test_emergency_stop_attempts_with_stale_unknown_readiness_and_is_honest() ->
         coordinator.emergency_stop(
             expected_generation=9,
             idempotency_key="estop-9",
-            token_authorized=True,
             mutations_enabled=True,
         )
     )
@@ -61,7 +60,7 @@ def test_emergency_stop_attempts_with_stale_unknown_readiness_and_is_honest() ->
     assert "not verified" in result.detail.lower()
 
 
-def test_emergency_stop_generation_or_auth_failure_never_reaches_transport() -> None:
+def test_emergency_stop_generation_failure_never_reaches_transport() -> None:
     from services.bioxp.command_coordinator import CommandDeniedError
 
     Coordinator, registry, Snapshot = _load()
@@ -74,13 +73,12 @@ def test_emergency_stop_generation_or_auth_failure_never_reaches_transport() -> 
     client = EmergencyClient()
     coordinator = Coordinator(Connection(snapshot, client), registry)
 
-    for generation, authorized in [(8, True), (9, False)]:
+    for generation in (8,):
         try:
             asyncio.run(
                 coordinator.emergency_stop(
                     expected_generation=generation,
-                    idempotency_key=f"estop-{generation}-{authorized}",
-                    token_authorized=authorized,
+                    idempotency_key=f"estop-{generation}",
                     mutations_enabled=True,
                 )
             )
@@ -114,7 +112,6 @@ def test_concurrent_same_emergency_idempotency_key_delivers_once() -> None:
             coordinator.emergency_stop(
                 expected_generation=9,
                 idempotency_key="same-emergency-key",
-                token_authorized=True,
                 mutations_enabled=True,
             )
         )
@@ -123,7 +120,6 @@ def test_concurrent_same_emergency_idempotency_key_delivers_once() -> None:
             coordinator.emergency_stop(
                 expected_generation=9,
                 idempotency_key="same-emergency-key",
-                token_authorized=True,
                 mutations_enabled=True,
             )
         )

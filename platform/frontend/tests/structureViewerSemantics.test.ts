@@ -147,7 +147,7 @@ test('quick views map semantic sections onto concrete overlay and color modes', 
     ]);
 });
 
-test('designability quick view falls back to frustration coloring when no PSCE profile exists', () => {
+test('designability quick view never reactivates retired legacy frustration coloring', () => {
     const quickViews = buildStructureViewerQuickViews({
         confidenceLabel: 'Design Confidence',
         hasResidueConfidence: false,
@@ -174,7 +174,7 @@ test('designability quick view falls back to frustration coloring when no PSCE p
             label: 'Designability',
             sectionId: 'designability',
             overlayView: 'metrics',
-            colorMode: 'frustration',
+            colorMode: 'default',
         },
     ]);
 });
@@ -541,8 +541,8 @@ test('StructureViewerPane wires first-class ConforNets slider, step, and overlay
     assert.match(molstarSource, /new StructureSceneController/);
     assert.match(molstarSource, /controller\.loadScene\(sceneResult\.value\)/);
     assert.match(molstarSource, /kind:\s*'independent_hypotheses'/);
-    assert.match(molstarSource, /\[adapterEpoch, documents\]/);
+    assert.match(molstarSource, /\[adapterEpoch, documents, measurements, molecularDynamics, scenePresentation\]/);
     assert.match(molstarSource, /alphafoldView:\s*options\.effectiveAlphafoldView/);
-    assert.match(molstarSource, /&& !residueColors\?\.size/);
+    assert.match(molstarSource, /&& !\(scenePresentation\?\.colorQueries\?\.length\)/);
     assert.doesNotMatch(molstarSource, /viewerInstance/);
 });

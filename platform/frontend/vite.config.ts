@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
@@ -89,6 +89,25 @@ function manualChunks(id: string): string | undefined {
   return undefined
 }
 
+function molstarCommonJsBuildResolver(): Plugin {
+  return {
+    name: 'bms-molstar-commonjs-build-resolver',
+    enforce: 'pre' as const,
+    apply: 'build' as const,
+    async resolveId(source, importer, options) {
+      if (!source.startsWith('molstar/lib/') || source.startsWith('molstar/lib/commonjs/')) {
+        return null
+      }
+
+      return this.resolve(
+        source.replace(/^molstar\/lib\//, 'molstar/lib/commonjs/'),
+        importer,
+        { ...options, skipSelf: true },
+      )
+    },
+  }
+}
+
 const devApiTarget = process.env.BMS_DEV_API_PROXY_TARGET || 'http://127.0.0.1:8002'
 const buildRevision = /^[0-9a-f]{40}$/.test(process.env.VITE_BMS_BUILD_SHA?.trim() || '')
   ? process.env.VITE_BMS_BUILD_SHA!.trim()
@@ -105,7 +124,7 @@ export default defineConfig(({ mode }) => ({
   // Use /bms/ for production (Tailscale Serve proxy), but / for dev mode
   base: mode === 'production' ? '/bms/' : '/',
   cacheDir: resolveViteCacheDir(),
-  plugins: [react(), tailwindcss()],
+  plugins: [molstarCommonJsBuildResolver(), react(), tailwindcss()],
   define: {
     __BMS_BUILD_METADATA__: JSON.stringify(buildMetadata),
   },
@@ -152,6 +171,7 @@ export default defineConfig(({ mode }) => ({
     // still visible, but above the known stable Molstar vendor payload.
     chunkSizeWarningLimit: 6500,
     rollupOptions: {
+      preserveEntrySignatures: false,
       output: {
         manualChunks,
       },

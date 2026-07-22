@@ -22,7 +22,7 @@ import re
 from database import get_session, Design, Job
 from paths import resolve_runtime_data_path, to_allowed_relative
 from services.analysis_runs import get_matching_design_analysis_run, load_analysis_result
-from services.cdr_annotator import extract_sequence_from_pdb, identify_binder_chains
+from services.cdr_annotator import extract_sequence_from_pdb
 from services.stage_review import REVIEWABLE_STAGES, load_review_gate_snapshot
 from services.structure_utils import get_per_chain_fampnn_psce
 from services.result_contracts import REVIEW_CONTRACT_VERSION, build_review_artifact_manifest, resolve_result_contract, validate_design_analysis_request
@@ -473,6 +473,7 @@ ANALYTICS_LOAD_ONLY_COLUMNS = (
     Design.id,
     Design.name,
     Design.created_at,
+    Design.review_profile_id,
     Design.plddt_overall,
     Design.plddt_binder,
     Design.plddt_target,
@@ -796,10 +797,18 @@ def _inject_metric(metrics: Dict[str, float], key: str, value: Any) -> None:
 
 
 def _review_metric_allowed(design: Design, key: str) -> bool:
+    normalized = key.strip().lower()
+    if normalized in {
+        "ipsae",
+        "ipsae_binder_to_target",
+        "ipsae_target_to_binder",
+        "ipsae_d0chn",
+        "ipsae_d0dom",
+    }:
+        return True
     capabilities = resolve_result_contract(
         review_profile_id=design.review_profile_id,
     ).viewer_capabilities
-    normalized = key.strip().lower()
     if any(token in normalized for token in (
         "binder", "interface", "interaction", "iptm", "ipsae", "affinity",
         "epitope", "target_contact", "target_distance", "hotspot",
@@ -1790,7 +1799,8 @@ def _design_to_response(
         isinstance(flat_scope, dict) and flat_scope.get("metric_family") == "rfantibody_plddt"
     ) or str(getattr(design, "source_stage", "") or getattr(design, "stage_family", "")).lower().find("rfantibody") >= 0
     rfa_metrics = nested_rfa_metrics if nested_rfa_metrics is not None else (confidence_metrics if looks_like_flat_rfa else None)
-    first_present = lambda *values: next((value for value in values if value is not None), None)
+    def first_present(*values: object) -> object | None:
+        return next((value for value in values if value is not None), None)
     if isinstance(rfa_metrics, dict):
         rfa_confidence_scope = rfa_metrics.get("confidence_scope") if isinstance(rfa_metrics.get("confidence_scope"), dict) else None
         rfa_plddt = rfa_confidence_scope.get("plddt") if isinstance(rfa_confidence_scope, dict) and isinstance(rfa_confidence_scope.get("plddt"), dict) else {}
@@ -1851,8 +1861,14 @@ def _design_to_response(
         data["artifact_schema_version"] = 1
     data["result_set"] = result_set
     data["result_set_label"] = result_set_label
+    legacy_contract_result_set = (
+        result_set
+        if result_set in {"ppiflow_candidates", "ppiflow_passed", "ppiflow_rejected"}
+        else None
+    )
     contract = resolve_result_contract(
         review_profile_id=data.get("review_profile_id"),
+        result_set=legacy_contract_result_set,
     )
     data["analysis_contract_id"] = contract.analysis_contract_id
     if contract.analysis_contract_id:
@@ -2343,7 +2359,7 @@ async def list_designs(
     if rfd_rog_max is not None:
         conditions.append(Design.rfd_rog <= rfd_rog_max)
     if favorites_only:
-        conditions.append(Design.is_favorite == True)
+        conditions.append(Design.is_favorite.is_(True))
     if artifact_group:
         conditions.append(Design.artifact_group == artifact_group)
     if artifact_class:

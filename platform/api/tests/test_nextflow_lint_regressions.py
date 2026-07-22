@@ -9,6 +9,7 @@ import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+NEXTFLOW_BIN = Path("/usr/local/bin/nextflow")
 TARGET_LINT_FILES = [
     "modules/protein_hunter_experimental.nf",
     "workflows/protein_hunter_experimental.nf",
@@ -38,11 +39,27 @@ CANONICAL_NGS_PREVIEW_ARGS = {
 
 
 def _run_nextflow(*args: str, env_overrides: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    if not (NEXTFLOW_BIN.is_file() and os.access(NEXTFLOW_BIN, os.X_OK)):
+        pytest.skip(f"direct Nextflow launcher is unavailable: {NEXTFLOW_BIN}")
     env = os.environ.copy()
+    env.update({
+        "NXF_VER": "25.10.1",
+        "NXF_OFFLINE": "true",
+        "NXF_DISABLE_CHECK_LATEST": "true",
+        "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt",
+        "CURL_CA_BUNDLE": "/etc/ssl/certs/ca-certificates.crt",
+        "REQUESTS_CA_BUNDLE": "/etc/ssl/certs/ca-certificates.crt",
+    })
     if env_overrides:
         env.update(env_overrides)
+    resolved_args = [
+        str((REPO_ROOT / arg).resolve())
+        if arg.endswith(".nf") and (REPO_ROOT / arg).is_file()
+        else arg
+        for arg in args
+    ]
     return subprocess.run(
-        ["nextflow", *args],
+        [str(NEXTFLOW_BIN), *resolved_args],
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,

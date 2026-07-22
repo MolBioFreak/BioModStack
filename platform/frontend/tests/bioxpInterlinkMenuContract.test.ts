@@ -15,9 +15,8 @@ test('BioXP topbar status menu remains install-feature gated', () => {
     assert.match(panel, /Connect/);
     assert.match(panel, /Disconnect/);
     assert.match(panel, /Probe/);
-    assert.match(panel, /type="password"/);
-    assert.match(panel, /autoComplete="off"/);
-    assert.match(panel, /connect\.mutate\(operatorToken\)/);
+    assert.doesNotMatch(panel, /operatorToken|type="password"/);
+    assert.match(panel, /connect\.mutate\(undefined\)/);
 });
 
 test('frontend client contains only compact BioXP endpoints', () => {
@@ -53,7 +52,6 @@ test('frontend types and hooks honor compact backend response envelopes', () => 
         'validation_status',
         'blockers',
         'response.data.jobs',
-        'operatorConfig(token)',
     ]) {
         assert.ok(client.includes(marker), marker);
     }

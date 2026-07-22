@@ -1,4 +1,6 @@
 import type { StructureDocumentRef, StructureSceneRef } from './structureIdentity.js';
+import type { StructureScenePresentation } from './scenePresentation.js';
+import { validateMDSceneState, type MDSceneState } from './mdTrajectory.js';
 import { viewerOk, viewerUnsupported, type ViewerResult } from './viewerResults.js';
 
 export type StructureCollectionKind =
@@ -29,6 +31,8 @@ export interface StructureSceneState {
     readonly collection?: StructureCollectionRef;
     readonly activeDocumentId: string;
     readonly provenance: StructureSceneProvenance;
+    readonly presentation?: StructureScenePresentation;
+    readonly molecularDynamics?: MDSceneState;
 }
 
 export type StructureSceneStateInput = Omit<StructureSceneState, 'schemaVersion'>;
@@ -64,6 +68,15 @@ export const createStructureSceneState = (input: StructureSceneStateInput): View
     }
     if (!input.provenance.createdBy.trim() || !input.provenance.createdAt.trim()) {
         return viewerUnsupported('Scene provenance requires createdBy and createdAt', 'provenance');
+    }
+    if (input.molecularDynamics) {
+        const md = validateMDSceneState(input.molecularDynamics);
+        if (md.status !== 'ok') {
+            return viewerUnsupported(
+                md.status === 'error' ? md.error.message : md.reason,
+                md.status === 'unsupported' ? md.capability : 'trajectories',
+            );
+        }
     }
     return viewerOk({ schemaVersion: 1, ...input });
 };
@@ -122,5 +135,7 @@ export const restoreViewerSnapshot = (
         collection: snapshot.scene.collection,
         activeDocumentId: snapshot.scene.activeDocumentId,
         provenance: snapshot.scene.provenance,
+        presentation: snapshot.scene.presentation,
+        molecularDynamics: snapshot.scene.molecularDynamics,
     });
 };

@@ -4,7 +4,8 @@ id: confornets_experimental
 name: Conformational Mapping
 icon: sparkles
 color: "#F97316"
-experimental: false
+experimental: true
+enabled: false
 description: >
   Experimental monomer-only conformational mapping workflow. The first backend is
   ConforNets/OpenFold3 for latent conformer diversity, MSE/reference-guided

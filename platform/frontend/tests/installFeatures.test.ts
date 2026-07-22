@@ -9,6 +9,7 @@ import {
     normalizeBmsFeatureState,
     normalizeBmsFeatures,
     resolveBmsFeatureQueryState,
+    resolveShowDevFeaturesDefault,
 } from '../src/runtime/installFeatures.js';
 
 test('optional hardware features default disabled until backend state is confirmed', () => {
@@ -40,4 +41,11 @@ test('dev feature flags hide developer-only install features until explicitly sh
     });
     assert.equal(isBmsFeatureVisible(state, 'bioxp', false), false);
     assert.equal(isBmsFeatureVisible(state, 'bioxp', true), true);
+});
+
+test('Vite development starts with developer surfaces visible without changing production defaults', () => {
+    assert.equal(resolveShowDevFeaturesDefault(true, null), true);
+    assert.equal(resolveShowDevFeaturesDefault(false, null), false);
+    assert.equal(resolveShowDevFeaturesDefault(false, 'true'), true);
+    assert.equal(resolveShowDevFeaturesDefault(true, 'false'), false);
 });

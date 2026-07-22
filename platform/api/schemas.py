@@ -129,6 +129,85 @@ class JobList(BaseModel):
     total: int
 
 
+class BoltzApiStructureRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    client_request_id: str = Field(..., pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+    model: str = Field(default="boltz-2.1", max_length=64)
+    sequence: str = Field(..., min_length=1, max_length=100000)
+    primary_chain_id: str = Field(default="A", min_length=1, max_length=8)
+    complex_components: List[dict] = Field(default_factory=list, max_length=64)
+    num_samples: int = Field(default=1, ge=1, le=10)
+    use_msa: bool = True
+
+
+class BoltzApiEstimateResponse(BaseModel):
+    model: str
+    provider_input: dict
+    estimate: dict
+    estimate_fingerprint: str
+
+
+class BoltzApiSubmitRequest(BoltzApiStructureRequest):
+    approved_estimate_fingerprint: str = Field(..., min_length=64, max_length=64)
+
+
+class BoltzApiProviderStatusResponse(BaseModel):
+    available: bool
+    cli_available: bool
+    credential_configured: bool
+    model: str
+    message: str
+
+
+class ExternalImportPreviewRequest(BaseModel):
+    source_path: str = Field(..., min_length=1, max_length=1000)
+    provider_hint: str = Field(default="boltz_api", max_length=64)
+
+
+class ExternalImportCreateRequest(BaseModel):
+    source_path: str = Field(..., min_length=1, max_length=1000)
+    provider: str = Field(default="boltz_api", max_length=64)
+    preview_fingerprint: str = Field(..., min_length=64, max_length=64)
+    dataset_name: str = Field(..., min_length=1, max_length=255)
+    job_name: Optional[str] = Field(default=None, max_length=255)
+
+
+class ExternalImportPreviewResponse(BaseModel):
+    provider: str
+    resource_type: str
+    provider_job_id: str
+    model: Optional[str] = None
+    model_version: Optional[str] = None
+    status: str
+    sample_count: int
+    entities: List[dict]
+    source_fingerprint: str
+    run_metadata_sha256: str
+    archive_sha256: Optional[str] = None
+    importable: bool
+    error_code: Optional[str] = None
+    errors: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+    provider_metadata: dict = Field(default_factory=dict)
+
+
+class ExternalImportResponse(BaseModel):
+    id: str
+    provider_id: str
+    resource_type: str
+    provider_job_id: str
+    state: str
+    source_fingerprint: str
+    bms_job_id: Optional[str] = None
+    failure_code: Optional[str] = None
+    failure_message: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    imported_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 # --- Design Schemas ---
 
 class DesignResponse(BaseModel):

@@ -486,9 +486,23 @@ Panels:
 9. **Diagnostics:** typed preparation, launch, CUDA, engine, ingestion, and scientific-QC failures with operator next step.
 10. **Controls:** pause, resume, retry replica, reconcile, cancel replica, cancel parent; disabled with a reason when invalid.
 
-Trajectory visualization remains a separate later design decision. This page specifies lifecycle/data inventory, not the viewer implementation.
+The reporting/viewing architecture is now a binding product decision: a separately pinned CPU **MDAnalysis** worker performs authoritative engine-neutral analysis; native GROMACS tools retain engine-native validation; existing **Plotly** renders bounded typed chart payloads; and BMS-owned **Mol\*** is the only bundled/in-product molecular viewer. Browser code does not compute authoritative metrics. Raw dynamics remain immutable, while aligned/downsampled trajectories, representative structures, frame maps, and metric tables are separately checksummed derived artifacts with explicit lineage. VMD is not bundled, vendored, containerized, or required; any later user-managed VMD export/launch adapter is outside this tranche and requires a separate licensing/scope decision.
 
-### 8.3 API surface
+### 8.3 MD analysis, reporting, and trajectory viewing
+
+The first implementation slice adds a retryable CPU analysis child after checksum-valid replica ingestion. Analysis failure never reruns or mutates valid GPU dynamics. Before registration, the exact pinned MDAnalysis image must read the exact retained GROMACS 2025.3 topology/trajectory fixtures; unsupported versions, mismatched topology/trajectory pairs, invalid selections, corrupt frames, or hash drift fail closed.
+
+The versioned `bms.md.analysis.v1` contract emits:
+
+- bounded `analysis.json` summary with method versions, units, selections, PBC/alignment transforms, exclusions, uncertainty, QC/verification state, and artifact descriptors;
+- `timeseries.parquet` and `residue_metrics.parquet` as authoritative tabular products;
+- representative/medoid structures as CIF;
+- optional PBC-corrected/aligned XTC and a separately bounded browser XTC, each with source hash, transformation lineage, and exact source-frame/time map;
+- optional deterministic SVG/PNG exports; CSV is a user export rather than authoritative storage.
+
+Initial methods are trajectory continuity, RMSD, RMSF, radius of gyration, SASA, admitted native thermodynamic series, and replica-aware summaries. Correlated frames are not independent replicates; insufficient evidence remains explicit. Plotly points carry replica/time/source-frame identity. Mol* starts with representative structures and advances to lazy bounded topology+trajectory playback only after owner-scoped range APIs and real Chrome/WebGL lifecycle/retention tests pass. The `molecular_dynamics_v1`, `trajectory_viewer`, performance, and provenance capabilities remain withheld until their real worker, ingestion, API, and frontend consumers pass end-to-end tests.
+
+### 8.4 API surface
 
 Add owner-scoped bounded detail/actions, or equivalent routes consistent with the existing jobs router:
 
@@ -513,11 +527,13 @@ Dependency order is binding:
 4. C1/C2 immutable preparation bundles and v2 chemistry contracts;
 5. L2 controls/reconciliation across every old and new action/writer path;
 6. MD-aware queue/detail backend projections;
-7. U1 frontend;
-8. V1 canonical runtime reconciliation;
-9. V2 scientific promotion.
+7. U1 frontend lifecycle/control surfaces;
+8. A0 truthful per-replica MDAnalysis artifact slice;
+9. A1 MDAnalysis expansion, artifact APIs, Plotly reports, and Mol* representative/trajectory surface;
+10. V1 canonical runtime reconciliation;
+11. V2 scientific promotion.
 
-Because the current plan and MD implementation are untracked in a heavily dirty checkout, implementation must first preserve a byte-identical external snapshot/patch and target-scoped hashes. No commit is authorized by this plan.
+Implementation occurs only against a freshly inventoried target state. If the shared checkout is dirty, preserve unrelated tracked/untracked work, record target-scoped status and hashes, and never bulk-copy a stale MD worktree over the authoritative checkout. This plan does not itself authorize a commit, migration, deployment, or restart.
 
 ### Phase C0 — Truthful capability catalog and current-profile correction
 
@@ -667,6 +683,77 @@ Because the current plan and MD implementation are untracked in a heavily dirty 
 
 **Gate:** the backend queue projection includes parent/child identity, chemistry, replica aggregate, phase/progress, checkpoint availability, and typed failure; default queue collapses MD children; every MD state/action and disabled reason is represented; DB/API/UI agree during queued, running, checkpointing, paused, partial, failed, cancelling, and completed states.
 
+### Phase A0 — Truthful per-replica MDAnalysis artifact slice
+
+**Objective:** Prove one deterministic, checksum-bound operational-QC method before adding APIs, charts, or trajectory playback.
+
+**Current-source correction:** `result_contracts.py` and its tests advertise `molecular_dynamics_v1`, `trajectory_viewer`, `md_performance_metrics`, and `provenance_audit`, while no MD analyzer is registered or dispatched. The MD template also describes an Analyze stage that does not execute. Direct Mol* 4.5.0 is governed and lifecycle-tested for static documents only; its capability contract rejects trajectories. Existing Plotly analytics require Design rows. These claims remain disabled/removed until their implementations pass.
+
+**Files:**
+
+- Create: `containers/md-analysis/md-analysis.def` and exact dependency lock
+- Create: `schemas/md_analysis_v1.schema.json`
+- Create: `scripts/bms_md/analysis.py`
+- Modify: `scripts/bms_md/cli.py`
+- Modify: `scripts/bms_md/{gromacs_pipeline,openmm_pipeline}.py`
+- Create: `modules/experimental/molecular_dynamics/analyze.nf`
+- Modify: `workflows/experimental/molecular_dynamics/orchestrator.nf`
+- Modify: `nextflow.config` with a CPU `MolecularDynamicsAnalysis` label
+- Modify: `platform/api/services/result_contracts.py`
+- Modify: `platform/api/config/templates/molecular_dynamics.yaml`
+- Test: `platform/api/tests/test_bms_md_analysis.py` and focused MD contract/workflow tests
+
+**Work:**
+
+1. Invert the false-capability tests and withhold analyzer/viewer/report declarations.
+2. Add a checksummed `analysis_topology` plus atom-order identity to every claimed engine manifest: first GROMACS final GRO+XTC and OpenMM final PDB+DCD. Promote each pair separately; do not depend implicitly on current-release TPR parsing. Emit mapped PDB/mmCIF when GRO cannot preserve required chain/entity identity.
+3. Pin one CPU MDAnalysis image and prove exact fixture readability. Add tiny tracked checksum-pinned fixtures for each promoted pair.
+4. Implement only `md_backbone_rmsd_v1`: per replica, `protein and backbone`, first admitted analyzed frame, ps/Å, explicit PBC/alignment/exclusion/stride, bounded chart points, and descriptive min/mean/max/final values. Label it operational QC, never convergence/stability/scientific acceptance.
+5. Verify manifest containment, path, byte count, and SHA-256 before MDAnalysis opens a file. Empty selection, topology/trajectory mismatch, atom-count mismatch, unsupported format, missing/corrupt frame, or hash drift fails closed without fallback.
+6. Emit a typed checksummed success/failure analysis artifact. Failure cannot delete or mutate completed dynamics; required/optional analysis terminal semantics follow the versioned policy rather than being inferred from a file's presence.
+7. Wire CPU analysis after replica collection and before the current terminal assertion using both the collection manifest and replica artifact inventory. Do not put analysis inside GPU replica execution.
+8. Keep the analyzer unregistered in the generic Design-oriented analysis registry until MD-owned durable ingestion and hash-bound run/replica subjects exist.
+
+**Gate:** exact GRO+XTC and PDB+DCD fixtures pass independently; negative containment/hash/selection/format/atom-count tests fail before analysis; unchanged inputs produce byte-stable scientific content or the same content hash; output is bounded and fully provenance-bound; no analyzer/viewer capability or frontend surface is advertised.
+
+### Phase A1 — MDAnalysis reporting, Plotly charts, and Mol* trajectory surface
+
+**Objective:** Add one authoritative, retryable analysis plane and one bounded in-product molecular visualization path without overstating scientific completion.
+
+**Files:**
+
+- Create: `containers/md-analysis/Dockerfile`
+- Create: `containers/md-analysis/environment.yml` or exact dependency lock
+- Create: `schemas/md_analysis_v1.schema.json`
+- Create: `scripts/bms_md/analysis.py`
+- Modify: `scripts/bms_md/cli.py`
+- Modify: `modules/experimental/molecular_dynamics/analyze.nf`
+- Modify: `platform/api/services/result_contracts.py`
+- Modify: `platform/api/services/analysis_registry.py`
+- Modify: analysis run/worker/ingestion services
+- Modify: `platform/api/routers/molecular_dynamics.py`
+- Create: `platform/frontend/src/components/md/MdAnalysisReport.tsx`
+- Create: `platform/frontend/src/components/md/MdPlotlyPanels.tsx`
+- Create: `platform/frontend/src/components/md/MdMolstarTrajectory.tsx`
+- Modify: BMS direct Mol* owner/adapter and frontend API/types
+- Test: schema, exact-fixture compatibility, analyzer negative matrix, artifact/range API, Plotly payload, Mol* lifecycle/browser retention, and stale-generation suites
+
+**Work:**
+
+1. Extend the A0 pinned worker; keep native GROMACS validation and do not add MDAnalysis to FastAPI or browser dependencies.
+2. Extend `bms.md.analysis.v1` and atomically emit checksummed `analysis.json`, time-series/residue Parquet, representative CIFs, and optional aligned/browser XTC derivatives with source hashes and exact frame/transformation lineage.
+3. Add per-replica trajectory continuity, PBC correction, centering/alignment, RMSF, radius of gyration, SASA, admitted native thermodynamic series, and explicit insufficient-evidence/replica-aware summaries.
+4. Schedule analysis as a retryable CPU child after dynamics ingestion. Never rerun or mutate valid dynamics when analysis fails.
+5. Add owner-scoped opaque artifact IDs and bounded metadata/range APIs, reusing existing `files.py::_serve_file_response` range behavior only behind job containment/authorization. Prove `200/206/416`, cross-job denial, hashes, MIME, and no host-path disclosure. Keep trajectories and unbounded arrays out of queue/detail JSON.
+6. Route zero-Design MD jobs by authoritative result contract into an MD-specific result pane before Design-centric components; never request Design Plotly metrics for MD.
+7. Render Plotly QC/stability/replica panels from server-computed values, with every point bound to replica/time/source-frame identity.
+8. Extend the existing `MolstarEngineOwner` and direct scene/controller path; do not create a second runtime owner. Load representative CIFs first, then add lazy bounded GRO+XTC and PDB+DCD playback only after range delivery and frame-map contracts pass; synchronize Plotly selection to exact Mol* frames.
+9. Run real Chrome/WebGL first-frame/play/scrub/pause/replica-switch/current/stale/replacement/unmount cycles and prove range requests plus cleanup of nested roots/plugins, requests, canvases, blob URLs, listeners, timers, animation frames, and warm-baseline memory.
+10. Advertise `molecular_dynamics_v1`, `trajectory_viewer`, `md_performance_metrics`, and `provenance_audit` separately only when each backing worker/artifact/API/UI behavior passes end to end.
+11. Do not bundle VMD. It is neither a source target nor an acceptance dependency.
+
+**Gate:** exact GROMACS 2025.3 fixtures analyze reproducibly; negative fixtures fail closed without changing dynamics; every derived artifact validates and preserves lineage; replica summaries do not pool frames as independent replicates; Plotly and Mol* resolve the same typed frame identity; bounded range/memory and lifecycle gates pass; execution, analysis, and scientific-verification states remain visibly separate; VMD is absent from BMS runtime/build artifacts.
+
 ### Phase V1 — Canonical GROMACS artifact reconciliation
 
 **Objective:** Resolve the historical SIF drift before broader acceptance.
@@ -775,13 +862,15 @@ This completion tranche is done only when:
 - cancellation drains descendants and releases reservations exactly once;
 - startup reconciliation is idempotent and fault-tested;
 - queue filters/cards expose meaningful MD state without flooding users with child jobs;
+- the pinned MDAnalysis worker, `bms.md.analysis.v1` artifacts, Plotly report panels, and BMS-owned Mol* representative/trajectory surface pass exact-artifact, range/bounds, frame-map, stale-generation, disposal, and warm-baseline retention gates;
+- analysis remains retryable without rerunning dynamics, correlated frames are not presented as independent evidence, and workflow/analysis/scientific-verification states remain separate;
 - canonical GROMACS SIF provenance is reconciled;
 - 1AKI all-GPU, protein–DNA, and DRT4 staged gates are either passed or visibly remain blocked with exact reasons;
 - broad tests and docs match only deployed facts;
 - no unrelated dirty work is overwritten or included;
 - no commit, migration, deployment, or restart occurs without separate explicit authorization.
 
-Only after this gate should BMS choose and implement the interactive trajectory/data viewing architecture.
+VMD is not a completion gate and is not pulled into BMS. Optional user-managed interoperability remains separately deferred.
 
 ## 12. External scientific anchors
 
@@ -795,5 +884,9 @@ Use primary/original sources during implementation and pin exact citations in pr
 - CHARMM36 parameter distribution: `https://mackerell.umaryland.edu/charmm_ff.shtml`
 - OpenMMForceFields inventory/tooling: `https://github.com/openmm/openmmforcefields`
 - Lipid21 publication: DOI `10.1021/acs.jctc.1c01217`
+- MDAnalysis analysis framework: `https://docs.mdanalysis.org/stable/documentation_pages/analysis/index.html`
+- Plotly JavaScript charting: `https://plotly.com/javascript/`
+- Mol* viewer documentation/examples: `https://molstar.org/viewer-docs/examples/`
+- VMD license boundary (not bundled): `https://www.ks.uiuc.edu/Research/vmd/current/LICENSE.html`
 
 These anchors inform candidate selection; they do not substitute for BMS profile-specific runtime and scientific validation.
