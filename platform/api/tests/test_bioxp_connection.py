@@ -182,9 +182,7 @@ def test_stale_hardware_cache_does_not_relabel_live_runtime_probe_as_stale(tmp_p
             "hardware_connected": True,
             "capabilities": [
                 "collect_hardware_snapshot",
-                "construct_pipettes",
-                "initialize_without_motion",
-                "run_initial_check",
+                "initialize_oem_environment",
             ],
         },
     )
@@ -201,9 +199,7 @@ def test_stale_hardware_cache_does_not_relabel_live_runtime_probe_as_stale(tmp_p
     assert snapshot.hardware_observed_at == now - timedelta(seconds=600)
     assert snapshot.capabilities == (
         "collect_hardware_snapshot",
-        "construct_pipettes",
-        "initialize_without_motion",
-        "run_initial_check",
+        "initialize_oem_environment",
     )
     assert snapshot.last_error is None
     assert snapshot.hardware_evidence_error is not None

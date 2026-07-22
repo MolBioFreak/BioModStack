@@ -41,9 +41,7 @@ def test_default_registry_exposes_only_current_compact_commissioning_mappings() 
     assert set(registry) == {
         "activate_usb_for_service",
         "collect_hardware_snapshot",
-        "construct_pipettes",
-        "initialize_without_motion",
-        "run_initial_check",
+        "initialize_oem_environment",
         "initialize_motors",
         "start_job",
         "pause_job",
@@ -54,9 +52,7 @@ def test_default_registry_exposes_only_current_compact_commissioning_mappings() 
     enabled = {
         "activate_usb_for_service": "activate_usb_for_service",
         "collect_hardware_snapshot": "collect_hardware_snapshot",
-        "construct_pipettes": "construct_pipettes",
-        "initialize_without_motion": "initialize_without_motion",
-        "run_initial_check": "run_initial_check",
+        "initialize_oem_environment": "initialize_oem_environment",
     }
     for name, route_key in enabled.items():
         assert registry[name].enabled is True
@@ -64,7 +60,12 @@ def test_default_registry_exposes_only_current_compact_commissioning_mappings() 
         if name != "activate_usb_for_service":
             assert registry[name].required_capability == name
 
-    assert registry["construct_pipettes"].requires_hardware_ready is True
+    assert registry["initialize_oem_environment"].requires_hardware_ready is False
+    assert registry["initialize_oem_environment"].required_lifecycle_states == (
+        ("constructor_pipette_stage", "not_run"),
+        ("initialization_without_motion", "blocked"),
+        ("initial_check", "blocked"),
+    )
     assert registry["activate_usb_for_service"].required_capability is None
     assert registry["activate_usb_for_service"].requires_runtime_inactive is True
 
@@ -74,32 +75,30 @@ def test_default_registry_exposes_only_current_compact_commissioning_mappings() 
         assert "online contract" in registry[name].disabled_reason.lower()
 
 
-def test_current_commissioning_command_payloads_are_typed_and_initial_check_requires_ack() -> None:
+def test_current_commissioning_command_payloads_are_typed_and_oem_startup_requires_ack() -> None:
     parse, _ = _load()
 
     for name in (
         "activate_usb_for_service",
         "collect_hardware_snapshot",
-        "construct_pipettes",
-        "initialize_without_motion",
     ):
         request = parse({"command": name, "expected_generation": 3, "idempotency_key": f"{name}-3"})
         assert request.command == name
 
     live = parse({
-        "command": "run_initial_check",
+        "command": "initialize_oem_environment",
         "expected_generation": 3,
-        "idempotency_key": "initial-check-3",
+        "idempotency_key": "oem-startup-3",
         "mode": "live",
         "operator_ack": "INITIALIZE",
     })
-    assert live.command == "run_initial_check"
+    assert live.command == "initialize_oem_environment"
 
     with pytest.raises(ValidationError):
         parse({
-            "command": "run_initial_check",
+            "command": "initialize_oem_environment",
             "expected_generation": 3,
-            "idempotency_key": "initial-check-bad",
+            "idempotency_key": "oem-startup-bad",
             "mode": "live",
             "operator_ack": "YES",
         })

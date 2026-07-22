@@ -77,8 +77,8 @@ test('server-admitted query-only snapshot remains available to recover stale or 
     assert.equal(isBioXpCommandAvailable(admitted, 'collect_hardware_snapshot', 'HARDWARE NOT READY'), true);
     assert.equal(isBioXpCommandAvailable(admitted, 'collect_hardware_snapshot', 'STALE'), true);
     assert.equal(isBioXpCommandAvailable(admitted, 'collect_hardware_snapshot', 'UNKNOWN'), true);
-    assert.equal(isBioXpCommandAvailable(admitted, 'construct_pipettes', 'HARDWARE NOT READY'), false);
-    assert.equal(isBioXpCommandAvailable(admitted, 'construct_pipettes', 'STALE'), false);
+    assert.equal(isBioXpCommandAvailable(admitted, 'initialize_oem_environment', 'HARDWARE NOT READY'), false);
+    assert.equal(isBioXpCommandAvailable(admitted, 'initialize_oem_environment', 'STALE'), false);
     assert.equal(isBioXpCommandAvailable(undefined, 'collect_hardware_snapshot', 'READY'), false);
 });
 
@@ -90,7 +90,7 @@ test('server-admitted USB activation remains available before runtime readiness 
 });
 
 test('server admission is authoritative when display-only hardware freshness is stale', () => {
-    const admitted = ['initialize_without_motion'];
-    assert.equal(isBioXpCommandAvailable(admitted, 'initialize_without_motion', 'RUNTIME READY'), true);
-    assert.equal(isBioXpCommandAvailable([], 'initialize_without_motion', 'READY'), false);
+    const admitted = ['initialize_oem_environment'];
+    assert.equal(isBioXpCommandAvailable(admitted, 'initialize_oem_environment', 'RUNTIME READY'), true);
+    assert.equal(isBioXpCommandAvailable([], 'initialize_oem_environment', 'READY'), false);
 });
