@@ -147,7 +147,7 @@ test('quick views map semantic sections onto concrete overlay and color modes', 
     ]);
 });
 
-test('designability quick view falls back to frustration coloring when no PSCE profile exists', () => {
+test('designability quick view never reactivates retired legacy frustration coloring', () => {
     const quickViews = buildStructureViewerQuickViews({
         confidenceLabel: 'Design Confidence',
         hasResidueConfidence: false,
@@ -174,7 +174,7 @@ test('designability quick view falls back to frustration coloring when no PSCE p
             label: 'Designability',
             sectionId: 'designability',
             overlayView: 'metrics',
-            colorMode: 'frustration',
+            colorMode: 'default',
         },
     ]);
 });

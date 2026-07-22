@@ -231,11 +231,6 @@ function plddtColor(value: number): { r: number; g: number; b: number } {
     return { r: 249, g: 115, b: 22 };
 }
 
-function frustrationColor(value: number): { r: number; g: number; b: number } {
-    if (value <= -1.0) return { r: 239, g: 68, b: 68 };
-    if (value >= 0.58) return { r: 34, g: 197, b: 94 };
-    return { r: 148, g: 163, b: 184 };
-}
 
 const CHAIN_ACCENT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
 const LEGACY_ANALYTICS_ENABLED = false;
@@ -985,22 +980,6 @@ export default function StructureViewerPane({
         });
     }, [chainMetrics, conforNetsDefaultChainId, conforNetsScalarPlddt, conforNetsUsesScalarPlddtFallback, effectiveColorMode, plddtProfile, residueMetricNumbers, rfaModifiableResidueMask]);
 
-    const frustrationResidueColors = (() => {
-        if (effectiveColorMode !== 'frustration' || !selectedDesign?.frustration_residues?.length) return undefined;
-        const colorMap = new Map<string, { r: number; g: number; b: number }>();
-        for (const residue of selectedDesign.frustration_residues) {
-            const chainId = residue.chain;
-            if (!chainId) continue;
-            const residueNumbers = chainMetrics[chainId]?.residue_numbers || [];
-            const actualResidueNumber =
-                residueNumbers[residue.pos] ??
-                residueNumbers[residue.pos - 1] ??
-                (typeof residue.pos === 'number' ? residue.pos + 1 : null);
-            if (actualResidueNumber == null) continue;
-            colorMap.set(residueColorKey(chainId, actualResidueNumber), frustrationColor(residue.frust));
-        }
-        return colorMap.size > 0 ? colorMap : undefined;
-    })();
 
     const fampnnPsceResidueColors = (() => {
         if (effectiveColorMode !== 'fampnn_psce' || !hasFampnnPsceProfile) return undefined;
@@ -1054,27 +1033,7 @@ export default function StructureViewerPane({
                 values,
             });
         }
-        if (effectiveColorMode === 'frustration' && frustrationResidueColors && selectedDesign?.frustration_residues) {
-            const values = new Map<string, number>();
-            for (const residue of selectedDesign.frustration_residues) {
-                const residueNumbers = chainMetrics[residue.chain]?.residue_numbers || [];
-                const residueNumber = residueNumbers[residue.pos] ?? residueNumbers[residue.pos - 1] ?? residue.pos + 1;
-                values.set(residueColorKey(residue.chain, residueNumber), residue.frust);
-            }
-            return buildMetricLayerFromExplicitMaps({
-                descriptor: {
-                    id: 'frustration-index',
-                    label: 'Frustration index',
-                    semanticType: 'energy',
-                    units: 'dimensionless',
-                    direction: 'higher_is_better',
-                    source: 'BioModStack design analysis',
-                    provenance: { source, method: 'FrustraMPNN' },
-                },
-                colors: frustrationResidueColors,
-                values,
-            });
-        }
+
         if (effectiveColorMode === 'fampnn_psce' && fampnnPsceResidueColors) {
             const values = new Map<string, number>();
             for (const chainId of fampnnPsceChainIds) {
@@ -1099,7 +1058,7 @@ export default function StructureViewerPane({
             });
         }
         return undefined;
-    }, [bfactorLabel, chainMetrics, conforNetsDefaultChainId, conforNetsScalarPlddt, effectiveColorMode, fampnnPsceChainIds, fampnnPsceChains, fampnnPsceResidueColors, frustrationResidueColors, plddtProfile, plddtResidueColors, residueMetricNumbers, selectedDesign]);
+    }, [bfactorLabel, chainMetrics, conforNetsDefaultChainId, conforNetsScalarPlddt, effectiveColorMode, fampnnPsceChainIds, fampnnPsceChains, fampnnPsceResidueColors, plddtProfile, plddtResidueColors, residueMetricNumbers, selectedDesign]);
 
     const pairMetricLayers = useMemo<readonly MetricLayer[]>(() => {
         const layers: MetricLayer[] = [];
@@ -1255,23 +1214,6 @@ export default function StructureViewerPane({
         [pairMetricLayers, structureScalarMetricLayers, subunitMeanPlddtLayer],
     );
 
-    const topFrustratedResidues = (() => {
-        if (!selectedDesign?.frustration_residues?.length) return [];
-        return [...selectedDesign.frustration_residues]
-            .sort((a, b) => a.frust - b.frust)
-            .slice(0, 8)
-            .map((residue) => {
-                const residueNumbers = chainMetrics[residue.chain]?.residue_numbers || [];
-                const actualResidueNumber =
-                    residueNumbers[residue.pos] ??
-                    residueNumbers[residue.pos - 1] ??
-                    (typeof residue.pos === 'number' ? residue.pos + 1 : residue.pos);
-                return {
-                    ...residue,
-                    actualResidueNumber,
-                };
-            });
-    })();
 
     const fampnnPscePlot = useMemo<{ data: Data[]; layout: Partial<Layout> } | null>(() => {
         if (!selectedDesign || !hasFampnnPsceProfile) return null;
@@ -2586,24 +2528,7 @@ export default function StructureViewerPane({
                             <span className="text-red-400 mr-1">●</span>high (≤-1.0)
                         </span>
                     </div>
-                    {topFrustratedResidues.length > 0 && (
-                        <div className="mt-3 pt-3 border-t border-slate-700/50">
-                            <div className="text-[11px] uppercase tracking-wider text-slate-500 mb-2">Most Frustrated Positions</div>
-                            <div className="grid grid-cols-2 gap-2 text-[11px]">
-                                {topFrustratedResidues.map((residue) => (
-                                    <div
-                                        key={`${residue.chain}-${residue.actualResidueNumber}`}
-                                        className="flex items-center justify-between rounded bg-slate-900/50 px-2 py-1"
-                                    >
-                                        <span className="text-slate-300">
-                                            {residue.chain}{residue.actualResidueNumber}
-                                        </span>
-                                        <span className="font-mono text-red-300">{residue.frust.toFixed(2)}</span>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
+
                             </div>
                         )}
                     </div>

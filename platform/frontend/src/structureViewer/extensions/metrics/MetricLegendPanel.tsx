@@ -17,6 +17,7 @@ export function MetricLegendPanel({ layer, visible = true, opacity = 1, onVisibi
     const { descriptor } = layer;
     const isStructureScalar = descriptor.dimension === 'structure-scalar';
     const scalarValue = isStructureScalar ? layer.values[0]?.value : undefined;
+    const categories = Object.values(descriptor.categories ?? {});
     const missing = new Map<string, number>();
     for (const value of layer.values) {
         if (value.missingness) missing.set(value.missingness, (missing.get(value.missingness) ?? 0) + 1);
@@ -41,7 +42,17 @@ export function MetricLegendPanel({ layer, visible = true, opacity = 1, onVisibi
                     </div>
                 </div>
             )}
-            {!isStructureScalar && <div className="mt-2 h-2 rounded" style={{ background: `linear-gradient(to right, ${(descriptor.palette?.colors ?? ['#2563eb', '#f8fafc', '#dc2626']).join(', ')})` }} aria-hidden="true" />}
+            {!isStructureScalar && categories.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1" aria-label="Metric categories">
+                    {categories.map((category) => (
+                        <span key={category.label} className="inline-flex items-center gap-1 text-slate-300">
+                            <span className="h-2.5 w-2.5 rounded-sm border border-white/20" style={{ backgroundColor: category.color ?? '#64748b' }} aria-hidden="true" />
+                            {category.label}
+                        </span>
+                    ))}
+                </div>
+            )}
+            {!isStructureScalar && categories.length === 0 && <div className="mt-2 h-2 rounded" style={{ background: `linear-gradient(to right, ${(descriptor.palette?.colors ?? ['#2563eb', '#f8fafc', '#dc2626']).join(', ')})` }} aria-hidden="true" />}
             {!isStructureScalar && <label className="mt-2 flex items-center gap-2">Opacity
                 <input aria-label={`${descriptor.label} opacity`} type="range" min={0} max={1} step={0.05} value={opacity} onChange={(event) => onOpacityChange?.(Number(event.target.value))} />
             </label>}
