@@ -367,6 +367,16 @@ def _normalize_topology_include(raw: str) -> PurePosixPath:
     return path
 
 
+def _bound_engine_runtime_identity(engine: str) -> dict[str, Any] | None:
+    variable = "BMS_MD_GROMACS_SIF" if engine == "gromacs" else "BMS_MD_OPENMM_SIF"
+    default_name = "gromacs-md-2025.3.sif" if engine == "gromacs" else "openmm-md-8.5.2.sif"
+    configured = str(os.getenv(variable) or "").strip()
+    path = Path(configured) if configured else Path("/mnt/BioModStack/apptainer") / default_name
+    if not path.is_file() or path.is_symlink():
+        return None
+    return {"sif_sha256": _memoized_sif_sha256(path), "image_name": default_name}
+
+
 def _openmm_runtime_image_path() -> Path | None:
     direct = str(os.getenv("BMS_MD_OPENMM_SIF") or "").strip()
     candidates: list[Path] = []
@@ -815,6 +825,14 @@ def materialize_md_job_spec(
         chemistry_catalog=catalog,
         chemistry_view=captured_view,
     )
+    engine_runtime = _bound_engine_runtime_identity(str(normalized["engine"]))
+    if engine_runtime is None:
+        raise MDLaunchError(
+            "MD_ENGINE_RUNTIME_IDENTITY_REQUIRED",
+            "The selected molecular-dynamics engine runtime is unavailable or unidentifiable.",
+            status_code=409,
+        )
+    normalized["engine_runtime"] = engine_runtime
     published_snapshots: list[Path] = []
     try:
         contract_dir = output_dir / "inputs"

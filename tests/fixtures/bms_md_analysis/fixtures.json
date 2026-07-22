@@ -1,0 +1,93 @@
+{
+  "fixtures": [
+    {
+      "artifacts": {
+        "atom_order_manifest": {
+          "bytes": 680202,
+          "path": "gromacs_1u19_format_smoke/atom_order_manifest.json",
+          "sha256": "8b10c256a05447de0667c158ca8974a7b885fedb41f56c395ef1407973f9fbec"
+        },
+        "manifest": {
+          "bytes": 1796,
+          "path": "gromacs_1u19_format_smoke/manifest.json",
+          "sha256": "7a619fb0c3a555c1bc349f9ee29fc66c71c6a7d0a5f76d97d2244bb7c0205750"
+        },
+        "topology": {
+          "bytes": 382788,
+          "path": "gromacs_1u19_format_smoke/system.gro",
+          "sha256": "8eec93cb0b45c43abc50ec40e49f983e2c2484671077777db19bf7340c068c76"
+        },
+        "trajectory": {
+          "bytes": 126628,
+          "path": "gromacs_1u19_format_smoke/trajectory.xtc",
+          "sha256": "64143da76aeeaca016569e284a02cb232c27c5128a89a7ac5bceb0c6a63b353e"
+        }
+      },
+      "format_pair": "gro_xtc",
+      "id": "gromacs_1u19_format_smoke",
+      "manifest": "gromacs_1u19_format_smoke/manifest.json"
+    },
+    {
+      "artifacts": {
+        "atom_order_manifest": {
+          "bytes": 680202,
+          "path": "pdb_dcd_1u19_format_smoke/atom_order_manifest.json",
+          "sha256": "240d9fe8ed433af5506b44bc31571c3393f23632d9ef957bd3385de03f3415f9"
+        },
+        "manifest": {
+          "bytes": 1790,
+          "path": "pdb_dcd_1u19_format_smoke/manifest.json",
+          "sha256": "04b899ac4907431d0c0b19a5a4a433cf515efca6a24514e5f5978178d33545ba"
+        },
+        "topology": {
+          "bytes": 371799,
+          "path": "pdb_dcd_1u19_format_smoke/system.pdb",
+          "sha256": "0282aacd4d69f4660e58ad979c086ca67b501618b94ca0634ed6edb7a86f968f"
+        },
+        "trajectory": {
+          "bytes": 400220,
+          "path": "pdb_dcd_1u19_format_smoke/trajectory.dcd",
+          "sha256": "e3746cb68d81c65415d2b191033569f35a104b07927351d194136dcae258777a"
+        }
+      },
+      "format_pair": "pdb_dcd",
+      "id": "pdb_dcd_1u19_format_smoke",
+      "manifest": "pdb_dcd_1u19_format_smoke/manifest.json"
+    }
+  ],
+  "provenance": {
+    "conversion": {
+      "instructions": "README.md#reproduction-command-shape-inside-the-pinned-analysis-runtime",
+      "runtime": "MDAnalysis 2.9.0",
+      "source_frames": [
+        0,
+        10,
+        20,
+        30,
+        40,
+        50
+      ]
+    },
+    "documentation": {
+      "path": "README.md",
+      "sha256": "acf2feb95134cb2c4659f36f583d48b3370d776d636e76eba8341d38cc0a6f02"
+    },
+    "license": {
+      "path": "SOURCE_LICENSE.txt",
+      "sha256": "bea5aadb9d668088f9addc68375dad6cfc78a1dc58c5466f494fcb4f719a2540"
+    },
+    "package": {
+      "archive_sha256": "09c19df1aba52965ca7fced368b0da4b57a234fb3be338cc5669cf28a0b32ea0",
+      "build": "pyh620948e_0",
+      "canonical_release_url": "https://conda.anaconda.org/conda-forge/noarch/nglview-3.1.4-pyh620948e_0.conda",
+      "name": "nglview",
+      "version": "3.1.4"
+    },
+    "source_files": {
+      "md_1u19.gro": "8eec93cb0b45c43abc50ec40e49f983e2c2484671077777db19bf7340c068c76",
+      "md_1u19.pdb": "e449c380b9eb7921910922eaa97495a1a300a4e1d4a5cdaecedba7a1843740d0",
+      "md_1u19.xtc": "8279bc6723a4b2e70d6ef3e83fbbcaeb3f981d80546ef4195b7b1d7ba5815af1"
+    }
+  },
+  "schema": "bms.md.analysis-fixtures.v1"
+}
