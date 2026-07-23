@@ -31,6 +31,7 @@ from .contracts import (
     validate_schema,
 )
 from .state_landscape_analysis import (
+    MAX_STATE_LANDSCAPE_COMPARISON_ROWS,
     StateLandscapeAnalysisError,
     validate_state_landscape_analysis_binding,
 )
@@ -43,6 +44,10 @@ RESULT_CONTRACT_BY_BACKEND = {
 }
 TERMINAL_STATES = frozenset({"completed", "failed", "cancelled"})
 RETRYABLE_STATES = frozenset({"failed", "cancelled"})
+# A state-analysis artifact cannot materialize more rows than this derivation cap.
+# Rejecting larger offsets prevents direct callers from binding unrepresentable
+# Python integers into SQLite while retaining every potentially reachable page.
+MAX_STATE_LANDSCAPE_ANALYSIS_PAGE_OFFSET = MAX_STATE_LANDSCAPE_COMPARISON_ROWS
 _RECORD_TYPES = frozenset(
     {
         "ensemble", "native_manifest", "structure_map", "landscape", "analysis",
@@ -765,7 +770,12 @@ async def paged_state_landscape_analysis_rows(
 ]:
     """Page stored state-analysis rows with a same-query lookahead for terminal pagination."""
 
-    if offset < 0 or limit < 1 or limit > 1000:
+    if (
+        offset < 0
+        or offset > MAX_STATE_LANDSCAPE_ANALYSIS_PAGE_OFFSET
+        or limit < 1
+        or limit > 1000
+    ):
         raise ConformationalPersistenceError("invalid state landscape analysis page")
     if sequence_start is not None and sequence_start < 1:
         raise ConformationalPersistenceError("invalid state landscape analysis sequence range")
