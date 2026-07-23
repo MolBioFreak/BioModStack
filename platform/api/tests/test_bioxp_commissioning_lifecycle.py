@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from typing import Any, cast
 
 
 def _startup(*, constructor="not_run", no_motion="blocked", initial="blocked"):
@@ -49,7 +50,12 @@ def test_aggregate_oem_startup_is_admitted_only_for_a_fresh_ownership_epoch():
     request = _request(7, "oem-startup-1")
     definition = DEFAULT_COMMAND_REGISTRY[request.command]
 
-    assert evaluate_command(request, definition, _context(_startup(), hardware_ready=None)).allowed
+    assert evaluate_command(request, definition, _context(_startup(), hardware_ready=True)).allowed
+    unknown_hardware = evaluate_command(
+        request, definition, _context(_startup(), hardware_ready=None)
+    )
+    assert unknown_hardware.allowed is False
+    assert "hardware readiness" in " ".join(unknown_hardware.reasons).lower()
     for startup in (
         _startup(constructor="passed", no_motion="not_run"),
         _startup(constructor="passed", no_motion="passed", initial="passed"),
@@ -193,3 +199,59 @@ def test_http_error_updates_cached_lifecycle_before_aggregate_failure_record_is_
         assert connection.observed == body
 
     asyncio.run(scenario())
+
+
+def test_production_connection_cache_unwraps_http_409_lifecycle_envelope():
+    from services.bioxp.connection import BioXpConnectionService
+
+    class Store:
+        def load(self):
+            return None
+
+        def exists(self):
+            return False
+
+    service = BioXpConnectionService(
+        cast(Any, Store()), cast(Any, object()), initial_generation=7
+    )
+    failed = _startup(constructor="failed")
+    service.observe_command_response({"detail": {"lifecycle": {"startup": failed}}})
+
+    assert service.snapshot().startup_lifecycle == failed
+
+
+def test_status_applies_fresh_epoch_predicate_used_by_execution(monkeypatch):
+    from types import SimpleNamespace
+
+    from routers.bioxp.connection import get_status
+    from services.bioxp.command_registry import DEFAULT_COMMAND_REGISTRY
+    from services.bioxp.models import BioXpSnapshot
+
+    monkeypatch.setenv("BMS_BIOXP_MUTATIONS_ENABLED", "1")
+    completed = _startup(constructor="passed", no_motion="passed", initial="passed")
+    snapshot = BioXpSnapshot(
+        configured=True,
+        active=True,
+        generation=7,
+        reachable=True,
+        runtime_ready=True,
+        hardware_ready=True,
+        capabilities=("initialize_oem_environment",),
+        observed_at=datetime.now(timezone.utc),
+        freshness_budget_seconds=30.0,
+        observation_fresh=True,
+        startup_lifecycle=completed,
+    )
+    runtime = SimpleNamespace(
+        connection=SimpleNamespace(snapshot=lambda: snapshot),
+        commands=SimpleNamespace(registry=DEFAULT_COMMAND_REGISTRY),
+        startup_warnings=(),
+        legacy_jobs=SimpleNamespace(model_dump=lambda: {}),
+    )
+
+    status = asyncio.run(get_status(cast(Any, runtime)))
+
+    assert "initialize_oem_environment" not in status["available_commands"]
+    assert "fresh ownership epoch" in status["unavailable_commands"][
+        "initialize_oem_environment"
+    ].lower()
