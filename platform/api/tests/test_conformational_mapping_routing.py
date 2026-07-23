@@ -577,6 +577,69 @@ def test_cm3_004da_state_comparison_authority_is_admitted_and_hash_bound(tmp_pat
         validate_request_params(incomplete_reference)
 
 
+@pytest.mark.parametrize(
+    ("ordered_seeds", "authority", "message"),
+    [
+        (
+            [101],
+            {"mode": "pairwise", "target_id": "target-a", "scope": "all_within_target"},
+            "at least two planned coordinates",
+        ),
+        (
+            [101, 202],
+            {
+                "mode": "reference", "target_id": "target-a", "scope": "all_other_within_target",
+                "reference_backend_coordinates": {
+                    "backend": "protenix_v2_ensemble", "target_id": "target-a",
+                    "ordered_seed": 999, "sample_index": 0,
+                },
+            },
+            "does not match exactly one planned coordinate",
+        ),
+        (
+            [101],
+            {
+                "mode": "reference", "target_id": "target-a", "scope": "all_other_within_target",
+                "reference_backend_coordinates": {
+                    "backend": "protenix_v2_ensemble", "target_id": "target-a",
+                    "ordered_seed": 101, "sample_index": 0,
+                },
+            },
+            "requires another planned coordinate",
+        ),
+    ],
+)
+def test_cm3_004daa_impossible_state_comparison_authority_is_rejected_at_admission(
+    ordered_seeds: list[int], authority: dict[str, object], message: str
+) -> None:
+    params = _request_params("protenix_v2_ensemble")
+    params["ordered_seeds"] = ordered_seeds
+    params["generated_json_ordered_seeds"] = ordered_seeds
+    params["cli_ordered_seeds"] = ordered_seeds
+    params["samples_per_seed"] = 1
+    params["state_landscape_comparison"] = authority
+
+    with pytest.raises(ConformationalMappingRequestError, match=message):
+        validate_request_params(params)
+
+
+def test_cm3_004dab_reference_state_comparison_authority_with_two_planned_coordinates_is_admitted() -> None:
+    params = _request_params("protenix_v2_ensemble")
+    params["ordered_seeds"] = [101, 202]
+    params["generated_json_ordered_seeds"] = [101, 202]
+    params["cli_ordered_seeds"] = [101, 202]
+    params["samples_per_seed"] = 1
+    params["state_landscape_comparison"] = {
+        "mode": "reference", "target_id": "target-a", "scope": "all_other_within_target",
+        "reference_backend_coordinates": {
+            "backend": "protenix_v2_ensemble", "target_id": "target-a",
+            "ordered_seed": 101, "sample_index": 0,
+        },
+    }
+
+    assert validate_request_params(params).coordinate_plan
+
+
 def test_cm3_004db_typed_submit_request_accepts_only_declared_state_comparison_authority() -> None:
     authority = {
         "mode": "pairwise",

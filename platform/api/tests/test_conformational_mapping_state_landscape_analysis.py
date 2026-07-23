@@ -475,7 +475,7 @@ async def test_cm_state_003a_ingestion_rejects_requested_analysis_that_did_not_m
 
 
 @pytest.mark.asyncio
-async def test_cm_state_004_persistence_validates_and_records_immutable_artifact(tmp_path: Path) -> None:
+async def test_cm_state_004_generic_persistence_rejects_schema_valid_state_artifact(tmp_path: Path) -> None:
     session, engine = await _session(tmp_path)
     try:
         request = {"request_id": "request-state", "request_sha256": "a" * 64, "backend": "protenix_v2_ensemble"}
@@ -487,18 +487,21 @@ async def test_cm_state_004_persistence_validates_and_records_immutable_artifact
         )
         ensemble, maps, landscapes = _sources()
         artifact = derive_state_landscape_analysis(ensemble, landscapes, maps, comparison=_pairwise())
-        await persist_derived_record(
-            session, record.request_id, record_type="state_landscape_analysis", record_key=artifact["analysis_id"], payload=artifact,
-        )
-        malformed = copy.deepcopy(artifact)
-        malformed["source_landscape_sha256"] = "not-a-sha256"
-        with pytest.raises(ConformationalPersistenceError):
+        validate_schema("cm_state_landscape_analysis_v1", artifact)
+        with pytest.raises(
+            ConformationalPersistenceError,
+            match="canonical result-bundle ingestion",
+        ):
             await persist_derived_record(
-                session, record.request_id, record_type="state_landscape_analysis", record_key="invalid", payload=malformed,
+                session,
+                record.request_id,
+                record_type="state_landscape_analysis",
+                record_key=artifact["analysis_id"],
+                payload=artifact,
             )
         await session.commit()
         stored = await session.scalar(select(ConformationalMappingRecord).where(ConformationalMappingRecord.record_type == "state_landscape_analysis"))
-        assert stored is not None and stored.payload_json == artifact
+        assert stored is None
     finally:
         await session.close()
         await engine.dispose()
