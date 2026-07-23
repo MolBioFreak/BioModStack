@@ -140,6 +140,15 @@ def test_volume_inventory_is_exact_bounded_hash_verified_and_path_contained(tmp_
         load_volume_inventory(job)
 
 
+def test_volume_inventory_rejects_tampered_map_before_publication(tmp_path: Path):
+    output = tmp_path / "job-output"
+    _, volume_path, _ = _volume_manifest(output)
+    volume_path.write_bytes(b"X" * volume_path.stat().st_size)
+
+    with pytest.raises(ViewerResourceError, match="hash mismatch"):
+        load_volume_inventory(SimpleNamespace(id="job-1", output_dir=str(output)))
+
+
 def test_volume_registration_requires_exact_canonical_identity_and_matching_volume(tmp_path: Path):
     output = tmp_path / "job-output"
     manifest, _, digest = _volume_manifest(output)

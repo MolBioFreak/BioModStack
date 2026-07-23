@@ -128,6 +128,12 @@ def _validate_volume(volume: Any, root: Path) -> dict[str, Any]:
     size = path.stat().st_size
     if size < 1 or size > MAX_ARTIFACT_BYTES or volume.get("byteLength") != size:
         raise ViewerResourceError("Volume artifact byte length mismatch")
+    digest = sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    if digest.hexdigest() != artifact_hash:
+        raise ViewerResourceError("Volume artifact hash mismatch", code="VIEWER_HASH_MISMATCH", status_code=412)
     return {**volume, "_resolved_path": str(path)}
 
 
