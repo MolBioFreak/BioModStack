@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
 
 import type { StructureSceneState, ViewerSnapshot } from '../src/structureViewer/contracts/sceneState.js';
@@ -116,6 +118,14 @@ test('supplied segmentation labels require exact hash and an acyclic hierarchy',
     assert.equal(validateVolumeSegmentation(segmentation, labelVolume).status, 'ok');
     const cycle: VolumeSegmentationV1 = { ...segmentation, labels: [{ segmentId: 1, label: null, parentSegmentId: 2, recommendedColor: null }, { segmentId: 2, label: null, parentSegmentId: 1, recommendedColor: null }] };
     assert.equal(validateVolumeSegmentation(cycle, labelVolume).status, 'unsupported');
+});
+
+test('governed volume registration can use a non-legacy structure document identity', () => {
+    const direct = readFileSync(path.resolve(process.cwd(), 'src/components/MolstarViewerImpl.tsx'), 'utf8');
+    const host = readFileSync(path.resolve(process.cwd(), 'src/structureViewer/StructureViewerHost.tsx'), 'utf8');
+    assert.match(direct, /structureDocumentId = 'primary'/);
+    assert.match(direct, /id: structureDocumentId/);
+    assert.match(host, /const documentId = viewerProps\.structureDocumentId \?\? 'primary';/);
 });
 
 test('movie export remains gated until real VP9 proof and morph warning is permanent', () => {
