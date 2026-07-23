@@ -2120,6 +2120,7 @@ export function MolBioToolkitV2() {
                                 selection={selection}
                                 selectedSequenceId={selectedSequenceId}
                                 onLoadProduct={handleLoadAssemblyProduct}
+                                onLoadSavedWorkup={loadSequence}
                             />
                         )}
                         {activePanel === 'edit' && (

@@ -2036,6 +2036,20 @@ export interface NucleotideSequenceListItem {
     updated_at: string | null;
 }
 
+export interface SavedGibsonWorkupListItem {
+    id: string;
+    name: string;
+    description: string | null;
+    length: number;
+    topology: 'circular' | 'linear';
+    engine: string | null;
+    engine_version: string | null;
+    fragment_count: number;
+    primer_count: number;
+    created_at: string;
+    updated_at: string | null;
+}
+
 export interface NucleotideSequenceCreate {
     name: string;
     description?: string;
@@ -2230,6 +2244,9 @@ export interface FetchNucleotideSequencesParams {
 
 export const fetchNucleotideSequences = (params: FetchNucleotideSequencesParams = {}) =>
     api.get<NucleotideSequenceListItem[]>('/api/sequences/', { params });
+
+export const fetchSavedGibsonWorkups = () =>
+    api.get<SavedGibsonWorkupListItem[]>('/api/sequences/assembly-workups');
 
 export const fetchNucleotideSequence = (id: string) =>
     api.get<NucleotideSequence>(`/api/sequences/${id}`);
