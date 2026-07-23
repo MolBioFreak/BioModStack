@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, ExternalResultImport, Job
@@ -18,6 +21,109 @@ from services.boltz_api_jobs import (
     process_boltz_api_job,
     queue_boltz_api_job,
 )
+from routers import boltz_api_jobs as boltz_api_router
+
+
+def _static_cli_release(version: str) -> bytes:
+    return json.dumps({
+        "tag_name": f"v{version}",
+        "assets": [{
+            "name": f"boltz-api_{version}_linux_amd64.tar.gz",
+            "browser_download_url": (
+                "https://install.boltz.bio/boltz-api/releases/"
+                f"v{version}/boltz-api_{version}_linux_amd64.tar.gz"
+            ),
+        }],
+    }).encode()
+
+
+def test_provider_capability_contract_lists_only_native_controls() -> None:
+    capabilities = boltz_api_jobs.provider_capability_contract()
+
+    assert capabilities == {
+        "contract_version": "bms.boltz_api.capabilities.v1",
+        "entities": {
+            "status": "supported",
+            "types": ["protein", "dna", "rna", "ligand_ccd", "ligand_smiles"],
+        },
+        "msa": {
+            "status": "supported",
+            "provider_default": "omit",
+            "disable_value": {"type": "empty"},
+        },
+        "num_samples": {"status": "supported", "minimum": 1, "maximum": 10},
+        "templates": {"status": "unavailable_pending_schema_verification"},
+        "unsupported_local_controls": {
+            "diffusion_sampling_steps": "unsupported",
+            "recycling_steps": "unsupported",
+            "potentials": "unsupported",
+            "denoiser_chunking": "unsupported",
+            "gpu_pinning": "unsupported",
+            "parallelism": "unsupported",
+            "oom_retry": "unsupported",
+            "conditioning": "unsupported",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_installed_cli_version_uses_version_flag_without_provider_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"boltz-api version 0.35.0\n", b""
+
+    async def fake_create_subprocess_exec(*args: object, **kwargs: object) -> FakeProcess:
+        captured["args"] = args
+        captured["env"] = kwargs["env"]
+        return FakeProcess()
+
+    monkeypatch.setenv("BOLTZ_API_KEY", "must-not-leak")
+    monkeypatch.setattr(boltz_api_jobs, "_cli_binary", lambda: "/tmp/boltz-api")
+    monkeypatch.setattr(boltz_api_jobs.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    assert await boltz_api_jobs.read_installed_cli_version() == "0.35.0"
+    assert captured["args"] == ("/tmp/boltz-api", "--version")
+    assert "BOLTZ_API_KEY" not in captured["env"]
+
+
+@pytest.mark.asyncio
+async def test_cli_update_status_is_local_read_only_until_official_feed_is_pinned(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_installed_version() -> str:
+        return "0.35.0"
+
+    monkeypatch.setattr(boltz_api_jobs, "read_installed_cli_version", fake_installed_version)
+    update = await boltz_api_jobs.get_cli_update_status()
+    assert update == {
+        "check_status": "unavailable_pending_official_feed_verification",
+        "installed_version": "0.35.0",
+        "latest_version": None,
+        "source": "boltz_api_static_cli",
+        "release_feed_url": None,
+        "release_url": None,
+        "checked_at": update["checked_at"],
+    }
+
+
+def test_status_route_includes_capabilities_and_safe_unavailable_update(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_status() -> dict:
+        return {"available": True, "cli_available": True, "credential_configured": True, "model": BOLTZ_API_MODEL, "message": "Boltz API is ready"}
+
+    async def fake_update() -> dict:
+        return {"check_status": "unavailable_pending_official_feed_verification", "installed_version": "0.35.0", "latest_version": None, "source": "boltz_api_static_cli", "release_feed_url": None, "release_url": None, "checked_at": None}
+
+    monkeypatch.setattr(boltz_api_router, "probe_provider_status", fake_status)
+    monkeypatch.setattr(boltz_api_router, "get_cli_update_status", fake_update)
+    app = FastAPI()
+    app.include_router(boltz_api_router.router, prefix="/api/jobs/boltz-api")
+    with TestClient(app) as client:
+        response = client.get("/api/jobs/boltz-api/status")
+    assert response.status_code == 200
+    assert response.json()["capabilities"]["templates"]["status"] == "unavailable_pending_schema_verification"
+    assert response.json()["cli_update"]["check_status"] == "unavailable_pending_official_feed_verification"
 
 
 def test_build_provider_input_preserves_complex_entities_and_chain_ids() -> None:

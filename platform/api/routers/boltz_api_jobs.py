@@ -17,7 +17,9 @@ from services.boltz_api_jobs import (
     BoltzApiJobError,
     build_boltz_api_input,
     estimate_boltz_api_cost,
+    get_cli_update_status,
     probe_provider_status,
+    provider_capability_contract,
     queue_boltz_api_job,
 )
 
@@ -36,7 +38,7 @@ def _provider_input(payload: BoltzApiStructureRequest) -> dict:
     return build_boltz_api_input(
         sequence=payload.sequence,
         primary_chain_id=payload.primary_chain_id,
-        complex_components=payload.complex_components,
+        complex_components=[component.model_dump(exclude_none=True) for component in payload.complex_components],
         num_samples=payload.num_samples,
         use_msa=payload.use_msa,
     )
@@ -44,7 +46,12 @@ def _provider_input(payload: BoltzApiStructureRequest) -> dict:
 
 @router.get("/status", response_model=BoltzApiProviderStatusResponse)
 async def boltz_api_status() -> BoltzApiProviderStatusResponse:
-    return BoltzApiProviderStatusResponse(**(await probe_provider_status()))
+    provider_status = await probe_provider_status()
+    return BoltzApiProviderStatusResponse(**{
+        **provider_status,
+        "capabilities": provider_capability_contract(),
+        "cli_update": await get_cli_update_status(),
+    })
 
 
 @router.post("/estimate", response_model=BoltzApiEstimateResponse)
