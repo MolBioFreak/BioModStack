@@ -12,6 +12,8 @@ import type {
 } from './conformationalMappingApi';
 import { canonicalEnsemble, requireApprovedCmResults } from './conformationalMappingSemantics';
 
+export type CanonicalStateLandscapeAnalysis = CmStateLandscapeAnalysis & { readonly content_sha256: string };
+
 const SHA256 = /^[0-9a-f]{64}$/;
 const ANALYSIS_ID = /^cm_state_landscape_analysis_[0-9a-f]{32}$/;
 const AMINO_ACIDS = new Set(['A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y']);
@@ -278,13 +280,14 @@ const validateExclusions = (value: unknown, pairs: Set<string>, comparisonTarget
  * Returns the sole immutable Phase-A state analysis without deriving or reordering
  * candidate pairs, rows, metric values, support, or exclusions for presentation.
  */
-export const canonicalStateLandscapeAnalysis = (results: CmResults): CmStateLandscapeAnalysis | null => {
+export const canonicalStateLandscapeAnalysis = (results: CmResults): CanonicalStateLandscapeAnalysis | null => {
     requireApprovedCmResults(results);
     const matches = results.records.filter((item) => item.type === 'state_landscape_analysis');
     if (matches.length === 0) return null;
     if (matches.length !== 1) throw new Error('Canonical state landscape analysis authority must exist exactly once');
 
     const record = matches[0];
+    const contentSha256 = sha(record.sha256, 'Canonical state landscape analysis record hash is malformed');
     const payload = object(record.payload, 'Canonical state landscape analysis is malformed');
     exactFields(payload, [
         'schema_name', 'schema_version', 'analysis_id', 'source_ensemble_sha256', 'source_landscape_sha256',
@@ -341,5 +344,5 @@ export const canonicalStateLandscapeAnalysis = (results: CmResults): CmStateLand
     validateRows(payload.rows, pairSet, comparisonTargetId);
     const exclusions = validateExclusions(payload.exclusion_ledger, pairSet, comparisonTargetId);
     validateSupport(payload.support_ledger, pairSet, exclusions);
-    return payload as unknown as CmStateLandscapeAnalysis;
+    return { ...payload as unknown as CmStateLandscapeAnalysis, content_sha256: contentSha256 };
 };

@@ -182,6 +182,14 @@ test('accepts one canonical pairwise state landscape analysis without reordering
     assert.deepEqual(parsed.resolved_pairs.map((pair) => pair.pair_id), ['candidate-a__candidate-b']);
 });
 
+test('retains the validated canonical state-analysis record hash for B2 projection binding', () => {
+    const value = withAnalysis();
+    const parsed = canonicalStateLandscapeAnalysis(value);
+
+    assert.ok(parsed);
+    assert.equal(parsed.content_sha256, value.records[1].sha256);
+});
+
 test('accepts a reference selector only when it binds the reference candidate and canonical pair direction', () => {
     const value = withAnalysis();
     const payload = value.records[1].payload as unknown as TestAnalysis;
