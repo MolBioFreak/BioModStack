@@ -6,7 +6,10 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from services.bioxp.errors import ConnectionStateError, ProfileStoreError, TargetPolicyError
 from services.bioxp.connection import mask_target_url
-from services.bioxp.command_policy import lifecycle_stage_reasons
+from services.bioxp.command_policy import (
+    lifecycle_stage_reasons,
+    required_lifecycle_state_reasons,
+)
 from services.bioxp.models import BioXpProfile
 from services.bioxp.runtime import BioXpRuntime
 
@@ -92,6 +95,10 @@ async def get_status(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict
             reason = "connection is not active"
         elif snapshot.command_active:
             reason = "another normal command is active"
+        elif required_reasons := required_lifecycle_state_reasons(
+            definition, snapshot.startup_lifecycle
+        ):
+            reason = "; ".join(required_reasons)
         elif lifecycle_reasons := lifecycle_stage_reasons(definition, snapshot.startup_lifecycle):
             reason = "; ".join(lifecycle_reasons)
         elif definition.requires_fresh_observation and snapshot.observation_fresh is not True:
