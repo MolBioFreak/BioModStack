@@ -4,6 +4,19 @@
 
 **Scope:** One direct BMS-owned Mol* lifecycle, real job-owned artifacts, focused tests, one live acceptance path. The work is not done until all six stages below pass.
 
+## Cross-cutting rendering-default contract
+
+Initial molecular representation is determined by serializable result/scene data, never by route, job ID, result label, or component-specific branching.
+
+1. **General default:** every non-MD structure scene starts as Mol* `polymer-cartoon`.
+2. **MD default:** an MD scene without an explicit rendering preference starts as Mol* `auto`, allowing the loaded trajectory/topology data to select the appropriate representation.
+3. **Explicit result override:** a result contract may declare `renderingProfile` as exactly `auto`, `atomic-detail`, or `polymer-cartoon`; it takes precedence for every result class.
+4. The profile is part of the authoritative, serializable `StructureSceneState`, validated at construction, preserved in snapshots, and passed once through the direct adapter.
+5. User-selected manual representation changes remain available; they are not erased by the initial default.
+6. Do not add page-specific, route-specific, workflow-specific, or job-specific representation exceptions.
+
+Acceptance: contract tests must cover non-MD cartoon default, MD automatic default, an explicit override, and snapshot preservation; a mounted Mol* test must confirm the selected initial preset reaches the direct owner.
+
 ## Current audited state
 
 Audit target: `test` at `a2eebd7b63a081cd92ef493778202bd561c78032`.
@@ -108,6 +121,7 @@ Files:
 - `platform/frontend/src/lib/api.ts`
 - `platform/frontend/src/components/MDResultsPane.tsx`
 - `platform/frontend/src/structureViewer/contracts/mdTrajectory.ts`
+- `platform/frontend/src/structureViewer/contracts/sceneState.ts`
 - `platform/frontend/src/structureViewer/runtime/MolstarEngineAdapter.ts`
 - `platform/frontend/src/structureViewer/runtime/MolstarDirectSceneEngineAdapter.ts`
 - `platform/frontend/src/structureViewer/adapters/MolstarDirectAdapter.ts`
