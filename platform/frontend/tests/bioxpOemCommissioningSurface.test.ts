@@ -29,6 +29,14 @@ test('OEM startup is one operator action while internal stage evidence remains v
     }
 });
 
+test('OEM startup uses a click-time confirmation instead of a typed acknowledgement gate', () => {
+    assert.match(cockpit, /window\.confirm/);
+    assert.match(cockpit, /Run the complete OEM non-motion startup sequence/);
+    assert.match(cockpit, /operator_ack: 'INITIALIZE'/);
+    assert.doesNotMatch(cockpit, /Type INITIALIZE to acknowledge/);
+    assert.doesNotMatch(cockpit, /oemStartupAck/);
+});
+
 test('operator receives full handler evidence and explicit non-secret mutation setup', () => {
     for (const marker of [
         'Latest Handler Result',
