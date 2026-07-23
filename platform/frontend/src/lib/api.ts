@@ -67,7 +67,7 @@ export interface MDArtifact {
     name: string;
     bytes: number;
     sha256: string;
-    semantic_role: 'analysis_topology' | 'analysis_trajectory' | 'representative_structure' | null;
+    semantic_role: 'analysis_topology' | 'analysis_trajectory' | 'representative_structure' | 'trajectory_frame_map' | 'atom_order_manifest' | null;
     atom_order_identity: string | null;
     selection_method?: string | null;
     source_frame?: number | null;
@@ -89,7 +89,26 @@ export interface MDSummary {
     artifact_count: number;
     replicas: Array<{ replica: number; status: string; engine: { name?: string; version?: string; platform?: string }; performance: Record<string, number> }>;
     analysis_status: 'absent' | 'partial' | 'completed';
-    trajectory_playback: { supported: false; reason: string };
+    trajectory_playback: { supported: false; reason: string } | {
+        supported: true;
+        replicas: Array<{
+            replica: number;
+            trajectory_sha256: string;
+            frame_map_artifact_id: string;
+            frame_count: number;
+            first_source_frame: number;
+            last_source_frame: number;
+            first_time_ps: number;
+            last_time_ps: number;
+        }>;
+    };
+}
+
+export interface MDTrajectoryFrameMap {
+    schema: 'bms.md.trajectory-frame-map.v1';
+    replica: number;
+    trajectory_sha256: string;
+    frames: Array<{ display_frame: number; source_frame: number; time_ps: number; step: number }>;
 }
 
 export interface MDAnalysisPoint {

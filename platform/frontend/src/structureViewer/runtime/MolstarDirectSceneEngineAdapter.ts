@@ -12,7 +12,6 @@ import {
     viewerCancelled,
     viewerError,
     viewerOk,
-    viewerUnsupported,
     type ViewerResult,
 } from '../contracts/viewerResults.js';
 import type { EngineResidueClick, MolstarEngineAdapter, MolstarEngineDiagnostics } from './MolstarEngineAdapter.js';
@@ -103,6 +102,15 @@ export class MolstarDirectSceneEngineAdapter implements MolstarEngineAdapter {
         if (documents.status !== 'ok') return documents;
         try {
             await this.adapter.loadScene(documents.value, state);
+            if (state.molecularDynamics?.playbackCapability.supported) {
+                const loaded = await this.adapter.loadMolecularDynamics(state.molecularDynamics);
+                if (loaded.status !== 'ok') return loaded;
+                const selectedFrame = state.molecularDynamics.playback.selectedFrame;
+                if (selectedFrame) {
+                    const selected = await this.adapter.selectMolecularDynamicsDisplayFrame(selectedFrame.displayFrame);
+                    if (selected.status !== 'ok') return selected;
+                }
+            }
             if (signal.aborted) return viewerCancelled('Scene load was cancelled after engine reconciliation');
             return viewerOk(undefined);
         } catch (error) {
@@ -125,6 +133,14 @@ export class MolstarDirectSceneEngineAdapter implements MolstarEngineAdapter {
             if (loaded.status !== 'ok') return loaded;
         }
         if (signal.aborted) return viewerCancelled('Scene reconciliation was cancelled');
+        if (!documentsReloaded && reconciliation.molecularDynamicsChanged
+            && next.molecularDynamics?.playbackCapability.supported
+            && next.molecularDynamics.playback.selectedFrame) {
+            const selected = await this.adapter.selectMolecularDynamicsDisplayFrame(
+                next.molecularDynamics.playback.selectedFrame.displayFrame,
+            );
+            if (selected.status !== 'ok') return selected;
+        }
         if (documentsReloaded || reconciliation.presentationChanged || reconciliation.layerChanged
             || reconciliation.selectionChanged || reconciliation.filterChanged) {
             try {
@@ -184,13 +200,13 @@ export class MolstarDirectSceneEngineAdapter implements MolstarEngineAdapter {
         return this.adapter.getCanvasElement();
     }
 
-    async selectMDSourceFrame(_frame: MDSourceFrameRef, signal: AbortSignal): Promise<ViewerResult<void>> {
+    async selectMDSourceFrame(frame: MDSourceFrameRef, signal: AbortSignal): Promise<ViewerResult<void>> {
         if (signal.aborted) return viewerCancelled('MD frame selection was cancelled');
-        return viewerUnsupported('Molstar 4.5 XTC/DCD playback is not enabled without exercised format proof', 'trajectories');
+        return this.adapter.selectMolecularDynamicsDisplayFrame(frame.displayFrame);
     }
 
-    async setMDPlayback(_playback: MDPlaybackState, signal: AbortSignal): Promise<ViewerResult<void>> {
+    async setMDPlayback(playback: MDPlaybackState, signal: AbortSignal): Promise<ViewerResult<void>> {
         if (signal.aborted) return viewerCancelled('MD playback update was cancelled');
-        return viewerUnsupported('Molstar 4.5 XTC/DCD playback is not enabled without exercised format proof', 'trajectories');
+        return this.adapter.setMolecularDynamicsPlayback(playback);
     }
 }
