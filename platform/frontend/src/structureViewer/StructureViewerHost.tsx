@@ -101,6 +101,7 @@ export default function StructureViewerHost({
     showComplexWorkbench = true,
     showM6Workbench = true,
     jobId,
+    artifactJobId: requestedArtifactJobId,
     derivedComponents = [],
     residueMetricLayer: compatibilityLayer,
     residueColors: compatibilityColors,
@@ -110,6 +111,7 @@ export default function StructureViewerHost({
     ...viewerProps
 }: StructureViewerHostProps) {
     const documentId = viewerProps.structureDocumentId ?? 'primary';
+    const artifactJobId = requestedArtifactJobId ?? jobId;
     const [ownedStructureUrl, setOwnedStructureUrl] = useState<string | undefined>(undefined);
     useEffect(() => {
         const owner = new ViewerResourceOwner();
@@ -349,7 +351,7 @@ export default function StructureViewerHost({
 
     return (
         <div className="relative h-full w-full" data-bms-structure-viewer-host="direct-4.5.0">
-            <MolstarViewerImpl {...viewerProps} artifactJobId={jobId} structureUrl={ownedStructureUrl ?? viewerProps.structureUrl} selections={selections} residueMetricLayer={residueMetricLayer} measurements={measurements} scenePresentation={scenePresentation} cameraResetToken={cameraResetToken} onResidueClick={handleResidueClick} onControllerReady={handleControllerReady} />
+            <MolstarViewerImpl {...viewerProps} artifactJobId={artifactJobId} structureUrl={ownedStructureUrl ?? viewerProps.structureUrl} selections={selections} residueMetricLayer={residueMetricLayer} measurements={measurements} scenePresentation={scenePresentation} cameraResetToken={cameraResetToken} onResidueClick={handleResidueClick} onControllerReady={handleControllerReady} />
             {!showMetricWorkbench && hasWorkbenchContent && onMetricWorkbenchVisibilityChange && (
                 <button
                     type="button"
