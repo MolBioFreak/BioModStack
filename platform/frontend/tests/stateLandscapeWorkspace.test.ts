@@ -89,6 +89,29 @@ test('workspace selection resets stale row and page on pair change while candida
     assert.deepEqual(changed, { selectedPairId: 'candidate-a__candidate-c', selectedStateRowKey: null, pageOffset: 0 });
 });
 
+test('candidate switches clear a prior state-row residue selection before candidate B can render it', async () => {
+    const module = await workspaceModule();
+    assert.ok(module, 'C2 workspace module must exist');
+    const clearForCandidate = module!.clearStateLandscapeResidueSelectionForCandidate as ((candidateId: string) => unknown) | undefined;
+    assert.equal(typeof clearForCandidate, 'function');
+
+    const selectedFromA = {
+        selectedCandidateId: 'candidate-a',
+        residueSelections: [{ documentId: 'primary', authAsymId: 'A', authSeqId: 42 }],
+        pendingCandidateId: 'candidate-a',
+        residueSelectionReason: null,
+    };
+    const inspectedB = clearForCandidate!('candidate-b') as typeof selectedFromA;
+    assert.deepEqual(inspectedB, {
+        selectedCandidateId: 'candidate-b', residueSelections: [], pendingCandidateId: null, residueSelectionReason: null,
+    }, 'Inspect B must not carry A residue identity into B');
+    const manuallySelectedB = clearForCandidate!('candidate-b') as typeof selectedFromA;
+    assert.deepEqual(manuallySelectedB, {
+        selectedCandidateId: 'candidate-b', residueSelections: [], pendingCandidateId: null, residueSelectionReason: null,
+    }, 'manual candidate selection must also start without a stale residue identity');
+    assert.notDeepEqual(inspectedB.residueSelections, selectedFromA.residueSelections);
+});
+
 test('workspace hides its lens and does not fetch a B2 projection without a canonical authority', async () => {
     const module = await workspaceModule();
     assert.ok(module, 'C2 workspace module must exist');

@@ -29,3 +29,17 @@ test('state-analysis panel renders pair rail, exact residue inspector, unavailab
     }));
     for (const text of ['State-analysis pairs', 'A: candidate-a', 'Inspect A', 'A:42', 'Unavailable: missing_slot', 'Docked residue inspector']) assert.match(html, new RegExp(text));
 });
+
+test('state-analysis renders a fail-closed availability alert for malformed and failed B2 summaries', async () => {
+    const panelModule = await import('../src/components/conformationalMapping/StateLandscapeWorkspacePanel.js').catch(() => null);
+    assert.ok(panelModule, 'C2 state-analysis panel must exist');
+    const Alert = panelModule!.StateLandscapeStatusAlert as React.ComponentType<{ error: string | null | undefined }> | undefined;
+    assert.equal(typeof Alert, 'function');
+
+    for (const error of ['State-analysis B2 projection does not bind canonical authority', 'State-analysis summary request failed with HTTP 503']) {
+        const html = renderToStaticMarkup(React.createElement(Alert!, { error }));
+        assert.match(html, /role="alert"/);
+        assert.match(html, /State analysis is unavailable/);
+        assert.match(html, new RegExp(error));
+    }
+});

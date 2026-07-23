@@ -259,6 +259,13 @@ export const selectStateLandscapeWorkspacePair = (_state: StateLandscapeWorkspac
 export const selectStateLandscapeWorkspaceRow = (state: StateLandscapeWorkspaceState, selectedStateRowKey: string): StateLandscapeWorkspaceState => ({ ...state, selectedStateRowKey });
 /** Candidate inspection belongs to the parent viewer; pair/residue selection intentionally stays unchanged. */
 export const inspectStateLandscapeWorkspaceCandidate = (state: StateLandscapeWorkspaceState): StateLandscapeWorkspaceState => state;
+/** A candidate switch is a hard boundary for state-analysis-derived 3D identity. */
+export const clearStateLandscapeResidueSelectionForCandidate = (selectedCandidateId: string) => ({
+    selectedCandidateId,
+    residueSelections: [] as ResidueRef[],
+    pendingCandidateId: null as string | null,
+    residueSelectionReason: null as string | null,
+});
 export const stateLandscapeRowKey = (row: Pick<CmStateLandscapeRow, 'pair_id' | 'candidate_a_id' | 'candidate_b_id' | 'identity'>): string => JSON.stringify([row.pair_id, row.candidate_a_id, row.candidate_b_id, row.identity.target_id, row.identity.entity_instance_id, row.identity.auth_asym_id, row.identity.auth_seq_id, row.identity.insertion_code, row.identity.sequence_index, row.identity.validated_wt]);
 export const stateLandscapeMetricText = (metric: CmStateLandscapeNumericMetric | CmStateLandscapeClassMetric): string => metric.status === 'unavailable' ? `Unavailable: ${metric.reason}` : `${metric.a} → ${metric.b}${'delta_b_minus_a' in metric ? ` (Δ ${metric.delta_b_minus_a})` : ` (${metric.transition})`}`;
 
