@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://biomodstack.org/schemas/conformational_mapping/cm_state_landscape_analysis_v1.schema.json",
+  "title": "BioModStack state-conditioned FrustraMPNN landscape analysis v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_name", "schema_version", "analysis_id", "source_ensemble_sha256", "source_landscape_sha256", "source_structure_map_sha256", "comparison_mode", "reference_candidate_id", "comparison_sha256", "formula_version", "formula_sha256", "policy_sha256", "rows", "support_ledger", "exclusion_ledger"],
+  "properties": {
+    "schema_name": {"const": "cm_state_landscape_analysis"},
+    "schema_version": {"const": 1},
+    "analysis_id": {"type": "string", "pattern": "^cm_state_landscape_analysis_[0-9a-f]{32}$"},
+    "source_ensemble_sha256": {"$ref": "#/$defs/sha256"},
+    "source_landscape_sha256": {"$ref": "#/$defs/sha256"},
+    "source_structure_map_sha256": {"$ref": "#/$defs/sha256"},
+    "comparison_mode": {"enum": ["reference", "pairwise"]},
+    "reference_candidate_id": {"type": ["string", "null"]},
+    "comparison_sha256": {"$ref": "#/$defs/sha256"},
+    "formula_version": {"const": "cm_state_landscape_analysis_v1"},
+    "formula_sha256": {"$ref": "#/$defs/sha256"},
+    "policy_sha256": {"$ref": "#/$defs/sha256"},
+    "rows": {"type": "array", "items": {"$ref": "#/$defs/row"}},
+    "support_ledger": {"type": "array", "items": {"$ref": "#/$defs/support"}},
+    "exclusion_ledger": {"type": "array", "items": {"$ref": "#/$defs/exclusion"}}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "aa": {"type": "string", "enum": ["A", "C", "D", "E", "F", "G", "H", "I", "K", "L", "M", "N", "P", "Q", "R", "S", "T", "V", "W", "Y"]},
+    "identity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["target_id", "entity_instance_id", "auth_asym_id", "auth_seq_id", "insertion_code", "sequence_index", "validated_wt"],
+      "properties": {
+        "target_id": {"type": "string", "minLength": 1},
+        "entity_instance_id": {"type": "string", "minLength": 1},
+        "auth_asym_id": {"type": "string", "minLength": 1},
+        "auth_seq_id": {"type": "integer"},
+        "insertion_code": {"type": "string", "maxLength": 1},
+        "sequence_index": {"type": "integer", "minimum": 1},
+        "validated_wt": {"$ref": "#/$defs/aa"}
+      }
+    },
+    "numeric_metric": {
+      "type": "object", "additionalProperties": false,
+      "required": ["a", "b", "delta_b_minus_a", "status", "reason"],
+      "properties": {
+        "a": {"type": ["number", "null"]}, "b": {"type": ["number", "null"]},
+        "delta_b_minus_a": {"type": ["number", "null"]},
+        "status": {"enum": ["ok", "unavailable"]}, "reason": {"type": ["string", "null"]}
+      }
+    },
+    "class_metric": {
+      "type": "object", "additionalProperties": false,
+      "required": ["a", "b", "transition", "status", "reason"],
+      "properties": {
+        "a": {"enum": ["high", "neutral", "minimally_frustrated", null]},
+        "b": {"enum": ["high", "neutral", "minimally_frustrated", null]},
+        "transition": {"type": ["string", "null"]},
+        "status": {"enum": ["ok", "unavailable"]}, "reason": {"type": ["string", "null"]}
+      }
+    },
+    "metrics": {
+      "type": "object", "additionalProperties": false,
+      "required": ["native_score", "high_non_native_highly_frustrated_fraction", "maximum_non_native_substitution_delta_relative_to_native", "native_class"],
+      "properties": {
+        "native_score": {"$ref": "#/$defs/numeric_metric"},
+        "high_non_native_highly_frustrated_fraction": {"$ref": "#/$defs/numeric_metric"},
+        "maximum_non_native_substitution_delta_relative_to_native": {"$ref": "#/$defs/numeric_metric"},
+        "native_class": {"$ref": "#/$defs/class_metric"}
+      }
+    },
+    "row": {
+      "type": "object", "additionalProperties": false,
+      "required": ["pair_id", "candidate_a_id", "candidate_b_id", "identity", "metrics"],
+      "properties": {
+        "pair_id": {"type": "string", "minLength": 1},
+        "candidate_a_id": {"type": "string", "minLength": 1},
+        "candidate_b_id": {"type": "string", "minLength": 1},
+        "identity": {"$ref": "#/$defs/identity"}, "metrics": {"$ref": "#/$defs/metrics"}
+      }
+    },
+    "support": {
+      "type": "object", "additionalProperties": false,
+      "required": ["pair_id", "candidate_a_id", "candidate_b_id", "eligible_row_count", "excluded_row_count"],
+      "properties": {
+        "pair_id": {"type": "string", "minLength": 1}, "candidate_a_id": {"type": "string", "minLength": 1}, "candidate_b_id": {"type": "string", "minLength": 1},
+        "eligible_row_count": {"type": "integer", "minimum": 0}, "excluded_row_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "exclusion": {
+      "type": "object", "additionalProperties": false,
+      "required": ["pair_id", "candidate_a_id", "candidate_b_id", "identity", "reason", "detail"],
+      "properties": {
+        "pair_id": {"type": "string", "minLength": 1}, "candidate_a_id": {"type": "string", "minLength": 1}, "candidate_b_id": {"type": "string", "minLength": 1},
+        "identity": {"anyOf": [{"$ref": "#/$defs/identity"}, {"type": "null"}]},
+        "reason": {"enum": ["identity_mismatch", "missing_map", "missing_row", "missing_slot", "wt_mismatch", "nonfinite_or_unavailable_slot", "provenance_mismatch", "candidate_analysis_unavailable"]},
+        "detail": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

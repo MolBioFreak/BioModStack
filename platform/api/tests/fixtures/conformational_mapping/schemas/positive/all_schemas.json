@@ -402,6 +402,23 @@
     "ranking_policy": {},
     "clash_records": []
   },
+  "cm_state_landscape_analysis_v1": {
+    "schema_name": "cm_state_landscape_analysis",
+    "schema_version": 1,
+    "analysis_id": "cm_state_landscape_analysis_0123456789abcdef0123456789abcdef",
+    "source_ensemble_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "source_landscape_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "source_structure_map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "comparison_mode": "pairwise",
+    "reference_candidate_id": null,
+    "comparison_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "formula_version": "cm_state_landscape_analysis_v1",
+    "formula_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "policy_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "rows": [],
+    "support_ledger": [],
+    "exclusion_ledger": []
+  },
   "cm_mutagenesis_handoff_v1": {
     "schema_name": "cm_mutagenesis_handoff",
     "schema_version": 1,
