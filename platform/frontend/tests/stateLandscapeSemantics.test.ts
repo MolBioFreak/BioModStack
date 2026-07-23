@@ -14,7 +14,7 @@ const candidate = (candidateId: string, sampleIndex: number) => ({
     candidate_id: candidateId,
     backend_coordinates: coordinate(sampleIndex),
     authoritative_structure_path: `native/${candidateId}/structure.cif`,
-    authoritative_structure_sha256: sha(candidateId === 'candidate-a' ? 'b' : 'c'),
+    authoritative_structure_sha256: sha(candidateId === 'candidate-a' ? 'b' : candidateId === 'candidate-b' ? 'c' : 'd'),
     sidecar_paths: [`native/${candidateId}/confidence.json`, `native/${candidateId}/full-data.json`],
 });
 
@@ -31,6 +31,10 @@ const ensemble = {
 
 const numericMetric = () => ({ a: 1.25, b: 2.5, delta_b_minus_a: 1.25, status: 'ok' as const, reason: null });
 const classMetric = () => ({ a: 'neutral', b: 'high', transition: 'neutral_to_high', status: 'ok', reason: null });
+const exclusionIdentity = (sequenceIndex: number) => ({
+    target_id: 'target-a', entity_instance_id: 'copy-1', auth_asym_id: 'A', auth_seq_id: sequenceIndex,
+    insertion_code: '', sequence_index: sequenceIndex, validated_wt: 'A',
+});
 
 interface TestNumericMetric {
     a: number | null;
@@ -117,6 +121,57 @@ const withAnalysis = (): CmResults => {
     return value;
 };
 
+const withTwoResolvedPairAnalysis = (): CmResults => {
+    const value = withAnalysis();
+    const ensemblePayload = value.records[0].payload as unknown as {
+        expected_cardinality: number;
+        expected_coordinates: Array<ReturnType<typeof coordinate>>;
+        candidates: Array<ReturnType<typeof candidate>>;
+    };
+    ensemblePayload.expected_cardinality = 3;
+    ensemblePayload.expected_coordinates.push(coordinate(2));
+    ensemblePayload.candidates.push(candidate('candidate-c', 2));
+
+    const payload = value.records[1].payload as unknown as TestAnalysis;
+    payload.comparison_mode = 'reference';
+    payload.comparison_scope = 'all_other_within_target';
+    payload.reference_candidate_id = 'candidate-a';
+    payload.reference_backend_coordinates = coordinate(0);
+    payload.resolved_pairs = [
+        { pair_id: 'candidate-a__candidate-b', candidate_a_id: 'candidate-a', candidate_b_id: 'candidate-b' },
+        { pair_id: 'candidate-a__candidate-c', candidate_a_id: 'candidate-a', candidate_b_id: 'candidate-c' },
+    ];
+    payload.rows.push({
+        ...structuredClone(payload.rows[0]),
+        pair_id: 'candidate-a__candidate-c', candidate_b_id: 'candidate-c',
+    });
+    payload.support_ledger = [
+        {
+            pair_id: 'candidate-a__candidate-b', candidate_a_id: 'candidate-a', candidate_b_id: 'candidate-b',
+            eligible_row_count: 1, excluded_row_count: 1,
+        },
+        {
+            pair_id: 'candidate-a__candidate-c', candidate_a_id: 'candidate-a', candidate_b_id: 'candidate-c',
+            eligible_row_count: 1, excluded_row_count: 2,
+        },
+    ];
+    payload.exclusion_ledger = [
+        {
+            pair_id: 'candidate-a__candidate-b', candidate_a_id: 'candidate-a', candidate_b_id: 'candidate-b',
+            identity: exclusionIdentity(43), reason: 'missing_row', detail: 'residue is absent from one candidate landscape',
+        },
+        {
+            pair_id: 'candidate-a__candidate-c', candidate_a_id: 'candidate-a', candidate_b_id: 'candidate-c',
+            identity: exclusionIdentity(43), reason: 'missing_row', detail: 'residue is absent from one candidate landscape',
+        },
+        {
+            pair_id: 'candidate-a__candidate-c', candidate_a_id: 'candidate-a', candidate_b_id: 'candidate-c',
+            identity: exclusionIdentity(44), reason: 'missing_row', detail: 'residue is absent from one candidate landscape',
+        },
+    ];
+    return value;
+};
+
 test('accepts one canonical pairwise state landscape analysis without reordering its scientific rows', () => {
     const value = withAnalysis();
     const parsed = canonicalStateLandscapeAnalysis(value);
@@ -193,5 +248,20 @@ test('fails closed when support excluded-row count does not match its pair exclu
     const payload = value.records[1].payload as unknown as TestAnalysis;
     payload.support_ledger[0].excluded_row_count = 1;
 
+    assert.throws(() => canonicalStateLandscapeAnalysis(value), /support.*exclusion|exclusion.*support/i);
+});
+
+test('fails closed when two resolved pairs preserve aggregate exclusions but swap support counts', () => {
+    const value = withTwoResolvedPairAnalysis();
+    const payload = value.records[1].payload as unknown as TestAnalysis;
+
+    assert.ok(canonicalStateLandscapeAnalysis(value));
+    payload.support_ledger[0].excluded_row_count = 2;
+    payload.support_ledger[1].excluded_row_count = 1;
+
+    assert.equal(
+        (payload.support_ledger[0].excluded_row_count as number) + (payload.support_ledger[1].excluded_row_count as number),
+        payload.exclusion_ledger.length,
+    );
     assert.throws(() => canonicalStateLandscapeAnalysis(value), /support.*exclusion|exclusion.*support/i);
 });
