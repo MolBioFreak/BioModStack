@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import hashlib
@@ -37,6 +38,9 @@ from services.conformational_mapping.request_builder import (  # noqa: E402
     MaterializedRequest,
     materialize_trusted_internal_request,
     validate_request_params,
+)
+from services.conformational_mapping.state_landscape_analysis import (  # noqa: E402
+    MAX_STATE_LANDSCAPE_COMPARISONS,
 )
 from database import Base, ConformationalMappingRequest, ConformationalMappingSource  # noqa: E402
 from routers.conformational_mapping import SubmitRequest  # noqa: E402
@@ -256,6 +260,29 @@ def _request_params(backend: str = "protenix_v2_ensemble") -> dict[str, object]:
 
 def _flag_value(command: list[str], flag: str) -> str:
     return command[command.index(flag) + 1]
+
+
+def _configure_state_comparison_candidate_count(
+    params: dict[str, object], *, mode: str, candidate_count: int
+) -> None:
+    seeds = list(range(1, candidate_count + 1))
+    params["ordered_seeds"] = seeds
+    params["generated_json_ordered_seeds"] = seeds
+    params["cli_ordered_seeds"] = seeds
+    params["samples_per_seed"] = 1
+    authority: dict[str, object] = {
+        "mode": mode,
+        "target_id": "target-a",
+        "scope": "all_within_target" if mode == "pairwise" else "all_other_within_target",
+    }
+    if mode == "reference":
+        authority["reference_backend_coordinates"] = {
+            "backend": "protenix_v2_ensemble",
+            "target_id": "target-a",
+            "ordered_seed": 1,
+            "sample_index": 0,
+        }
+    params["state_landscape_comparison"] = authority
 
 
 def test_cm3_001_model_and_template_discoverable() -> None:
@@ -638,6 +665,38 @@ def test_cm3_004dab_reference_state_comparison_authority_with_two_planned_coordi
     }
 
     assert validate_request_params(params).coordinate_plan
+
+
+@pytest.mark.parametrize(
+    ("mode", "candidate_count", "admitted"),
+    [
+        (
+            "pairwise",
+            (1 + math.isqrt(1 + 8 * MAX_STATE_LANDSCAPE_COMPARISONS)) // 2,
+            True,
+        ),
+        (
+            "pairwise",
+            (1 + math.isqrt(1 + 8 * MAX_STATE_LANDSCAPE_COMPARISONS)) // 2 + 1,
+            False,
+        ),
+        ("reference", MAX_STATE_LANDSCAPE_COMPARISONS + 1, True),
+        ("reference", MAX_STATE_LANDSCAPE_COMPARISONS + 2, False),
+    ],
+)
+def test_cm3_004dac_state_comparison_work_cap_is_enforced_at_admission(
+    mode: str, candidate_count: int, admitted: bool
+) -> None:
+    params = _request_params("protenix_v2_ensemble")
+    _configure_state_comparison_candidate_count(
+        params, mode=mode, candidate_count=candidate_count,
+    )
+
+    if admitted:
+        assert len(validate_request_params(params).coordinate_plan) == candidate_count
+    else:
+        with pytest.raises(ConformationalMappingRequestError, match="configured maximum"):
+            validate_request_params(params)
 
 
 def test_cm3_004db_typed_submit_request_accepts_only_declared_state_comparison_authority() -> None:
