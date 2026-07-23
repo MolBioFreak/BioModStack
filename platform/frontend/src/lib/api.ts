@@ -477,12 +477,62 @@ export interface BoltzApiEstimateResponse {
     estimate_fingerprint: string;
 }
 
+export type BoltzApiEntityType = 'protein' | 'dna' | 'rna' | 'ligand_ccd' | 'ligand_smiles';
+export type BoltzApiUpdateCheckStatus =
+    | 'current'
+    | 'update_available'
+    | 'unavailable'
+    | 'unavailable_pending_official_feed_verification';
+
+export interface BoltzApiProviderCapabilities {
+    contract_version: 'bms.boltz_api.capabilities.v1';
+    entities: {
+        status: 'supported';
+        types: BoltzApiEntityType[];
+    };
+    msa: {
+        status: 'supported';
+        provider_default: 'omit';
+        disable_value: { type: 'empty' };
+    };
+    num_samples: {
+        status: 'supported';
+        minimum: number;
+        maximum: number;
+    };
+    templates: {
+        status: 'unavailable_pending_schema_verification';
+    };
+    unsupported_local_controls: {
+        diffusion_sampling_steps: 'unsupported';
+        recycling_steps: 'unsupported';
+        potentials: 'unsupported';
+        denoiser_chunking: 'unsupported';
+        gpu_pinning: 'unsupported';
+        parallelism: 'unsupported';
+        oom_retry: 'unsupported';
+        conditioning: 'unsupported';
+    };
+}
+
+export interface BoltzApiCliUpdateStatus {
+    check_status: BoltzApiUpdateCheckStatus;
+    installed_version: string | null;
+    latest_version: string | null;
+    source: 'boltz_api_static_cli';
+    release_feed_url: string | null;
+    release_url: string | null;
+    checked_at: string | null;
+}
+
 export interface BoltzApiProviderStatus {
     available: boolean;
     cli_available: boolean;
     credential_configured: boolean;
     model: string;
     message: string;
+    capabilities: BoltzApiProviderCapabilities;
+    cli_update: BoltzApiCliUpdateStatus;
 }
 
 export const fetchBoltzApiProviderStatus = () => (
