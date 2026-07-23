@@ -631,6 +631,10 @@ class ConformationalMappingStateLandscapeAnalysisPair(Base):
 
     __tablename__ = "conformational_mapping_state_landscape_analysis_pairs"
     __table_args__ = (
+        UniqueConstraint(
+            "request_id", "analysis_id", "pair_id", "candidate_a_id", "candidate_b_id",
+            name="uq_cm_state_analysis_pair_candidates",
+        ),
         ForeignKeyConstraint(
             ("request_id", "analysis_id"),
             (
@@ -662,6 +666,24 @@ class ConformationalMappingStateLandscapeAnalysisRow(Base):
             (
                 "conformational_mapping_state_landscape_analysis_headers.request_id",
                 "conformational_mapping_state_landscape_analysis_headers.analysis_id",
+            ),
+        ),
+        ForeignKeyConstraint(
+            ("request_id", "analysis_id", "pair_id"),
+            (
+                "conformational_mapping_state_landscape_analysis_pairs.request_id",
+                "conformational_mapping_state_landscape_analysis_pairs.analysis_id",
+                "conformational_mapping_state_landscape_analysis_pairs.pair_id",
+            ),
+        ),
+        ForeignKeyConstraint(
+            ("request_id", "analysis_id", "pair_id", "candidate_a_id", "candidate_b_id"),
+            (
+                "conformational_mapping_state_landscape_analysis_pairs.request_id",
+                "conformational_mapping_state_landscape_analysis_pairs.analysis_id",
+                "conformational_mapping_state_landscape_analysis_pairs.pair_id",
+                "conformational_mapping_state_landscape_analysis_pairs.candidate_a_id",
+                "conformational_mapping_state_landscape_analysis_pairs.candidate_b_id",
             ),
         ),
     )
