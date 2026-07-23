@@ -102,7 +102,7 @@ export class MolstarDirectSceneEngineAdapter implements MolstarEngineAdapter {
         const documents = documentsForDirectMolstar(state);
         if (documents.status !== 'ok') return documents;
         try {
-            await this.adapter.loadScene(documents.value);
+            await this.adapter.loadScene(documents.value, state);
             if (signal.aborted) return viewerCancelled('Scene load was cancelled after engine reconciliation');
             return viewerOk(undefined);
         } catch (error) {

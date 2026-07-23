@@ -30,6 +30,7 @@ import { createDirectMolstarEngineOwner } from '../runtime/createDirectMolstarEn
 import type { MolstarEngineOwner } from '../runtime/MolstarEngineOwner';
 import { assessMeasurement, type ViewerMeasurement } from '../contracts/measurements';
 import type { StructureCameraState, StructureComponentType } from '../contracts/scenePresentation';
+import { resolveSceneRenderingProfile, type StructureSceneState } from '../contracts/sceneState';
 import {
     absoluteContourValue,
     type SpatialVolumeDescriptorV1,
@@ -356,7 +357,10 @@ export class MolstarDirectAdapter {
         this.residueClickHandler = handler;
     }
 
-    loadScene(documents: readonly MolstarDirectDocument[]): Promise<void> {
+    loadScene(
+        documents: readonly MolstarDirectDocument[],
+        scene: Pick<StructureSceneState, 'molecularDynamics' | 'renderingProfile'>,
+    ): Promise<void> {
         this.requirePlugin();
         const generation = ++this.sceneGeneration;
         this.presentationGeneration += 1;
@@ -397,7 +401,7 @@ export class MolstarDirectAdapter {
                             ? { name: 'assembly', params: { id: document.assemblyId } }
                             : { name: 'model', params: {} },
                         showUnitcell: false,
-                        representationPreset: 'atomic-detail',
+                        representationPreset: resolveSceneRenderingProfile(scene),
                     });
                     this.assertSceneCurrent(generation);
                     for (const entry of plugin.managers.structure.hierarchy.current.structures) {

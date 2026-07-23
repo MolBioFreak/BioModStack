@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const ownerStats = vi.hoisted(() => ({ initialized: 0, disposed: 0, live: 0, maximumLive: 0 }));
+const ownerStats = vi.hoisted(() => ({ initialized: 0, disposed: 0, live: 0, maximumLive: 0, representationPresets: [] as string[] }));
 vi.mock('../../src/structureViewer/runtime/createDirectMolstarEngineOwner', () => ({
     createDirectMolstarEngineOwner: () => {
         let disposed = false;
@@ -24,7 +24,14 @@ vi.mock('../../src/structureViewer/runtime/createDirectMolstarEngineOwner', () =
                         behaviors: { interaction: { click: { subscribe: () => ({ unsubscribe: () => undefined }) } } },
                         builders: {
                             data: { download: async () => ({}) },
-                            structure: { parseTrajectory: async () => ({}), hierarchy: { applyPreset: async () => undefined } },
+                            structure: {
+                                parseTrajectory: async () => ({}),
+                                hierarchy: {
+                                    applyPreset: async (_trajectory: unknown, _preset: string, params: { representationPreset?: string }) => {
+                                        if (params.representationPreset) ownerStats.representationPresets.push(params.representationPreset);
+                                    },
+                                },
+                            },
                         },
                         clear: async () => undefined,
                     },
@@ -76,7 +83,7 @@ afterEach(() => { document.body.replaceChildren(); });
 
 describe('mounted MD results and sole Molstar route lifecycle', () => {
     it('tears down A before B, isolates stale A cache updates, switches replicas, and disposes the sole host', async () => {
-        Object.assign(ownerStats, { initialized: 0, disposed: 0, live: 0, maximumLive: 0 });
+        Object.assign(ownerStats, { initialized: 0, disposed: 0, live: 0, maximumLive: 0, representationPresets: [] });
         const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
         seedJob(client, 'job-a', 'A');
         seedJob(client, 'job-b', 'B', 2);
@@ -101,6 +108,7 @@ describe('mounted MD results and sole Molstar route lifecycle', () => {
             await Promise.resolve();
         });
         await waitForSoleHost();
+        expect(ownerStats.representationPresets).toContain('auto');
         const paneA = container.querySelector('[data-bms-result-pane="molecular-dynamics"]');
         expect(paneA).toBeTruthy();
         await renderJob('job-b');
