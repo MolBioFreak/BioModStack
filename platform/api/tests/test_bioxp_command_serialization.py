@@ -160,6 +160,49 @@ def test_idempotency_returns_structured_prior_result_without_redelivery() -> Non
     asyncio.run(scenario())
 
 
+def test_activation_idempotent_replay_precedes_changed_runtime_admission() -> None:
+    from services.bioxp.command_coordinator import CommandDeniedError
+
+    _, Coordinator, parse, registry, Snapshot = _load()
+
+    class ActivatingClient:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.connection: Any = None
+
+        async def request(self, *_: object, **__: object):
+            self.calls += 1
+            self.connection._snapshot = self.connection._snapshot.model_copy(update={"runtime_ready": True})
+            return {"acknowledged": True, "ok": True}
+
+    async def scenario() -> None:
+        client = ActivatingClient()
+        snapshot = _ready_snapshot(Snapshot).model_copy(
+            update={"runtime_ready": False, "hardware_ready": None, "capabilities": ()}
+        )
+        connection = FakeConnection(snapshot, client)
+        client.connection = connection
+        coordinator = Coordinator(connection, registry)
+        request = parse({
+            "command": "activate_usb_for_service",
+            "expected_generation": 4,
+            "idempotency_key": "activate-replay",
+        })
+
+        first = await coordinator.execute(request, mutations_enabled=True)
+        second = await coordinator.execute(request, mutations_enabled=True)
+
+        assert second == first
+        assert client.calls == 1
+
+        connection._snapshot = connection._snapshot.model_copy(update={"generation": 5})
+        with pytest.raises(CommandDeniedError, match="generation"):
+            await coordinator.execute(request, mutations_enabled=True)
+        assert client.calls == 1
+
+    asyncio.run(scenario())
+
+
 def test_idempotent_replay_does_not_redeliver() -> None:
     _, Coordinator, parse, registry, Snapshot = _load()
 

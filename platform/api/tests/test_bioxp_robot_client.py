@@ -104,6 +104,8 @@ def test_robot_client_routes_only_current_compact_commissioning_contracts() -> N
     )
     client = BioXpRobotClient(target, transport=RecordingTransport())
 
+    assert client.routes["activate_usb_for_service"][:2] == ("POST", "/oem/runtime/activate_service")
+    assert client.routes["activate_usb_for_service"][2] >= 90.0
     assert client.routes["collect_hardware_snapshot"][:2] == ("POST", "/hardware/snapshot/collect")
     assert client.routes["initialize_oem_environment"][:2] == ("POST", "/oem/startup/initialize_environment")
     assert client.routes["initialize_oem_environment"][2] >= 460.0
