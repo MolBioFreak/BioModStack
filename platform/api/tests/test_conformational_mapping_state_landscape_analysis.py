@@ -12,7 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from database import Base, ConformationalMappingRecord, Job
-from services.conformational_mapping.contracts import AA_ORDER, canonical_json_bytes, canonical_sha256, validate_schema
+from services.conformational_mapping.contracts import (
+    AA_ORDER,
+    canonical_json_bytes,
+    canonical_sha256,
+    request_sha256,
+    validate_schema,
+)
 from services.conformational_mapping.persistence import (
     ConformationalPersistenceError,
     ingest_result_bundle,
@@ -138,6 +144,39 @@ def _pairwise() -> dict:
             {"pair_id": "state-a__state-b", "candidate_a_id": "state-a", "candidate_b_id": "state-b"},
         ],
     }
+
+
+def test_cm_state_000_generic_fixture_omits_state_authority_and_a_coherent_chain_binds() -> None:
+    fixture_path = Path(__file__).parent / "fixtures" / "conformational_mapping" / "schemas" / "positive" / "all_schemas.json"
+    generic_fixture = json.loads(fixture_path.read_text())
+
+    assert "state_landscape_comparison" not in generic_fixture["cm_request_v1"]
+    assert "cm_state_landscape_analysis_v1" not in generic_fixture
+
+    request = dict(generic_fixture["cm_request_v1"])
+    request["state_landscape_comparison"] = {
+        "mode": "pairwise",
+        "target_id": "target-a",
+        "scope": "all_within_target",
+    }
+    request["request_sha256"] = request_sha256(request)
+    validate_schema("cm_request_v1", request)
+    ensemble, maps, landscapes = _sources()
+    artifact = state_landscape_analysis.derive_state_landscape_analysis_for_request(
+        request,
+        ensemble,
+        landscapes,
+        maps,
+    )
+
+    assert artifact is not None
+    state_landscape_analysis.validate_state_landscape_analysis_binding(
+        request,
+        ensemble,
+        landscapes,
+        maps,
+        artifact,
+    )
 
 
 def test_cm_state_000_explicit_pairwise_authority_ignores_resampling_shaped_cross_target_candidates() -> None:
@@ -429,7 +468,6 @@ async def test_cm_state_003a_ingestion_rejects_requested_analysis_that_did_not_m
 
     fixture_path = Path(__file__).parent / "fixtures" / "conformational_mapping" / "schemas" / "positive" / "all_schemas.json"
     bundle = json.loads(fixture_path.read_text())
-    bundle.pop("cm_state_landscape_analysis_v1", None)
     bundle.pop("cm_mutagenesis_handoff_v1", None)
     root = tmp_path / "result"
     root.mkdir()
@@ -451,6 +489,14 @@ async def test_cm_state_003a_ingestion_rejects_requested_analysis_that_did_not_m
     session, engine = await _session(tmp_path)
     try:
         request = bundle["cm_request_v1"]
+        request["state_landscape_comparison"] = {
+            "mode": "pairwise",
+            "target_id": "target-a",
+            "scope": "all_within_target",
+        }
+        request["request_sha256"] = request_sha256(request)
+        ensemble["request_sha256"] = request["request_sha256"]
+        bundle["cm_analysis_v1"]["source_ensemble_sha256"] = canonical_sha256(ensemble)
         record = await register_prepared_request(
             session,
             job=Job(id=request["request_id"], name="state", model_id="conformational_mapping", mode="map", status="queued", params={}, created_at=datetime.utcnow()),
