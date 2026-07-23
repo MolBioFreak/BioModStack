@@ -724,6 +724,21 @@ async def paged_landscape(
 async def rollback_request_records(session: AsyncSession, request_id: str) -> None:
     """Test/failure seam for request-local rows only; never a broad rollback."""
 
+    await session.execute(
+        delete(ConformationalMappingStateLandscapeAnalysisRow).where(
+            ConformationalMappingStateLandscapeAnalysisRow.request_id == request_id
+        )
+    )
+    await session.execute(
+        delete(ConformationalMappingStateLandscapeAnalysisPair).where(
+            ConformationalMappingStateLandscapeAnalysisPair.request_id == request_id
+        )
+    )
+    await session.execute(
+        delete(ConformationalMappingStateLandscapeAnalysisHeader).where(
+            ConformationalMappingStateLandscapeAnalysisHeader.request_id == request_id
+        )
+    )
     await session.execute(delete(ConformationalMappingLandscapeRow).where(ConformationalMappingLandscapeRow.request_id == request_id))
     await session.execute(delete(ConformationalMappingArtifact).where(ConformationalMappingArtifact.request_id == request_id))
     await session.execute(delete(ConformationalMappingRecord).where(ConformationalMappingRecord.request_id == request_id))
