@@ -148,6 +148,95 @@ function EndEditor({
     );
 }
 
+type SavedWorkupRecord = Record<string, unknown>;
+
+function asWorkupRecord(value: unknown): SavedWorkupRecord | null {
+    return value !== null && typeof value === 'object' && !Array.isArray(value)
+        ? value as SavedWorkupRecord
+        : null;
+}
+
+function asWorkupRecords(value: unknown): SavedWorkupRecord[] {
+    return Array.isArray(value)
+        ? value.map(asWorkupRecord).filter((item): item is SavedWorkupRecord => item !== null)
+        : [];
+}
+
+function workupText(value: unknown, fallback = '—'): string {
+    return typeof value === 'string' || typeof value === 'number' ? String(value) : fallback;
+}
+
+function SavedGibsonWorkup({ operationParams }: { operationParams?: Record<string, unknown> | null }) {
+    if (operationParams?.mode !== 'gibson') return null;
+    const fragments = asWorkupRecords(operationParams.source_fragments ?? operationParams.fragments);
+    const junctions = asWorkupRecords(operationParams.junctions);
+    const primers = asWorkupRecords(operationParams.primers);
+    const validationNotes = Array.isArray(operationParams.validation_notes)
+        ? operationParams.validation_notes.filter((note): note is string => typeof note === 'string')
+        : [];
+    const warningValues: unknown = operationParams.design_warnings ?? operationParams.warnings;
+    const warnings = Array.isArray(warningValues)
+        ? warningValues.filter((warning): warning is string => typeof warning === 'string')
+        : [];
+
+    return (
+        <section aria-label="Saved Gibson workup" className="space-y-3 rounded-xl border border-violet-500/40 bg-violet-950/20 p-3">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                    <h5 className="font-semibold text-violet-100">Saved Gibson workup</h5>
+                    <p className="mt-1 text-xs text-violet-200/70">Read-only server-persisted design evidence for this construct.</p>
+                </div>
+                <span className="rounded-full border border-violet-400/40 px-2 py-1 text-[11px] font-medium text-violet-200">
+                    {workupText(operationParams.engine, 'Gibson')} {workupText(operationParams.engine_version, '')}
+                </span>
+            </div>
+            <div className="grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
+                <div className="rounded bg-slate-950/50 p-2"><div className="text-slate-500">Fragments</div><div className="mt-1 font-medium text-slate-100">{fragments.length}</div></div>
+                <div className="rounded bg-slate-950/50 p-2"><div className="text-slate-500">Primers</div><div className="mt-1 font-medium text-slate-100">{primers.length}</div></div>
+                <div className="rounded bg-slate-950/50 p-2"><div className="text-slate-500">Junctions</div><div className="mt-1 font-medium text-slate-100">{junctions.length}</div></div>
+                <div className="rounded bg-slate-950/50 p-2"><div className="text-slate-500">Overlap / Tm</div><div className="mt-1 font-medium text-slate-100">{workupText(operationParams.overlap)} nt / {workupText(operationParams.target_tm)} °C</div></div>
+            </div>
+            <div className="rounded bg-slate-950/50 p-2 text-xs">
+                <div className="text-slate-500">Server-selected candidate checksum</div>
+                <code className="mt-1 block break-all text-[11px] text-emerald-300">{workupText(operationParams.candidate_checksum)}</code>
+            </div>
+            <details open className="rounded border border-slate-700 bg-slate-950/30 p-2">
+                <summary className="cursor-pointer text-xs font-medium text-slate-200">Source fragments ({fragments.length})</summary>
+                <div className="mt-2 max-h-64 space-y-1 overflow-auto text-xs">
+                    {fragments.map((fragment, index) => <div key={`${workupText(fragment.fragment_id)}-${index}`} className="flex flex-wrap justify-between gap-2 border-b border-slate-800 py-1 text-slate-300">
+                        <span>{workupText(fragment.name, workupText(fragment.fragment_id))} • {workupText(fragment.preparation, 'PCR')}</span>
+                        <span className="font-mono text-slate-500">{workupText(fragment.source_start)}–{workupText(fragment.source_end)}{fragment.source_wraps_origin === true ? ' ↻' : ''}</span>
+                    </div>)}
+                </div>
+            </details>
+            <details className="rounded border border-slate-700 bg-slate-950/30 p-2">
+                <summary className="cursor-pointer text-xs font-medium text-slate-200">Validated junctions ({junctions.length})</summary>
+                <div className="mt-2 max-h-64 space-y-2 overflow-auto text-xs">
+                    {junctions.map((junction, index) => <div key={`${workupText(junction.left_fragment_id)}-${index}`} className="border-b border-slate-800 pb-2 text-slate-300">
+                        <div>{workupText(junction.left_fragment_name)} → {workupText(junction.right_fragment_name)} <span className="text-emerald-300">{workupText(junction.validation)}</span></div>
+                        <code className="block break-all text-[11px] text-slate-500">{workupText(junction.overlap_sequence)} ({workupText(junction.overlap_length)} nt)</code>
+                    </div>)}
+                </div>
+            </details>
+            <details className="rounded border border-slate-700 bg-slate-950/30 p-2">
+                <summary className="cursor-pointer text-xs font-medium text-slate-200">Generated primers ({primers.length})</summary>
+                <div className="mt-2 max-h-64 space-y-2 overflow-auto text-xs">
+                    {primers.map((primer, index) => <div key={`${workupText(primer.id)}-${index}`} className="border-b border-slate-800 pb-2">
+                        <div className="text-slate-300">{workupText(primer.fragment_name)} • {workupText(primer.direction)} • {workupText(primer.tm)} °C</div>
+                        <code className="block break-all text-[11px] text-slate-500">{workupText(primer.full_sequence)}</code>
+                    </div>)}
+                </div>
+            </details>
+            {(validationNotes.length > 0 || warnings.length > 0) && <details className="rounded border border-slate-700 bg-slate-950/30 p-2">
+                <summary className="cursor-pointer text-xs font-medium text-slate-200">Validation notes ({validationNotes.length}) / warnings ({warnings.length})</summary>
+                <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-slate-400">
+                    {[...validationNotes, ...warnings].map((note, index) => <li key={`${note}-${index}`}>{note}</li>)}
+                </ul>
+            </details>}
+        </section>
+    );
+}
+
 export function AssemblyPanel({
     sequenceData,
     selection,
@@ -363,6 +452,8 @@ export function AssemblyPanel({
                     Fragment-driven cloning workspace with explicit end or overlap contracts. Nothing is inferred from missing chemistry.
                 </p>
             </div>
+
+            <SavedGibsonWorkup operationParams={sequenceData.operationParams} />
 
             <div className="flex flex-wrap gap-2">
                 {[
