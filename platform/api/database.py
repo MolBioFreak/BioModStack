@@ -4,7 +4,7 @@ Database models and initialization for BioModStack Control Platform.
 Uses SQLAlchemy with async SQLite.
 """
 
-from sqlalchemy import Column, String, Text, Integer, Float, Boolean, DateTime, JSON, ForeignKey, ForeignKeyConstraint, UniqueConstraint, text, event
+from sqlalchemy import Column, String, Text, Integer, Float, Boolean, DateTime, Index, JSON, ForeignKey, ForeignKeyConstraint, UniqueConstraint, text, event
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.types import TypeDecorator
@@ -668,6 +668,11 @@ class ConformationalMappingStateLandscapeAnalysisRow(Base):
 
     __tablename__ = "conformational_mapping_state_landscape_analysis_rows"
     __table_args__ = (
+        Index(
+            "ix_cm_state_analysis_rows_page_order",
+            "request_id", "analysis_id", "pair_id", "target_id", "entity_instance_id",
+            "auth_asym_id", "auth_seq_id", "insertion_code", "sequence_index", "validated_wt", "id",
+        ),
         UniqueConstraint(
             "request_id", "analysis_id", "pair_id", "entity_instance_id", "auth_asym_id",
             "auth_seq_id", "insertion_code", "sequence_index", "validated_wt",

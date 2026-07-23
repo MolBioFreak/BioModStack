@@ -19,7 +19,9 @@ from database import (
     Job,
 )
 from services.conformational_mapping.persistence import (
+    ConformationalPersistenceError,
     issue_request_capability,
+    paged_state_landscape_analysis_rows,
     register_prepared_request,
 )
 
@@ -204,6 +206,33 @@ async def test_state_analysis_rows_are_bounded_ordered_filtered_and_projection_o
             with pytest.raises(HTTPException) as invalid:
                 await cm_router.state_landscape_analysis_rows("request-a", _request(token=token), session=session, **kwargs)
             assert invalid.value.status_code == 422
+    finally:
+        await session.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_state_analysis_rows_reject_oversized_offset_at_route_and_persistence_boundary(
+    tmp_path: Path,
+) -> None:
+    """The 100k-row analysis cap bounds both HTTP and direct read callers."""
+
+    session, engine = await _session(tmp_path)
+    try:
+        token = await _seed_request(session, "request-a")
+        await _seed_analysis(session, "request-a")
+        await session.commit()
+
+        with pytest.raises(HTTPException) as route_error:
+            await cm_router.state_landscape_analysis_rows(
+                "request-a", _request(token=token), offset=2**100, session=session,
+            )
+        assert route_error.value.status_code == 422
+
+        with pytest.raises(ConformationalPersistenceError, match="invalid state landscape analysis page"):
+            await paged_state_landscape_analysis_rows(
+                session, "request-a", offset=2**100,
+            )
     finally:
         await session.close()
         await engine.dispose()

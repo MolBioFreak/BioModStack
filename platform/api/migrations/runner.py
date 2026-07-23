@@ -22,6 +22,9 @@ from migrations.add_state_landscape_analysis_projection import migrate as migrat
 from migrations.enforce_state_landscape_analysis_pair_row_integrity import (
     migrate as migrate_state_landscape_analysis_pair_row_integrity,
 )
+from migrations.add_state_landscape_analysis_page_order_index import (
+    migrate as migrate_state_landscape_analysis_page_order_index,
+)
 from run_migration import migrate as migrate_stage_tracking
 
 
@@ -49,6 +52,11 @@ MIGRATIONS: List[Migration] = [
         13,
         "enforce_state_landscape_analysis_pair_row_integrity",
         migrate_state_landscape_analysis_pair_row_integrity,
+    ),
+    Migration(
+        14,
+        "add_state_landscape_analysis_page_order_index",
+        migrate_state_landscape_analysis_page_order_index,
     ),
 ]
 
