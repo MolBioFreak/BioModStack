@@ -758,8 +758,12 @@ async def paged_state_landscape_analysis_rows(
     sequence_end: int | None = None,
     offset: int = 0,
     limit: int = 200,
-) -> tuple[ConformationalMappingStateLandscapeAnalysisHeader, list[ConformationalMappingStateLandscapeAnalysisRow]]:
-    """Page stored state-analysis rows in the exact canonical artifact identity order."""
+) -> tuple[
+    ConformationalMappingStateLandscapeAnalysisHeader,
+    list[ConformationalMappingStateLandscapeAnalysisRow],
+    bool,
+]:
+    """Page stored state-analysis rows with a same-query lookahead for terminal pagination."""
 
     if offset < 0 or limit < 1 or limit > 1000:
         raise ConformationalPersistenceError("invalid state landscape analysis page")
@@ -803,8 +807,10 @@ async def paged_state_landscape_analysis_rows(
         ConformationalMappingStateLandscapeAnalysisRow.sequence_index,
         ConformationalMappingStateLandscapeAnalysisRow.validated_wt,
         ConformationalMappingStateLandscapeAnalysisRow.id,
-    ).offset(offset).limit(limit)
-    return header, list((await session.execute(statement)).scalars().all())
+    ).offset(offset).limit(limit + 1)
+    rows = list((await session.execute(statement)).scalars().all())
+    has_more = len(rows) > limit
+    return header, rows[:limit], has_more
 
 
 async def paged_landscape(
