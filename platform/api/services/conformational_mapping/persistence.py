@@ -345,8 +345,9 @@ async def ingest_result_bundle(
         raise ConformationalPersistenceError("resumable canonical result has no validated descriptor")
     if ensemble.get("resumable") is False and descriptor is not None:
         raise ConformationalPersistenceError("nonresumable canonical result has an invalid descriptor")
+    resume_key_to_persist: str | None = None
     if record.resume_key == "0" * 64 and ensemble.get("resumable") is True:
-        record.resume_key = ensemble["resume_key"]
+        resume_key_to_persist = ensemble["resume_key"]
     elif ensemble["resume_key"] != record.resume_key:
         raise ConformationalPersistenceError("result bundle resume identity mismatch")
     root = Path(result_root).resolve(strict=True)
@@ -375,8 +376,6 @@ async def ingest_result_bundle(
             raise ConformationalPersistenceError("derived artifact hash or size mismatch")
         verified_artifacts.append((item, path))
 
-    await _replace_record(session, record.request_id, "ensemble", "primary", ensemble)
-    await _replace_record(session, record.request_id, "native_manifest", "primary", native)
     optional_records = {
         "cm_structure_maps": "structure_map", "cm_frustration_landscapes": "landscape",
         "cm_analysis_v1": "analysis", "cm_state_landscape_analyses": "state_landscape_analysis",
@@ -436,6 +435,7 @@ async def ingest_result_bundle(
             )
         except (ContractValidationError, StateLandscapeAnalysisError, KeyError, TypeError) as exc:
             raise ConformationalPersistenceError("state landscape analysis binding validation failed") from exc
+    validated_optional_records: list[tuple[str, str, Mapping[str, Any]]] = []
     for bundle_key, record_type in optional_records.items():
         value = bundle.get(bundle_key)
         if value is None:
@@ -451,11 +451,31 @@ async def ingest_result_bundle(
                 raise ConformationalPersistenceError(
                     f"{record_type} candidate is not authorized by the ensemble"
                 )
-            await _replace_record(
-                session, record.request_id, record_type,
-                str(payload.get("candidate_id") or payload.get("analysis_id") or index), payload,
-            )
+            validated_optional_records.append((
+                record_type,
+                str(payload.get("candidate_id") or payload.get("analysis_id") or index),
+                payload,
+            ))
 
+    record_writes = [
+        ("ensemble", "primary", ensemble),
+        ("native_manifest", "primary", native),
+        *validated_optional_records,
+    ]
+    for record_type, record_key, payload in record_writes:
+        existing = (
+            await session.execute(
+                select(ConformationalMappingRecord).where(
+                    ConformationalMappingRecord.request_id == record.request_id,
+                    ConformationalMappingRecord.record_type == record_type,
+                    ConformationalMappingRecord.record_key == record_key,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None and existing.content_sha256 != canonical_sha256(payload):
+            raise ConformationalPersistenceError("record identity conflicts with previously ingested bytes")
+
+    artifacts_to_create: list[tuple[str, Mapping[str, Any], Path]] = []
     for item, path in verified_artifacts:
         binding = canonical_sha256(
             {"request_id": record.request_id, "relative_path": item["relative_path"]}
@@ -466,6 +486,42 @@ async def ingest_result_bundle(
             if existing.storage_path != str(path):
                 raise ConformationalPersistenceError("content artifact identity conflicts with storage")
             continue
+        artifacts_to_create.append((artifact_id, item, path))
+
+    landscapes_to_insert = bundle.get("cm_frustration_landscapes") or []
+    existing_landscapes = (
+        await session.execute(
+            select(ConformationalMappingLandscapeRow).where(
+                ConformationalMappingLandscapeRow.request_id == record.request_id
+            ).limit(1)
+        )
+    ).scalar_one_or_none()
+    if existing_landscapes is not None and landscapes_to_insert:
+        stored_records = (
+            await session.execute(
+                select(ConformationalMappingRecord).where(
+                    ConformationalMappingRecord.request_id == record.request_id,
+                    ConformationalMappingRecord.record_type == "landscape",
+                )
+            )
+        ).scalars().all()
+        stored = {row.record_key: row.content_sha256 for row in stored_records}
+        incoming = {
+            str(value.get("candidate_id") or index): canonical_sha256(value)
+            for index, value in enumerate(landscapes_to_insert)
+        }
+        if incoming != stored:
+            raise ConformationalPersistenceError("landscape retry conflicts with persisted matrix")
+        landscapes_to_insert = []
+
+    if resume_key_to_persist is not None:
+        record.resume_key = resume_key_to_persist
+    await _replace_record(session, record.request_id, "ensemble", "primary", ensemble)
+    await _replace_record(session, record.request_id, "native_manifest", "primary", native)
+    for record_type, record_key, payload in validated_optional_records:
+        await _replace_record(session, record.request_id, record_type, record_key, payload)
+
+    for artifact_id, item, path in artifacts_to_create:
         session.add(
             ConformationalMappingArtifact(
                 artifact_id=artifact_id, request_id=record.request_id,
@@ -480,33 +536,7 @@ async def ingest_result_bundle(
             )
         )
 
-    landscapes = bundle.get("cm_frustration_landscapes") or []
-    existing_landscapes = (
-        await session.execute(
-            select(ConformationalMappingLandscapeRow).where(
-                ConformationalMappingLandscapeRow.request_id == record.request_id
-            ).limit(1)
-        )
-    ).scalar_one_or_none()
-    if existing_landscapes is not None and landscapes:
-        stored_records = (
-            await session.execute(
-                select(ConformationalMappingRecord).where(
-                    ConformationalMappingRecord.request_id == record.request_id,
-                    ConformationalMappingRecord.record_type == "landscape",
-                )
-            )
-        ).scalars().all()
-        stored = {row.record_key: row.content_sha256 for row in stored_records}
-        incoming = {
-            str(value.get("candidate_id") or index): canonical_sha256(value)
-            for index, value in enumerate(landscapes)
-        }
-        if incoming != stored:
-            raise ConformationalPersistenceError("landscape retry conflicts with persisted matrix")
-        landscapes = []
-    for landscape in landscapes:
-        validate_schema("cm_frustration_landscape_v1", landscape)
+    for landscape in landscapes_to_insert:
         for residue in landscape["residues"]:
             for slot in residue["slots"]:
                 session.add(

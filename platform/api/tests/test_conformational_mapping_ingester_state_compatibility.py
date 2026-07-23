@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from database import Base, ConformationalMappingRecord, Job
+from database import Base, ConformationalMappingLandscapeRow, ConformationalMappingRecord, Job
 from services.conformational_mapping.contracts import (
     canonical_sha256,
     candidate_id,
@@ -217,6 +217,39 @@ async def test_cm_ingest_bundle_is_the_accepted_state_artifact_persistence_path(
             )
         )
         assert stored is not None and stored.payload_json == artifact
+    finally:
+        await session.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cm_ingest_bundle_failing_state_binding_persists_no_partial_records_after_caller_commit(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "result"
+    root.mkdir()
+    request, bundle, artifact = _coherent_state_bundle(root)
+    forged = copy.deepcopy(artifact)
+    forged["analysis_id"] = "cm_state_landscape_analysis_" + "0" * 32
+    validate_schema("cm_state_landscape_analysis_v1", forged)
+    bundle["cm_state_landscape_analyses"] = [forged]
+    session, engine = await _session(tmp_path)
+    try:
+        record = await _register(session, request, bundle)
+        with pytest.raises(ConformationalPersistenceError, match="binding validation failed"):
+            await ingest_result_bundle(session, record, bundle=bundle, result_root=root)
+
+        await session.commit()
+        assert list((await session.execute(
+            select(ConformationalMappingRecord).where(
+                ConformationalMappingRecord.request_id == record.request_id
+            )
+        )).scalars()) == []
+        assert list((await session.execute(
+            select(ConformationalMappingLandscapeRow).where(
+                ConformationalMappingLandscapeRow.request_id == record.request_id
+            )
+        )).scalars()) == []
     finally:
         await session.close()
         await engine.dispose()
