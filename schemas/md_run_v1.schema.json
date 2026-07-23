@@ -61,7 +61,7 @@
         "path": {"type": "string", "minLength": 1, "pattern": "^(?!/)"},
         "bytes": {"type": "integer", "minimum": 0},
         "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-        "semantic_role": {"enum": ["analysis_topology", "analysis_trajectory", "atom_order_manifest", "representative_structure"]},
+        "semantic_role": {"enum": ["analysis_topology", "analysis_trajectory", "atom_order_manifest", "representative_structure", "trajectory_frame_map"]},
         "atom_order_identity": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
         "selection_method": {"const": "completed_production_final_coordinates"},
         "source_frame": {"oneOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]},
