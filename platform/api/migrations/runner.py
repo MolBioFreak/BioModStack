@@ -18,6 +18,7 @@ from migrations.add_external_result_imports import migrate as migrate_external_r
 from migrations.add_sequence_provenance import migrate as migrate_sequence_provenance
 from migrations.add_conformational_mapping import migrate as migrate_conformational_mapping
 from migrations.add_viewer_snapshots import migrate as migrate_viewer_snapshots
+from migrations.add_state_landscape_analysis_projection import migrate as migrate_state_landscape_analysis_projection
 from run_migration import migrate as migrate_stage_tracking
 
 
@@ -40,6 +41,7 @@ MIGRATIONS: List[Migration] = [
     Migration(9, "add_external_result_imports", migrate_external_result_imports),
     Migration(10, "add_conformational_mapping", migrate_conformational_mapping),
     Migration(11, "add_viewer_snapshots", migrate_viewer_snapshots),
+    Migration(12, "add_state_landscape_analysis_projection", migrate_state_landscape_analysis_projection),
 ]
 
 
