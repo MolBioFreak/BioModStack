@@ -109,6 +109,7 @@ export default function StructureViewerHost({
     onControllerReady: callerControllerReady,
     ...viewerProps
 }: StructureViewerHostProps) {
+    const documentId = viewerProps.structureDocumentId ?? 'primary';
     const [ownedStructureUrl, setOwnedStructureUrl] = useState<string | undefined>(undefined);
     useEffect(() => {
         const owner = new ViewerResourceOwner();
@@ -164,7 +165,7 @@ export default function StructureViewerHost({
             },
             values: compatibilityLayer.points.map((point) => ({
                 identity: {
-                    documentId: point.residue.documentId ?? 'primary',
+                    documentId: point.residue.documentId ?? documentId,
                     labelAsymId: point.residue.labelAsymId,
                     authAsymId: point.residue.authAsymId,
                     labelSeqId: point.residue.labelSeqId,
@@ -178,7 +179,7 @@ export default function StructureViewerHost({
             })),
         };
         return [compatibilityMetric, ...metricLayers.filter((layer) => layer.descriptor.id !== compatibilityMetric.descriptor.id)];
-    }, [compatibilityLayer, metricLayers]);
+    }, [compatibilityLayer, documentId, metricLayers]);
 
     const registryState = useMemo(() => {
         const next = new MetricRegistry();
@@ -221,7 +222,7 @@ export default function StructureViewerHost({
         const queries: StructurePresentationQuery[] = [];
         if (residueMetricLayer?.points.length) {
             queries.push(...residueMetricLayer.points.map((point) => ({
-                documentId: point.residue.documentId ?? 'primary', entityId: point.residue.entityId,
+                documentId: point.residue.documentId ?? documentId, entityId: point.residue.entityId,
                 labelAsymId: point.residue.labelAsymId, authAsymId: point.residue.authAsymId,
                 startLabelSeqId: point.residue.labelSeqId, endLabelSeqId: point.residue.labelSeqId,
                 startAuthSeqId: point.residue.authSeqId, endAuthSeqId: point.residue.authSeqId,
@@ -229,14 +230,14 @@ export default function StructureViewerHost({
             })));
         } else if (legacyColors) {
             queries.push(...legacyColors.selections.map((entry) => ({
-                documentId: 'primary', labelAsymId: entry.struct_asym_id,
+                documentId: documentId, labelAsymId: entry.struct_asym_id,
                 startLabelSeqId: entry.residue_number, endLabelSeqId: entry.residue_number,
                 color: entry.color, opacity: layerOpacity,
             })));
         }
         if (selections?.length) {
             queries.push(...selections.map((entry) => ({
-                documentId: 'primary', labelAsymId: entry.chain_id,
+                documentId: documentId, labelAsymId: entry.chain_id,
                 startLabelSeqId: entry.start_residue_number, endLabelSeqId: entry.end_residue_number,
                 color: entry.color, focus: entry.focus, opacity: layerOpacity,
             })));
@@ -251,17 +252,17 @@ export default function StructureViewerHost({
             })));
         }
         return queries;
-    }, [layerOpacity, layerVisible, legacyColors, residueMetricLayer, residueSelections, selections]);
+    }, [documentId, layerOpacity, layerVisible, legacyColors, residueMetricLayer, residueSelections, selections]);
     const tooltipQueries = useMemo((): readonly StructurePresentationQuery[] => {
         if (!layerVisible) return [];
         return residueMetricLayer?.points.map((point) => ({
-            documentId: point.residue.documentId ?? 'primary', entityId: point.residue.entityId, labelAsymId: point.residue.labelAsymId,
+            documentId: point.residue.documentId ?? documentId, entityId: point.residue.entityId, labelAsymId: point.residue.labelAsymId,
             authAsymId: point.residue.authAsymId, startLabelSeqId: point.residue.labelSeqId,
             endLabelSeqId: point.residue.labelSeqId, startAuthSeqId: point.residue.authSeqId,
             endAuthSeqId: point.residue.authSeqId, insertionCode: point.residue.insertionCode,
             tooltip: point.tooltip,
         })) ?? [];
-    }, [layerVisible, residueMetricLayer]);
+    }, [documentId, layerVisible, residueMetricLayer]);
     const hiddenQueries = useMemo((): readonly StructurePresentationQuery[] => {
         const queries: StructurePresentationQuery[] = [];
         if (activeLayer?.descriptor.dimension === 'residue-scalar' && filteredLayer?.descriptor.dimension === 'residue-scalar') {
@@ -398,7 +399,7 @@ export default function StructureViewerHost({
                     {showLinkedSequence && residueLayer && <SequenceTrackExtension metricId={residueLayer.descriptor.id} points={residueValues.map((entry) => ({ residue: entry.identity, label: residueLabel(entry.identity), value: typeof entry.value === 'number' ? entry.value : null }))} selectedKeys={selectedResidueKeys} onSelection={commitSelection} />}
                     {showMetricWorkbench && pairLayer && <PairMatrixExtension layer={pairLayer} onSelection={commitSelection} />}
                     {showMetricWorkbench && showComplexWorkbench && <ComplexAnalysisPanel components={derivedComponents} chainPairLayers={chainPairLayers} geometryLayers={geometryLayers} onSelection={commitSelection} />}
-                    {showMetricWorkbench && showMeasurements && <MeasurementPanel documentId="primary" measurements={measurements} onChange={setMeasurements} />}
+                    {showMetricWorkbench && showMeasurements && <MeasurementPanel documentId={documentId} measurements={measurements} onChange={setMeasurements} />}
                     {showM6Workbench && <M6WorkbenchPanel controller={controller} jobId={jobId} tableRows={exportRows} />}
                     {showMetricWorkbench && (registryState.issues.length > 0 || (projected && projected.status !== 'ok')) && <div role="alert" className="rounded bg-red-950/80 p-2 text-xs text-red-200">{[...registryState.issues, ...(projected && projected.status !== 'ok' ? [projected.status === 'error' ? projected.error.message : projected.reason] : [])].join(' · ')}</div>}
                 </aside>
