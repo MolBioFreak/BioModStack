@@ -16,6 +16,7 @@ from services.conformational_mapping.persistence import (
     persist_derived_record,
     register_prepared_request,
 )
+from services.conformational_mapping import state_landscape_analysis
 from services.conformational_mapping.state_landscape_analysis import (
     StateLandscapeAnalysisError,
     derive_state_landscape_analysis,
@@ -101,7 +102,20 @@ def _landscape(candidate_id: str, *, native: float, high_c: float, max_v: float)
 
 
 def _sources() -> tuple[dict, list[dict], list[dict]]:
-    ensemble = {"schema_name": "cm_ensemble", "schema_version": 1, "request_id": "request-a"}
+    ensemble = {
+        "schema_name": "cm_ensemble", "schema_version": 1, "request_id": "request-a",
+        "candidates": [
+            {"candidate_id": "state-b", "backend_coordinates": {
+                "backend": "protenix_v2_ensemble", "target_id": "target-a", "ordered_seed": 202, "sample_index": 0,
+            }},
+            {"candidate_id": "state-a", "backend_coordinates": {
+                "backend": "protenix_v2_ensemble", "target_id": "target-a", "ordered_seed": 101, "sample_index": 0,
+            }},
+            {"candidate_id": "resampling-mutant", "backend_coordinates": {
+                "backend": "protenix_v2_ensemble", "target_id": "target-mutant", "ordered_seed": 101, "sample_index": 0,
+            }},
+        ],
+    }
     maps = [_map("state-a"), _map("state-b")]
     landscapes = [
         _landscape("state-a", native=-0.5, high_c=-1.2, max_v=1.5),
@@ -115,6 +129,58 @@ def _pairwise() -> dict:
         "mode": "pairwise",
         "pairs": [{"pair_id": "state-a__state-b", "candidate_a_id": "state-a", "candidate_b_id": "state-b"}],
     }
+
+
+def test_cm_state_000_explicit_pairwise_authority_ignores_resampling_shaped_cross_target_candidates() -> None:
+    ensemble, _, _ = _sources()
+    resolver = getattr(state_landscape_analysis, "resolve_state_landscape_comparison", None)
+
+    assert callable(resolver), "explicit state-landscape comparison resolver is required"
+    assert resolver(ensemble, {
+        "mode": "pairwise", "target_id": "target-a", "scope": "all_within_target",
+    }) == {
+        "mode": "pairwise",
+        "pairs": [{
+            "pair_id": "state-a__state-b", "candidate_a_id": "state-a", "candidate_b_id": "state-b",
+        }],
+    }
+
+
+def test_cm_state_000b_explicit_reference_authority_uses_full_coordinate_selector_and_stable_order() -> None:
+    ensemble, _, _ = _sources()
+    ensemble["candidates"].append({
+        "candidate_id": "state-c", "backend_coordinates": {
+            "backend": "protenix_v2_ensemble", "target_id": "target-a", "ordered_seed": 303, "sample_index": 0,
+        },
+    })
+    resolver = getattr(state_landscape_analysis, "resolve_state_landscape_comparison", None)
+
+    assert callable(resolver), "explicit state-landscape comparison resolver is required"
+    assert resolver(ensemble, {
+        "mode": "reference", "target_id": "target-a", "scope": "all_other_within_target",
+        "reference_backend_coordinates": {
+            "backend": "protenix_v2_ensemble", "target_id": "target-a", "ordered_seed": 101, "sample_index": 0,
+        },
+    }) == {
+        "mode": "reference", "reference_candidate_id": "state-a", "candidate_ids": ["state-b", "state-c"],
+    }
+
+
+@pytest.mark.parametrize("authority, message", [
+    ({"mode": "reference", "target_id": "target-a", "scope": "all_other_within_target", "reference_backend_coordinates": {"backend": "protenix_v2_ensemble", "target_id": "target-a", "ordered_seed": 999, "sample_index": 0}}, "absent"),
+    ({"mode": "reference", "target_id": "target-a", "scope": "all_other_within_target", "reference_backend_coordinates": {"backend": "protenix_v2_ensemble", "target_id": "target-a", "ordered_seed": 101, "sample_index": 0}}, "ambiguous"),
+])
+def test_cm_state_000c_reference_authority_fails_closed_without_one_resolved_reference(authority: dict, message: str) -> None:
+    ensemble, _, _ = _sources()
+    if message == "ambiguous":
+        ensemble["candidates"].append({
+            "candidate_id": "duplicate-reference", "backend_coordinates": dict(authority["reference_backend_coordinates"]),
+        })
+    resolver = getattr(state_landscape_analysis, "resolve_state_landscape_comparison", None)
+
+    assert callable(resolver), "explicit state-landscape comparison resolver is required"
+    with pytest.raises(StateLandscapeAnalysisError, match=message):
+        resolver(ensemble, authority)
 
 
 def test_cm_state_001_explicit_pair_derives_deterministic_metrics() -> None:
