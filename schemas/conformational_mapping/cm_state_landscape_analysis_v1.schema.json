@@ -4,7 +4,7 @@
   "title": "BioModStack state-conditioned FrustraMPNN landscape analysis v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_name", "schema_version", "analysis_id", "source_ensemble_sha256", "source_landscape_sha256", "source_structure_map_sha256", "comparison_mode", "reference_candidate_id", "comparison_sha256", "formula_version", "formula_sha256", "policy_sha256", "rows", "support_ledger", "exclusion_ledger"],
+  "required": ["schema_name", "schema_version", "analysis_id", "source_ensemble_sha256", "source_landscape_sha256", "source_structure_map_sha256", "comparison_mode", "comparison_target_id", "comparison_scope", "reference_backend_coordinates", "reference_candidate_id", "resolved_pairs", "comparison_sha256", "formula_version", "formula_sha256", "policy_sha256", "rows", "support_ledger", "exclusion_ledger"],
   "properties": {
     "schema_name": {"const": "cm_state_landscape_analysis"},
     "schema_version": {"const": 1},
@@ -13,7 +13,11 @@
     "source_landscape_sha256": {"$ref": "#/$defs/sha256"},
     "source_structure_map_sha256": {"$ref": "#/$defs/sha256"},
     "comparison_mode": {"enum": ["reference", "pairwise"]},
+    "comparison_target_id": {"type": "string", "minLength": 1},
+    "comparison_scope": {"enum": ["all_within_target", "all_other_within_target"]},
+    "reference_backend_coordinates": {"oneOf": [{"$ref": "#/$defs/backend_coordinates"}, {"type": "null"}]},
     "reference_candidate_id": {"type": ["string", "null"]},
+    "resolved_pairs": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/resolved_pair"}},
     "comparison_sha256": {"$ref": "#/$defs/sha256"},
     "formula_version": {"const": "cm_state_landscape_analysis_v1"},
     "formula_sha256": {"$ref": "#/$defs/sha256"},
@@ -22,9 +26,66 @@
     "support_ledger": {"type": "array", "items": {"$ref": "#/$defs/support"}},
     "exclusion_ledger": {"type": "array", "items": {"$ref": "#/$defs/exclusion"}}
   },
+  "allOf": [
+    {
+      "if": {"properties": {"comparison_mode": {"const": "pairwise"}}},
+      "then": {
+        "properties": {
+          "comparison_scope": {"const": "all_within_target"},
+          "reference_backend_coordinates": {"type": "null"},
+          "reference_candidate_id": {"type": "null"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"comparison_mode": {"const": "reference"}}},
+      "then": {
+        "properties": {
+          "comparison_scope": {"const": "all_other_within_target"},
+          "reference_backend_coordinates": {"$ref": "#/$defs/backend_coordinates"},
+          "reference_candidate_id": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  ],
   "$defs": {
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "aa": {"type": "string", "enum": ["A", "C", "D", "E", "F", "G", "H", "I", "K", "L", "M", "N", "P", "Q", "R", "S", "T", "V", "W", "Y"]},
+    "protenix_coordinates": {
+      "type": "object", "additionalProperties": false,
+      "required": ["backend", "target_id", "ordered_seed", "sample_index"],
+      "properties": {
+        "backend": {"const": "protenix_v2_ensemble"}, "target_id": {"type": "string", "minLength": 1},
+        "ordered_seed": {"type": "integer", "minimum": -2147483648, "maximum": 2147483647},
+        "sample_index": {"type": "integer", "minimum": 0}
+      }
+    },
+    "confornets_coordinates": {
+      "type": "object", "additionalProperties": false,
+      "required": ["backend", "target_id", "task", "test_case_id", "reference_id", "run_index", "saved_step", "confornet_index", "sample_index"],
+      "properties": {
+        "backend": {"const": "confornets"}, "target_id": {"type": "string", "minLength": 1},
+        "task": {"type": "string", "minLength": 1}, "test_case_id": {"type": "string", "minLength": 1},
+        "reference_id": {"type": ["string", "null"]}, "run_index": {"type": "integer", "minimum": 0},
+        "saved_step": {"type": "integer", "minimum": 0}, "confornet_index": {"type": "integer", "minimum": 0},
+        "sample_index": {"type": "integer", "minimum": 0}
+      }
+    },
+    "import_coordinates": {
+      "type": "object", "additionalProperties": false,
+      "required": ["backend", "target_id", "staged_index", "source_content_sha256", "staged_receipt_sha256"],
+      "properties": {
+        "backend": {"const": "external_import"}, "target_id": {"type": "string", "minLength": 1},
+        "staged_index": {"type": "integer", "minimum": 0}, "source_content_sha256": {"$ref": "#/$defs/sha256"},
+        "staged_receipt_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "backend_coordinates": {
+      "oneOf": [
+        {"$ref": "#/$defs/protenix_coordinates"}, {"$ref": "#/$defs/confornets_coordinates"},
+        {"$ref": "#/$defs/import_coordinates"}
+      ]
+    },
     "identity": {
       "type": "object", "additionalProperties": false,
       "required": ["target_id", "entity_instance_id", "auth_asym_id", "auth_seq_id", "insertion_code", "sequence_index", "validated_wt"],
@@ -65,6 +126,15 @@
         "high_non_native_highly_frustrated_fraction": {"$ref": "#/$defs/numeric_metric"},
         "maximum_non_native_substitution_delta_relative_to_native": {"$ref": "#/$defs/numeric_metric"},
         "native_class": {"$ref": "#/$defs/class_metric"}
+      }
+    },
+    "resolved_pair": {
+      "type": "object", "additionalProperties": false,
+      "required": ["pair_id", "candidate_a_id", "candidate_b_id"],
+      "properties": {
+        "pair_id": {"type": "string", "minLength": 1},
+        "candidate_a_id": {"type": "string", "minLength": 1},
+        "candidate_b_id": {"type": "string", "minLength": 1}
       }
     },
     "row": {
