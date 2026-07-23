@@ -231,6 +231,15 @@ function SavedGibsonWorkupLibrary({
     );
 }
 
+function workupPreparation(fragment: SavedWorkupRecord): string {
+    const metadata = asWorkupRecord(fragment.metadata);
+    const preparation = fragment.preparation ?? metadata?.preparation;
+    if (preparation === 'ready_linear') {
+        return metadata?.vendor_purchase === 'full_fragment' ? 'Vendor-ready linear' : 'Ready linear';
+    }
+    return preparation === 'pcr' ? 'PCR' : 'Unspecified preparation';
+}
+
 function SavedGibsonWorkup({ operationParams }: { operationParams?: Record<string, unknown> | null }) {
     if (operationParams?.mode !== 'gibson') return null;
     const fragments = asWorkupRecords(operationParams.source_fragments ?? operationParams.fragments);
@@ -269,7 +278,7 @@ function SavedGibsonWorkup({ operationParams }: { operationParams?: Record<strin
                 <summary className="cursor-pointer text-xs font-medium text-slate-200">Source fragments ({fragments.length})</summary>
                 <div className="mt-2 max-h-64 space-y-1 overflow-auto text-xs">
                     {fragments.map((fragment, index) => <div key={`${workupText(fragment.fragment_id)}-${index}`} className="flex flex-wrap justify-between gap-2 border-b border-slate-800 py-1 text-slate-300">
-                        <span>{workupText(fragment.name, workupText(fragment.fragment_id))} • {workupText(fragment.preparation, 'PCR')}</span>
+                        <span>{workupText(fragment.name, workupText(fragment.fragment_id))} • {workupPreparation(fragment)}</span>
                         <span className="font-mono text-slate-500">{workupText(fragment.source_start)}–{workupText(fragment.source_end)}{fragment.source_wraps_origin === true ? ' ↻' : ''}</span>
                     </div>)}
                 </div>
