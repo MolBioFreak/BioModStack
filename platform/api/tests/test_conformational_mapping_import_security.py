@@ -88,6 +88,18 @@ def _registered(root: Path, relative: str = "input.pdb", *, principal: str = "al
     return RegisteredArtifact("artifact-1", principal, root, relative, hashlib.sha256(payload).hexdigest(), len(payload))
 
 
+def test_mmcif_probe_admits_a_coordinate_loop_after_a_large_metadata_block(tmp_path: Path) -> None:
+    """Real deposited mmCIF files may place atom-site data well after metadata."""
+    source = tmp_path / "late_atoms.cif"
+    source.write_bytes(b"data_late\n#\n" + b"x" * 200_000 + b"\n_atom_site.group_PDB\n")
+    descriptor = os.open(source, os.O_RDONLY)
+    try:
+        _digest, _size, prefix = import_stager._digest_fd(descriptor, maximum_bytes=1_000_000)
+    finally:
+        os.close(descriptor)
+    import_stager._inspect_structure(".cif", prefix)
+
+
 def test_registered_verify_and_read_reject_oversize_before_hashing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
