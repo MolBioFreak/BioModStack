@@ -138,7 +138,7 @@ def test_two_fragments_design_exact_linear_candidate_with_ready_linear_input() -
 
 
 def test_unusable_and_invalid_design_requests_are_actionable() -> None:
-    with pytest.raises(AssemblyError, match="2 to 20"):
+    with pytest.raises(AssemblyError, match="2 to 50"):
         design_gibson(
             [_fragment(1)],
             preparations=["pcr"],
@@ -171,12 +171,12 @@ def test_unusable_and_invalid_design_requests_are_actionable() -> None:
             },
         )
     assert response.status_code == 400
-    assert "2 to 20" in response.json()["detail"]
+    assert "2 to 50" in response.json()["detail"]
 
-    with pytest.raises(AssemblyError, match="2 to 20"):
+    with pytest.raises(AssemblyError, match="2 to 50"):
         design_gibson(
-            [_fragment(index) for index in range(1, 22)],
-            preparations=["pcr"] * 21,
+            [_fragment(index) for index in range(1, 52)],
+            preparations=["pcr"] * 51,
             circular=False,
         )
 
