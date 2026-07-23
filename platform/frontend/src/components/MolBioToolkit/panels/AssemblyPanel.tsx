@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
     fetchGoldenGateAssemblyOptions,
+    fetchSavedGibsonWorkups,
     saveGibsonAssembly,
     saveGoldenGateAssembly,
     saveLigationAssembly,
@@ -11,6 +12,7 @@ import {
     type AssemblyFragmentInput,
     type AssemblyOperationResponse,
     type GoldenGateAssemblyOptionsResponse,
+    type SavedGibsonWorkupListItem,
 } from '../../../lib/api';
 import type { SequenceData, SelectionInfo } from '../types';
 import { GibsonDesignWorkspace } from './GibsonDesignWorkspace';
@@ -20,6 +22,7 @@ interface AssemblyPanelProps {
     selection: SelectionInfo | null;
     selectedSequenceId: string | null;
     onLoadProduct: (sequenceData: SequenceData, savedSequenceId?: string | null) => void;
+    onLoadSavedWorkup: (savedSequenceId: string) => Promise<void> | void;
 }
 
 type AssemblyMode = 'ligation' | 'gibson' | 'golden_gate';
@@ -166,6 +169,68 @@ function workupText(value: unknown, fallback = '—'): string {
     return typeof value === 'string' || typeof value === 'number' ? String(value) : fallback;
 }
 
+function SavedGibsonWorkupLibrary({
+    records,
+    loading,
+    error,
+    onRefresh,
+    onLoad,
+}: {
+    records: SavedGibsonWorkupListItem[];
+    loading: boolean;
+    error: string | null;
+    onRefresh: () => void;
+    onLoad: (savedSequenceId: string) => Promise<void> | void;
+}) {
+    const [open, setOpen] = useState(false);
+    const [loadingId, setLoadingId] = useState<string | null>(null);
+
+    const load = async (id: string) => {
+        setLoadingId(id);
+        try {
+            await onLoad(id);
+            setOpen(false);
+        } finally {
+            setLoadingId(null);
+        }
+    };
+
+    return (
+        <section aria-label="Saved Gibson workups library" className="rounded-xl border border-violet-500/50 bg-violet-950/20 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                    <h5 className="font-semibold text-violet-100">Saved Gibson workups</h5>
+                    <p className="mt-1 text-xs text-violet-200/70">Assembly-only records saved on the server. Loading opens the associated construct and its immutable workup evidence.</p>
+                </div>
+                <div className="flex gap-2">
+                    <button type="button" onClick={onRefresh} disabled={loading} className="rounded border border-violet-400/50 px-2 py-1 text-xs text-violet-100 disabled:opacity-50">Refresh</button>
+                    <button type="button" onClick={() => setOpen(true)} className="rounded bg-violet-600 px-3 py-1.5 text-xs font-medium text-white">Saved workups ({records.length})</button>
+                </div>
+            </div>
+            {error && <p className="mt-2 text-xs text-red-300">Could not load saved workups: {error}</p>}
+            {open && (
+                <div role="dialog" aria-modal="true" aria-label="Saved Gibson workups" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4">
+                    <div className="max-h-[80vh] w-full max-w-2xl overflow-auto rounded-xl border border-violet-400/50 bg-slate-900 p-4 shadow-2xl">
+                        <div className="flex items-start justify-between gap-3">
+                            <div><h4 className="font-semibold text-violet-100">Saved Gibson workups</h4><p className="mt-1 text-xs text-slate-400">Only persisted Gibson assemblies appear here.</p></div>
+                            <button type="button" onClick={() => setOpen(false)} className="rounded px-2 py-1 text-sm text-slate-300 hover:bg-slate-800" aria-label="Close saved workups">Close</button>
+                        </div>
+                        <div className="mt-4 space-y-2">
+                            {records.length === 0 && <p className="rounded border border-dashed border-slate-700 p-3 text-sm text-slate-400">No saved Gibson workups yet.</p>}
+                            {records.map((record) => <article key={record.id} className="rounded-lg border border-slate-700 bg-slate-950/40 p-3">
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                    <div className="min-w-0"><h5 className="font-medium text-slate-100">{record.name}</h5><p className="mt-1 text-xs text-slate-400">{record.length.toLocaleString()} bp • {record.topology} • {record.engine || 'Gibson'} {record.engine_version || ''}</p><p className="mt-1 text-xs text-slate-500">{record.fragment_count} fragments • {record.primer_count} primers</p></div>
+                                    <button type="button" onClick={() => void load(record.id)} disabled={loadingId === record.id} className="rounded bg-violet-600 px-3 py-2 text-xs font-medium text-white disabled:opacity-50">{loadingId === record.id ? 'Loading…' : 'Load workup'}</button>
+                                </div>
+                            </article>)}
+                        </div>
+                    </div>
+                </div>
+            )}
+        </section>
+    );
+}
+
 function SavedGibsonWorkup({ operationParams }: { operationParams?: Record<string, unknown> | null }) {
     if (operationParams?.mode !== 'gibson') return null;
     const fragments = asWorkupRecords(operationParams.source_fragments ?? operationParams.fragments);
@@ -242,6 +307,7 @@ export function AssemblyPanel({
     selection,
     selectedSequenceId,
     onLoadProduct,
+    onLoadSavedWorkup,
 }: AssemblyPanelProps) {
     const [mode, setMode] = useState<AssemblyMode>('ligation');
     const [fragments, setFragments] = useState<AssemblyFragmentInput[]>([]);
@@ -259,8 +325,28 @@ export function AssemblyPanel({
     const [result, setResult] = useState<AssemblyOperationResponse | null>(null);
     const [loading, setLoading] = useState<'simulate' | 'save' | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [savedWorkups, setSavedWorkups] = useState<SavedGibsonWorkupListItem[]>([]);
+    const [savedWorkupsLoading, setSavedWorkupsLoading] = useState(false);
+    const [savedWorkupsError, setSavedWorkupsError] = useState<string | null>(null);
+
+    const refreshSavedWorkups = async () => {
+        setSavedWorkupsLoading(true);
+        setSavedWorkupsError(null);
+        try {
+            const response = await fetchSavedGibsonWorkups();
+            setSavedWorkups(response.data);
+        } catch (loadError) {
+            setSavedWorkupsError(loadError instanceof Error ? loadError.message : 'Request failed');
+        } finally {
+            setSavedWorkupsLoading(false);
+        }
+    };
 
     const activeSelection = useMemo(() => selectionSequence(sequenceData, selection), [sequenceData, selection]);
+
+    useEffect(() => {
+        void refreshSavedWorkups();
+    }, []);
 
     useEffect(() => {
         let cancelled = false;
@@ -452,6 +538,14 @@ export function AssemblyPanel({
                     Fragment-driven cloning workspace with explicit end or overlap contracts. Nothing is inferred from missing chemistry.
                 </p>
             </div>
+
+            <SavedGibsonWorkupLibrary
+                records={savedWorkups}
+                loading={savedWorkupsLoading}
+                error={savedWorkupsError}
+                onRefresh={() => void refreshSavedWorkups()}
+                onLoad={onLoadSavedWorkup}
+            />
 
             <SavedGibsonWorkup operationParams={sequenceData.operationParams} />
 
