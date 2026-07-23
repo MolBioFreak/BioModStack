@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 from datetime import datetime
 from pathlib import Path
 
@@ -27,6 +28,7 @@ from services.conformational_mapping.persistence import (
 )
 from services.conformational_mapping import state_landscape_analysis
 from services.conformational_mapping.state_landscape_analysis import (
+    MAX_STATE_LANDSCAPE_COMPARISONS,
     StateLandscapeAnalysisError,
     derive_state_landscape_analysis,
 )
@@ -143,6 +145,23 @@ def _pairwise() -> dict:
         "resolved_pairs": [
             {"pair_id": "state-a__state-b", "candidate_a_id": "state-a", "candidate_b_id": "state-b"},
         ],
+    }
+
+
+def _final_ensemble_with_target_candidates(candidate_count: int) -> dict:
+    return {
+        "candidates": [
+            {
+                "candidate_id": f"state-{index:05d}",
+                "backend_coordinates": {
+                    "backend": "protenix_v2_ensemble",
+                    "target_id": "target-a",
+                    "ordered_seed": index,
+                    "sample_index": 0,
+                },
+            }
+            for index in range(1, candidate_count + 1)
+        ]
     }
 
 
@@ -364,6 +383,42 @@ def test_cm_state_001d_pairwise_authority_fails_closed_when_final_ensemble_has_f
                 "target_id": "target-a",
                 "scope": "all_within_target",
             },
+        )
+
+
+@pytest.mark.parametrize(
+    ("authority", "candidate_count"),
+    [
+        (
+            {
+                "mode": "pairwise",
+                "target_id": "target-a",
+                "scope": "all_within_target",
+            },
+            (1 + math.isqrt(1 + 8 * MAX_STATE_LANDSCAPE_COMPARISONS)) // 2 + 1,
+        ),
+        (
+            {
+                "mode": "reference",
+                "target_id": "target-a",
+                "scope": "all_other_within_target",
+                "reference_backend_coordinates": {
+                    "backend": "protenix_v2_ensemble",
+                    "target_id": "target-a",
+                    "ordered_seed": 1,
+                    "sample_index": 0,
+                },
+            },
+            MAX_STATE_LANDSCAPE_COMPARISONS + 2,
+        ),
+    ],
+)
+def test_cm_state_001da_final_candidate_resolution_rejects_excessive_comparison_work(
+    authority: dict, candidate_count: int
+) -> None:
+    with pytest.raises(StateLandscapeAnalysisError, match="configured maximum"):
+        state_landscape_analysis.resolve_state_landscape_comparison(
+            _final_ensemble_with_target_candidates(candidate_count), authority,
         )
 
 
