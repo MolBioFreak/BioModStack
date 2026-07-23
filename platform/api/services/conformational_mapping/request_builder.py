@@ -19,7 +19,11 @@ from .contracts import (
     validate_seed_sources,
 )
 from .clash import CLASH_DETECTOR_ID, CLASH_DETECTOR_VERSION
-from .state_landscape_analysis import MAX_STATE_LANDSCAPE_COMPARISONS
+from .state_landscape_analysis import (
+    MAX_STATE_LANDSCAPE_COMPARISON_ROWS,
+    MAX_STATE_LANDSCAPE_COMPARISONS,
+    MAX_STATE_LANDSCAPE_RESIDUES_PER_CANDIDATE,
+)
 
 
 BACKENDS = frozenset({"protenix_v2_ensemble", "confornets", "external_import"})
@@ -432,18 +436,30 @@ def _validate_state_landscape_comparison_plan(
     except Exception as exc:  # pragma: no cover - plan construction is local authority
         raise ConformationalMappingRequestError("canonical coordinate plan is invalid") from exc
     selected = [coordinate for coordinate in planned if coordinate["target_id"] == target_id]
-    if mode == "pairwise":
-        if len(selected) < 2:
-            raise ConformationalMappingRequestError(
-                "pairwise state landscape comparison requires at least two planned coordinates"
-            )
-        comparison_count = len(selected) * (len(selected) - 1) // 2
+
+    def validate_comparison_work(comparison_count: int) -> None:
         if comparison_count > MAX_STATE_LANDSCAPE_COMPARISONS:
             raise ConformationalMappingRequestError(
                 "state landscape comparison resolves "
                 f"{comparison_count} comparisons, exceeding configured maximum "
                 f"{MAX_STATE_LANDSCAPE_COMPARISONS}"
             )
+        estimated_rows = comparison_count * MAX_STATE_LANDSCAPE_RESIDUES_PER_CANDIDATE
+        if estimated_rows > MAX_STATE_LANDSCAPE_COMPARISON_ROWS:
+            raise ConformationalMappingRequestError(
+                "state landscape comparison reserves "
+                f"{estimated_rows} comparison rows at the "
+                f"{MAX_STATE_LANDSCAPE_RESIDUES_PER_CANDIDATE}-residue candidate envelope, "
+                f"exceeding configured maximum {MAX_STATE_LANDSCAPE_COMPARISON_ROWS}"
+            )
+
+    if mode == "pairwise":
+        if len(selected) < 2:
+            raise ConformationalMappingRequestError(
+                "pairwise state landscape comparison requires at least two planned coordinates"
+            )
+        comparison_count = len(selected) * (len(selected) - 1) // 2
+        validate_comparison_work(comparison_count)
         return
     if mode != "reference":
         return
@@ -468,12 +484,7 @@ def _validate_state_landscape_comparison_plan(
             "reference state landscape comparison requires another planned coordinate"
         )
     comparison_count = len(selected) - 1
-    if comparison_count > MAX_STATE_LANDSCAPE_COMPARISONS:
-        raise ConformationalMappingRequestError(
-            "state landscape comparison resolves "
-            f"{comparison_count} comparisons, exceeding configured maximum "
-            f"{MAX_STATE_LANDSCAPE_COMPARISONS}"
-        )
+    validate_comparison_work(comparison_count)
 
 
 def validate_request_params(params: Mapping[str, Any]) -> ValidatedRequest:

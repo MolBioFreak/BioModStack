@@ -112,6 +112,31 @@ def _landscape(candidate_id: str, *, native: float, high_c: float, max_v: float)
     }
 
 
+def _landscape_and_map_with_residue_count(candidate_id: str, residue_count: int) -> tuple[dict, dict]:
+    landscape = _landscape(candidate_id, native=-0.5, high_c=-1.2, max_v=1.5)
+    structure_map = _map(candidate_id)
+    template_landscape_row = landscape["residues"][0]
+    template_map_row = structure_map["rows"][0]
+    landscape["residues"] = []
+    structure_map["rows"] = []
+    for index in range(residue_count):
+        auth_seq_id = index + 1
+        landscape["residues"].append({
+            **copy.deepcopy(template_landscape_row),
+            "auth_seq_id": auth_seq_id,
+            "sequence_index": auth_seq_id,
+        })
+        structure_map["rows"].append({
+            **copy.deepcopy(template_map_row),
+            "auth_seq_id": auth_seq_id,
+            "label_seq_id": auth_seq_id,
+            "sequence_index": auth_seq_id,
+            "pdb_residue_id": auth_seq_id,
+            "backbone_atoms": {atom: f"{atom}-{auth_seq_id}" for atom in ("N", "CA", "C", "O")},
+        })
+    return landscape, structure_map
+
+
 def _sources() -> tuple[dict, list[dict], list[dict]]:
     ensemble = {
         "schema_name": "cm_ensemble", "schema_version": 1, "request_id": "request-a",
@@ -420,6 +445,26 @@ def test_cm_state_001da_final_candidate_resolution_rejects_excessive_comparison_
         state_landscape_analysis.resolve_state_landscape_comparison(
             _final_ensemble_with_target_candidates(candidate_count), authority,
         )
+
+
+@pytest.mark.parametrize(("residue_count", "admitted"), [(2, True), (3, False)])
+def test_cm_state_001db_final_derivation_bounds_actual_unioned_comparison_rows_before_materialization(
+    monkeypatch: pytest.MonkeyPatch, residue_count: int, admitted: bool,
+) -> None:
+    monkeypatch.setattr(state_landscape_analysis, "MAX_STATE_LANDSCAPE_COMPARISON_ROWS", 2, raising=False)
+    ensemble, _, _ = _sources()
+    landscape_a, map_a = _landscape_and_map_with_residue_count("state-a", residue_count)
+    landscape_b, map_b = _landscape_and_map_with_residue_count("state-b", residue_count)
+
+    if admitted:
+        assert len(derive_state_landscape_analysis(
+            ensemble, [landscape_a, landscape_b], [map_a, map_b], comparison=_pairwise(),
+        )["rows"]) == residue_count
+    else:
+        with pytest.raises(StateLandscapeAnalysisError, match="comparison rows"):
+            derive_state_landscape_analysis(
+                ensemble, [landscape_a, landscape_b], [map_a, map_b], comparison=_pairwise(),
+            )
 
 
 @pytest.mark.parametrize("forgery", [
