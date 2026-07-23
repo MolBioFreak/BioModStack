@@ -14,6 +14,7 @@ from .contracts import (
     ContractValidationError,
     canonical_json_bytes,
     canonical_sha256,
+    parse_backend_coordinates,
     validate_schema,
     validate_seed_sources,
 )
@@ -410,6 +411,56 @@ def build_confornets_coordinate_plan(
     return coordinates
 
 
+def _validate_state_landscape_comparison_plan(
+    request_fields: Mapping[str, Any], coordinate_plan: list[dict[str, Any]]
+) -> None:
+    """Reject comparison authorities that cannot resolve against planned coordinates."""
+
+    authority = request_fields.get("state_landscape_comparison")
+    if not isinstance(authority, Mapping):
+        return
+    mode = authority.get("mode")
+    target_id = authority.get("target_id")
+    if not isinstance(mode, str) or not isinstance(target_id, str):
+        return
+    try:
+        planned = [
+            parse_backend_coordinates(coordinate).model_dump(mode="json")
+            for coordinate in coordinate_plan
+        ]
+    except Exception as exc:  # pragma: no cover - plan construction is local authority
+        raise ConformationalMappingRequestError("canonical coordinate plan is invalid") from exc
+    selected = [coordinate for coordinate in planned if coordinate["target_id"] == target_id]
+    if mode == "pairwise":
+        if len(selected) < 2:
+            raise ConformationalMappingRequestError(
+                "pairwise state landscape comparison requires at least two planned coordinates"
+            )
+        return
+    if mode != "reference":
+        return
+    selector = authority.get("reference_backend_coordinates")
+    if not isinstance(selector, Mapping):
+        return
+    try:
+        reference = parse_backend_coordinates(selector).model_dump(mode="json")
+    except Exception:
+        return
+    if reference["target_id"] != target_id:
+        raise ConformationalMappingRequestError(
+            "reference state landscape comparison target does not match the selected target"
+        )
+    matching = [coordinate for coordinate in selected if coordinate == reference]
+    if len(matching) != 1:
+        raise ConformationalMappingRequestError(
+            "reference state landscape comparison does not match exactly one planned coordinate"
+        )
+    if not any(coordinate != reference for coordinate in selected):
+        raise ConformationalMappingRequestError(
+            "reference state landscape comparison requires another planned coordinate"
+        )
+
+
 def validate_request_params(params: Mapping[str, Any]) -> ValidatedRequest:
     """Validate API controls without writing files or scheduling work."""
 
@@ -596,6 +647,7 @@ def validate_request_params(params: Mapping[str, Any]) -> ValidatedRequest:
         validate_schema("cm_request_v1", preview)
     except ContractValidationError as exc:
         raise ConformationalMappingRequestError(str(exc)) from exc
+    _validate_state_landscape_comparison_plan(request_fields, coordinate_plan)
     return ValidatedRequest(
         request_fields=request_fields,
         coordinate_plan=tuple(coordinate_plan),

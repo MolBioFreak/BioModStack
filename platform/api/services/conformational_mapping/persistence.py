@@ -224,11 +224,14 @@ async def persist_derived_record(
 ) -> None:
     """Persist one validated server-produced derived authority idempotently."""
 
+    if record_type == "state_landscape_analysis":
+        raise ConformationalPersistenceError(
+            "state landscape analysis must be persisted through canonical result-bundle ingestion"
+        )
     schema_by_type = {
         "structure_map": "cm_structure_map_v1",
         "landscape": "cm_frustration_landscape_v1",
         "analysis": "cm_analysis_v1",
-        "state_landscape_analysis": "cm_state_landscape_analysis_v1",
         "handoff": "cm_mutagenesis_handoff_v1",
     }
     schema = schema_by_type.get(record_type)
@@ -404,9 +407,17 @@ async def ingest_result_bundle(
         raise ConformationalPersistenceError("canonical analysis authority is missing")
     state_analysis_value = bundle.get("cm_state_landscape_analyses")
     state_analysis_requested = "state_landscape_comparison" in record.request_json
-    if state_analysis_value is None:
-        if state_analysis_requested:
-            raise ConformationalPersistenceError("requested state landscape analysis is missing")
+    if not state_analysis_requested:
+        if state_analysis_value is not None and (
+            not isinstance(state_analysis_value, list) or state_analysis_value
+        ):
+            raise ConformationalPersistenceError(
+                "state landscape analysis is not authorized without comparison authority"
+            )
+    elif state_analysis_value is None or (
+        isinstance(state_analysis_value, list) and not state_analysis_value
+    ):
+        raise ConformationalPersistenceError("requested state landscape analysis is missing")
     else:
         state_analyses = state_analysis_value if isinstance(state_analysis_value, list) else [state_analysis_value]
         if len(state_analyses) != 1:
