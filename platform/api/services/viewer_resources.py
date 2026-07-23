@@ -29,6 +29,15 @@ MAX_VOXELS = 536_870_912
 MAX_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024
 
 
+def _valid_structure_document_id(value: Any) -> bool:
+    """Accept direct-viewer document identities without treating them as filesystem paths."""
+    return (
+        isinstance(value, str)
+        and 1 <= len(value) <= 255
+        and all(character.isalnum() or character in "._:-" for character in value)
+    )
+
+
 @dataclass(frozen=True)
 class ViewerArtifact:
     artifact_id: str
@@ -176,9 +185,11 @@ def _validate_registration(registration: Any, volumes: list[dict[str, Any]]) -> 
         raise ViewerResourceError("Volume registration schema is invalid")
     if registration.get("method") != "supplied_transform_v1" or not isinstance(registration.get("provenanceRef"), str) or not registration["provenanceRef"].strip():
         raise ViewerResourceError("Only provenance-bound supplied registration is supported")
-    for key in ("registrationId", "structureDocumentId", "volumeId"):
+    for key in ("registrationId", "volumeId"):
         if not isinstance(registration.get(key), str) or not UUID_RE.fullmatch(registration[key]):
             raise ViewerResourceError(f"Volume registration {key} is invalid")
+    if not _valid_structure_document_id(registration.get("structureDocumentId")):
+        raise ViewerResourceError("Volume registration structureDocumentId is invalid")
     for key in ("artifactSha256", "structureSha256", "volumeSha256"):
         if not isinstance(registration.get(key), str) or not SHA256_RE.fullmatch(registration[key]):
             raise ViewerResourceError(f"Volume registration {key} is invalid")
