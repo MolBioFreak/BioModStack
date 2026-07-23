@@ -16,6 +16,7 @@ import {
 } from '../src/structureViewer/runtime/browserMovieExport.js';
 import { viewerOk } from '../src/structureViewer/contracts/viewerResults.js';
 import { StructureSceneController } from '../src/structureViewer/runtime/StructureSceneController.js';
+import { exportMetricIdentity } from '../src/structureViewer/contracts/exportIdentity.js';
 
 const HASH_A = 'a'.repeat(64);
 const HASH_B = 'b'.repeat(64);
@@ -89,6 +90,12 @@ test('governed CSV/export manifest preserves missingness and exact source state'
     });
     assert.equal(validateExportManifest(manifest).status, 'ok');
     assert.equal(manifest.snapshotId, snapshot().snapshotId);
+});
+
+test('table export removes absent optional identity fields before canonical JSON serialization', () => {
+    const identity = exportMetricIdentity({ documentId: 'primary', labelAsymId: 'A', labelSeqId: 1, authAsymId: undefined });
+    assert.deepEqual(identity, { documentId: 'primary', labelAsymId: 'A', labelSeqId: 1 });
+    assert.doesNotThrow(() => canonicalJson([{ identity, value: 91.2, missingness: null }]));
 });
 
 test('volume contracts admit exact CCP4 descriptors and fail before allocation', () => {

@@ -4,6 +4,7 @@ import MolstarViewerImpl from '../components/MolstarViewerImpl';
 import type { MolstarViewerProps } from '../components/MolstarViewerImpl';
 import { adaptLegacyResidueColors } from './adapters/residueColorSelections';
 import type { StructureFilterState, StructurePresentationQuery, StructureScenePresentation } from './contracts/scenePresentation.js';
+import { exportMetricIdentity } from './contracts/exportIdentity.js';
 import type { StructureComponentType } from './contracts/scenePresentation.js';
 import { canonicalResidueRefKey, type ResidueRef } from './contracts/structureIdentity.js';
 import type { ViewerMeasurement } from './contracts/measurements.js';
@@ -339,7 +340,7 @@ export default function StructureViewerHost({
         metric_id: layer.descriptor.id,
         metric_label: layer.descriptor.label,
         units: layer.descriptor.units ?? null,
-        identity: entry.identity,
+        identity: exportMetricIdentity(entry.identity),
         value: entry.missingness === undefined ? entry.value : null,
         missingness: entry.missingness ?? null,
     }))), [registry]);
