@@ -28,6 +28,7 @@ import type { PluginUIContext } from 'molstar/lib/mol-plugin-ui/context';
 
 import { createDirectMolstarEngineOwner } from '../runtime/createDirectMolstarEngineOwner';
 import type { MolstarEngineOwner } from '../runtime/MolstarEngineOwner';
+import type { MDPlaybackState, MDSceneState } from '../contracts/mdTrajectory';
 import { assessMeasurement, type ViewerMeasurement } from '../contracts/measurements';
 import type { StructureCameraState, StructureComponentType } from '../contracts/scenePresentation';
 import { resolveSceneRenderingProfile, type StructureSceneState } from '../contracts/sceneState';
@@ -261,6 +262,12 @@ interface DirectVolumeEntry {
     segmentation?: VolumeSegmentationV1;
 }
 
+interface DirectMolecularDynamicsEntry {
+    readonly replica: number;
+    readonly modelRef: string;
+    readonly frameCount: number;
+}
+
 export class MolstarDirectAdapterCancelledError extends Error {
     constructor() {
         super('Mol* adapter operation was cancelled');
@@ -293,6 +300,7 @@ export class MolstarDirectAdapter {
     private presentationQueue: Promise<void> = Promise.resolve();
     private measurementQueue: Promise<void> = Promise.resolve();
     private readonly volumes = new Map<string, DirectVolumeEntry>();
+    private molecularDynamics: DirectMolecularDynamicsEntry | undefined;
 
     constructor({
         hideControls = true,
@@ -379,10 +387,12 @@ export class MolstarDirectAdapter {
                 await plugin.clear();
                 this.assertSceneCurrent(generation);
                 this.volumes.clear();
+                this.molecularDynamics = undefined;
                 this.documentStructures = new WeakMap<Structure, string>();
                 this.measurementSelectionRefs = [];
 
-                for (const document of documents) {
+                const documentsToLoad = scene.molecularDynamics?.playbackCapability.supported ? [] : documents;
+                for (const document of documentsToLoad) {
                     const existingStructures = new Set(
                         plugin.managers.structure.hierarchy.current.structures
                             .flatMap((entry) => entry.cell.obj?.data ? [entry.cell.obj.data] : []),
@@ -424,6 +434,109 @@ export class MolstarDirectAdapter {
         });
         this.sceneQueue = task.catch(() => undefined);
         return task;
+    }
+
+    /**
+     * Load the governed active replica through Mol* 4.5's public GRO/XTC state transforms.
+     * Artifact URLs are resolved at this runtime boundary and never copied into MDSceneState.
+     */
+    async loadMolecularDynamics(state: MDSceneState): Promise<ViewerResult<void>> {
+        const replica = state.replicas.find((item) => item.replica === state.activeReplica);
+        if (!replica || replica.trajectoryFormat !== 'xtc') {
+            return viewerUnsupported('Direct Mol* trajectory playback requires an active XTC replica', 'trajectories');
+        }
+        if (!this.resolveViewerArtifactUrl) {
+            return viewerUnsupported('Direct Mol* trajectory playback requires a runtime artifact URL resolver', 'trajectories');
+        }
+
+        const generation = this.sceneGeneration;
+        const plugin = this.requirePlugin();
+        try {
+            const topologyData = await plugin.builders.data.download({
+                url: Asset.Url(this.resolveViewerArtifactUrl(replica.topologyArtifactId)),
+                isBinary: false,
+                label: `MD replica ${replica.replica} GRO topology`,
+            }, { state: { isGhost: true } });
+            this.assertSceneCurrent(generation);
+            const topologyTrajectory = await plugin.builders.structure.parseTrajectory(topologyData, 'gro');
+            this.assertSceneCurrent(generation);
+            const topologyModel = await plugin.builders.structure.createModel(topologyTrajectory, { modelIndex: 0 });
+            this.assertSceneCurrent(generation);
+
+            const coordinateData = await plugin.builders.data.download({
+                url: Asset.Url(this.resolveViewerArtifactUrl(replica.trajectoryArtifactId)),
+                isBinary: true,
+                label: `MD replica ${replica.replica} XTC coordinates`,
+            }, { state: { isGhost: true } });
+            this.assertSceneCurrent(generation);
+            const coordinates = await plugin.state.data.build()
+                .to(coordinateData)
+                .apply(StateTransforms.Model.CoordinatesFromXtc)
+                .commit();
+            this.assertSceneCurrent(generation);
+            const trajectory = await plugin.build().toRoot()
+                .apply(StateTransforms.Model.TrajectoryFromModelAndCoordinates, {
+                    modelRef: topologyModel.ref,
+                    coordinatesRef: coordinates.ref,
+                }, { dependsOn: [topologyModel.ref, coordinates.ref] })
+                .commit();
+            this.assertSceneCurrent(generation);
+            const preset = await plugin.builders.structure.hierarchy.applyPreset(trajectory, 'default', {
+                structure: { name: 'model', params: {} },
+                showUnitcell: false,
+                representationPreset: 'atomic-detail',
+            });
+            this.assertSceneCurrent(generation);
+
+            const modelRef = preset?.model.ref;
+            const frameCount = trajectory.cell?.obj?.data.frameCount;
+            if (!modelRef || !frameCount || frameCount < 1) {
+                throw new Error('Mol* did not create an addressable XTC model trajectory');
+            }
+            this.molecularDynamics = { replica: replica.replica, modelRef, frameCount };
+            for (const entry of plugin.managers.structure.hierarchy.current.structures) {
+                const structure = entry.cell.obj?.data;
+                if (structure) this.documentStructures.set(structure, `md:replica:${replica.replica}`);
+            }
+            return viewerOk(undefined);
+        } catch (error) {
+            if (!this.isSceneCurrent(generation)) throw new MolstarDirectAdapterCancelledError();
+            try {
+                await plugin.clear();
+            } catch {
+                // Preserve the parse/load error while leaving no partial trajectory scene behind.
+            }
+            this.molecularDynamics = undefined;
+            return viewerError(error);
+        }
+    }
+
+    /** Select an XTC frame strictly by the bounded Mol* model/display index. */
+    async selectMolecularDynamicsDisplayFrame(displayFrame: number): Promise<ViewerResult<void>> {
+        const molecularDynamics = this.molecularDynamics;
+        if (!molecularDynamics) return viewerUnsupported('No direct Mol* XTC trajectory is loaded', 'trajectories');
+        if (!Number.isInteger(displayFrame) || displayFrame < 0 || displayFrame >= molecularDynamics.frameCount) {
+            return viewerUnsupported(`Display frame ${displayFrame} is outside the loaded XTC range`, 'trajectories');
+        }
+        try {
+            await this.requirePlugin().build()
+                .to(molecularDynamics.modelRef)
+                .update({ modelIndex: displayFrame })
+                .commit();
+            return viewerOk(undefined);
+        } catch (error) {
+            return viewerError(error);
+        }
+    }
+
+    async setMolecularDynamicsPlayback(playback: MDPlaybackState): Promise<ViewerResult<void>> {
+        if (playback.selectedFrame) return this.selectMolecularDynamicsDisplayFrame(playback.selectedFrame.displayFrame);
+        if (playback.state === 'playing') {
+            return viewerUnsupported('Direct Mol* playback currently accepts explicit bounded display-frame selection only', 'trajectories');
+        }
+        return this.molecularDynamics
+            ? viewerOk(undefined)
+            : viewerUnsupported('No direct Mol* XTC trajectory is loaded', 'trajectories');
     }
 
     setMeasurements(measurements: readonly ViewerMeasurement[]): Promise<ViewerResult<void>> {
