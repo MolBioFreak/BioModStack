@@ -67,7 +67,11 @@ def resolve_state_landscape_comparison(
             raise StateLandscapeAnalysisError("pairwise state comparison resolved fewer than two candidates")
         return {
             "mode": "pairwise",
-            "pairs": [
+            "comparison_target_id": target_id,
+            "comparison_scope": scope,
+            "reference_backend_coordinates": None,
+            "reference_candidate_id": None,
+            "resolved_pairs": [
                 {
                     "pair_id": f"{candidate_a_id}__{candidate_b_id}",
                     "candidate_a_id": candidate_a_id,
@@ -99,7 +103,19 @@ def resolve_state_landscape_comparison(
     if not candidate_ids:
         raise StateLandscapeAnalysisError("reference state comparison resolved no other candidates")
     return {
-        "mode": "reference", "reference_candidate_id": reference_candidate_id, "candidate_ids": candidate_ids,
+        "mode": "reference",
+        "comparison_target_id": target_id,
+        "comparison_scope": scope,
+        "reference_backend_coordinates": dict(selector),
+        "reference_candidate_id": reference_candidate_id,
+        "resolved_pairs": [
+            {
+                "pair_id": f"{reference_candidate_id}__{candidate_id}",
+                "candidate_a_id": reference_candidate_id,
+                "candidate_b_id": candidate_id,
+            }
+            for candidate_id in candidate_ids
+        ],
     }
 
 
@@ -123,43 +139,101 @@ def _source_by_candidate(
     return indexed
 
 
-def _comparison_pairs(comparison: Mapping[str, Any]) -> tuple[str, str | None, list[dict[str, str]]]:
+def _resolved_comparison(comparison: Mapping[str, Any]) -> dict[str, Any]:
     mode = comparison.get("mode")
+    target_id = comparison.get("comparison_target_id")
+    scope = comparison.get("comparison_scope")
+    if not isinstance(target_id, str) or not target_id:
+        raise StateLandscapeAnalysisError("comparison target must be explicit")
+    if not isinstance(scope, str) or not scope:
+        raise StateLandscapeAnalysisError("comparison scope must be explicit")
+    raw_pairs = comparison.get("resolved_pairs")
+    if not isinstance(raw_pairs, list) or not raw_pairs:
+        raise StateLandscapeAnalysisError("comparison requires an explicit nonempty resolved pair ledger")
+    pairs: list[dict[str, str]] = []
+    for raw in raw_pairs:
+        if not isinstance(raw, Mapping):
+            raise StateLandscapeAnalysisError("resolved comparison pair must be an object")
+        pair_id = raw.get("pair_id")
+        candidate_a_id = raw.get("candidate_a_id")
+        candidate_b_id = raw.get("candidate_b_id")
+        if (
+            not isinstance(pair_id, str)
+            or not pair_id
+            or not isinstance(candidate_a_id, str)
+            or not candidate_a_id
+            or not isinstance(candidate_b_id, str)
+            or not candidate_b_id
+        ):
+            raise StateLandscapeAnalysisError("resolved comparison requires pair and candidate identities")
+        if candidate_a_id == candidate_b_id:
+            raise StateLandscapeAnalysisError("resolved comparison candidates must differ")
+        pairs.append({"pair_id": pair_id, "candidate_a_id": candidate_a_id, "candidate_b_id": candidate_b_id})
+    if len({item["pair_id"] for item in pairs}) != len(pairs):
+        raise StateLandscapeAnalysisError("resolved comparison pair IDs must be unique")
+    pairs.sort(key=lambda item: item["pair_id"])
     if mode == "pairwise":
-        raw_pairs = comparison.get("pairs")
-        if not isinstance(raw_pairs, list) or not raw_pairs:
-            raise StateLandscapeAnalysisError("pairwise comparison requires explicit nonempty pairs")
-        pairs: list[dict[str, str]] = []
-        for raw in raw_pairs:
-            if not isinstance(raw, Mapping):
-                raise StateLandscapeAnalysisError("pairwise comparison pair must be an object")
-            pair_id = raw.get("pair_id")
-            candidate_a_id = raw.get("candidate_a_id")
-            candidate_b_id = raw.get("candidate_b_id")
-            if not all(isinstance(value, str) and value for value in (pair_id, candidate_a_id, candidate_b_id)):
-                raise StateLandscapeAnalysisError("pairwise comparison requires pair and candidate identities")
-            if candidate_a_id == candidate_b_id:
-                raise StateLandscapeAnalysisError("pairwise comparison candidates must differ")
-            pairs.append({"pair_id": pair_id, "candidate_a_id": candidate_a_id, "candidate_b_id": candidate_b_id})
-        if len({item["pair_id"] for item in pairs}) != len(pairs):
-            raise StateLandscapeAnalysisError("pairwise comparison pair IDs must be unique")
-        return mode, None, sorted(pairs, key=lambda item: item["pair_id"])
-    if mode == "reference":
-        reference = comparison.get("reference_candidate_id")
-        if not isinstance(reference, str) or not reference:
-            raise StateLandscapeAnalysisError("reference comparison requires explicit reference_candidate_id")
-        candidates = comparison.get("candidate_ids")
-        if not isinstance(candidates, list) or not candidates:
-            raise StateLandscapeAnalysisError("reference comparison requires explicit candidate_ids")
-        if any(not isinstance(value, str) or not value for value in candidates):
-            raise StateLandscapeAnalysisError("reference comparison candidate IDs are invalid")
-        if reference in candidates or len(set(candidates)) != len(candidates):
-            raise StateLandscapeAnalysisError("reference comparison candidates must be unique and exclude reference")
-        return mode, reference, [
-            {"pair_id": f"{reference}__{candidate}", "candidate_a_id": reference, "candidate_b_id": candidate}
-            for candidate in sorted(candidates)
-        ]
-    raise StateLandscapeAnalysisError("comparison mode must be explicit reference or pairwise")
+        if scope != "all_within_target":
+            raise StateLandscapeAnalysisError("pairwise comparison scope must be all_within_target")
+        if comparison.get("reference_candidate_id") is not None or comparison.get("reference_backend_coordinates") is not None:
+            raise StateLandscapeAnalysisError("pairwise comparison cannot include a reference authority")
+        return {
+            "mode": mode,
+            "comparison_target_id": target_id,
+            "comparison_scope": scope,
+            "reference_backend_coordinates": None,
+            "reference_candidate_id": None,
+            "resolved_pairs": pairs,
+        }
+    if mode != "reference" or scope != "all_other_within_target":
+        raise StateLandscapeAnalysisError("comparison mode and scope must be explicit reference or pairwise")
+    reference = comparison.get("reference_candidate_id")
+    selector = comparison.get("reference_backend_coordinates")
+    if not isinstance(reference, str) or not reference:
+        raise StateLandscapeAnalysisError("reference comparison requires explicit reference_candidate_id")
+    if not isinstance(selector, Mapping):
+        raise StateLandscapeAnalysisError("reference comparison requires full backend coordinates")
+    try:
+        parsed = parse_backend_coordinates(selector)
+    except Exception as exc:
+        raise StateLandscapeAnalysisError("reference comparison coordinates are invalid") from exc
+    if parsed.target_id != target_id:
+        raise StateLandscapeAnalysisError("reference comparison target mismatch")
+    if any(pair["candidate_a_id"] != reference for pair in pairs):
+        raise StateLandscapeAnalysisError("reference comparison pairs must begin with the reference candidate")
+    if len({pair["candidate_b_id"] for pair in pairs}) != len(pairs) or any(
+        pair["candidate_b_id"] == reference for pair in pairs
+    ):
+        raise StateLandscapeAnalysisError("reference comparison candidates must be unique and exclude reference")
+    return {
+        "mode": mode,
+        "comparison_target_id": target_id,
+        "comparison_scope": scope,
+        "reference_backend_coordinates": dict(selector),
+        "reference_candidate_id": reference,
+        "resolved_pairs": pairs,
+    }
+
+
+def derive_state_landscape_analysis_for_request(
+    request: Mapping[str, Any],
+    ensemble: Mapping[str, Any],
+    landscapes: Sequence[Mapping[str, Any]],
+    structure_maps: Sequence[Mapping[str, Any]],
+) -> dict[str, Any] | None:
+    """Derive state analysis only from dedicated request authority, never resampling shape."""
+
+    authority = request.get("state_landscape_comparison")
+    if authority is None:
+        return None
+    if not isinstance(authority, Mapping):
+        raise StateLandscapeAnalysisError("state comparison authority must be an object")
+    return derive_state_landscape_analysis(
+        ensemble,
+        landscapes,
+        structure_maps,
+        comparison=resolve_state_landscape_comparison(ensemble, authority),
+    )
 
 
 def _map_rows(structure_map: Mapping[str, Any]) -> dict[tuple[str, str, int, str, int], str]:
@@ -268,7 +342,10 @@ def derive_state_landscape_analysis(
 
     if not isinstance(ensemble, Mapping):
         raise StateLandscapeAnalysisError("ensemble must be a canonical object")
-    mode, reference_candidate_id, pairs = _comparison_pairs(comparison)
+    resolved_comparison = _resolved_comparison(comparison)
+    mode = resolved_comparison["mode"]
+    reference_candidate_id = resolved_comparison["reference_candidate_id"]
+    pairs = resolved_comparison["resolved_pairs"]
     landscape_by_candidate = _source_by_candidate(
         landscapes, schema_key="cm_frustration_landscape_v1", label="landscape",
     )
@@ -348,7 +425,7 @@ def derive_state_landscape_analysis(
     support.sort(key=lambda row: row["pair_id"])
     source_landscapes = {candidate_id: landscape_by_candidate[candidate_id] for candidate_id in sorted(landscape_by_candidate)}
     source_maps = {candidate_id: map_by_candidate[candidate_id] for candidate_id in sorted(map_by_candidate)}
-    comparison_payload = {"mode": mode, "reference_candidate_id": reference_candidate_id, "pairs": pairs}
+    comparison_payload = resolved_comparison
     policy = {"strict_required_slots": "status_ok_scoreable_finite", "no_imputation": True, "identity": "target_entity_auth_residue_insertion_sequence_wt"}
     artifact_without_id = {
         "source_ensemble_sha256": canonical_sha256(ensemble), "source_landscape_sha256": canonical_sha256(source_landscapes),
@@ -361,7 +438,12 @@ def derive_state_landscape_analysis(
         "source_ensemble_sha256": artifact_without_id["source_ensemble_sha256"],
         "source_landscape_sha256": artifact_without_id["source_landscape_sha256"],
         "source_structure_map_sha256": artifact_without_id["source_structure_map_sha256"],
-        "comparison_mode": mode, "reference_candidate_id": reference_candidate_id,
+        "comparison_mode": mode,
+        "comparison_target_id": resolved_comparison["comparison_target_id"],
+        "comparison_scope": resolved_comparison["comparison_scope"],
+        "reference_backend_coordinates": resolved_comparison["reference_backend_coordinates"],
+        "reference_candidate_id": reference_candidate_id,
+        "resolved_pairs": pairs,
         "comparison_sha256": canonical_sha256(comparison_payload), "formula_version": "cm_state_landscape_analysis_v1",
         "formula_sha256": canonical_sha256(_FORMULA), "policy_sha256": canonical_sha256(policy),
         "rows": rows, "support_ledger": support, "exclusion_ledger": exclusions,
