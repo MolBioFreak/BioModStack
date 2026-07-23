@@ -17,7 +17,7 @@ from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Literal, Mapping, Sequence
 
 from jsonschema import Draft202012Validator, FormatChecker
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, computed_field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, computed_field, model_validator
 
 
 AA_ORDER = "ACDEFGHIKLMNPQRSTVWY"
@@ -245,6 +245,8 @@ def validate_schema(schema_key: str, instance: Any) -> None:
             raise ContractValidationError("request target orders must be unique")
         if target_orders != list(range(len(target_orders))):
             raise ContractValidationError("request target orders must be contiguous and ordered")
+        if "state_landscape_comparison" in instance:
+            validate_state_landscape_comparison_request(instance, instance["state_landscape_comparison"])
         expected_request_hash = request_sha256(instance)
         if instance["request_sha256"] != expected_request_hash:
             raise ContractValidationError("request_sha256 does not match canonical request bytes")
@@ -592,6 +594,27 @@ def candidate_id(coordinates: Mapping[str, Any] | BackendCoordinates) -> str:
     if isinstance(parsed, ConforNetsCoordinates):
         return f"cm_cn_{slug}_{canonical_sha256(value)[:20]}"
     return f"cm_imp_{slug}_{parsed.staged_index:06d}_{parsed.source_content_sha256[:16]}"
+
+
+def validate_state_landscape_comparison_request(
+    request: Mapping[str, Any], comparison: Mapping[str, Any],
+) -> None:
+    """Bind optional state-analysis authority to this request's targets and backend."""
+
+    target_id = comparison["target_id"]
+    if target_id not in {target["target_id"] for target in request["targets"]}:
+        raise ContractValidationError("state landscape comparison target is not a request target")
+    if comparison["mode"] != "reference":
+        return
+    coordinates = comparison["reference_backend_coordinates"]
+    try:
+        parsed = parse_backend_coordinates(coordinates)
+    except ValidationError as exc:
+        raise ContractValidationError("state landscape reference coordinates are invalid") from exc
+    if parsed.target_id != target_id:
+        raise ContractValidationError("state landscape reference target does not match comparison target")
+    if parsed.backend != request["backend"]:
+        raise ContractValidationError("state landscape reference backend does not match request backend")
 
 
 def ensure_candidate_id_uniqueness(records: Sequence[Mapping[str, Any]]) -> None:
