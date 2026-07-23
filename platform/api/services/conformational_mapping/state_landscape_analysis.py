@@ -236,6 +236,31 @@ def derive_state_landscape_analysis_for_request(
     )
 
 
+def validate_state_landscape_analysis_binding(
+    request: Mapping[str, Any],
+    ensemble: Mapping[str, Any],
+    landscapes: Sequence[Mapping[str, Any]],
+    structure_maps: Sequence[Mapping[str, Any]],
+    proposed: Mapping[str, Any],
+) -> None:
+    """Require a worker artifact to be byte-identical to canonical request derivation."""
+
+    if not isinstance(request, Mapping):
+        raise StateLandscapeAnalysisError("state analysis binding requires the persisted canonical request")
+    if not isinstance(proposed, Mapping):
+        raise StateLandscapeAnalysisError("state analysis binding requires an artifact object")
+    expected = derive_state_landscape_analysis_for_request(
+        request,
+        ensemble,
+        landscapes,
+        structure_maps,
+    )
+    if expected is None:
+        raise StateLandscapeAnalysisError("state analysis binding rejects an artifact without request authority")
+    if canonical_json_bytes(expected) != canonical_json_bytes(proposed):
+        raise StateLandscapeAnalysisError("state analysis binding does not match canonical request-derived artifact")
+
+
 def _map_rows(structure_map: Mapping[str, Any]) -> dict[tuple[str, str, int, str, int], str]:
     rows: dict[tuple[str, str, int, str, int], str] = {}
     for row in structure_map["rows"]:
