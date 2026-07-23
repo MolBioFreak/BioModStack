@@ -3,11 +3,15 @@ from __future__ import annotations
 import json
 import os
 import sys
+import hashlib
 from pathlib import Path
 
 import pytest
-from fastapi import BackgroundTasks, HTTPException
+from fastapi import BackgroundTasks, HTTPException, Request, Response
 from pydantic import ValidationError
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
 
 
 API_ROOT = Path(__file__).resolve().parents[1]
@@ -17,6 +21,7 @@ if str(API_ROOT) not in sys.path:
 
 from model_registry import ModelRegistry  # noqa: E402
 from routers import jobs as jobs_router  # noqa: E402
+from routers import conformational_mapping as cm_router  # noqa: E402
 from schemas import JobCreate  # noqa: E402
 from services import nextflow  # noqa: E402
 from services.conformational_mapping import request_builder  # noqa: E402
@@ -33,6 +38,7 @@ from services.conformational_mapping.request_builder import (  # noqa: E402
     materialize_trusted_internal_request,
     validate_request_params,
 )
+from database import Base, ConformationalMappingRequest, ConformationalMappingSource  # noqa: E402
 from routers.conformational_mapping import SubmitRequest  # noqa: E402
 from template_registry import TemplateRegistry  # noqa: E402
 
@@ -601,6 +607,65 @@ def test_cm3_004db_typed_submit_request_accepts_only_declared_state_comparison_a
             state_landscape_comparison=authority,
             unexpected=True,
         )
+
+
+@pytest.mark.asyncio
+async def test_cm3_004dc_submit_route_persists_state_comparison_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise the real submit handler through request materialization and persistence."""
+
+    fixture = json.loads(
+        (API_ROOT / "tests" / "fixtures" / "conformational_mapping" / "schemas" / "positive" / "all_schemas.json").read_text()
+    )
+    snapshot_bytes = canonical_json_bytes([fixture["cm_complex_snapshot_v1"]])
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    (source_root / "snapshot.json").write_bytes(snapshot_bytes)
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'submit.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)()
+    try:
+        session.add(ConformationalMappingSource(
+            source_id="snapshot", principal_id="alice", source_kind="complex_snapshot",
+            storage_root=str(source_root), relative_path="snapshot.json",
+            content_sha256=hashlib.sha256(snapshot_bytes).hexdigest(), size_bytes=len(snapshot_bytes),
+            metadata_json={}, immutable=True,
+        ))
+        await session.commit()
+        monkeypatch.setattr(cm_router, "get_results_dir", lambda: tmp_path / "results")
+        monkeypatch.setattr(cm_router, "_runtime_registry", lambda _backend: {"test_runtime": True})
+        request = Request({
+            "type": "http", "method": "POST", "scheme": "http", "path": "/api/conformational-mapping/requests",
+            "headers": [], "client": ("testclient", 50000), "server": ("testserver", 80),
+        })
+        request.state.authenticated_principal = {"id": "alice", "roles": ["scientist"]}
+        authority = {"mode": "pairwise", "target_id": "target-a", "scope": "all_within_target"}
+        response = await cm_router.submit_request(
+            SubmitRequest(
+                name="state authority route",
+                backend="protenix_v2_ensemble",
+                ordered_seeds=[101, 202], samples_per_seed=1,
+                feature_policy=_request_params("protenix_v2_ensemble")["feature_policy"],
+                runtime_policy={"use_default_params": True},
+                analysis_policy=_request_params("protenix_v2_ensemble")["analysis_policy"],
+                registered_snapshot_id="snapshot",
+                state_landscape_comparison=authority,
+            ),
+            request,
+            Response(),
+            session,
+        )
+        persisted = await session.scalar(select(ConformationalMappingRequest).where(
+            ConformationalMappingRequest.request_id == response["request_id"]
+        ))
+        assert persisted is not None
+        assert persisted.request_json["state_landscape_comparison"] == authority
+    finally:
+        await session.close()
+        await engine.dispose()
 
 
 def test_cm3_004e_unknown_raw_cn_flags_fail_closed() -> None:
