@@ -225,6 +225,41 @@ def test_input_contract_requires_exactly_one_primary_input() -> None:
             ),
         )
 
+def test_wf_clone_vendor_insert_and_host_inputs_are_confined_and_semantically_bound(monkeypatch) -> None:
+    confined: list[str] = []
+
+    def confine(value, label, **_kwargs):
+        confined.append(label)
+        return str(value)
+
+    monkeypatch.setattr(ont_runs, "_confine_submitted_path", confine)
+    job = _job_create_for_ont_submit(
+        "wf_clone_validation",
+        _request({
+            "fastq_path": "/tmp/reads.fastq",
+            "reference_fasta": "/tmp/reference.fa",
+            "wf_clone_primers": "/tmp/primers.tsv",
+            "wf_clone_insert_reference": "/tmp/insert.fa",
+            "wf_clone_host_reference": "/tmp/host.fa",
+            "wf_clone_regions_bedfile": "/tmp/masked.bed",
+        }),
+    )
+    assert {"wf_clone_primers", "wf_clone_insert_reference", "wf_clone_host_reference", "wf_clone_regions_bedfile"} <= set(confined)
+    assert job.params["wf_clone_primers"] == "/tmp/primers.tsv"
+    assert job.params["wf_clone_insert_reference"] == "/tmp/insert.fa"
+    assert job.params["wf_clone_host_reference"] == "/tmp/host.fa"
+    assert job.params["wf_clone_regions_bedfile"] == "/tmp/masked.bed"
+
+    with pytest.raises(ValueError, match="wf_clone_insert_reference requires wf_clone_primers"):
+        _job_create_for_ont_submit(
+            "wf_clone_validation",
+            _request({"fastq_path": "/tmp/reads.fastq", "reference_fasta": "/tmp/reference.fa", "wf_clone_insert_reference": "/tmp/insert.fa"}),
+        )
+    with pytest.raises(ValueError, match="wf_clone_regions_bedfile requires wf_clone_host_reference"):
+        _job_create_for_ont_submit(
+            "wf_clone_validation",
+            _request({"fastq_path": "/tmp/reads.fastq", "reference_fasta": "/tmp/reference.fa", "wf_clone_regions_bedfile": "/tmp/masked.bed"}),
+        )
 
 @pytest.mark.parametrize(
     "server_controlled_param",

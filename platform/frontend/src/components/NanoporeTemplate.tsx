@@ -431,6 +431,10 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     );
     const [fastqPath, setFastqPath] = useState(initialValues?.fastqPath as string || '');
     const [referencePath, setReferencePath] = useState(initialValues?.referencePath as string || '');
+    const [wfClonePrimers, setWfClonePrimers] = useState(initialValues?.wfClonePrimers as string || '');
+    const [wfCloneInsertReference, setWfCloneInsertReference] = useState(initialValues?.wfCloneInsertReference as string || '');
+    const [wfCloneHostReference, setWfCloneHostReference] = useState(initialValues?.wfCloneHostReference as string || '');
+    const [wfCloneRegionsBedfile, setWfCloneRegionsBedfile] = useState(initialValues?.wfCloneRegionsBedfile as string || '');
 
     // ============================================================================
     // State: Basecalling Config
@@ -862,6 +866,10 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         wf_clone_basecaller_model: wfCloneBasecallerModel,
                         wf_clone_large_construct: wfCloneLargeConstruct,
                         ...(wfCloneSample.trim() && { wf_clone_sample: wfCloneSample.trim() }),
+                        ...(wfClonePrimers.trim() && { wf_clone_primers: wfClonePrimers.trim() }),
+                        ...(wfCloneInsertReference.trim() && { wf_clone_insert_reference: wfCloneInsertReference.trim() }),
+                        ...(wfCloneHostReference.trim() && { wf_clone_host_reference: wfCloneHostReference.trim() }),
+                        ...(wfCloneRegionsBedfile.trim() && { wf_clone_regions_bedfile: wfCloneRegionsBedfile.trim() }),
                     }),
                     ...(runModkit && canRunModkit && modkitFilterThreshold != null && { modkit_filter_threshold: modkitFilterThreshold }),
                 }
@@ -1903,6 +1911,22 @@ nextflow run workflows/ngs/ont_fastq_qc.nf -profile ont_fastq_qc,apptainer \\
                                             placeholder="auto from job name"
                                             className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
                                         />
+                                    </label>
+                                    <label className="text-xs text-[var(--text-secondary)] md:col-span-2">
+                                        Primers TSV (optional; enables vendor insert discovery)
+                                        <input type="text" value={wfClonePrimers} onChange={(e) => setWfClonePrimers(e.target.value)} placeholder="/confined/path/primers.tsv" className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm font-mono" />
+                                    </label>
+                                    <label className="text-xs text-[var(--text-secondary)]">
+                                        Insert reference FASTA (requires primers)
+                                        <input type="text" value={wfCloneInsertReference} onChange={(e) => setWfCloneInsertReference(e.target.value)} placeholder="/confined/path/insert.fasta" className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm font-mono" />
+                                    </label>
+                                    <label className="text-xs text-[var(--text-secondary)]">
+                                        Host reference FASTA (optional filtering)
+                                        <input type="text" value={wfCloneHostReference} onChange={(e) => setWfCloneHostReference(e.target.value)} placeholder="/confined/path/host.fasta" className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm font-mono" />
+                                    </label>
+                                    <label className="text-xs text-[var(--text-secondary)] md:col-span-2">
+                                        Host mask BED (requires host reference)
+                                        <input type="text" value={wfCloneRegionsBedfile} onChange={(e) => setWfCloneRegionsBedfile(e.target.value)} placeholder="/confined/path/masked-regions.bed" className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm font-mono" />
                                     </label>
                                     <label className="flex items-center gap-2 cursor-pointer md:col-span-2">
                                         <input
