@@ -2175,6 +2175,31 @@ export interface GibsonAssemblyRequest {
     save_description?: string;
 }
 
+export interface DnaWeaverPlanRequest {
+    target_sequence: string;
+    circular?: boolean;
+    min_fragment_length?: number;
+    max_fragment_length?: number;
+    overlap_length?: number;
+    vendor_name?: string;
+    price_per_bp?: number;
+    lead_time_days?: number;
+}
+
+export interface DnaWeaverPlanResponse {
+    engine: string;
+    engine_version: string;
+    validator_engine: string;
+    validator_version: string;
+    estimated_price?: number | null;
+    lead_time_days?: number | null;
+    source_intervals: Array<{ start: number; end: number }>;
+    pydna_exact_candidate_count: number;
+    ordered_fragments: AssemblyFragmentInput[];
+    product: AssemblyProduct;
+    warnings: string[];
+}
+
 export interface GibsonDesignFragmentInput extends AssemblyFragmentInput {
     preparation: 'pcr' | 'ready_linear';
 }
@@ -2569,6 +2594,9 @@ export const simulateGibsonAssembly = (data: GibsonAssemblyRequest) =>
 
 export const saveGibsonAssembly = (data: GibsonAssemblyRequest) =>
     api.post<AssemblyOperationResponse>('/api/molbio/assembly/gibson/save', data);
+
+export const planDnaWeaverGibsonAssembly = (data: DnaWeaverPlanRequest) =>
+    api.post<DnaWeaverPlanResponse>('/api/molbio/assembly/gibson/dnaweaver/plan', data);
 
 export const designGibsonAssembly = (data: GibsonDesignRequest) =>
     api.post<GibsonDesignResponse>('/api/molbio/assembly/gibson/design', data);
