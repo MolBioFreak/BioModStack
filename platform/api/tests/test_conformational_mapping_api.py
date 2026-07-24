@@ -8,7 +8,7 @@ import pytest
 import routers.conformational_mapping as cm_router
 from fastapi import HTTPException, Request
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -241,6 +241,34 @@ def test_cm11_api_request_capability_is_secret_bound() -> None:
     assert capability_matches(token, digest)
     assert not capability_matches(token + "x", digest)
     assert not capability_matches(None, digest)
+
+
+@pytest.mark.asyncio
+async def test_register_prepared_request_inserts_job_before_cm_request_with_sqlite_foreign_keys(
+    tmp_path: Path,
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'foreign_keys.db'}")
+    async with engine.begin() as connection:
+        await connection.execute(text("PRAGMA foreign_keys=ON"))
+        await connection.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as session:
+        await register_prepared_request(
+            session,
+            job=Job(
+                id="job", name="map", model_id="conformational_mapping", mode="map",
+                status="queued", params={},
+            ),
+            principal_id="alice",
+            request={"request_id": "request", "request_sha256": "a" * 64, "backend": "external_import"},
+            coordinate_plan={"coordinate_plan_sha256": "b" * 64, "expected_cardinality": 1, "coordinates": [{}]},
+            resume_key="0" * 64,
+            capability_sha256="c" * 64,
+        )
+        await session.commit()
+        assert await session.get(Job, "job") is not None
+        assert await session.get(ConformationalMappingRequest, "request") is not None
+    await engine.dispose()
 
 
 @pytest.mark.asyncio
