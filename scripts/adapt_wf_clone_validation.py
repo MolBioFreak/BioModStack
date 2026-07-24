@@ -163,6 +163,9 @@ def normalize(args: argparse.Namespace) -> dict[str, Any]:
     sample = args.sample
     if fasta_name != sample or final_fasta.name != f"{sample}.final.fasta":
         fail("FASTA_SAMPLE_MISMATCH", f"final FASTA identity {fasta_name!r}/{final_fasta.name!r} does not match sample {sample!r}")
+    final_fastq = exactly_one(root, f"{sample}.final.fastq", "final FASTQ")
+    if final_fastq.stat().st_size == 0:
+        fail("MALFORMED_FASTQ", "final FASTQ is empty")
     stats = exactly_one(root, f"{sample}.assembly_stats.tsv", "assembly stats")
     stats_row = read_rows(stats, delimiter="\t")[0]
     required_stats = {"read_id", "sample_name", "read_length"}
@@ -191,18 +194,28 @@ def normalize(args: argparse.Namespace) -> dict[str, Any]:
     if status_row["Sample"] != sample or status_length != len(sequence) or completed != (args.execution_exit_code == 0):
         fail("STATUS_EVIDENCE_CONTRADICTION", "sample status identity, length, or completion contradicts execution/final FASTA")
     report = exactly_one(root, "wf-clone-validation-report.html", "upstream report")
+    plannotate_json = exactly_one(root, "plannotate.json", "plannotate JSON")
+    try:
+        json.loads(plannotate_json.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        fail("MALFORMED_PLANNOTATE_JSON", f"plannotate JSON cannot be parsed: {exc}")
 
     artifacts = [
         artifact(root, final_fasta, "final_fasta"),
+        artifact(root, final_fastq, "final_fastq"),
         artifact(root, stats, "assembly_stats"),
         artifact(root, bam, "bam"),
         artifact(root, bai, "bai"),
         artifact(root, status_path, "sample_status"),
         artifact(root, report, "upstream_report"),
+        artifact(root, plannotate_json, "plannotate_json"),
     ]
     if args.full_reference_provided:
         bcf = exactly_one(root, f"{sample}.full_construct.calls.bcf", "full-reference BCF")
         csi = exactly_one(root, f"{sample}.full_construct.calls.bcf.csi", "full-reference BCF index")
+        full_reference_stats = exactly_one(root, f"{sample}.full_construct.stats", "full-reference variant stats")
+        if full_reference_stats.stat().st_size == 0:
+            fail("MALFORMED_TABULAR_OUTPUT", "full-reference variant stats are empty")
         header = bcf.read_bytes()[:5]
         if header[:2] == b"\x1f\x8b":
             try:
@@ -212,12 +225,19 @@ def normalize(args: argparse.Namespace) -> dict[str, Any]:
                 fail("MALFORMED_BCF", f"full-reference BCF compression is malformed: {exc}")
         if header != b"BCF\x02\x02":
             fail("MALFORMED_BCF", "full-reference BCF does not have a BCF 2.2 header")
-        artifacts.extend((artifact(root, bcf, "full_reference_bcf"), artifact(root, csi, "full_reference_csi")))
-    elif candidates(root, "*.full_construct.calls.bcf") or candidates(root, "*.full_construct.calls.bcf.csi"):
-        fail("UNEXPECTED_REFERENCE_EVIDENCE", "full-reference BCF evidence exists although no full reference was declared")
+        artifacts.extend((
+            artifact(root, bcf, "full_reference_bcf"),
+            artifact(root, csi, "full_reference_csi"),
+            artifact(root, full_reference_stats, "full_reference_stats"),
+        ))
+    elif (
+        candidates(root, "*.full_construct.calls.bcf")
+        or candidates(root, "*.full_construct.calls.bcf.csi")
+        or candidates(root, "*.full_construct.stats")
+    ):
+        fail("UNEXPECTED_REFERENCE_EVIDENCE", "full-reference evidence exists although no full reference was declared")
 
     optional_specs = (
-        ("plannotate.json", "plannotate_json"),
         ("plannotate_report.json", "plannotate_report_json"),
         (f"{sample}.annotations.bed", "plannotate_bed"),
         (f"{sample}.annotations.gbk", "plannotate_genbank"),
