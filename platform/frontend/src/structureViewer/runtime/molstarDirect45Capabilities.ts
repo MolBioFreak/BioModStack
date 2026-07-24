@@ -139,9 +139,9 @@ const capabilities: Record<ViewerCapabilityId, ViewerCapability> = {
         'platform/frontend/src/structureViewer/contracts/measurements.ts',
     ),
     trajectories: directCapability(
-        'unsupported', 'not-implemented',
-        'Governed hash-bound metadata, replica replacement, playback state, and source-frame contracts exist; XTC/DCD engine playback remains fail-closed pending exercised Molstar 4.5 format proof.',
-        'platform/frontend/src/structureViewer/contracts/mdTrajectory.ts',
+        'partial', 'bms-direct-adapter',
+        'Governed GRO/XTC replica loading and bounded display-frame selection are supported through pinned Mol* 4.5 state transforms; DCD and continuous playback remain fail-closed.',
+        adapterSource,
     ),
     assemblies: directCapability(
         'partial', 'bms-direct-adapter',

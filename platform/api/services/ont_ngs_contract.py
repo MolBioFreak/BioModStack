@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import json
+import re
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -23,6 +25,7 @@ ONT_NGS_FAMILY_ID = "ont_ngs"
 ANALYSIS_OWNER = "nextflow_analysis"
 DEVICE_CONTROL_OWNER = "bms_service_api"
 MANIFEST_SCHEMA = "sequence_qc.manifest.v1"
+DORADO_LOCK_PATH = Path(__file__).resolve().parents[3] / "config" / "ngs" / "dorado_v1.3.1.lock.json"
 
 
 def normalized_fasta_sequence_sha256(path: Path) -> str:
@@ -73,6 +76,10 @@ COMMON_ARTIFACT_KINDS = (
     "read_qc_summary",
     "per_base_support",
     "consensus",
+    "dorado_preflight",
+    "dorado_runtime_provenance",
+    "demux_manifest",
+    "barcode_units",
 )
 
 ONT_SEQUENCE_QC_MANIFEST_CONTRACT: dict[str, Any] = {
@@ -139,6 +146,10 @@ CANONICAL_ONT_WORKFLOWS: dict[str, OntWorkflowSpec] = {
             "alignment_bam",
             "alignment_bai",
             "read_qc_summary",
+            "dorado_preflight",
+            "dorado_runtime_provenance",
+            "demux_manifest",
+            "barcode_units",
         ),
         lifecycle="seed",
     ),
@@ -153,6 +164,8 @@ CANONICAL_ONT_WORKFLOWS: dict[str, OntWorkflowSpec] = {
             "alignment_bam",
             "alignment_bai",
             "read_qc_summary",
+            "dorado_preflight",
+            "dorado_runtime_provenance",
         ),
         lifecycle="seed",
     ),
@@ -309,9 +322,10 @@ WORKFLOW_DEFAULTS: dict[str, dict[str, Any]] = {
     },
     "ont_methylation_analysis": {
         "ont_molecule_type": "dna",
-        "run_modkit": True,
+        "dorado_quality_mode": "hac",
+        "run_modkit": False,
         "run_fastq_qc": True,
-        "modified_bases": "6mA 4mC_5mC",
+        "modified_bases": "none",
     },
     "ont_fastq_qc": {
         "ont_molecule_type": "dna",
@@ -353,13 +367,26 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
     normalized: dict[str, Any] = dict(WORKFLOW_DEFAULTS.get(canonical_id, {}))
     normalized.update(dict(params or {}))
 
-    quality_mode = str(
-        normalized.get("dorado_quality_mode")
-        or normalized.get("dorado_model")
-        or ONT_QUALITY_MODE_CONTRACT["default_quality_mode"]
-    ).strip()
+    lock_bytes = DORADO_LOCK_PATH.read_bytes()
+    lock = json.loads(lock_bytes)
+    current_lock_sha256 = hashlib.sha256(lock_bytes).hexdigest()
+    submitted_lock_sha256 = str(normalized.get("dorado_lock_sha256") or "").strip().lower()
+    if submitted_lock_sha256 and submitted_lock_sha256 != current_lock_sha256:
+        raise ValueError("accepted Dorado lock identity changed before execution")
+    submitted_model_id = str(normalized.get("dorado_resolved_model_id") or "").strip()
+    supplied_model = str(normalized.get("dorado_model") or "").strip()
+    quality_mode = str(normalized.get("dorado_quality_mode") or "").strip().lower()
+    if supplied_model:
+        if supplied_model in ONT_QUALITY_MODE_CONTRACT["quality_modes"]:
+            if quality_mode and quality_mode != supplied_model:
+                raise ValueError("dorado_model and dorado_quality_mode must preserve one exact quality choice")
+            quality_mode = supplied_model
+        elif supplied_model != str(normalized.get("dorado_resolved_model_id") or "").strip():
+            raise ValueError("dorado quality must be fast, hac, or sup; exact model IDs are server-resolved")
     if not quality_mode:
         quality_mode = ONT_QUALITY_MODE_CONTRACT["default_quality_mode"]
+    if quality_mode not in ONT_QUALITY_MODE_CONTRACT["quality_modes"]:
+        raise ValueError("dorado quality must be fast, hac, or sup")
 
     basecall_mode = str(
         normalized.get("dorado_basecall_mode")
@@ -368,22 +395,87 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
     ).strip()
     if not basecall_mode:
         basecall_mode = ONT_QUALITY_MODE_CONTRACT["default_basecalling_mode"]
+    if basecall_mode not in ONT_QUALITY_MODE_CONTRACT["basecalling_modes"]:
+        raise ValueError("dorado_basecall_mode must be simplex or duplex")
 
-    molecule_type = str(normalized.get("ont_molecule_type") or ("rna" if canonical_id.endswith("_rna") else "dna")).strip().lower()
-    if molecule_type not in ONT_QUALITY_MODE_CONTRACT["molecule_types"]:
-        molecule_type = "dna"
+    required_molecule = "rna" if canonical_id == "ont_basecall_rna" else "dna"
+    molecule_type = str(normalized.get("ont_molecule_type") or required_molecule).strip().lower()
+    if molecule_type != required_molecule:
+        raise ValueError(f"{canonical_id} requires ont_molecule_type={required_molecule}")
+    if molecule_type == "rna" and basecall_mode == "duplex":
+        raise ValueError("RNA duplex is unsupported")
+    if molecule_type == "rna" and normalized.get("trim_adapters") is False:
+        raise ValueError("Dorado RNA always trims adapters; trim_adapters=false is unsupported")
+    if basecall_mode == "duplex" and normalized.get("trim_adapters") is False:
+        raise ValueError("locked Dorado duplex lacks an adapter-trim control; trim_adapters=false is unsupported")
+
+    barcode_kit = str(normalized.get("barcode_kit") or "").strip() or None
+    if barcode_kit and barcode_kit not in lock["barcoding"]["accepted_kits"]:
+        raise ValueError("unsupported barcode kit")
+    if barcode_kit and canonical_id != "ont_basecall_dna":
+        raise ValueError("inline barcode classification is only supported by ont_basecall_dna")
+    if barcode_kit and basecall_mode == "duplex":
+        raise ValueError("barcode classification is incompatible with duplex in the locked runtime")
+    sample_sheet = str(normalized.get("sample_sheet") or "").strip() or None
+    if sample_sheet and not barcode_kit:
+        raise ValueError("sample_sheet requires barcode_kit")
+    duplex_pairs = str(normalized.get("duplex_pairs") or "").strip() or None
+    if basecall_mode == "duplex" and not duplex_pairs:
+        raise ValueError("duplex mode requires duplex_pairs")
+    if basecall_mode == "simplex" and duplex_pairs:
+        raise ValueError("duplex_pairs is only valid in duplex mode")
+
+    modified_bases = str(normalized.get("modified_bases") or "none").strip()
+    if modified_bases not in {"none", "5mC_5hmC", "6mA"}:
+        raise ValueError("unsupported modified-base selection")
+    if modified_bases != "none" and (molecule_type != "dna" or quality_mode != "hac" or basecall_mode != "simplex"):
+        raise ValueError("modified-base selection requires DNA HAC simplex basecalling")
+    if barcode_kit and modified_bases != "none":
+        raise ValueError("inline barcode classification and modified-base calling are mutually exclusive")
+
+    raw_batch = normalized.get("dorado_batch_size")
+    if raw_batch in (None, ""):
+        batch_size = int(lock["policy"]["default_batch_size"][basecall_mode])
+    elif isinstance(raw_batch, bool) or not (
+        isinstance(raw_batch, int) or (isinstance(raw_batch, str) and re.fullmatch(r"[0-9]+", raw_batch.strip()))
+    ):
+        raise ValueError("dorado_batch_size must be an integer")
+    else:
+        batch_size = int(raw_batch)
+    if not int(lock["policy"]["batch_size_min"]) <= batch_size <= int(lock["policy"]["batch_size_max"]):
+        raise ValueError("dorado_batch_size is outside the locked bounded policy")
+    raw_qscore = normalized.get("min_qscore", 10)
+    if isinstance(raw_qscore, bool) or not (
+        isinstance(raw_qscore, int) or (isinstance(raw_qscore, str) and re.fullmatch(r"[0-9]+", raw_qscore.strip()))
+    ):
+        raise ValueError("min_qscore must be an integer")
+    min_qscore = int(raw_qscore)
+    if min_qscore < 0 or min_qscore > 30:
+        raise ValueError("min_qscore must be an integer from 0 through 30")
+    resolved_model = lock["models"][molecule_type][quality_mode]["id"]
+    if submitted_model_id and submitted_model_id != resolved_model:
+        raise ValueError("accepted Dorado model identity changed before execution")
 
     normalized["ont_workflow_id"] = spec.workflow_id
     normalized["ont_molecule_type"] = molecule_type
     normalized["dorado_quality_mode"] = quality_mode
-    if normalized.get("dorado_model"):
-        normalized["dorado_model"] = normalized["dorado_model"]
-    elif molecule_type == "rna":
-        normalized["dorado_model"] = "rna004_130bps_sup@v5.2.0"
-    else:
-        normalized["dorado_model"] = quality_mode
+    normalized["dorado_model"] = resolved_model
+    normalized["dorado_resolved_model_id"] = resolved_model
     normalized["dorado_basecall_mode"] = basecall_mode
-    normalized["dorado_device"] = normalized.get("dorado_device") or ONT_QUALITY_MODE_CONTRACT["default_device"]
+    if basecall_mode == "duplex":
+        normalized["dorado_stereo_model"] = lock["models"]["stereo"]["id"]
+    else:
+        normalized.pop("dorado_stereo_model", None)
+    normalized["dorado_batch_size"] = batch_size
+    normalized["min_qscore"] = min_qscore
+    normalized["modified_bases"] = modified_bases
+    for key, value in (("barcode_kit", barcode_kit), ("sample_sheet", sample_sheet), ("duplex_pairs", duplex_pairs)):
+        if value is None:
+            normalized.pop(key, None)
+        else:
+            normalized[key] = value
+    normalized["dorado_lock_sha256"] = current_lock_sha256
+    normalized["dorado_device"] = ONT_QUALITY_MODE_CONTRACT["default_device"]
     normalized["manifest_contract"] = MANIFEST_SCHEMA
 
     if canonical_id == "wf_clone_validation":

@@ -3314,7 +3314,7 @@ export function ResultsViewer() {
             return;
         }
         if (selectedDesignLens === 'frustrampnn') {
-            setColorMode(selectedDesign?.frustration_residues?.length ? 'frustration' : 'default');
+            setColorMode('default');
             return;
         }
         if (selectedDesignLens === 'validation' || selectedDesignLens === 'protenix') {
@@ -3326,7 +3326,7 @@ export function ResultsViewer() {
             return;
         }
         setColorMode('default');
-    }, [hasCdrAnnotation, hasCdrOverlay, isOligoJob, selectedDesign?.frustration_residues?.length, selectedDesignLens, selectedJobId]);
+    }, [hasCdrAnnotation, hasCdrOverlay, isOligoJob, selectedDesignLens, selectedJobId]);
     const antibodyDesignGroups = useMemo(() => {
         const grouped: Record<OutputSourceFilter, typeof designs> = { all: [], rfantibody: [], boltzgen: [], fampnn: [], caliby: [], ppiflow: [], confornets: [], esmfold2: [], imported: [], validation: [] };
         for (const design of orderedDesigns) {
@@ -5161,7 +5161,7 @@ export function ResultsViewer() {
 
                 {activeJob && (
                     activeJob.model_id === 'molecular_dynamics' ? (
-                        <MDResultsPane jobId={activeJob.id} />
+                        <MDResultsPane key={activeJob.id} jobId={activeJob.id} />
                     ) : (
                     <>
                         {activeLineageRootJob && (

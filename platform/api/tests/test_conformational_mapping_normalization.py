@@ -11,8 +11,40 @@ from services.conformational_mapping.contracts import validate_schema
 from services.conformational_mapping.structure_normalizer import (
     StructureMapError,
     normalize_conformational_mapping_structure,
+    validate_pdb_atom_representability,
     validate_rendered_pdb_mapping,
 )
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"atom_name": "Cα"}, "atom name.*ASCII"),
+        ({"element": "Cα"}, "element.*ASCII"),
+        ({"residue_name": "AΛA"}, "residue name.*ASCII"),
+        ({"insertion_code": "α"}, "insertion code.*ASCII"),
+        ({"residue_id": -1000}, "residue number"),
+        ({"residue_id": 10000}, "residue number"),
+        ({"x": 100000.0}, "x coordinate"),
+        ({"y": 100000.0}, "y coordinate"),
+        ({"z": 100000.0}, "z coordinate"),
+        ({"occupancy": 10000.0}, "occupancy"),
+        ({"b_factor": 1000000.0}, "B factor"),
+        ({"atom_name": "CX", "residue_name": "GLY"}, "not valid for standard residue"),
+        ({"atom_name": "CB", "element": "N"}, "inconsistent with element"),
+    ],
+)
+def test_shared_pdb_representability_authority_covers_every_fixed_field(
+    changes: dict[str, object], message: str,
+) -> None:
+    fields = {
+        "atom_name": "CA", "element": "C", "residue_name": "ALA",
+        "residue_id": 1, "insertion_code": "", "x": 0.0, "y": 0.0,
+        "z": 0.0, "occupancy": 1.0, "b_factor": 10.0,
+    }
+    fields.update(changes)
+    with pytest.raises(StructureMapError, match=message):
+        validate_pdb_atom_representability(**fields)
 
 
 FIXTURES = (

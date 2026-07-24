@@ -12,7 +12,8 @@ import copy
 import stat
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal, Mapping
+from typing import Annotated, Any, Literal, Mapping
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
@@ -27,7 +28,12 @@ from database import (
     Job,
     get_session,
 )
-from paths import get_data_root, get_results_dir, get_container_dir, get_weights_root
+from paths import (
+    get_data_root,
+    get_results_dir,
+    get_container_dir,
+    get_weights_root,
+)
 from services.conformational_mapping.contracts import candidate_id, canonical_sha256, validate_schema
 from services.conformational_mapping.import_stager import (
     ImportStagingError,
@@ -37,20 +43,33 @@ from services.conformational_mapping.import_stager import (
     stage_registered_assets,
     verify_registered_artifact,
 )
+from services.conformational_mapping.import_snapshot import (
+    ImportSnapshotError,
+    MAX_IMPORT_MMCIF_BYTES,
+    build_staged_import_snapshots,
+)
 from services.conformational_mapping.persistence import (
     ConformationalPersistenceError,
+    MAX_STATE_LANDSCAPE_ANALYSIS_PAGE_OFFSET,
+    StateLandscapeAnalysisProjectionAbsent,
+    StateLandscapeAnalysisProjectionAmbiguous,
     capability_matches,
     get_request,
     issue_request_capability,
     paged_landscape,
+    paged_state_landscape_analysis_rows,
     persist_derived_record,
     register_prepared_request,
+    resolve_state_landscape_analysis_projection,
+    state_landscape_analysis_artifact,
+    state_landscape_analysis_pair_summaries,
     transition_request,
 )
 from services.conformational_mapping.mutagenesis_handoff import MutagenesisHandoffError, prepare_handoff
 from services.conformational_mapping.resampling import ResamplingError, materialize_resampling_pair
 from services.conformational_mapping.request_builder import (
     ConformationalMappingRequestError,
+    bind_materialized_source_snapshot,
     materialize_trusted_internal_request,
     validate_request_params,
 )
@@ -59,6 +78,7 @@ from services.job_control import cancel_job_lineage
 
 router = APIRouter(prefix="/api/conformational-mapping", tags=["conformational-mapping"])
 _OPERATOR_HEADER = "X-BMS-CM-Operator-Token"
+_APPLICATION_PROXY_HEADER = "X-BMS-CM-Proxy-Secret"
 _COOKIE_PREFIX = "bms_cm_access_"
 
 
@@ -81,6 +101,7 @@ class SubmitRequest(BaseModel):
     registered_config_id: str | None = None
     registered_transfer_id: str | None = None
     confornets: dict[str, Any] | None = None
+    state_landscape_comparison: dict[str, Any] | None = None
 
 
 class HandoffRequest(BaseModel):
@@ -113,11 +134,63 @@ _SOURCE_MAX_BYTES = {
     "complex_snapshot": 64 * 1024 * 1024,
     "protein_sequence": 16 * 1024 * 1024,
     "confornets_config": 16 * 1024 * 1024,
-    "structure_upload": 2 * 1024 * 1024 * 1024,
-    "structure_artifact": 2 * 1024 * 1024 * 1024,
+    "structure_upload": MAX_IMPORT_MMCIF_BYTES,
+    "structure_artifact": MAX_IMPORT_MMCIF_BYTES,
     "confornets_checkpoint": 2 * 1024 * 1024 * 1024,
     "confornets_state": 2 * 1024 * 1024 * 1024,
 }
+_CM_VRAM_ESTIMATE_MB = {
+    "external_import": 12_000,
+    "confornets": 16_000,
+    "protenix_v2_ensemble": 24_000,
+}
+_FRUSTRAMPNN_IMAGE_SHA256 = "c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da"
+
+
+def _cm_job_admission(backend: str, request_payload: Mapping[str, Any]) -> dict[str, int]:
+    sequence_length = 0
+    for target in request_payload["targets"]:
+        direct_sequence = str(target.get("sequence") or "")
+        if direct_sequence:
+            sequence_length += len(direct_sequence)
+            continue
+        sequence_length += sum(
+            len(str(entity.get("sequence") or ""))
+            for entity in target.get("entities", [])
+            if entity.get("entity_type") == "protein"
+        )
+    return {
+        "vram_estimate_mb": _CM_VRAM_ESTIMATE_MB[backend],
+        "sequence_length": sequence_length or 300,
+    }
+
+
+def _validated_source_suffix(source_kind: str, filename: str) -> str:
+    source_suffix = Path(filename).suffix.lower()
+    allowed_suffixes = {
+        "structure_upload": {".cif", ".mmcif"},
+        "structure_artifact": {".cif", ".mmcif"},
+        "complex_snapshot": {".json"},
+        "protein_sequence": {".txt", ".fa", ".fasta", ""},
+        "confornets_checkpoint": {".pt", ".pth", ".ckpt"},
+        "confornets_config": {".json", ".yaml", ".yml"},
+        "confornets_state": {".pt", ".pth", ".ckpt"},
+    }.get(source_kind)
+    if allowed_suffixes is None or source_suffix not in allowed_suffixes:
+        detail = (
+            "structure sources must be mmCIF (.cif or .mmcif); PDB is not accepted"
+            if source_kind in {"structure_upload", "structure_artifact"}
+            else "registered source extension is unsupported"
+        )
+        raise HTTPException(status_code=422, detail=detail)
+    return source_suffix
+
+
+def _registered_source_format(relative_path: str) -> str:
+    suffix = Path(relative_path).suffix.lower()
+    if suffix in {".cif", ".mmcif"}:
+        return "mmcif"
+    return suffix.removeprefix(".") or "unknown"
 
 
 def _sha256_path(path: Path) -> str:
@@ -154,8 +227,18 @@ def _server_confornets_identity() -> dict[str, str]:
 
 
 def _runtime_registry(backend: str) -> dict[str, Any]:
+    analysis_image = get_container_dir() / "frustrampnn.sif"
+    if not analysis_image.is_file() or analysis_image.is_symlink():
+        raise HTTPException(status_code=503, detail="registered FrustraMPNN runtime is unavailable")
+    analysis_runtime = {
+        "container_name": "frustrampnn.sif",
+        "container_sha256": _FRUSTRAMPNN_IMAGE_SHA256,
+    }
     if backend == "confornets":
-        return {"schema_name": "cm_runtime_registry", "schema_version": 1, **_server_confornets_identity()}
+        return {
+            "schema_name": "cm_runtime_registry", "schema_version": 1,
+            "analysis_runtime": analysis_runtime, **_server_confornets_identity(),
+        }
     if backend == "protenix_v2_ensemble":
         image = get_container_dir() / "protenix.sif"
         checkpoint = get_weights_root() / "protenix" / "checkpoint" / "protenix-v2.pt"
@@ -168,12 +251,14 @@ def _runtime_registry(backend: str) -> dict[str, Any]:
             "container_digest": f"sha256:{_sha256_path(image)}",
             "checkpoint_sha256": _sha256_path(checkpoint),
             "checkpoint_relative_path": "checkpoint/protenix-v2.pt",
+            "analysis_runtime": analysis_runtime,
         }
     return {
         "schema_name": "cm_runtime_registry", "schema_version": 1,
         "backend_version": "1", "backend_commit": "biomodstack-import-v1",
         "runtime_identity": "descriptor-safe-import-v1", "model_id": "external-import",
         "container_digest": "sha256:" + "0" * 64, "checkpoint_sha256": "0" * 64,
+        "analysis_runtime": analysis_runtime,
     }
 
 
@@ -190,6 +275,7 @@ async def list_sources(request: Request, session: AsyncSession = Depends(get_ses
     ).scalars().all()
     return {"sources": [
         {"source_id": row.source_id, "source_kind": row.source_kind,
+         "format": _registered_source_format(row.relative_path),
          "sha256": row.content_sha256, "bytes": row.size_bytes,
          "metadata": row.metadata_json, "created_at": row.created_at.isoformat() + "Z"}
         for row in rows
@@ -201,7 +287,7 @@ async def register_source(
     request: Request, source_kind: str = Form(...), metadata_json: str = Form("{}"),
     file: UploadFile = File(...), session: AsyncSession = Depends(get_session),
 ):
-    principal_id = _principal(request)
+    principal_id = _mutation_principal(request)
     if source_kind not in _SOURCE_KINDS:
         raise HTTPException(status_code=422, detail="unsupported conformational-mapping source kind")
     try:
@@ -254,6 +340,7 @@ async def register_source(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {
             "source_id": source_id, "source_kind": source_kind,
+            "format": _registered_source_format(existing.relative_path),
             "sha256": content_sha256, "bytes": size, "metadata": existing.metadata_json,
         }
     destination_dir = registry / source_id
@@ -262,20 +349,12 @@ async def register_source(
     except FileExistsError as exc:
         temporary.unlink(missing_ok=True)
         raise HTTPException(status_code=409, detail="registered source publication raced or is ambiguous") from exc
-    source_suffix = Path(file.filename or "").suffix.lower()
-    allowed_suffixes = {
-        "structure_upload": {".cif", ".mmcif", ".pdb"},
-        "structure_artifact": {".cif", ".mmcif", ".pdb"},
-        "complex_snapshot": {".json"},
-        "protein_sequence": {".txt", ".fa", ".fasta", ""},
-        "confornets_checkpoint": {".pt", ".pth", ".ckpt"},
-        "confornets_config": {".json", ".yaml", ".yml"},
-        "confornets_state": {".pt", ".pth", ".ckpt"},
-    }[source_kind]
-    if source_suffix not in allowed_suffixes:
+    try:
+        source_suffix = _validated_source_suffix(source_kind, file.filename or "")
+    except HTTPException:
         temporary.unlink(missing_ok=True)
         destination_dir.rmdir()
-        raise HTTPException(status_code=422, detail="registered source extension is unsupported")
+        raise
     destination = destination_dir / f"content{source_suffix}"
     created_destination = False
     try:
@@ -326,7 +405,59 @@ async def register_source(
         destination_dir.rmdir()
         raise
     destination_dir.chmod(0o550)
-    return {"source_id": source_id, "source_kind": source_kind, "sha256": content_sha256, "bytes": size, "metadata": metadata}
+    return {
+        "source_id": source_id, "source_kind": source_kind,
+        "format": _registered_source_format(destination.name),
+        "sha256": content_sha256, "bytes": size, "metadata": metadata,
+    }
+
+
+def _trusted_application_boundary(request: Request) -> bool:
+    proxy_secret = os.getenv("BMS_CM_TRUSTED_PROXY_SECRET", "")
+    supplied_proxy_secret = request.headers.get(_APPLICATION_PROXY_HEADER, "")
+    return bool(
+        proxy_secret
+        and supplied_proxy_secret
+        and secrets.compare_digest(proxy_secret, supplied_proxy_secret)
+    )
+
+
+def _require_same_origin_proxy_mutation(request: Request) -> None:
+    if not _trusted_application_boundary(request):
+        return
+    origin = request.headers.get("origin", "").strip()
+    forwarded_proto = request.headers.get("x-forwarded-proto", "").partition(",")[0].strip().lower()
+    scheme = forwarded_proto or request.url.scheme.lower()
+    host = (
+        request.headers.get("x-forwarded-host")
+        or request.headers.get("host", "")
+    ).partition(",")[0].strip().lower()
+    try:
+        parsed = urlsplit(origin)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail="same-origin mutation proof required") from exc
+    allowed_origins = {
+        value.strip().lower().rstrip("/")
+        for value in os.getenv(
+            "BMS_CM_ALLOWED_ORIGINS",
+            "http://127.0.0.1:18080,http://localhost:18080",
+        ).split(",")
+        if value.strip()
+    }
+    normalized_origin = f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
+    if (
+        scheme not in {"http", "https"}
+        or not host
+        or parsed.scheme.lower() != scheme
+        or parsed.netloc.lower() != host
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+        or normalized_origin not in allowed_origins
+    ):
+        raise HTTPException(status_code=403, detail="same-origin mutation proof required")
 
 
 def _principal(request: Request) -> str:
@@ -341,11 +472,19 @@ def _principal(request: Request) -> str:
         role_set = {str(role).strip().lower() for role in roles}
         if principal_id and role_set.intersection({"operator", "scientist", "admin"}):
             return str(principal_id)
+    if _trusted_application_boundary(request):
+        return "local-application-operator"
     configured = os.getenv("BMS_CM_OPERATOR_TOKEN", "")
     supplied = request.headers.get(_OPERATOR_HEADER, "")
     if configured and supplied and secrets.compare_digest(configured, supplied):
         return "configured-cm-operator"
     raise HTTPException(status_code=401, detail="authenticated conformational-mapping principal required")
+
+
+def _mutation_principal(request: Request) -> str:
+    principal = _principal(request)
+    _require_same_origin_proxy_mutation(request)
+    return principal
 
 
 def _request_token(request: Request, request_id: str) -> str | None:
@@ -361,10 +500,14 @@ async def _authorized_record(
     request_id: str,
     request: Request,
     session: AsyncSession,
+    *,
+    mutation: bool = False,
 ):
     record = await get_request(session, request_id)
     if record is None:
         raise HTTPException(status_code=404, detail="conformational-mapping request not found")
+    if mutation:
+        _require_same_origin_proxy_mutation(request)
     principal: str | None
     try:
         principal = _principal(request)
@@ -396,6 +539,31 @@ def _registered(source: ConformationalMappingSource) -> RegisteredArtifact:
         storage_root=Path(source.storage_root), relative_path=source.relative_path,
         content_sha256=source.content_sha256, size_bytes=source.size_bytes,
     )
+
+
+def _external_import_target_ids(
+    sources: list[ConformationalMappingSource],
+    *,
+    registered_snapshot_id: str | None,
+) -> list[str]:
+    if registered_snapshot_id:
+        raise HTTPException(
+            status_code=422,
+            detail="external-import snapshots are derived automatically from staged mmCIF bytes",
+        )
+    if len(sources) != 1:
+        raise HTTPException(status_code=422, detail="external import currently requires exactly one mmCIF structure")
+    target_ids: list[str] = []
+    for source in sources:
+        if Path(source.relative_path).suffix.lower() not in {".cif", ".mmcif"}:
+            raise HTTPException(status_code=422, detail="external import accepts mmCIF structures only")
+        target_id = str((source.metadata_json or {}).get("target_id") or source.source_id).strip()
+        if not target_id:
+            raise HTTPException(status_code=422, detail="external import target identity is empty")
+        target_ids.append(target_id)
+    if len(set(target_ids)) != len(target_ids):
+        raise HTTPException(status_code=422, detail="external import target identities must be unique")
+    return target_ids
 
 
 def _read_registered_json(source: ConformationalMappingSource) -> Any:
@@ -463,7 +631,7 @@ async def submit_request(
     response: Response,
     session: AsyncSession = Depends(get_session),
 ):
-    principal_id = _principal(request)
+    principal_id = _mutation_principal(request)
     params: dict[str, Any] = {
         "backend": body.backend,
         "ordered_seeds": body.ordered_seeds,
@@ -472,6 +640,8 @@ async def submit_request(
         "runtime_policy": body.runtime_policy,
         "analysis_policy": body.analysis_policy,
     }
+    if body.state_landscape_comparison is not None:
+        params["state_landscape_comparison"] = body.state_landscape_comparison
     import_sources: list[ConformationalMappingSource] = []
     confor_sources: list[ConformationalMappingSource] = []
     snapshot_source: ConformationalMappingSource | None = None
@@ -508,24 +678,21 @@ async def submit_request(
             or body.registered_transfer_id
         ):
             raise HTTPException(status_code=422, detail="inactive backend fields are forbidden")
-        snapshot_source = await _source(
-            session, body.registered_snapshot_id, principal_id, {"complex_snapshot"}
-        )
         if not body.registered_artifact_ids:
             raise HTTPException(status_code=422, detail="at least one registered structure is required")
         import_sources = [
             await _source(session, source_id, principal_id, {"structure_upload", "structure_artifact"})
             for source_id in body.registered_artifact_ids
         ]
+        target_ids = _external_import_target_ids(
+            import_sources,
+            registered_snapshot_id=body.registered_snapshot_id,
+        )
         if body.ordered_seeds != [0] or body.samples_per_seed != 1:
             raise HTTPException(status_code=422, detail="external import requires ordered_seeds [0] and samples_per_seed 1")
-        snapshots = _read_registered_json(snapshot_source)
-        snapshots = snapshots if isinstance(snapshots, list) else [snapshots]
-        if len(snapshots) != len(import_sources):
-            raise HTTPException(status_code=422, detail="import snapshot targets must equal ordered import cardinality")
         params["targets"] = [
-            {"target_id": str(snapshot["target_id"]), "target_order": index}
-            for index, snapshot in enumerate(snapshots)
+            {"target_id": target_id, "target_order": index}
+            for index, target_id in enumerate(target_ids)
         ]
         params["ordered_seeds"] = [0]
         params["samples_per_seed"] = 1
@@ -632,6 +799,7 @@ async def submit_request(
             staged_import = stage_registered_artifacts(
                 [_registered(source) for source in import_sources], principal_id=principal_id,
                 request_id=request_id, destination_root=root / "registered_import",
+                maximum_bytes=MAX_IMPORT_MMCIF_BYTES,
             )
             params["import_receipt_id"] = staged_import.receipt["receipt_sha256"]
             params["resolved_import_entries"] = staged_import.receipt["entries"]
@@ -641,6 +809,25 @@ async def submit_request(
         )
         request_payload = json.loads(materialized.request_path.read_text(encoding="utf-8"))
         coordinate_plan = json.loads(materialized.coordinate_plan_path.read_text(encoding="utf-8"))
+        analysis_targets = request_payload["targets"]
+        if body.backend == "external_import":
+            if staged_import is None:
+                raise ImportSnapshotError("external import staging did not produce an immutable receipt")
+            import_snapshots = build_staged_import_snapshots(
+                staged_root=staged_import.root,
+                entries=staged_import.receipt["entries"],
+                targets=request_payload["targets"],
+                coordinates=coordinate_plan["coordinates"],
+            )
+            analysis_targets = import_snapshots
+            (root / "cm_complex_snapshots_v1.json").write_text(
+                json.dumps(import_snapshots, sort_keys=True, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            request_payload, coordinate_plan = bind_materialized_source_snapshot(
+                materialized,
+                source_snapshot_sha256=canonical_sha256(import_snapshots[0]),
+            )
         if body.backend == "confornets":
             confor_snapshot = _confornets_snapshot(
                 target_id=request_payload["targets"][0]["target_id"],
@@ -649,6 +836,7 @@ async def submit_request(
                 source_sha256=sequence_source.content_sha256,
                 coordinates=coordinate_plan["coordinates"],
             )
+            analysis_targets = [confor_snapshot]
             (root / "cm_complex_snapshots_v1.json").write_text(
                 json.dumps([confor_snapshot], sort_keys=True, separators=(",", ":")),
                 encoding="utf-8",
@@ -664,6 +852,7 @@ async def submit_request(
         job = Job(
             id=request_id, name=body.name.strip(), status="queued", model_id="conformational_mapping",
             mode="map", params=materialized.launch_params, output_dir=str(root), queue_status="queued",
+            **_cm_job_admission(body.backend, {"targets": analysis_targets}),
             lineage_root_job_id=request_id, stage_family="conformational_mapping", stage_mode=body.backend,
             provenance={
                 "cm_request_sha256": request_payload["request_sha256"],
@@ -695,7 +884,15 @@ async def submit_request(
         await session.rollback()
         _remove_request_root(root)
         raise
-    except (ConformationalMappingRequestError, ImportStagingError, ConformationalPersistenceError, OSError, KeyError, TypeError) as exc:
+    except (
+        ConformationalMappingRequestError,
+        ImportStagingError,
+        ImportSnapshotError,
+        ConformationalPersistenceError,
+        OSError,
+        KeyError,
+        TypeError,
+    ) as exc:
         await session.rollback()
         _remove_request_root(root)
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -707,33 +904,29 @@ async def request_status(
 ):
     record = await _authorized_record(request_id, request, session)
     job = await session.get(Job, record.job_id)
+    status = record.status
+    progress = record.progress_json
+    failure_receipt = record.failure_receipt_json
     if job is not None and record.status not in {"completed", "failed", "cancelled"}:
         job_state = str(job.status or job.queue_status or "").lower()
         if job_state == "running" and record.status == "queued":
-            await transition_request(
-                session, record, status="running",
-                progress={"phase": "running", "job_stage": job.current_stage},
-            )
-            await session.commit()
+            status = "running"
+            progress = {"phase": "running", "job_stage": job.current_stage}
         elif job_state in {"failed", "cancelled"}:
-            failure = {
+            status = job_state
+            progress = {"phase": job_state}
+            failure_receipt = {
                 "schema_name": "cm_failure_receipt", "schema_version": 1,
                 "request_id": record.request_id, "job_id": job.id,
                 "terminal_state": job_state,
                 "message": str(job.error_message or f"canonical job {job_state}"),
                 "recorded_at": datetime.utcnow().isoformat() + "Z",
             }
-            await transition_request(
-                session, record, status=job_state,
-                progress={"phase": job_state},
-                failure_receipt=failure if job_state == "failed" else None,
-            )
-            await session.commit()
     return {
         "request_id": record.request_id, "job_id": record.job_id, "backend": record.backend,
-        "status": record.status, "job_status": job.status if job else None,
-        "progress": record.progress_json, "failure_receipt": record.failure_receipt_json,
-        "retry_eligible": record.status in {"failed", "cancelled"},
+        "status": status, "job_status": job.status if job else None,
+        "progress": progress, "failure_receipt": failure_receipt,
+        "retry_eligible": status in {"failed", "cancelled"},
         "result_contract_id": record.result_contract_id,
     }
 
@@ -803,7 +996,7 @@ async def prepare_mutagenesis_handoff(
     request_id: str, body: HandoffRequest, request: Request,
     session: AsyncSession = Depends(get_session),
 ):
-    await _authorized_record(request_id, request, session)
+    await _authorized_record(request_id, request, session, mutation=True)
     ensemble = (await _canonical_record(session, request_id, "ensemble", "primary")).payload_json
     analysis = (await _canonical_record(session, request_id, "analysis")).payload_json
     structure_map = (
@@ -868,7 +1061,7 @@ async def launch_resampling(
 ):
     """Atomically materialize and queue one idempotent matched WT/mutant launch."""
 
-    source_record = await _authorized_record(request_id, request, session)
+    source_record = await _authorized_record(request_id, request, session, mutation=True)
     principal_id = source_record.principal_id
     handoff_row = await _canonical_record(session, request_id, "handoff", body.handoff_key)
     handoff = handoff_row.payload_json
@@ -941,6 +1134,7 @@ async def launch_resampling(
             id=child_request_id, name=f"CM resampling {handoff['mutation_set_string']}",
             status="queued", model_id="conformational_mapping", mode="map",
             params=materialized.launch_params, output_dir=str(root), queue_status="queued",
+            **_cm_job_admission("protenix_v2_ensemble", request_payload),
             parent_job_id=source_job.id, lineage_root_job_id=source_job.lineage_root_job_id or source_job.id,
             stage_family="conformational_mapping", stage_mode="resampling",
             provenance={"cm_pair_id": pair["pair_id"], "cm_handoff_key": body.handoff_key},
@@ -980,7 +1174,7 @@ async def launch_resampling(
 async def cancel_request(
     request_id: str, request: Request, session: AsyncSession = Depends(get_session)
 ):
-    record = await _authorized_record(request_id, request, session)
+    record = await _authorized_record(request_id, request, session, mutation=True)
     if record.status not in {"prepared", "queued", "running"}:
         raise HTTPException(status_code=409, detail="request is not cancellable")
     await cancel_job_lineage(record.job_id, session, error_message="Cancelled through typed CM API")
@@ -993,12 +1187,26 @@ async def cancel_request(
 async def retry_request(
     request_id: str, request: Request, session: AsyncSession = Depends(get_session)
 ):
-    record = await _authorized_record(request_id, request, session)
-    if record.status not in {"failed", "cancelled"}:
-        raise HTTPException(status_code=409, detail="request is not retry eligible")
+    record = await _authorized_record(request_id, request, session, mutation=True)
+    if record.status == "completed":
+        raise HTTPException(status_code=409, detail="completed request authority cannot be retried")
     job = await session.get(Job, record.job_id)
     if job is None:
         raise HTTPException(status_code=409, detail="request job is missing")
+    if record.status not in {"failed", "cancelled"}:
+        job_state = str(job.status or job.queue_status or "").lower()
+        if job_state not in {"failed", "cancelled"}:
+            raise HTTPException(status_code=409, detail="request is not retry eligible")
+        await transition_request(
+            session, record, status=job_state, progress={"phase": job_state},
+            failure_receipt={
+                "schema_name": "cm_failure_receipt", "schema_version": 1,
+                "request_id": record.request_id, "job_id": job.id,
+                "terminal_state": job_state,
+                "message": str(job.error_message or f"canonical job {job_state}"),
+                "recorded_at": datetime.utcnow().isoformat() + "Z",
+            } if job_state == "failed" else None,
+        )
     job.status = "queued"
     job.queue_status = "queued"
     job.error_message = None
@@ -1093,6 +1301,145 @@ async def request_landscape(
     }
 
 
+@router.get("/requests/{request_id}/state-landscape-analysis")
+async def state_landscape_analysis_summary(
+    request_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+    analysis_id: str | None = None,
+):
+    """Expose one compact, request-governed state-analysis header without canonical payload reads."""
+
+    await _authorized_record(request_id, request, session)
+    try:
+        header = await resolve_state_landscape_analysis_projection(
+            session, request_id, analysis_id=analysis_id,
+        )
+    except StateLandscapeAnalysisProjectionAbsent as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except StateLandscapeAnalysisProjectionAmbiguous as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    pairs = await state_landscape_analysis_pair_summaries(session, header)
+    artifact = await state_landscape_analysis_artifact(session, header)
+    return {
+        "request_id": request_id,
+        "analysis_id": header.analysis_id,
+        "authority": {
+            "content_sha256": header.content_sha256,
+            "source_ensemble_sha256": header.source_ensemble_sha256,
+            "source_landscape_sha256": header.source_landscape_sha256,
+            "source_structure_map_sha256": header.source_structure_map_sha256,
+            "comparison_sha256": header.comparison_sha256,
+            "formula_version": header.formula_version,
+            "formula_sha256": header.formula_sha256,
+            "policy_sha256": header.policy_sha256,
+        },
+        "comparison": {
+            "mode": header.comparison_mode,
+            "target_id": header.comparison_target_id,
+            "scope": header.comparison_scope,
+            "reference_backend_coordinates": header.reference_backend_coordinates_json,
+            "reference_candidate_id": header.reference_candidate_id,
+        },
+        "counts": {
+            "pairs": header.pair_count,
+            "rows": header.row_count,
+            "exclusions": header.exclusion_count,
+        },
+        "pairs": [
+            {
+                "pair_id": pair.pair_id,
+                "candidate_a_id": pair.candidate_a_id,
+                "candidate_b_id": pair.candidate_b_id,
+            }
+            for pair in pairs
+        ],
+        "artifact": None if artifact is None else {
+            "artifact_id": artifact.artifact_id,
+            "content_sha256": artifact.content_sha256,
+            "size_bytes": artifact.size_bytes,
+            "media_type": artifact.media_type,
+            "download_url": f"/api/conformational-mapping/requests/{request_id}/artifacts/{artifact.artifact_id}",
+        },
+    }
+
+
+@router.get("/requests/{request_id}/state-landscape-analysis/rows")
+async def state_landscape_analysis_rows(
+    request_id: str,
+    request: Request,
+    analysis_id: str | None = None,
+    pair_id: str | None = None,
+    candidate_id: str | None = None,
+    entity_instance_id: str | None = None,
+    auth_asym_id: str | None = None,
+    sequence_start: int | None = None,
+    sequence_end: int | None = None,
+    offset: Annotated[int, Query(ge=0, le=MAX_STATE_LANDSCAPE_ANALYSIS_PAGE_OFFSET)] = 0,
+    limit: int = 200,
+    session: AsyncSession = Depends(get_session),
+):
+    """Page normalized state-analysis rows; all values are persisted artifact projections."""
+
+    if offset > MAX_STATE_LANDSCAPE_ANALYSIS_PAGE_OFFSET:
+        raise HTTPException(status_code=422, detail="invalid state landscape analysis page")
+    await _authorized_record(request_id, request, session)
+    try:
+        header, rows, has_more = await paged_state_landscape_analysis_rows(
+            session,
+            request_id,
+            analysis_id=analysis_id,
+            pair_id=pair_id,
+            candidate_id=candidate_id,
+            entity_instance_id=entity_instance_id,
+            auth_asym_id=auth_asym_id,
+            sequence_start=sequence_start,
+            sequence_end=sequence_end,
+            offset=offset,
+            limit=limit,
+        )
+    except StateLandscapeAnalysisProjectionAbsent as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except StateLandscapeAnalysisProjectionAmbiguous as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ConformationalPersistenceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {
+        "request_id": request_id,
+        "selected_analysis_id": header.analysis_id,
+        "offset": offset,
+        "limit": limit,
+        "applied_filters": {
+            "pair_id": pair_id,
+            "candidate_id": candidate_id,
+            "entity_instance_id": entity_instance_id,
+            "auth_asym_id": auth_asym_id,
+            "sequence_start": sequence_start,
+            "sequence_end": sequence_end,
+        },
+        "next_offset": offset + len(rows) if has_more else None,
+        "rows": [
+            {
+                "pair_id": row.pair_id,
+                "candidate_a_id": row.candidate_a_id,
+                "candidate_b_id": row.candidate_b_id,
+                "identity": {
+                    "target_id": row.target_id,
+                    "entity_instance_id": row.entity_instance_id,
+                    "auth_asym_id": row.auth_asym_id,
+                    "auth_seq_id": row.auth_seq_id,
+                    "insertion_code": row.insertion_code,
+                    "sequence_index": row.sequence_index,
+                    "validated_wt": row.validated_wt,
+                },
+                "metrics": row.metrics_json,
+                "availability": row.availability_json,
+            }
+            for row in rows
+        ],
+    }
+
+
 @router.get("/requests/{request_id}/lineage")
 async def request_lineage(
     request_id: str, request: Request, session: AsyncSession = Depends(get_session)
@@ -1109,6 +1456,93 @@ async def request_lineage(
     return {"request_id": request_id, "lineage": [row.payload_json for row in rows]}
 
 
+def _resolve_artifact_runtime_alias(path: str | Path) -> Path:
+    """Translate a known data-root prefix without dereferencing the artifact leaf."""
+    candidate = Path(os.path.abspath(os.path.expanduser(str(path))))
+    current_root = Path(os.path.abspath(str(get_data_root())))
+    alias_roots = [current_root]
+    for variable in ("BMS_CONTAINER_STATE_PATH", "BMS_STATE_DIR", "BMS_DATA"):
+        configured_root = os.getenv(variable, "").strip()
+        if configured_root:
+            alias_roots.append(Path(configured_root))
+    alias_roots.extend((Path("/mnt/BioModStack"), Path.home() / ".biomodstack"))
+
+    seen: set[str] = set()
+    for raw_root in alias_roots:
+        alias_root = Path(os.path.abspath(os.path.expanduser(str(raw_root))))
+        if str(alias_root) in seen:
+            continue
+        seen.add(str(alias_root))
+        try:
+            relative_path = candidate.relative_to(alias_root)
+        except ValueError:
+            continue
+        remapped = current_root / relative_path
+        if remapped.exists() or remapped.is_symlink():
+            return remapped
+    return candidate
+
+
+def _open_verified_artifact_descriptor(
+    *, storage_path: str, root_path: str, size_bytes: int, content_sha256: str,
+) -> int:
+    """Open one persisted artifact through the active runtime's data-root alias."""
+    root = _resolve_artifact_runtime_alias(root_path).resolve(strict=True)
+    lexical_path = _resolve_artifact_runtime_alias(storage_path)
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(lexical_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        opened = Path(f"/proc/self/fd/{descriptor}").resolve(strict=True)
+        opened.relative_to(root)
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_size != size_bytes:
+            raise OSError("artifact is not the registered regular file")
+        digest = hashlib.sha256()
+        while chunk := os.read(descriptor, 1024 * 1024):
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
+        ) or digest.hexdigest() != content_sha256:
+            raise OSError("artifact identity changed")
+        return descriptor
+    except (OSError, ValueError):
+        if descriptor is not None:
+            os.close(descriptor)
+        raise
+
+
+def _artifact_byte_range(supplied_range: str | None, size_bytes: int) -> tuple[int, int, int]:
+    """Resolve one HTTP byte range, clamping a satisfiable end at EOF."""
+    if not supplied_range:
+        return 0, size_bytes - 1, 200
+    try:
+        unit, value = supplied_range.split("=", 1)
+        left, right = value.split("-", 1)
+        if unit != "bytes" or "," in value or size_bytes <= 0:
+            raise ValueError
+        if left:
+            start = int(left)
+            if start < 0 or start >= size_bytes:
+                raise ValueError
+            end = min(int(right), size_bytes - 1) if right else size_bytes - 1
+            if end < start:
+                raise ValueError
+        else:
+            suffix_bytes = int(right)
+            if suffix_bytes <= 0:
+                raise ValueError
+            start = max(0, size_bytes - suffix_bytes)
+            end = size_bytes - 1
+        return start, end, 206
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=416,
+            detail="invalid artifact byte range",
+            headers={"Content-Range": f"bytes */{size_bytes}"},
+        )
+
+
 @router.get("/requests/{request_id}/artifacts/{artifact_id}")
 async def download_artifact(
     request_id: str, artifact_id: str, request: Request,
@@ -1122,48 +1556,23 @@ async def download_artifact(
     job = await session.get(Job, record.job_id if record else "")
     if job is None or not job.output_dir:
         raise HTTPException(status_code=409, detail="artifact storage authority is unavailable")
-    root = Path(job.output_dir).resolve(strict=True)
-    lexical_path = Path(artifact.storage_path)
     try:
-        descriptor = os.open(lexical_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-        opened = Path(f"/proc/self/fd/{descriptor}").resolve(strict=True)
-        opened.relative_to(root)
-        before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode) or before.st_size != artifact.size_bytes:
-            raise OSError("artifact is not the registered regular file")
-        digest = hashlib.sha256()
-        while chunk := os.read(descriptor, 1024 * 1024):
-            digest.update(chunk)
-        after = os.fstat(descriptor)
-        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
-            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
-        ) or digest.hexdigest() != artifact.content_sha256:
-            raise OSError("artifact identity changed")
+        descriptor = _open_verified_artifact_descriptor(
+            storage_path=artifact.storage_path,
+            root_path=job.output_dir,
+            size_bytes=artifact.size_bytes,
+            content_sha256=artifact.content_sha256,
+        )
     except (OSError, ValueError):
-        if "descriptor" in locals():
-            os.close(descriptor)
         raise HTTPException(status_code=409, detail="artifact byte identity is unavailable")
 
-    start, end, status_code = 0, artifact.size_bytes - 1, 200
-    supplied_range = request.headers.get("range")
-    if supplied_range:
-        try:
-            unit, value = supplied_range.split("=", 1)
-            left, right = value.split("-", 1)
-            if unit != "bytes" or "," in value:
-                raise ValueError
-            if left:
-                start = int(left)
-                end = int(right) if right else end
-            else:
-                suffix_bytes = int(right)
-                start = max(0, artifact.size_bytes - suffix_bytes)
-            if start < 0 or end < start or end >= artifact.size_bytes:
-                raise ValueError
-            status_code = 206
-        except ValueError:
-            os.close(descriptor)
-            raise HTTPException(status_code=416, detail="invalid artifact byte range")
+    try:
+        start, end, status_code = _artifact_byte_range(
+            request.headers.get("range"), artifact.size_bytes,
+        )
+    except HTTPException:
+        os.close(descriptor)
+        raise
     os.lseek(descriptor, start, os.SEEK_SET)
     remaining = end - start + 1
 

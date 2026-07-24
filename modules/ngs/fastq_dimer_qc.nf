@@ -1369,7 +1369,7 @@ process FastqDimerAnalysis {
         echo "Consensus: \${consensus_status}; dominant: \${dominant_consensus_status}"
     } > dimer_analysis.log
 
-    python3 "${codeRoot}/scripts/build_alignment_session_manifest.py"
+    bash "${codeRoot}/scripts/build_alignment_session_manifest.sh"
         """
     }
 process BuildDimerCanonicalOutputs {

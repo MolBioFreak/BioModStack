@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef, type MouseEvent as ReactMouseEvent } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
 import type { Data, Layout } from 'plotly.js';
 import { StructureWorkbench } from '../structureViewer/StructureWorkbench';
@@ -8,6 +9,7 @@ import { useThemeColors } from './useThemeColors';
 import {
     buildFileDownloadUrl,
     buildFileStreamUrl,
+    fetchViewerVolumes,
     type ChainMetric,
     type ChainPairIptmData,
     type ContactMapData,
@@ -28,6 +30,8 @@ import { inferDesignAnalysisLens, inferDesignOutputSource, getValidationOutputLa
 import { buildMetricLayerFromExplicitMaps } from '../lib/molstar-metrics';
 import type { MolstarResidueMetricLayer } from '../lib/molstar-metrics';
 import type { MetricLayer } from '../structureViewer/metrics/metricContracts.js';
+import type { DerivedStructureComponent } from '../structureViewer/contracts/complexAnalysis.js';
+import { resolveGovernedStructureWorkbenchContext } from '../structureViewer/contracts/governedStructureWorkbenchContext.js';
 import {
     buildConforNetsConformerNavigation,
     buildConforNetsConformerSet,
@@ -231,11 +235,6 @@ function plddtColor(value: number): { r: number; g: number; b: number } {
     return { r: 249, g: 115, b: 22 };
 }
 
-function frustrationColor(value: number): { r: number; g: number; b: number } {
-    if (value <= -1.0) return { r: 239, g: 68, b: 68 };
-    if (value >= 0.58) return { r: 34, g: 197, b: 94 };
-    return { r: 148, g: 163, b: 184 };
-}
 
 const CHAIN_ACCENT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
 const LEGACY_ANALYTICS_ENABLED = false;
@@ -366,6 +365,26 @@ export default function StructureViewerPane({
         viewportHeight,
     }), [viewportWidth, viewportHeight]);
     const designOrigin = getDesignOriginLabel(selectedDesign);
+    const governedVolumeInventoryQuery = useQuery({
+        queryKey: ['viewer-volume-inventory', activeJob?.id],
+        queryFn: () => fetchViewerVolumes(activeJob!.id).then((response) => response.data),
+        enabled: Boolean(activeJob?.id && activeJob.status === 'completed'),
+        retry: false,
+        staleTime: 30_000,
+    });
+    const governedWorkbenchContext = useMemo(
+        () => resolveGovernedStructureWorkbenchContext({
+            activeJobId: activeJob?.id,
+            design: selectedDesign,
+            inventory: governedVolumeInventoryQuery.data,
+        }),
+        [activeJob?.id, governedVolumeInventoryQuery.data, selectedDesign],
+    );
+    const awaitingGovernedWorkbenchIdentity = Boolean(
+        activeJob?.status === 'completed'
+        && activeJob.params?.ui_contract === 'generic_structure_viewer'
+        && governedVolumeInventoryQuery.isPending,
+    );
     const designLens = selectedDesign ? inferDesignAnalysisLens(selectedDesign as UntypedApiValue) : null;
     const selectedDesignPpiflowRecord = asRecord(asRecord(selectedDesign?.provenance)?.ppiflow);
     const fampnnPayload = useMemo(() => getFampnnPayload(selectedDesign), [selectedDesign]);
@@ -985,22 +1004,6 @@ export default function StructureViewerPane({
         });
     }, [chainMetrics, conforNetsDefaultChainId, conforNetsScalarPlddt, conforNetsUsesScalarPlddtFallback, effectiveColorMode, plddtProfile, residueMetricNumbers, rfaModifiableResidueMask]);
 
-    const frustrationResidueColors = (() => {
-        if (effectiveColorMode !== 'frustration' || !selectedDesign?.frustration_residues?.length) return undefined;
-        const colorMap = new Map<string, { r: number; g: number; b: number }>();
-        for (const residue of selectedDesign.frustration_residues) {
-            const chainId = residue.chain;
-            if (!chainId) continue;
-            const residueNumbers = chainMetrics[chainId]?.residue_numbers || [];
-            const actualResidueNumber =
-                residueNumbers[residue.pos] ??
-                residueNumbers[residue.pos - 1] ??
-                (typeof residue.pos === 'number' ? residue.pos + 1 : null);
-            if (actualResidueNumber == null) continue;
-            colorMap.set(residueColorKey(chainId, actualResidueNumber), frustrationColor(residue.frust));
-        }
-        return colorMap.size > 0 ? colorMap : undefined;
-    })();
 
     const fampnnPsceResidueColors = (() => {
         if (effectiveColorMode !== 'fampnn_psce' || !hasFampnnPsceProfile) return undefined;
@@ -1054,27 +1057,7 @@ export default function StructureViewerPane({
                 values,
             });
         }
-        if (effectiveColorMode === 'frustration' && frustrationResidueColors && selectedDesign?.frustration_residues) {
-            const values = new Map<string, number>();
-            for (const residue of selectedDesign.frustration_residues) {
-                const residueNumbers = chainMetrics[residue.chain]?.residue_numbers || [];
-                const residueNumber = residueNumbers[residue.pos] ?? residueNumbers[residue.pos - 1] ?? residue.pos + 1;
-                values.set(residueColorKey(residue.chain, residueNumber), residue.frust);
-            }
-            return buildMetricLayerFromExplicitMaps({
-                descriptor: {
-                    id: 'frustration-index',
-                    label: 'Frustration index',
-                    semanticType: 'energy',
-                    units: 'dimensionless',
-                    direction: 'higher_is_better',
-                    source: 'BioModStack design analysis',
-                    provenance: { source, method: 'FrustraMPNN' },
-                },
-                colors: frustrationResidueColors,
-                values,
-            });
-        }
+
         if (effectiveColorMode === 'fampnn_psce' && fampnnPsceResidueColors) {
             const values = new Map<string, number>();
             for (const chainId of fampnnPsceChainIds) {
@@ -1099,7 +1082,7 @@ export default function StructureViewerPane({
             });
         }
         return undefined;
-    }, [bfactorLabel, chainMetrics, conforNetsDefaultChainId, conforNetsScalarPlddt, effectiveColorMode, fampnnPsceChainIds, fampnnPsceChains, fampnnPsceResidueColors, frustrationResidueColors, plddtProfile, plddtResidueColors, residueMetricNumbers, selectedDesign]);
+    }, [bfactorLabel, chainMetrics, conforNetsDefaultChainId, conforNetsScalarPlddt, effectiveColorMode, fampnnPsceChainIds, fampnnPsceChains, fampnnPsceResidueColors, plddtProfile, plddtResidueColors, residueMetricNumbers, selectedDesign]);
 
     const pairMetricLayers = useMemo<readonly MetricLayer[]>(() => {
         const layers: MetricLayer[] = [];
@@ -1163,9 +1146,125 @@ export default function StructureViewerPane({
                 },
                 values,
             });
+            const proximityThresholdAngstrom = 8;
+            const maxProximities = 10_000;
+            const proximities = [];
+            for (let row = 0; row < contactMap.size && proximities.length < maxProximities; row += 1) {
+                for (let column = row + 1; column < contactMap.size && proximities.length < maxProximities; column += 1) {
+                    if (contactMap.chain_ids[row] === contactMap.chain_ids[column]) continue;
+                    const distance = contactMap.distance_matrix[row]?.[column];
+                    if (typeof distance !== 'number' || !Number.isFinite(distance) || distance > proximityThresholdAngstrom) continue;
+                    const first = identities[row]!;
+                    const second = identities[column]!;
+                    proximities.push({
+                        identity: {
+                            annotationId: `ca-proximity:${first.labelAsymId}:${first.labelSeqId}:${second.labelAsymId}:${second.labelSeqId}`,
+                            documentId: 'primary',
+                            residues: [first, second],
+                        },
+                        value: distance,
+                    });
+                }
+            }
+            if (proximities.length > 0) {
+                layers.push({
+                    descriptor: {
+                        id: 'interchain-ca-proximity',
+                        label: `Inter-chain Cα proximity (≤${proximityThresholdAngstrom} Å)`,
+                        dimension: 'geometry-annotation',
+                        units: 'Å',
+                        direction: 'neutral',
+                        description: 'Display-only thresholding of persisted Cα distances. These records are proximities, not inferred hydrogen bonds, clashes, or chemical interactions.',
+                        projectionPolicy: 'none',
+                        normalization: 'none',
+                        provenance: {
+                            source: 'BioModStack persisted contact-map analysis',
+                            parameters: {
+                                threshold_angstrom: proximityThresholdAngstrom,
+                                admitted: proximities.length,
+                                bounded: proximities.length === maxProximities,
+                            },
+                        },
+                    },
+                    values: proximities,
+                });
+            }
         }
         return layers;
     }, [chainMetrics, contactMap, paeData, paeMatrix]);
+
+    const derivedComponents = useMemo<readonly DerivedStructureComponent[]>(() => (
+        Object.entries(chainMetrics ?? {}).map(([chainId, metric]) => ({
+            documentId: 'primary',
+            chainId,
+            componentType: metric.type,
+            length: metric.length,
+            provenance: 'BioModStack persisted chain_metrics structure analysis',
+            identityScope: 'derived-chain' as const,
+        }))
+    ), [chainMetrics]);
+
+    const interfaceMetricLayers = useMemo<readonly MetricLayer[]>(() => {
+        if (ipsaeInterfaceRun?.status && ipsaeInterfaceRun.status !== 'completed') return [];
+        if (!ipsaeInterface?.pair_scores?.length) return [];
+        const fields = [
+            { key: 'ipsae_d0res_max', id: 'ipsae-d0res-max', label: 'ipSAE residue-normalized maximum' },
+            { key: 'ipsae_d0chn_max', id: 'ipsae-d0chn-max', label: 'ipSAE chain-normalized maximum' },
+            { key: 'ipsae_d0dom_max', id: 'ipsae-d0dom-max', label: 'ipSAE domain-normalized maximum' },
+        ] as const;
+        return fields.flatMap(({ key, id, label }): MetricLayer[] => {
+            const seenPairs = new Set<string>();
+            let duplicatePairs = 0;
+            const values = ipsaeInterface.pair_scores.flatMap((pair) => {
+                const value = pair[key];
+                if (typeof value !== 'number' || !Number.isFinite(value)) return [];
+                const pairKey = `${pair.chain_1}\u0000${pair.chain_2}`;
+                if (seenPairs.has(pairKey)) {
+                    duplicatePairs += 1;
+                    return [];
+                }
+                seenPairs.add(pairKey);
+                return [{
+                    identity: {
+                        documentId: 'primary',
+                        firstChainId: pair.chain_1,
+                        secondChainId: pair.chain_2,
+                    },
+                    value,
+                    provenance: {
+                        source: 'BioModStack persisted interface-ipSAE analysis',
+                        jobId: activeJob?.id,
+                        artifactId: ipsaeInterfaceRun?.run_id ?? undefined,
+                        parameters: { pair_type: pair.pair_type },
+                    },
+                }];
+            });
+            if (values.length === 0) return [];
+            return [{
+                descriptor: {
+                    id,
+                    label,
+                    dimension: 'chain-pair-scalar',
+                    units: 'score',
+                    direction: 'higher_is_better',
+                    description: 'Persisted ipSAE interface score for the exact declared chain pair. This is not iPTM.',
+                    projectionPolicy: 'none',
+                    normalization: 'none',
+                    provenance: {
+                        source: 'BioModStack persisted interface-ipSAE analysis',
+                        jobId: activeJob?.id,
+                        artifactId: ipsaeInterfaceRun?.run_id ?? undefined,
+                        parameters: {
+                            pae_cutoff: ipsaeInterface.pae_cutoff,
+                            distance_cutoff: ipsaeInterface.dist_cutoff,
+                            duplicate_pair_rows_not_admitted: duplicatePairs,
+                        },
+                    },
+                },
+                values,
+            }];
+        });
+    }, [activeJob?.id, ipsaeInterface, ipsaeInterfaceRun?.run_id, ipsaeInterfaceRun?.status]);
 
     const structureScalarMetricLayers = useMemo<readonly MetricLayer[]>(() => {
         const candidates: Array<{
@@ -1251,27 +1350,11 @@ export default function StructureViewerPane({
             ...structureScalarMetricLayers,
             ...(subunitMeanPlddtLayer ? [subunitMeanPlddtLayer] : []),
             ...pairMetricLayers,
+            ...interfaceMetricLayers,
         ],
-        [pairMetricLayers, structureScalarMetricLayers, subunitMeanPlddtLayer],
+        [interfaceMetricLayers, pairMetricLayers, structureScalarMetricLayers, subunitMeanPlddtLayer],
     );
 
-    const topFrustratedResidues = (() => {
-        if (!selectedDesign?.frustration_residues?.length) return [];
-        return [...selectedDesign.frustration_residues]
-            .sort((a, b) => a.frust - b.frust)
-            .slice(0, 8)
-            .map((residue) => {
-                const residueNumbers = chainMetrics[residue.chain]?.residue_numbers || [];
-                const actualResidueNumber =
-                    residueNumbers[residue.pos] ??
-                    residueNumbers[residue.pos - 1] ??
-                    (typeof residue.pos === 'number' ? residue.pos + 1 : residue.pos);
-                return {
-                    ...residue,
-                    actualResidueNumber,
-                };
-            });
-    })();
 
     const fampnnPscePlot = useMemo<{ data: Data[]; layout: Partial<Layout> } | null>(() => {
         if (!selectedDesign || !hasFampnnPsceProfile) return null;
@@ -2586,24 +2669,7 @@ export default function StructureViewerPane({
                             <span className="text-red-400 mr-1">●</span>high (≤-1.0)
                         </span>
                     </div>
-                    {topFrustratedResidues.length > 0 && (
-                        <div className="mt-3 pt-3 border-t border-slate-700/50">
-                            <div className="text-[11px] uppercase tracking-wider text-slate-500 mb-2">Most Frustrated Positions</div>
-                            <div className="grid grid-cols-2 gap-2 text-[11px]">
-                                {topFrustratedResidues.map((residue) => (
-                                    <div
-                                        key={`${residue.chain}-${residue.actualResidueNumber}`}
-                                        className="flex items-center justify-between rounded bg-slate-900/50 px-2 py-1"
-                                    >
-                                        <span className="text-slate-300">
-                                            {residue.chain}{residue.actualResidueNumber}
-                                        </span>
-                                        <span className="font-mono text-red-300">{residue.frust.toFixed(2)}</span>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
+
                             </div>
                         )}
                     </div>
@@ -2806,22 +2872,31 @@ export default function StructureViewerPane({
                         }
                         style={isFullscreen ? undefined : { height: viewerLayout.viewerHeight }}
                     >
-                        <StructureWorkbench
-                            mode="standard"
-                            structureUrl={viewerStructureUrl}
-                            format={viewerStructureFormat}
-                            alphafoldView={effectiveColorMode === 'plddt' && !plddtResidueColors}
-                            selections={effectiveColorMode === 'cdr' ? antibodySelections : undefined}
-                            overlayStructures={conforNetsOverlayStructures}
-                            residueMetricLayer={residueMetricLayer}
-                            metricLayers={allMetricLayers}
-                            activeMetricId={overlayView === 'pae' ? 'pae' : residueMetricLayer?.descriptor.id}
-                            showMetricWorkbench={metricWorkbenchOpen}
-                            onMetricWorkbenchVisibilityChange={setMetricWorkbenchOpen}
-                            showSequenceTrack
-                            height="100%"
-                            backgroundColor={themeColors.bgPrimary}
-                        />
+                        {awaitingGovernedWorkbenchIdentity ? (
+                            <div className="flex h-full items-center justify-center text-sm text-slate-400">Preparing governed structure resources…</div>
+                        ) : (
+                            <StructureWorkbench
+                                mode="standard"
+                                structureUrl={viewerStructureUrl}
+                                format={viewerStructureFormat}
+                                alphafoldView={effectiveColorMode === 'plddt' && !plddtResidueColors}
+                                selections={effectiveColorMode === 'cdr' ? antibodySelections : undefined}
+                                overlayStructures={conforNetsOverlayStructures}
+                                residueMetricLayer={residueMetricLayer}
+                                metricLayers={allMetricLayers}
+                                showComplexWorkbench={false}
+                                jobId={governedWorkbenchContext?.jobId ?? activeJob?.id}
+                                artifactJobId={governedWorkbenchContext?.artifactJobId ?? activeJob?.id}
+                                structureDocumentId={governedWorkbenchContext?.structureDocumentId}
+                                derivedComponents={derivedComponents}
+                                activeMetricId={overlayView === 'pae' ? 'pae' : residueMetricLayer?.descriptor.id}
+                                showMetricWorkbench={metricWorkbenchOpen}
+                                onMetricWorkbenchVisibilityChange={setMetricWorkbenchOpen}
+                                showSequenceTrack
+                                height="100%"
+                                backgroundColor={themeColors.bgPrimary}
+                            />
+                        )}
 
                         {showReferenceDock && (
                             <div

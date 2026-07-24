@@ -64,12 +64,11 @@ def test_two_normal_commands_cannot_overlap_and_busy_is_409_semantic() -> None:
         )
         coordinator = Coordinator(connection, definitions)
         request = parse({"command": "initialize_motors", "expected_generation": 4, "idempotency_key": "one"})
-        first = asyncio.create_task(coordinator.execute(request, token_authorized=True, mutations_enabled=True))
+        first = asyncio.create_task(coordinator.execute(request, mutations_enabled=True))
         await client.started.wait()
         with pytest.raises(Busy) as exc_info:
             await coordinator.execute(
                 request.model_copy(update={"idempotency_key": "two"}),
-                token_authorized=True,
                 mutations_enabled=True,
             )
         assert exc_info.value.status_code == 409
@@ -92,9 +91,9 @@ def test_concurrent_same_normal_idempotency_key_joins_one_delivery() -> None:
         )
         coordinator = Coordinator(FakeConnection(_ready_snapshot(Snapshot), client), definitions)
         request = parse({"command": "initialize_motors", "expected_generation": 4, "idempotency_key": "join"})
-        first = asyncio.create_task(coordinator.execute(request, token_authorized=True, mutations_enabled=True))
+        first = asyncio.create_task(coordinator.execute(request, mutations_enabled=True))
         await client.started.wait()
-        second = asyncio.create_task(coordinator.execute(request, token_authorized=True, mutations_enabled=True))
+        second = asyncio.create_task(coordinator.execute(request, mutations_enabled=True))
         await asyncio.sleep(0)
         assert second.done() is False
         client.release.set()
@@ -118,13 +117,12 @@ def test_normal_and_emergency_operations_cannot_share_an_inflight_key() -> None:
         )
         coordinator = Coordinator(FakeConnection(_ready_snapshot(Snapshot), client), definitions)
         request = parse({"command": "initialize_motors", "expected_generation": 4, "idempotency_key": "cross"})
-        normal = asyncio.create_task(coordinator.execute(request, token_authorized=True, mutations_enabled=True))
+        normal = asyncio.create_task(coordinator.execute(request, mutations_enabled=True))
         await client.started.wait()
         with pytest.raises(IdempotencyConflictError):
             await coordinator.emergency_stop(
                 expected_generation=4,
                 idempotency_key="cross",
-                token_authorized=True,
                 mutations_enabled=True,
             )
         client.release.set()
@@ -153,8 +151,8 @@ def test_idempotency_returns_structured_prior_result_without_redelivery() -> Non
         )
         coordinator = Coordinator(FakeConnection(_ready_snapshot(Snapshot), client), definitions)
         request = parse({"command": "initialize_motors", "expected_generation": 4, "idempotency_key": "same"})
-        first = await coordinator.execute(request, token_authorized=True, mutations_enabled=True)
-        second = await coordinator.execute(request, token_authorized=True, mutations_enabled=True)
+        first = await coordinator.execute(request, mutations_enabled=True)
+        second = await coordinator.execute(request, mutations_enabled=True)
         assert first == second
         assert client.calls == 1
         assert coordinator.get(first.command_id) == first
@@ -162,9 +160,50 @@ def test_idempotency_returns_structured_prior_result_without_redelivery() -> Non
     asyncio.run(scenario())
 
 
-def test_idempotent_replay_still_requires_current_authorization() -> None:
+def test_activation_idempotent_replay_precedes_changed_runtime_admission() -> None:
     from services.bioxp.command_coordinator import CommandDeniedError
 
+    _, Coordinator, parse, registry, Snapshot = _load()
+
+    class ActivatingClient:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.connection: Any = None
+
+        async def request(self, *_: object, **__: object):
+            self.calls += 1
+            self.connection._snapshot = self.connection._snapshot.model_copy(update={"runtime_ready": True})
+            return {"acknowledged": True, "ok": True}
+
+    async def scenario() -> None:
+        client = ActivatingClient()
+        snapshot = _ready_snapshot(Snapshot).model_copy(
+            update={"runtime_ready": False, "hardware_ready": None, "capabilities": ()}
+        )
+        connection = FakeConnection(snapshot, client)
+        client.connection = connection
+        coordinator = Coordinator(connection, registry)
+        request = parse({
+            "command": "activate_usb_for_service",
+            "expected_generation": 4,
+            "idempotency_key": "activate-replay",
+        })
+
+        first = await coordinator.execute(request, mutations_enabled=True)
+        second = await coordinator.execute(request, mutations_enabled=True)
+
+        assert second == first
+        assert client.calls == 1
+
+        connection._snapshot = connection._snapshot.model_copy(update={"generation": 5})
+        with pytest.raises(CommandDeniedError, match="generation"):
+            await coordinator.execute(request, mutations_enabled=True)
+        assert client.calls == 1
+
+    asyncio.run(scenario())
+
+
+def test_idempotent_replay_does_not_redeliver() -> None:
     _, Coordinator, parse, registry, Snapshot = _load()
 
     class ImmediateClient:
@@ -183,9 +222,8 @@ def test_idempotent_replay_still_requires_current_authorization() -> None:
         )
         coordinator = Coordinator(FakeConnection(_ready_snapshot(Snapshot), client), definitions)
         request = parse({"command": "initialize_motors", "expected_generation": 4, "idempotency_key": "auth-replay"})
-        await coordinator.execute(request, token_authorized=True, mutations_enabled=True)
-        with pytest.raises(CommandDeniedError):
-            await coordinator.execute(request, token_authorized=False, mutations_enabled=True)
+        await coordinator.execute(request, mutations_enabled=True)
+        await coordinator.execute(request, mutations_enabled=True)
         assert client.calls == 1
 
     asyncio.run(scenario())
@@ -209,7 +247,7 @@ def test_denied_precondition_never_reaches_transport() -> None:
     request = parse({"command": "initialize_motors", "expected_generation": 4, "idempotency_key": "denied"})
 
     with pytest.raises(CommandDeniedError):
-        asyncio.run(coordinator.execute(request, token_authorized=True, mutations_enabled=True))
+        asyncio.run(coordinator.execute(request, mutations_enabled=True))
 
 
 def test_remote_acknowledgement_requires_literal_true() -> None:
@@ -226,6 +264,6 @@ def test_remote_acknowledgement_requires_literal_true() -> None:
     coordinator = Coordinator(FakeConnection(_ready_snapshot(Snapshot), StringClient()), definitions)
     request = parse({"command": "initialize_motors", "expected_generation": 4, "idempotency_key": "strict-bool"})
 
-    result = asyncio.run(coordinator.execute(request, token_authorized=True, mutations_enabled=True))
+    result = asyncio.run(coordinator.execute(request, mutations_enabled=True))
     assert result.remote_acknowledged is False
     assert result.status == "delivered_unacknowledged"

@@ -165,7 +165,7 @@ def test_stale_observation_is_explicit(tmp_path: Path) -> None:
     assert snapshot.last_observed_reachable is True
 
 
-def test_robot_stale_cache_cannot_be_relabelled_as_fresh_readiness(tmp_path: Path) -> None:
+def test_stale_hardware_cache_does_not_relabel_live_runtime_probe_as_stale(tmp_path: Path) -> None:
     _, BioXpProfile, _, _ = _load()
     now = datetime(2026, 7, 18, tzinfo=timezone.utc)
     clients: list[FakeRobotClient] = []
@@ -174,32 +174,36 @@ def test_robot_stale_cache_cannot_be_relabelled_as_fresh_readiness(tmp_path: Pat
         clients,
         clock=lambda: now,
         probe_result={
-            "status": "ok",
-            "available": False,
+            "status": "degraded",
+            "available": True,
             "cache_state": "stale",
             "freshness": {"state": "stale", "age_s": 600.0, "fresh_for_s": 30.0},
             "runtime_available": True,
             "hardware_connected": True,
             "capabilities": [
                 "collect_hardware_snapshot",
-                "construct_pipettes",
-                "initialize_without_motion",
-                "run_initial_check",
+                "initialize_oem_environment",
             ],
         },
     )
     asyncio.run(service.save_profile(BioXpProfile(api_url="http://robot:8123")))
     snapshot = asyncio.run(service.connect())
 
-    assert snapshot.observation_fresh is False
-    assert snapshot.observation_stale is True
-    assert snapshot.reachable is None
-    assert snapshot.last_observed_reachable is True
-    assert snapshot.runtime_ready is None
+    assert snapshot.observation_fresh is True
+    assert snapshot.observation_stale is False
+    assert snapshot.reachable is True
+    assert snapshot.runtime_ready is True
     assert snapshot.hardware_ready is None
-    assert snapshot.capabilities == ()
-    assert snapshot.last_error is not None
-    assert "stale" in snapshot.last_error.lower()
+    assert snapshot.hardware_observation_fresh is False
+    assert snapshot.hardware_observation_stale is True
+    assert snapshot.hardware_observed_at == now - timedelta(seconds=600)
+    assert snapshot.capabilities == (
+        "collect_hardware_snapshot",
+        "initialize_oem_environment",
+    )
+    assert snapshot.last_error is None
+    assert snapshot.hardware_evidence_error is not None
+    assert "stale" in snapshot.hardware_evidence_error.lower()
 
 
 def test_explicit_active_connection_monitor_renews_observation_and_stops_on_disconnect(tmp_path: Path) -> None:

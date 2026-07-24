@@ -74,11 +74,17 @@ def test_release_materializes_exact_blobs_without_hooks_or_private_attributes(
     backend = release.ProductionReleaseBackend(repo_root=tmp_path, allow_first_install=True)
     observed: dict[str, object] = {}
 
-    def fake_build(materialized_root: Path, identity: release.BuildIdentity) -> None:
+    def fake_build(
+        materialized_root: Path,
+        identity: release.BuildIdentity,
+        *,
+        image_refs,
+    ) -> None:
         observed["root"] = materialized_root
         observed["tracked"] = (materialized_root / "tracked.txt").read_text(encoding="utf-8")
         observed["has_git_metadata"] = (materialized_root / ".git").exists()
         observed["link_target"] = (materialized_root / "tracked-link").readlink()
+        observed["image_refs"] = image_refs
 
     monkeypatch.setattr(backend, "_build_materialized_images", fake_build)
     identity = release.BuildIdentity(head, "materialized", "2026-07-19T00:00:00Z")
@@ -91,6 +97,50 @@ def test_release_materializes_exact_blobs_without_hooks_or_private_attributes(
     materialized_root = observed["root"]
     assert isinstance(materialized_root, Path)
     assert not materialized_root.exists()
+
+
+def test_release_backend_loads_configured_image_refs_and_build_uses_same_refs(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env_file = tmp_path / "core-runtime.env"
+    env_file.write_text(
+        "# production refs\n"
+        "BMS_API_IMAGE=registry.example/bms-api:release-42\n"
+        "BMS_HOST_AGENT_IMAGE=registry.example/bms-host:release-42\n"
+        "BMS_CPU_POWER_IMAGE=registry.example/bms-power:release-42\n"
+        "BMS_WEB_IMAGE=registry.example/bms-web:release-42\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BMS_CORE_RUNTIME_ENV_FILE", str(env_file))
+    for variable in release.IMAGE_REFS.values():
+        monkeypatch.delenv(variable, raising=False)
+
+    backend = release.ProductionReleaseBackend(repo_root=tmp_path, allow_first_install=True)
+    assert backend.image_refs == {
+        "bms-api": "registry.example/bms-api:release-42",
+        "bms-host-agent": "registry.example/bms-host:release-42",
+        "bms-cpu-power": "registry.example/bms-power:release-42",
+        "bms-web": "registry.example/bms-web:release-42",
+    }
+
+    observed: dict[str, str] = {}
+
+    def fake_run(command, *, cwd, env, check):
+        observed.update({key: env[key] for key in release.IMAGE_REFS.values()})
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    identity = release.BuildIdentity(
+        revision="0123456789abcdef0123456789abcdef01234567",
+        build_id="release-42",
+        build_time="2026-07-22T23:00:00Z",
+    )
+    backend._build_materialized_images(tmp_path, identity, image_refs=backend.image_refs)
+
+    assert observed == {
+        release.IMAGE_REFS[service]: image_ref
+        for service, image_ref in backend.image_refs.items()
+    }
 
 
 def test_release_plan_is_explicit_and_validation_precedes_commit() -> None:

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import 'molstar/build/viewer/molstar.css';
 
@@ -67,6 +67,12 @@ export interface MolstarViewerProps {
     cameraResetToken?: number;
     /** Governed, hash-bound MD metadata; playback remains capability-gated by the direct adapter. */
     molecularDynamics?: MDSceneState;
+    /** Shared-controller bridge for governed M6 workbench controls; never owns lifecycle. */
+    onControllerReady?: (controller: StructureSceneController | null) => void;
+    /** Runtime-only job scope for authorized viewer artifacts; never enters scene state. */
+    artifactJobId?: string;
+    /** Governed primary structure identity used for cross-artifact registration. */
+    structureDocumentId?: string;
 }
 
 type ViewerStatus = 'idle' | 'loading' | 'ready' | 'error';
@@ -106,15 +112,25 @@ export default function MolstarViewer({
     scenePresentation,
     cameraResetToken,
     molecularDynamics,
+    onControllerReady,
+    artifactJobId,
+    structureDocumentId = 'primary',
 }: MolstarViewerProps) {
     const mountRef = useRef<HTMLDivElement>(null);
     const adapterRef = useRef<MolstarDirectAdapter | null>(null);
     const controllerRef = useRef<StructureSceneController | null>(null);
     const sceneRequestGenerationRef = useRef(0);
+    const latestMeasurementsRef = useRef(measurements);
+    const latestScenePresentationRef = useRef(scenePresentation);
     const appliedCameraResetTokenRef = useRef(cameraResetToken);
     const viewerIdRef = useRef(`molstar-viewer-${crypto.randomUUID()}`);
     const [status, setStatus] = useState<ViewerStatus>('idle');
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+    useEffect(() => {
+        latestMeasurementsRef.current = measurements;
+        latestScenePresentationRef.current = scenePresentation;
+    }, [measurements, scenePresentation]);
 
 
     const absoluteUrl = useMemo(() => toAbsoluteStructureUrl(structureUrl), [structureUrl]);
@@ -122,8 +138,7 @@ export default function MolstarViewer({
         () => normalizeBackgroundColor(backgroundColor),
         [backgroundColor],
     );
-    const effectiveAlphafoldView = alphafoldView
-        && !(scenePresentation?.colorQueries?.length);
+    const effectiveAlphafoldView = alphafoldView && scenePresentation === undefined;
 
     const interactionTouchAction = useMemo(() => {
         const coarsePointer = typeof window.matchMedia === 'function'
@@ -138,7 +153,7 @@ export default function MolstarViewer({
     const documents = useMemo<readonly MolstarDirectDocument[]>(() => {
         if (!absoluteUrl) return [];
         const primary: MolstarDirectDocument = {
-            id: 'primary',
+            id: structureDocumentId,
             url: absoluteUrl,
             format: toMolstarLoadFormat(format),
         };
@@ -151,14 +166,52 @@ export default function MolstarViewer({
             } satisfies MolstarDirectDocument] : [];
         });
         return [primary, ...overlays];
-    }, [absoluteUrl, format, overlayStructures]);
+    }, [absoluteUrl, format, overlayStructures, structureDocumentId]);
+
+    const buildRequestedScene = useCallback(() => {
+        const primaryDocument = documents[0];
+        if (!primaryDocument) return undefined;
+        const presentation = latestScenePresentationRef.current;
+        return createStructureSceneState({
+            ref: {
+                viewerId: viewerIdRef.current,
+                sceneId: `${viewerIdRef.current}-scene`,
+                generation: ++sceneRequestGenerationRef.current,
+            },
+            documents: documents.map((document) => ({
+                documentId: document.id,
+                sourceKind: document.format === 'pdb'
+                    ? 'pdb'
+                    : document.format === 'sdf' ? 'sdf' : 'mmcif',
+                sourceUrl: document.url,
+            })),
+            ...(documents.length > 1 ? {
+                collection: {
+                    kind: 'independent_hypotheses' as const,
+                    orderedDocumentIds: documents.map((document) => document.id),
+                },
+            } : {}),
+            activeDocumentId: primaryDocument.id,
+            provenance: {
+                createdBy: 'MolstarViewer compatibility facade',
+                createdAt: new Date().toISOString(),
+            },
+            presentation: {
+                ...presentation,
+                measurements: latestMeasurementsRef.current ?? presentation?.measurements,
+            },
+            molecularDynamics,
+        });
+    }, [documents, molecularDynamics]);
 
     const hasStructure = Boolean(absoluteUrl);
     const adapterSignature = useMemo(() => JSON.stringify({
         hideControls,
         effectiveAlphafoldView,
         normalizedBackgroundColor,
-    }), [effectiveAlphafoldView, hideControls, normalizedBackgroundColor]);
+        artifactJobId,
+        hasGovernedMDPlayback: molecularDynamics?.playbackCapability.supported === true,
+    }), [artifactJobId, effectiveAlphafoldView, hideControls, molecularDynamics?.playbackCapability.supported, normalizedBackgroundColor]);
     const [adapterEpoch, setAdapterEpoch] = useState(0);
 
     useEffect(() => {
@@ -177,12 +230,17 @@ export default function MolstarViewer({
             hideControls: boolean;
             effectiveAlphafoldView: boolean;
             normalizedBackgroundColor: string;
+            artifactJobId?: string;
+            hasGovernedMDPlayback: boolean;
         };
         let cancelled = false;
         const adapter = new MolstarDirectAdapter({
             hideControls: options.hideControls,
             alphafoldView: options.effectiveAlphafoldView,
             backgroundColor: options.normalizedBackgroundColor,
+            resolveViewerArtifactUrl: options.artifactJobId
+                ? (artifactId) => `/api/jobs/${encodeURIComponent(options.artifactJobId!)}/${options.hasGovernedMDPlayback ? 'md' : 'viewer'}/artifacts/${encodeURIComponent(artifactId)}/content`
+                : undefined,
         });
         const controller = new StructureSceneController(new MolstarDirectSceneEngineAdapter(adapter));
         adapterRef.current = adapter;
@@ -212,6 +270,12 @@ export default function MolstarViewer({
     }, [adapterSignature, hasStructure]);
 
     useEffect(() => {
+        const controller = adapterEpoch > 0 ? controllerRef.current : null;
+        onControllerReady?.(controller);
+        return () => onControllerReady?.(null);
+    }, [adapterEpoch, onControllerReady]);
+
+    useEffect(() => {
         const controller = controllerRef.current;
         if (!controller || (!onViewerEvent && !onResidueClick)) return undefined;
         return controller.subscribe((event) => {
@@ -233,46 +297,13 @@ export default function MolstarViewer({
     }, [adapterEpoch, onResidueClick, onViewerEvent]);
 
     useEffect(() => {
-        const adapter = adapterRef.current;
         const controller = controllerRef.current;
-        const primaryDocument = documents[0];
-        if (!adapter || !controller || adapterEpoch === 0 || !primaryDocument) return undefined;
-
-        const sceneGeneration = ++sceneRequestGenerationRef.current;
-        const sceneResult = createStructureSceneState({
-            ref: {
-                viewerId: viewerIdRef.current,
-                sceneId: `${viewerIdRef.current}-scene`,
-                generation: sceneGeneration,
-            },
-            documents: documents.map((document) => ({
-                documentId: document.id,
-                sourceKind: document.format === 'pdb'
-                    ? 'pdb'
-                    : document.format === 'sdf' ? 'sdf' : 'mmcif',
-                sourceUrl: document.url,
-            })),
-            ...(documents.length > 1 ? {
-                collection: {
-                    kind: 'independent_hypotheses' as const,
-                    orderedDocumentIds: documents.map((document) => document.id),
-                },
-            } : {}),
-            activeDocumentId: primaryDocument.id,
-            provenance: {
-                createdBy: 'MolstarViewer compatibility facade',
-                createdAt: new Date().toISOString(),
-            },
-            presentation: {
-                ...scenePresentation,
-                measurements: measurements ?? scenePresentation?.measurements,
-            },
-            molecularDynamics,
-        });
-        if (sceneResult.status !== 'ok') {
-            const error = sceneResult.status === 'error'
-                ? sceneResult.error
-                : new Error(sceneResult.reason);
+        const initialScene = buildRequestedScene();
+        if (!controller || adapterEpoch === 0 || !initialScene) return undefined;
+        if (initialScene.status !== 'ok') {
+            const error = initialScene.status === 'error'
+                ? initialScene.error
+                : new Error(initialScene.reason);
             setErrorMessage(formatError(error));
             setStatus('error');
             return undefined;
@@ -281,7 +312,17 @@ export default function MolstarViewer({
         let cancelled = false;
         setStatus('loading');
         setErrorMessage(null);
-        void controller.loadScene(sceneResult.value).then((result) => {
+        void (async () => {
+            let result = await controller.loadScene(initialScene.value);
+            if (cancelled || controllerRef.current !== controller || result.status === 'cancelled') return;
+            if (result.status === 'ok') {
+                const latestScene = buildRequestedScene();
+                if (latestScene?.status === 'ok') {
+                    result = await controller.reconcileScene(latestScene.value);
+                } else if (latestScene) {
+                    result = latestScene;
+                }
+            }
             if (cancelled || controllerRef.current !== controller || result.status === 'cancelled') return;
             if (result.status === 'ok') {
                 setStatus('ready');
@@ -291,11 +332,37 @@ export default function MolstarViewer({
             console.error('Failed to load direct Mol* scene:', error);
             setErrorMessage(formatError(error));
             setStatus('error');
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [adapterEpoch, buildRequestedScene]);
+
+    useEffect(() => {
+        const controller = controllerRef.current;
+        const currentScene = controller?.currentScene;
+        const requestedScene = buildRequestedScene();
+        if (!controller || !currentScene || !requestedScene || requestedScene.status !== 'ok') return;
+        const currentDocuments = currentScene.documents.map((document) => `${document.documentId}:${document.sourceUrl}`).join('|');
+        const requestedDocuments = requestedScene.value.documents.map((document) => `${document.documentId}:${document.sourceUrl}`).join('|');
+        if (currentDocuments !== requestedDocuments) return;
+
+        let cancelled = false;
+        void controller.reconcileScene(requestedScene.value).then((result) => {
+            if (cancelled || controllerRef.current !== controller || result.status === 'cancelled') return;
+            if (result.status === 'ok') {
+                setStatus('ready');
+                return;
+            }
+            const error = result.status === 'error' ? result.error : new Error(result.reason);
+            console.error('Failed to reconcile direct Mol* presentation:', error);
+            setErrorMessage(formatError(error));
+            setStatus('error');
         });
         return () => {
             cancelled = true;
         };
-    }, [adapterEpoch, documents, measurements, molecularDynamics, scenePresentation]);
+    }, [adapterEpoch, buildRequestedScene, measurements, scenePresentation]);
 
     useEffect(() => {
         if (status !== 'ready' || cameraResetToken === undefined || cameraResetToken === appliedCameraResetTokenRef.current) return;

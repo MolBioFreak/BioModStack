@@ -5,7 +5,6 @@ from fastapi import APIRouter
 from . import commands, connection, jobs, protocols
 from .dependencies import (
     SAFE_LOCAL_MUTATIONS,
-    _BIOXP_OPERATOR_HEADER,
     require_bioxp_mutation_access,
 )
 
@@ -20,7 +19,6 @@ for child_router in (
 
 __all__ = [
     "SAFE_LOCAL_MUTATIONS",
-    "_BIOXP_OPERATOR_HEADER",
     "require_bioxp_mutation_access",
     "router",
 ]

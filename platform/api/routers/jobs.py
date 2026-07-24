@@ -4,7 +4,7 @@ Jobs API router - Create, list, cancel pipeline jobs.
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, Body, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
 from sqlalchemy.exc import OperationalError
 from typing import Optional, List, Dict, Any, NoReturn
 from types import SimpleNamespace
@@ -51,10 +51,12 @@ from paths import (
 from runtime_policy import workflow_launch_block_detail, workflow_launches_allowed
 from schemas import JobCreate, JobResponse, JobList, JobStatus
 from services.job_control import cancel_job_lineage
-from services import alignment_access, ont_submission_trust
+from services import alignment_access, ont_submission_trust, stage_reporting, ont_ngs_contract
+from services.ont_barcode_units import load_barcode_units
 from services.md.chemistry_catalog import ChemistryCatalogError, ChemistryProfileSelectionError
 from services.md.feature_gate import require_molecular_dynamics_feature
 from services.md.launch_contract import MDLaunchError, materialize_md_job_spec, normalize_md_job_spec
+from services.md.results import expected_analysis_implementation_sha256
 from services.proteinbase_importer import import_proteinbase_bundle
 
 from model_registry import get_registry
@@ -188,6 +190,9 @@ def _raise_md_launch_http_error(exc: Exception) -> NoReturn:
 
 
 _MD_OUTPUT_SLUG = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_MD_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_MD_ANALYSIS_SIF_SHA256 = "3a74031e20dbd5012b7e532134f81816d596521dde47c4439fd1d6ae54fa5c68"
+_MD_TERMINAL_STATES = {"completed", "failed", "cancelled"}
 
 
 def _md_output_path_forbidden() -> MDLaunchError:
@@ -238,6 +243,159 @@ def _cleanup_call_owned_md_output(output_dir: Path, *, created: bool) -> None:
             candidate.rmdir()
         except (FileNotFoundError, OSError):
             pass
+
+
+def _md_analysis_error(code: str, message: str, *, status_code: int = 422) -> HTTPException:
+    return HTTPException(status_code=status_code, detail={"code": code, "message": message})
+
+
+def _md_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _md_analysis_gpu_requested(job_data: JobCreate) -> bool:
+    if job_data.pinned_gpu is not None:
+        return True
+    params = job_data.params if isinstance(job_data.params, dict) else {}
+    if params.get("gpu_id") not in (None, ""):
+        return True
+    pinned_gpus = params.get("pinned_gpus")
+    return pinned_gpus not in (None, "", [])
+
+
+def _md_contained_file(root: Path, raw_path: Any, *, code: str, label: str) -> Path:
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        raise _md_analysis_error(code, f"{label} is required")
+    candidate = Path(raw_path).expanduser()
+    if candidate.is_symlink():
+        raise _md_analysis_error(code, f"{label} must not be a symbolic link", status_code=409)
+    try:
+        resolved = candidate.resolve(strict=True)
+        resolved.relative_to(root)
+    except (OSError, ValueError) as exc:
+        raise _md_analysis_error(code, f"{label} is not contained by the MD parent", status_code=409) from exc
+    if not resolved.is_file():
+        raise _md_analysis_error(code, f"{label} is unavailable", status_code=409)
+    return resolved
+
+
+async def _validate_md_analysis_child(job_data: JobCreate, session: AsyncSession) -> None:
+    """Bind one internal CPU analysis attempt to immutable completed parent dynamics."""
+
+    if job_data.child_stage != "md_analysis" or not job_data.parent_job_id:
+        raise _md_analysis_error(
+            "MD_ANALYSIS_PARENT_REQUIRED",
+            "An analysis child requires an MD parent and child_stage=md_analysis.",
+        )
+    parent = await session.get(Job, job_data.parent_job_id)
+    if parent is None:
+        raise _md_analysis_error("MD_ANALYSIS_PARENT_NOT_FOUND", "The MD analysis parent does not exist.", status_code=404)
+    if parent.model_id != "molecular_dynamics" or parent.mode != "simulate":
+        raise _md_analysis_error("MD_ANALYSIS_PARENT_INVALID", "The analysis parent is not an MD coordinator.")
+    if str(parent.status or "").strip().lower() in _MD_TERMINAL_STATES:
+        raise _md_analysis_error("MD_ANALYSIS_PARENT_TERMINAL", "The MD analysis parent is already terminal.", status_code=409)
+    if not parent.output_dir:
+        raise _md_analysis_error("MD_ANALYSIS_PARENT_INVALID", "The MD analysis parent has no result root.", status_code=409)
+
+    parent_root = Path(parent.output_dir).expanduser().resolve()
+    work_item_path = _md_contained_file(
+        parent_root,
+        job_data.params.get("md_analysis_work_item"),
+        code="MD_ANALYSIS_WORK_ITEM_INVALID",
+        label="The MD analysis work item",
+    )
+    try:
+        work_item = json.loads(work_item_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise _md_analysis_error("MD_ANALYSIS_WORK_ITEM_INVALID", "The MD analysis work item is invalid.") from exc
+    if not isinstance(work_item, dict) or work_item.get("schema") != "bms.md.analysis-work-item.v1":
+        raise _md_analysis_error("MD_ANALYSIS_WORK_ITEM_INVALID", "The MD analysis work item schema is invalid.")
+    replica_index = work_item.get("replica_index")
+    if isinstance(replica_index, bool) or not isinstance(replica_index, int) or replica_index < 0:
+        raise _md_analysis_error("MD_ANALYSIS_WORK_ITEM_INVALID", "The MD analysis replica index is invalid.")
+    if work_item.get("job_id") != parent.id:
+        raise _md_analysis_error("MD_ANALYSIS_PARENT_MISMATCH", "The analysis work item belongs to another MD parent.")
+
+    aggregate_path = parent_root / "manifest.json"
+    try:
+        aggregate = json.loads(aggregate_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise _md_analysis_error("MD_ANALYSIS_REPLICAS_INCOMPLETE", "The completed MD aggregate manifest is unavailable.", status_code=409) from exc
+    aggregate_replicas = aggregate.get("replicas") if isinstance(aggregate, dict) else None
+    if (
+        not isinstance(aggregate, dict)
+        or aggregate.get("schema") != "bms.md.aggregate.v1"
+        or aggregate.get("status") != "completed"
+        or aggregate.get("job_id") != parent.id
+        or not isinstance(aggregate_replicas, list)
+        or not any(isinstance(item, dict) and item.get("replica_index") == replica_index for item in aggregate_replicas)
+    ):
+        raise _md_analysis_error("MD_ANALYSIS_REPLICAS_INCOMPLETE", "The MD replica aggregate is not complete.", status_code=409)
+
+    expected_manifest = (parent_root / "replicas" / f"replica_{replica_index}" / "manifest.json").resolve()
+    replica_manifest = _md_contained_file(
+        parent_root,
+        work_item.get("manifest"),
+        code="MD_ANALYSIS_REPLICA_INVALID",
+        label="The MD replica manifest",
+    )
+    if replica_manifest != expected_manifest:
+        raise _md_analysis_error("MD_ANALYSIS_REPLICA_INVALID", "The MD replica manifest path is not canonical.", status_code=409)
+    expected_sha256 = work_item.get("manifest_sha256")
+    if not isinstance(expected_sha256, str) or not _MD_SHA256.fullmatch(expected_sha256) or _md_sha256(replica_manifest) != expected_sha256:
+        raise _md_analysis_error("MD_ANALYSIS_REPLICA_CHECKSUM_MISMATCH", "The MD replica manifest checksum is invalid.", status_code=409)
+    try:
+        replica = json.loads(replica_manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise _md_analysis_error("MD_ANALYSIS_REPLICA_INVALID", "The MD replica manifest is invalid.", status_code=409) from exc
+    if (
+        not isinstance(replica, dict)
+        or replica.get("schema") != "bms.md.run.v1"
+        or replica.get("status") != "completed"
+        or replica.get("job_id") != parent.id
+        or replica.get("replica_index") != replica_index
+        or not isinstance(replica.get("artifacts"), dict)
+        or not replica["artifacts"]
+    ):
+        raise _md_analysis_error("MD_ANALYSIS_REPLICA_INVALID", "The MD replica is not complete.", status_code=409)
+    for artifact in replica["artifacts"].values():
+        if not isinstance(artifact, dict):
+            raise _md_analysis_error("MD_ANALYSIS_REPLICA_INVALID", "An MD replica artifact record is invalid.", status_code=409)
+        artifact_path = _md_contained_file(
+            replica_manifest.parent,
+            str(replica_manifest.parent / str(artifact.get("path") or "")),
+            code="MD_ANALYSIS_REPLICA_INVALID",
+            label="An MD replica artifact",
+        )
+        artifact_bytes = artifact.get("bytes")
+        artifact_sha256 = artifact.get("sha256")
+        if (
+            isinstance(artifact_bytes, bool)
+            or not isinstance(artifact_bytes, int)
+            or artifact_bytes < 0
+            or not isinstance(artifact_sha256, str)
+            or not _MD_SHA256.fullmatch(artifact_sha256)
+            or artifact_path.stat().st_size != artifact_bytes
+            or _md_sha256(artifact_path) != artifact_sha256
+        ):
+            raise _md_analysis_error("MD_ANALYSIS_REPLICA_CHECKSUM_MISMATCH", "An MD replica artifact checksum is invalid.", status_code=409)
+
+    runtime_sha256 = job_data.params.get("md_analysis_sif_sha256")
+    if runtime_sha256 != _MD_ANALYSIS_SIF_SHA256:
+        raise _md_analysis_error("MD_ANALYSIS_RUNTIME_INVALID", "The qualified MD analysis runtime identity is required.")
+    job_data.params.update(
+        {
+            "md_replica_index": replica_index,
+            "md_replica_manifest": str(replica_manifest),
+            "md_replica_manifest_sha256": expected_sha256,
+            "md_aggregate_manifest_sha256": _md_sha256(aggregate_path),
+            "md_analysis_implementation_sha256": expected_analysis_implementation_sha256(),
+        }
+    )
 
 
 def _coerce_positive_int(value: Any) -> Optional[int]:
@@ -4960,6 +5118,11 @@ async def create_job(
     }
     normalized_model_id = str(job_data.model_id or "").strip().lower()
     normalized_mode = str(job_data.mode or "").strip().lower()
+    if normalized_model_id == "molecular_dynamics" and normalized_mode == "analyze" and _md_analysis_gpu_requested(job_data):
+        raise _md_analysis_error(
+            "MD_ANALYSIS_GPU_FORBIDDEN",
+            "MD analysis children are CPU-only and cannot request a GPU assignment.",
+        )
     if normalized_model_id == "conformational_mapping":
         raise HTTPException(
             status_code=403,
@@ -5058,6 +5221,8 @@ async def create_job(
     _validate_protenix_checkpoint_requirements(job_data.model_id, job_data.params)
     _validate_fampnn_checkpoint_requirements(job_data.model_id, job_data.params)
     _validate_antibody_runtime_paths(job_data.model_id, job_data.params)
+    if normalized_model_id == "molecular_dynamics" and normalized_mode == "analyze":
+        await _validate_md_analysis_child(job_data, session)
 
     if job_data.parent_job_id and job_data.child_stage and job_data.name:
         existing_child_result = await session.execute(
@@ -5260,10 +5425,10 @@ async def create_job(
         vram_estimate = 0
         job_data.pinned_gpu = None
         logger.info(f"[QUEUE] Orchestrator parent job '{job_data.name}': CPU-only launcher, vram_estimate=0")
-    if job_data.model_id == "molecular_dynamics" and job_data.mode == "simulate":
+    if job_data.model_id == "molecular_dynamics" and job_data.mode in {"simulate", "analyze"}:
         vram_estimate = 0
         job_data.pinned_gpu = None
-        logger.info(f"[QUEUE] MD parent job '{job_data.name}': CPU-only durable coordinator, vram_estimate=0")
+        logger.info(f"[QUEUE] MD {job_data.mode} job '{job_data.name}': CPU-only, vram_estimate=0")
 
     # ─── CPU-only override: FASTQ-only nanopore jobs don't need a GPU ─────
     if job_data.model_id == "nanopore" and isinstance(job_data.params, dict):
@@ -6342,9 +6507,191 @@ async def annotate_cdr_regions(
 # STAGE CHECKPOINTING ENDPOINTS
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
+def _anchor_dorado_demux_products(job: Job) -> dict[str, Any]:
+    """Build the immutable server-side anchor for one terminal Dorado demux stage."""
+    if job.model_id != "nanopore" or job.mode != "basecall_dna" or str((job.params or {}).get("barcode_kit") or "") != "SQK-RBK114-96":
+        raise HTTPException(status_code=422, detail="dorado_demux is valid only for locked barcoded DNA jobs")
+    root = Path(str(job.output_dir or "")).expanduser()
+    if root.is_symlink():
+        raise HTTPException(status_code=409, detail="Dorado result root symlink is forbidden")
+    try:
+        root = root.resolve(strict=True)
+    except OSError as exc:
+        raise HTTPException(status_code=409, detail="Dorado result root is unavailable") from exc
+    expected = {
+        "demux_manifest": root / "demux" / "demux_manifest.json",
+        "barcode_units_manifest": root / "demux" / "per_barcode_units.json",
+        "dorado_preflight": root / "basecall" / "dorado_preflight.json",
+        "dorado_runtime_provenance": root / "basecall" / "dorado_runtime_provenance.json",
+    }
+    for label, path in expected.items():
+        if path.is_symlink() or not path.is_file():
+            raise HTTPException(status_code=409, detail=f"terminal Dorado product is unavailable or unsafe: {label}")
+        try:
+            resolved_product = path.resolve(strict=True)
+            relative_product = resolved_product.relative_to(root)
+            cursor = root
+            for part in relative_product.parts:
+                cursor = cursor / part
+                if cursor.is_symlink():
+                    raise ValueError(f"terminal Dorado product contains a symlink: {label}")
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=f"terminal Dorado product escapes result root: {label}") from exc
+    try:
+        product_bytes = {label: path.read_bytes() for label, path in expected.items()}
+        product_digests = {
+            label: hashlib.sha256(payload).hexdigest() for label, payload in product_bytes.items()
+        }
+        demux = json.loads(product_bytes["demux_manifest"].decode("utf-8"))
+        preflight = json.loads(product_bytes["dorado_preflight"].decode("utf-8"))
+        runtime = json.loads(product_bytes["dorado_runtime_provenance"].decode("utf-8"))
+        unit_catalog = json.loads(product_bytes["barcode_units_manifest"].decode("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=409, detail="terminal Dorado product is unreadable or malformed") from exc
+    if not all(isinstance(payload, dict) for payload in (demux, preflight, runtime, unit_catalog)):
+        raise HTTPException(status_code=409, detail="terminal Dorado product documents must be JSON objects")
+    # Narrow JSON values for both runtime safety and static analysis.
+    demux = dict(demux)
+    preflight = dict(preflight)
+    runtime = dict(runtime)
+    unit_catalog = dict(unit_catalog)
+    preflight_sha256 = product_digests["dorado_preflight"]
+    params = dict(job.params or {})
+    expected_lock_sha256 = str(params.get("dorado_lock_sha256") or "").strip().lower()
+    expected_model_id = str(params.get("dorado_resolved_model_id") or "").strip()
+    expected_mode = str(params.get("dorado_basecall_mode") or "").strip().lower()
+    try:
+        approved_lock_bytes = ont_ngs_contract.DORADO_LOCK_PATH.read_bytes()
+        approved_lock = json.loads(approved_lock_bytes.decode("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=409, detail="approved Dorado lock is unavailable or malformed") from exc
+    if not isinstance(approved_lock, dict) or hashlib.sha256(approved_lock_bytes).hexdigest() != expected_lock_sha256:
+        raise HTTPException(status_code=409, detail="terminal Dorado job lock is not the approved lock")
+    approved_dorado = approved_lock.get("dorado")
+    approved_models = approved_lock.get("models")
+    if not isinstance(approved_dorado, dict) or not isinstance(approved_models, dict):
+        raise HTTPException(status_code=409, detail="approved Dorado lock has invalid runtime/model sections")
+    approved_dna_models = approved_models.get("dna")
+    if not isinstance(approved_dna_models, dict):
+        raise HTTPException(status_code=409, detail="approved Dorado lock has no DNA model section")
+    approved_model = next(
+        (entry for entry in approved_dna_models.values() if isinstance(entry, dict) and entry.get("id") == expected_model_id),
+        None,
+    )
+    if not isinstance(approved_model, dict):
+        raise HTTPException(status_code=409, detail="terminal Dorado model is not retained by the approved lock")
+    preflight_lock = preflight.get("lock")
+    if not isinstance(preflight_lock, dict):
+        preflight_lock = {}
+    preflight_lock_sha256 = str(preflight_lock.get("sha256") or "").lower()
+    preflight_selection = preflight.get("selection")
+    if not isinstance(preflight_selection, dict):
+        preflight_selection = {}
+    preflight_runtime = preflight.get("runtime")
+    if not isinstance(preflight_runtime, dict):
+        preflight_runtime = {}
+    runtime_assets = preflight_runtime.get("assets")
+    if not isinstance(runtime_assets, dict):
+        runtime_assets = {}
+    runtime_sif = runtime_assets.get("runtime_sif")
+    if not isinstance(runtime_sif, dict):
+        runtime_sif = {}
+    runtime_calls = runtime.get("calls_bam")
+    if not isinstance(runtime_calls, dict):
+        runtime_calls = {}
+    demux_source = demux.get("source_calls")
+    if not isinstance(demux_source, dict):
+        demux_source = {}
+    anchored_read_count = runtime_calls.get("read_count")
+    if isinstance(anchored_read_count, bool) or not isinstance(anchored_read_count, int) or anchored_read_count < 0:
+        raise HTTPException(status_code=409, detail="terminal Dorado calls read count is invalid")
+    preflight_barcoding = preflight.get("barcoding")
+    if not isinstance(preflight_barcoding, dict):
+        preflight_barcoding = {}
+    demux_units = demux.get("units")
+    catalog_units = unit_catalog.get("units")
+    if (
+        demux.get("schema") != "biomodstack.dorado_demux.v1"
+        or preflight.get("schema") != "biomodstack.dorado_preflight.v1"
+        or runtime.get("schema") != "biomodstack.dorado_runtime_provenance.v1"
+        or unit_catalog.get("schema") != "biomodstack.dorado_barcode_units.v1"
+        or demux.get("preflight_sha256") != preflight_sha256
+        or runtime.get("preflight_sha256") != preflight_sha256
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_lock_sha256)
+        or preflight_lock_sha256 != expected_lock_sha256
+        or not expected_model_id
+        or preflight_selection.get("model_id") != expected_model_id
+        or preflight_selection.get("molecule") != "dna"
+        or preflight_selection.get("model_aggregate_sha256") != approved_model.get("aggregate_sha256")
+        or preflight_selection.get("quality") != params.get("dorado_quality_mode")
+        or preflight_selection.get("modified_bases") != "none"
+        or preflight_selection.get("modified_bases_model_id") is not None
+        or preflight_selection.get("stereo_model_id") is not None
+        or runtime.get("model_id") != expected_model_id
+        or expected_mode != "simplex"
+        or preflight_selection.get("mode") != expected_mode
+        or runtime.get("mode") != expected_mode
+        or preflight_barcoding.get("kit") != params.get("barcode_kit")
+        or preflight_runtime.get("version") != approved_dorado.get("version")
+        or runtime.get("runtime_sha256") != approved_dorado.get("sif_sha256")
+        or runtime_sif.get("sha256") != runtime.get("runtime_sha256")
+        or preflight_runtime.get("sif_sha256") != runtime.get("runtime_sha256")
+        or runtime_calls.get("sha256") != demux_source.get("sha256")
+        or runtime_calls.get("read_count") != demux_source.get("read_count")
+        or runtime_calls.get("read_count") != demux.get("total_reads")
+        or not isinstance(demux_units, list)
+        or demux_units != catalog_units
+    ):
+        raise HTTPException(status_code=409, detail="terminal Dorado product identities are inconsistent")
+    try:
+        anchored_units = load_barcode_units(
+            expected["demux_manifest"],
+            root,
+            expected_manifest_sha256=product_digests["demux_manifest"],
+            expected_source_calls_sha256=str(runtime_calls.get("sha256") or ""),
+            expected_preflight_sha256=preflight_sha256,
+        )
+        catalog_verified_units = load_barcode_units(
+            expected["barcode_units_manifest"],
+            root,
+            expected_manifest_sha256=product_digests["barcode_units_manifest"],
+            expected_source_calls_sha256=str(runtime_calls.get("sha256") or ""),
+            expected_preflight_sha256=preflight_sha256,
+        )
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail="terminal Dorado barcode units are inconsistent") from exc
+    identity_fields = (
+        "unit_id", "bam_sha256", "read_count", "unit_manifest_sha256",
+        "source_calls_sha256", "preflight_sha256",
+    )
+    if [tuple(unit[field] for field in identity_fields) for unit in anchored_units] != [
+        tuple(unit[field] for field in identity_fields) for unit in catalog_verified_units
+    ]:
+        raise HTTPException(status_code=409, detail="terminal Dorado unit catalog does not match demux products")
+    return {
+        "schema": "biomodstack.ont_dorado_terminal_products.v1",
+        "stage": "dorado_demux",
+        "identities": {
+            "lock_sha256": expected_lock_sha256,
+            "model_id": expected_model_id,
+            "mode": expected_mode,
+            "runtime_sha256": str(runtime.get("runtime_sha256")),
+            "calls_bam_sha256": str(runtime_calls.get("sha256")),
+            "read_count": anchored_read_count,
+            "unit_count": len(anchored_units),
+        },
+        "products": {
+            label: {"path": path.relative_to(root).as_posix(), "sha256": product_digests[label]}
+            for label, path in expected.items()
+        },
+    }
+
+
 @router.post("/{job_id}/stage-complete")
 async def report_stage_complete(
     job_id: str,
+    request: Request,
     stage: str,
     outputs: List[str] = [],
     session: AsyncSession = Depends(get_session)
@@ -6353,11 +6700,59 @@ async def report_stage_complete(
     Report that a workflow stage has completed.
     Called by Nextflow workflows after each stage finishes.
     """
-    result = await session.execute(select(Job).where(Job.id == job_id))
+    result = await session.execute(select(Job).where(Job.id == job_id).with_for_update())
     job = result.scalar_one_or_none()
     
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    authorization = str(request.headers.get("authorization") or "")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not stage_reporting.token_is_authorized(job.provenance, token):
+        raise HTTPException(status_code=403, detail="invalid workflow stage credential")
+
+    if stage == "dorado_demux":
+        provenance = dict(job.provenance or {})
+        callback_digest = str(provenance.get(stage_reporting.PROVENANCE_DIGEST_KEY) or "")
+        existing = provenance.get("ont_dorado_terminal_products")
+        if existing is None and job.status != "running":
+            raise HTTPException(status_code=409, detail="terminal Dorado products can be anchored only by an active workflow")
+        anchor = _anchor_dorado_demux_products(job)
+        if existing is not None and existing != anchor:
+            raise HTTPException(status_code=409, detail="terminal Dorado product anchor is immutable")
+        provenance["ont_dorado_terminal_products"] = anchor
+        # The demux callback is the terminal trust transition for a barcoded
+        # basecall job. Revoke its launch-scoped credential in the same commit
+        # that persists the immutable anchor so the transition is single-use.
+        provenance.pop(stage_reporting.PROVENANCE_DIGEST_KEY, None)
+        completed = list(job.completed_stages or [])
+        if stage not in completed:
+            completed.append(stage)
+        stage_outputs = dict(job.stage_outputs or {})
+        stage_outputs[stage] = outputs
+        published = await session.execute(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.status == JobStatus.RUNNING.value,
+                Job.provenance[stage_reporting.PROVENANCE_DIGEST_KEY].as_string() == callback_digest,
+            )
+            .values(
+                provenance=provenance,
+                completed_stages=completed,
+                stage_outputs=stage_outputs,
+                current_stage=None,
+            )
+        )
+        await session.commit()
+        if published.rowcount != 1:
+            raise HTTPException(status_code=409, detail="terminal Dorado anchor transition was already consumed")
+        logger.info(f"Job {job_id}: Stage '{stage}' completed with {len(outputs)} outputs")
+        return {
+            "message": f"Stage '{stage}' marked complete",
+            "job_id": job_id,
+            "completed_stages": completed,
+            "outputs_count": len(outputs),
+        }
     
     # Update completed stages
     completed = job.completed_stages or []
@@ -6720,6 +7115,7 @@ async def mark_children_aggregated(
 @router.post("/{job_id}/stage-start")
 async def report_stage_start(
     job_id: str,
+    request: Request,
     stage: str,
     session: AsyncSession = Depends(get_session)
 ):
@@ -6727,11 +7123,15 @@ async def report_stage_start(
     Report that a workflow stage has started.
     Called by Nextflow workflows when entering a new stage.
     """
-    result = await session.execute(select(Job).where(Job.id == job_id))
+    result = await session.execute(select(Job).where(Job.id == job_id).with_for_update())
     job = result.scalar_one_or_none()
     
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    authorization = str(request.headers.get("authorization") or "")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not stage_reporting.token_is_authorized(job.provenance, token):
+        raise HTTPException(status_code=403, detail="invalid workflow stage credential")
     
     job.current_stage = stage
     await session.commit()

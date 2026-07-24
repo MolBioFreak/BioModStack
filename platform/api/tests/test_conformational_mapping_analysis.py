@@ -8,8 +8,10 @@ import pytest
 from services.conformational_mapping.analysis import (
     ConformationalAnalysisError,
     _average_ranks,
+    _clash_key_sort_bytes,
     _hierarchical,
     _matched_comparison,
+    _ranked_universe_reference,
     _rank_stability,
 )
 from services.conformational_mapping.contracts import hotspot_score, switch_score
@@ -113,3 +115,19 @@ def test_cm8_011_no_thermodynamic_language() -> None:
     labels = json.dumps({"difference": "FrustraMPNN score difference", "status": "independent generated hypotheses"})
     assert "free energy" not in labels.lower()
     assert "ddg" not in labels.lower()
+
+
+def test_cm8_012_nested_clash_identity_has_canonical_sort_key() -> None:
+    key = ("candidate", ("copy1", "A", 7, "", 1), "V")
+    assert _clash_key_sort_bytes(key) == (
+        b'["candidate",["copy1","A",7,"",1],"V"]'
+    )
+
+
+def test_cm8_013_common_ranked_universe_is_content_addressed_not_repeated() -> None:
+    common = [("t", "A", index) for index in range(1_444)]
+    reference = _ranked_universe_reference(common)
+    assert reference["count"] == 1_444
+    assert reference["sha256"] == _ranked_universe_reference(list(reversed(common)))["sha256"]
+    assert len(reference["sha256"]) == 64
+    assert len(json.dumps(reference, separators=(",", ":"))) < 100

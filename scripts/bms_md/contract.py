@@ -385,6 +385,111 @@ def load_verified_job_config(config_path: Path) -> dict[str, Any]:
     return config
 
 
+def _canonical_json_bytes(payload: Mapping[str, Any]) -> bytes:
+    return (json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8")
+
+
+def build_atom_order_manifest(topology_path: Path) -> dict[str, Any]:
+    """Build a deterministic atom-order contract from a GRO or PDB topology.
+
+    Sequential position is authoritative. Source serials are retained only as
+    provenance because GRO/PDB serial fields can wrap or contain insertion codes.
+    """
+
+    topology_path = Path(topology_path).resolve()
+    suffix = topology_path.suffix.lower()
+    try:
+        lines = topology_path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise ValueError("analysis topology is unavailable or not text") from exc
+    atoms: list[dict[str, Any]] = []
+    if suffix == ".gro":
+        if len(lines) < 3:
+            raise ValueError("GRO topology is truncated")
+        try:
+            declared_count = int(lines[1].strip())
+        except ValueError as exc:
+            raise ValueError("GRO topology atom count is invalid") from exc
+        atom_lines = lines[2 : 2 + declared_count]
+        if declared_count < 1 or len(atom_lines) != declared_count or len(lines) < declared_count + 3:
+            raise ValueError("GRO topology atom count does not match its records")
+        for index, line in enumerate(atom_lines):
+            if len(line) < 20:
+                raise ValueError("GRO topology atom record is truncated")
+            try:
+                resid = int(line[0:5])
+                source_serial = int(line[15:20])
+            except ValueError as exc:
+                raise ValueError("GRO topology atom identity is invalid") from exc
+            name = line[10:15].strip()
+            resname = line[5:10].strip()
+            if not name or not resname:
+                raise ValueError("GRO topology atom identity is incomplete")
+            atoms.append({
+                "index": index,
+                "name": name,
+                "resid": str(resid),
+                "resname": resname,
+                "chain_id": "",
+                "insertion_code": "",
+                "segid": "",
+                "source_serial": source_serial,
+            })
+    elif suffix in {".pdb", ".ent"}:
+        atom_lines = [line for line in lines if line.startswith(("ATOM  ", "HETATM"))]
+        if not atom_lines:
+            raise ValueError("PDB topology contains no atom records")
+        for index, line in enumerate(atom_lines):
+            padded = line.ljust(80)
+            name = padded[12:16].strip()
+            resname = padded[17:20].strip()
+            resid = padded[22:26].strip()
+            serial = padded[6:11].strip()
+            if not name or not resname or not resid:
+                raise ValueError("PDB topology atom identity is incomplete")
+            atoms.append({
+                "index": index,
+                "name": name,
+                "resid": resid,
+                "resname": resname,
+                "chain_id": padded[21:22].strip(),
+                "insertion_code": padded[26:27].strip(),
+                "segid": padded[72:76].strip(),
+                "source_serial": int(serial) if serial.isdigit() else serial,
+            })
+    else:
+        raise ValueError("atom-order manifests support only GRO and PDB analysis topologies")
+    return {
+        "schema": "bms.md.atom-order.v1",
+        "topology_format": suffix.removeprefix("."),
+        "atom_count": len(atoms),
+        "atoms": atoms,
+    }
+
+
+def atom_order_identity(payload: Mapping[str, Any]) -> str:
+    if payload.get("schema") != "bms.md.atom-order.v1":
+        raise ValueError("atom-order manifest schema is invalid")
+    digest = hashlib.sha256(_canonical_json_bytes(payload)).hexdigest()
+    return f"sha256:{digest}"
+
+
+def write_atom_order_manifest(topology_path: Path, output_path: Path) -> tuple[Path, str]:
+    payload = build_atom_order_manifest(topology_path)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output_path.with_suffix(output_path.suffix + f".tmp-{os.getpid()}")
+    try:
+        temporary.write_bytes(_canonical_json_bytes(payload))
+        with temporary.open("rb") as handle:
+            os.fsync(handle.fileno())
+        os.replace(temporary, output_path)
+        _fsync_directory(output_path.parent)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return output_path, atom_order_identity(payload)
+
+
 def _artifact_record(path: Path, output_dir: Path) -> dict[str, Any]:
     resolved_output = output_dir.resolve()
     resolved_path = path.resolve()
@@ -428,6 +533,7 @@ def build_run_manifest(
             "name": config["engine"],
             "version": str(engine_version).strip(),
             "platform": str(platform).strip(),
+            "runtime": copy.deepcopy(config.get("engine_runtime")),
         },
         "config": config,
         "stages": copy.deepcopy(dict(stages)),

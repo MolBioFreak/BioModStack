@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from inspect import signature
 from typing import Callable, List
 import sqlite3
 
@@ -16,6 +17,14 @@ from migrations.add_saved_selection_sets import migrate as migrate_saved_selecti
 from migrations.add_external_result_imports import migrate as migrate_external_result_imports
 from migrations.add_sequence_provenance import migrate as migrate_sequence_provenance
 from migrations.add_conformational_mapping import migrate as migrate_conformational_mapping
+from migrations.add_viewer_snapshots import migrate as migrate_viewer_snapshots
+from migrations.add_state_landscape_analysis_projection import migrate as migrate_state_landscape_analysis_projection
+from migrations.enforce_state_landscape_analysis_pair_row_integrity import (
+    migrate as migrate_state_landscape_analysis_pair_row_integrity,
+)
+from migrations.add_state_landscape_analysis_page_order_index import (
+    migrate as migrate_state_landscape_analysis_page_order_index,
+)
 from run_migration import migrate as migrate_stage_tracking
 
 
@@ -23,7 +32,7 @@ from run_migration import migrate as migrate_stage_tracking
 class Migration:
     version: int
     name: str
-    fn: Callable[[], None]
+    fn: Callable[..., None]
 
 
 MIGRATIONS: List[Migration] = [
@@ -37,6 +46,18 @@ MIGRATIONS: List[Migration] = [
     Migration(8, "add_saved_selection_sets", migrate_saved_selection_sets),
     Migration(9, "add_external_result_imports", migrate_external_result_imports),
     Migration(10, "add_conformational_mapping", migrate_conformational_mapping),
+    Migration(11, "add_viewer_snapshots", migrate_viewer_snapshots),
+    Migration(12, "add_state_landscape_analysis_projection", migrate_state_landscape_analysis_projection),
+    Migration(
+        13,
+        "enforce_state_landscape_analysis_pair_row_integrity",
+        migrate_state_landscape_analysis_pair_row_integrity,
+    ),
+    Migration(
+        14,
+        "add_state_landscape_analysis_page_order_index",
+        migrate_state_landscape_analysis_page_order_index,
+    ),
 ]
 
 
@@ -65,6 +86,14 @@ def _get_applied_versions(conn: sqlite3.Connection) -> set[int]:
     return {row[0] for row in rows}
 
 
+def _run_migration(migration: Migration, db_path: str) -> None:
+    """Use an explicit database for migrations that support it; preserve legacy no-argument migrations."""
+    if "db_path" in signature(migration.fn).parameters:
+        migration.fn(db_path)
+    else:
+        migration.fn()
+
+
 def run_all(db_path: str | None = None) -> None:
     db_path = db_path or str(get_db_path())
     conn = _connect(db_path)
@@ -75,7 +104,7 @@ def run_all(db_path: str | None = None) -> None:
         for mig in MIGRATIONS:
             if mig.version in applied:
                 continue
-            mig.fn()
+            _run_migration(mig, db_path)
             conn.execute(
                 "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
                 (mig.version, mig.name, datetime.utcnow().isoformat()),

@@ -17,37 +17,49 @@ process PrepareBamForAnalysis {
 
     script:
     def bamMinMapq = Math.max((params.bam_min_mapq ?: 0) as Integer, 0)
+    def declaredSourceSha256 = params.bam_source_sha256?.toString()?.trim()?.toLowerCase() ?: ''
+    if (declaredSourceSha256 && !(declaredSourceSha256 ==~ /[0-9a-f]{64}/)) {
+        throw new IllegalArgumentException('bam_source_sha256 must be exactly 64 hexadecimal characters')
+    }
     """
     set -euo pipefail
 
-    source_sha256_before="\$(sha256sum "${bam}" | awk '{print \$1}')"
-    samtools quickcheck -v "${bam}" 2> bam_prepare.log
-    input_sort_order=\$(samtools view -H "${bam}" | awk -F '\t' '
+    # Authenticate one task-local regular-file copy and consume only that copy.
+    # The staged input may be a symlink to caller-writable storage.
+    cp --reflink=auto -- "${bam}" source.snapshot.bam
+    chmod 0444 source.snapshot.bam
+    source_sha256_before="\$(sha256sum source.snapshot.bam | awk '{print \$1}')"
+    if [[ -n "${declaredSourceSha256}" && "\${source_sha256_before}" != "${declaredSourceSha256}" ]]; then
+        echo "ERROR: task-local source BAM snapshot does not match authorized bam_source_sha256." >&2
+        exit 98
+    fi
+    samtools quickcheck -v source.snapshot.bam 2> bam_prepare.log
+    input_sort_order=\$(samtools view -H source.snapshot.bam | awk -F '\t' '
         /^@HD/ { for (i=1; i<=NF; i++) if (\$i ~ /^SO:/) { sub(/^SO:/, "", \$i); print \$i; exit } }
     ')
     echo "input_sort_order=\${input_sort_order:-unknown}" >> bam_prepare.log
 
     # Preserve MM/ML tags while enforcing coordinate-sorted BAM + index for modkit.
     if [[ ${bamMinMapq} -gt 0 ]]; then
-        samtools view -h -q ${bamMinMapq} "${bam}" 2>> bam_prepare.log \\
+        samtools view -h -q ${bamMinMapq} source.snapshot.bam 2>> bam_prepare.log \\
             | samtools sort -@ ${task.cpus} -o aligned.bam
         echo "Applied MAPQ filter: >= ${bamMinMapq}" >> bam_prepare.log
     else
-        samtools sort -@ ${task.cpus} -o aligned.bam "${bam}" 2>> bam_prepare.log
+        samtools sort -@ ${task.cpus} -o aligned.bam source.snapshot.bam 2>> bam_prepare.log
     fi
     samtools index aligned.bam 2>> bam_prepare.log
     samtools quickcheck -v aligned.bam 2>> bam_prepare.log
     samtools idxstats aligned.bam > /dev/null 2>> bam_prepare.log
-    input_records=\$(samtools view -c "${bam}")
+    input_records=\$(samtools view -c source.snapshot.bam)
     output_records=\$(samtools view -c aligned.bam)
     mapped_records=\$(samtools view -c -F 4 aligned.bam)
     if [[ "\${mapped_records}" -eq 0 ]]; then
         echo "ERROR: prepared BAM contains no mapped reads." >&2
         exit 1
     fi
-    source_sha256_after="\$(sha256sum "${bam}" | awk '{print \$1}')"
+    source_sha256_after="\$(sha256sum source.snapshot.bam | awk '{print \$1}')"
     if [[ "\${source_sha256_before}" != "\${source_sha256_after}" ]]; then
-        echo "ERROR: staged source BAM changed during preparation." >&2
+        echo "ERROR: task-local source BAM snapshot changed during preparation." >&2
         exit 97
     fi
     {

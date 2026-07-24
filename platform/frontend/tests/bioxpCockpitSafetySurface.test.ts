@@ -21,8 +21,13 @@ test('emergency stop is separate and never claims physical effect', () => {
     assert.doesNotMatch(cockpit, /EMERGENCY STOP succeeded/i);
 });
 
-test('operator token is transient input rather than embedded credential', () => {
-    assert.match(cockpit, /type="password"/);
-    assert.match(cockpit, /token: operatorToken/);
+test('normal commands and emergency stop do not require an operator credential', () => {
+    assert.doesNotMatch(cockpit, /operatorToken|Transient operator token|type="password"/);
     assert.doesNotMatch(cockpit, /X-BMS-BioXP-Operator-Token['"]\s*:/);
+});
+
+test('missing mutation-access metadata fails closed instead of crashing the cockpit', () => {
+    assert.match(cockpit, /status\?\.mutation_access\?\.enabled\s*===\s*true/);
+    assert.match(cockpit, /mutationAccessEnabled\s*&&\s*isBioXpCommandAvailable/);
+    assert.doesNotMatch(cockpit, /status\.mutation_access\.enabled/);
 });

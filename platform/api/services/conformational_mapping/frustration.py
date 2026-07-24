@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import io
 import math
 from pathlib import Path
 from typing import Any, Mapping
@@ -52,6 +53,7 @@ def finalize_landscape(
     checkpoint_sha256: str,
     tool_id: str,
     tool_sha256: str,
+    container_sha256: str,
 ) -> dict[str, Any]:
     raw_path = Path(raw_csv)
     raw_bytes = raw_path.read_bytes()
@@ -59,26 +61,36 @@ def finalize_landscape(
     if not isinstance(map_rows, list):
         raise FrustrationLandscapeError("structure map has no residue rows")
     mapped: dict[tuple[str, int, str], Mapping[str, Any]] = {}
+    indexed_mapped: dict[tuple[str, int], tuple[str, int, str]] = {}
+    chain_counts: dict[str, int] = {}
     scoreable_keys: list[tuple[str, int, str]] = []
     for row in map_rows:
+        chain = str(row.get("pdb_chain_id") or "")
+        chain_index = chain_counts.get(chain, 0)
+        chain_counts[chain] = chain_index + 1
         if row.get("status") != "mapped":
             continue
         backbone = row.get("backbone_atoms")
         if not isinstance(backbone, dict) or set(backbone) != {"N", "CA", "C", "O"}:
             continue
         key = (
-            str(row["pdb_chain_id"]),
+            chain,
             int(row["pdb_residue_id"]),
             str(row.get("pdb_insertion_code") or ""),
         )
         if key in mapped:
             raise FrustrationLandscapeError("structure map has duplicate normalized residue identity")
         mapped[key] = row
+        indexed_mapped[(chain, chain_index)] = key
         scoreable_keys.append(key)
 
     observed: dict[tuple[str, int, str, str], dict[str, Any]] = {}
     input_issues: list[dict[str, Any]] = []
-    with raw_path.open("r", encoding="utf-8", newline="") as handle:
+    try:
+        raw_text = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise FrustrationLandscapeError("raw landscape CSV is not valid UTF-8") from exc
+    with io.StringIO(raw_text, newline="") as handle:
         reader = csv.DictReader(handle)
         if not reader.fieldnames:
             raise FrustrationLandscapeError("raw landscape CSV has no header")
@@ -104,11 +116,12 @@ def finalize_landscape(
                     "raw_identity": {"chain": chain, "position": position, "insertion_code": insertion_code, "mutation_aa": mutation},
                 })
                 continue
-            residue_key = (chain, position, insertion_code)
-            if residue_key not in mapped:
+            indexed_key = (chain, position)
+            residue_key = indexed_mapped.get(indexed_key)
+            if insertion_code or residue_key is None:
                 input_issues.append({
                     "line_number": line_number, "status": "mapping_failed",
-                    "reason": "raw residue has no authoritative structure-map row",
+                    "reason": "zero-based FrustraMPNN chain position has no authoritative structure-map row",
                     "raw_identity": {"chain": chain, "position": position, "insertion_code": insertion_code, "mutation_aa": mutation},
                 })
                 continue
@@ -202,6 +215,7 @@ def finalize_landscape(
         "checkpoint_sha256": checkpoint_sha256,
         "tool_id": tool_id,
         "tool_sha256": tool_sha256,
+        "container_sha256": container_sha256,
         "threshold_policy_id": _THRESHOLD_POLICY["id"],
         "threshold_policy_sha256": canonical_sha256(_THRESHOLD_POLICY),
         "input_issues": input_issues,

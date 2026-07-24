@@ -23,6 +23,7 @@ except Exception:
 
 # Default API URL - construct from environment or localhost
 API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
+STAGE_REPORT_TOKEN = os.environ.get("BMS_STAGE_REPORT_TOKEN", "").strip()
 
 
 def normalize_output_path(path: str) -> str:
@@ -45,11 +46,15 @@ def main() -> None:
 
     args = parser.parse_args()
     cleaned_outputs = [normalize_output_path(p) for p in args.outputs]
+    if not STAGE_REPORT_TOKEN:
+        print("Failed to report stage: missing launch-scoped stage credential", file=sys.stderr)
+        sys.exit(1)
+    headers = {"Authorization": f"Bearer {STAGE_REPORT_TOKEN}"}
 
     try:
         if args.status == "start":
             url = f"{API_BASE_URL}/api/jobs/{args.job_id}/stage-start"
-            response = requests.post(url, params={"stage": args.stage}, timeout=10)
+            response = requests.post(url, params={"stage": args.stage}, headers=headers, timeout=10)
         else:
             url = f"{API_BASE_URL}/api/jobs/{args.job_id}/stage-complete"
             # FastAPI endpoint expects List[str] body directly.
@@ -57,19 +62,18 @@ def main() -> None:
                 url,
                 params={"stage": args.stage},
                 json=cleaned_outputs,
+                headers=headers,
                 timeout=10,
             )
 
         if response.status_code >= 400:
             print(f"Error reporting stage: {response.text}", file=sys.stderr)
-            # Do not fail workflow if reporting fails.
-            sys.exit(0)
+            sys.exit(1)
 
         print(f"Successfully reported stage {args.stage} {args.status}")
     except Exception as e:
         print(f"Failed to report stage: {e}", file=sys.stderr)
-        # Do not fail workflow if reporting fails.
-        sys.exit(0)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

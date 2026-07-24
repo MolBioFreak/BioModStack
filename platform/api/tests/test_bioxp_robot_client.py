@@ -104,16 +104,17 @@ def test_robot_client_routes_only_current_compact_commissioning_contracts() -> N
     )
     client = BioXpRobotClient(target, transport=RecordingTransport())
 
+    assert client.routes["activate_usb_for_service"][:2] == ("POST", "/oem/runtime/activate_service")
+    assert client.routes["activate_usb_for_service"][2] >= 90.0
     assert client.routes["collect_hardware_snapshot"][:2] == ("POST", "/hardware/snapshot/collect")
-    assert client.routes["construct_pipettes"][:2] == ("POST", "/oem/startup/constructor_pipettes")
-    assert client.routes["initialize_without_motion"][:2] == ("POST", "/oem/startup/initialize_without_motion")
-    assert client.routes["run_initial_check"][:2] == ("POST", "/oem/initial_check")
+    assert client.routes["initialize_oem_environment"][:2] == ("POST", "/oem/startup/initialize_environment")
+    assert client.routes["initialize_oem_environment"][2] >= 460.0
     assert client.routes["collect_hardware_snapshot"][2] >= 195.0
 
     asyncio.run(client.close())
 
 
-def test_probe_renews_advertised_stale_hardware_evidence_through_query_only_collector() -> None:
+def test_probe_never_posts_hidden_snapshot_when_hardware_evidence_is_stale() -> None:
     target = ValidatedBioXpTarget(
         api_url="http://robot:8123",
         scheme="http",
@@ -126,10 +127,8 @@ def test_probe_renews_advertised_stale_hardware_evidence_through_query_only_coll
 
     payload = asyncio.run(client.probe())
 
-    assert payload["cache_state"] == "fresh"
+    assert payload["cache_state"] == "stale"
     assert [(request.method, request.url.path) for request in transport.requests] == [
-        ("GET", "/status"),
-        ("POST", "/hardware/snapshot/collect"),
         ("GET", "/status"),
     ]
     asyncio.run(client.close())
@@ -153,7 +152,7 @@ def test_probe_does_not_collect_when_advertised_hardware_evidence_is_fresh() -> 
     asyncio.run(client.close())
 
 
-def test_probe_renews_fresh_hardware_evidence_before_half_life_expires() -> None:
+def test_probe_never_posts_hidden_snapshot_at_freshness_half_life() -> None:
     target = ValidatedBioXpTarget(
         api_url="http://robot:8123",
         scheme="http",
@@ -167,8 +166,6 @@ def test_probe_renews_fresh_hardware_evidence_before_half_life_expires() -> None
     asyncio.run(client.probe())
 
     assert [(request.method, request.url.path) for request in transport.requests] == [
-        ("GET", "/status"),
-        ("POST", "/hardware/snapshot/collect"),
         ("GET", "/status"),
     ]
     asyncio.run(client.close())

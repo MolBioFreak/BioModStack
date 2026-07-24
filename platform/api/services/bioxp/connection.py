@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import secrets
 from collections.abc import Callable
 from contextlib import suppress
@@ -82,7 +83,11 @@ class BioXpConnectionService:
         self._last_reachable: bool | None = None
         self._last_runtime_ready: bool | None = None
         self._last_hardware_ready: bool | None = None
+        self._hardware_observed_at: datetime | None = None
+        self._hardware_observation_fresh: bool | None = None
+        self._hardware_evidence_error: str | None = None
         self._capabilities: tuple[str, ...] = ()
+        self._startup_lifecycle: dict[str, Any] | None = None
         self._last_error: str | None = None
         self._command_active = False
         self._active_probe_task: asyncio.Task[None] | None = None
@@ -147,27 +152,32 @@ class BioXpConnectionService:
         assert self._client is not None
         try:
             payload = await self._client.probe()
-            self._last_reachable = True
-            observed_at, freshness_error = _robot_evidence_time(
-                payload,
-                now=self.clock(),
-                local_freshness_budget_seconds=self.freshness_budget_seconds,
-            )
-            self._observed_at = observed_at
-            if freshness_error is not None:
-                self._last_runtime_ready = None
-                self._last_hardware_ready = None
-                self._capabilities = ()
-                self._last_error = freshness_error
-                return
-            self._last_runtime_ready = _optional_bool(payload, "runtime_ready", "runtime_available")
-            self._last_hardware_ready = _optional_bool(payload, "hardware_ready", "hardware_connected")
+            startup = payload.get("startup")
+            self._startup_lifecycle = copy.deepcopy(startup) if isinstance(startup, dict) else None
             raw_capabilities = payload.get("capabilities")
             self._capabilities = (
                 tuple(sorted({str(value) for value in raw_capabilities}))
                 if isinstance(raw_capabilities, (list, tuple, set))
                 else ()
             )
+            now = self.clock()
+            self._last_reachable = True
+            self._observed_at = now
+            self._last_runtime_ready = _optional_bool(payload, "runtime_ready", "runtime_available")
+            hardware_observed_at, freshness_error = _robot_evidence_time(
+                payload,
+                now=now,
+                local_freshness_budget_seconds=self.freshness_budget_seconds,
+            )
+            self._hardware_observed_at = hardware_observed_at
+            self._hardware_observation_fresh = freshness_error is None
+            self._hardware_evidence_error = freshness_error
+            if freshness_error is not None:
+                self._last_hardware_ready = None
+                self._last_error = None
+                return
+            self._last_hardware_ready = _optional_bool(payload, "hardware_ready", "hardware_connected")
+            self._hardware_evidence_error = None
             self._last_error = None
         except Exception as exc:
             self._last_reachable = False
@@ -234,7 +244,11 @@ class BioXpConnectionService:
         self._last_reachable = None
         self._last_runtime_ready = None
         self._last_hardware_ready = None
+        self._hardware_observed_at = None
+        self._hardware_observation_fresh = None
+        self._hardware_evidence_error = None
         self._capabilities = ()
+        self._startup_lifecycle = None
         self._last_error = None
 
     def snapshot(self) -> BioXpSnapshot:
@@ -260,7 +274,15 @@ class BioXpConnectionService:
             generation=self._generation,
             reachable=self._last_reachable if expose_observation else None,
             runtime_ready=self._last_runtime_ready if expose_observation else None,
-            hardware_ready=self._last_hardware_ready if expose_observation else None,
+            hardware_ready=(
+                self._last_hardware_ready
+                if expose_observation and self._hardware_observation_fresh is True
+                else None
+            ),
+            hardware_observed_at=self._hardware_observed_at,
+            hardware_observation_fresh=self._hardware_observation_fresh,
+            hardware_observation_stale=self._hardware_observation_fresh is False,
+            hardware_evidence_error=self._hardware_evidence_error,
             capabilities=self._capabilities,
             observed_at=self._observed_at,
             freshness_budget_seconds=self.freshness_budget_seconds,
@@ -271,6 +293,7 @@ class BioXpConnectionService:
             last_observed_hardware_ready=self._last_hardware_ready,
             last_error=profile_error or self._last_error,
             command_active=self._command_active,
+            startup_lifecycle=copy.deepcopy(self._startup_lifecycle),
         )
 
     @property
@@ -287,6 +310,16 @@ class BioXpConnectionService:
     def set_command_active(self, active: bool) -> None:
         self._command_active = active
 
+    def observe_command_response(self, response: object) -> None:
+        if not isinstance(response, dict):
+            return
+        envelope = response.get("detail")
+        payload = envelope if isinstance(envelope, dict) else response
+        lifecycle = payload.get("lifecycle")
+        startup = lifecycle.get("startup") if isinstance(lifecycle, dict) else payload.get("startup")
+        if isinstance(startup, dict):
+            self._startup_lifecycle = copy.deepcopy(startup)
+
 
 def _optional_bool(payload: dict[str, Any], *keys: str) -> bool | None:
     for key in keys:
@@ -301,8 +334,8 @@ def _robot_evidence_time(
     *,
     now: datetime,
     local_freshness_budget_seconds: float,
-) -> tuple[datetime, str | None]:
-    """Preserve robot-owned cache age instead of renewing it at BMS receipt time."""
+) -> tuple[datetime | None, str | None]:
+    """Preserve robot-owned hardware cache age separately from runtime liveness."""
 
     freshness = payload.get("freshness")
     freshness = freshness if isinstance(freshness, dict) else {}
@@ -323,15 +356,12 @@ def _robot_evidence_time(
         assert age_s is not None
         return now - timedelta(seconds=age_s), None
 
-    stale_age_s = max(
-        age_s or 0.0,
-        local_freshness_budget_seconds + 1.0,
-    )
+    observed_at = now - timedelta(seconds=age_s) if age_s is not None else None
     detail = (
         "BioXP status evidence is stale or unavailable "
         f"(available={available}, cache_state={cache_state!r}, freshness_state={freshness_state!r})"
     )
-    return now - timedelta(seconds=stale_age_s), detail
+    return observed_at, detail
 
 
 def _non_negative_number(value: object) -> float | None:

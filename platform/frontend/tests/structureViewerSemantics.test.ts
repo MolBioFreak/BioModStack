@@ -147,7 +147,7 @@ test('quick views map semantic sections onto concrete overlay and color modes', 
     ]);
 });
 
-test('designability quick view falls back to frustration coloring when no PSCE profile exists', () => {
+test('designability quick view never reactivates retired legacy frustration coloring', () => {
     const quickViews = buildStructureViewerQuickViews({
         confidenceLabel: 'Design Confidence',
         hasResidueConfidence: false,
@@ -174,7 +174,7 @@ test('designability quick view falls back to frustration coloring when no PSCE p
             label: 'Designability',
             sectionId: 'designability',
             overlayView: 'metrics',
-            colorMode: 'frustration',
+            colorMode: 'default',
         },
     ]);
 });
@@ -513,6 +513,7 @@ test('ConforNets overlay ids are de-duplicated, valid, sorted, and never include
 test('StructureViewerPane wires first-class ConforNets slider, step, and overlay controls', () => {
     const source = readFileSync('src/components/StructureViewerPane.tsx', 'utf8');
     const molstarSource = readFileSync('src/components/MolstarViewerImpl.tsx', 'utf8');
+    const directAdapterSource = readFileSync('src/structureViewer/adapters/MolstarDirectAdapter.ts', 'utf8');
 
     assert.match(source, /data-confornets-conformer-controls/);
     assert.match(source, /type="range"/);
@@ -539,10 +540,23 @@ test('StructureViewerPane wires first-class ConforNets slider, step, and overlay
     assert.match(molstarSource, /overlayStructures/);
     assert.match(molstarSource, /new MolstarDirectAdapter/);
     assert.match(molstarSource, /new StructureSceneController/);
-    assert.match(molstarSource, /controller\.loadScene\(sceneResult\.value\)/);
+    assert.match(molstarSource, /controller\.loadScene\(initialScene\.value\)/);
+    assert.match(molstarSource, /controller\.reconcileScene\(latestScene\.value\)/);
+    assert.match(molstarSource, /controller\.reconcileScene\(requestedScene\.value\)/);
     assert.match(molstarSource, /kind:\s*'independent_hypotheses'/);
-    assert.match(molstarSource, /\[adapterEpoch, documents, measurements, molecularDynamics, scenePresentation\]/);
-    assert.match(molstarSource, /alphafoldView:\s*options\.effectiveAlphafoldView/);
-    assert.match(molstarSource, /&& !\(scenePresentation\?\.colorQueries\?\.length\)/);
+    assert.match(molstarSource, /\[adapterEpoch, buildRequestedScene\]/);
+    assert.match(molstarSource, /\[adapterEpoch, buildRequestedScene, measurements, scenePresentation\]/);
+    assert.match(molstarSource, /alphafoldView && scenePresentation === undefined/);
+    assert.doesNotMatch(molstarSource, /\[adapterEpoch, documents, measurements, molecularDynamics, scenePresentation\]/);
     assert.doesNotMatch(molstarSource, /viewerInstance/);
+    assert.match(directAdapterSource, /representationPreset:\s*'atomic-detail'/);
+    assert.doesNotMatch(directAdapterSource, /representationPreset:\s*'auto'/);
+    assert.match(directAdapterSource, /if \(this\.hasOverpaint\) await clearStructureOverpaint/);
+    assert.match(directAdapterSource, /if \(this\.hasTransparency\) await clearStructureTransparency/);
+    assert.match(directAdapterSource, /this\.hasOverpaint = true/);
+    assert.match(directAdapterSource, /this\.hasTransparency = true/);
+    assert.match(directAdapterSource, /plugin\.managers\.lociLabels\.addProvider\(provider\)/);
+    assert.match(directAdapterSource, /StructureElement\.Loci\.areIntersecting/);
+    assert.doesNotMatch(directAdapterSource, /CustomStructureProperties/);
+    assert.doesNotMatch(directAdapterSource, /CustomTooltipsProvider/);
 });

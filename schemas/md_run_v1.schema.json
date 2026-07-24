@@ -16,13 +16,22 @@
     "engine": {
       "type": "object",
       "additionalProperties": true,
-      "required": ["name", "version", "platform"],
+      "required": ["name", "version", "platform", "runtime"],
       "properties": {
         "name": {"enum": ["gromacs", "openmm"]},
         "version": {"type": "string", "minLength": 1},
         "platform": {"type": "string", "minLength": 1},
         "cuda_enabled": {"type": "boolean"},
-        "binary": {"type": "string", "minLength": 1}
+        "binary": {"type": "string", "minLength": 1},
+        "runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sif_sha256", "image_name"],
+          "properties": {
+            "sif_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "image_name": {"type": "string", "minLength": 1}
+          }
+        }
       }
     },
     "config": {"type": "object"},
@@ -52,8 +61,12 @@
         "path": {"type": "string", "minLength": 1, "pattern": "^(?!/)"},
         "bytes": {"type": "integer", "minimum": 0},
         "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-        "semantic_role": {"enum": ["analysis_topology", "analysis_trajectory", "representative_structure"]},
-        "atom_order_identity": {"type": "string", "minLength": 1}
+        "semantic_role": {"enum": ["analysis_topology", "analysis_trajectory", "atom_order_manifest", "representative_structure", "trajectory_frame_map"]},
+        "atom_order_identity": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "selection_method": {"const": "completed_production_final_coordinates"},
+        "source_frame": {"oneOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]},
+        "time_ps": {"type": "number", "minimum": 0},
+        "source_trajectory_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
       }
     }
   }

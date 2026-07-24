@@ -11,10 +11,9 @@ from .target_policy import ValidatedBioXpTarget
 
 DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
     "status": ("GET", "/status", 5.0),
+    "activate_usb_for_service": ("POST", "/oem/runtime/activate_service", 90.0),
     "collect_hardware_snapshot": ("POST", "/hardware/snapshot/collect", 210.0),
-    "construct_pipettes": ("POST", "/oem/startup/constructor_pipettes", 280.0),
-    "initialize_without_motion": ("POST", "/oem/startup/initialize_without_motion", 140.0),
-    "run_initial_check": ("POST", "/oem/initial_check", 75.0),
+    "initialize_oem_environment": ("POST", "/oem/startup/initialize_environment", 470.0),
     "emergency_stop": ("POST", "/oem/runtime/emergency_stop", 5.0),
 }
 
@@ -78,16 +77,9 @@ class BioXpRobotClient:
         payload = await self.request("status", retry_read_once=True)
         if not isinstance(payload, dict):
             raise RobotTransportError("BioXP status response was not an object")
-        # Newer handlers intentionally age hardware evidence rather than
-        # relabelling an old observation as live. While an operator has an
-        # active BMS connection, renew only through the handler's advertised,
-        # serialized query-only collector; never infer or invoke an
-        # initialization/recovery route.
-        if _hardware_snapshot_refresh_required(payload):
-            await self.request("collect_hardware_snapshot", json_data={})
-            payload = await self.request("status", retry_read_once=True)
-            if not isinstance(payload, dict):
-                raise RobotTransportError("BioXP status response was not an object")
+        # Remote interlink probes are cache-only. Query-only hardware sampling
+        # remains an explicit audited collect_hardware_snapshot command; it is
+        # never hidden inside the periodic connection probe.
         return payload
 
     async def request(
@@ -133,30 +125,3 @@ class BioXpRobotClient:
 
     async def close(self) -> None:
         await self._client.aclose()
-
-
-def _hardware_snapshot_refresh_required(payload: Mapping[str, Any]) -> bool:
-    raw_capabilities = payload.get("capabilities")
-    if not isinstance(raw_capabilities, (list, tuple, set)):
-        return False
-    if "collect_hardware_snapshot" not in {str(value) for value in raw_capabilities}:
-        return False
-    if payload.get("available") is False:
-        return True
-    if payload.get("cache_state") in {"missing", "stale"}:
-        return True
-    freshness = payload.get("freshness")
-    if not isinstance(freshness, Mapping):
-        return False
-    if freshness.get("state") in {"missing", "stale"}:
-        return True
-    age_s = freshness.get("age_s")
-    fresh_for_s = freshness.get("fresh_for_s")
-    return (
-        isinstance(age_s, (int, float))
-        and not isinstance(age_s, bool)
-        and isinstance(fresh_for_s, (int, float))
-        and not isinstance(fresh_for_s, bool)
-        and fresh_for_s > 0
-        and age_s >= fresh_for_s / 2.0
-    )

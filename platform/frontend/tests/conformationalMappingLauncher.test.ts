@@ -57,3 +57,20 @@ test('downloads use content-addressed API identities', () => {
     assert.match(api, /encodeURIComponent\(artifactId\)/);
     assert.match(viewer, /cmArtifactUrl/);
 });
+
+test('normal external import is mmCIF-only with server-derived snapshot authority', () => {
+    const launcher = source('conformationalMapping/ConformationalMappingLauncher.tsx');
+    assert.match(launcher, /Protein mmCIF upload/);
+    assert.match(launcher, /\.cif,\.mmcif/);
+    assert.match(launcher, /source\.format === 'mmcif'/);
+    assert.match(launcher, /External import accepts registered mmCIF handles only/);
+    assert.match(launcher, /form\.importIds\.length !== 1/);
+    assert.doesNotMatch(launcher, /<select multiple value=\{form\.importIds\}/);
+    assert.doesNotMatch(launcher, /\.cif,\.mmcif,\.pdb/);
+    assert.match(launcher, /Snapshot and residue identity are derived server-side from immutable staged bytes/);
+    assert.doesNotMatch(
+        launcher,
+        /if \(form\.backend === 'external_import'\) \{\s*payload\.registered_snapshot_id/,
+    );
+    assert.doesNotMatch(launcher, /form\.snapshotId\) errors\.push\('Select the matching ordered complete-complex snapshot bundle/);
+});

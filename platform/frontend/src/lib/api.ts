@@ -1,4 +1,6 @@
 import axios from 'axios';
+import type { ViewerSnapshotV2 } from '../structureViewer/contracts/m6Reproducibility';
+import type { SpatialVolumeDescriptorV1, VolumeRegistrationV1, VolumeSegmentationV1 } from '../structureViewer/contracts/spatialVolumes';
 
 // Use relative path - Vite's proxy handles /api -> localhost:8000
 const API_BASE = '';
@@ -65,8 +67,12 @@ export interface MDArtifact {
     name: string;
     bytes: number;
     sha256: string;
-    semantic_role: 'analysis_topology' | 'analysis_trajectory' | 'representative_structure' | null;
+    semantic_role: 'analysis_topology' | 'analysis_trajectory' | 'representative_structure' | 'trajectory_frame_map' | 'atom_order_manifest' | null;
     atom_order_identity: string | null;
+    selection_method?: string | null;
+    source_frame?: number | null;
+    time_ps?: number | null;
+    source_trajectory_sha256?: string | null;
     format: string;
     content_url: string;
 }
@@ -75,13 +81,34 @@ export interface MDSummary {
     schema: 'bms.md.summary.v1';
     job_id: string;
     status: string;
+    result_state: 'partial' | 'completed' | null;
     source: 'validated_job_owned_manifests';
     bounded: true;
+    aggregate_manifest_sha256: string;
     replica_count: number;
     artifact_count: number;
     replicas: Array<{ replica: number; status: string; engine: { name?: string; version?: string; platform?: string }; performance: Record<string, number> }>;
     analysis_status: 'absent' | 'partial' | 'completed';
-    trajectory_playback: { supported: false; reason: string };
+    trajectory_playback: { supported: false; reason: string } | {
+        supported: true;
+        replicas: Array<{
+            replica: number;
+            trajectory_sha256: string;
+            frame_map_artifact_id: string;
+            frame_count: number;
+            first_source_frame: number;
+            last_source_frame: number;
+            first_time_ps: number;
+            last_time_ps: number;
+        }>;
+    };
+}
+
+export interface MDTrajectoryFrameMap {
+    schema: 'bms.md.trajectory-frame-map.v1';
+    replica: number;
+    trajectory_sha256: string;
+    frames: Array<{ display_frame: number; source_frame: number; time_ps: number; step: number }>;
 }
 
 export interface MDAnalysisPoint {
@@ -121,11 +148,13 @@ export interface MDAnalysisReportSet {
         sample_stdev_of_replica_final_rmsd_angstrom: number | null;
     };
     evidence: { status: 'insufficient_evidence'; reason: string; frames_are_independent_replicates: false };
+    retry: { eligible: boolean; active: boolean; reason: string };
 }
 
 export const fetchMDSummary = (jobId: string) => api.get<MDSummary>(`/api/jobs/${jobId}/md/summary`);
 export const fetchMDArtifacts = (jobId: string) => api.get<{ schema: string; job_id: string; source: string; bounded: true; artifacts: MDArtifact[] }>(`/api/jobs/${jobId}/md/artifacts`);
 export const fetchMDAnalysis = (jobId: string) => api.get<MDAnalysisReportSet>(`/api/jobs/${jobId}/md/analysis`);
+export const retryMDAnalysis = (jobId: string) => api.post<{ schema: 'bms.md.analysis-retry.v1'; status: string; created_child_ids: string[] }>(`/api/jobs/${jobId}/md/analysis/retry`);
 
 // Log data for View Logs modal
 export interface JobLogs {
@@ -449,6 +478,94 @@ export const submitJob = (jobData: Partial<Job>) => {
     return api.post('/api/jobs', jobData);
 };
 
+export interface BoltzApiStructureRequest {
+    name: string;
+    client_request_id: string;
+    model: 'boltz-2.1';
+    sequence: string;
+    primary_chain_id: string;
+    complex_components: Array<Record<string, unknown>>;
+    num_samples: number;
+    use_msa: boolean;
+}
+
+export interface BoltzApiEstimateResponse {
+    model: string;
+    provider_input: Record<string, unknown>;
+    estimate: Record<string, unknown>;
+    estimate_fingerprint: string;
+}
+
+export type BoltzApiEntityType = 'protein' | 'dna' | 'rna' | 'ligand_ccd' | 'ligand_smiles';
+export type BoltzApiUpdateCheckStatus =
+    | 'current'
+    | 'update_available'
+    | 'unavailable'
+    | 'unavailable_pending_official_feed_verification';
+
+export interface BoltzApiProviderCapabilities {
+    contract_version: 'bms.boltz_api.capabilities.v1';
+    entities: {
+        status: 'supported';
+        types: BoltzApiEntityType[];
+    };
+    msa: {
+        status: 'supported';
+        provider_default: 'omit';
+        disable_value: { type: 'empty' };
+    };
+    num_samples: {
+        status: 'supported';
+        minimum: number;
+        maximum: number;
+    };
+    templates: {
+        status: 'unavailable_pending_schema_verification';
+    };
+    unsupported_local_controls: {
+        diffusion_sampling_steps: 'unsupported';
+        recycling_steps: 'unsupported';
+        potentials: 'unsupported';
+        denoiser_chunking: 'unsupported';
+        gpu_pinning: 'unsupported';
+        parallelism: 'unsupported';
+        oom_retry: 'unsupported';
+        conditioning: 'unsupported';
+    };
+}
+
+export interface BoltzApiCliUpdateStatus {
+    check_status: BoltzApiUpdateCheckStatus;
+    installed_version: string | null;
+    latest_version: string | null;
+    source: 'boltz_api_static_cli';
+    release_feed_url: string | null;
+    release_url: string | null;
+    checked_at: string | null;
+}
+
+export interface BoltzApiProviderStatus {
+    available: boolean;
+    cli_available: boolean;
+    credential_configured: boolean;
+    model: string;
+    message: string;
+    capabilities: BoltzApiProviderCapabilities;
+    cli_update: BoltzApiCliUpdateStatus;
+}
+
+export const fetchBoltzApiProviderStatus = () => (
+    api.get<BoltzApiProviderStatus>('/api/jobs/boltz-api/status')
+);
+
+export const estimateBoltzApiJob = (payload: BoltzApiStructureRequest) => (
+    api.post<BoltzApiEstimateResponse>('/api/jobs/boltz-api/estimate', payload)
+);
+
+export const submitBoltzApiJob = (
+    payload: BoltzApiStructureRequest & { approved_estimate_fingerprint: string },
+) => api.post<Job>('/api/jobs/boltz-api', payload);
+
 export interface OntNgsSubmitRequest {
     name?: string;
     params: Record<string, unknown>;
@@ -458,6 +575,35 @@ export interface OntNgsSubmitRequest {
 
 export const submitOntNgsJob = (workflowId: string, request: OntNgsSubmitRequest) =>
     api.post<Job>(`/api/ont/ngs/${workflowId}/submit`, request);
+
+export interface OntBarcodeUnit {
+    schema: 'biomodstack.ont_barcode_resubmission_unit.v1';
+    unit_id: string;
+    bam_path: string;
+    bam_sha256: string;
+    read_count: number;
+    manifest_sha256: string;
+    unit_manifest_sha256: string;
+}
+
+export const fetchOntBarcodeUnits = (jobId: string) =>
+    api.get<{ job_id: string; units: OntBarcodeUnit[] }>(
+        `/api/jobs/${encodeURIComponent(jobId)}/barcode-units`,
+    );
+
+export const submitOntBarcodeUnit = (
+    jobId: string,
+    unitId: string,
+    request: {
+        target_workflow: 'ont_plasmid_qc' | 'ont_construct_screening';
+        reference_fasta: string;
+        name?: string;
+        pinned_gpu?: number | null;
+    },
+) => api.post<Job>(
+    `/api/jobs/${encodeURIComponent(jobId)}/barcode-units/${encodeURIComponent(unitId)}/submit`,
+    request,
+);
 
 export interface BoltzGenPreviewResponse {
     yaml_text: string;
@@ -1300,7 +1446,7 @@ export const fetchDesignResidueMetrics = (designId: string) =>
     api.get<ResidueMetrics>(`/api/designs/${designId}/residue-metrics`);
 
 export interface ChainMetric {
-    type: 'protein' | 'dna' | 'rna' | 'ligand';
+    type: 'protein' | 'dna' | 'rna' | 'ligand' | 'unknown';
     length: number;
     avg_plddt: number | null;
     plddt: number[];
@@ -1443,14 +1589,27 @@ export interface IpsaeInterfacePairScore {
     ipsae_d0dom_max: number | null;
     iptm_d0chn_asym: number | null;
     iptm_d0chn_max: number | null;
-    n0res: number | null;
     n0chn: number | null;
     n0dom: number | null;
-    d0res: number | null;
+    n0dom_max: number | null;
+    n0res: number | null;
+    n0res_max: number | null;
     d0chn: number | null;
     d0dom: number | null;
-    residue_label_asym: string | null;
-    residue_label_max: string | null;
+    d0dom_max: number | null;
+    d0res: number | null;
+    d0res_max: number | null;
+    residue_label_iptm_asym: string | null;
+    residue_label_ipsae_d0chn_asym: string | null;
+    residue_label_ipsae_d0dom_asym: string | null;
+    residue_label_ipsae_d0res_asym: string | null;
+    residue_label_ipsae_d0res_max: string | null;
+    interface_residue_count_chain_1: number | null;
+    interface_residue_count_chain_2: number | null;
+    interface_dist_residue_count_chain_1: number | null;
+    interface_dist_residue_count_chain_2: number | null;
+    valid_pair_count: number | null;
+    dist_valid_pair_count: number | null;
 }
 
 export interface IpsaeInterfaceAnalysis {
@@ -1896,6 +2055,20 @@ export interface NucleotideSequenceListItem {
     updated_at: string | null;
 }
 
+export interface SavedGibsonWorkupListItem {
+    id: string;
+    name: string;
+    description: string | null;
+    length: number;
+    topology: 'circular' | 'linear';
+    engine: string | null;
+    engine_version: string | null;
+    fragment_count: number;
+    primer_count: number;
+    created_at: string;
+    updated_at: string | null;
+}
+
 export interface NucleotideSequenceCreate {
     name: string;
     description?: string;
@@ -1927,6 +2100,7 @@ export interface AssemblyFragmentInput {
     role?: string;
     source_sequence_id?: string;
     source_name?: string;
+    source_revision?: number;
     source_start?: number;
     source_end?: number;
     source_wraps_origin?: boolean;
@@ -1942,6 +2116,7 @@ export interface AssemblyFragmentResult {
     role?: string | null;
     source_sequence_id?: string | null;
     source_name?: string | null;
+    source_revision?: number | null;
     source_start?: number | null;
     source_end?: number | null;
     source_wraps_origin?: boolean;
@@ -2000,6 +2175,66 @@ export interface GibsonAssemblyRequest {
     save_description?: string;
 }
 
+export interface GibsonDesignFragmentInput extends AssemblyFragmentInput {
+    preparation: 'pcr' | 'ready_linear';
+}
+
+export interface GibsonDesignRequest {
+    fragments: GibsonDesignFragmentInput[];
+    circular?: boolean;
+    overlap?: number;
+    target_tm?: number;
+    min_anneal?: number;
+    selected_candidate_checksum?: string;
+    new_name?: string;
+    save_description?: string;
+}
+
+export interface GibsonDesignedPrimer {
+    id: string;
+    fragment_id: string;
+    fragment_name: string;
+    direction: 'forward' | 'reverse';
+    full_sequence: string;
+    annealing_sequence: string;
+    tail_sequence: string;
+    tm: number;
+    warnings: string[];
+}
+
+export interface GibsonDesignedFragment {
+    id: string;
+    name: string;
+    preparation: 'pcr' | 'ready_linear';
+    sequence: string;
+    checksum: string;
+    primer_ids: string[];
+}
+
+export interface GibsonDesignCandidate {
+    checksum: string;
+    product: AssemblyProduct;
+    exact_match: boolean;
+}
+
+export interface GibsonDesignResponse {
+    engine: string;
+    engine_version: string;
+    circular: boolean;
+    overlap: number;
+    target_tm: number;
+    min_anneal: number;
+    primers: GibsonDesignedPrimer[];
+    designed_fragments: GibsonDesignedFragment[];
+    candidates: GibsonDesignCandidate[];
+    selected_candidate_checksum: string;
+    selected_product: AssemblyProduct;
+    warnings: string[];
+    source_provenance: Array<Record<string, unknown>>;
+    saved_sequence?: NucleotideSequence | null;
+    message: string;
+}
+
 export interface GoldenGateAssemblyRequest {
     fragments: AssemblyFragmentInput[];
     circular?: boolean;
@@ -2028,6 +2263,9 @@ export interface FetchNucleotideSequencesParams {
 
 export const fetchNucleotideSequences = (params: FetchNucleotideSequencesParams = {}) =>
     api.get<NucleotideSequenceListItem[]>('/api/sequences/', { params });
+
+export const fetchSavedGibsonWorkups = () =>
+    api.get<SavedGibsonWorkupListItem[]>('/api/sequences/assembly-workups');
 
 export const fetchNucleotideSequence = (id: string) =>
     api.get<NucleotideSequence>(`/api/sequences/${id}`);
@@ -2331,6 +2569,12 @@ export const simulateGibsonAssembly = (data: GibsonAssemblyRequest) =>
 
 export const saveGibsonAssembly = (data: GibsonAssemblyRequest) =>
     api.post<AssemblyOperationResponse>('/api/molbio/assembly/gibson/save', data);
+
+export const designGibsonAssembly = (data: GibsonDesignRequest) =>
+    api.post<GibsonDesignResponse>('/api/molbio/assembly/gibson/design', data);
+
+export const saveDesignedGibsonAssembly = (data: GibsonDesignRequest) =>
+    api.post<GibsonDesignResponse>('/api/molbio/assembly/gibson/design/save', data);
 
 export const fetchGoldenGateAssemblyOptions = () =>
     api.get<GoldenGateAssemblyOptionsResponse>('/api/molbio/assembly/golden-gate/options');
@@ -3004,3 +3248,51 @@ export const fetchOntInstrumentRun = (runId: string) =>
 
 export const stopOntInstrumentRun = (runId: string, payload: { confirm_stop: boolean }) =>
     api.post<OntInstrumentRun>(`/api/ont/runs/${encodeURIComponent(runId)}/stop`, payload);
+
+export interface ViewerVolumeInventoryV1 {
+    readonly schema: 'bms.viewer.volume-list.v1';
+    readonly jobId: string;
+    readonly volumes: readonly SpatialVolumeDescriptorV1[];
+    readonly segmentations: readonly VolumeSegmentationV1[];
+    readonly registrations: readonly VolumeRegistrationV1[];
+}
+
+export interface ViewerSnapshotRecordV2 {
+    readonly schema: 'bms.viewer.snapshot-record.v2';
+    readonly snapshotId: string;
+    readonly jobId: string;
+    readonly label: string;
+    readonly createdBy: string;
+    readonly createdAt: string;
+    readonly schemaVersion: 2;
+    readonly snapshotSha256: string;
+    readonly snapshot?: ViewerSnapshotV2;
+}
+
+export const fetchViewerVolumes = (jobId: string) =>
+    api.get<ViewerVolumeInventoryV1>(`/api/jobs/${encodeURIComponent(jobId)}/viewer/volumes`);
+
+export const viewerArtifactContentUrl = (jobId: string, artifactId: string): string =>
+    `/api/jobs/${encodeURIComponent(jobId)}/viewer/artifacts/${encodeURIComponent(artifactId)}/content`;
+
+export const fetchViewerSnapshots = (jobId: string) =>
+    api.get<{ schema: 'bms.viewer.snapshot-list.v2'; jobId: string; snapshots: ViewerSnapshotRecordV2[]; nextCursor: string | null }>(
+        `/api/jobs/${encodeURIComponent(jobId)}/viewer/snapshots`,
+    );
+
+export const fetchViewerSnapshot = (jobId: string, snapshotId: string) =>
+    api.get<ViewerSnapshotRecordV2>(
+        `/api/jobs/${encodeURIComponent(jobId)}/viewer/snapshots/${encodeURIComponent(snapshotId)}`,
+    );
+
+export const createViewerSnapshot = (
+    jobId: string,
+    label: string,
+    snapshot: ViewerSnapshotV2,
+    snapshotSha256: string,
+) => api.post<ViewerSnapshotRecordV2>(`/api/jobs/${encodeURIComponent(jobId)}/viewer/snapshots`, {
+    schema: 'bms.viewer.snapshot-create.v2', label, snapshot, snapshotSha256,
+});
+
+export const deleteViewerSnapshot = (jobId: string, snapshotId: string) =>
+    api.delete(`/api/jobs/${encodeURIComponent(jobId)}/viewer/snapshots/${encodeURIComponent(snapshotId)}`);

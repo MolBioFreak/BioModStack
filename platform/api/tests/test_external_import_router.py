@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from fastapi import BackgroundTasks, HTTPException
+from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base
@@ -64,6 +64,7 @@ ATOM 1 CA ALA A 1 0 0 0 A
 async def test_preview_route_resolves_only_server_allowed_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     source = _source(tmp_path)
     monkeypatch.setattr(external_imports, "resolve_allowed_path", lambda value: source)
+    monkeypatch.setenv("BMS_BOLTZ_DOWNLOAD_ROOT", str(tmp_path))
 
     response = await external_imports.preview_external_import(ExternalImportPreviewRequest(source_path="data/source"))
 
@@ -72,16 +73,16 @@ async def test_preview_route_resolves_only_server_allowed_path(tmp_path: Path, m
 
 
 @pytest.mark.asyncio
-async def test_import_route_queues_durable_background_import(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_import_route_queues_for_the_durable_worker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     source = _source(tmp_path)
     monkeypatch.setattr(external_imports, "resolve_allowed_path", lambda value: source)
+    monkeypatch.setenv("BMS_BOLTZ_DOWNLOAD_ROOT", str(tmp_path))
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'db.sqlite'}")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     Session = async_sessionmaker(engine, expire_on_commit=False)
     try:
         preview = await external_imports.preview_external_import(ExternalImportPreviewRequest(source_path="data/source"))
-        background = BackgroundTasks()
         async with Session() as session:
             response = await external_imports.create_external_import(
                 ExternalImportCreateRequest(
@@ -90,12 +91,10 @@ async def test_import_route_queues_durable_background_import(tmp_path: Path, mon
                     preview_fingerprint=preview.source_fingerprint,
                     dataset_name="router test",
                 ),
-                background,
                 session,
             )
         assert response.state == "discovered"
         assert response.provider_job_id == "sab_pred_router"
-        assert len(background.tasks) == 1
     finally:
         await engine.dispose()
 

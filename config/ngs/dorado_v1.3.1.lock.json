@@ -1,0 +1,49 @@
+{
+  "schema": "biomodstack.dorado_lock.v1",
+  "dorado": {
+    "version": "1.3.1+7c84b01de",
+    "source_commit": "7c84b01de1e46d4c5b2d5208fc430f27579a6c22",
+    "source_tree": "19dbc819cb81afab03a37b324e87a012d02bbc77",
+    "sif_sha256": "2af01c5973eb86736949ea7d29342bb9f24611036906266c35e27c54d2032fad"
+  },
+  "model_aggregate_algorithm": "sha256(sorted(relative_path NUL size NUL file_sha256 LF))",
+  "models": {
+    "dna": {
+      "fast": {"id": "dna_r10.4.1_e8.2_400bps_fast@v5.2.0", "aggregate_sha256": "cbf9f6fbd332f1f835f3732e137131de42b7c682338ca2e4fd1d6237cd8b6700", "files": 28, "bytes": 1774398},
+      "hac": {"id": "dna_r10.4.1_e8.2_400bps_hac@v5.2.0", "aggregate_sha256": "4e3d419904d06fbff1ee79fccef3d4dd2d8fd93fdcca17963088e73df0b17229", "files": 36, "bytes": 35244890},
+      "sup": {"id": "dna_r10.4.1_e8.2_400bps_sup@v5.2.0", "aggregate_sha256": "af7efe9d6f69a54be38d0f34c7f3d222907816cb342a01380d5ca116caf218a8", "files": 158, "bytes": 315286691}
+    },
+    "rna": {
+      "fast": {"id": "rna004_130bps_fast@v5.2.0", "aggregate_sha256": "61682b5ca016f95ec5d4cd712fd9b74c767adf57c139117788eb1464e121ca91", "files": 28, "bytes": 1835943},
+      "hac": {"id": "rna004_130bps_hac@v5.2.0", "aggregate_sha256": "eb48d6dc6fedcfeb77797274db04f98f04e7d4bb4f538047d6983e7627231bc7", "files": 28, "bytes": 26010426},
+      "sup": {"id": "rna004_130bps_sup@v5.2.0", "aggregate_sha256": "8896d6d3718d8c17d48051487237935b5e57db0db847c427ee19588483139d1e", "files": 158, "bytes": 315286729}
+    },
+    "stereo": {"id": "dna_r10.4.1_e8.2_5khz_stereo@v1.4", "aggregate_sha256": "c0a87ddc0e73b18b0b1d3742ceb0e70e3106855667a511c0a58e8b656c1723a5", "files": 29, "bytes": 25773916},
+    "modified_bases": {
+      "5mC_5hmC": {"base_quality": "hac", "id": "dna_r10.4.1_e8.2_400bps_hac@v5.2.0_5mC_5hmC@v2", "aggregate_sha256": "881558a9cfcd6ad894ed84d2f440f3dba3feefa522cfa4b847b810fb08f29ba1", "files": 24, "bytes": 41181650},
+      "6mA": {"base_quality": "hac", "id": "dna_r10.4.1_e8.2_400bps_hac@v5.2.0_6mA@v1", "aggregate_sha256": "89566e6a357baf7e2503d2960aaf556e657176a32d8c491f32432a99023e4272", "files": 24, "bytes": 41180085}
+    }
+  },
+  "compatibility": {
+    "dna": {"sample_rate": 5000, "flow_cell_product_codes": ["FLO-MIN114", "FLO-MIN114M", "FLO-PRO114M"], "sequencing_kit_prefixes": ["SQK-", "sqk-"]},
+    "rna": {"sample_rate": 4000, "flow_cell_product_codes": ["FLO-MIN004RA", "FLO-PRO004RA"], "sequencing_kit_prefixes": ["SQK-RNA004", "sqk-rna004"]}
+  },
+  "barcoding": {"accepted_kits": ["SQK-RBK114-96"], "duplex_supported": false},
+  "required_runtime_capabilities": {
+    "basecaller": ["--batchsize", "--device", "--models-directory", "--min-qscore"],
+    "basecaller_barcoding": ["--kit-name", "--sample-sheet"],
+    "basecaller_modified_bases": ["--modified-bases-models"],
+    "duplex": ["--batchsize", "--device", "--models-directory", "--pairs"],
+    "demux": ["--no-classify", "--output-dir"]
+  },
+  "policy": {
+    "default_modified_bases": "none",
+    "default_batch_size": {"simplex": 64, "duplex": 32},
+    "batch_size_min": 1,
+    "batch_size_max": 256,
+    "min_gpu_total_mib": 15360,
+    "min_gpu_free_mib": 8192,
+    "runtime_network": "forbidden",
+    "model_download": "forbidden"
+  }
+}

@@ -1901,7 +1901,7 @@ export function MolBioToolkitV2() {
 
                     <div className="relative flex-1 overflow-hidden flex flex-col">
                         {sequenceData.circular && (
-                            <div className="pointer-events-none absolute right-4 top-4 z-20 flex items-center gap-2">
+                            <div className={`pointer-events-none absolute right-4 z-20 flex items-center gap-2 ${showGCTrack ? 'top-[212px]' : 'top-4'}`}>
                                 <button
                                     type="button"
                                     onClick={toggleViewerFullscreen}
@@ -1926,7 +1926,7 @@ export function MolBioToolkitV2() {
                                         onSelectionChange={handleSelection}
                                         onClearSelection={() => setSelection(null)}
                                         windowSize={Math.max(20, Math.min(100, Math.floor(sequenceData.sequence.length / 50)))}
-                                        height={132}
+                                        height={108}
                                     />
                                 )}
 
@@ -2120,6 +2120,7 @@ export function MolBioToolkitV2() {
                                 selection={selection}
                                 selectedSequenceId={selectedSequenceId}
                                 onLoadProduct={handleLoadAssemblyProduct}
+                                onLoadSavedWorkup={loadSequence}
                             />
                         )}
                         {activePanel === 'edit' && (

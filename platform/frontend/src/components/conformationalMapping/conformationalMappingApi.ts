@@ -16,6 +16,7 @@ export type CmTask = 'diversity' | 'mse' | 'transfer';
 export interface CmSource {
     source_id: string;
     source_kind: CmSourceKind;
+    format: string;
     sha256: string;
     bytes: number;
     metadata: Record<string, unknown>;
@@ -139,11 +140,128 @@ export interface CmRecord {
     payload: Record<string, unknown>;
 }
 
+export type CmStateLandscapeComparisonMode = 'pairwise' | 'reference';
+export type CmStateLandscapeMetricStatus = 'ok' | 'unavailable';
+export type CmStateLandscapeClass = 'high' | 'neutral' | 'minimally_frustrated';
+
+export interface CmStateLandscapeIdentity {
+    target_id: string;
+    entity_instance_id: string;
+    auth_asym_id: string;
+    auth_seq_id: number;
+    insertion_code: string;
+    sequence_index: number;
+    validated_wt: string;
+}
+
+export interface CmStateLandscapeResolvedPair {
+    pair_id: string;
+    candidate_a_id: string;
+    candidate_b_id: string;
+}
+
+export type CmStateLandscapeNumericMetric =
+    | { a: number; b: number; delta_b_minus_a: number; status: 'ok'; reason: null }
+    | { a: null; b: null; delta_b_minus_a: null; status: 'unavailable'; reason: string };
+
+export type CmStateLandscapeClassMetric =
+    | { a: CmStateLandscapeClass; b: CmStateLandscapeClass; transition: string; status: 'ok'; reason: null }
+    | { a: null; b: null; transition: null; status: 'unavailable'; reason: string };
+
+export interface CmStateLandscapeMetrics {
+    native_score: CmStateLandscapeNumericMetric;
+    high_non_native_highly_frustrated_fraction: CmStateLandscapeNumericMetric;
+    maximum_non_native_substitution_delta_relative_to_native: CmStateLandscapeNumericMetric;
+    native_class: CmStateLandscapeClassMetric;
+}
+
+export interface CmStateLandscapeRow extends CmStateLandscapeResolvedPair {
+    identity: CmStateLandscapeIdentity;
+    metrics: CmStateLandscapeMetrics;
+}
+
+export interface CmStateLandscapeSupport extends CmStateLandscapeResolvedPair {
+    eligible_row_count: number;
+    excluded_row_count: number;
+}
+
+export interface CmStateLandscapeExclusion extends CmStateLandscapeResolvedPair {
+    identity: CmStateLandscapeIdentity | null;
+    reason: string;
+    detail: string;
+}
+
+export interface CmStateLandscapeAnalysis {
+    schema_name: 'cm_state_landscape_analysis';
+    schema_version: 1;
+    analysis_id: string;
+    source_ensemble_sha256: string;
+    source_landscape_sha256: string;
+    source_structure_map_sha256: string;
+    comparison_mode: CmStateLandscapeComparisonMode;
+    comparison_target_id: string;
+    comparison_scope: 'all_within_target' | 'all_other_within_target';
+    reference_backend_coordinates: Record<string, unknown> | null;
+    reference_candidate_id: string | null;
+    resolved_pairs: CmStateLandscapeResolvedPair[];
+    comparison_sha256: string;
+    formula_version: 'cm_state_landscape_analysis_v1';
+    formula_sha256: string;
+    policy_sha256: string;
+    rows: CmStateLandscapeRow[];
+    support_ledger: CmStateLandscapeSupport[];
+    exclusion_ledger: CmStateLandscapeExclusion[];
+}
+
 export interface CmResults {
     request_id: string;
     result_contract_id: string;
     records: CmRecord[];
     artifacts: CmArtifact[];
+}
+
+export interface CmStateLandscapeAnalysisAuthority {
+    content_sha256: string;
+    source_ensemble_sha256: string;
+    source_landscape_sha256: string;
+    source_structure_map_sha256: string;
+    comparison_sha256: string;
+    formula_version: string;
+    formula_sha256: string;
+    policy_sha256: string;
+}
+
+export interface CmStateLandscapeAnalysisSummary {
+    request_id: string;
+    analysis_id: string;
+    authority: CmStateLandscapeAnalysisAuthority;
+    comparison: {
+        mode: CmStateLandscapeComparisonMode;
+        target_id: string;
+        scope: 'all_within_target' | 'all_other_within_target';
+        reference_backend_coordinates: Record<string, unknown> | null;
+        reference_candidate_id: string | null;
+    };
+    counts: { pairs: number; rows: number; exclusions: number };
+    pairs: CmStateLandscapeResolvedPair[];
+    artifact: { artifact_id: string; content_sha256: string; size_bytes: number; media_type: string; download_url: string } | null;
+}
+
+export interface CmStateLandscapeAnalysisRowsPage {
+    request_id: string;
+    selected_analysis_id: string;
+    offset: number;
+    limit: number;
+    applied_filters: {
+        pair_id: string | null;
+        candidate_id: string | null;
+        entity_instance_id: string | null;
+        auth_asym_id: string | null;
+        sequence_start: number | null;
+        sequence_end: number | null;
+    };
+    next_offset: number | null;
+    rows: Array<CmStateLandscapeRow & { availability: Record<string, unknown> }>;
 }
 
 export interface CmLandscapeRow {
@@ -230,6 +348,25 @@ export const getCmLandscape = async (
     (await api.get<CmLandscapePage>(`/api/conformational-mapping/requests/${encodeURIComponent(requestId)}/landscape`, {
         params: { candidate_id: candidateId, offset, limit },
     })).data;
+
+/** Compact B2 projection; callers validate it before rendering any scientific value. */
+export const getCmStateLandscapeAnalysis = async (requestId: string): Promise<CmStateLandscapeAnalysisSummary> =>
+    (await api.get<CmStateLandscapeAnalysisSummary>(
+        `/api/conformational-mapping/requests/${encodeURIComponent(requestId)}/state-landscape-analysis`,
+    )).data;
+
+/** B2 row pages are intentionally bounded to a single server-authoritative pair. */
+export const getCmStateLandscapeAnalysisRows = async (
+    requestId: string,
+    analysisId: string,
+    pairId: string,
+    offset = 0,
+    limit = 50,
+): Promise<CmStateLandscapeAnalysisRowsPage> =>
+    (await api.get<CmStateLandscapeAnalysisRowsPage>(
+        `/api/conformational-mapping/requests/${encodeURIComponent(requestId)}/state-landscape-analysis/rows`,
+        { params: { analysis_id: analysisId, pair_id: pairId, offset, limit } },
+    )).data;
 
 export const cancelCmRequest = async (requestId: string): Promise<{ request_id: string; status: string }> =>
     (await api.post(`/api/conformational-mapping/requests/${encodeURIComponent(requestId)}/cancel`)).data;

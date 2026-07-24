@@ -19,6 +19,8 @@ from datetime import datetime
 from typing import Deque, Dict, Any, Iterable, Iterator, Optional, List, Tuple, Set
 import logging
 
+from services import stage_reporting
+
 logger = logging.getLogger(__name__)
 
 CPU_RESERVED_THREADS = 4
@@ -2011,7 +2013,13 @@ async def launch_nextflow_job(
             logger.info(f"Job {job_id} was cancelled just before spawn, aborting")
             return
 
-        dynamic_gpu_cpus = await _resolve_dynamic_gpu_cpu_share(session, job, launch_params)
+        # Canonical conformational-mapping launch parameters are intentionally
+        # closed: cm_request_path is request authority and gpu_id is the only
+        # scheduler-owned addition.  Generic CPU-share hints must not weaken
+        # that boundary or make a valid request fail closed downstream.
+        dynamic_gpu_cpus = None
+        if model_id != "conformational_mapping":
+            dynamic_gpu_cpus = await _resolve_dynamic_gpu_cpu_share(session, job, launch_params)
         if dynamic_gpu_cpus is not None:
             launch_params["cpus_per_gpu"] = dynamic_gpu_cpus
             logger.info(
@@ -2056,6 +2064,12 @@ async def launch_nextflow_job(
 
             # Build environment with GPU pinning
             env = {**os.environ, "NXF_ANSI_LOG": "false"}
+            stage_report_token, stage_report_digest = stage_reporting.issue_stage_report_token()
+            provenance = dict(job.provenance or {})
+            provenance[stage_reporting.PROVENANCE_DIGEST_KEY] = stage_report_digest
+            job.provenance = provenance
+            await session.commit()
+            env[stage_reporting.ENV_TOKEN_KEY] = stage_report_token
             env, java_notes = resolve_nextflow_java_env(env)
             java_ok, java_message = preflight_nextflow_java(env)
             for note in java_notes:
@@ -2469,30 +2483,40 @@ async def launch_nextflow_job(
                                     elif isinstance(hotspots, list):
                                         epitope_residues = hotspots
 
-                            from services.result_state_integrity import finalize_successful_job
-
                             result_output_dir = job.child_output_dir or output_dir
-                            finalization = await finalize_successful_job(
-                                job,
-                                result_output_dir,
-                                session,
-                                epitope_residues=epitope_residues,
+                            is_md_parent = (
+                                job.model_id == "molecular_dynamics" and job.mode == "simulate"
                             )
-                            if finalization.completed:
-                                logger.info(
-                                    f"Ingested and validated {finalization.design_count} designs for job {job_id}"
-                                )
-                                from services.analysis_autorun import schedule_viewer_minimum_analyses_for_job
+                            if is_md_parent:
+                                from services.md.completion import validate_and_finalize_md_job
 
-                                schedule_viewer_minimum_analyses_for_job(str(job.id))
-                                # BATCH-STAGE-GATE: Check if all sibling variants complete, trigger batch FrustraMPNN
-                                await maybe_trigger_batch_frustrampnn(job, session)
-                                await maybe_trigger_mutation_seed_refinement(job, session)
+                                validate_and_finalize_md_job(job)
+                                logger.info("Validated the immutable MD completion generation for job %s", job_id)
                             else:
-                                logger.warning(
-                                    f"Result ingestion failed integrity validation for job {job_id}; "
-                                    f"preserving explicit {finalization.integrity_state} state"
+                                from services.result_state_integrity import finalize_successful_job
+
+                                finalization = await finalize_successful_job(
+                                    job,
+                                    result_output_dir,
+                                    session,
+                                    epitope_residues=epitope_residues,
                                 )
+                                if finalization.completed:
+                                    logger.info(
+                                        f"Ingested and validated {finalization.design_count} designs for job {job_id}"
+                                    )
+                                    from services.analysis_autorun import schedule_viewer_minimum_analyses_for_job
+
+                                    schedule_viewer_minimum_analyses_for_job(str(job.id))
+                                    # BATCH-STAGE-GATE: Check if all sibling variants complete, trigger batch FrustraMPNN
+                                    await maybe_trigger_batch_frustrampnn(job, session)
+                                    await maybe_trigger_mutation_seed_refinement(job, session)
+                                else:
+                                    logger.warning(
+                                        f"Result ingestion failed integrity validation for job {job_id}; "
+                                        f"preserving explicit {finalization.integrity_state} state"
+                                    )
+
                             
                     # Check for cancellation exit codes (SIGTERM=15/-15/143, SIGKILL=9/-9/137)
                     elif exit_code in (-15, -9, 143, 137):
@@ -2551,7 +2575,11 @@ async def launch_nextflow_job(
                         # Log last few lines
                         if job.status == JobStatus.FAILED.value:
                             logger.error(f"Tail of log:\n{''.join(full_log.tail(20))}")
-                
+                md_analysis_parent_id = (
+                    str(job.parent_job_id)
+                    if job.model_id == "molecular_dynamics" and job.mode == "analyze" and job.parent_job_id
+                    else None
+                )
                 job.completed_at = datetime.utcnow()
                 changes = {
                     attribute.key: attribute.value
@@ -2577,6 +2605,16 @@ async def launch_nextflow_job(
                     await session.commit()
                     if not published.rowcount:
                         logger.info("Skipped stale Nextflow terminal publication for job %s", job_id)
+                    if md_analysis_parent_id:
+                        # Reconcile only after the guarded child publication.  The
+                        # worker ORM snapshot has been expunged, so an operator's
+                        # concurrent cancellation remains authoritative even when
+                        # the terminal CAS loses its race.
+                        from services.md.lifecycle import reconcile_md_analysis_parent
+
+                        session.expire_all()
+                        await reconcile_md_analysis_parent(md_analysis_parent_id, session)
+                        await session.commit()
                 _running_processes.pop(job_id, None)
                 
         except Exception as e:
@@ -2617,6 +2655,11 @@ async def launch_nextflow_job(
                         await session.commit()
                         if not published.rowcount:
                             logger.info("Skipped stale Nextflow exception publication for job %s", job_id)
+                        elif job.model_id == "molecular_dynamics" and job.mode == "analyze" and job.parent_job_id:
+                            from services.md.lifecycle import reconcile_md_analysis_parent
+
+                            await reconcile_md_analysis_parent(str(job.parent_job_id), session)
+                            await session.commit()
 
 
 def launch_nextflow_job_detached(
@@ -2710,7 +2753,7 @@ def build_nextflow_command(
     if str(model_id or "").strip() == "conformational_mapping":
         if str(mode or "").strip() != "map":
             raise ValueError("conformational_mapping supports only mode=map")
-        unknown = sorted(set(params) - {"cm_request_path"})
+        unknown = sorted(set(params) - {"cm_request_path", "gpu_id"})
         if unknown:
             raise ValueError(
                 "canonical conformational-mapping launch parameters fail closed: "
@@ -2719,6 +2762,17 @@ def build_nextflow_command(
         request_path = str(params.get("cm_request_path") or "").strip()
         if not request_path:
             raise ValueError("cm_request_path is required")
+        gpu_id = params.get("gpu_id")
+        if gpu_id is None:
+            normalized_gpu_id = None
+        elif isinstance(gpu_id, int) and not isinstance(gpu_id, bool):
+            normalized_gpu_id = gpu_id
+        elif isinstance(gpu_id, str) and gpu_id.isascii() and gpu_id.isdecimal():
+            normalized_gpu_id = int(gpu_id)
+        else:
+            raise ValueError("conformational_mapping gpu_id must be a non-negative integer")
+        if normalized_gpu_id is not None and normalized_gpu_id < 0:
+            raise ValueError("conformational_mapping gpu_id must be a non-negative integer")
         workflow_entrypoint = resolve_nextflow_entrypoint(
             effective_profile="conformational_mapping",
             model_id="conformational_mapping",
@@ -2739,10 +2793,15 @@ def build_nextflow_command(
         if job_id:
             command.extend(["--job_id", str(job_id)])
         command.extend(["--cm_request_path", request_path])
+        if normalized_gpu_id is not None:
+            command.extend(["--gpu_id", str(normalized_gpu_id)])
         return command
 
     normalized_model_id = str(model_id or "").strip().lower()
     normalized_mode = str(mode or "").strip().lower()
+    if normalized_model_id == "molecular_dynamics" and normalized_mode == "analyze":
+        if params.get("gpu_id") not in (None, "") or params.get("pinned_gpus") not in (None, "", []):
+            raise ValueError("Molecular-dynamics analysis is CPU-only and rejects GPU assignment")
     if normalized_model_id == "bind" + "craft":
         raise ValueError("This retired workflow has been permanently removed")
     if str(model_id or "").strip().lower() == "caliby_experimental":

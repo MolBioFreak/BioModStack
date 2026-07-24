@@ -1,6 +1,6 @@
 export type StructurePredictionMode = 'predict' | 'complex';
 export type StructurePredictorFamily = 'boltz' | 'rf3' | 'protenix' | 'esmfold2';
-export type StructurePredictorSelection = StructurePredictorFamily | 'both' | 'all' | 'boltz_protenix';
+export type StructurePredictorSelection = StructurePredictorFamily | 'boltz_api' | 'both' | 'all' | 'boltz_protenix';
 export type BoltzQualityPresetId = 'quick' | 'balanced' | 'max' | 'custom';
 export type StructureLaunchVariant = 'default' | 'boltz_cp_experimental';
 export type StructureMsaProvider = 'local' | 'colabfold_api';
@@ -78,7 +78,7 @@ export interface BoltzCpShardPlanDefinition {
 }
 
 export interface StructureSubmitTarget {
-    modelId: 'boltz2' | 'rf3' | 'protenix' | 'esmfold2' | 'boltz_cp_experimental';
+    modelId: 'boltz2' | 'boltz_api' | 'rf3' | 'protenix' | 'esmfold2' | 'boltz_cp_experimental';
     mode: 'predict' | 'complex' | 'design';
 }
 
@@ -105,6 +105,25 @@ export interface StructureMsaSubmitParamsInput {
     targetShardMinSizeGb?: number | string | null;
 }
 
+export interface BoltzApiStructureRequestInput {
+    name: string;
+    clientRequestId: string;
+    sequence: string;
+    primaryChainId: string;
+    complexComponents: Array<Record<string, unknown>>;
+    numSamples: number;
+    useMsa: boolean;
+    // This field is deliberately not serialized. It keeps the payload boundary
+    // explicit when a caller has local-only controls in scope.
+    localControls?: {
+        pinnedGpus?: number[];
+        diffusionSamplingSteps?: number;
+        recyclingSteps?: number;
+        usePotentials?: boolean;
+        denoiserChunkLimit?: number;
+    };
+}
+
 const COMPLEX_RF3_DISABLED_REASON = 'RF3 is predict-only and cannot be launched in complex mode.';
 const TARGET_PREVIEW_HIGHLIGHT = { r: 59, g: 130, b: 246 };
 type StructureInitialValues = Record<string, unknown>;
@@ -115,6 +134,42 @@ export const DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MODE: StructureMsaTargetShardMod
 export const DEFAULT_STRUCTURE_MSA_TARGET_SHARDS = 4;
 export const DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MIN_SIZE_GB = 1;
 export const DEFAULT_STRUCTURE_MSA_PROVIDER: StructureMsaProvider = 'colabfold_api';
+
+const toBoltzApiNativeComponents = (components: Array<Record<string, unknown>>) => components.map((component) => {
+    const type = String(component.type || '').toLowerCase();
+    const providerType = type === 'peptide' ? 'protein'
+        : type === 'ion' || (type === 'ligand' && component.ccd) ? 'ligand_ccd'
+        : type === 'ligand' ? 'ligand_smiles'
+        : type;
+    const value = providerType === 'ligand_ccd'
+        ? component.ccd
+        : providerType === 'ligand_smiles'
+            ? component.smiles
+            : component.sequence;
+    const rawChainIds = component.chain_ids ?? component.id;
+    const chainIds = Array.isArray(rawChainIds) ? rawChainIds : [rawChainIds];
+    return { type: providerType, value, chain_ids: chainIds };
+});
+
+/** Build the narrow provider request; local runtime controls never cross this boundary. */
+export const buildBoltzApiStructureRequest = ({
+    name,
+    clientRequestId,
+    sequence,
+    primaryChainId,
+    complexComponents,
+    numSamples,
+    useMsa,
+}: BoltzApiStructureRequestInput) => ({
+    name,
+    client_request_id: clientRequestId,
+    model: 'boltz-2.1' as const,
+    sequence,
+    primary_chain_id: primaryChainId,
+    complex_components: toBoltzApiNativeComponents(complexComponents),
+    num_samples: Math.max(1, Math.min(10, Math.floor(Number(numSamples) || 1))),
+    use_msa: useMsa,
+});
 
 export const BOLTZ_CP_DEFAULT_SHARD_PLAN_ID: BoltzCpShardPlanId = '2x2';
 export const DEFAULT_BOLTZ_CP_CONTEXT_QUERY_TILE_TOKENS = 512;
@@ -312,13 +367,15 @@ export const resolveStructureSubmitTarget = ({
 
     const resolvedSelection = resolveStructurePredictorSelection(predictionMode, predictorSelection);
     return {
-        modelId: resolvedSelection.canonicalSelection === 'rf3'
-            ? 'rf3'
-            : resolvedSelection.canonicalSelection === 'protenix'
-                ? 'protenix'
-                : resolvedSelection.canonicalSelection === 'esmfold2'
-                    ? 'esmfold2'
-                    : 'boltz2',
+        modelId: resolvedSelection.canonicalSelection === 'boltz_api'
+            ? 'boltz_api'
+            : resolvedSelection.canonicalSelection === 'rf3'
+                ? 'rf3'
+                : resolvedSelection.canonicalSelection === 'protenix'
+                    ? 'protenix'
+                    : resolvedSelection.canonicalSelection === 'esmfold2'
+                        ? 'esmfold2'
+                        : 'boltz2',
         mode: predictionMode,
     };
 };
@@ -383,6 +440,7 @@ export const BOLTZ_QUALITY_PRESETS = [
 
 const PREDICT_MODE_OPTIONS: StructurePredictorOption[] = [
     { id: 'boltz', name: 'Boltz-2', desc: 'Fast, SOTA accuracy', color: 'blue' },
+    { id: 'boltz_api', name: 'Boltz API', desc: 'Remote Boltz-2.1 queue', color: 'blue' },
     { id: 'rf3', name: 'RoseTTAFold3', desc: 'Open-source AF3 alt.', color: 'green' },
     { id: 'protenix', name: 'Protenix', desc: 'AF3-level, multi-modal', color: 'violet' },
     { id: 'esmfold2', name: 'ESMFold2', desc: 'Fast local all-atom folding', color: 'blue' },
@@ -392,6 +450,7 @@ const PREDICT_MODE_OPTIONS: StructurePredictorOption[] = [
 
 const COMPLEX_MODE_OPTIONS: StructurePredictorOption[] = [
     { id: 'boltz', name: 'Boltz-2', desc: 'Complex prediction with target conditioning', color: 'blue' },
+    { id: 'boltz_api', name: 'Boltz API', desc: 'Remote Boltz-2.1 complex prediction', color: 'blue' },
     { id: 'rf3', name: 'RoseTTAFold3', desc: 'Predict-only; unavailable for complexes', color: 'green', disabled: true, disabledReason: COMPLEX_RF3_DISABLED_REASON },
     { id: 'protenix', name: 'Protenix', desc: 'Template-guided complex prediction', color: 'violet' },
     { id: 'esmfold2', name: 'ESMFold2', desc: 'Fast MSA-free complex co-folding', color: 'blue' },
@@ -400,7 +459,7 @@ const COMPLEX_MODE_OPTIONS: StructurePredictorOption[] = [
 
 const toPredictorSelection = (value: string | null | undefined): StructurePredictorSelection => {
     const normalized = String(value || '').trim().toLowerCase();
-    if (normalized === 'rf3' || normalized === 'protenix' || normalized === 'esmfold2' || normalized === 'both' || normalized === 'all' || normalized === 'boltz_protenix') {
+    if (normalized === 'boltz_api' || normalized === 'rf3' || normalized === 'protenix' || normalized === 'esmfold2' || normalized === 'both' || normalized === 'all' || normalized === 'boltz_protenix') {
         return normalized;
     }
     return 'boltz';
@@ -417,6 +476,14 @@ export const resolveStructurePredictorSelection = (
     const requestedSelection = toPredictorSelection(selection);
 
     if (mode === 'complex') {
+        if (requestedSelection === 'boltz_api') {
+            return {
+                requestedSelection,
+                canonicalSelection: 'boltz_api',
+                families: ['boltz'],
+                valid: true,
+            };
+        }
         if (requestedSelection === 'rf3') {
             return {
                 requestedSelection,
@@ -458,6 +525,14 @@ export const resolveStructurePredictorSelection = (
         };
     }
 
+    if (requestedSelection === 'boltz_api') {
+        return {
+            requestedSelection,
+            canonicalSelection: 'boltz_api',
+            families: ['boltz'],
+            valid: true,
+        };
+    }
     if (requestedSelection === 'both') {
         return {
             requestedSelection,

@@ -10,12 +10,13 @@ function readSource(relativePath: string): string {
 test('Nanopore FASTQ launch defaults stay compatible with bundled minimap2', () => {
     const template = readSource('src/components/NanoporeTemplate.tsx');
     const ngsToolkit = readSource('src/components/NGSToolkit.tsx');
+    const cloneState = readSource('src/lib/nanoporeCloneState.ts');
 
     assert.match(template, /const FASTQ_DEFAULT_MINIMAP_PRESET: MinimapPreset = 'map-ont'/u);
     assert.match(template, /map-ont \(ONT reads\)/u);
     assert.doesNotMatch(template, /lr:hq/u, 'frontend must not expose the minimap2 lr:hq preset until the bundled runtime supports it');
     assert.doesNotMatch(ngsToolkit, /lr:hq/u, 'reusing an old NGS job must not silently seed lr:hq');
-    assert.match(ngsToolkit, /fastqMinimap2Preset: p\.fastq_minimap2_preset \?\? 'map-ont'/u);
+    assert.match(cloneState, /fastqMinimap2Preset: p\.fastq_minimap2_preset \?\? 'map-ont'/u);
 });
 
 test('Nanopore FASTQ launch is gated on reference input and finite numeric bounds', () => {
@@ -44,6 +45,35 @@ test('Nanopore submit success navigates to the live job-detail route', () => {
     assert.match(app, /<Route path="\/jobs\/:jobId" element=\{<JobDetailPage \/>\}/u);
     assert.match(template, /navigate\(`\/jobs\/\$\{[^}`]+\}`\)/u);
     assert.doesNotMatch(template, /navigate\(`\/results\/\$\{response\.data\.job_id\}`\)/u);
+});
+
+test('Nanopore P4 controls serialize only locked molecule, quality, duplex, and barcode choices', () => {
+    const template = readSource('src/components/NanoporeTemplate.tsx');
+
+    assert.match(template, /type DoradoMolecule = 'dna' \| 'rna'/u);
+    assert.match(template, /type DoradoMode = 'simplex' \| 'duplex'/u);
+    assert.match(template, /useState<ModifiedBases>\([^\n]*\|\| 'none'\)/u);
+    assert.match(template, /dorado_quality_mode: doradoModel/u);
+    assert.match(template, /dorado_basecall_mode: doradoMode/u);
+    assert.match(template, /duplex_pairs: doradoMode === 'duplex'/u);
+    assert.match(template, /barcode_kit: barcodeKit \|\| undefined/u);
+    assert.match(template, /sample_sheet: barcodeKit/u);
+    assert.match(template, /ont_basecall_rna/u);
+    assert.match(template, /ont_basecall_dna/u);
+    assert.match(template, /dna_r10\.4\.1_e8\.2_400bps_sup@v5\.2\.0/u);
+    assert.match(template, /rna004_130bps_sup@v5\.2\.0/u);
+    assert.doesNotMatch(template, /dorado_model: doradoModel/u);
+});
+
+test('Nanopore consensus assembly launches the wf-clone-validation workflow instead of a basecall-only workflow', () => {
+    const template = readSource('src/components/NanoporeTemplate.tsx');
+
+    assert.match(template, /inputSource !== 'fastq' && runAssembly && !barcodeKit\s*\? 'wf_clone_validation'/u);
+    assert.match(template, /Consensus assembly requires a reference FASTA for construct verification/u);
+    assert.match(template, /setRunAssembly\(false\)/u);
+    assert.match(template, /run_assembly: inputSource !== 'fastq' \? runAssembly && !barcodeKit : false/u);
+    assert.match(template, /if \(value\) \{ setModifiedBases\('none'\); setRunModkit\(false\); setRunAssembly\(false\); \}/u);
+    assert.match(template, /type="range"\s+min=\{0\}/u);
 });
 
 test('NGS runs polling is scoped to Nanopore jobs instead of pulling the whole job table', () => {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import uuid
@@ -13,10 +14,16 @@ from .contracts import (
     ContractValidationError,
     canonical_json_bytes,
     canonical_sha256,
+    parse_backend_coordinates,
     validate_schema,
     validate_seed_sources,
 )
 from .clash import CLASH_DETECTOR_ID, CLASH_DETECTOR_VERSION
+from .state_landscape_analysis import (
+    MAX_STATE_LANDSCAPE_COMPARISON_ROWS,
+    MAX_STATE_LANDSCAPE_COMPARISONS,
+    MAX_STATE_LANDSCAPE_RESIDUES_PER_CANDIDATE,
+)
 
 
 BACKENDS = frozenset({"protenix_v2_ensemble", "confornets", "external_import"})
@@ -31,6 +38,7 @@ _TOP_LEVEL_FIELDS = frozenset(
         "feature_policy",
         "runtime_policy",
         "analysis_policy",
+        "state_landscape_comparison",
         "confornets",
         "protenix_snapshot_id",
         "import_receipt_id",
@@ -82,6 +90,8 @@ class MaterializedRequest:
     request_path: Path
     coordinate_plan_path: Path
     launch_params: dict[str, str]
+    request_sha256: str
+    coordinate_plan_sha256: str
 
 
 def _strict_object(
@@ -406,6 +416,77 @@ def build_confornets_coordinate_plan(
     return coordinates
 
 
+def _validate_state_landscape_comparison_plan(
+    request_fields: Mapping[str, Any], coordinate_plan: list[dict[str, Any]]
+) -> None:
+    """Reject comparison authorities that cannot resolve against planned coordinates."""
+
+    authority = request_fields.get("state_landscape_comparison")
+    if not isinstance(authority, Mapping):
+        return
+    mode = authority.get("mode")
+    target_id = authority.get("target_id")
+    if not isinstance(mode, str) or not isinstance(target_id, str):
+        return
+    try:
+        planned = [
+            parse_backend_coordinates(coordinate).model_dump(mode="json")
+            for coordinate in coordinate_plan
+        ]
+    except Exception as exc:  # pragma: no cover - plan construction is local authority
+        raise ConformationalMappingRequestError("canonical coordinate plan is invalid") from exc
+    selected = [coordinate for coordinate in planned if coordinate["target_id"] == target_id]
+
+    def validate_comparison_work(comparison_count: int) -> None:
+        if comparison_count > MAX_STATE_LANDSCAPE_COMPARISONS:
+            raise ConformationalMappingRequestError(
+                "state landscape comparison resolves "
+                f"{comparison_count} comparisons, exceeding configured maximum "
+                f"{MAX_STATE_LANDSCAPE_COMPARISONS}"
+            )
+        estimated_rows = comparison_count * MAX_STATE_LANDSCAPE_RESIDUES_PER_CANDIDATE
+        if estimated_rows > MAX_STATE_LANDSCAPE_COMPARISON_ROWS:
+            raise ConformationalMappingRequestError(
+                "state landscape comparison reserves "
+                f"{estimated_rows} comparison rows at the "
+                f"{MAX_STATE_LANDSCAPE_RESIDUES_PER_CANDIDATE}-residue candidate envelope, "
+                f"exceeding configured maximum {MAX_STATE_LANDSCAPE_COMPARISON_ROWS}"
+            )
+
+    if mode == "pairwise":
+        if len(selected) < 2:
+            raise ConformationalMappingRequestError(
+                "pairwise state landscape comparison requires at least two planned coordinates"
+            )
+        comparison_count = len(selected) * (len(selected) - 1) // 2
+        validate_comparison_work(comparison_count)
+        return
+    if mode != "reference":
+        return
+    selector = authority.get("reference_backend_coordinates")
+    if not isinstance(selector, Mapping):
+        return
+    try:
+        reference = parse_backend_coordinates(selector).model_dump(mode="json")
+    except Exception:
+        return
+    if reference["target_id"] != target_id:
+        raise ConformationalMappingRequestError(
+            "reference state landscape comparison target does not match the selected target"
+        )
+    matching = [coordinate for coordinate in selected if coordinate == reference]
+    if len(matching) != 1:
+        raise ConformationalMappingRequestError(
+            "reference state landscape comparison does not match exactly one planned coordinate"
+        )
+    if not any(coordinate != reference for coordinate in selected):
+        raise ConformationalMappingRequestError(
+            "reference state landscape comparison requires another planned coordinate"
+        )
+    comparison_count = len(selected) - 1
+    validate_comparison_work(comparison_count)
+
+
 def validate_request_params(params: Mapping[str, Any]) -> ValidatedRequest:
     """Validate API controls without writing files or scheduling work."""
 
@@ -457,6 +538,8 @@ def validate_request_params(params: Mapping[str, Any]) -> ValidatedRequest:
         "runtime_policy": values["runtime_policy"],
         "analysis_policy": values["analysis_policy"],
     }
+    if "state_landscape_comparison" in values:
+        request_fields["state_landscape_comparison"] = values["state_landscape_comparison"]
     analysis_policy = values["analysis_policy"]
     if (
         not isinstance(analysis_policy, Mapping)
@@ -590,6 +673,7 @@ def validate_request_params(params: Mapping[str, Any]) -> ValidatedRequest:
         validate_schema("cm_request_v1", preview)
     except ContractValidationError as exc:
         raise ConformationalMappingRequestError(str(exc)) from exc
+    _validate_state_landscape_comparison_plan(request_fields, coordinate_plan)
     return ValidatedRequest(
         request_fields=request_fields,
         coordinate_plan=tuple(coordinate_plan),
@@ -771,4 +855,88 @@ def materialize_trusted_internal_request(
         request_path=request_path,
         coordinate_plan_path=coordinate_plan_path,
         launch_params={"cm_request_path": str(request_path)},
+        request_sha256=request["request_sha256"],
+        coordinate_plan_sha256=plan["coordinate_plan_sha256"],
     )
+
+
+def bind_materialized_source_snapshot(
+    materialized: MaterializedRequest,
+    *,
+    source_snapshot_sha256: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Atomically bind a server-generated snapshot into request and plan hashes."""
+
+    if len(source_snapshot_sha256) != 64 or any(value not in "0123456789abcdef" for value in source_snapshot_sha256):
+        raise ConformationalMappingRequestError("source snapshot identity must be a lowercase SHA-256")
+    request = json.loads(materialized.request_path.read_text(encoding="utf-8"))
+    plan = json.loads(materialized.coordinate_plan_path.read_text(encoding="utf-8"))
+    try:
+        validate_schema("cm_request_v1", request)
+    except ContractValidationError as exc:
+        raise ConformationalMappingRequestError(str(exc)) from exc
+    expected_request_sha256 = canonical_sha256({
+        key: value for key, value in request.items() if key != "request_sha256"
+    })
+    if request.get("request_sha256") != expected_request_sha256:
+        raise ConformationalMappingRequestError("materialized request self-hash is invalid")
+    if request.get("request_sha256") != materialized.request_sha256:
+        raise ConformationalMappingRequestError("materialized request no longer matches trusted authority")
+    allowed_plan_fields = {
+        "schema_name", "schema_version", "request_id", "backend", "request_sha256",
+        "expected_cardinality", "coordinates", "coordinate_plan_sha256",
+    }
+    if set(plan) != allowed_plan_fields:
+        raise ConformationalMappingRequestError("materialized coordinate plan has unexpected fields")
+    expected_plan_sha256 = canonical_sha256({
+        key: value for key, value in plan.items() if key != "coordinate_plan_sha256"
+    })
+    if plan.get("coordinate_plan_sha256") != expected_plan_sha256:
+        raise ConformationalMappingRequestError("materialized coordinate-plan self-hash is invalid")
+    if plan.get("coordinate_plan_sha256") != materialized.coordinate_plan_sha256:
+        raise ConformationalMappingRequestError("materialized coordinate plan no longer matches trusted authority")
+    if (
+        plan.get("schema_name") != "cm_coordinate_plan"
+        or plan.get("schema_version") != 1
+        or plan.get("request_id") != request.get("request_id")
+        or plan.get("request_sha256") != request.get("request_sha256")
+    ):
+        raise ConformationalMappingRequestError("materialized request and coordinate plan are not bound")
+    targets = request.get("targets")
+    coordinates = plan.get("coordinates")
+    if not isinstance(targets, list) or not isinstance(coordinates, list):
+        raise ConformationalMappingRequestError("materialized coordinate plan does not match request authority")
+    if plan.get("expected_cardinality") != len(coordinates) or len(coordinates) != len(targets):
+        raise ConformationalMappingRequestError("materialized coordinate plan does not match request authority")
+    if request.get("backend") == "external_import" and any(
+        not isinstance(coordinate, Mapping)
+        or set(coordinate) != {
+            "backend", "target_id", "staged_index", "source_content_sha256",
+            "staged_receipt_sha256",
+        }
+        or coordinate.get("backend") != "external_import"
+        or coordinate.get("target_id") != target.get("target_id")
+        or coordinate.get("staged_index") != index
+        or coordinate.get("staged_receipt_sha256") != request.get("import_receipt_id")
+        for index, (target, coordinate) in enumerate(zip(targets, coordinates, strict=True))
+    ):
+        raise ConformationalMappingRequestError(
+            "materialized coordinate plan does not match request authority"
+        )
+    if request.get("backend") != "external_import" or plan.get("backend") != "external_import":
+        raise ConformationalMappingRequestError("source snapshot binding is external-import only")
+    if "source_snapshot_sha256" in request:
+        raise ConformationalMappingRequestError("source snapshot identity is already bound")
+    request["source_snapshot_sha256"] = source_snapshot_sha256
+    request["request_sha256"] = canonical_sha256({
+        key: value for key, value in request.items() if key != "request_sha256"
+    })
+    validate_schema("cm_request_v1", request)
+    plan["request_sha256"] = request["request_sha256"]
+    plan.pop("coordinate_plan_sha256", None)
+    plan["coordinate_plan_sha256"] = canonical_sha256(plan)
+    _publish_canonical_json_pair(
+        materialized.request_path, request,
+        materialized.coordinate_plan_path, plan,
+    )
+    return request, plan

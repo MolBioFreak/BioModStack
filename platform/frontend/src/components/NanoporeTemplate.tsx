@@ -18,17 +18,9 @@ import { useLiveGpuCatalog } from './useLiveGpuCatalog';
 // Type Definitions
 // ============================================================================
 type DoradoModel = 'sup' | 'hac' | 'fast';
-type ModifiedBases =
-    | '6mA 4mC_5mC'
-    | '6mA 5mC'
-    | '6mA'
-    | '5mC'
-    | '5mC_5hmC'
-    | '4mC_5mC'
-    | '5mCG_5hmCG'
-    | '5mCG'
-    | '5hmCG'
-    | 'none';
+type DoradoMolecule = 'dna' | 'rna';
+type DoradoMode = 'simplex' | 'duplex';
+type ModifiedBases = '6mA' | '5mC_5hmC' | 'none';
 type AssemblyTool = 'flye' | 'canu';
 type MinimapPreset = 'map-ont' | 'map-hifi' | 'map-pb' | 'sr';
 type InputSource = 'pod5' | 'bam' | 'fastq';
@@ -69,16 +61,22 @@ const DORADO_MODELS: Record<DoradoModel, { label: string; description: string }>
 };
 
 const MODIFIED_BASES_OPTIONS: Record<ModifiedBases, { label: string; description: string }> = {
-    '6mA 4mC_5mC': { label: '6mA + 4mC/5mC (DAM/DCM)', description: 'Bacterial/plasmid methylation.' },
-    '6mA 5mC': { label: '6mA + 5mC (legacy alias)', description: 'Normalized to 6mA + 4mC/5mC.' },
     '6mA': { label: '6mA only', description: 'Adenine methylation.' },
-    '5mC': { label: '5mC only', description: 'Cytosine methylation.' },
     '5mC_5hmC': { label: '5mC + 5hmC', description: 'Cytosine + hydroxymethyl-cytosine.' },
-    '4mC_5mC': { label: '4mC + 5mC', description: 'Bacterial cytosine panel.' },
-    '5mCG_5hmCG': { label: '5mCG + 5hmCG', description: 'CpG 5mC + 5hmC.' },
-    '5mCG': { label: '5mCG only', description: 'CpG 5mC.' },
-    '5hmCG': { label: '5hmCG only (legacy)', description: 'CpG 5hmC.' },
     none: { label: 'No modification detection', description: 'No modification tags.' },
+};
+
+const DORADO_EXACT_MODELS: Record<DoradoMolecule, Record<DoradoModel, string>> = {
+    dna: {
+        fast: 'dna_r10.4.1_e8.2_400bps_fast@v5.2.0',
+        hac: 'dna_r10.4.1_e8.2_400bps_hac@v5.2.0',
+        sup: 'dna_r10.4.1_e8.2_400bps_sup@v5.2.0',
+    },
+    rna: {
+        fast: 'rna004_130bps_fast@v5.2.0',
+        hac: 'rna004_130bps_hac@v5.2.0',
+        sup: 'rna004_130bps_sup@v5.2.0',
+    },
 };
 
 const QSCORE_LABELS: Record<number, string> = {
@@ -438,7 +436,12 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     // State: Basecalling Config
     // ============================================================================
     const [doradoModel, setDoradoModel] = useState<DoradoModel>(initialValues?.doradoModel as DoradoModel || 'sup');
-    const [modifiedBases, setModifiedBases] = useState<ModifiedBases>(initialValues?.modifiedBases as ModifiedBases || '6mA 4mC_5mC');
+    const [doradoMolecule, setDoradoMolecule] = useState<DoradoMolecule>(initialValues?.doradoMolecule as DoradoMolecule || 'dna');
+    const [doradoMode, setDoradoMode] = useState<DoradoMode>(initialValues?.doradoMode as DoradoMode || 'simplex');
+    const [duplexPairs, setDuplexPairs] = useState(initialValues?.duplexPairs as string || '');
+    const [barcodeKit, setBarcodeKit] = useState<'' | 'SQK-RBK114-96'>(initialValues?.barcodeKit as '' | 'SQK-RBK114-96' || '');
+    const [sampleSheet, setSampleSheet] = useState(initialValues?.sampleSheet as string || '');
+    const [modifiedBases, setModifiedBases] = useState<ModifiedBases>(initialValues?.modifiedBases as ModifiedBases || 'none');
 
     // ============================================================================
     // State: QC Settings
@@ -453,12 +456,12 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         if (!Number.isFinite(raw)) return 0;
         return Math.min(60, Math.max(0, Math.round(raw)));
     });
-    const [trimAdapters, setTrimAdapters] = useState(initialValues?.trimAdapters !== false);
+    const [trimAdapters, setTrimAdapters] = useState(doradoMolecule === 'rna' || doradoMode === 'duplex' ? true : initialValues?.trimAdapters !== false);
 
     // ============================================================================
     // State: Analysis Options
     // ============================================================================
-    const [runModkit, setRunModkit] = useState(initialValues?.runModkit !== false);
+    const [runModkit, setRunModkit] = useState<boolean>((initialValues?.runModkit as boolean | undefined) ?? false);
     const [runFastqQc, setRunFastqQc] = useState<boolean>(
         (initialValues?.runFastqQc as boolean | undefined)
         ?? (initialValues?.runMultimerQc as boolean | undefined)
@@ -759,7 +762,6 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const submitMutation = useMutation({
         mutationFn: async () => {
             const isCpuOnly = inputSource === 'fastq';
-            const normalizedModifiedBases = modifiedBases === '6mA 5mC' ? '6mA 4mC_5mC' : modifiedBases;
             let effectiveReferencePath = '';
 
             const createTabFasta = (
@@ -796,10 +798,21 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             if (inputSource === 'fastq' && !effectiveReferencePath) {
                 throw new Error('FASTQ plasmid QC requires a reference FASTA (path or pasted sequence).');
             }
+            if (inputSource !== 'fastq' && runAssembly && !effectiveReferencePath) {
+                throw new Error('Consensus assembly requires a reference FASTA for construct verification.');
+            }
 
-            const workflowId = inputSource === 'fastq'
-                ? 'ont_plasmid_qc'
-                : 'ont_methylation_analysis';
+            const workflowId = inputSource !== 'fastq' && runAssembly && !barcodeKit
+                ? 'wf_clone_validation'
+                : inputSource === 'fastq'
+                    ? 'ont_plasmid_qc'
+                : inputSource === 'bam'
+                    ? 'ont_methylation_analysis'
+                    : doradoMolecule === 'rna'
+                        ? 'ont_basecall_rna'
+                        : modifiedBases !== 'none'
+                            ? 'ont_methylation_analysis'
+                            : 'ont_basecall_dna';
             const jobPayload = {
                 name: jobName || `nanopore_${Date.now()}`,
                 pinned_gpu: isCpuOnly ? null : (pinnedGpus.length === 1 ? pinnedGpus[0] : null),
@@ -809,13 +822,18 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     run_modkit: runModkit && canRunModkit,
                     run_fastq_qc: inputSource === 'fastq' ? runFastqQc : false,
                     run_multimer_qc: inputSource === 'fastq' ? runFastqQc : false,
-                    run_assembly: inputSource !== 'fastq' ? runAssembly : false,
+                    run_assembly: inputSource !== 'fastq' ? runAssembly && !barcodeKit : false,
                     pinned_gpus: isCpuOnly ? undefined : (pinnedGpus.length > 0 ? pinnedGpus : undefined),
                     lock_gpus: isCpuOnly ? false : (lockGpus && pinnedGpus.length > 0),
                     ...(inputSource === 'pod5' && {
                         pod5_dir: pod5Dir,
-                        dorado_model: doradoModel,
-                        modified_bases: normalizedModifiedBases === 'none' ? undefined : normalizedModifiedBases,
+                        dorado_quality_mode: doradoModel,
+                        dorado_basecall_mode: doradoMode,
+                        ont_molecule_type: doradoMolecule,
+                        modified_bases: modifiedBases,
+                        duplex_pairs: doradoMode === 'duplex' ? duplexPairs : undefined,
+                        barcode_kit: barcodeKit || undefined,
+                        sample_sheet: barcodeKit ? (sampleSheet || undefined) : undefined,
                         trim_adapters: trimAdapters,
                         emit_summary: emitSummary,
                         ...(batchSize !== null && { dorado_batch_size: batchSize }),
@@ -872,6 +890,22 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         }
         if (inputSource === 'pod5' && !pod5Dir.trim()) {
             setError('Please specify a POD5 data directory');
+            return;
+        }
+        if (inputSource === 'pod5' && doradoMolecule === 'rna' && doradoMode === 'duplex') {
+            setError('RNA duplex is unsupported by the locked Dorado runtime.');
+            return;
+        }
+        if (inputSource === 'pod5' && doradoMode === 'duplex' && !duplexPairs.trim()) {
+            setError('Duplex basecalling requires a confined read-pairs file.');
+            return;
+        }
+        if (inputSource === 'pod5' && doradoMode === 'duplex' && barcodeKit) {
+            setError('Barcode classification and duplex cannot be combined in the locked runtime.');
+            return;
+        }
+        if (inputSource === 'pod5' && modifiedBases !== 'none' && (doradoMolecule !== 'dna' || doradoModel !== 'hac' || doradoMode !== 'simplex')) {
+            setError('Modified-base calling requires DNA HAC simplex.');
             return;
         }
         if (inputSource === 'bam' && !bamPath.trim()) {
@@ -1335,6 +1369,48 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                 )}
             </div>
 
+            {/* Locked P4 molecule, mode, and multiplexing controls */}
+            {inputSource === 'pod5' && (
+                <div className="bg-[var(--bg-secondary)] rounded-lg p-4 space-y-3">
+                    <div className="grid grid-cols-2 gap-3">
+                        <label className="text-sm text-[var(--text-secondary)]">Molecule
+                            <select value={doradoMolecule} onChange={(event) => {
+                                const value = event.target.value as DoradoMolecule;
+                                setDoradoMolecule(value);
+                                if (value === 'rna') { setDoradoMode('simplex'); setModifiedBases('none'); setBarcodeKit(''); setTrimAdapters(true); setRunAssembly(false); }
+                            }} className="block w-full mt-1 bg-[var(--bg-tertiary)] rounded p-2">
+                                <option value="dna">DNA — R10.4.1 E8.2 5 kHz</option>
+                                <option value="rna">RNA004 — 4 kHz</option>
+                            </select>
+                        </label>
+                        <label className="text-sm text-[var(--text-secondary)]">Basecalling mode
+                            <select value={doradoMode} onChange={(event) => { const value = event.target.value as DoradoMode; setDoradoMode(value); if (value === 'duplex') { setBarcodeKit(''); setModifiedBases('none'); setTrimAdapters(true); } }} className="block w-full mt-1 bg-[var(--bg-tertiary)] rounded p-2">
+                                <option value="simplex">Simplex</option>
+                                <option value="duplex" disabled={doradoMolecule === 'rna'}>Duplex (explicit pairs)</option>
+                            </select>
+                        </label>
+                    </div>
+                    {doradoMode === 'duplex' && (
+                        <input value={duplexPairs} onChange={(event) => setDuplexPairs(event.target.value)} placeholder="Confined duplex pairs file" className="w-full bg-[var(--bg-tertiary)] rounded p-2" />
+                    )}
+                    {doradoMolecule === 'dna' && doradoMode === 'simplex' && (
+                        <div className="grid grid-cols-2 gap-3">
+                            <select value={barcodeKit} onChange={(event) => {
+                                const value = event.target.value as '' | 'SQK-RBK114-96';
+                                setBarcodeKit(value);
+                                if (value) { setModifiedBases('none'); setRunModkit(false); setRunAssembly(false); }
+                                else setSampleSheet('');
+                            }} disabled={modifiedBases !== 'none'} className="bg-[var(--bg-tertiary)] rounded p-2 disabled:opacity-40">
+                                <option value="">No barcode classification</option>
+                                <option value="SQK-RBK114-96">SQK-RBK114-96</option>
+                            </select>
+                            <input value={sampleSheet} onChange={(event) => setSampleSheet(event.target.value)} disabled={!barcodeKit} placeholder="Optional confined sample sheet" className="bg-[var(--bg-tertiary)] rounded p-2 disabled:opacity-40" />
+                        </div>
+                    )}
+                    <div className="text-xs text-[var(--text-secondary)]">Locked runtime: Dorado 1.3.1 · exact model: <code>{DORADO_EXACT_MODELS[doradoMolecule][doradoModel]}</code>{doradoMode === 'duplex' ? ' · stereo v1.4' : ''}</div>
+                </div>
+            )}
+
             {/* Basecalling Model */}
             {inputSource === 'pod5' && (
                 <div className="bg-[var(--bg-secondary)] rounded-lg p-4">
@@ -1369,8 +1445,9 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         {(Object.entries(MODIFIED_BASES_OPTIONS) as [ModifiedBases, typeof MODIFIED_BASES_OPTIONS[ModifiedBases]][]).map(([key, opt]) => (
                             <button
                                 key={key}
-                                onClick={() => setModifiedBases(key)}
-                                className={`p-3 rounded-lg border-2 transition-all text-left ${modifiedBases === key
+                                onClick={() => { setModifiedBases(key); if (key !== 'none') { setBarcodeKit(''); setSampleSheet(''); } }}
+                                disabled={key !== 'none' && (doradoMolecule !== 'dna' || doradoModel !== 'hac' || doradoMode !== 'simplex' || Boolean(barcodeKit))}
+                                className={`p-3 rounded-lg border-2 transition-all text-left disabled:opacity-40 disabled:cursor-not-allowed ${modifiedBases === key
                                     ? ''
                                     : 'border-[var(--border-primary)] hover:border-[var(--border-secondary)] bg-[var(--bg-tertiary)]/60'
                                     }`}
@@ -1396,7 +1473,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     </label>
                     <input
                         type="range"
-                        min={5}
+                        min={0}
                         max={30}
                         step={1}
                         value={minQscore}
@@ -1404,7 +1481,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         className="w-full mt-2 accent-[var(--accent-secondary)]"
                     />
                     <div className="flex justify-between text-[10px] text-[var(--text-secondary)] mt-1">
-                        <span>Q5 (permissive)</span>
+                        <span>Q0 (no filter)</span>
                         <span>Q10</span>
                         <span>Q15</span>
                         <span>Q20</span>
@@ -1449,10 +1526,11 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                             type="checkbox"
                             checked={trimAdapters}
                             onChange={(e) => setTrimAdapters(e.target.checked)}
+                            disabled={doradoMolecule === 'rna' || doradoMode === 'duplex'}
                             className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
                         />
                         <div>
-                            <span className="text-sm text-[var(--text-primary)]">Trim adapters</span>
+                            <span className="text-sm text-[var(--text-primary)]">Trim adapters{doradoMolecule === 'rna' ? ' (required for RNA)' : doradoMode === 'duplex' ? ' (fixed by duplex mode)' : ''}</span>
                         </div>
                     </label>
                 )}
@@ -1491,8 +1569,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     </label>
                 )}
 
-                {/* Assembly — POD5 or BAM */}
-                {inputSource !== 'fastq' && (
+                {/* Assembly — DNA POD5 or BAM */}
+                {inputSource !== 'fastq' && (inputSource === 'bam' || (doradoMolecule === 'dna' && !barcodeKit)) && (
                     <label className="flex items-center gap-3 cursor-pointer">
                         <input
                             type="checkbox"

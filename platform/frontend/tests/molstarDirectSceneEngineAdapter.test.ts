@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import type { StructureSceneState } from '../src/structureViewer/contracts/sceneState.js';
@@ -40,4 +41,22 @@ test('transport URL is required but never substituted for document identity', ()
     const result = documentsForDirectMolstar(input);
     assert.equal(result.status, 'unsupported');
     assert.equal(input.documents[0].documentId, 'doc');
+});
+
+test('direct bridge delegates MD loading and frame selection by bounded display index', () => {
+    const source = readFileSync('src/structureViewer/runtime/MolstarDirectSceneEngineAdapter.ts', 'utf8');
+
+    assert.match(source, /this\.adapter\.loadMolecularDynamics\(state\.molecularDynamics\)/);
+    assert.match(source, /this\.adapter\.selectMolecularDynamicsDisplayFrame\(frame\.displayFrame\)/);
+    assert.doesNotMatch(source, /selectMolecularDynamicsDisplayFrame\(frame\.sourceFrame\)/);
+});
+
+test('direct adapter uses Molstar 4.5 GRO/XTC state transforms and bounded display indices', () => {
+    const source = readFileSync('src/structureViewer/adapters/MolstarDirectAdapter.ts', 'utf8');
+
+    assert.match(source, /parseTrajectory\(topologyData, 'gro'\)/);
+    assert.match(source, /StateTransforms\.Model\.CoordinatesFromXtc/);
+    assert.match(source, /StateTransforms\.Model\.TrajectoryFromModelAndCoordinates/);
+    assert.match(source, /modelIndex:\s*displayFrame/);
+    assert.doesNotMatch(source, /modelIndex:\s*.*sourceFrame/);
 });

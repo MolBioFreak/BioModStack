@@ -3,7 +3,7 @@ Pydantic schemas for API request/response validation.
 """
 
 from pydantic import BaseModel, Field, ConfigDict
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Literal
 from datetime import datetime
 from enum import Enum
 
@@ -127,6 +127,103 @@ class JobList(BaseModel):
     """Response schema for job list."""
     jobs: List[JobResponse]
     total: int
+
+
+class BoltzApiComplexComponent(BaseModel):
+    """Strict provider-native complex entity; UI aliases never cross this boundary."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["protein", "dna", "rna", "ligand_ccd", "ligand_smiles"]
+    value: str = Field(min_length=1, max_length=100000)
+    chain_ids: List[str] = Field(min_length=1, max_length=8)
+
+
+class BoltzApiStructureRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(..., min_length=1, max_length=255)
+    client_request_id: str = Field(..., pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+    model: str = Field(default="boltz-2.1", max_length=64)
+    sequence: str = Field(..., min_length=1, max_length=100000)
+    primary_chain_id: str = Field(default="A", min_length=1, max_length=8)
+    complex_components: List[BoltzApiComplexComponent] = Field(default_factory=list, max_length=64)
+    num_samples: int = Field(default=1, ge=1, le=10)
+    use_msa: bool = True
+
+
+class BoltzApiEstimateResponse(BaseModel):
+    model: str
+    provider_input: dict
+    estimate: dict
+    estimate_fingerprint: str
+
+
+class BoltzApiSubmitRequest(BoltzApiStructureRequest):
+    approved_estimate_fingerprint: str = Field(..., min_length=64, max_length=64)
+
+
+class BoltzApiEntitiesCapability(BaseModel):
+    status: Literal["supported"]
+    types: List[Literal["protein", "dna", "rna", "ligand_ccd", "ligand_smiles"]]
+
+
+class BoltzApiMsaCapability(BaseModel):
+    status: Literal["supported"]
+    provider_default: Literal["omit"]
+    disable_value: dict[Literal["type"], Literal["empty"]]
+
+
+class BoltzApiSampleRangeCapability(BaseModel):
+    status: Literal["supported"]
+    minimum: int = Field(ge=1)
+    maximum: int = Field(ge=1)
+
+
+class BoltzApiTemplatesCapability(BaseModel):
+    status: Literal["unavailable_pending_schema_verification"]
+
+
+class BoltzApiUnsupportedLocalControls(BaseModel):
+    diffusion_sampling_steps: Literal["unsupported"]
+    recycling_steps: Literal["unsupported"]
+    potentials: Literal["unsupported"]
+    denoiser_chunking: Literal["unsupported"]
+    gpu_pinning: Literal["unsupported"]
+    parallelism: Literal["unsupported"]
+    oom_retry: Literal["unsupported"]
+    conditioning: Literal["unsupported"]
+
+
+class BoltzApiProviderCapabilities(BaseModel):
+    contract_version: Literal["bms.boltz_api.capabilities.v1"]
+    entities: BoltzApiEntitiesCapability
+    msa: BoltzApiMsaCapability
+    num_samples: BoltzApiSampleRangeCapability
+    templates: BoltzApiTemplatesCapability
+    unsupported_local_controls: BoltzApiUnsupportedLocalControls
+
+
+class BoltzApiCliUpdateStatus(BaseModel):
+    check_status: Literal[
+        "current", "update_available", "unavailable", "unavailable_pending_official_feed_verification"
+    ]
+    installed_version: Optional[str] = None
+    latest_version: Optional[str] = None
+    source: Literal["boltz_api_static_cli"]
+    release_feed_url: Optional[str] = None
+    release_url: Optional[str] = None
+    checked_at: Optional[datetime] = None
+
+
+class BoltzApiProviderStatusResponse(BaseModel):
+    available: bool
+    cli_available: bool
+    credential_configured: bool
+    model: str
+    message: str
+    capabilities: BoltzApiProviderCapabilities
+    cli_update: BoltzApiCliUpdateStatus
 
 
 class ExternalImportPreviewRequest(BaseModel):

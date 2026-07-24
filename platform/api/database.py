@@ -4,7 +4,7 @@ Database models and initialization for BioModStack Control Platform.
 Uses SQLAlchemy with async SQLite.
 """
 
-from sqlalchemy import Column, String, Text, Integer, Float, Boolean, DateTime, JSON, ForeignKey, UniqueConstraint, text, event
+from sqlalchemy import Column, String, Text, Integer, Float, Boolean, DateTime, Index, JSON, ForeignKey, ForeignKeyConstraint, UniqueConstraint, text, event
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.types import TypeDecorator
@@ -21,6 +21,18 @@ engine_kwargs = {"echo": False}
 if DATABASE_URL.startswith("sqlite"):
     engine_kwargs["connect_args"] = {"timeout": 30}
 engine = create_async_engine(DATABASE_URL, **engine_kwargs)
+
+if engine.dialect.name == "sqlite":
+    @event.listens_for(engine.sync_engine, "connect")
+    def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record):
+        """SQLite foreign-key constraints are disabled by default per DBAPI connection."""
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("PRAGMA foreign_keys=ON")
+        finally:
+            cursor.close()
+
+
 async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 Base = declarative_base()
@@ -145,6 +157,21 @@ class Job(Base):
     
     # Relationship to designs
     designs = relationship("Design", back_populates="job", cascade="all, delete-orphan")
+
+
+class ViewerSnapshotRecord(Base):
+    """Immutable, job-owned M6A viewer snapshot metadata and canonical JSON."""
+
+    __tablename__ = "viewer_snapshots"
+
+    id = Column(String(36), primary_key=True)
+    job_id = Column(String(36), ForeignKey("jobs.id"), nullable=False, index=True)
+    label = Column(String(120), nullable=False)
+    created_by = Column(String(128), nullable=False)
+    schema_version = Column(Integer, nullable=False, default=2)
+    snapshot_sha256 = Column(String(64), nullable=False, index=True)
+    snapshot_json = Column(JSON, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
 class ExternalResultImport(Base):
@@ -581,6 +608,120 @@ class ConformationalMappingLandscapeRow(Base):
     provenance_json = Column(JSON, nullable=False, default=dict)
 
 
+class ConformationalMappingStateLandscapeAnalysisHeader(Base):
+    """Immutable query projection header; canonical artifact bytes remain authority."""
+
+    __tablename__ = "conformational_mapping_state_landscape_analysis_headers"
+
+    request_id = Column(
+        String(36),
+        ForeignKey("conformational_mapping_requests.request_id"),
+        primary_key=True,
+    )
+    analysis_id = Column(String(80), primary_key=True)
+    content_sha256 = Column(String(64), nullable=False, index=True)
+    source_ensemble_sha256 = Column(String(64), nullable=False)
+    source_landscape_sha256 = Column(String(64), nullable=False)
+    source_structure_map_sha256 = Column(String(64), nullable=False)
+    comparison_sha256 = Column(String(64), nullable=False)
+    formula_version = Column(String(80), nullable=False)
+    formula_sha256 = Column(String(64), nullable=False)
+    policy_sha256 = Column(String(64), nullable=False)
+    comparison_mode = Column(String(32), nullable=False)
+    comparison_target_id = Column(String(128), nullable=False)
+    comparison_scope = Column(String(64), nullable=False)
+    reference_backend_coordinates_json = Column(JSON, nullable=True)
+    reference_candidate_id = Column(String(128), nullable=True)
+    pair_count = Column(Integer, nullable=False)
+    row_count = Column(Integer, nullable=False)
+    exclusion_count = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ConformationalMappingStateLandscapeAnalysisPair(Base):
+    """Resolved candidate pair from one immutable state-analysis artifact."""
+
+    __tablename__ = "conformational_mapping_state_landscape_analysis_pairs"
+    __table_args__ = (
+        UniqueConstraint(
+            "request_id", "analysis_id", "pair_id", "candidate_a_id", "candidate_b_id",
+            name="uq_cm_state_analysis_pair_candidates",
+        ),
+        ForeignKeyConstraint(
+            ("request_id", "analysis_id"),
+            (
+                "conformational_mapping_state_landscape_analysis_headers.request_id",
+                "conformational_mapping_state_landscape_analysis_headers.analysis_id",
+            ),
+        ),
+    )
+
+    request_id = Column(String(36), primary_key=True)
+    analysis_id = Column(String(80), primary_key=True)
+    pair_id = Column(String(300), primary_key=True)
+    candidate_a_id = Column(String(128), nullable=False)
+    candidate_b_id = Column(String(128), nullable=False)
+
+
+class ConformationalMappingStateLandscapeAnalysisRow(Base):
+    """Exact artifact row payload and availability, never recomputed from source data."""
+
+    __tablename__ = "conformational_mapping_state_landscape_analysis_rows"
+    __table_args__ = (
+        Index(
+            "ix_cm_state_analysis_rows_page_order",
+            "request_id", "analysis_id", "pair_id", "target_id", "entity_instance_id",
+            "auth_asym_id", "auth_seq_id", "insertion_code", "sequence_index", "validated_wt", "id",
+        ),
+        UniqueConstraint(
+            "request_id", "analysis_id", "pair_id", "entity_instance_id", "auth_asym_id",
+            "auth_seq_id", "insertion_code", "sequence_index", "validated_wt",
+            name="uq_cm_state_analysis_row_identity",
+        ),
+        ForeignKeyConstraint(
+            ("request_id", "analysis_id"),
+            (
+                "conformational_mapping_state_landscape_analysis_headers.request_id",
+                "conformational_mapping_state_landscape_analysis_headers.analysis_id",
+            ),
+        ),
+        ForeignKeyConstraint(
+            ("request_id", "analysis_id", "pair_id"),
+            (
+                "conformational_mapping_state_landscape_analysis_pairs.request_id",
+                "conformational_mapping_state_landscape_analysis_pairs.analysis_id",
+                "conformational_mapping_state_landscape_analysis_pairs.pair_id",
+            ),
+        ),
+        ForeignKeyConstraint(
+            ("request_id", "analysis_id", "pair_id", "candidate_a_id", "candidate_b_id"),
+            (
+                "conformational_mapping_state_landscape_analysis_pairs.request_id",
+                "conformational_mapping_state_landscape_analysis_pairs.analysis_id",
+                "conformational_mapping_state_landscape_analysis_pairs.pair_id",
+                "conformational_mapping_state_landscape_analysis_pairs.candidate_a_id",
+                "conformational_mapping_state_landscape_analysis_pairs.candidate_b_id",
+            ),
+        ),
+    )
+
+    id = Column(String(96), primary_key=True)
+    request_id = Column(String(36), nullable=False, index=True)
+    analysis_id = Column(String(80), nullable=False, index=True)
+    pair_id = Column(String(300), nullable=False, index=True)
+    candidate_a_id = Column(String(128), nullable=False)
+    candidate_b_id = Column(String(128), nullable=False)
+    target_id = Column(String(128), nullable=False)
+    entity_instance_id = Column(String(128), nullable=False)
+    auth_asym_id = Column(String(128), nullable=False)
+    auth_seq_id = Column(Integer, nullable=False)
+    insertion_code = Column(String(16), nullable=False)
+    sequence_index = Column(Integer, nullable=False)
+    validated_wt = Column(String(1), nullable=False)
+    metrics_json = Column(JSON, nullable=False)
+    availability_json = Column(JSON, nullable=False)
+
+
 class InputFile(Base):
     """Tracked input file (PDB, FASTA, etc.)."""
     __tablename__ = "input_files"
@@ -738,6 +879,9 @@ async def _ensure_schema(conn):
     await _ensure_table_columns(conn, "conformational_mapping_records", ConformationalMappingRecord.__table__.columns)
     await _ensure_table_columns(conn, "conformational_mapping_artifacts", ConformationalMappingArtifact.__table__.columns)
     await _ensure_table_columns(conn, "conformational_mapping_landscape_rows", ConformationalMappingLandscapeRow.__table__.columns)
+    await _ensure_table_columns(conn, "conformational_mapping_state_landscape_analysis_headers", ConformationalMappingStateLandscapeAnalysisHeader.__table__.columns)
+    await _ensure_table_columns(conn, "conformational_mapping_state_landscape_analysis_pairs", ConformationalMappingStateLandscapeAnalysisPair.__table__.columns)
+    await _ensure_table_columns(conn, "conformational_mapping_state_landscape_analysis_rows", ConformationalMappingStateLandscapeAnalysisRow.__table__.columns)
     await _ensure_table_columns(conn, "nucleotide_sequences", NucleotideSequence.__table__.columns)
     await _ensure_table_columns(conn, "primers", Primer.__table__.columns)
     await _backfill_design_review_contracts(conn)

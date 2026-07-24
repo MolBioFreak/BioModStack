@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
 import * as prepareAssets from '../scripts/prepare-bms-assets.mjs';
@@ -27,6 +28,7 @@ test('normalizeConfig fills in phone-friendly mobile viewport defaults while pre
   assert.deepEqual(config, {
     frontendCheckout: '/tmp/frontend',
     apiBaseUrl: 'https://example.test',
+    remoteUiUrl: '',
     routerBasename: '/',
     mobileInitialScale: 0.82,
     mobileMinimumScale: 0.25,
@@ -38,6 +40,20 @@ test('normalizeConfig fills in phone-friendly mobile viewport defaults while pre
     bundledUiVersion: 'bundled',
   });
   assert.ok(config.mobileMinimumScale < config.mobileInitialScale);
+});
+
+test('normalizeConfig accepts only an exact HTTPS live UI origin', () => {
+  const config = normalizeConfig({
+    frontendCheckout: '/tmp/frontend',
+    apiBaseUrl: 'https://example.test',
+    remoteUiUrl: 'https://live.example.test/',
+  });
+  assert.equal(config.remoteUiUrl, 'https://live.example.test/');
+  assert.throws(() => normalizeConfig({
+    frontendCheckout: '/tmp/frontend',
+    apiBaseUrl: 'https://example.test',
+    remoteUiUrl: 'https://live.example.test/path',
+  }), /exact HTTPS origin/);
 });
 
 test('normalizeConfig derives safe APK UI update manifest paths from explicit channels', () => {
@@ -76,6 +92,44 @@ test('buildRuntimeConfigScript exposes defaults and local override storage for t
   assert.match(script, /runtime\.uiUpdateManifestPath = buildUiUpdateManifestPath/);
   assert.doesNotThrow(() => new vm.Script(script));
 });
+
+test('buildRuntimeConfigScript normalizes Cordova index.html before React Router starts', () => {
+  const script = buildRuntimeConfigScript({
+    frontendCheckout: '/tmp/frontend',
+    apiBaseUrl: 'https://example.test',
+    routerBasename: '/',
+    uiUpdateChannel: 'phone',
+    uiUpdateManifestPath: '/api/mobile-ui/channels/phone/manifest',
+  });
+  const replacements = [];
+  const context = {
+    localStorage: { getItem: () => null },
+    window: {
+      location: { pathname: '/index.html', search: '?from=apk', hash: '#dashboard' },
+      history: {
+        state: { shell: true },
+        replaceState: (...args) => replacements.push(args),
+      },
+    },
+  };
+
+  vm.createContext(context);
+  new vm.Script(script).runInContext(context);
+
+  assert.deepEqual(replacements, [[{ shell: true }, '', '/?from=apk#dashboard']]);
+});
+
+test('production builds resolve Molstar through its cycle-safe CommonJS distribution', async () => {
+  const viteSource = await readFile(new URL('../../frontend/vite.config.ts', import.meta.url), 'utf8');
+
+  assert.match(viteSource, /name:\s*'bms-molstar-commonjs-build-resolver'/);
+  assert.match(viteSource, /apply:\s*'build'/);
+  assert.match(viteSource, /'molstar\/lib\/commonjs\/'/);
+  assert.match(viteSource, /preserveEntrySignatures:\s*false/);
+  assert.doesNotMatch(viteSource, /preserveModules/);
+  assert.match(viteSource, /output:\s*\{\s*manualChunks,\s*\}/s);
+});
+
 
 test('buildRuntimeConfigScript applies only sanitized APK UI update channel overrides', () => {
   const script = buildRuntimeConfigScript({
@@ -195,6 +249,10 @@ test('buildUpdateLoaderScript exposes fallback boot and readiness hooks for down
   assert.match(script, /__BMS_CORDOVA_UI_BOOT_STATUS__/);
   assert.match(script, /__BMS_CORDOVA_BUNDLED_DESCRIPTOR__/);
   assert.match(script, /__bms_ui__\//);
+  assert.match(script, /bms-cordova-remote-ui/);
+  assert.match(script, /bootRemoteUi\(remoteUiUrl\)/);
+  assert.match(script, /BioModStack live UI/);
+  assert.match(script, /DOMContentLoaded/);
   assert.doesNotThrow(() => new vm.Script(script));
 });
 

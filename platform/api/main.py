@@ -14,10 +14,11 @@ from database import init_db, async_session
 from molbio_database import init_molbio_db, molbio_health
 from build_identity import current_build_identity
 from readiness import collect_runtime_readiness
-from routers import analyses, analytics, boltzgen, conformational_mapping, designs, external_imports, files, frameworks, frustrampnn, gpu, inputs, jobs, md_results, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_ops, msa, ngs_alignment_sessions, nucleotide_sequences, ont_devices, ont_runs, queue, rcsb, ribocentre, rna_structure, sequence_qc, smiles_converter, system, templates, user_sequences, user_templates
+from routers import analyses, analytics, boltz_api_jobs, boltzgen, conformational_mapping, designs, external_imports, files, frameworks, frustrampnn, gpu, inputs, jobs, md_results, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_ops, msa, ngs_alignment_sessions, nucleotide_sequences, ont_devices, ont_runs, queue, rcsb, ribocentre, rna_structure, sequence_qc, smiles_converter, system, templates, user_sequences, user_templates, viewer_resources
 from runtime_policy import workflow_launch_block_detail, workflow_launches_allowed
 from biomodstack_runtime_profile import install_feature_enabled
 from services.analysis_worker import AnalysisWorker
+from services.boltz_api_jobs import BoltzApiJobWorker
 from services.external_imports.worker import ExternalImportWorker
 from services.gpu_orchestrator import GPUOrchestrator
 from routers.gpu import get_gpu_stats
@@ -30,6 +31,22 @@ logger = logging.getLogger(__name__)
 _orchestrator: GPUOrchestrator = None
 _analysis_worker: AnalysisWorker = None
 _external_import_worker: ExternalImportWorker | None = None
+_boltz_api_job_worker: BoltzApiJobWorker | None = None
+
+
+async def _orchestrator_launch_job(job_id, model_id, mode, params, output_dir):
+    """Delegate a scheduler-owned job whose durable state is already running."""
+    from services.nextflow import launch_nextflow_job_detached
+
+    logger.info(f"[ORCHESTRATOR] Launching job {job_id} on GPU {params.get('gpu_id', 0)}")
+    launch_nextflow_job_detached(
+        job_id=job_id,
+        model_id=model_id,
+        mode=mode,
+        params=params,
+        output_dir=output_dir,
+        allow_running_job=True,
+    )
 
 
 @asynccontextmanager
@@ -38,6 +55,7 @@ async def lifespan(app: FastAPI):
     global _orchestrator
     global _analysis_worker
     global _external_import_worker
+    global _boltz_api_job_worker
     bioxp_runtime = None
     
     # Initialize independently owned core and MolBio persistence stores.
@@ -46,30 +64,10 @@ async def lifespan(app: FastAPI):
     
     # Initialize GPU orchestrator only when this runtime is allowed to own workflow launches.
     if workflow_launches_allowed():
-        from services.nextflow import launch_nextflow_job_detached
-
-        # Wrapper to call the real Nextflow launcher with GPU assignment
-        async def orchestrator_launch_job(job_id, model_id, mode, params, output_dir):
-            """Launch a job via Nextflow with GPU assignment from orchestrator.
-
-            Uses asyncio.create_task to fire-and-forget, so multiple jobs can launch
-            in parallel without waiting for each to complete.
-            """
-            logger.info(f"[ORCHESTRATOR] Launching job {job_id} on GPU {params.get('gpu_id', 0)}")
-            # Fire-and-forget with immediate registration in the launcher so the
-            # completion reconciler knows the job is still bootstrapping.
-            launch_nextflow_job_detached(
-                job_id=job_id,
-                model_id=model_id,
-                mode=mode,
-                params=params,
-                output_dir=output_dir
-            )
-
         _orchestrator = GPUOrchestrator(
             db_session_factory=async_session,
             get_gpu_stats_fn=get_gpu_stats,
-            launch_nextflow_job_fn=orchestrator_launch_job,
+            launch_nextflow_job_fn=_orchestrator_launch_job,
             poll_interval=3.0
         )
 
@@ -92,6 +90,10 @@ async def lifespan(app: FastAPI):
     await _external_import_worker.start()
     logger.info("[STARTUP] External result import worker started")
 
+    _boltz_api_job_worker = BoltzApiJobWorker(async_session)
+    await _boltz_api_job_worker.start()
+    logger.info("[STARTUP] Boltz API submission worker started")
+
     if install_feature_enabled("bioxp"):
         from services.bioxp.runtime import create_bioxp_runtime
 
@@ -111,6 +113,9 @@ async def lifespan(app: FastAPI):
     if _analysis_worker:
         await _analysis_worker.stop()
         logger.info("[SHUTDOWN] Analysis worker stopped")
+    if _boltz_api_job_worker:
+        await _boltz_api_job_worker.stop()
+        logger.info("[SHUTDOWN] Boltz API submission worker stopped")
     if _external_import_worker:
         await _external_import_worker.stop()
         logger.info("[SHUTDOWN] External result import worker stopped")
@@ -160,9 +165,11 @@ app.include_router(models.router, prefix="/api/models", tags=["models"])
 app.include_router(molecular_dynamics.router)
 app.include_router(templates.router, prefix="/api/templates", tags=["templates"])
 app.include_router(inputs.router, prefix="/api/inputs", tags=["inputs"])
+app.include_router(boltz_api_jobs.router, prefix="/api/jobs/boltz-api", tags=["boltz-api-jobs"])
 app.include_router(jobs.router, prefix="/api/jobs", tags=["jobs"])
 app.include_router(external_imports.router, prefix="/api/jobs/imports/external", tags=["external-result-imports"])
 app.include_router(md_results.router, prefix="/api/jobs", tags=["molecular-dynamics-results"])
+app.include_router(viewer_resources.router, prefix="/api/jobs", tags=["viewer-resources"])
 app.include_router(conformational_mapping.router)
 app.include_router(designs.router, prefix="/api/designs", tags=["designs"])
 app.include_router(analyses.router, prefix="/api", tags=["analyses"])
@@ -192,6 +199,7 @@ app.include_router(sequence_qc.router, prefix="/api/sequence-qc", tags=["sequenc
 app.include_router(ngs_alignment_sessions.router, prefix="/api", tags=["ngs-alignment"])
 app.include_router(ont_devices.router, prefix="/api/ont", tags=["ont-devices"])
 app.include_router(ont_runs.router, prefix="/api/ont", tags=["ont-runs"])
+app.include_router(ont_runs.barcode_router, prefix="/api/jobs", tags=["ont-barcode-units"])
 app.include_router(mobile_apk_updates.router, prefix="/api")
 app.include_router(mobile_ui_updates.router, prefix="/api")
 

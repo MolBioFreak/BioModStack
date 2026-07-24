@@ -119,6 +119,7 @@ VRAM_PROFILES = {
     'esmfold2_experimental': {'base': 22000, 'scale': 35},  # Compatibility alias
 
     'oligo_design': {'base': 7000, 'scale': 20},     # Oligo Designer (RFDpoly + NA-MPNN)
+    'nanopore': {'base': 15360, 'scale': 0},        # Dorado P4 lock: total VRAM floor, runtime also requires 8192 MiB free
     'default': {'base': 6000, 'scale': 25},     # Conservative fallback
 }
 
@@ -1113,6 +1114,21 @@ def _normalize_job_params(raw_params: Any) -> Dict[str, Any]:
     return {}
 
 
+def _md_analysis_has_gpu_assignment(job: Any) -> bool:
+    if str(getattr(job, "model_id", "") or "").strip().lower() != "molecular_dynamics":
+        return False
+    if str(getattr(job, "mode", "") or "").strip().lower() != "analyze":
+        return False
+    params = _normalize_job_params(getattr(job, "params", None))
+    return (
+        (getattr(job, "vram_estimate_mb", 0) or 0) != 0
+        or getattr(job, "pinned_gpu", None) is not None
+        or getattr(job, "assigned_gpu", None) is not None
+        or params.get("gpu_id") not in (None, "")
+        or params.get("pinned_gpus") not in (None, "", [])
+    )
+
+
 def _normalize_pinned_gpus(raw_value: Any) -> Optional[List[int]]:
     """Normalize pinned_gpus to a list of ints, or None if invalid."""
     if raw_value is None:
@@ -2100,6 +2116,19 @@ class GPUOrchestrator:
                 )
             )
             pending_jobs = result.scalars().all()
+
+            rejected_analysis_jobs = [job for job in pending_jobs if _md_analysis_has_gpu_assignment(job)]
+            for job in rejected_analysis_jobs:
+                job.status = "failed"
+                job.queue_status = "failed"
+                job.assigned_gpu = None
+                job.error_message = "MD_ANALYSIS_GPU_FORBIDDEN"
+                job.completed_at = datetime.utcnow()
+                logger.error("[LAUNCH REJECTED] %s: MD analysis is CPU-only", job.name)
+            if rejected_analysis_jobs:
+                await session.commit()
+                rejected_ids = {job.id for job in rejected_analysis_jobs}
+                pending_jobs = [job for job in pending_jobs if job.id not in rejected_ids]
             
             
             if not pending_jobs:
@@ -2550,6 +2579,18 @@ class GPUOrchestrator:
                                 job.queue_status = "failed"
                                 job.error_message = failure_reason
                                 job.completed_at = datetime.utcnow()
+                                if (
+                                    str(getattr(job, "model_id", "") or "").strip().lower() == "molecular_dynamics"
+                                    and str(getattr(job, "mode", "") or "").strip().lower() == "analyze"
+                                    and getattr(job, "parent_job_id", None)
+                                ):
+                                    try:
+                                        await session.flush()
+                                        from services.md.lifecycle import reconcile_md_analysis_parent
+
+                                        await reconcile_md_analysis_parent(str(job.parent_job_id), session)
+                                    except Exception as exc:
+                                        logger.warning("[COMPLETION] MD analysis failure reconciliation deferred for %s: %s", job.name, exc)
                                 logger.warning(
                                     f"[COMPLETION] {job.name} reconciled as failed "
                                     f"(no process found, age: {age_seconds:.0f}s): {failure_reason}"
@@ -2561,7 +2602,29 @@ class GPUOrchestrator:
                                     reconciled += 1
                                     continue
                                 finalization = None
-                                if result_output_dir:
+                                is_md_parent = (
+                                    str(getattr(job, "model_id", "") or "").strip().lower() == "molecular_dynamics"
+                                    and str(getattr(job, "mode", "") or "").strip().lower() == "simulate"
+                                    and getattr(job, "parent_job_id", None) is None
+                                )
+                                if is_md_parent:
+                                    from services.md.results import MDResultError, apply_completion_barrier
+
+                                    try:
+                                        apply_completion_barrier(job)
+                                        job.completed_at = datetime.utcnow()
+                                    except MDResultError as exc:
+                                        job.status = "failed"
+                                        job.queue_status = "failed"
+                                        job.current_stage = "MD Completion Blocked"
+                                        job.stage_progress = None
+                                        job.error_message = f"{exc.code}: {exc}"
+                                        job.completed_at = datetime.utcnow()
+                                        await _commit_reconciled_job_mutations(session)
+                                        logger.warning("[COMPLETION] MD barrier rejected %s: %s", job.name, exc)
+                                        reconciled += 1
+                                        continue
+                                elif result_output_dir:
                                     from services.result_state_integrity import finalize_successful_job
 
                                     finalization = await finalize_successful_job(job, result_output_dir, session)
@@ -2599,6 +2662,16 @@ class GPUOrchestrator:
                                 # Publish it before hooks that can issue queries/commits in this session.
                                 if session.dirty:
                                     await _commit_reconciled_job_mutations(session)
+                                if (
+                                    str(getattr(job, "model_id", "") or "").strip().lower() == "molecular_dynamics"
+                                    and str(getattr(job, "mode", "") or "").strip().lower() == "analyze"
+                                    and getattr(job, "parent_job_id", None)
+                                ):
+                                    from services.md.lifecycle import reconcile_md_analysis_parent
+
+                                    await reconcile_md_analysis_parent(str(job.parent_job_id), session)
+                                    if session.dirty:
+                                        await _commit_reconciled_job_mutations(session)
                                 try:
                                     if finalization is not None:
                                         logger.info(
@@ -2673,6 +2746,16 @@ class GPUOrchestrator:
                                 result_output_dir = job.child_output_dir or job.output_dir
                                 from services.result_state_integrity import job_expects_design_results
 
+                                is_md_parent = job.model_id == "molecular_dynamics" and job.mode == "simulate"
+                                if history_status == "OK" and is_md_parent and not result_output_dir:
+                                    job.status = "failed"
+                                    job.queue_status = "failed"
+                                    job.current_stage = "MD Completion Blocked"
+                                    job.stage_progress = None
+                                    job.error_message = "MD completion barrier requires a job-owned result directory"
+                                    job.completed_at = datetime.utcnow()
+                                    reconciled += 1
+                                    continue
                                 if history_status == "OK" and job_expects_design_results(job) and not result_output_dir:
                                     job.status = "failed"
                                     job.queue_status = "failed"
@@ -2692,12 +2775,17 @@ class GPUOrchestrator:
                                     and not getattr(job, "awaiting_input", False)
                                     and result_output_dir
                                 ):
-                                    from services.result_state_integrity import finalize_successful_job
+                                    if job.model_id == "molecular_dynamics" and job.mode == "simulate":
+                                        from services.md.completion import validate_and_finalize_md_job
 
-                                    finalization = await finalize_successful_job(job, result_output_dir, session)
-                                    if not finalization.completed:
-                                        reconciled += 1
-                                        continue
+                                        validate_and_finalize_md_job(job)
+                                    else:
+                                        from services.result_state_integrity import finalize_successful_job
+
+                                        finalization = await finalize_successful_job(job, result_output_dir, session)
+                                        if not finalization.completed:
+                                            reconciled += 1
+                                            continue
                                 reconciled_now = _reconcile_terminal_history_without_process(
                                     job,
                                     history_status=history_status,

@@ -14,11 +14,12 @@ function sourceBetween(source: string, start: string, end: string): string {
     return source.slice(startIndex, endIndex);
 }
 
-test('BioXP frontend route is gated by resolved install feature flags', () => {
-    assert.match(appSource, /useBmsFeatures/);
-    assert.match(appSource, /const bmsFeatures = useBmsFeatures\(\)/);
-    assert.match(appSource, /bmsFeatures\.bioxp\s*&&\s*\(/);
-    assert.match(appSource, /<Route path="\/bioxp" element=\{<BioXpCockpit \/>\} \/>/);
+test('BioXP frontend route is always declared and redirects fail-closed until the feature resolves', () => {
+    assert.match(appSource, /useResolvedBmsFeatures/);
+    assert.match(appSource, /resolved:\s*bmsFeaturesResolved/);
+    assert.match(appSource, /<Route\s+path="\/bioxp"/);
+    assert.match(appSource, /!bmsFeaturesResolved[\s\S]*<RouteLoadingFallback\s*\/>[\s\S]*bmsFeatures\.bioxp[\s\S]*<BioXpCockpit\s*\/>[\s\S]*<Navigate/);
+    assert.doesNotMatch(appSource, /bmsFeatures\.bioxp\s*&&\s*\(\s*<Route path="\/bioxp"/);
 });
 
 test('topbar BioXP controls render only when enabled and dev tools are visible', () => {
