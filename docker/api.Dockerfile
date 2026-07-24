@@ -39,7 +39,10 @@ RUN apt-get update \
         libgsl-dev \
         libicu-dev \
         libjpeg-dev \
-        libpng-dev \
+        libpango-1.0-0 \
+        libpangocairo-1.0-0 \
+        libgdk-pixbuf-2.0-0 \
+        libpangoft2-1.0-0 \
         libssl-dev \
         libtiff5-dev \
         libuv1-dev \

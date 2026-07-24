@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
     fetchGoldenGateAssemblyOptions,
     fetchSavedGibsonWorkups,
+    planDnaWeaverGibsonAssembly,
     saveGibsonAssembly,
     saveGoldenGateAssembly,
     saveLigationAssembly,
@@ -320,7 +321,7 @@ export function AssemblyPanel({
 }: AssemblyPanelProps) {
     const [mode, setMode] = useState<AssemblyMode>('ligation');
     const [fragments, setFragments] = useState<AssemblyFragmentInput[]>([]);
-    const [gibsonWorkflow, setGibsonWorkflow] = useState<'design' | 'validate'>('validate');
+    const [gibsonWorkflow, setGibsonWorkflow] = useState<'plan' | 'design' | 'validate'>('plan');
     const [gibsonPreparations, setGibsonPreparations] = useState<Record<string, 'pcr' | 'ready_linear'>>({});
     const [saveName, setSaveName] = useState('');
     const [saveDescription, setSaveDescription] = useState('');
@@ -333,6 +334,7 @@ export function AssemblyPanel({
     const [pasteSequence, setPasteSequence] = useState('');
     const [result, setResult] = useState<AssemblyOperationResponse | null>(null);
     const [loading, setLoading] = useState<'simulate' | 'save' | null>(null);
+    const [planning, setPlanning] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [savedWorkups, setSavedWorkups] = useState<SavedGibsonWorkupListItem[]>([]);
     const [savedWorkupsLoading, setSavedWorkupsLoading] = useState(false);
@@ -461,6 +463,40 @@ export function AssemblyPanel({
         })));
     };
 
+    const planDnaWeaverVendorFragments = async () => {
+        const target = sequenceData.sequence.replace(/\s/g, '').toUpperCase();
+        if (!target) {
+            setError('The current construct needs a DNA sequence before DNA Weaver can plan vendor fragments.');
+            return;
+        }
+        setPlanning(true);
+        setError(null);
+        try {
+            const response = await planDnaWeaverGibsonAssembly({
+                target_sequence: target,
+                circular: sequenceData.circular,
+                min_fragment_length: 500,
+                max_fragment_length: 1500,
+                overlap_length: 30,
+            });
+            const ordered = response.data.ordered_fragments;
+            setFragments(ordered);
+            setGibsonPreparations(Object.fromEntries(ordered.map((fragment) => [fragment.id, 'ready_linear'])));
+            setGibsonMinOverlap(30);
+            setGibsonPreferredOverlap(30);
+            setGibsonMaxOverlap(30);
+            setSaveName((current) => current || `${sequenceData.name} DNA Weaver Gibson purchase plan`);
+            setResult({
+                product: response.data.product,
+                message: `DNA Weaver proposed ${ordered.length} vendor fragments; pydna returned ${response.data.pydna_exact_candidate_count} exact target candidate(s).`,
+            });
+        } catch (planError: UntypedApiValue) {
+            setError(planError?.response?.data?.detail || planError?.message || 'DNA Weaver planning failed');
+        } finally {
+            setPlanning(false);
+        }
+    };
+
     const execute = async (action: 'simulate' | 'save') => {
         if (fragments.length === 0) {
             setError('Add at least one fragment to the basket.');
@@ -577,7 +613,21 @@ export function AssemblyPanel({
 
             {mode === 'gibson' && (
                 <>
-                    <div className="grid grid-cols-2 gap-2 rounded-xl border border-slate-700 bg-slate-900/50 p-1.5">
+                    <div className="grid grid-cols-1 gap-2 rounded-xl border border-slate-700 bg-slate-900/50 p-1.5 sm:grid-cols-3">
+                        <button
+                            type="button"
+                            onClick={() => { setGibsonWorkflow('plan'); setResult(null); setError(null); }}
+                            className={`rounded-lg px-3 py-2 text-xs font-medium ${gibsonWorkflow === 'plan' ? 'bg-cyan-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}
+                        >
+                            Plan vendor fragments (DNA Weaver)
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => { setGibsonWorkflow('validate'); setResult(null); setError(null); }}
+                            className={`rounded-lg px-3 py-2 text-xs font-medium ${gibsonWorkflow === 'validate' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`}
+                        >
+                            Validate purchased fragments
+                        </button>
                         <button
                             type="button"
                             onClick={() => { setGibsonWorkflow('design'); setResult(null); setError(null); }}
@@ -585,17 +635,22 @@ export function AssemblyPanel({
                         >
                             PCR template route (optional)
                         </button>
-                        <button
-                            type="button"
-                            onClick={() => { setGibsonWorkflow('validate'); setResult(null); setError(null); }}
-                            className={`rounded-lg px-3 py-2 text-xs font-medium ${gibsonWorkflow === 'validate' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`}
-                        >
-                            Vendor fragments — validate pre-overlapped
-                        </button>
                     </div>
-                    <p className="rounded-lg border border-cyan-900/60 bg-cyan-950/20 px-3 py-2 text-xs leading-5 text-cyan-100/80">
-                        Standard workup: order complete, pre-overlapped DNA fragments externally and assemble them in-house. Paste the exact purchased sequences here to validate every Gibson junction. Use the PCR route only when deliberately amplifying from physical template DNA.
-                    </p>
+                    {gibsonWorkflow === 'plan' ? (
+                        <div className="rounded-lg border border-cyan-900/60 bg-cyan-950/20 px-3 py-3 text-xs leading-5 text-cyan-100/80">
+                            <p>DNA Weaver will split the current full construct into purchasable, pre-overlapped vendor fragments, then pydna must independently reconstruct the exact requested product.</p>
+                            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                                <span className="text-cyan-200/70">Target: {sequenceData.name} • {sequenceData.sequence.length.toLocaleString()} bp • {sequenceData.circular ? 'circular' : 'linear'}</span>
+                                <button type="button" onClick={() => void planDnaWeaverVendorFragments()} disabled={planning} className="rounded-lg bg-cyan-600 px-3 py-1.5 font-medium text-white hover:bg-cyan-500 disabled:opacity-50">
+                                    {planning ? 'Planning vendor fragments…' : 'Plan vendor fragments'}
+                                </button>
+                            </div>
+                        </div>
+                    ) : (
+                        <p className="rounded-lg border border-cyan-900/60 bg-cyan-950/20 px-3 py-2 text-xs leading-5 text-cyan-100/80">
+                            Standard workup: order complete, pre-overlapped DNA fragments externally and assemble them in-house. Paste exact purchased sequences here to validate every Gibson junction. Use the PCR route only when deliberately amplifying from physical template DNA.
+                        </p>
+                    )}
                 </>
             )}
 
