@@ -1939,6 +1939,43 @@ async def launch_nextflow_job(
     
     logger.info(f"Launching job {job_id} (model={model_id}, mode={mode})")
 
+    async def publish_guarded_job_failure(
+        failure_session,
+        failed_job,
+        *,
+        stale_log_message: str,
+    ) -> bool:
+        """Publish an active job failure and its CM receipt in one transaction."""
+
+        changes = {
+            attribute.key: attribute.value
+            for attribute in inspect(failed_job).attrs
+            if attribute.history.has_changes()
+        }
+        if not changes:
+            return False
+        failure_session.expunge(failed_job)
+        published = await failure_session.execute(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.status == JobStatus.RUNNING.value,
+                Job.queue_status == "running",
+                Job.awaiting_input.is_(False),
+            )
+            .values(**changes)
+        )
+        if published.rowcount:
+            from services.conformational_mapping.persistence import (
+                terminalize_failed_request_for_job,
+            )
+
+            await terminalize_failed_request_for_job(failure_session, job_id=job_id)
+        await failure_session.commit()
+        if not published.rowcount:
+            logger.info(stale_log_message, job_id)
+        return bool(published.rowcount)
+
     existing_process = _running_processes.get(job_id)
     if existing_process and existing_process.returncode is None:
         logger.warning(f"Skipping duplicate launch request for active job {job_id}")
@@ -2081,13 +2118,21 @@ async def launch_nextflow_job(
                 async with async_session() as fail_session:
                     result = await fail_session.execute(select(Job).where(Job.id == job_id))
                     failed_job = result.scalar_one_or_none()
-                    if failed_job:
+                    if (
+                        failed_job
+                        and failed_job.status != JobStatus.CANCELLED.value
+                        and failed_job.status != JobStatus.COMPLETED.value
+                    ):
                         failed_job.status = JobStatus.FAILED.value
                         failed_job.queue_status = "failed"
                         failed_job.error_message = f"Nextflow Java preflight failed: {java_message}"
                         failed_job.completed_at = datetime.utcnow()
                         failed_job.assigned_gpu = None
-                        await fail_session.commit()
+                        await publish_guarded_job_failure(
+                            fail_session,
+                            failed_job,
+                            stale_log_message="Skipped stale Nextflow Java preflight failure publication for job %s",
+                        )
                 return
             gpu_id_str = None
             if gpu_id is not None:
@@ -2581,6 +2626,7 @@ async def launch_nextflow_job(
                     else None
                 )
                 job.completed_at = datetime.utcnow()
+                terminalizing_cm_failure = job.status == JobStatus.FAILED.value
                 changes = {
                     attribute.key: attribute.value
                     for attribute in inspect(job).attrs
@@ -2602,6 +2648,12 @@ async def launch_nextflow_job(
                         )
                         .values(**changes)
                     )
+                    if published.rowcount and terminalizing_cm_failure:
+                        from services.conformational_mapping.persistence import (
+                            terminalize_failed_request_for_job,
+                        )
+
+                        await terminalize_failed_request_for_job(session, job_id=job_id)
                     await session.commit()
                     if not published.rowcount:
                         logger.info("Skipped stale Nextflow terminal publication for job %s", job_id)
@@ -2641,21 +2693,17 @@ async def launch_nextflow_job(
                         if attribute.history.has_changes()
                     }
                     if changes:
-                        session.expunge(job)
-                        published = await session.execute(
-                            update(Job)
-                            .where(
-                                Job.id == job_id,
-                                Job.status == JobStatus.RUNNING.value,
-                                Job.queue_status == "running",
-                                Job.awaiting_input.is_(False),
-                            )
-                            .values(**changes)
+                        is_md_analysis = (
+                            job.model_id == "molecular_dynamics"
+                            and job.mode == "analyze"
+                            and job.parent_job_id
                         )
-                        await session.commit()
-                        if not published.rowcount:
-                            logger.info("Skipped stale Nextflow exception publication for job %s", job_id)
-                        elif job.model_id == "molecular_dynamics" and job.mode == "analyze" and job.parent_job_id:
+                        published = await publish_guarded_job_failure(
+                            session,
+                            job,
+                            stale_log_message="Skipped stale Nextflow exception publication for job %s",
+                        )
+                        if published and is_md_analysis:
                             from services.md.lifecycle import reconcile_md_analysis_parent
 
                             await reconcile_md_analysis_parent(str(job.parent_job_id), session)
