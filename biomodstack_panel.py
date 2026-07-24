@@ -39,6 +39,7 @@ from biomodstack_panel_compat import build_toggle_row  # noqa: E402
 from biomodstack_services import (  # noqa: E402
     API_LOG as API_LOG_PATH,
     CORE_RUNTIME_LOG as CORE_RUNTIME_LOG_PATH,
+    CONTAINER_RUNTIME_MODE,
     DEV_RUNTIME_MODE,
     FRONTEND_LOG as FRONTEND_LOG_PATH,
     WORKFLOW_ADAPTER_LOG as WORKFLOW_ADAPTER_LOG_PATH,
@@ -46,6 +47,7 @@ from biomodstack_services import (  # noqa: E402
     operator_frontend_url,
     operator_runtime_mode,
     runtime_api_health_url,
+    runtime_descriptor,
     runtime_port_settings,
     save_runtime_port_settings,
 )
@@ -114,43 +116,99 @@ def save_config(config: dict):
 # SERVICE STATUS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def check_api_status(runtime_mode: str | None = None) -> bool:
-    """Return true only when the selected operator API health endpoint responds.
-
-    A systemd unit or matching process can remain alive while the service is
-    unavailable (or bound to an obsolete port).  It is therefore diagnostic
-    evidence, never a green-status fallback.
-    """
-    selected_runtime = runtime_mode or operator_runtime_mode(project_root=PROJECT_ROOT)
+def _api_health_ready(runtime_mode: str) -> bool:
+    """Require a fresh semantic-ready response from the selected API lane."""
     try:
         import urllib.request
+
         req = urllib.request.Request(
-            runtime_api_health_url(runtime_mode=selected_runtime, project_root=PROJECT_ROOT),
+            runtime_api_health_url(runtime_mode=runtime_mode, project_root=PROJECT_ROOT),
+            headers={"Accept": "application/json", "Cache-Control": "no-cache"},
             method="GET",
         )
         with urllib.request.urlopen(req, timeout=2) as resp:
-            return resp.status == 200
+            if resp.status != 200:
+                return False
+            payload = json.loads(resp.read().decode("utf-8"))
     except Exception:
         return False
+
+    return (
+        isinstance(payload, dict)
+        and payload.get("status") == "healthy"
+        and isinstance(payload.get("liveness"), dict)
+        and payload["liveness"].get("alive") is True
+        and isinstance(payload.get("readiness"), dict)
+        and payload["readiness"].get("ready") is True
+    )
+
+
+def _component_ready(descriptor: dict, component_id: str) -> bool:
+    components = descriptor.get("components")
+    if not isinstance(components, dict):
+        return False
+    component = components.get(component_id)
+    return (
+        isinstance(component, dict)
+        and component.get("active") is True
+        and component.get("ready") is True
+        and component.get("owner_verified") is True
+    )
+
+
+def runtime_status_snapshot(runtime_mode: str) -> dict:
+    """Return a fail-closed operator status for one explicit runtime lane."""
+    try:
+        descriptor = runtime_descriptor(
+            project_root=PROJECT_ROOT,
+            runtime_mode=runtime_mode,
+        )
+    except Exception:
+        descriptor = {}
+
+    api_health_ready = _api_health_ready(runtime_mode)
+    required_components = []
+    components = descriptor.get("components")
+    if isinstance(components, dict):
+        required_components = [
+            component_id
+            for component_id, component in components.items()
+            if isinstance(component, dict) and component.get("required") is True
+        ]
+    required_ready = bool(required_components) and all(
+        _component_ready(descriptor, component_id)
+        for component_id in required_components
+    )
+    runtime_ready = (
+        descriptor.get("runtime_active") is True
+        and descriptor.get("runtime_ready") is True
+        and required_ready
+        and api_health_ready
+    )
+
+    # Component checks are gated by aggregate runtime readiness. A partial lane
+    # must never render as an all-green operator surface.
+    return {
+        "runtime_mode": runtime_mode,
+        "runtime_ready": runtime_ready,
+        "api_ready": runtime_ready and _component_ready(descriptor, "api"),
+        "frontend_ready": runtime_ready and _component_ready(descriptor, "frontend"),
+        "adapter_ready": (
+            runtime_ready and _component_ready(descriptor, "workflow-adapter")
+            if runtime_mode == "container"
+            else None
+        ),
+    }
+
+
+def check_api_status(runtime_mode: str | None = None) -> bool:
+    selected_runtime = runtime_mode or operator_runtime_mode(project_root=PROJECT_ROOT)
+    return runtime_status_snapshot(selected_runtime)["api_ready"]
 
 
 def check_frontend_status(runtime_mode: str | None = None) -> bool:
-    """Return true only when the selected operator frontend URL responds.
-
-    Do not paint the launcher green merely because a dev service manager or a
-    stale Vite process exists; neither establishes that operators can reach the
-    selected runtime surface.
-    """
     selected_runtime = runtime_mode or operator_runtime_mode(project_root=PROJECT_ROOT)
-    frontend_url = operator_frontend_url(project_root=PROJECT_ROOT, runtime_mode=selected_runtime)
-    try:
-        import urllib.request
-
-        req = urllib.request.Request(frontend_url, method="GET")
-        with urllib.request.urlopen(req, timeout=2) as resp:
-            return resp.status == 200
-    except Exception:
-        return False
+    return runtime_status_snapshot(selected_runtime)["frontend_ready"]
 
 STATUS_DB_TIMEOUT_SECONDS = 0.25
 
@@ -395,45 +453,53 @@ class BioModStackPanel(Adw.Application):
         self.window.present()
     
     def _build_status_section(self) -> Gtk.Widget:
-        """Status indicators section."""
+        """Runtime-scoped status indicators section."""
         group = Adw.PreferencesGroup()
         group.set_title("Status")
-        
-        # Status row
-        self.status_row = Adw.ActionRow()
-        self.status_row.set_title("Services")
-        self._update_status_row()
-        group.add(self.status_row)
-        
-        # Jobs row
+
+        self.dev_status_row = Adw.ActionRow()
+        self.dev_status_row.set_title("Development")
+        group.add(self.dev_status_row)
+
+        self.prod_status_row = Adw.ActionRow()
+        self.prod_status_row.set_title("Production")
+        group.add(self.prod_status_row)
+
+        self._update_status_rows()
+
         self.jobs_row = Adw.ActionRow()
         self.jobs_row.set_title("Jobs")
         self._update_jobs_row()
         group.add(self.jobs_row)
-        
+
         return group
-    
-    def _update_status_row(self):
-        selected_runtime = operator_runtime_mode(project_root=PROJECT_ROOT)
-        api_ok = check_api_status(selected_runtime)
-        frontend_ok = check_frontend_status(selected_runtime)
-        
-        api_icon = "✓" if api_ok else "✗"
-        frontend_icon = "✓" if frontend_ok else "✗"
-        api_color = "green" if api_ok else "red"
-        frontend_color = "green" if frontend_ok else "red"
-        
-        self.status_row.set_subtitle(
-            f"<span foreground='{api_color}'>API {api_icon}</span>  |  "
-            f"<span foreground='{frontend_color}'>Frontend {frontend_icon}</span>"
-        )
-        self.status_row.set_subtitle_lines(1)
-        # Enable markup - GTK4 way
-        subtitle_label = self.status_row.get_last_child()
+
+    @staticmethod
+    def _status_part(label: str, ready: bool) -> str:
+        icon = "✓" if ready else "✗"
+        color = "green" if ready else "red"
+        return f"<span foreground='{color}'>{label} {icon}</span>"
+
+    def _update_runtime_status_row(self, row, runtime_mode: str):
+        status = runtime_status_snapshot(runtime_mode)
+        parts = [
+            self._status_part("Runtime", status["runtime_ready"]),
+            self._status_part("API", status["api_ready"]),
+            self._status_part("Frontend", status["frontend_ready"]),
+        ]
+        if status["adapter_ready"] is not None:
+            parts.append(self._status_part("Adapter", status["adapter_ready"]))
+        row.set_subtitle("  |  ".join(parts))
+        row.set_subtitle_lines(1)
+        subtitle_label = row.get_last_child()
         while subtitle_label:
             if isinstance(subtitle_label, Gtk.Label):
                 subtitle_label.set_use_markup(True)
             subtitle_label = subtitle_label.get_prev_sibling()
+
+    def _update_status_rows(self):
+        self._update_runtime_status_row(self.dev_status_row, DEV_RUNTIME_MODE)
+        self._update_runtime_status_row(self.prod_status_row, CONTAINER_RUNTIME_MODE)
     
     def _update_jobs_row(self):
         running, queued, total = get_job_counts()
@@ -913,7 +979,7 @@ X-GNOME-Autostart-enabled=true
     
     def _refresh_status(self):
         """Refresh all status displays."""
-        self._update_status_row()
+        self._update_status_rows()
         self._update_jobs_row()
         self._update_db_info()
         self._update_bioxp_row()
