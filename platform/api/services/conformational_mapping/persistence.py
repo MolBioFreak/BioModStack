@@ -163,6 +163,7 @@ async def transition_request(
     status: str,
     progress: Mapping[str, Any] | None = None,
     failure_receipt: Mapping[str, Any] | None = None,
+    flush: bool = True,
 ) -> None:
     allowed = {
         "prepared": {"queued", "cancelled", "failed"},
@@ -190,7 +191,56 @@ async def transition_request(
         record.terminal_at = datetime.now(timezone.utc).replace(tzinfo=None)
     elif status == "queued":
         record.terminal_at = None
-    await session.flush()
+    if flush:
+        await session.flush()
+
+
+async def terminalize_failed_request_for_job(
+    session: AsyncSession,
+    *,
+    job_id: str,
+) -> bool:
+    """Bind a published CM job failure to its still-active request atomically.
+
+    This deliberately does not commit: callers publish the guarded Job terminal
+    update and this typed request transition in one transaction.
+    """
+
+    job = await session.get(Job, job_id)
+    if (
+        job is None
+        or job.stage_family != "conformational_mapping"
+        or job.status != "failed"
+    ):
+        return False
+    record = (
+        await session.execute(
+            select(ConformationalMappingRequest).where(
+                ConformationalMappingRequest.job_id == job_id,
+                ConformationalMappingRequest.status.in_(("prepared", "queued", "running")),
+            )
+        )
+    ).scalar_one_or_none()
+    if record is None:
+        return False
+    failure_receipt = {
+        "schema_name": "cm_failure_receipt",
+        "schema_version": 1,
+        "request_id": record.request_id,
+        "job_id": job.id,
+        "terminal_state": "failed",
+        "message": str(job.error_message or "canonical job failed"),
+        "recorded_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+    await transition_request(
+        session,
+        record,
+        status="failed",
+        progress={"phase": "failed"},
+        failure_receipt=failure_receipt,
+        flush=False,
+    )
+    return True
 
 
 def _contained_file(root: Path, relative_path: str) -> Path:
