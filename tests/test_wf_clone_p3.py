@@ -161,6 +161,9 @@ def test_runtime_lock_validator_fails_closed(
 def adapter_fixture(root: Path, *, full_reference: bool = True) -> None:
     root.mkdir()
     (root / "sample02.final.fasta").write_text(">sample02\nACGTACGT\n", encoding="utf-8")
+    (root / "sample02.final.fastq").write_text(
+        "@sample02\nACGTACGT\n+\nFFFFFFFF\n", encoding="utf-8"
+    )
     (root / "sample02.assembly_stats.tsv").write_text(
         "read_id\tfilename\trunid\tsample_name\tread_length\tmean_quality\tchannel\tread_number\tstart_time\n"
         "sample02\tassembly.fastq\t\tsample02\t8\t46.75\t0\t0\t\n",
@@ -176,6 +179,7 @@ def adapter_fixture(root: Path, *, full_reference: bool = True) -> None:
     if full_reference:
         (root / "sample02.full_construct.calls.bcf").write_bytes(b"BCF\x02\x02fixture")
         (root / "sample02.full_construct.calls.bcf.csi").write_bytes(b"CSI fixture")
+        (root / "sample02.full_construct.stats").write_text("SN\t0\tnumber of records:\t1\n", encoding="utf-8")
     (root / "plannotate.json").write_text('{"features": []}\n', encoding="utf-8")
     (root / "sample02.annotations.bed").write_text("sample02\t0\t4\tfeature\n", encoding="utf-8")
     (root / "sample02.annotations.gbk").write_text("LOCUS       sample02 8 bp\n", encoding="utf-8")
@@ -218,7 +222,7 @@ def test_adapter_happy_path_inventory_and_non_scientific_execution_status(tmp_pa
         "authoritative_analysis_bai",
     }
     kinds = {artifact["kind"] for artifact in manifest["artifacts"]}
-    assert {"final_fasta", "assembly_stats", "bam", "bai", "full_reference_bcf", "full_reference_csi", "upstream_report", "runtime_provenance"} <= kinds
+    assert {"final_fasta", "final_fastq", "assembly_stats", "bam", "bai", "full_reference_bcf", "full_reference_csi", "full_reference_stats", "plannotate_json", "upstream_report", "runtime_provenance"} <= kinds
     assert all(len(artifact["sha256"]) == 64 for artifact in manifest["artifacts"])
 
 
@@ -229,6 +233,9 @@ def test_adapter_happy_path_inventory_and_non_scientific_execution_status(tmp_pa
         ("duplicate", "AMBIGUOUS_ARTIFACT"),
         ("missing_bai", "AUTHORITATIVE_INPUT_INVALID"),
         ("missing_bcf", "REQUIRED_ARTIFACT_MISSING"),
+        ("missing_final_fastq", "REQUIRED_ARTIFACT_MISSING"),
+        ("missing_full_reference_stats", "REQUIRED_ARTIFACT_MISSING"),
+        ("missing_plannotate_json", "REQUIRED_ARTIFACT_MISSING"),
         ("malformed_fasta", "MALFORMED_FASTA"),
         ("status_contradiction", "STATUS_EVIDENCE_CONTRADICTION"),
         ("stats_contradiction", "STATS_EVIDENCE_CONTRADICTION"),
@@ -245,6 +252,12 @@ def test_adapter_fails_closed_on_malformed_or_contradictory_outputs(
         (root / "sample02.bam.bai").unlink()
     elif mutation == "missing_bcf":
         (root / "sample02.full_construct.calls.bcf").unlink()
+    elif mutation == "missing_final_fastq":
+        (root / "sample02.final.fastq").unlink()
+    elif mutation == "missing_full_reference_stats":
+        (root / "sample02.full_construct.stats").unlink()
+    elif mutation == "missing_plannotate_json":
+        (root / "plannotate.json").unlink()
     elif mutation == "malformed_fasta":
         (root / "sample02.final.fasta").write_text("not fasta\n", encoding="utf-8")
     elif mutation == "status_contradiction":
