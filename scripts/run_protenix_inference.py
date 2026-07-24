@@ -165,7 +165,7 @@ def _install_coordinate_ledger(ledger_path: Path, context_path: Path) -> None:
         descriptor = os.open(
             ledger_path,
             os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0),
-            0o440,
+            0o640,
         )
         try:
             fcntl.flock(descriptor, fcntl.LOCK_EX)
@@ -304,6 +304,10 @@ def main() -> None:
             nhmmer_n_cpu=args.nhmmer_n_cpu,
         )
         infer_predict(runner, runner.configs)
+
+    if args.cm_coordinate_ledger:
+        ledger_path = Path(args.cm_coordinate_ledger).resolve()
+        os.chmod(ledger_path, 0o440)
 
 
 if __name__ == "__main__":
