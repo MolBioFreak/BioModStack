@@ -9,6 +9,7 @@ CommandName = Literal[
     "collect_hardware_snapshot",
     "initialize_oem_environment",
     "initialize_motors",
+    "run_oem_motor_stage",
     "start_job",
     "pause_job",
     "resume_job",
@@ -66,6 +67,14 @@ DEFAULT_COMMAND_REGISTRY: Mapping[CommandName, CommandDefinition] = MappingProxy
                 ("initialization_without_motion", "blocked"),
                 ("initial_check", "blocked"),
             ),
+        ),
+        "run_oem_motor_stage": CommandDefinition(
+            name="run_oem_motor_stage",
+            enabled=True,
+            route_key="run_oem_motor_stage",
+            required_capability="run_oem_motor_stage",
+            requires_hardware_ready=True,
+            required_lifecycle_states=(("initial_check", "passed"),),
         ),
         **{
         name: CommandDefinition(
