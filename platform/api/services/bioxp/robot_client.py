@@ -15,6 +15,7 @@ DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
     "collect_hardware_snapshot": ("POST", "/hardware/snapshot/collect", 210.0),
     "initialize_oem_environment": ("POST", "/oem/startup/initialize_environment", 470.0),
     "run_oem_motor_stage": ("POST", "/oem/runtime/commands/enqueue", 30.0),
+    "record_oem_motor_stage_observation": ("POST", "/oem/runtime/commands/enqueue", 15.0),
     "emergency_stop": ("POST", "/oem/runtime/emergency_stop", 5.0),
 }
 

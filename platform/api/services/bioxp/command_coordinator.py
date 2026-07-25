@@ -123,6 +123,19 @@ class CommandCoordinator:
                     "operator_ack": request.operator_ack,
                     "params": {"homing_step": request.stage},
                 }
+            elif request.command == "record_oem_motor_stage_observation":
+                params = {
+                    "homing_step": request.stage,
+                    "record_stage_observation": True,
+                    "observed_pass": request.observed_pass,
+                }
+                params["operator_note"] = request.operator_note
+                payload = {
+                    "name": "startupHomingStepwise",
+                    "mode": "live",
+                    "operator_ack": request.operator_ack,
+                    "params": params,
+                }
             try:
                 response = await client.request(definition.route_key, json_data=payload)
                 handler_response = dict(response) if isinstance(response, Mapping) else {"response": response}
@@ -130,10 +143,17 @@ class CommandCoordinator:
                 if callable(observer):
                     observer(response)
                 acknowledged = _strict_acknowledgement(response)
-                semantic_rejected = isinstance(response, Mapping) and response.get("ok") is False
+                queue_receipt = isinstance(response, Mapping) and "queued" in response
+                queued = queue_receipt and acknowledged
+                semantic_rejected = isinstance(response, Mapping) and (
+                    response.get("ok") is False or (queue_receipt and not queued)
+                )
                 if semantic_rejected:
                     status = "delivery_failed"
                     detail = f"Robot reported command failure: {response.get('error') or response.get('detail') or 'ok=false'}"
+                elif queued:
+                    status = "queued"
+                    detail = "Robot accepted the command into its queue; execution and physical effect are not yet observed"
                 else:
                     status = "acknowledged" if acknowledged else "delivered_unacknowledged"
                     detail = "Robot acknowledged command" if acknowledged else "Command delivered; robot acknowledgement absent"
@@ -273,9 +293,11 @@ def _fingerprint(value: object) -> str:
 
 
 def _strict_acknowledgement(response: object) -> bool:
-    return isinstance(response, Mapping) and (
-        response.get("acknowledged") is True or response.get("ok") is True
-    )
+    if not isinstance(response, Mapping):
+        return False
+    if "queued" in response:
+        return response.get("ok") is True and response.get("queued") is True
+    return response.get("acknowledged") is True or response.get("ok") is True
 
 
 def _utcnow() -> datetime:

@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
     deriveBioXpNoCommandsMessage,
     deriveBioXpStatus,
+    isBioXpControlPlaneFresh,
     isBioXpCommandAvailable,
 } from '../src/components/bioxpInterlinkStatus.js';
 
@@ -64,6 +65,10 @@ test('cached ready evidence expires locally at the server freshness budget', () 
     const observed = Date.parse(base.observed_at);
     assert.equal(deriveBioXpStatus(base, observed + 30_001).label, 'STALE');
     assert.equal(deriveBioXpStatus({ ...base, observed_at: null }, observed).label, 'UNKNOWN');
+    assert.equal(isBioXpControlPlaneFresh(base, observed + 29_000), true);
+    assert.equal(isBioXpControlPlaneFresh(base, observed + 30_001), false);
+    assert.equal(isBioXpControlPlaneFresh({ ...base, observed_at: null }, observed), false);
+    assert.equal(isBioXpControlPlaneFresh({ ...base, observed_at: 'malformed' }, observed), false);
 });
 
 test('saved profile remains disconnected after restart', () => {

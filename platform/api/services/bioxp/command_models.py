@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StringConstraints, TypeAdapter
 
 
 class _CommandBase(BaseModel):
@@ -39,6 +39,19 @@ class RunOemMotorStageCommand(_CommandBase):
     operator_ack: Literal["HOME"]
 
 
+class RecordOemMotorStageObservationCommand(_CommandBase):
+    command: Literal["record_oem_motor_stage_observation"]
+    stage: Literal[
+        "z-home",
+        "gripper-current-31",
+        "gripper-clear-10000",
+        "gripper-home",
+    ]
+    observed_pass: StrictBool
+    operator_ack: Literal["OBSERVE"]
+    operator_note: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
+
+
 class StartJobCommand(_CommandBase):
     command: Literal["start_job"]
     job_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
@@ -69,6 +82,7 @@ CommandRequest: TypeAlias = Annotated[
     | InitializeOemEnvironmentCommand
     | InitializeMotorsCommand
     | RunOemMotorStageCommand
+    | RecordOemMotorStageObservationCommand
     | StartJobCommand
     | PauseJobCommand
     | ResumeJobCommand

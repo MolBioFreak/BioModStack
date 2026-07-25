@@ -67,7 +67,7 @@ export interface BioXpCommandRecord {
     command: string;
     idempotency_key: string;
     generation: number;
-    status: 'acknowledged' | 'delivered_unacknowledged' | 'delivery_failed';
+    status: 'queued' | 'acknowledged' | 'delivered_unacknowledged' | 'delivery_failed';
     started_at: string;
     finished_at: string;
     remote_acknowledged: boolean;
