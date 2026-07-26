@@ -54,10 +54,10 @@ def canonical_run(*, run_state="planned"):
             },
         },
         "run_state": run_state,
-        "terminal_state": terminal,
+        "terminal_state": "cancelled" if run_state == "cancelled" else None,
         "planned_terminal_state": "oem_movement_ready_job_admission",
         "current_stage": None,
-        "expected_next_stage": "construct_control_lib",
+        "expected_next_stage": None if run_state == "cancelled" else "construct_control_lib",
         "blocked_reason": None,
         "source_authority_verified": False,
         "configuration_verified": False,
@@ -79,7 +79,7 @@ def canonical_run(*, run_state="planned"):
         "machine_serial": 206,
         "ownership_generation": 7,
         "transport_frames": [],
-        "sequence": 1,
+        "sequence": 2 if run_state == "cancelled" else 1,
         "stages": [{
             "stage_id": "construct_control_lib",
             "source_anchor": "BioXPMainWindow.initializeEnvironment",
@@ -107,17 +107,42 @@ class FakeRobotClient:
         self.on_request = None
         self.responses = {
             "oem_full_lifecycle_contract": {
+                "schema_version": "bioxp.oem_full_lifecycle_contract.v1",
+                "command": "initialize_oem_movement_lifecycle",
                 "machine_serial": 206,
                 "registry_sha256": REGISTRY,
+                "evidence_lock_path": "/robot/private/OEM_EVIDENCE_LOCK.json",
                 "evidence_lock_sha256": EVIDENCE_LOCK,
+                "evidence_lock_schema": "bioxp.oem_evidence_lock.v4",
+                "evidence_lock_identity_verified": True,
+                "acquisition_id": "serial-206-acquisition",
                 "evidence_lock_verified": True,
                 "source_registry_identity_verified": True,
                 "machine_configuration_verified": True,
+                "source_authority_verified": False,
                 "ownership_generation": 7,
+                "initialize_system_producers": [{
+                    "producer": "initializeEnvironment",
+                    "source_anchor": "BioXPMainWindow.initializeEnvironment:989-997",
+                }],
                 "plan_available": True,
                 "plan_blockers": [],
                 "live_creation_enabled": False,
                 "physical_commissioning_complete": False,
+                "providers": {
+                    "initial_check": {
+                        "source_contract": True,
+                        "implemented": True,
+                        "live_bound": True,
+                        "commissioned": False,
+                    },
+                },
+                "safety_boundary": {
+                    "caller_supplied_motion_parameters": False,
+                    "dry_run_commands_hardware": False,
+                    "queue_acceptance_is_execution": False,
+                    "physical_effect_verified": False,
+                },
             },
             "plan_oem_full_lifecycle": copy.deepcopy(canonical_run()),
             "get_oem_full_lifecycle_run": copy.deepcopy(canonical_run()),
@@ -203,7 +228,9 @@ def cancel_payload(**extra):
 
 def test_contract_and_reads_use_only_fixed_robot_routes(monkeypatch):
     client, runtime = make_client(monkeypatch)
-    assert client.get("/api/bioxp/oem-full-lifecycle/contract").status_code == 200
+    contract = client.get("/api/bioxp/oem-full-lifecycle/contract")
+    assert contract.status_code == 200
+    assert "evidence_lock_path" not in contract.json()
     assert client.get("/api/bioxp/oem-full-lifecycle/runs/run-12345678").status_code == 200
     assert client.get("/api/bioxp/oem-full-lifecycle/runs/run-12345678/ledger").status_code == 200
     assert runtime.connection.active_client.calls == [
@@ -454,3 +481,66 @@ def test_cancel_rereads_generation_and_freshness_immediately_before_mutation(mon
     assert runtime.connection.active_client.calls == [
         ("get_oem_full_lifecycle_run", {"path_params": {"run_id": "run-12345678"}})
     ]
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("request", "idempotency_key"), "mutated-idempotency"),
+        (("request", "inputs", "saved_status"), 2),
+        (("request", "inputs", "ownership_generation"), 8),
+        (("ownership_generation",), 8),
+        (("planned_terminal_state",), "mutated-terminal"),
+        (("stages", 0, "status"), "completed"),
+    ],
+)
+def test_cancel_rejects_any_nonterminal_canonical_echo_mutation(monkeypatch, path, value):
+    client, runtime = make_client(monkeypatch)
+    target = runtime.connection.active_client.responses["cancel_oem_full_lifecycle_run"]
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    response = client.post(
+        "/api/bioxp/oem-full-lifecycle/runs/run-12345678/cancel",
+        json=cancel_payload(),
+    )
+    assert response.status_code == 502
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("request", "inputs", "ownership_generation"), 8),
+        (("terminal_state",), "cancelled"),
+        (("stages", 0, "status"), "completed"),
+    ],
+)
+def test_plan_rejects_cross_field_or_state_contradictions(monkeypatch, path, value):
+    client, runtime = make_client(monkeypatch)
+    target = runtime.connection.active_client.responses["plan_oem_full_lifecycle"]
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    response = client.post("/api/bioxp/oem-full-lifecycle/runs", json=request_payload())
+    assert response.status_code == 502
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda contract: contract.__setitem__("mutation_token", "must-not-reach-browser"),
+        lambda contract: contract["providers"]["initial_check"].__setitem__(
+            "raw_mutation_header", "must-not-reach-browser"
+        ),
+        lambda contract: contract["safety_boundary"].__setitem__(
+            "arbitrary_robot_path", "/oem/runtime/commands/enqueue"
+        ),
+    ],
+)
+def test_contract_projection_rejects_credential_or_route_injection(monkeypatch, mutate):
+    client, runtime = make_client(monkeypatch)
+    mutate(runtime.connection.active_client.responses["oem_full_lifecycle_contract"])
+    response = client.get("/api/bioxp/oem-full-lifecycle/contract")
+    assert response.status_code == 502
+    assert "must-not-reach-browser" not in response.text
+    assert "/oem/runtime/commands/enqueue" not in response.text
