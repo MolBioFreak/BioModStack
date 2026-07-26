@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StringConstraints, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StringConstraints, TypeAdapter, model_validator
 
 
 class _CommandBase(BaseModel):
@@ -31,10 +31,10 @@ class InitializeMotorsCommand(_CommandBase):
 
 
 class RunOemMotorStageCommand(_CommandBase):
-    """One admitted M01–M04 source stage; never a generic movement request."""
+    """One admitted legacy source stage; M02 action current is never standalone."""
 
     command: Literal["run_oem_motor_stage"]
-    stage: Literal["z-home", "gripper-current-31", "gripper-clear-10000", "gripper-home"]
+    stage: Literal["z-home", "gripper-clear-10000", "gripper-home"]
     mode: Literal["live"]
     operator_ack: Literal["HOME"]
 
@@ -43,13 +43,57 @@ class RecordOemMotorStageObservationCommand(_CommandBase):
     command: Literal["record_oem_motor_stage_observation"]
     stage: Literal[
         "z-home",
-        "gripper-current-31",
         "gripper-clear-10000",
         "gripper-home",
     ]
     observed_pass: StrictBool
     operator_ack: Literal["OBSERVE"]
     operator_note: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
+
+
+AxisDiagnosticAxis: TypeAlias = Literal["x", "y", "z", "g", "door"]
+AxisDiagnosticOperation: TypeAlias = Literal[
+    "move-negative",
+    "move-positive",
+    "home",
+    "park-6000",
+    "commission-home",
+    "close",
+    "open",
+    "open-wide",
+]
+_AXIS_DIAGNOSTIC_OPERATIONS = {
+    "x": frozenset({"move-negative", "move-positive", "home", "park-6000"}),
+    "y": frozenset({"move-negative", "move-positive", "home"}),
+    "z": frozenset({"move-negative", "move-positive", "home"}),
+    "g": frozenset({"commission-home", "close", "open", "open-wide"}),
+    "door": frozenset({"home", "open", "close"}),
+}
+
+
+class CollectAxisDiagnosticsCommand(_CommandBase):
+    command: Literal["collect_axis_diagnostics"]
+
+
+class RunAxisDiagnosticCommand(_CommandBase):
+    command: Literal["run_axis_diagnostic"]
+    axis: AxisDiagnosticAxis
+    operation: AxisDiagnosticOperation
+    operator_ack: Literal["RUN_AXIS_DIAGNOSTIC"]
+    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
+
+    @model_validator(mode="after")
+    def validate_axis_operation(self) -> "RunAxisDiagnosticCommand":
+        if self.operation not in _AXIS_DIAGNOSTIC_OPERATIONS[self.axis]:
+            raise ValueError(f"operation {self.operation!r} is not valid for axis {self.axis!r}")
+        return self
+
+
+class StopAxisDiagnosticCommand(_CommandBase):
+    command: Literal["stop_axis_diagnostic"]
+    axis: AxisDiagnosticAxis
+    operator_ack: Literal["STOP_AXIS"]
+    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
 
 
 class StartJobCommand(_CommandBase):
@@ -83,6 +127,9 @@ CommandRequest: TypeAlias = Annotated[
     | InitializeMotorsCommand
     | RunOemMotorStageCommand
     | RecordOemMotorStageObservationCommand
+    | CollectAxisDiagnosticsCommand
+    | RunAxisDiagnosticCommand
+    | StopAxisDiagnosticCommand
     | StartJobCommand
     | PauseJobCommand
     | ResumeJobCommand
