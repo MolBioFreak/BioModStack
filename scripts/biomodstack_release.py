@@ -380,6 +380,15 @@ class ProductionReleaseBackend:
                 )
 
     def install_units(self) -> None:
+        services.run_systemctl(
+            "stop",
+            services.TARGET_UNIT,
+            services.FRONTEND_SERVICE,
+            services.WORKFLOW_ADAPTER_SERVICE,
+            services.CORE_RUNTIME_SERVICE,
+            check=False,
+            project_root=self.repo_root,
+        )
         services.install_user_units(
             project_root=self.repo_root,
             runtime_mode=services.CONTAINER_RUNTIME_MODE,
