@@ -261,7 +261,11 @@ def test_plan_is_fixed_dry_run_with_no_caller_motion_fields(monkeypatch):
                     "mode": "dry_run",
                 }
             },
-        )
+        ),
+        (
+            "get_oem_full_lifecycle_run",
+            {"path_params": {"run_id": "run-12345678"}},
+        ),
     ]
     for field, value in (("mode", "live"), ("axis", "z"), ("stage", "M01"), ("raw_frame", "00ff")):
         rejected = client.post("/api/bioxp/oem-full-lifecycle/runs", json=request_payload(**{field: value}))
@@ -544,3 +548,34 @@ def test_contract_projection_rejects_credential_or_route_injection(monkeypatch, 
     assert response.status_code == 502
     assert "must-not-reach-browser" not in response.text
     assert "/oem/runtime/commands/enqueue" not in response.text
+
+
+def test_plan_rejects_wire_echo_that_differs_from_durable_canonical_run(monkeypatch):
+    client, runtime = make_client(monkeypatch)
+    runtime.connection.active_client.responses["plan_oem_full_lifecycle"]["request"]["inputs"]["saved_status"] = 2
+
+    response = client.post("/api/bioxp/oem-full-lifecycle/runs", json=request_payload())
+
+    assert response.status_code == 502
+    assert runtime.connection.active_client.calls[-1] == (
+        "get_oem_full_lifecycle_run",
+        {"path_params": {"run_id": "run-12345678"}},
+    )
+
+
+@pytest.mark.parametrize(("admitted_sequence", "cancelled_sequence"), [(2, 1), (1, 1)])
+def test_cancel_requires_exactly_one_monotonic_sequence_advance(
+    monkeypatch,
+    admitted_sequence,
+    cancelled_sequence,
+):
+    client, runtime = make_client(monkeypatch)
+    runtime.connection.active_client.responses["get_oem_full_lifecycle_run"]["sequence"] = admitted_sequence
+    runtime.connection.active_client.responses["cancel_oem_full_lifecycle_run"]["sequence"] = cancelled_sequence
+
+    response = client.post(
+        "/api/bioxp/oem-full-lifecycle/runs/run-12345678/cancel",
+        json=cancel_payload(),
+    )
+
+    assert response.status_code == 502
