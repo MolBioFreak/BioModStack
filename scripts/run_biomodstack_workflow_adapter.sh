@@ -73,6 +73,73 @@ export NXF_HOME="${NXF_HOME:-$BMS_NEXTFLOW_HOME}"
 mkdir -p "$NXF_HOME"
 export BMS_CPU_POWER_COLLECTOR_URL="${BMS_CPU_POWER_COLLECTOR_URL:-http://127.0.0.1:8797/power}"
 BMS_WORKFLOW_ADAPTER_BIND_HOST="${BMS_WORKFLOW_ADAPTER_BIND_HOST:-127.0.0.1}"
+CM_API_RUNTIME_DIR="${BMS_CM_API_RUNTIME_DIR:-${BMS_DATA:-/mnt/BioModStack}/runtime/cm-api-python}"
+
+rewrite_cm_api_pyvenv_home() {
+    local config_path="$1" runtime_bin="$2"
+    python3 - "$config_path" "$runtime_bin" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+runtime_bin = sys.argv[2]
+lines = path.read_text(encoding="utf-8").splitlines()
+if not any(line.startswith("home = ") for line in lines):
+    raise SystemExit(f"missing venv home declaration: {path}")
+path.write_text(
+    "\n".join(
+        f"home = {runtime_bin}" if line.startswith("home = ") else line
+        for line in lines
+    ) + "\n",
+    encoding="utf-8",
+)
+PY
+}
+
+provision_cm_api_runtime() {
+    local source_venv="$PROJECT_DIR/platform/api/.venv"
+    local source_python source_runtime stage runtime_name runtime_dir target_python next_link
+    mkdir -p "$CM_API_RUNTIME_DIR/releases"
+    exec 9>"${CM_API_RUNTIME_DIR}/.provision.lock"
+    flock -x 9
+
+    source_python="$(readlink -f "$source_venv/bin/python")"
+    source_runtime="$(dirname "$(dirname "$source_python")")"
+    [ -x "$source_python" ] || { echo "locked API interpreter is unavailable: $source_python" >&2; return 1; }
+
+    stage="$(mktemp -d "${CM_API_RUNTIME_DIR}/.stage.XXXXXX")"
+    runtime_name="runtime-${stage##*.stage.}"
+    runtime_dir="$CM_API_RUNTIME_DIR/releases/$runtime_name"
+    trap 'test -z "$stage" || rm -rf "$stage"' RETURN
+    cp -a "$source_runtime" "$stage/python-runtime"
+    cp -a "$source_venv" "$stage/venv"
+    target_python="$runtime_dir/python-runtime/bin/$(basename "$source_python")"
+    [ -x "$stage/python-runtime/bin/$(basename "$source_python")" ] || { echo "copied API interpreter is unavailable: $target_python" >&2; return 1; }
+    for link in python python3 python3.12; do
+        rm -f "$stage/venv/bin/$link"
+        ln -s "$target_python" "$stage/venv/bin/$link"
+    done
+    rewrite_cm_api_pyvenv_home "$stage/venv/pyvenv.cfg" "$runtime_dir/python-runtime/bin"
+
+    if [ -e "$runtime_dir" ] || [ -L "$runtime_dir" ]; then
+        echo "refusing to replace existing CM API runtime generation: $runtime_dir" >&2
+        return 1
+    fi
+    mv -T "$stage" "$runtime_dir"
+    stage="$runtime_dir"
+    apptainer exec --no-home --bind "$CM_API_RUNTIME_DIR:$CM_API_RUNTIME_DIR" \
+        "${BMS_CONTAINER_DIR:-${BMS_DATA:-/mnt/BioModStack}/apptainer}/protenix.sif" \
+        "$runtime_dir/venv/bin/python" -c 'import jsonschema'
+
+    next_link="${CM_API_RUNTIME_DIR}/.current.${runtime_name}"
+    ln -s "releases/$runtime_name" "$next_link"
+    mv -Tf "$next_link" "$CM_API_RUNTIME_DIR/current"
+    stage=""
+    trap - RETURN
+}
 
 cd "$PROJECT_DIR/platform/api"
-exec uv run uvicorn workflow_adapter_app:app --port 8001 --host "$BMS_WORKFLOW_ADAPTER_BIND_HOST" --no-access-log
+uv sync --locked
+provision_cm_api_runtime
+export BMS_CM_API_RUNTIME_DIR
+export BMS_API_PYTHON="$CM_API_RUNTIME_DIR/current/venv/bin/python"
+exec uv run --no-sync uvicorn workflow_adapter_app:app --port 8001 --host "$BMS_WORKFLOW_ADAPTER_BIND_HOST" --no-access-log
