@@ -1246,7 +1246,11 @@ def test_start_all_container_mode_never_kills_existing_listeners_before_first_st
 def test_restart_all_container_mode_enables_target_before_restart(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / "repo"
     calls: list[tuple[str, object]] = []
-    monkeypatch.setattr(services, "assert_runtime_listener_preflight", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        services,
+        "assert_runtime_listener_preflight",
+        lambda root, mode: calls.append(("preflight", mode)) or {},
+    )
 
     monkeypatch.setattr(
         services,
@@ -1283,10 +1287,48 @@ def test_restart_all_container_mode_enables_target_before_restart(monkeypatch, t
                 services.CORE_RUNTIME_SERVICE,
             ),
         ),
+        ("preflight", "container"),
         ("systemctl", ("start", services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE, services.TARGET_UNIT)),
         ("wait", (services.WORKFLOW_ADAPTER_HEALTH_URL, services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
         ("wait", (services.runtime_api_health_url("container", project_root=project_root), services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
         ("wait", (services.FRONTEND_URL, services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
+    ]
+
+
+def test_restart_all_container_mode_blocks_start_when_foreign_listener_remains(
+    monkeypatch, tmp_path: Path
+) -> None:
+    project_root = tmp_path / "repo"
+    calls: list[tuple[str, object]] = []
+    monkeypatch.setattr(services, "ensure_user_units", lambda *args, **kwargs: None)
+    monkeypatch.setattr(services, "ensure_target_enabled", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        services,
+        "run_systemctl",
+        lambda *args, **kwargs: calls.append(("systemctl", args))
+        or SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    monkeypatch.setattr(
+        services,
+        "assert_runtime_listener_preflight",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            services.ServiceManagerError("foreign listener remains")
+        ),
+    )
+
+    with pytest.raises(services.ServiceManagerError, match="foreign listener remains"):
+        services.restart_all(project_root=project_root, runtime_mode="container")
+
+    assert calls == [
+        ("systemctl", ("stop", services.TARGET_UNIT)),
+        (
+            "systemctl",
+            (
+                "stop",
+                services.WORKFLOW_ADAPTER_SERVICE,
+                services.CORE_RUNTIME_SERVICE,
+            ),
+        ),
     ]
 
 
