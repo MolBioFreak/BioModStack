@@ -33,6 +33,7 @@ def test_dnaweaver_plan_orders_preoverlapped_fragments_and_pydna_validates_targe
     assert plan.validator_version == "5.5.16"
     assert plan.pydna_exact_candidate_count >= 1
     assert plan.product.circular is True
+    assert plan.product.sequence == target
     assert len(plan.product.fragments) >= 2
     assert all(
         fragment.metadata["preparation"] == "ready_linear"

@@ -190,6 +190,10 @@ def _validate_with_pydna(
         raise AssemblyError(
             "pydna did not produce an exact requested target from the DNA Weaver purchase plan"
         )
+    # Circular identity is rotation-invariant for validation, but the published product
+    # must preserve the origin selected by the user so coordinates, exports, and saved
+    # provenance all refer to the submitted target.
+    product.sequence = target
     return product, exact
 
 
