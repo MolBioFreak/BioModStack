@@ -523,6 +523,10 @@ def plan_vendor_gibson(
         circular=circular,
         overlap_length=overlap_length,
     )
+    # Canonical circular identity is validation-only. Publish and persist the exact
+    # submitted target string so coordinates, exports, and provenance retain its
+    # requested origin after deterministic and pydna validation have passed.
+    product.sequence = target
     planner_version = version("dnaweaver")
     validator_version = version("pydna")
     planning_parameters = {
