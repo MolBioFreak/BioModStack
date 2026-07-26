@@ -45,6 +45,23 @@ test('NGS exposes named workflow choices with input and output expectations befo
     assert.match(template, /How to use this page:/u);
 });
 
+test('Clone-validation tuning controls serialize bounded vendor-supported settings', () => {
+    const source = readSource('src/components/NanoporeTemplate.tsx');
+    for (const setting of [
+        'wf_clone_analyse_unclassified',
+        'wf_clone_flye_quality',
+        'wf_clone_non_uniform_coverage',
+        'wf_clone_canu_fast',
+        'wf_clone_cutsite_mismatch',
+        'wf_clone_expected_coverage',
+        'wf_clone_expected_identity',
+    ]) {
+        assert.match(source, new RegExp(setting));
+    }
+    assert.match(source, /max-w-\[1440px\]/);
+    assert.match(source, /xl:grid-cols-12/);
+});
+
 test('Nanopore FASTQ CLI preview points at the executable standalone entrypoint', () => {
     const template = readSource('src/components/NanoporeTemplate.tsx');
 
