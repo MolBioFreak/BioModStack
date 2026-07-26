@@ -32,6 +32,8 @@ class FakeRobotClient:
         self.probe_error = probe_error
         self.closed = False
         self.probes = 0
+        self.request_started: asyncio.Event | None = None
+        self.request_release: asyncio.Event | None = None
 
     async def probe(self) -> dict[str, Any]:
         self.probes += 1
@@ -41,6 +43,13 @@ class FakeRobotClient:
 
     async def close(self) -> None:
         self.closed = True
+
+    async def request(self, route_name: str, **kwargs: Any) -> dict[str, Any]:
+        if self.request_started is not None:
+            self.request_started.set()
+        if self.request_release is not None:
+            await self.request_release.wait()
+        return {"route_name": route_name, "kwargs": kwargs}
 
 
 def _service(
@@ -146,6 +155,39 @@ def test_disconnect_closes_client_increments_generation_and_clears_observation(t
     assert disconnected.hardware_ready is None
     assert disconnected.observed_at is None
     assert disconnected.capabilities == ()
+
+
+def test_generation_bound_request_lease_serializes_disconnect(tmp_path: Path) -> None:
+    _, BioXpProfile, _, _ = _load()
+    clients: list[FakeRobotClient] = []
+    service = _service(tmp_path, clients)
+
+    async def exercise() -> None:
+        await service.save_profile(BioXpProfile(api_url="http://robot:8123"))
+        connected = await service.connect()
+        robot = clients[0]
+        robot.request_started = asyncio.Event()
+        robot.request_release = asyncio.Event()
+
+        request_task = asyncio.create_task(service.request_active(
+            "plan_oem_full_lifecycle",
+            expected_generation=connected.generation,
+            json_data={"expected_generation": connected.generation},
+        ))
+        await robot.request_started.wait()
+        disconnect_task = asyncio.create_task(service.disconnect())
+        await asyncio.sleep(0)
+        assert disconnect_task.done() is False
+        assert service.snapshot().generation == connected.generation
+
+        robot.request_release.set()
+        response = await request_task
+        assert response["route_name"] == "plan_oem_full_lifecycle"
+        disconnected = await disconnect_task
+        assert disconnected.generation == connected.generation + 1
+        assert disconnected.active is False
+
+    asyncio.run(exercise())
 
 
 def test_stale_observation_is_explicit(tmp_path: Path) -> None:

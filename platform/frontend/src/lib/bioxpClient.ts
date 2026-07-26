@@ -160,7 +160,9 @@ export interface BioXpOemFullLifecycleContract {
     machine_serial: 206;
     registry_sha256: string;
     evidence_lock_sha256: string;
-    source_authority_verified: boolean;
+    evidence_lock_verified: boolean;
+    source_registry_identity_verified: boolean;
+    machine_configuration_verified: boolean;
     initialize_system_producers: ReadonlyArray<{
         producer: string;
         source_anchor: string;
@@ -181,8 +183,7 @@ export interface BioXpOemFullLifecycleContract {
 
 export interface BioXpOemFullLifecycleStage {
     stage_id: string;
-    stage_index: number;
-    state: string;
+    status: string;
     source_anchor: string;
     would_command_hardware: boolean;
     would_command_physical_motion: boolean;
@@ -194,12 +195,16 @@ export interface BioXpOemFullLifecycleStage {
 
 export interface BioXpOemFullLifecycleRun {
     run_id: string;
-    mode: 'dry_run';
+    request: { mode: 'dry_run' };
     run_state: string;
     machine_serial: 206;
     registry_sha256: string;
+    evidence_lock_sha256: string;
+    evidence_lock_verified: true;
+    source_registry_identity_verified: true;
+    machine_configuration_verified: true;
     expected_next_stage: string | null;
-    physical_command_sent: false;
+    physical_motion_commanded: false;
     physical_effect_verified: false;
     stages: BioXpOemFullLifecycleStage[];
 }
@@ -358,10 +363,21 @@ export const usePlanBioXpOemFullLifecycle = () => useRefreshMutation(
 );
 
 export const useCancelBioXpOemFullLifecycle = () => useRefreshMutation(
-    async ({ runId, generation }: { runId: string; generation: number }) => (
+    async ({ runId, generation, machineSerial, registrySha256, evidenceLockSha256 }: {
+        runId: string;
+        generation: number;
+        machineSerial: 206;
+        registrySha256: string;
+        evidenceLockSha256: string;
+    }) => (
         await api.post<BioXpOemFullLifecycleRun>(
             `/api/bioxp/oem-full-lifecycle/runs/${encodeURIComponent(runId)}/cancel`,
-            { expected_generation: generation },
+            {
+                expected_generation: generation,
+                expected_machine_serial: machineSerial,
+                expected_registry_sha256: registrySha256,
+                expected_evidence_lock_sha256: evidenceLockSha256,
+            },
         )
     ).data,
 );
