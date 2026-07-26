@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+from datetime import datetime, timezone
+
 import pytest
 from pydantic import ValidationError
 
@@ -22,6 +25,65 @@ def test_command_request_is_discriminated_and_rejects_unknown_names_or_parameter
     )
     assert valid.command == "initialize_motors"
 
+    staged = parse(
+        {
+            "command": "run_oem_motor_stage",
+            "expected_generation": 3,
+            "idempotency_key": "m01-z-home-3",
+            "stage": "z-home",
+            "mode": "live",
+            "operator_ack": "HOME",
+        }
+    )
+    assert staged.stage == "z-home"
+    assert staged.operator_ack == "HOME"
+
+    observed = parse(
+        {
+            "command": "record_oem_motor_stage_observation",
+            "expected_generation": 3,
+            "idempotency_key": "m01-observed-3",
+            "stage": "z-home",
+            "observed_pass": True,
+            "operator_ack": "OBSERVE",
+            "operator_note": "Z reached the physical reference without collision.",
+        }
+    )
+    assert observed.stage == "z-home"
+    assert observed.observed_pass is True
+
+    observation_base = {
+        "command": "record_oem_motor_stage_observation",
+        "expected_generation": 3,
+        "idempotency_key": "m01-observed-invalid",
+        "stage": "z-home",
+        "observed_pass": True,
+        "operator_ack": "OBSERVE",
+        "operator_note": "Observed physical completion.",
+    }
+    for invalid_pass in ("true", "false", "yes", "no", 0, 1):
+        with pytest.raises(ValidationError):
+            parse({**observation_base, "observed_pass": invalid_pass})
+    for invalid_note in (None, "", "   "):
+        with pytest.raises(ValidationError):
+            parse({**observation_base, "operator_note": invalid_note})
+    missing_note = dict(observation_base)
+    missing_note.pop("operator_note")
+    with pytest.raises(ValidationError):
+        parse(missing_note)
+
+    with pytest.raises(ValidationError):
+        parse(
+            {
+                "command": "initialize_motors",
+                "expected_generation": 3,
+                "idempotency_key": "unknown-stage-3",
+                "stage": "raw-axis-jog",
+                "mode": "live",
+                "operator_ack": "HOME",
+            }
+        )
+
     with pytest.raises(ValidationError):
         parse({"command": "arbitrary_path", "expected_generation": 3, "idempotency_key": "x"})
     with pytest.raises(ValidationError):
@@ -35,6 +97,18 @@ def test_command_request_is_discriminated_and_rejects_unknown_names_or_parameter
         )
 
 
+def test_queue_receipts_are_not_misclassified_as_completed_handler_acknowledgements() -> None:
+    from services.bioxp.command_coordinator import _strict_acknowledgement
+
+    assert _strict_acknowledgement({"ok": True, "queued": True}) is True
+    assert _strict_acknowledgement({"ok": True, "queued": False}) is False
+    assert _strict_acknowledgement({"ok": True}) is True
+    assert _strict_acknowledgement({"ok": False, "queued": True}) is False
+    assert _strict_acknowledgement({"queued": True}) is False
+    assert _strict_acknowledgement({"ok": "false", "queued": True}) is False
+    assert _strict_acknowledgement({"ok": 0, "queued": True}) is False
+
+
 def test_default_registry_exposes_only_current_compact_commissioning_mappings() -> None:
     _, registry = _load()
 
@@ -43,6 +117,11 @@ def test_default_registry_exposes_only_current_compact_commissioning_mappings() 
         "collect_hardware_snapshot",
         "initialize_oem_environment",
         "initialize_motors",
+        "run_oem_motor_stage",
+        "record_oem_motor_stage_observation",
+        "collect_axis_diagnostics",
+        "run_axis_diagnostic",
+        "stop_axis_diagnostic",
         "start_job",
         "pause_job",
         "resume_job",
@@ -53,14 +132,26 @@ def test_default_registry_exposes_only_current_compact_commissioning_mappings() 
         "activate_usb_for_service": "activate_usb_for_service",
         "collect_hardware_snapshot": "collect_hardware_snapshot",
         "initialize_oem_environment": "initialize_oem_environment",
+        "run_oem_motor_stage": "run_oem_motor_stage",
+        "record_oem_motor_stage_observation": "record_oem_motor_stage_observation",
+        "collect_axis_diagnostics": "collect_axis_diagnostics",
+        "run_axis_diagnostic": "run_axis_diagnostic",
+        "stop_axis_diagnostic": "stop_axis_diagnostic",
     }
     for name, route_key in enabled.items():
         assert registry[name].enabled is True
         assert registry[name].route_key == route_key
-        if name != "activate_usb_for_service":
-            assert registry[name].required_capability == name
+        expected_capability = (
+            None if name == "activate_usb_for_service"
+            else "run_oem_motor_stage" if name == "record_oem_motor_stage_observation"
+            else name
+        )
+        assert registry[name].required_capability == expected_capability
 
     assert registry["initialize_oem_environment"].requires_hardware_ready is True
+    assert registry["run_oem_motor_stage"].requires_hardware_ready is True
+    assert registry["record_oem_motor_stage_observation"].requires_hardware_ready is False
+    assert registry["record_oem_motor_stage_observation"].required_capability == "run_oem_motor_stage"
     assert registry["initialize_oem_environment"].required_lifecycle_states == (
         ("constructor_pipette_stage", "not_run"),
         ("initialization_without_motion", "blocked"),
@@ -102,3 +193,297 @@ def test_current_commissioning_command_payloads_are_typed_and_oem_startup_requir
             "mode": "live",
             "operator_ack": "YES",
         })
+
+
+def test_oem_motor_stage_requires_advertised_capability_and_translates_to_queued_robot_envelope() -> None:
+    from services.bioxp.command_coordinator import CommandCoordinator, CommandDeniedError
+    from services.bioxp.command_models import parse_command_request
+    from services.bioxp.command_registry import DEFAULT_COMMAND_REGISTRY
+    from services.bioxp.models import BioXpSnapshot
+
+    class Client:
+        def __init__(self, response=None) -> None:
+            self.calls = []
+            self.response = response or {"ok": True, "queued": True}
+
+        async def request(self, route_key, *, json_data):
+            self.calls.append((route_key, json_data))
+            return self.response
+
+    class Connection:
+        def __init__(self, capabilities, response=None):
+            self.active_client = Client(response)
+            self.capabilities = capabilities
+            self.observed = None
+
+        def snapshot(self):
+            return BioXpSnapshot(
+                configured=True,
+                active=True,
+                generation=7,
+                reachable=True,
+                runtime_ready=True,
+                hardware_ready=True,
+                hardware_observed_at=datetime.now(timezone.utc),
+                hardware_observation_fresh=True,
+                capabilities=self.capabilities,
+                observed_at=datetime.now(timezone.utc),
+                freshness_budget_seconds=30.0,
+                observation_fresh=True,
+                startup_lifecycle={"stages": {"initial_check": {"state": "passed"}}},
+            )
+
+        def observe_command_response(self, value):
+            self.observed = value
+
+    request = parse_command_request({
+        "command": "run_oem_motor_stage",
+        "expected_generation": 7,
+        "idempotency_key": "m01-cross-contract",
+        "stage": "z-home",
+        "mode": "live",
+        "operator_ack": "HOME",
+    })
+
+    async def scenario():
+        missing = Connection(("collect_hardware_snapshot",))
+        with pytest.raises(CommandDeniedError, match="Required capability is unavailable"):
+            await CommandCoordinator(missing, DEFAULT_COMMAND_REGISTRY).execute(request, mutations_enabled=True)
+        assert missing.active_client.calls == []
+
+        admitted = Connection(("collect_hardware_snapshot", "run_oem_motor_stage"))
+        record = await CommandCoordinator(admitted, DEFAULT_COMMAND_REGISTRY).execute(request, mutations_enabled=True)
+        assert record.status == "queued"
+        assert record.remote_acknowledged is True
+        assert record.physical_effect_verified is False
+        assert admitted.active_client.calls == [(
+            "run_oem_motor_stage",
+            {
+                "name": "startupHomingStepwise",
+                "mode": "live",
+                "operator_ack": "HOME",
+                "params": {"homing_step": "z-home"},
+            },
+        )]
+
+        for malformed_receipt in (
+            {"queued": True},
+            {"ok": "false", "queued": True},
+            {"ok": 0, "queued": True},
+        ):
+            malformed = Connection(
+                ("collect_hardware_snapshot", "run_oem_motor_stage"),
+                malformed_receipt,
+            )
+            rejected = await CommandCoordinator(
+                malformed,
+                DEFAULT_COMMAND_REGISTRY,
+            ).execute(request, mutations_enabled=True)
+            assert rejected.status == "delivery_failed"
+            assert rejected.remote_acknowledged is False
+            assert rejected.physical_effect_verified is False
+
+    asyncio.run(scenario())
+
+
+def test_oem_motor_stage_observation_is_typed_non_motion_and_uses_the_same_robot_queue() -> None:
+    from services.bioxp.command_coordinator import CommandCoordinator
+    from services.bioxp.command_models import parse_command_request
+    from services.bioxp.command_registry import DEFAULT_COMMAND_REGISTRY
+    from services.bioxp.models import BioXpSnapshot
+
+    class Client:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def request(self, route_key, *, json_data):
+            self.calls.append((route_key, json_data))
+            return {"ok": True, "queued": True, "command_id": "robot-observation-queue-id"}
+
+    class Connection:
+        def __init__(self) -> None:
+            self.active_client = Client()
+
+        def snapshot(self):
+            return BioXpSnapshot(
+                configured=True,
+                active=True,
+                generation=9,
+                reachable=True,
+                runtime_ready=True,
+                hardware_ready=None,
+                hardware_observation_fresh=False,
+                hardware_observation_stale=True,
+                capabilities=("run_oem_motor_stage",),
+                observed_at=datetime.now(timezone.utc),
+                freshness_budget_seconds=30.0,
+                observation_fresh=True,
+                startup_lifecycle={"stages": {"initial_check": {"state": "passed"}}},
+            )
+
+        def observe_command_response(self, value):
+            pass
+
+    request = parse_command_request({
+        "command": "record_oem_motor_stage_observation",
+        "expected_generation": 9,
+        "idempotency_key": "m01-observe-pass",
+        "stage": "z-home",
+        "observed_pass": True,
+        "operator_ack": "OBSERVE",
+        "operator_note": "Observed Z reference complete.",
+    })
+
+    async def scenario():
+        connection = Connection()
+        record = await CommandCoordinator(connection, DEFAULT_COMMAND_REGISTRY).execute(request, mutations_enabled=True)
+        assert record.status == "queued"
+        assert record.remote_acknowledged is True
+        assert record.physical_effect_verified is False
+        assert connection.active_client.calls == [(
+            "record_oem_motor_stage_observation",
+            {
+                "name": "startupHomingStepwise",
+                "mode": "live",
+                "operator_ack": "OBSERVE",
+                "params": {
+                    "homing_step": "z-home",
+                    "record_stage_observation": True,
+                    "observed_pass": True,
+                    "operator_note": "Observed Z reference complete.",
+                },
+            },
+        )]
+
+    asyncio.run(scenario())
+
+
+def test_axis_diagnostic_commands_are_finite_typed_and_m02_is_retired() -> None:
+    parse, registry = _load()
+
+    collect = parse({
+        "command": "collect_axis_diagnostics",
+        "expected_generation": 11,
+        "idempotency_key": "axis-status-11",
+    })
+    assert collect.command == "collect_axis_diagnostics"
+
+    run = parse({
+        "command": "run_axis_diagnostic",
+        "expected_generation": 11,
+        "idempotency_key": "axis-x-positive-11",
+        "axis": "x",
+        "operation": "move-positive",
+        "operator_ack": "RUN_AXIS_DIAGNOSTIC",
+        "reason": "supervised X relative-position test",
+    })
+    assert run.axis == "x" and run.operation == "move-positive"
+
+    stop = parse({
+        "command": "stop_axis_diagnostic",
+        "expected_generation": 11,
+        "idempotency_key": "axis-x-stop-11",
+        "axis": "x",
+        "operator_ack": "STOP_AXIS",
+        "reason": "operator stop",
+    })
+    assert stop.axis == "x"
+
+    invalid = run.model_dump(mode="json")
+    invalid["operation"] = "open"
+    with pytest.raises(ValidationError):
+        parse(invalid)
+    with pytest.raises(ValidationError):
+        parse({**run.model_dump(mode="json"), "steps": 999999})
+    with pytest.raises(ValidationError):
+        parse({
+            "command": "run_oem_motor_stage",
+            "expected_generation": 11,
+            "idempotency_key": "retired-m02",
+            "stage": "gripper-current-31",
+            "mode": "live",
+            "operator_ack": "HOME",
+        })
+
+    assert registry["collect_axis_diagnostics"].requires_hardware_ready is False
+    assert registry["run_axis_diagnostic"].requires_hardware_ready is True
+    assert registry["stop_axis_diagnostic"].requires_hardware_ready is False
+    assert registry["stop_axis_diagnostic"].requires_fresh_observation is False
+
+
+def test_axis_diagnostic_execution_holds_generation_lease_and_forwards_only_typed_payload() -> None:
+    from contextlib import asynccontextmanager
+
+    from services.bioxp.command_coordinator import CommandCoordinator
+    from services.bioxp.command_models import parse_command_request
+    from services.bioxp.command_registry import DEFAULT_COMMAND_REGISTRY
+    from services.bioxp.models import BioXpSnapshot
+
+    events: list[object] = []
+
+    class Client:
+        async def request(self, route_key, *, json_data):
+            events.append(("request", route_key, json_data))
+            return {
+                "ok": True,
+                "axis": "x",
+                "operation": "move-positive",
+                "terminal_status": {"rows": {"x": {"status": {"speed": {"speed": 0}}}}},
+            }
+
+    class Connection:
+        active_client = Client()
+
+        @asynccontextmanager
+        async def workflow_lease(self, expected_generation):
+            events.append(("lease-enter", expected_generation))
+            try:
+                yield self.active_client
+            finally:
+                events.append(("lease-exit", expected_generation))
+
+        def snapshot(self):
+            return BioXpSnapshot(
+                configured=True,
+                active=True,
+                generation=13,
+                reachable=True,
+                runtime_ready=True,
+                hardware_ready=True,
+                hardware_observed_at=datetime.now(timezone.utc),
+                hardware_observation_fresh=True,
+                capabilities=("run_axis_diagnostic",),
+                observed_at=datetime.now(timezone.utc),
+                freshness_budget_seconds=30.0,
+                observation_fresh=True,
+            )
+
+        def observe_command_response(self, value):
+            events.append(("observe", value["axis"], value["operation"]))
+
+    request = parse_command_request({
+        "command": "run_axis_diagnostic",
+        "expected_generation": 13,
+        "idempotency_key": "axis-x-positive-13",
+        "axis": "x",
+        "operation": "move-positive",
+        "operator_ack": "RUN_AXIS_DIAGNOSTIC",
+        "reason": "supervised X relative-position test",
+    })
+
+    record = asyncio.run(CommandCoordinator(Connection(), DEFAULT_COMMAND_REGISTRY).execute(request, mutations_enabled=True))
+
+    assert record.status == "acknowledged"
+    assert record.remote_acknowledged is True
+    assert record.physical_effect_verified is False
+    assert events == [
+        ("lease-enter", 13),
+        ("request", "run_axis_diagnostic", {
+            "axis": "x",
+            "operation": "move-positive",
+            "operator_ack": "RUN_AXIS_DIAGNOSTIC",
+            "reason": "supervised X relative-position test",
+        }),
+        ("observe", "x", "move-positive"),
+        ("lease-exit", 13),
+    ]

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import os
+import re
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -14,8 +18,52 @@ DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
     "activate_usb_for_service": ("POST", "/oem/runtime/activate_service", 90.0),
     "collect_hardware_snapshot": ("POST", "/hardware/snapshot/collect", 210.0),
     "initialize_oem_environment": ("POST", "/oem/startup/initialize_environment", 470.0),
+    "run_oem_motor_stage": ("POST", "/oem/runtime/commands/enqueue", 30.0),
+    "record_oem_motor_stage_observation": ("POST", "/oem/runtime/commands/enqueue", 15.0),
+    "oem_full_lifecycle_contract": ("GET", "/oem/runtime/movement-runs/contract", 10.0),
+    "plan_oem_full_lifecycle": ("POST", "/oem/runtime/movement-runs", 30.0),
+    "get_oem_full_lifecycle_run": ("GET", "/oem/runtime/movement-runs/{run_id}", 10.0),
+    "get_oem_full_lifecycle_ledger": ("GET", "/oem/runtime/movement-runs/{run_id}/ledger", 10.0),
+    "cancel_oem_full_lifecycle_run": ("POST", "/oem/runtime/movement-runs/{run_id}/cancel", 15.0),
+    "collect_axis_diagnostics": ("GET", "/motion/diagnostics/status", 45.0),
+    "run_axis_diagnostic": ("POST", "/motion/diagnostics/execute", 180.0),
+    "stop_axis_diagnostic": ("POST", "/motion/diagnostics/stop", 25.0),
     "emergency_stop": ("POST", "/oem/runtime/emergency_stop", 5.0),
 }
+
+_ROUTE_PARAMETER_RE = re.compile(r"\{([A-Za-z][A-Za-z0-9_]*)\}")
+_OEM_LIFECYCLE_MUTATION_ROUTES = frozenset({"plan_oem_full_lifecycle", "cancel_oem_full_lifecycle_run"})
+
+
+def _read_oem_lifecycle_token(path: Path | None) -> str:
+    if path is None:
+        raise RobotTransportError("BioXP OEM lifecycle mutation token file is not configured")
+    try:
+        mode = path.stat().st_mode
+        token = path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise RobotTransportError("BioXP OEM lifecycle mutation token file is unavailable") from exc
+    if mode & 0o077:
+        raise RobotTransportError("BioXP OEM lifecycle mutation token file permissions are too broad")
+    if len(token) < 32:
+        raise RobotTransportError("BioXP OEM lifecycle mutation token is invalid")
+    return token
+
+
+def _render_route_path(template: str, path_params: dict[str, str] | None) -> str:
+    required = set(_ROUTE_PARAMETER_RE.findall(template))
+    supplied = set((path_params or {}).keys())
+    if supplied != required:
+        raise RobotTransportError(
+            f"BioXP route parameters do not match template: required={sorted(required)} supplied={sorted(supplied)}"
+        )
+    path = template
+    for key in sorted(required):
+        value = (path_params or {})[key]
+        if type(value) is not str or not value:
+            raise RobotTransportError(f"BioXP route parameter {key!r} must be a non-empty string")
+        path = path.replace("{" + key + "}", quote(value, safe=""))
+    return path
 
 
 class PinnedAddressTransport(httpx.AsyncBaseTransport):
@@ -61,9 +109,14 @@ class BioXpRobotClient:
         *,
         routes: Mapping[str, tuple[str, str, float]] | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
+        oem_lifecycle_token_file: Path | None = None,
     ) -> None:
         self.target = target
         self.routes = dict(routes or DEFAULT_ROBOT_ROUTES)
+        configured_token_file = os.environ.get("BMS_BIOXP_OEM_RUNTIME_TOKEN_FILE", "").strip()
+        self._oem_lifecycle_token_file = oem_lifecycle_token_file or (
+            Path(configured_token_file) if configured_token_file else None
+        )
         pinned_transport = PinnedAddressTransport(target, transport=transport)
         self._client = httpx.AsyncClient(
             base_url=target.api_url,
@@ -88,12 +141,17 @@ class BioXpRobotClient:
         *,
         json_data: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
+        path_params: dict[str, str] | None = None,
         retry_read_once: bool = False,
     ) -> Any:
         try:
-            method, path, timeout = self.routes[route_name]
+            method, path_template, timeout = self.routes[route_name]
         except KeyError as exc:
             raise RobotTransportError(f"Unknown BioXP robot route key: {route_name}") from exc
+        path = _render_route_path(path_template, path_params)
+        headers = None
+        if route_name in _OEM_LIFECYCLE_MUTATION_ROUTES:
+            headers = {"X-BioXP-OEM-Token": _read_oem_lifecycle_token(self._oem_lifecycle_token_file)}
         attempts = 2 if retry_read_once and method == "GET" else 1
         for attempt in range(attempts):
             try:
@@ -102,6 +160,7 @@ class BioXpRobotClient:
                     path,
                     json=json_data,
                     params=params,
+                    headers=headers,
                     timeout=timeout,
                 )
                 if 300 <= response.status_code < 400:

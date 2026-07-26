@@ -4,9 +4,11 @@ import asyncio
 import hashlib
 import json
 from collections import deque
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import Any, Mapping, Protocol
+from typing import Any, Mapping, Protocol, cast
 from uuid import uuid4
 
 from .command_models import CommandRequest
@@ -66,6 +68,32 @@ class CommandCoordinator:
         mutations_enabled: bool,
     ) -> CommandRecord:
         definition = self.registry[request.command]
+        if not definition.enabled:
+            raise CommandDeniedError((f"command {request.command} is disabled",))
+        lease_factory = cast(
+            Callable[[int], AbstractAsyncContextManager[Any]] | None,
+            getattr(self.connection, "workflow_lease", None),
+        )
+        if callable(lease_factory):
+            async with lease_factory(request.expected_generation):
+                return await self._execute_with_generation_lease(
+                    request,
+                    mutations_enabled=mutations_enabled,
+                )
+        # Compatibility path for isolated unit-test fakes. Production
+        # BioXpConnectionService always supplies workflow_lease.
+        return await self._execute_with_generation_lease(
+            request,
+            mutations_enabled=mutations_enabled,
+        )
+
+    async def _execute_with_generation_lease(
+        self,
+        request: CommandRequest,
+        *,
+        mutations_enabled: bool,
+    ) -> CommandRecord:
+        definition = self.registry[request.command]
         fingerprint = _fingerprint(request.model_dump(mode="json"))
         snapshot = self.connection.snapshot()
         context = CommandAdmissionContext(
@@ -117,7 +145,7 @@ class CommandCoordinator:
         try:
             payload = request.model_dump(mode="json", exclude={"command", "expected_generation", "idempotency_key"})
             try:
-                response = await client.request(definition.route_key, json_data=payload)
+                response = await client.request(definition.route_key, json_data=payload or None)
                 handler_response = dict(response) if isinstance(response, Mapping) else {"response": response}
                 observer = getattr(self.connection, "observe_command_response", None)
                 if callable(observer):
