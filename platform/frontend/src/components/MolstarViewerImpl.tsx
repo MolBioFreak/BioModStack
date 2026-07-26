@@ -204,7 +204,7 @@ export default function MolstarViewer({
         });
     }, [documents, molecularDynamics]);
 
-    const hasStructure = Boolean(absoluteUrl);
+    const hasStructure = Boolean(absoluteUrl) || molecularDynamics?.playbackCapability.supported === true;
     const adapterSignature = useMemo(() => JSON.stringify({
         hideControls,
         effectiveAlphafoldView,
