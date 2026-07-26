@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
     type BioXpProtocol,
     bioXpErrorText,
+    useConnectBioXp,
     useBioXpCommand,
     useBioXpEmergencyStop,
     useBioXpJobs,
@@ -76,6 +77,7 @@ const COMMISSIONING_COMMANDS: ReadonlyArray<{
 export function BioXpCockpit() {
     const statusQuery = useBioXpStatus(true);
     const jobsQuery = useBioXpJobs(true);
+    const connect = useConnectBioXp();
     const compileProtocol = useCompileBioXpProtocol();
     const submitProtocol = useSubmitBioXpProtocol();
     const executeCommand = useBioXpCommand();
@@ -223,9 +225,23 @@ export function BioXpCockpit() {
                         <h2 className="text-lg font-semibold">Connection Status</h2>
                         <p className="text-sm text-slate-400">{derived?.detail ?? 'Status request pending.'}</p>
                     </div>
-                    <span className="rounded border border-slate-700 px-3 py-1 text-sm font-semibold">
-                        {derived?.label ?? 'UNKNOWN'}
-                    </span>
+                    <div className="flex flex-wrap items-center gap-2">
+                        <span className="rounded border border-slate-700 px-3 py-1 text-sm font-semibold">
+                            {derived?.label ?? 'UNKNOWN'}
+                        </span>
+                        <button
+                            type="button"
+                            onClick={() => connect.mutate(undefined)}
+                            disabled={!connection?.configured || connection?.active === true || connect.isPending}
+                            className="rounded bg-cyan-700 px-3 py-1 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                            {connect.isPending
+                                ? 'Connecting…'
+                                : connection?.active
+                                    ? 'BioXP Connected'
+                                    : 'Connect / Reconnect BioXP'}
+                        </button>
+                    </div>
                 </div>
                 <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
                     <div><dt className="text-slate-500">configured</dt><dd>{String(connection?.configured ?? false)}</dd></div>
@@ -239,6 +255,7 @@ export function BioXpCockpit() {
                     <div><dt className="text-slate-500">target_url</dt><dd>{connection?.target_url ?? 'not configured'}</dd></div>
                 </dl>
                 {connection?.last_error && <p className="mt-3 text-sm text-red-300">last_error: {connection.last_error}</p>}
+                {connect.error && <p className="mt-3 text-sm text-red-300">Connect failed: {bioXpErrorText(connect.error)}</p>}
                 {status && !mutationAccessEnabled && (
                     <p className="mt-3 rounded border border-amber-600/50 bg-amber-500/10 p-3 text-sm text-amber-200">
                         Commissioning writes are disabled or were not advertised by the BMS server. Set <code>{mutationAccessSetting}</code>. No API key or secret is required.
