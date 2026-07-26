@@ -25,14 +25,15 @@ def canonical_run(*, run_state="planned"):
         "request": {
             "command": "initialize_oem_movement_lifecycle",
             "operator_ack": "INITIALIZE",
-            "expected_generation": 77,
+            "expected_generation": 7,
+            "bms_connection_generation": 77,
             "expected_machine_serial": 206,
             "expected_registry_sha256": REGISTRY,
             "expected_evidence_lock_sha256": EVIDENCE_LOCK,
             "idempotency_key": "plan-12345678",
             "mode": "dry_run",
             "inputs": {
-                "ownership_generation": 77,
+                "ownership_generation": 7,
                 "can_ready": True,
                 "board_test_mode": False,
                 "pipette_exists": None,
@@ -76,7 +77,7 @@ def canonical_run(*, run_state="planned"):
         "evidence_lock_identity_verified": True,
         "acquisition_id": "serial-206-acquisition",
         "machine_serial": 206,
-        "ownership_generation": 77,
+        "ownership_generation": 7,
         "transport_frames": [],
         "sequence": 1,
         "stages": [{
@@ -112,6 +113,7 @@ class FakeRobotClient:
                 "evidence_lock_verified": True,
                 "source_registry_identity_verified": True,
                 "machine_configuration_verified": True,
+                "ownership_generation": 7,
                 "plan_available": True,
                 "plan_blockers": [],
                 "live_creation_enabled": False,
@@ -223,7 +225,8 @@ def test_plan_is_fixed_dry_run_with_no_caller_motion_fields(monkeypatch):
                 "json_data": {
                     "command": "initialize_oem_movement_lifecycle",
                     "operator_ack": "INITIALIZE",
-                    "expected_generation": 77,
+                    "expected_generation": 7,
+                    "bms_connection_generation": 77,
                     "expected_machine_serial": 206,
                     "expected_registry_sha256": REGISTRY,
                     "expected_evidence_lock_sha256": EVIDENCE_LOCK,
@@ -248,6 +251,19 @@ def test_plan_requires_kill_switch_generation_and_fresh_process_observation(monk
     runtime.connection.value.observation_fresh = False
     assert client.post("/api/bioxp/oem-full-lifecycle/runs", json=request_payload()).status_code == 409
     assert runtime.connection.active_client.calls == []
+
+
+@pytest.mark.parametrize("generation", [True, "77", 77.0])
+def test_plan_and_cancel_reject_coerced_connection_generations(monkeypatch, generation):
+    client, _ = make_client(monkeypatch)
+    assert client.post(
+        "/api/bioxp/oem-full-lifecycle/runs",
+        json=request_payload(expected_generation=generation),
+    ).status_code == 422
+    assert client.post(
+        "/api/bioxp/oem-full-lifecycle/runs/run-12345678/cancel",
+        json=cancel_payload(expected_generation=generation),
+    ).status_code == 422
 
 
 def test_plan_refuses_robot_contract_blockers_before_mutation(monkeypatch):
@@ -287,13 +303,14 @@ def test_cancel_is_generation_freshness_gated_and_response_checked(monkeypatch):
     )
     assert response.status_code == 200
     assert runtime.connection.active_client.calls == [
-        ("oem_full_lifecycle_contract", {}),
+        ("get_oem_full_lifecycle_run", {"path_params": {"run_id": "run-12345678"}}),
         (
             "cancel_oem_full_lifecycle_run",
             {
                 "path_params": {"run_id": "run-12345678"},
                 "json_data": {
-                    "expected_generation": 77,
+                    "expected_generation": 7,
+                    "bms_connection_generation": 77,
                     "expected_machine_serial": 206,
                     "expected_registry_sha256": REGISTRY,
                     "expected_evidence_lock_sha256": EVIDENCE_LOCK,
@@ -315,6 +332,60 @@ def test_plan_rejects_unsafe_robot_response(monkeypatch):
     response = client.post("/api/bioxp/oem-full-lifecycle/runs", json=request_payload())
     assert response.status_code == 502
     assert "unsafe" in response.json()["detail"].lower()
+
+
+@pytest.mark.parametrize("field", [
+    "source_authority_verified",
+    "configuration_verified",
+    "transport_owner_verified",
+    "controller_acknowledged",
+])
+def test_plan_rejects_contradictory_dry_run_authority_claims(monkeypatch, field):
+    client, runtime = make_client(monkeypatch)
+    runtime.connection.active_client.responses["plan_oem_full_lifecycle"][field] = True
+    response = client.post("/api/bioxp/oem-full-lifecycle/runs", json=request_payload())
+    assert response.status_code == 502
+
+
+def test_plan_rejects_unverified_evidence_lock_identity(monkeypatch):
+    client, runtime = make_client(monkeypatch)
+    runtime.connection.active_client.responses["plan_oem_full_lifecycle"]["evidence_lock_identity_verified"] = False
+    response = client.post("/api/bioxp/oem-full-lifecycle/runs", json=request_payload())
+    assert response.status_code == 502
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda run: run.update({"controller_acknowledged": True}),
+    lambda run: run.update({"source_authority_verified": True}),
+    lambda run: run.update({"configuration_verified": True}),
+    lambda run: run.update({"transport_owner_verified": True}),
+    lambda run: run.update({"evidence_lock_identity_verified": False}),
+    lambda run: run["stages"][0].update({"physical_motion_commanded": True}),
+    lambda run: run["stages"][0].update({"controller_acknowledged": True}),
+])
+def test_cancel_rejects_contradictory_authority_or_no_effect_claims(monkeypatch, mutate):
+    client, runtime = make_client(monkeypatch)
+    mutate(runtime.connection.active_client.responses["cancel_oem_full_lifecycle_run"])
+    response = client.post(
+        "/api/bioxp/oem-full-lifecycle/runs/run-12345678/cancel",
+        json=cancel_payload(),
+    )
+    assert response.status_code == 502
+
+
+def test_cancel_does_not_depend_on_current_plan_availability(monkeypatch):
+    client, runtime = make_client(monkeypatch)
+    contract = runtime.connection.active_client.responses["oem_full_lifecycle_contract"]
+    contract["plan_available"] = False
+    contract["plan_blockers"] = ["current robot predicate unavailable"]
+    contract["machine_configuration_verified"] = False
+
+    response = client.post(
+        "/api/bioxp/oem-full-lifecycle/runs/run-12345678/cancel",
+        json=cancel_payload(),
+    )
+    assert response.status_code == 200
+    assert response.json()["run_state"] == "cancelled"
 
 
 def test_plan_rejects_mismatched_canonical_request_echo(monkeypatch):
@@ -369,15 +440,17 @@ def test_plan_revalidates_returned_authority_identity(monkeypatch):
 def test_cancel_rereads_generation_and_freshness_immediately_before_mutation(monkeypatch):
     client, runtime = make_client(monkeypatch)
 
-    def stale_after_contract(route_name):
-        if route_name == "oem_full_lifecycle_contract":
+    def stale_after_admitted_run(route_name):
+        if route_name == "get_oem_full_lifecycle_run":
             runtime.connection.value.generation = 78
             runtime.connection.value.observation_fresh = False
 
-    runtime.connection.active_client.on_request = stale_after_contract
+    runtime.connection.active_client.on_request = stale_after_admitted_run
     response = client.post(
         "/api/bioxp/oem-full-lifecycle/runs/run-12345678/cancel",
         json=cancel_payload(),
     )
     assert response.status_code == 409
-    assert runtime.connection.active_client.calls == [("oem_full_lifecycle_contract", {})]
+    assert runtime.connection.active_client.calls == [
+        ("get_oem_full_lifecycle_run", {"path_params": {"run_id": "run-12345678"}})
+    ]

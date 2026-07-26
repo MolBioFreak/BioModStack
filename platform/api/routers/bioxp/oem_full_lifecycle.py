@@ -16,7 +16,7 @@ router = APIRouter()
 class FullLifecyclePlanRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    expected_generation: int = Field(ge=1)
+    expected_generation: StrictInt = Field(ge=1)
     expected_machine_serial: Literal[206]
     expected_registry_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     expected_evidence_lock_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -26,7 +26,7 @@ class FullLifecyclePlanRequest(BaseModel):
 class FullLifecycleCancelRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    expected_generation: int = Field(ge=1)
+    expected_generation: StrictInt = Field(ge=1)
     expected_machine_serial: Literal[206]
     expected_registry_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     expected_evidence_lock_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -61,6 +61,7 @@ class _CanonicalPlanRequest(BaseModel):
     command: Literal["initialize_oem_movement_lifecycle"]
     operator_ack: Literal["INITIALIZE"]
     expected_generation: StrictInt = Field(ge=1)
+    bms_connection_generation: StrictInt = Field(ge=1)
     expected_machine_serial: Literal[206]
     expected_registry_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     expected_evidence_lock_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -223,16 +224,21 @@ def _validate_planned_run(
         raise HTTPException(status_code=502, detail="BioXP robot returned a mismatched lifecycle request echo")
     if (
         run.run_state != "planned"
+        or run.source_authority_verified is not False
+        or run.configuration_verified is not False
+        or run.transport_owner_verified is not False
         or run.physical_motion_commanded is not False
         or run.physical_effect_verified is not False
         or run.machine_serial != expected_machine_serial
         or run.registry_sha256 != expected_registry_sha256
         or run.evidence_lock_sha256 != expected_evidence_lock_sha256
         or run.evidence_lock_verified is not True
+        or run.evidence_lock_identity_verified is not True
         or run.source_registry_identity_verified is not True
         or run.machine_configuration_verified is not True
         or run.controller_acknowledged is not False
         or run.postcondition_verified is not False
+        or run.ownership_generation != outbound["expected_generation"]
         or any(
             stage.physical_motion_commanded
             or stage.controller_acknowledged
@@ -287,10 +293,14 @@ async def plan_full_lifecycle(
         runtime, "oem_full_lifecycle_contract", expected_generation=request.expected_generation,
     )
     _validate_contract_for_plan(contract, request)
+    robot_generation = contract.get("ownership_generation")
+    if type(robot_generation) is not int or robot_generation < 1:
+        raise HTTPException(status_code=502, detail="BioXP robot returned an invalid ownership generation")
     payload = {
         "command": "initialize_oem_movement_lifecycle",
         "operator_ack": "INITIALIZE",
-        "expected_generation": request.expected_generation,
+        "expected_generation": robot_generation,
+        "bms_connection_generation": request.expected_generation,
         "expected_machine_serial": request.expected_machine_serial,
         "expected_registry_sha256": request.expected_registry_sha256,
         "expected_evidence_lock_sha256": request.expected_evidence_lock_sha256,
@@ -351,45 +361,65 @@ async def cancel_full_lifecycle_run(
     run_id: str = _RUN_ID,
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> dict[str, Any]:
-    contract = await _leased_robot_request(
-        runtime, "oem_full_lifecycle_contract", expected_generation=request.expected_generation,
-    )
-    authority_request = FullLifecyclePlanRequest(
+    admitted_response = await _leased_robot_request(
+        runtime,
+        "get_oem_full_lifecycle_run",
         expected_generation=request.expected_generation,
-        expected_machine_serial=request.expected_machine_serial,
-        expected_registry_sha256=request.expected_registry_sha256,
-        expected_evidence_lock_sha256=request.expected_evidence_lock_sha256,
-        idempotency_key="cancel-authority-check",
+        path_params={"run_id": run_id},
     )
-    _validate_contract_authority(contract, authority_request)
+    admitted = _parse_lifecycle_run(admitted_response)
+    if (
+        admitted.run_id != run_id
+        or admitted.request.bms_connection_generation != request.expected_generation
+        or admitted.machine_serial != request.expected_machine_serial
+        or admitted.registry_sha256 != request.expected_registry_sha256
+        or admitted.evidence_lock_sha256 != request.expected_evidence_lock_sha256
+    ):
+        raise HTTPException(status_code=409, detail="Lifecycle cancellation authority does not match the admitted run")
+    cancel_payload = {
+        "expected_generation": admitted.request.expected_generation,
+        "bms_connection_generation": request.expected_generation,
+        "expected_machine_serial": request.expected_machine_serial,
+        "expected_registry_sha256": request.expected_registry_sha256,
+        "expected_evidence_lock_sha256": request.expected_evidence_lock_sha256,
+    }
     response = await _leased_robot_request(
         runtime,
         "cancel_oem_full_lifecycle_run",
         expected_generation=request.expected_generation,
         path_params={"run_id": run_id},
-        json_data={
-            "expected_generation": request.expected_generation,
-            "expected_machine_serial": request.expected_machine_serial,
-            "expected_registry_sha256": request.expected_registry_sha256,
-            "expected_evidence_lock_sha256": request.expected_evidence_lock_sha256,
-        },
+        json_data=cancel_payload,
     )
     run = _parse_lifecycle_run(response)
     if (
         run.run_id != run_id
         or run.run_state != "cancelled"
+        or run.source_authority_verified is not False
+        or run.configuration_verified is not False
+        or run.transport_owner_verified is not False
+        or run.controller_acknowledged is not False
+        or run.postcondition_verified is not False
         or run.physical_motion_commanded is not False
         or run.physical_effect_verified is not False
         or run.machine_serial != request.expected_machine_serial
         or run.registry_sha256 != request.expected_registry_sha256
         or run.evidence_lock_sha256 != request.expected_evidence_lock_sha256
         or run.evidence_lock_verified is not True
+        or run.evidence_lock_identity_verified is not True
         or run.source_registry_identity_verified is not True
         or run.machine_configuration_verified is not True
-        or run.request.expected_generation != request.expected_generation
+        or run.request.expected_generation != admitted.request.expected_generation
+        or run.request.bms_connection_generation != request.expected_generation
         or run.request.expected_machine_serial != request.expected_machine_serial
         or run.request.expected_registry_sha256 != request.expected_registry_sha256
         or run.request.expected_evidence_lock_sha256 != request.expected_evidence_lock_sha256
+        or any(
+            stage.physical_motion_commanded
+            or stage.controller_acknowledged
+            or stage.postcondition_verified
+            or stage.physical_effect_verified
+            for stage in run.stages
+        )
     ):
         raise HTTPException(status_code=502, detail="BioXP robot returned an unsafe or malformed lifecycle cancellation")
     return response
