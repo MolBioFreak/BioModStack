@@ -64,3 +64,12 @@ test('physical actions require click-time confirmation and carry generation-boun
     assert.match(cockpit, /operator_ack: 'STOP_AXIS'/);
     assert.match(cockpit, /Physical motion may occur/);
 });
+
+test('component stop has an independent mutation lane and stays available while a run is pending', () => {
+    for (const marker of [
+        'const stopCommand = useBioXpCommand();',
+        'stopCommand.mutate({',
+        'disabled={!axisStopAvailable || stopCommand.isPending}',
+    ]) assert.ok(cockpit.includes(marker), marker);
+    assert.ok(!cockpit.includes('disabled={!axisStopAvailable || executeCommand.isPending}'));
+});
