@@ -98,7 +98,9 @@ export class MolstarDirectSceneEngineAdapter implements MolstarEngineAdapter {
 
     async loadScene(state: StructureSceneState, signal: AbortSignal): Promise<ViewerResult<void>> {
         if (signal.aborted) return viewerCancelled('Scene load was cancelled before translation');
-        const documents = documentsForDirectMolstar(state);
+        const documents = state.molecularDynamics?.playbackCapability.supported
+            ? viewerOk([])
+            : documentsForDirectMolstar(state);
         if (documents.status !== 'ok') return documents;
         try {
             await this.adapter.loadScene(documents.value, state);
