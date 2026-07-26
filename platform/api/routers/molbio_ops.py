@@ -417,7 +417,7 @@ class DnaWeaverPlanRequest(BaseModel):
     vendor_name: str = Field(
         default="Configured commercial DNA vendor", min_length=1, max_length=200
     )
-    price_per_bp: float = Field(default=0.15, ge=0.0, le=1000.0, allow_inf_nan=False)
+    price_per_bp: float = Field(default=0.08, ge=0.0, le=1000.0, allow_inf_nan=False)
     lead_time_days: float = Field(default=10.0, ge=0.0, le=3650.0, allow_inf_nan=False)
 
 
