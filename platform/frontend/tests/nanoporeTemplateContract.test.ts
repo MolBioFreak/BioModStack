@@ -19,15 +19,30 @@ test('Nanopore FASTQ launch defaults stay compatible with bundled minimap2', () 
     assert.match(cloneState, /fastqMinimap2Preset: p\.fastq_minimap2_preset \?\? 'map-ont'/u);
 });
 
-test('Nanopore FASTQ launch is gated on reference input and finite numeric bounds', () => {
+test('Nanopore FASTQ launch is gated on reference input, finite numeric bounds, and a selected QC or clone workflow', () => {
     const template = readSource('src/components/NanoporeTemplate.tsx');
 
     assert.match(template, /const hasFastqReferenceInput = useMemo/u);
-    assert.match(template, /return fastqPath\.trim\(\) !== '' && runFastqQc && hasFastqReferenceInput && hasValidFastqNumericControls/u);
+    assert.match(template, /&& \(runFastqQc \|\| runAssembly\)\s+&& hasFastqReferenceInput\s+&& hasValidFastqNumericControls/u);
     assert.match(template, /FASTQ plasmid QC requires a reference FASTA path or a pasted\/created FASTA sequence/u);
+    assert.match(template, /Choose either FASTQ plasmid QC or vendor clone validation before submitting a FASTQ analysis/u);
     assert.match(template, /function coerceIntegerInput/u);
     assert.match(template, /FASTQ_MAX_IGV_REPORT_MAX_SITES/u);
     assert.match(template, /max=\{FASTQ_MAX_IGV_REPORT_MAX_SITES\}/u);
+});
+
+test('NGS exposes named workflow choices with input and output expectations before the detailed form', () => {
+    const template = readSource('src/components/NanoporeTemplate.tsx');
+
+    assert.match(template, /Choose what you want to do/u);
+    assert.match(template, /Validate a known plasmid \/ clone from FASTQ/u);
+    assert.match(template, /QC plasmid reads/u);
+    assert.match(template, /Basecall DNA simplex/u);
+    assert.match(template, /Basecall RNA/u);
+    assert.match(template, /Basecall DNA duplex/u);
+    assert.match(template, /Call modified bases/u);
+    assert.match(template, /Classify and demultiplex RBK114/u);
+    assert.match(template, /How to use this page:/u);
 });
 
 test('Nanopore FASTQ CLI preview points at the executable standalone entrypoint', () => {
