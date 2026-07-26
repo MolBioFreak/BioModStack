@@ -26,6 +26,7 @@ from database import (
 
 from .contracts import (
     ContractValidationError,
+    canonical_json_bytes,
     canonical_sha256,
     validate_contract_bundle,
     validate_schema,
@@ -617,6 +618,32 @@ async def ingest_result_bundle(
             )
         except (ContractValidationError, StateLandscapeAnalysisError, KeyError, TypeError) as exc:
             raise ConformationalPersistenceError("state landscape analysis binding validation failed") from exc
+    # The inline index payload is useful for one-pass validation, but it is not
+    # the immutable export. A requested state analysis must bind exactly to the
+    # canonical bytes of its registered derived artifact before any record or
+    # projection write is permitted.
+    if proposed_state_analysis is not None:
+        expected_bytes = canonical_json_bytes(proposed_state_analysis)
+        expected_path = "derived/cm_state_landscape_analysis_v1.json"
+        state_artifacts = [
+            item for item, _path in verified_artifacts
+            if item.get("semantic_role") == "state_landscape_analysis"
+        ]
+        if len(state_artifacts) != 1:
+            raise ConformationalPersistenceError(
+                "state landscape analysis requires exactly one registered immutable artifact"
+            )
+        state_artifact = state_artifacts[0]
+        if (
+            state_artifact.get("candidate_id") is not None
+            or state_artifact.get("relative_path") != expected_path
+            or state_artifact.get("sha256") != canonical_sha256(proposed_state_analysis)
+            or state_artifact.get("bytes") != len(expected_bytes)
+        ):
+            raise ConformationalPersistenceError(
+                "state landscape analysis artifact does not bind canonical analysis bytes"
+            )
+
     validated_optional_records: list[tuple[str, str, Mapping[str, Any]]] = []
     for bundle_key, record_type in optional_records.items():
         value = bundle.get(bundle_key)
@@ -794,11 +821,12 @@ async def state_landscape_analysis_artifact(
     session: AsyncSession,
     header: ConformationalMappingStateLandscapeAnalysisHeader,
 ) -> ConformationalMappingArtifact | None:
-    """Return an unambiguous registered byte artifact matching the authoritative content hash."""
+    """Return the single request-local immutable state-analysis export."""
 
     artifacts = list((await session.execute(
         select(ConformationalMappingArtifact).where(
             ConformationalMappingArtifact.request_id == header.request_id,
+            ConformationalMappingArtifact.role == "state_landscape_analysis",
             ConformationalMappingArtifact.content_sha256 == header.content_sha256,
         ).order_by(ConformationalMappingArtifact.artifact_id)
     )).scalars().all())

@@ -1321,6 +1321,11 @@ async def state_landscape_analysis_summary(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     pairs = await state_landscape_analysis_pair_summaries(session, header)
     artifact = await state_landscape_analysis_artifact(session, header)
+    if artifact is None:
+        raise HTTPException(
+            status_code=409,
+            detail="state landscape analysis immutable export is unavailable or ambiguous",
+        )
     return {
         "request_id": request_id,
         "analysis_id": header.analysis_id,
