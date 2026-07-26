@@ -230,12 +230,20 @@ def test_release_installs_operator_frontend_for_managed_api(tmp_path: Path, monk
         ),
     )
     backend = release.ProductionReleaseBackend(repo_root=tmp_path, allow_first_install=True)
+    backend.identity = release.BuildIdentity(
+        "0123456789abcdef0123456789abcdef01234567",
+        "operator-release",
+        "2026-07-26T19:30:00Z",
+    )
 
     backend.install_units()
 
     frontend = (systemd_dir / release.services.FRONTEND_SERVICE).read_text()
     assert "BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:8000" in frontend
     assert "BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:18002" not in frontend
+    assert "VITE_BMS_BUILD_SHA=0123456789abcdef0123456789abcdef01234567" in frontend
+    assert "VITE_BMS_BUILD_ID=operator-release" in frontend
+    assert "VITE_BMS_BUILD_TIME=2026-07-26T19:30:00Z" in frontend
     assert calls == ["stop-old-runtime", "install-container", "daemon-reload"]
 
 
@@ -293,6 +301,14 @@ def test_release_validates_operator_frontend_proxy_and_owner(tmp_path: Path, mon
         "http://api/health": (200, payload),
         "http://stable/bms/": (200, b"<html>stable</html>"),
         release.OPERATOR_FRONTEND_URL: (200, b"<html>operator</html>"),
+        release.OPERATOR_FRONTEND_BUILD_IDENTITY_URL: (
+            200,
+            (
+                'import.meta.env = {"VITE_BMS_BUILD_SHA":"'
+                + revision
+                + '","VITE_BMS_BUILD_ID":"operator","VITE_BMS_BUILD_TIME":"2026-07-26T00:00:00Z"};'
+            ).encode(),
+        ),
         release.OPERATOR_API_HEALTH_URL: (200, payload),
     }
     monkeypatch.setattr(backend, "_fetch", lambda url: responses[url])
@@ -310,6 +326,36 @@ def test_release_validates_operator_frontend_proxy_and_owner(tmp_path: Path, mon
     )
 
     backend.validate_runtime(identity)
+
+
+def test_release_rejects_mismatched_operator_frontend_build_identity(
+    tmp_path: Path, monkeypatch
+) -> None:
+    revision = "0123456789abcdef0123456789abcdef01234567"
+    identity = release.BuildIdentity(revision, "operator", "2026-07-26T00:00:00Z")
+    backend = release.ProductionReleaseBackend(
+        repo_root=tmp_path,
+        api_url="http://api/health",
+        browser_url="http://stable/bms/",
+        allow_first_install=True,
+    )
+    payload = (
+        '{"readiness":{"ready":true},"build":{"revision":"' + revision + '"}}'
+    ).encode()
+    responses = {
+        "http://api/health": (200, payload),
+        "http://stable/bms/": (200, b"<html>stable</html>"),
+        release.OPERATOR_FRONTEND_URL: (200, b"<html>operator</html>"),
+        release.OPERATOR_FRONTEND_BUILD_IDENTITY_URL: (
+            200,
+            b'import.meta.env = {"VITE_BMS_BUILD_SHA":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","VITE_BMS_BUILD_ID":"operator","VITE_BMS_BUILD_TIME":"2026-07-26T00:00:00Z"};',
+        ),
+        release.OPERATOR_API_HEALTH_URL: (200, payload),
+    }
+    monkeypatch.setattr(backend, "_fetch", lambda url: responses[url])
+
+    with pytest.raises(release.ReleaseValidationError, match="frontend build identity"):
+        backend.validate_runtime(identity)
 
 
 class _FailingValidationBackend:

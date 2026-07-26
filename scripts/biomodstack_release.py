@@ -51,6 +51,9 @@ IMAGE_DEFAULTS = {
     "bms-web": "biomodstack/web:local",
 }
 OPERATOR_FRONTEND_URL = "http://127.0.0.1:5173/bms/"
+OPERATOR_FRONTEND_BUILD_IDENTITY_URL = (
+    "http://127.0.0.1:5173/src/lib/buildIdentity.ts"
+)
 OPERATOR_API_HEALTH_URL = "http://127.0.0.1:5173/api/health"
 
 
@@ -89,6 +92,8 @@ class BuildIdentity:
             raise ValueError("release revision must be a full 40-character lowercase git SHA")
         if not self.build_id.strip() or not self.build_time.strip():
             raise ValueError("release build id and build time must be non-empty")
+        if any(character.isspace() for character in self.build_id + self.build_time):
+            raise ValueError("release build id and build time must not contain whitespace")
 
     def as_environment(self) -> dict[str, str]:
         return {
@@ -259,7 +264,10 @@ class ProductionReleaseBackend:
             project_root=self.repo_root,
             runtime_mode=services.CONTAINER_RUNTIME_MODE,
         )
-        rendered[services.FRONTEND_SERVICE] = self._operator_frontend_unit()
+        # Snapshot only needs the complete unit-name set. Candidate frontend
+        # rendering requires the new BuildIdentity, which is not available until
+        # after this known-good snapshot is durable.
+        rendered[services.FRONTEND_SERVICE] = ""
         systemd_dir = services.get_user_systemd_dir()
         snapshot: dict[str, str | None] = {}
         for unit_name in rendered:
@@ -270,6 +278,10 @@ class ProductionReleaseBackend:
         return snapshot
 
     def _operator_frontend_unit(self) -> str:
+        if self.identity is None:
+            raise ReleaseValidationError(
+                "operator frontend unit requires the exact release build identity"
+            )
         unit = services.render_user_units(
             project_root=self.repo_root,
             runtime_mode=services.DEV_RUNTIME_MODE,
@@ -290,7 +302,10 @@ class ProductionReleaseBackend:
         replacement = (
             f"Environment=BMS_DEV_API_PROXY_TARGET={managed_target}\n"
             "# The operator-facing Vite origin must proxy the managed core API.\n"
-            f"ExecStartPre=/usr/bin/sh -c 'test \"$BMS_DEV_API_PROXY_TARGET\" = \"{managed_target}\"'"
+            f"ExecStartPre=/usr/bin/sh -c 'test \"$BMS_DEV_API_PROXY_TARGET\" = \"{managed_target}\"'\n"
+            f"Environment=VITE_BMS_BUILD_SHA={self.identity.revision}\n"
+            f"Environment=VITE_BMS_BUILD_ID={self.identity.build_id}\n"
+            f"Environment=VITE_BMS_BUILD_TIME={self.identity.build_time}"
         )
         return unit.replace(original, replacement)
 
@@ -454,6 +469,39 @@ class ProductionReleaseBackend:
         operator_status, operator_body = self._fetch(OPERATOR_FRONTEND_URL)
         if operator_status != 200 or b"<html" not in operator_body.lower():
             raise ReleaseValidationError("operator frontend did not return the BioModStack HTML shell")
+        if identity is not None:
+            identity_status, identity_body = self._fetch(
+                OPERATOR_FRONTEND_BUILD_IDENTITY_URL
+            )
+            if identity_status != 200:
+                raise ReleaseValidationError(
+                    f"operator frontend build identity returned HTTP {identity_status}"
+                )
+            match = re.search(
+                rb"import\.meta\.env\s*=\s*(\{.*?\});", identity_body, re.DOTALL
+            )
+            if match is None:
+                raise ReleaseValidationError(
+                    "operator frontend build identity module is malformed"
+                )
+            try:
+                frontend_environment = json.loads(match.group(1))
+            except (TypeError, ValueError) as exc:
+                raise ReleaseValidationError(
+                    "operator frontend build identity module is malformed"
+                ) from exc
+            expected_frontend_identity = {
+                "VITE_BMS_BUILD_SHA": identity.revision,
+                "VITE_BMS_BUILD_ID": identity.build_id,
+                "VITE_BMS_BUILD_TIME": identity.build_time,
+            }
+            if any(
+                frontend_environment.get(key) != value
+                for key, value in expected_frontend_identity.items()
+            ):
+                raise ReleaseValidationError(
+                    "operator frontend build identity does not match the built release"
+                )
         proxy_status, proxy_body = self._fetch(OPERATOR_API_HEALTH_URL)
         if proxy_status != 200:
             raise ReleaseValidationError(f"operator API proxy returned HTTP {proxy_status}")
