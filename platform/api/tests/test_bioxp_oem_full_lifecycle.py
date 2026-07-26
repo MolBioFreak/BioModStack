@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -168,6 +169,7 @@ class FakeConnection:
     def __init__(self):
         self.active_client = FakeRobotClient()
         self.value = FakeSnapshot()
+        self.lease_entries = 0
 
     def snapshot(self):
         return self.value
@@ -189,6 +191,19 @@ class FakeConnection:
         if require_fresh and self.value.observation_fresh is not True:
             raise ConnectionStateError("A fresh process-local BioXP status observation is required")
         return await self.active_client.request(route_name, **kwargs)
+
+    @asynccontextmanager
+    async def active_request_lease(self, *, expected_generation, require_fresh=True):
+        from services.bioxp.errors import ConnectionStateError
+
+        if not self.value.active or self.active_client is None:
+            raise ConnectionStateError("BioXP saved profile is not actively connected")
+        if self.value.generation != expected_generation:
+            raise ConnectionStateError("Expected connection generation does not match the active generation")
+        if require_fresh and self.value.observation_fresh is not True:
+            raise ConnectionStateError("A fresh process-local BioXP status observation is required")
+        self.lease_entries += 1
+        yield self.active_client
 
 
 def make_client(monkeypatch, *, mutations=True):
@@ -244,6 +259,7 @@ def test_plan_is_fixed_dry_run_with_no_caller_motion_fields(monkeypatch):
     client, runtime = make_client(monkeypatch)
     response = client.post("/api/bioxp/oem-full-lifecycle/runs", json=request_payload())
     assert response.status_code == 200
+    assert runtime.connection.lease_entries == 1
     assert runtime.connection.active_client.calls == [
         ("oem_full_lifecycle_contract", {}),
         (
@@ -443,18 +459,18 @@ def test_plan_rejects_noncanonical_run_and_stage_shapes(monkeypatch, mutate):
     assert "malformed" in response.json()["detail"].lower()
 
 
-def test_plan_rereads_generation_and_freshness_immediately_before_mutation(monkeypatch):
+def test_plan_holds_one_generation_lease_through_durable_readback(monkeypatch):
     client, runtime = make_client(monkeypatch)
 
-    def stale_after_contract(route_name):
-        if route_name == "oem_full_lifecycle_contract":
-            runtime.connection.value.generation = 78
-            runtime.connection.value.observation_fresh = False
-
-    runtime.connection.active_client.on_request = stale_after_contract
     response = client.post("/api/bioxp/oem-full-lifecycle/runs", json=request_payload())
-    assert response.status_code == 409
-    assert runtime.connection.active_client.calls == [("oem_full_lifecycle_contract", {})]
+
+    assert response.status_code == 200
+    assert runtime.connection.lease_entries == 1
+    assert [route for route, _ in runtime.connection.active_client.calls] == [
+        "oem_full_lifecycle_contract",
+        "plan_oem_full_lifecycle",
+        "get_oem_full_lifecycle_run",
+    ]
 
 
 def test_plan_revalidates_returned_authority_identity(monkeypatch):
