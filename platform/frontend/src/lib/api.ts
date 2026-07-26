@@ -2177,6 +2177,7 @@ export interface GibsonAssemblyRequest {
 
 export interface DnaWeaverPlanRequest {
     target_sequence: string;
+    target_sequence_id?: string;
     circular?: boolean;
     min_fragment_length?: number;
     max_fragment_length?: number;
@@ -2186,18 +2187,41 @@ export interface DnaWeaverPlanRequest {
     lead_time_days?: number;
 }
 
+export interface DnaWeaverPlanSaveRequest extends DnaWeaverPlanRequest {
+    selected_plan_checksum: string;
+    new_name?: string;
+    save_description?: string;
+}
+
+export interface DnaWeaverQualityCheck {
+    check_id: string;
+    status: 'pass' | 'advisory' | 'blocker';
+    detail: string;
+    [key: string]: unknown;
+}
+
 export interface DnaWeaverPlanResponse {
-    engine: string;
-    engine_version: string;
+    planner_engine: string;
+    planner_version: string;
     validator_engine: string;
     validator_version: string;
+    vendor_name: string;
     estimated_price?: number | null;
-    lead_time_days?: number | null;
-    source_intervals: Array<{ start: number; end: number }>;
+    estimated_lead_time_days?: number | null;
+    ordered_fragments: (AssemblyFragmentInput & { sequence_sha256: string })[];
+    quote: Record<string, unknown>;
     pydna_exact_candidate_count: number;
-    ordered_fragments: AssemblyFragmentInput[];
-    product: AssemblyProduct;
+    selected_product: AssemblyProduct;
+    target_checksum: string;
+    plan_checksum: string;
+    planning_parameters: Record<string, unknown>;
+    manufacturability_profile: string;
+    quality_checks: DnaWeaverQualityCheck[];
+    order_ready: boolean;
     warnings: string[];
+    validation_notes: string[];
+    saved_sequence?: NucleotideSequence | null;
+    message: string;
 }
 
 export interface GibsonDesignFragmentInput extends AssemblyFragmentInput {
@@ -2597,6 +2621,9 @@ export const saveGibsonAssembly = (data: GibsonAssemblyRequest) =>
 
 export const planDnaWeaverGibsonAssembly = (data: DnaWeaverPlanRequest) =>
     api.post<DnaWeaverPlanResponse>('/api/molbio/assembly/gibson/dnaweaver/plan', data);
+
+export const saveDnaWeaverGibsonAssembly = (data: DnaWeaverPlanSaveRequest) =>
+    api.post<DnaWeaverPlanResponse>('/api/molbio/assembly/gibson/dnaweaver/save', data);
 
 export const designGibsonAssembly = (data: GibsonDesignRequest) =>
     api.post<GibsonDesignResponse>('/api/molbio/assembly/gibson/design', data);

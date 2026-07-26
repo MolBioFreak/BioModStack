@@ -708,7 +708,7 @@ async def list_saved_gibson_workups(
     payload: list[SavedGibsonWorkupListItem] = []
     for seq in workups:
         params = seq.operation_params if isinstance(seq.operation_params, dict) else {}
-        fragments = params.get("source_fragments", params.get("fragments", []))
+        fragments = params.get("ordered_fragments", params.get("source_fragments", params.get("fragments", [])))
         primers = params.get("primers", [])
         payload.append(SavedGibsonWorkupListItem(
             id=seq.id,
