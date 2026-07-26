@@ -189,6 +189,10 @@ def _install_coordinate_ledger(ledger_path: Path, context_path: Path) -> None:
     DataDumper.dump_predictions = instrumented
 
 
+def _seal_coordinate_ledger(ledger_path: Path) -> None:
+    os.chmod(ledger_path, 0o440)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run Protenix inference with raw confidence dumps enabled.")
     parser.add_argument("--input", required=True, help="Input JSON file or directory.")
@@ -306,8 +310,7 @@ def main() -> None:
         infer_predict(runner, runner.configs)
 
     if args.cm_coordinate_ledger:
-        ledger_path = Path(args.cm_coordinate_ledger).resolve()
-        os.chmod(ledger_path, 0o440)
+        _seal_coordinate_ledger(Path(args.cm_coordinate_ledger).resolve())
 
 
 if __name__ == "__main__":

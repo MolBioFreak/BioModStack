@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import importlib.util
+import json
+import stat
+import sys
+import types
 from pathlib import Path
 
 
@@ -10,11 +15,42 @@ RUNTIME_SCRIPT_PATH = REPO_ROOT / "scripts" / "run_protenix_inference.py"
 ADAPTER_LAUNCHER_PATH = REPO_ROOT / "scripts" / "run_biomodstack_workflow_adapter.sh"
 
 
-def test_protenix_coordinate_ledger_is_appendable_until_inference_completes() -> None:
-    source = RUNTIME_SCRIPT_PATH.read_text(encoding="utf-8")
+def test_protenix_coordinate_ledger_appends_all_seeds_then_seals(tmp_path: Path, monkeypatch) -> None:
+    runner_module = types.ModuleType("runner")
+    dumper_module = types.ModuleType("runner.dumper")
 
-    assert "0o640," in source
-    assert "os.chmod(ledger_path, 0o440)" in source
+    class DataDumper:
+        def _get_ranker_indices(self, *, data):
+            return [0]
+
+        def dump_predictions(self, _pred_dict, dump_dir, pdb_id, _atom_array, _entity_poly_type, _seed):
+            predictions = Path(dump_dir) / "predictions"
+            predictions.mkdir(parents=True, exist_ok=True)
+            for suffix in (".cif", "_summary_confidence_sample_0.json", "_full_data_sample_0.json"):
+                name = f"{pdb_id}_sample_0{suffix}" if suffix == ".cif" else f"{pdb_id}{suffix}"
+                (predictions / name).write_text("{}", encoding="utf-8")
+
+    dumper_module.DataDumper = DataDumper
+    monkeypatch.setitem(sys.modules, "runner", runner_module)
+    monkeypatch.setitem(sys.modules, "runner.dumper", dumper_module)
+    spec = importlib.util.spec_from_file_location("bms_run_protenix", RUNTIME_SCRIPT_PATH)
+    assert spec and spec.loader
+    runtime = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runtime)
+
+    context = tmp_path / "context.json"
+    context.write_text(json.dumps({"schema_name": "cm_protenix_coordinate_context", "schema_version": 1, "target_by_pdb_id": {"target": "target-id"}}), encoding="utf-8")
+    ledger = tmp_path / "ledger.jsonl"
+    runtime._install_coordinate_ledger(ledger, context)
+    dumper = DataDumper()
+    dumper.base_dir = tmp_path
+    dumper.dump_predictions({}, tmp_path, "target", None, None, 1)
+    dumper.dump_predictions({}, tmp_path, "target", None, None, 2)
+
+    assert [json.loads(line)["coordinates"]["ordered_seed"] for line in ledger.read_text(encoding="utf-8").splitlines()] == [1, 2]
+    assert stat.S_IMODE(ledger.stat().st_mode) == 0o640
+    runtime._seal_coordinate_ledger(ledger)
+    assert stat.S_IMODE(ledger.stat().st_mode) == 0o440
 
 
 def test_protenix_binds_a_self_contained_declared_canonical_runtime() -> None:
