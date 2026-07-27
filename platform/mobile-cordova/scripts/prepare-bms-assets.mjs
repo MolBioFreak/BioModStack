@@ -919,6 +919,34 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
         && reportInExactUnit(report, 'biomodstack-workflow-adapter.service')
       ));
   };
+  const validHealth = (health) => {
+    const validFrontend = (report) => hasExactKeys(report, ['status']) && report.status === 200;
+    const validBuild = (build) => (
+      hasExactKeys(build, ['revision', 'build_id', 'build_time'])
+      && revisionPattern.test(String(build.revision || ''))
+      && nonEmptyBounded(build.build_id, 256)
+      && validBuildTime(build.build_time)
+    );
+    const validApi = (report) => (
+      hasExactKeys(report, ['status', 'payload'])
+      && report.status === 200
+      && hasExactKeys(report.payload, ['build', 'status', 'liveness', 'readiness'])
+      && report.payload.status === 'healthy'
+      && validBuild(report.payload.build)
+      && hasExactKeys(report.payload.liveness, ['alive', 'status'])
+      && report.payload.liveness.alive === true
+      && report.payload.liveness.status === 'alive'
+      && hasExactKeys(report.payload.readiness, ['ready'])
+      && report.payload.readiness.ready === true
+    );
+    return hasExactKeys(health, [
+      'local_frontend', 'tailnet_frontend', 'local_api', 'tailnet_api',
+    ])
+      && validFrontend(health.local_frontend)
+      && validFrontend(health.tailnet_frontend)
+      && validApi(health.local_api)
+      && validApi(health.tailnet_api);
+  };
   if (!expected || !payload || typeof payload !== 'object') reject();
   const baseKeys = [
     'selected_environment', 'runtime_mode', 'runtime_target', 'project_root',
@@ -944,6 +972,9 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
     || payload.tailnet_origin !== trustedOrigin
     || !revisionPattern.test(String(payload.project_revision || ''))
     || !revisionPattern.test(String(payload.selector_revision || ''))
+    || !hasExactKeys(payload.serve_handlers, ['/', '/api/tailnet-environment'])
+    || !hasExactKeys(payload.serve_handlers?.['/'], ['Proxy'])
+    || !hasExactKeys(payload.serve_handlers?.['/api/tailnet-environment'], ['Proxy'])
     || payload.serve_handlers?.['/']?.Proxy !== expected.serveRootProxy
     || payload.serve_handlers?.['/api/tailnet-environment']?.Proxy !== 'http://127.0.0.1:8001'
   ) reject();
@@ -952,7 +983,8 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
   const localBuild = health?.local_api?.payload?.build;
   const tailnetBuild = health?.tailnet_api?.payload?.build;
   if (
-    health?.local_frontend?.status !== 200
+    !validHealth(health)
+    || health?.local_frontend?.status !== 200
     || health?.tailnet_frontend?.status !== 200
     || health?.local_api?.status !== 200
     || health?.tailnet_api?.status !== 200
