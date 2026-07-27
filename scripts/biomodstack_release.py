@@ -417,6 +417,8 @@ class ProductionReleaseBackend:
             raise RuntimeError(
                 "incomplete running managed-container discovery: " + ", ".join(missing_containers)
             )
+        if containers:
+            self._validate_snapshot_container_listener_ownership(containers)
         images = {
             service: containers[service]["image_id"]
             if service in containers
@@ -954,18 +956,25 @@ class ProductionReleaseBackend:
                 raise ReleaseValidationError(
                     "listener ownership is not proven for workflow adapter"
                 )
-        core_root = unit_roots.get(services.CORE_RUNTIME_SERVICE)
-        if core_root is not None:
-            preflight = services.runtime_listener_preflight(
-                core_root, services.CONTAINER_RUNTIME_MODE
+
+    def _validate_snapshot_container_listener_ownership(
+        self, containers: Mapping[str, Mapping[str, str]]
+    ) -> None:
+        for service, component, port, owner_kind in (
+            ("bms-api", "api", 8000, "api"),
+            ("bms-web", "frontend", 18080, "frontend"),
+        ):
+            record = containers.get(service)
+            if not isinstance(record, Mapping):
+                raise ReleaseValidationError(f"running container truth is missing for {service}")
+            root = Path(record.get("root", ""))
+            ownership = services.runtime_listener_ownership(
+                component, port, owner_kind, root
             )
-            components = preflight.get("components", {})
-            for component in ("api", "frontend"):
-                record = components.get(component) if isinstance(components, Mapping) else None
-                if not isinstance(record, Mapping) or record.get("ok") is not True:
-                    raise ReleaseValidationError(
-                        f"listener ownership is not proven for {component}"
-                    )
+            if ownership.get("ok") is not True:
+                raise ReleaseValidationError(
+                    f"listener ownership is not proven for {component}"
+                )
 
     def _retry_release_validation(self, validator) -> None:
         last_error: ReleaseValidationError | None = None

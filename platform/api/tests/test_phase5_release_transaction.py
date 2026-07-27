@@ -343,6 +343,9 @@ def test_snapshot_prefers_running_managed_container_image_id_over_drifted_select
         repo_root=tmp_path,
         state_dir=tmp_path / "state",
     )
+    monkeypatch.setattr(
+        release.services, "runtime_listener_ownership", lambda *args, **kwargs: {"ok": True}
+    )
     backend.image_refs["bms-web"] = "registry.invalid/web:mutable"
 
     def fake_run(command, **kwargs):
@@ -1029,7 +1032,7 @@ def test_candidate_validation_failure_restores_and_revalidates_exact_prior_runti
         for event in start_events[-3:]
     )
     assert old_root in ownership_roots
-    assert ownership_roots[-2:] == [old_root, old_root]
+    assert ownership_roots[-1] == old_root
     for index, service in enumerate(release.BUILD_SERVICES, start=1):
         assert f"tag:sha256:{str(index) * 64}:{backend.image_refs[service]}" in events
 
@@ -1278,6 +1281,9 @@ def test_snapshot_captures_exact_multi_root_container_topology_without_selector_
     workflow_root = Path("/home/dalab/worktrees/bms-tailnet-production-03dea8c")
     core_root = Path("/home/dalab/worktrees/bms-tailnet-environment-selector-20260726")
     backend = release.ProductionReleaseBackend(repo_root=tmp_path, state_dir=tmp_path / "state")
+    monkeypatch.setattr(
+        release.services, "runtime_listener_ownership", lambda *args, **kwargs: {"ok": True}
+    )
     monkeypatch.setattr(
         backend,
         "_unit_snapshot",
