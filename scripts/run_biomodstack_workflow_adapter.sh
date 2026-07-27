@@ -20,6 +20,27 @@ pin_nextflow_java() {
     fi
 }
 
+SYSTEMD_AUTHORITY_KEYS=(
+    BMS_BUILD_SHA
+    BMS_TAILNET_CONTROL_SOURCE_REVISION
+    BMS_TAILNET_CONTROL_ALLOWED_TAILSCALE_USERS
+    BMS_TAILNET_CONTROL_TRUSTED_PROXY_HOSTS
+    BMS_WORKFLOW_ADAPTER_BIND_HOST
+)
+declare -A SYSTEMD_AUTHORITY_ENV=()
+for key in "${SYSTEMD_AUTHORITY_KEYS[@]}"; do
+    if [[ -v "$key" ]]; then
+        SYSTEMD_AUTHORITY_ENV["$key"]="${!key}"
+    fi
+done
+
+restore_systemd_authority_environment() {
+    local key
+    for key in "${!SYSTEMD_AUTHORITY_ENV[@]}"; do
+        export "$key=${SYSTEMD_AUTHORITY_ENV[$key]}"
+    done
+}
+
 if [ -f "$HOME/.biomodstack/env.sh" ]; then
     source "$HOME/.biomodstack/env.sh"
 fi
@@ -52,6 +73,7 @@ if [ -f "$CORE_RUNTIME_ENV_FILE" ]; then
 elif [ -f "$LEGACY_CORE_RUNTIME_ENV_FILE" ]; then
     load_env_file_overrides "$LEGACY_CORE_RUNTIME_ENV_FILE"
 fi
+restore_systemd_authority_environment
 pin_nextflow_java
 
 # Keep BioModStack dependency resolution isolated from shared caches that may

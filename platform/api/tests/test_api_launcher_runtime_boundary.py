@@ -17,6 +17,19 @@ def test_workflow_adapter_disables_proxy_header_client_rewriting() -> None:
     assert "--no-proxy-headers" in launcher
 
 
+def test_workflow_adapter_preserves_systemd_tailnet_authority_environment() -> None:
+    launcher = WORKFLOW_ADAPTER_LAUNCHER.read_text(encoding="utf-8")
+    for key in (
+        "BMS_BUILD_SHA",
+        "BMS_TAILNET_CONTROL_SOURCE_REVISION",
+        "BMS_TAILNET_CONTROL_ALLOWED_TAILSCALE_USERS",
+        "BMS_TAILNET_CONTROL_TRUSTED_PROXY_HOSTS",
+        "BMS_WORKFLOW_ADAPTER_BIND_HOST",
+    ):
+        assert key in launcher
+    assert launcher.count("restore_systemd_authority_environment") >= 2
+
+
 def test_dev_api_launcher_does_not_inherit_container_adapter_routing(tmp_path: Path) -> None:
     """The native dev API must collect host telemetry directly.
 
