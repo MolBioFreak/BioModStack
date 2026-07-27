@@ -39,7 +39,7 @@ test('OEM startup uses a click-time confirmation instead of a typed acknowledgem
 
 test('operator receives full handler evidence and explicit non-secret mutation setup', () => {
     for (const marker of [
-        'Latest Handler Result',
+        'Latest Delivery Result',
         'handler_response',
         'remote_acknowledged',
         'physical_effect_verified',

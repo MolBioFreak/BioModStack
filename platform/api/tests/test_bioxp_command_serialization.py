@@ -167,13 +167,15 @@ def test_activation_idempotent_replay_precedes_changed_runtime_admission() -> No
 
     class ActivatingClient:
         def __init__(self) -> None:
-            self.calls = 0
+            self.calls: list[str] = []
             self.connection: Any = None
 
-        async def request(self, *_: object, **__: object):
-            self.calls += 1
-            self.connection._snapshot = self.connection._snapshot.model_copy(update={"runtime_ready": True})
-            return {"acknowledged": True, "ok": True}
+        async def request(self, route_name: str, **__: object):
+            self.calls.append(route_name)
+            if route_name == "activate_usb_for_service":
+                self.connection._snapshot = self.connection._snapshot.model_copy(update={"runtime_ready": True})
+                return {"acknowledged": True, "ok": True}
+            return {"ok": True, "published": True, "snapshot_id": "post-activation"}
 
     async def scenario() -> None:
         client = ActivatingClient()
@@ -193,12 +195,12 @@ def test_activation_idempotent_replay_precedes_changed_runtime_admission() -> No
         second = await coordinator.execute(request, mutations_enabled=True)
 
         assert second == first
-        assert client.calls == 1
+        assert client.calls == ["activate_usb_for_service", "collect_hardware_snapshot"]
 
         connection._snapshot = connection._snapshot.model_copy(update={"generation": 5})
         with pytest.raises(CommandDeniedError, match="generation"):
             await coordinator.execute(request, mutations_enabled=True)
-        assert client.calls == 1
+        assert client.calls == ["activate_usb_for_service", "collect_hardware_snapshot"]
 
     asyncio.run(scenario())
 
