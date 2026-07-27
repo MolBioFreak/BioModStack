@@ -29,9 +29,11 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
     const queryClient = useQueryClient();
     const [selectedReplica, setSelectedReplica] = useState<number | null>(null);
     const [selectedPoint, setSelectedPoint] = useState<MDAnalysisPoint | null>(null);
+    const [selectedDisplayFrame, setSelectedDisplayFrame] = useState<number | null>(null);
     useEffect(() => {
         setSelectedReplica(null);
         setSelectedPoint(null);
+        setSelectedDisplayFrame(null);
     }, [jobId]);
     const summary = useQuery({ queryKey: ['md-summary', jobId], queryFn: () => fetchMDSummary(jobId) });
     const artifacts = useQuery({ queryKey: ['md-artifacts', jobId], queryFn: () => fetchMDArtifacts(jobId) });
@@ -68,14 +70,21 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
         },
     });
     const reports = analysis.data?.data.reports ?? [];
+    const playbackFrames = frameMap.data?.frames ?? [];
+    const selectedFrame = (
+        (selectedDisplayFrame == null
+            ? undefined
+            : playbackFrames.find((frame) => frame.display_frame === selectedDisplayFrame))
+        ?? (selectedPoint && selectedPoint.replica === activeReplica
+            ? frameMap.data?.frames.find((frame) => frame.source_frame === selectedPoint.source_frame)
+            : undefined)
+        ?? (playbackCapability?.supported ? playbackFrames[0] : undefined)
+    );
     const molecularDynamics = useMemo<MDSceneState | undefined>(() => {
         if (activeReplica == null || !summary.data || !playbackCapability) return undefined;
         const topology = (artifacts.data?.data.artifacts ?? []).find((item) => item.replica === activeReplica && item.semantic_role === 'analysis_topology');
         const trajectory = (artifacts.data?.data.artifacts ?? []).find((item) => item.replica === activeReplica && item.semantic_role === 'analysis_trajectory');
         if (!topology || !trajectory || trajectory.format !== 'xtc' || !topology.atom_order_identity || topology.atom_order_identity !== trajectory.atom_order_identity) return undefined;
-        const selectedFrame = selectedPoint && selectedPoint.replica === activeReplica
-            ? frameMap.data?.frames.find((frame) => frame.source_frame === selectedPoint.source_frame)
-            : undefined;
         return {
             activeReplica,
             replicas: [{
@@ -100,7 +109,7 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
                 framesPerSecond: 0,
             },
         };
-    }, [activeReplica, artifacts.data?.data.artifacts, frameMap.data, playbackCapability, selectedPoint, summary.data]);
+    }, [activeReplica, artifacts.data?.data.artifacts, playbackCapability, selectedFrame, summary.data]);
     const traces = useMemo<Data[]>(() => reports
         .filter((report) => report.status === 'completed' && report.replica != null && report.points?.length)
         .map((report) => ({
@@ -171,6 +180,22 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
                 <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
                     <div className="mb-3 flex items-center justify-between"><h2 className="font-semibold text-white">Replica final structure</h2>{finalStructures.length > 1 && <select value={finalStructure?.replica ?? ''} onChange={(event) => setSelectedReplica(Number(event.target.value))} className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-sm">{finalStructures.map((item) => <option key={item.id} value={item.replica}>Replica {item.replica}</option>)}</select>}</div>
                     {(finalStructure || molecularDynamics) ? <MolstarViewer structureUrl={finalStructure?.content_url ?? ''} format={finalStructure ? (finalStructure.format === 'cif' || finalStructure.format === 'mmcif' ? 'cif' : 'pdb') : 'pdb'} height={390} label={finalStructure ? `MD replica ${finalStructure.replica} final structure` : 'MD GRO+XTC trajectory'} showMetricWorkbench={false} molecularDynamics={molecularDynamics} artifactJobId={jobId} /> : <div className="py-20 text-center text-slate-400">No checksum-bound PDB/mmCIF final structure or GRO+XTC trajectory is available.</div>}
+                    {summaryData.trajectory_playback.supported && playbackFrames.length > 0 && selectedFrame && <div className="mt-3 rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-3 py-3 text-xs text-cyan-100">
+                        <div className="flex flex-wrap gap-2" aria-label="Governed trajectory display frames">
+                            {playbackFrames.map((frame) => <button
+                                key={frame.display_frame}
+                                type="button"
+                                data-bms-md-display-frame={frame.display_frame}
+                                aria-pressed={frame.display_frame === selectedFrame.display_frame}
+                                onClick={() => setSelectedDisplayFrame(frame.display_frame)}
+                                className={`rounded border px-2 py-1 ${frame.display_frame === selectedFrame.display_frame ? 'border-cyan-300 bg-cyan-400/20 text-white' : 'border-slate-600 bg-slate-950/50 text-slate-300 hover:border-cyan-500/60'}`}
+                            >{frame.display_frame}</button>)}
+                        </div>
+                        <div className="mt-2 font-medium" data-bms-md-frame-receipt="true">
+                            Display frame {selectedFrame.display_frame} · source {selectedFrame.source_frame} / {selectedFrame.time_ps} ps / step {selectedFrame.step}
+                        </div>
+                        <div className="mt-1 text-slate-400">Display indices address the bounded decoder; source/time/step values come from the governed frame map.</div>
+                    </div>}
                     {finalStructure && <div className="mt-3 space-y-1 rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-xs text-slate-300"><div>Replica {finalStructure.replica} · source frame {finalStructure.source_frame ?? 'n/a'} · {finalStructure.time_ps != null ? `${finalStructure.time_ps.toFixed(2)} ps` : 'time unavailable'}</div><div className="break-all text-slate-500">Structure SHA-256 {finalStructure.sha256}</div><div className="break-all text-slate-500">Source trajectory SHA-256 {finalStructure.source_trajectory_sha256 ?? 'unavailable'}</div><div className="text-slate-500">Selection: {finalStructure.selection_method ?? 'completed production final coordinates'}</div></div>}
                     {!summaryData.trajectory_playback.supported && <div className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs text-amber-200">Trajectory playback unavailable: {summaryData.trajectory_playback.reason}. Plot selections retain exact replica/time/source-frame provenance but do not move Mol*.</div>}
                 </div>
