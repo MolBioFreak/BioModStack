@@ -377,7 +377,6 @@ def _effective_runtime_features(request: Request, configured: Mapping[str, objec
 
 @router.get("/features")
 async def get_install_features(request: Request):
-    _require_local_admin(request)
     snapshot = _install_profile_response()
     resolved = snapshot.get("resolved") if isinstance(snapshot, Mapping) else {}
     features = resolved.get("features") if isinstance(resolved, Mapping) else None
