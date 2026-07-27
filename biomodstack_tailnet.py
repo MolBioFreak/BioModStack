@@ -26,6 +26,7 @@ from biomodstack_services import (
     ServiceManagerError,
     WORKFLOW_ADAPTER_SERVICE,
     daemon_reload,
+    git_build_identity,
     listener_pids,
     render_user_units,
     run_systemctl,
@@ -665,8 +666,9 @@ def _install_operator_development_frontend(root: Path, mutation_ledger: set[str]
     if expected_line not in frontend:
         raise TailnetEnvironmentError("could not render the canonical development frontend proxy contract")
     revision = _git_revision(root)
-    build_time = _run(["git", "-C", str(root), "show", "-s", "--format=%cI", "HEAD"]).stdout.strip()
-    build_id = f"test-{revision[:12]}"
+    build_identity = git_build_identity(root)
+    build_time = build_identity["build_time"]
+    build_id = build_identity["build_id"]
     home_line = f"Environment=BMS_HOME={root}"
     required_identity_lines = (
         home_line,

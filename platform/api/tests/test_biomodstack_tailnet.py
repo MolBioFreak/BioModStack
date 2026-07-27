@@ -546,7 +546,7 @@ def test_operator_development_frontend_is_pinned_to_isolated_dev_api(monkeypatch
                 "Environment=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:18002\n"
                 f"Environment=VITE_BMS_BUILD_SHA={'a' * 40}\n"
                 f"Environment=VITE_BMS_BUILD_ID=test-{'a' * 12}\n"
-                "Environment=VITE_BMS_BUILD_TIME=2026-07-26T20:00:00-05:00\n"
+                "Environment=VITE_BMS_BUILD_TIME=2026-07-27T01:00:00Z\n"
             )
         },
     )
@@ -557,11 +557,11 @@ def test_operator_development_frontend_is_pinned_to_isolated_dev_api(monkeypatch
     )
     monkeypatch.setattr(tailnet, "daemon_reload", lambda **kwargs: None)
     monkeypatch.setattr(tailnet, "_git_revision", lambda root: "a" * 40)
-    monkeypatch.setattr(
-        tailnet,
-        "_run",
-        lambda args: type("Result", (), {"stdout": "2026-07-26T20:00:00-05:00\n"})(),
-    )
+    monkeypatch.setattr(tailnet, "git_build_identity", lambda root: {
+        "revision": "a" * 40,
+        "build_id": f"test-{'a' * 12}",
+        "build_time": "2026-07-27T01:00:00Z",
+    })
 
     tailnet._install_operator_development_frontend(tmp_path)
 
@@ -577,6 +577,8 @@ def test_operator_development_frontend_is_pinned_to_isolated_dev_api(monkeypatch
     assert "http://127.0.0.1:8000" not in dropin
     assert f"VITE_BMS_BUILD_SHA={'a' * 40}" in unit
     assert f"VITE_BMS_BUILD_SHA={'a' * 40}" in dropin
+    assert "VITE_BMS_BUILD_TIME=2026-07-27T01:00:00Z" in unit
+    assert "VITE_BMS_BUILD_TIME=2026-07-27T01:00:00Z" in dropin
 
 
 def test_development_frontend_requires_every_exclusive_loopback_vite_owner(monkeypatch, tmp_path: Path) -> None:
@@ -1177,12 +1179,16 @@ def test_canonical_source_override_supersedes_old_dropins_without_deleting_them(
             "Environment=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:18002\n"
             f"Environment=VITE_BMS_BUILD_SHA={'b' * 40}\n"
             f"Environment=VITE_BMS_BUILD_ID=test-{'b' * 12}\n"
-            "Environment=VITE_BMS_BUILD_TIME=2026-07-26T20:00:00-05:00\n"
+            "Environment=VITE_BMS_BUILD_TIME=2026-07-27T01:00:00Z\n"
         )
     })
     monkeypatch.setattr(tailnet, "runtime_api_port", lambda mode, project_root=None: 18002 if mode == tailnet.DEV_RUNTIME_MODE else 8000)
     monkeypatch.setattr(tailnet, "_git_revision", lambda root: "b" * 40)
-    monkeypatch.setattr(tailnet, "_run", lambda args: type("Result", (), {"stdout": "2026-07-26T20:00:00-05:00\n"})())
+    monkeypatch.setattr(tailnet, "git_build_identity", lambda root: {
+        "revision": "b" * 40,
+        "build_id": f"test-{'b' * 12}",
+        "build_time": "2026-07-27T01:00:00Z",
+    })
     monkeypatch.setattr(tailnet, "daemon_reload", lambda **kwargs: None)
 
     tailnet._install_operator_development_frontend(tmp_path / "canonical")
