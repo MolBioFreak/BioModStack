@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import hashlib
 import json
 import os
 import re
@@ -868,20 +869,23 @@ class ProductionReleaseBackend:
             raise ReleaseValidationError(
                 f"operator frontend identity returned HTTP {identity_status}"
             )
-        observed = self._frontend_identity(identity_body)
-        if not allow_unsealed and (
-            observed["layer"] != "frontend"
-            or observed["revision"] != api_revision
-            or observed["revision"] == "unknown"
-            or observed["buildId"] in {"", "development"}
-            or observed["buildTime"] in {"", "unknown"}
-        ):
-            raise ReleaseValidationError("operator frontend identity tuple is not exact")
-        observed_identity = BuildIdentity(
-            observed["revision"], observed["buildId"], observed["buildTime"]
-        )
-        if expected_identity is not None and observed_identity != expected_identity:
-            raise ReleaseValidationError("operator frontend identity does not match the built release")
+        if allow_unsealed:
+            observed = {"sourceSha256": hashlib.sha256(identity_body).hexdigest()}
+        else:
+            observed = self._frontend_identity(identity_body)
+            if (
+                observed["layer"] != "frontend"
+                or observed["revision"] != api_revision
+                or observed["revision"] == "unknown"
+                or observed["buildId"] in {"", "development"}
+                or observed["buildTime"] in {"", "unknown"}
+            ):
+                raise ReleaseValidationError("operator frontend identity tuple is not exact")
+            observed_identity = BuildIdentity(
+                observed["revision"], observed["buildId"], observed["buildTime"]
+            )
+            if expected_identity is not None and observed_identity != expected_identity:
+                raise ReleaseValidationError("operator frontend identity does not match the built release")
         return {
             "api_revision": api_revision,
             "browser_html": True,
