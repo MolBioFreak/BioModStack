@@ -479,6 +479,7 @@ class ProductionReleaseBackend:
                 str(materialized_root / "compose.core-runtime.yml"),
                 "build",
                 "--pull",
+                "--no-cache",
                 *BUILD_SERVICES,
             ],
             cwd=materialized_root,
@@ -578,6 +579,21 @@ class ProductionReleaseBackend:
 
     def stop_installed_owner(self) -> None:
         self._stop_managed_units()
+        names = [CONTAINER_NAMES[service] for service in BUILD_SERVICES]
+        self._run(["docker", "rm", "--force", *names], check=False)
+        still_present: list[str] = []
+        for name in names:
+            state = self._run(
+                ["docker", "inspect", "--format", "{{.State.Running}}", name],
+                check=False,
+            )
+            if state.returncode == 0:
+                still_present.append(name)
+        if still_present:
+            raise ReleaseValidationError(
+                "managed containers remained present after removal: "
+                + ", ".join(still_present)
+            )
 
     def render_operator_frontend_unit(self, identity: BuildIdentity) -> str:
         frontend_root = self.repo_root / "platform" / "frontend"
@@ -714,6 +730,36 @@ class ProductionReleaseBackend:
             source = body.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise ReleaseValidationError("operator frontend identity is not UTF-8") from exc
+        transformed_env = re.search(r"import\.meta\.env\s*=\s*(\{[^\r\n]*\});", source)
+        if transformed_env is not None:
+            try:
+                env = json.loads(transformed_env.group(1))
+            except json.JSONDecodeError as exc:
+                raise ReleaseValidationError(
+                    "operator frontend identity has invalid transformed environment"
+                ) from exc
+            layer_match = re.search(r'\blayer\s*:\s*("(?:\\.|[^"\\])*")', source)
+            if layer_match is None:
+                raise ReleaseValidationError("operator frontend identity is missing layer")
+            try:
+                layer = json.loads(layer_match.group(1))
+            except json.JSONDecodeError as exc:
+                raise ReleaseValidationError(
+                    "operator frontend identity has invalid layer"
+                ) from exc
+            transformed_fields = {
+                "layer": layer,
+                "revision": env.get("VITE_BMS_BUILD_SHA"),
+                "buildId": env.get("VITE_BMS_BUILD_ID"),
+                "buildTime": env.get("VITE_BMS_BUILD_TIME"),
+            }
+            for field, value in transformed_fields.items():
+                if not isinstance(value, str):
+                    raise ReleaseValidationError(
+                        f"operator frontend identity is missing {field}"
+                    )
+            return transformed_fields
+
         values: dict[str, str] = {}
         for field in ("layer", "revision", "buildId", "buildTime"):
             match = re.search(
