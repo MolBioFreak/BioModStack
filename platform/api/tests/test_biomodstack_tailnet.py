@@ -72,6 +72,15 @@ def test_host_systemd_path_ignores_xdg_config_override(monkeypatch, tmp_path: Pa
     assert tailnet._host_user_systemd_dir() == Path.home() / ".config" / "systemd" / "user"
 
 
+def test_managed_image_receipt_accepts_only_exact_deploy_time_image_ids(monkeypatch) -> None:
+    expected = "sha256:" + ("a" * 64)
+    monkeypatch.setenv("BMS_MANAGED_API_IMAGE_ID", expected)
+    assert tailnet._managed_image_id("BMS_MANAGED_API_IMAGE_ID", tailnet.MANAGED_API_IMAGE_ID) == expected
+    monkeypatch.setenv("BMS_MANAGED_API_IMAGE_ID", "biomodstack/api:latest")
+    with pytest.raises(tailnet.TailnetEnvironmentError, match="exact Docker image ID"):
+        tailnet._managed_image_id("BMS_MANAGED_API_IMAGE_ID", tailnet.MANAGED_API_IMAGE_ID)
+
+
 def test_git_revision_rejects_dirty_or_nested_selector_source(tmp_path: Path) -> None:
     tailnet._run(["git", "-C", str(tmp_path), "init", "--quiet"])
     tracked = tmp_path / "selector.py"
