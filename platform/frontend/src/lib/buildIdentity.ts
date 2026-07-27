@@ -5,9 +5,11 @@ export type BuildIdentity = {
   buildTime: string
 }
 
-declare const __BMS_BUILD_METADATA__: Partial<BuildIdentity> | undefined
-
-const injected = typeof __BMS_BUILD_METADATA__ === 'undefined' ? {} : __BMS_BUILD_METADATA__
+const injected = {
+  revision: import.meta.env.VITE_BMS_BUILD_SHA,
+  buildId: import.meta.env.VITE_BMS_BUILD_ID,
+  buildTime: import.meta.env.VITE_BMS_BUILD_TIME,
+}
 
 export const buildIdentity: BuildIdentity = Object.freeze({
   layer: 'frontend',
