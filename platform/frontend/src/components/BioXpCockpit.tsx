@@ -123,7 +123,7 @@ const COMMISSIONING_COMMANDS: ReadonlyArray<{
     {
         command: 'collect_hardware_snapshot',
         label: 'Collect Hardware Snapshot',
-        detail: 'Serialized query-only collection. It never activates, recovers, homes, or moves hardware.',
+        detail: 'Explicit query-only diagnostic refresh. Connect, readiness probes, and synchronous semantic operations collect evidence automatically; this button never moves hardware.',
         tone: 'query',
     },
     {
@@ -342,13 +342,13 @@ export function BioXpCockpit() {
                         Commissioning writes are disabled or were not advertised by the BMS server. Set <code>{mutationAccessSetting}</code>. No API key or secret is required.
                     </p>
                 )}
-                <p className="mt-3 text-xs text-slate-500">UNKNOWN or STALE evidence never authorizes controls. Profile changes and connection actions are in the BioXP menu in the top bar. SAVED / DISCONNECTED is expected after an API restart.</p>
+                <p className="mt-3 text-xs text-slate-500">UNKNOWN or STALE evidence never authorizes controls. The saved managed target is restored automatically after API restart; a failed restore remains visibly disconnected and can be retried here.</p>
                 {statusQuery.isError && <p className="mt-3 text-sm text-red-300">Status unavailable; cached readiness and controls are suppressed.</p>}
             </section>
 
             <section className="rounded-xl border border-slate-800 bg-slate-950/70 p-5">
                 <h2 className="text-lg font-semibold">Profile</h2>
-                <p className="mt-1 text-sm text-slate-400">The saved target is masked on read. Connection activation is process-local and never restored automatically.</p>
+                <p className="mt-1 text-sm text-slate-400">The saved target is masked on read. Connection authority remains process-local, while managed API startup restores the saved profile without activating USB or moving hardware.</p>
             </section>
 
             <section className="rounded-xl border border-slate-800 bg-slate-950/70 p-5">
@@ -371,7 +371,7 @@ export function BioXpCockpit() {
                         );
                     })}
                 </div>
-                {!connection?.startup_lifecycle && <p className="mt-3 text-sm text-amber-300">Collect a hardware snapshot or probe the active robot to load lifecycle evidence.</p>}
+                {!connection?.startup_lifecycle && <p className="mt-3 text-sm text-amber-300">Automatic connect/readiness probing is loading lifecycle and controller evidence.</p>}
             </section>
 
             <section className="rounded-xl border border-violet-700/60 bg-violet-950/20 p-5">

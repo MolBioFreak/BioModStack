@@ -99,7 +99,15 @@ async def lifespan(app: FastAPI):
 
         bioxp_runtime = create_bioxp_runtime()
         app.state.bioxp_runtime = bioxp_runtime
-        logger.info("[STARTUP] BioXP control plane initialized disconnected")
+        await bioxp_runtime.start()
+        snapshot = bioxp_runtime.connection.snapshot()
+        logger.info(
+            "[STARTUP] BioXP control plane initialized active=%s reachable=%s runtime_ready=%s hardware_ready=%s",
+            snapshot.active,
+            snapshot.reachable,
+            snapshot.runtime_ready,
+            snapshot.hardware_ready,
+        )
     
     yield
     
