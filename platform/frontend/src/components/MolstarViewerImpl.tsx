@@ -170,7 +170,7 @@ export default function MolstarViewer({
 
     const buildRequestedScene = useCallback(() => {
         const primaryDocument = documents[0];
-        if (!primaryDocument) return undefined;
+        if (!primaryDocument && molecularDynamics?.playbackCapability.supported !== true) return undefined;
         const presentation = latestScenePresentationRef.current;
         return createStructureSceneState({
             ref: {
@@ -191,7 +191,7 @@ export default function MolstarViewer({
                     orderedDocumentIds: documents.map((document) => document.id),
                 },
             } : {}),
-            activeDocumentId: primaryDocument.id,
+            activeDocumentId: primaryDocument?.id ?? 'governed-md-topology',
             provenance: {
                 createdBy: 'MolstarViewer compatibility facade',
                 createdAt: new Date().toISOString(),
