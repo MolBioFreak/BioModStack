@@ -637,6 +637,21 @@ def _validation_backend(tmp_path: Path, **kwargs) -> release.ProductionReleaseBa
     )
 
 
+def test_frontend_identity_accepts_vite_transformed_import_meta_env() -> None:
+    body = b'''import.meta.env = {"VITE_BMS_BUILD_ID":"release-1","VITE_BMS_BUILD_SHA":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","VITE_BMS_BUILD_TIME":"2026-07-27T21:45:00Z"};const injected = {
+  revision: import.meta.env.VITE_BMS_BUILD_SHA,
+  buildId: import.meta.env.VITE_BMS_BUILD_ID,
+  buildTime: import.meta.env.VITE_BMS_BUILD_TIME
+};
+export const buildIdentity = Object.freeze({ layer: "frontend", revision: injected.revision });'''
+    assert release.ProductionReleaseBackend._frontend_identity(body) == {
+        "layer": "frontend",
+        "revision": "a" * 40,
+        "buildId": "release-1",
+        "buildTime": "2026-07-27T21:45:00Z",
+    }
+
+
 def test_validation_rejects_container_browser_only_when_operator_origin_is_down(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
