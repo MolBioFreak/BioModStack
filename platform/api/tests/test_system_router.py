@@ -262,6 +262,29 @@ def test_system_features_endpoint_returns_resolved_addon_flags(monkeypatch) -> N
     }
 
 
+def test_system_features_get_is_read_only_tailnet_safe(monkeypatch) -> None:
+    snapshot = {
+        "profile": {"features": {"bioxp": True}},
+        "resolved": {"features": {"bioxp": True}},
+    }
+    monkeypatch.setattr(system, "install_profile_snapshot", lambda profile=None: snapshot, raising=False)
+    request = SimpleNamespace(
+        client=SimpleNamespace(host="100.124.140.56"),
+        app=SimpleNamespace(
+            routes=[SimpleNamespace(path="/api/bioxp/status")],
+            openapi=lambda: {"paths": {"/api/bioxp/status": {}}},
+        ),
+    )
+
+    response = asyncio.run(system.get_install_features(request))  # type: ignore[arg-type]
+
+    assert response == {
+        "features": {"bioxp": True},
+        "configured_features": {"bioxp": True},
+        "dev_features": {"bioxp": False},
+    }
+
+
 def test_system_features_put_merges_feature_flags_into_install_profile(monkeypatch) -> None:
     saved_payloads: list[dict[str, object]] = []
 
