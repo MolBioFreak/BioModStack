@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-import sys
+import base64
+import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -150,10 +152,10 @@ def test_release_plan_is_explicit_and_validation_precedes_commit() -> None:
         "build-images-explicitly",
         "verify-generated-ownership",
         "verify-image-provenance",
-        "render-install-units",
-        "restart-container-runtime",
-        "validate-api-readiness-and-provenance",
-        "validate-browser-health",
+        "stop-installed-owner-before-unit-replacement",
+        "install-candidate-units",
+        "start-candidate-runtime",
+        "validate-all-runtime-surfaces-and-ownership",
         "commit-known-good",
     )
 
@@ -164,7 +166,13 @@ class _FailingValidationBackend:
 
     def snapshot_known_good(self):
         self.events.append("snapshot")
-        return {"images": {"bms-api": "sha256:old"}, "units": {}}
+        return {
+            "images": {
+                service: ("sha256:old" if service == "bms-api" else f"sha256:old-{service}")
+                for service in release.BUILD_SERVICES
+            },
+            "units": {},
+        }
 
     def build_images(self, identity):
         self.events.append(f"build:{identity.revision}")
@@ -175,20 +183,30 @@ class _FailingValidationBackend:
     def verify_image_provenance(self, identity):
         self.events.append("verify-images")
 
-    def install_units(self):
+    def stop_installed_owner(self):
+        self.events.append("stop-installed-owner")
+
+    def install_units(self, identity):
         self.events.append("install-units")
 
-    def restart_runtime(self):
-        self.events.append("restart")
+    def start_candidate(self):
+        self.events.append("start-candidate")
 
-    def validate_runtime(self, identity=None):
-        if identity is not None:
-            self.events.append("validate-new")
-            raise release.ReleaseValidationError("new runtime failed readiness")
+    def stop_candidate(self):
+        self.events.append("stop-candidate")
+
+    def validate_candidate_release(self, identity):
+        self.events.append("validate-new")
+        raise release.ReleaseValidationError("new runtime failed readiness")
+
+    def revalidate_known_good(self, snapshot):
         self.events.append("validate-rollback")
 
     def restore_known_good(self, snapshot):
         self.events.append(f"restore:{snapshot['images']['bms-api']}")
+
+    def restart_known_good(self, snapshot):
+        self.events.append("restart-old")
 
     def commit_known_good(self, snapshot, identity):
         self.events.append("commit")
@@ -208,11 +226,13 @@ def test_failed_validation_restores_and_revalidates_known_good_runtime() -> None
         f"build:{identity.revision}",
         "verify-ownership",
         "verify-images",
+        "stop-installed-owner",
         "install-units",
-        "restart",
+        "start-candidate",
         "validate-new",
+        "stop-candidate",
         "restore:sha256:old",
-        "restart",
+        "restart-old",
         "validate-rollback",
     ]
     assert "commit" not in backend.events
@@ -236,17 +256,26 @@ class _FirstInstallBuildFailureBackend:
     def verify_image_provenance(self, identity):
         raise AssertionError("not reached")
 
-    def install_units(self):
+    def stop_installed_owner(self):
         raise AssertionError("not reached")
 
-    def restart_runtime(self):
+    def install_units(self, identity):
+        raise AssertionError("not reached")
+
+    def start_candidate(self):
         raise AssertionError("first install has no runtime to restart")
+
+    def stop_candidate(self):
+        self.events.append("stop-candidate")
 
     def validate_runtime(self, identity=None):
         raise AssertionError("first install has no runtime to validate")
 
     def restore_known_good(self, snapshot):
         self.events.append("restore-units")
+
+    def restart_known_good(self, snapshot):
+        raise AssertionError("first install has no runtime to restart")
 
     def commit_known_good(self, snapshot, identity):
         raise AssertionError("not reached")
@@ -272,3 +301,684 @@ def test_first_install_build_failure_preserves_original_error_without_fake_resta
 def test_release_identity_requires_full_sha() -> None:
     with pytest.raises(ValueError, match="full 40-character"):
         release.BuildIdentity(revision="short", build_id="x", build_time="now")
+
+
+def test_release_backend_rejects_systemd_unsafe_release_root(tmp_path: Path) -> None:
+    unsafe_root = tmp_path / "unsafe root"
+    unsafe_root.mkdir()
+    with pytest.raises(release.ReleaseValidationError, match="systemd-safe"):
+        release.ProductionReleaseBackend(repo_root=unsafe_root, allow_first_install=True)
+
+
+def _managed_container_inspect(repo_root: Path, service: str) -> dict[str, object]:
+    return {
+        "Id": f"container-{service}",
+        "Image": f"sha256:running-{service}",
+        "State": {"Running": True},
+        "Config": {
+            "Labels": {
+                "com.docker.compose.service": service,
+                "com.docker.compose.project.working_dir": str(repo_root),
+                "com.docker.compose.project.config_files": str(
+                    repo_root / "compose.core-runtime.yml"
+                ),
+            }
+        },
+    }
+
+
+def test_snapshot_prefers_running_managed_container_image_id_over_drifted_selector(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installed_owner = (tmp_path / "installed-owner").resolve()
+    installed_owner.mkdir()
+    systemd_dir = tmp_path / "systemd"
+    systemd_dir.mkdir()
+    monkeypatch.setattr(release.services, "get_user_systemd_dir", lambda: systemd_dir)
+    backend = release.ProductionReleaseBackend(
+        repo_root=tmp_path,
+        state_dir=tmp_path / "state",
+    )
+    backend.image_refs["bms-web"] = "registry.invalid/web:mutable"
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["docker", "compose", "-f"] and "ps" in command:
+            assert command[3] == str(installed_owner / "compose.core-runtime.yml")
+            service = command[-1]
+            return subprocess.CompletedProcess(command, 0, f"container-{service}\n", "")
+        if command[:2] == ["docker", "inspect"]:
+            service = command[-1].removeprefix("container-")
+            payload = _managed_container_inspect(installed_owner, service)
+            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+        if command[:4] == ["systemctl", "--user", "is-active", command[-1]]:
+            return subprocess.CompletedProcess(command, 3, "inactive\n", "")
+        if command[:3] == ["docker", "image", "inspect"]:
+            return subprocess.CompletedProcess(command, 0, "sha256:selector-drift\n", "")
+        raise AssertionError(command)
+
+    monkeypatch.setattr(backend, "_run", fake_run)
+    monkeypatch.setattr(
+        backend,
+        "_snapshot_known_good_validation",
+        lambda units: {
+            "runtime_root": str(installed_owner),
+            "effective_units": {},
+            "surfaces": None,
+        },
+    )
+    snapshot = backend.snapshot_known_good()
+
+    assert snapshot["images"]["bms-web"] == "sha256:running-bms-web"
+    assert snapshot["containers"]["bms-web"]["id"] == "container-bms-web"
+    assert snapshot["containers"]["bms-web"]["service"] == "bms-web"
+    assert snapshot["image_refs"]["bms-web"] == "registry.invalid/web:mutable"
+
+
+def test_unit_snapshot_and_restore_include_frontend_dropins_and_active_truth_byte_exact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    systemd_dir = tmp_path / "systemd"
+    dropin_dir = systemd_dir / f"{release.services.FRONTEND_SERVICE}.d"
+    dropin_dir.mkdir(parents=True)
+    frontend = systemd_dir / release.services.FRONTEND_SERVICE
+    frontend.write_bytes(b"old frontend unit\n")
+    override = dropin_dir / "20-owner.conf"
+    override.write_bytes(b"[Service]\nEnvironment=OWNER=old\n")
+    monkeypatch.setattr(release.services, "get_user_systemd_dir", lambda: systemd_dir)
+    backend = release.ProductionReleaseBackend(
+        repo_root=tmp_path,
+        state_dir=tmp_path / "state",
+        allow_first_install=True,
+    )
+    commands: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        if command[:4] == ["systemctl", "--user", "is-active", command[-1]]:
+            active = command[-1] == release.services.FRONTEND_SERVICE
+            return subprocess.CompletedProcess(
+                command, 0 if active else 3, "active\n" if active else "inactive\n", ""
+            )
+        if command[:3] == ["docker", "compose", "-f"]:
+            return subprocess.CompletedProcess(command, 0, "", "")
+        if command[:3] == ["docker", "image", "inspect"]:
+            return subprocess.CompletedProcess(command, 1, "", "")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(backend, "_run", fake_run)
+    monkeypatch.setattr(
+        backend,
+        "_snapshot_known_good_validation",
+        lambda units: {
+            "runtime_root": None,
+            "effective_units": {},
+            "surfaces": None,
+        },
+    )
+    snapshot = backend.snapshot_known_good()
+    frontend_record = snapshot["units"][release.services.FRONTEND_SERVICE]
+    assert frontend_record["active"] is True
+    assert set(frontend_record["drop_ins"]) == {"20-owner.conf"}
+
+    frontend.write_bytes(b"candidate frontend\n")
+    override.write_bytes(b"candidate override\n")
+    (dropin_dir / "99-candidate.conf").write_bytes(b"candidate extra\n")
+    backend.restore_known_good(snapshot)
+    backend.restart_known_good(snapshot)
+
+    assert frontend.read_bytes() == b"old frontend unit\n"
+    assert override.read_bytes() == b"[Service]\nEnvironment=OWNER=old\n"
+    assert not (dropin_dir / "99-candidate.conf").exists()
+    assert ["systemctl", "--user", "start", release.services.FRONTEND_SERVICE] in commands
+
+
+def test_unit_restore_rejects_unsafe_unit_and_dropin_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    systemd_dir = tmp_path / "systemd"
+    systemd_dir.mkdir()
+    monkeypatch.setattr(release.services, "get_user_systemd_dir", lambda: systemd_dir)
+    backend = release.ProductionReleaseBackend(
+        repo_root=tmp_path,
+        state_dir=tmp_path / "state",
+        allow_first_install=True,
+    )
+    monkeypatch.setattr(
+        backend,
+        "_run",
+        lambda command, **kwargs: subprocess.CompletedProcess(command, 0, "", ""),
+    )
+    image_refs = dict(backend.image_refs)
+    images = {service: None for service in release.BUILD_SERVICES}
+    safe_units = {
+        unit_name: {"base": None, "drop_ins": {}, "active": False}
+        for unit_name in release.MANAGED_UNIT_NAMES
+    }
+    unsafe_unit = {
+        "images": images,
+        "image_refs": image_refs,
+        "units": {
+            **safe_units,
+            "../foreign.service": {"base": None, "drop_ins": {}, "active": False},
+        },
+    }
+    with pytest.raises(release.ReleaseRollbackError, match="unsafe unit"):
+        backend.restore_known_good(unsafe_unit)
+
+    unsafe_dropin = {
+        "images": images,
+        "image_refs": image_refs,
+        "units": {
+            **safe_units,
+            release.services.FRONTEND_SERVICE: {
+                **safe_units[release.services.FRONTEND_SERVICE],
+                "drop_ins": {"../escape.conf": ""},
+            },
+        },
+    }
+    with pytest.raises(release.ReleaseRollbackError, match="unsafe drop-in"):
+        backend.restore_known_good(unsafe_dropin)
+
+
+def _identity() -> release.BuildIdentity:
+    return release.BuildIdentity(
+        revision="0123456789abcdef0123456789abcdef01234567",
+        build_id="release-operator-7",
+        build_time="2026-07-27T15:04:05Z",
+    )
+
+
+def test_operator_frontend_unit_binds_exact_candidate_root_identity_and_prod_api(
+    tmp_path: Path,
+) -> None:
+    root = (tmp_path / "candidate-root").resolve()
+    backend = release.ProductionReleaseBackend(
+        repo_root=root,
+        state_dir=tmp_path / "state",
+        allow_first_install=True,
+    )
+    unit = backend.render_operator_frontend_unit(_identity())
+
+    assert f"PartOf={release.services.TARGET_UNIT}" in unit
+    assert (
+        f"After=network-online.target {release.services.CORE_RUNTIME_SERVICE}" in unit
+    )
+    assert f"WantedBy={release.services.TARGET_UNIT}" in unit
+    assert f"Environment=BMS_HOME={root}" in unit
+    assert f"WorkingDirectory={root / 'platform/frontend'}" in unit
+    assert f"ExecStartPre=/usr/bin/env python3 {root / 'scripts/rotate_biomodstack_logs.py'}" in unit
+    assert f"ExecStart={root / 'platform/frontend/node_modules/.bin/vite'}" in unit
+    assert "Environment=VITE_BMS_BUILD_SHA=0123456789abcdef0123456789abcdef01234567" in unit
+    assert "Environment=VITE_BMS_BUILD_ID=release-operator-7" in unit
+    assert "Environment=VITE_BMS_BUILD_TIME=2026-07-27T15:04:05Z" in unit
+    assert "Environment=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:8000" in unit
+    assert "8002" not in unit
+    assert release.services.DEV_TARGET_UNIT not in unit
+
+
+def test_install_and_activation_use_candidate_frontend_only_after_old_owner_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    systemd_dir = tmp_path / "systemd"
+    systemd_dir.mkdir()
+    monkeypatch.setattr(release.services, "get_user_systemd_dir", lambda: systemd_dir)
+    events: list[str] = []
+
+    def fake_install(**kwargs):
+        events.append("install-core")
+        return []
+
+    monkeypatch.setattr(release.services, "install_user_units", fake_install)
+    monkeypatch.setattr(
+        release.services,
+        "assert_runtime_listener_preflight",
+        lambda **kwargs: events.append("preflight-after-stop"),
+    )
+    backend = release.ProductionReleaseBackend(
+        repo_root=tmp_path,
+        state_dir=tmp_path / "state",
+        allow_first_install=True,
+    )
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["systemctl", "--user", "stop"]:
+            events.append("stop-installed")
+        elif command[:3] == ["systemctl", "--user", "daemon-reload"]:
+            events.append("daemon-reload")
+        elif command[:3] == ["systemctl", "--user", "enable"]:
+            events.append("enable")
+        elif command[:3] == ["systemctl", "--user", "start"]:
+            events.append("start-candidate")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(backend, "_run", fake_run)
+    backend.stop_installed_owner()
+    backend.install_units(_identity())
+    backend.start_candidate()
+
+    assert events == [
+        "stop-installed",
+        "install-core",
+        "daemon-reload",
+        "preflight-after-stop",
+        "enable",
+        "start-candidate",
+    ]
+    installed = (systemd_dir / release.services.FRONTEND_SERVICE).read_text(encoding="utf-8")
+    assert installed == backend.render_operator_frontend_unit(_identity())
+
+
+def _health(identity: release.BuildIdentity, *, revision: str | None = None) -> bytes:
+    return json.dumps(
+        {
+            "readiness": {"ready": True},
+            "build": {"revision": revision or identity.revision},
+        }
+    ).encode()
+
+
+def _transformed_identity(identity: release.BuildIdentity, *, revision: str | None = None) -> bytes:
+    return (
+        "const injected = "
+        + json.dumps(
+            {
+                "layer": "frontend",
+                "revision": revision or identity.revision,
+                "buildId": identity.build_id,
+                "buildTime": identity.build_time,
+            },
+            separators=(",", ":"),
+        )
+    ).encode()
+
+
+def _validation_backend(tmp_path: Path, **kwargs) -> release.ProductionReleaseBackend:
+    state_dir = kwargs.pop("state_dir", tmp_path / "state")
+    return release.ProductionReleaseBackend(
+        repo_root=tmp_path,
+        state_dir=state_dir,
+        api_url="http://127.0.0.1:8000/api/health",
+        browser_url="http://127.0.0.1:18080/bms/",
+        operator_url="http://127.0.0.1:5173/",
+        validation_retry_delay=0,
+        **kwargs,
+    )
+
+
+def test_validation_rejects_container_browser_only_when_operator_origin_is_down(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend = _validation_backend(tmp_path, validation_attempts=1)
+    identity = _identity()
+    monkeypatch.setattr(backend, "_validate_effective_units_and_ownership", lambda identity: None)
+
+    def fake_fetch(url: str):
+        if url == backend.api_url:
+            return 200, _health(identity)
+        if url == backend.browser_url:
+            return 200, b"<html>container</html>"
+        return 503, b"offline"
+
+    monkeypatch.setattr(backend, "_fetch", fake_fetch)
+    with pytest.raises(release.ReleaseValidationError, match="operator frontend"):
+        backend.validate_candidate_release(identity)
+
+
+def test_validation_rejects_unknown_operator_vite_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend = _validation_backend(tmp_path, validation_attempts=1)
+    identity = _identity()
+    monkeypatch.setattr(backend, "_validate_effective_units_and_ownership", lambda identity: None)
+
+    def fake_fetch(url: str):
+        if url in {backend.api_url, backend.operator_api_url}:
+            return 200, _health(identity)
+        if url in {backend.browser_url, backend.operator_url}:
+            return 200, b"<html>BioModStack</html>"
+        if url == backend.operator_identity_url:
+            return 200, _transformed_identity(identity, revision="unknown")
+        raise AssertionError(url)
+
+    monkeypatch.setattr(backend, "_fetch", fake_fetch)
+    with pytest.raises(release.ReleaseValidationError, match="frontend identity"):
+        backend.validate_candidate_release(identity)
+
+
+def test_validation_accepts_exact_api_browser_operator_and_frontend_tuple(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend = _validation_backend(tmp_path, validation_attempts=1)
+    identity = _identity()
+    monkeypatch.setattr(backend, "_validate_effective_units_and_ownership", lambda identity: None)
+
+    def fake_fetch(url: str):
+        if url in {backend.api_url, backend.operator_api_url}:
+            return 200, _health(identity)
+        if url in {backend.browser_url, backend.operator_url}:
+            return 200, b"<!doctype html><html>BioModStack</html>"
+        if url == backend.operator_identity_url:
+            return 200, _transformed_identity(identity)
+        raise AssertionError(url)
+
+    monkeypatch.setattr(backend, "_fetch", fake_fetch)
+    backend.validate_candidate_release(identity)
+
+
+def test_validation_retries_transport_malformed_and_stale_before_exact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend = _validation_backend(tmp_path, validation_attempts=4)
+    identity = _identity()
+    attempts = -1
+    monkeypatch.setattr(backend, "_validate_effective_units_and_ownership", lambda identity: None)
+
+    def fake_fetch(url: str):
+        nonlocal attempts
+        if url == backend.api_url:
+            attempts += 1
+            if attempts == 0:
+                raise release.ReleaseValidationError("transport warming")
+            if attempts == 1:
+                return 200, b"not-json"
+            if attempts == 2:
+                return 200, _health(identity, revision="f" * 40)
+            return 200, _health(identity)
+        if url == backend.operator_api_url:
+            return 200, _health(identity)
+        if url in {backend.browser_url, backend.operator_url}:
+            return 200, b"<html>BioModStack</html>"
+        if url == backend.operator_identity_url:
+            return 200, _transformed_identity(identity)
+        raise AssertionError(url)
+
+    monkeypatch.setattr(backend, "_fetch", fake_fetch)
+    backend.validate_candidate_release(identity)
+    assert attempts == 3
+
+
+def test_validation_requires_effective_candidate_units_proxy_and_listener_ownership(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend = _validation_backend(tmp_path, validation_attempts=1)
+    identity = _identity()
+    systemd_dir = tmp_path / "systemd"
+    systemd_dir.mkdir()
+    monkeypatch.setattr(release.services, "get_user_systemd_dir", lambda: systemd_dir)
+    for unit_name in release.MANAGED_UNIT_NAMES:
+        (systemd_dir / unit_name).write_text("managed\n", encoding="utf-8")
+    (systemd_dir / release.services.FRONTEND_SERVICE).write_text(
+        backend.render_operator_frontend_unit(identity), encoding="utf-8"
+    )
+    effective_proxy = "http://127.0.0.1:8000"
+
+    def fake_run(command, **kwargs):
+        unit_name = command[3]
+        property_name = command[4].split("=", 1)[1]
+        values = {
+            "FragmentPath": str(systemd_dir / unit_name),
+            "Environment": (
+                f"BMS_HOME={tmp_path.resolve()} "
+                f"BMS_DEV_API_PROXY_TARGET={effective_proxy} "
+                f"VITE_BMS_BUILD_SHA={identity.revision} "
+                f"VITE_BMS_BUILD_ID={identity.build_id} "
+                f"VITE_BMS_BUILD_TIME={identity.build_time}"
+            ),
+            "WorkingDirectory": str(tmp_path.resolve() / "platform/frontend"),
+            "ExecStart": str(
+                tmp_path.resolve() / "platform/frontend/node_modules/.bin/vite"
+            ),
+        }
+        return subprocess.CompletedProcess(command, 0, values[property_name] + "\n", "")
+
+    monkeypatch.setattr(backend, "_run", fake_run)
+    monkeypatch.setattr(
+        release.services,
+        "runtime_listener_preflight",
+        lambda *args, **kwargs: {
+            "components": {
+                "workflow-adapter": {"ok": True},
+                "api": {"ok": True},
+                "frontend": {"ok": True},
+            }
+        },
+    )
+    monkeypatch.setattr(
+        release.services,
+        "runtime_listener_ownership",
+        lambda *args, **kwargs: {"ok": True},
+    )
+    backend._validate_effective_units_and_ownership(identity)
+
+    effective_proxy = "http://127.0.0.1:8002"
+    with pytest.raises(release.ReleaseValidationError, match="proxy target"):
+        backend._validate_effective_units_and_ownership(identity)
+
+
+def test_candidate_validation_failure_restores_and_revalidates_exact_prior_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    candidate_root = (tmp_path / "candidate-root").resolve()
+    old_root = (tmp_path / "known-good-root").resolve()
+    candidate_root.mkdir()
+    old_root.mkdir()
+    systemd_dir = tmp_path / "systemd"
+    systemd_dir.mkdir()
+    monkeypatch.setattr(release.services, "get_user_systemd_dir", lambda: systemd_dir)
+
+    old_identity = release.BuildIdentity(
+        revision="a" * 40,
+        build_id="known-good-11",
+        build_time="2026-07-26T10:00:00Z",
+    )
+    candidate_identity = _identity()
+    old_frontend = release.ProductionReleaseBackend(
+        repo_root=old_root,
+        state_dir=tmp_path / "old-state",
+        allow_first_install=True,
+    ).render_operator_frontend_unit(old_identity)
+    prior_bases = {
+        unit_name: (
+            old_frontend.encode()
+            if unit_name == release.services.FRONTEND_SERVICE
+            else f"old unit {unit_name} root={old_root}\n".encode()
+        )
+        for unit_name in release.MANAGED_UNIT_NAMES
+    }
+    for unit_name, content in prior_bases.items():
+        (systemd_dir / unit_name).write_bytes(content)
+    prior_dropin = b"[Service]\nEnvironment=KNOWN_GOOD=1\n"
+    prior_dropin_path = (
+        systemd_dir / f"{release.services.FRONTEND_SERVICE}.d" / "20-known-good.conf"
+    )
+    prior_dropin_path.parent.mkdir()
+    prior_dropin_path.write_bytes(prior_dropin)
+
+    backend = _validation_backend(
+        candidate_root,
+        state_dir=tmp_path / "state",
+        validation_attempts=1,
+    )
+    runtime = {
+        "units": "old",
+        "surface": "old",
+        "active": {
+            release.services.TARGET_UNIT: True,
+            release.services.FRONTEND_SERVICE: True,
+            release.services.WORKFLOW_ADAPTER_SERVICE: False,
+            release.services.CORE_RUNTIME_SERVICE: True,
+        },
+    }
+    events: list[str] = []
+    ownership_roots: list[Path] = []
+
+    def fake_install_user_units(**kwargs):
+        assert kwargs["project_root"] == candidate_root
+        for unit_name in (
+            release.services.TARGET_UNIT,
+            release.services.WORKFLOW_ADAPTER_SERVICE,
+            release.services.CORE_RUNTIME_SERVICE,
+        ):
+            (systemd_dir / unit_name).write_bytes(f"candidate {unit_name}\n".encode())
+        return []
+
+    monkeypatch.setattr(release.services, "install_user_units", fake_install_user_units)
+
+    def fake_listener_preflight(root, mode):
+        ownership_roots.append(Path(root))
+        return {
+            "components": {
+                "workflow-adapter": {"ok": True},
+                "api": {"ok": True},
+                "frontend": {"ok": True},
+            }
+        }
+
+    monkeypatch.setattr(release.services, "runtime_listener_preflight", fake_listener_preflight)
+    monkeypatch.setattr(
+        release.services,
+        "assert_runtime_listener_preflight",
+        lambda *, project_root, runtime_mode: ownership_roots.append(Path(project_root)),
+    )
+    monkeypatch.setattr(
+        release.services,
+        "runtime_listener_ownership",
+        lambda component, port, owner_kind, project_root: (
+            ownership_roots.append(Path(project_root)) or {"ok": True}
+        ),
+    )
+
+    container_by_service = {
+        service: f"container-{service}" for service in release.BUILD_SERVICES
+    }
+
+    def current_root() -> Path:
+        return candidate_root if runtime["units"] == "candidate" else old_root
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["docker", "compose", "-f"] and "ps" in command:
+            service = command[-1]
+            return subprocess.CompletedProcess(command, 0, container_by_service[service] + "\n", "")
+        if command[:2] == ["docker", "inspect"]:
+            service = command[-1].removeprefix("container-")
+            payload = _managed_container_inspect(old_root, service)
+            payload["Image"] = "sha256:" + str(release.BUILD_SERVICES.index(service) + 1) * 64
+            return subprocess.CompletedProcess(command, 0, json.dumps([payload]), "")
+        if command[:3] == ["docker", "image", "tag"]:
+            events.append(f"tag:{command[3]}:{command[4]}")
+            return subprocess.CompletedProcess(command, 0, "", "")
+        if command[:3] == ["docker", "image", "inspect"]:
+            return subprocess.CompletedProcess(command, 1, "", "")
+        if command[:3] == ["systemctl", "--user", "is-active"]:
+            unit_name = command[-1]
+            active = runtime["active"][unit_name]
+            return subprocess.CompletedProcess(
+                command, 0 if active else 3, "active\n" if active else "inactive\n", ""
+            )
+        if command[:3] == ["systemctl", "--user", "show"]:
+            unit_name = command[3]
+            property_name = command[4].split("=", 1)[1]
+            root = current_root()
+            properties = {
+                "FragmentPath": str(systemd_dir / unit_name),
+                "Environment": f"BMS_HOME={root} BMS_RUNTIME_MODE=container",
+                "WorkingDirectory": str(root / "platform/frontend"),
+                "ExecStart": str(root / "scripts" / f"run-{unit_name}"),
+            }
+            return subprocess.CompletedProcess(command, 0, properties[property_name] + "\n", "")
+        if command[:3] == ["systemctl", "--user", "daemon-reload"]:
+            restored = (
+                systemd_dir / release.services.FRONTEND_SERVICE
+            ).read_bytes() == prior_bases[release.services.FRONTEND_SERVICE]
+            runtime["units"] = "old" if restored else "candidate"
+            return subprocess.CompletedProcess(command, 0, "", "")
+        if command[:3] == ["systemctl", "--user", "enable"]:
+            return subprocess.CompletedProcess(command, 0, "", "")
+        if command[:3] == ["systemctl", "--user", "stop"]:
+            events.append("stop:" + ",".join(command[3:]))
+            for unit_name in command[3:]:
+                runtime["active"][unit_name] = False
+            return subprocess.CompletedProcess(command, 0, "", "")
+        if command[:3] == ["systemctl", "--user", "start"]:
+            events.append("start:" + ",".join(command[3:]))
+            for unit_name in command[3:]:
+                runtime["active"][unit_name] = True
+            runtime["surface"] = "old" if runtime["units"] == "old" else "candidate"
+            return subprocess.CompletedProcess(command, 0, "", "")
+        raise AssertionError(command)
+
+    monkeypatch.setattr(backend, "_run", fake_run)
+
+    def fake_fetch(url: str):
+        observed_identity = old_identity if runtime["surface"] == "old" else candidate_identity
+        if url in {backend.api_url, backend.operator_api_url}:
+            return 200, _health(observed_identity)
+        if url in {backend.browser_url, backend.operator_url}:
+            return 200, b"<html>BioModStack</html>"
+        if url == backend.operator_identity_url:
+            if runtime["surface"] == "candidate":
+                return 200, _transformed_identity(candidate_identity).replace(
+                    candidate_identity.build_id.encode(), b"wrong-candidate"
+                )
+            return 200, _transformed_identity(old_identity)
+        raise AssertionError(url)
+
+    monkeypatch.setattr(backend, "_fetch", fake_fetch)
+    monkeypatch.setattr(backend, "build_images", lambda identity: events.append("build"))
+    monkeypatch.setattr(
+        backend, "verify_generated_ownership", lambda: events.append("verify-ownership")
+    )
+    monkeypatch.setattr(
+        backend, "verify_image_provenance", lambda identity: events.append("verify-images")
+    )
+
+    original_start_candidate = backend.start_candidate
+
+    def start_candidate():
+        runtime["units"] = "candidate"
+        runtime["surface"] = "candidate"
+        original_start_candidate()
+
+    monkeypatch.setattr(backend, "start_candidate", start_candidate)
+    candidate_validations = 0
+    original_candidate_validator = backend.validate_candidate_release
+
+    def validate_candidate(identity):
+        nonlocal candidate_validations
+        candidate_validations += 1
+        original_candidate_validator(identity)
+
+    monkeypatch.setattr(backend, "validate_candidate_release", validate_candidate)
+
+    with pytest.raises(release.ReleaseValidationError, match="frontend identity"):
+        release.execute_release(backend, candidate_identity)
+
+    assert candidate_validations == 1
+    assert runtime["units"] == "old"
+    assert (systemd_dir / release.services.FRONTEND_SERVICE).read_bytes() == prior_bases[
+        release.services.FRONTEND_SERVICE
+    ]
+    assert prior_dropin_path.read_bytes() == prior_dropin
+    assert not (
+        systemd_dir / f"{release.services.FRONTEND_SERVICE}.d" / "99-candidate.conf"
+    ).exists()
+    expected_active = {
+        release.services.TARGET_UNIT,
+        release.services.FRONTEND_SERVICE,
+        release.services.CORE_RUNTIME_SERVICE,
+    }
+    assert {unit for unit, active in runtime["active"].items() if active} == expected_active
+    rollback_start = "start:" + ",".join(
+        [
+            release.services.TARGET_UNIT,
+            release.services.FRONTEND_SERVICE,
+            release.services.CORE_RUNTIME_SERVICE,
+        ]
+    )
+    start_events = [event for event in events if event.startswith("start:")]
+    assert start_events[-1] == rollback_start
+    assert release.services.WORKFLOW_ADAPTER_SERVICE not in start_events[-1]
+    assert old_root in ownership_roots
+    assert ownership_roots[-2:] == [old_root, old_root]
+    for index, service in enumerate(release.BUILD_SERVICES, start=1):
+        assert f"tag:sha256:{str(index) * 64}:{backend.image_refs[service]}" in events
