@@ -55,6 +55,14 @@ IMAGE_DEFAULTS = {
     "bms-cpu-power": "biomodstack/cpu-power:local",
     "bms-web": "biomodstack/web:local",
 }
+CONTAINER_NAMES = {
+    "bms-api": "biomodstack-api",
+    "bms-host-agent": "biomodstack-host-agent",
+    "bms-cpu-power": "biomodstack-cpu-power",
+    "bms-web": "biomodstack-web",
+}
+IMMUTABLE_IMAGE_ID = re.compile(r"^sha256:[0-9a-f]{64}$")
+COMPOSE_PROJECT_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 MANAGED_UNIT_NAMES = (
     services.TARGET_UNIT,
     services.FRONTEND_SERVICE,
@@ -241,6 +249,13 @@ class ProductionReleaseBackend:
             )
             for service in BUILD_SERVICES
         }
+        self.compose_project = runtime_env.get(
+            "COMPOSE_PROJECT_NAME",
+            os.environ.get("COMPOSE_PROJECT_NAME", "biomodstack-core-runtime"),
+        )
+        if not COMPOSE_PROJECT_NAME.fullmatch(self.compose_project):
+            raise ReleaseValidationError("Compose project name is missing or unsafe")
+        self.candidate_image_ids: dict[str, str] = {}
         self.identity: BuildIdentity | None = None
 
     def _run(
@@ -281,7 +296,11 @@ class ProductionReleaseBackend:
             check=False,
         )
         value = completed.stdout.strip()
-        return value if completed.returncode == 0 and value else None
+        return (
+            value
+            if completed.returncode == 0 and IMMUTABLE_IMAGE_ID.fullmatch(value)
+            else None
+        )
 
     def _unit_snapshot(self) -> dict[str, dict[str, Any]]:
         systemd_dir = services.get_user_systemd_dir()
@@ -315,6 +334,10 @@ class ProductionReleaseBackend:
                 ["systemctl", "--user", "is-active", unit_name],
                 check=False,
             )
+            enabled = self._run(
+                ["systemctl", "--user", "is-enabled", unit_name],
+                check=False,
+            )
             snapshot[unit_name] = {
                 "base": (
                     base64.b64encode(path.read_bytes()).decode("ascii")
@@ -323,35 +346,23 @@ class ProductionReleaseBackend:
                 ),
                 "drop_ins": drop_ins,
                 "active": active.returncode == 0 and active.stdout.strip() == "active",
+                "enabled": enabled.returncode == 0 and enabled.stdout.strip() == "enabled",
             }
         return snapshot
 
-    def _running_container_snapshot(
-        self, service: str, owner_root: Path
-    ) -> dict[str, str] | None:
-        owner_compose_file = owner_root / "compose.core-runtime.yml"
+    def _running_container_snapshot(self, service: str) -> dict[str, str] | None:
+        container_name = CONTAINER_NAMES[service]
         completed = self._run(
-            [
-                "docker",
-                "compose",
-                "-f",
-                str(owner_compose_file),
-                "ps",
-                "-q",
-                service,
-            ],
+            ["docker", "inspect", container_name],
             check=False,
         )
-        container_ids = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
-        if completed.returncode != 0 or not container_ids:
+        if completed.returncode != 0 or not completed.stdout.strip():
             return None
-        if len(container_ids) != 1:
-            raise RuntimeError(f"expected exactly one running managed container for {service}")
-        container_id = container_ids[0]
-        inspected = self._run(["docker", "inspect", container_id])
         try:
-            raw = json.loads(inspected.stdout)
-            record = raw[0] if isinstance(raw, list) else raw
+            raw = json.loads(completed.stdout)
+            if not isinstance(raw, list) or len(raw) != 1:
+                raise TypeError("Docker inspect must return exactly one record")
+            record = raw[0]
             labels = record["Config"]["Labels"]
             image_id = record["Image"]
             running = record["State"]["Running"] is True
@@ -368,19 +379,23 @@ class ProductionReleaseBackend:
         working_dir = Path(working_dir_value)
         if not working_dir.is_absolute() or working_dir.resolve() != working_dir:
             raise RuntimeError(f"container for {service} has an unsafe managed working directory")
-        expected_compose_file = str(owner_compose_file)
+        expected_compose_file = str(working_dir / "compose.core-runtime.yml")
+        project = labels.get("com.docker.compose.project")
         if not (
             running
             and labels.get("com.docker.compose.service") == service
-            and working_dir == owner_root
-            and expected_compose_file in config_files
+            and isinstance(project, str)
+            and COMPOSE_PROJECT_NAME.fullmatch(project)
+            and config_files == {expected_compose_file}
             and isinstance(image_id, str)
-            and image_id.startswith("sha256:")
+            and IMMUTABLE_IMAGE_ID.fullmatch(image_id)
         ):
             raise RuntimeError(f"container for {service} is not the expected running managed service")
         return {
-            "id": str(record.get("Id") or container_id),
+            "id": str(record.get("Id") or container_name),
             "service": service,
+            "project": project,
+            "config_file": expected_compose_file,
             "image_id": image_id,
             "root": str(working_dir),
         }
@@ -388,14 +403,20 @@ class ProductionReleaseBackend:
     def snapshot_known_good(self) -> Mapping[str, Any]:
         units = self._unit_snapshot()
         validation = self._snapshot_known_good_validation(units)
-        runtime_root_value = validation.get("runtime_root")
-        owner_root = Path(runtime_root_value) if isinstance(runtime_root_value, str) else None
         containers = {
             service: running
             for service in BUILD_SERVICES
-            if owner_root is not None
-            and (running := self._running_container_snapshot(service, owner_root)) is not None
+            if (running := self._running_container_snapshot(service)) is not None
         }
+        core_record = units.get(services.CORE_RUNTIME_SERVICE)
+        managed_runtime_active = (
+            isinstance(core_record, Mapping) and core_record.get("active") is True
+        )
+        if (managed_runtime_active or containers) and set(containers) != set(BUILD_SERVICES):
+            missing_containers = sorted(set(BUILD_SERVICES) - set(containers))
+            raise RuntimeError(
+                "incomplete running managed-container discovery: " + ", ".join(missing_containers)
+            )
         images = {
             service: containers[service]["image_id"]
             if service in containers
@@ -417,9 +438,9 @@ class ProductionReleaseBackend:
         }
         if _snapshot_has_restorable_runtime(snapshot):
             container_roots = {record["root"] for record in containers.values()}
-            validation_root = validation.get("runtime_root")
-            if container_roots and (
-                len(container_roots) != 1 or validation_root not in container_roots
+            runtime_roots = validation.get("runtime_roots")
+            if not isinstance(runtime_roots, list) or not container_roots.issubset(
+                set(runtime_roots)
             ):
                 raise RuntimeError("known-good container and unit roots do not match")
             snapshot["validation"] = validation
@@ -478,35 +499,88 @@ class ProductionReleaseBackend:
         )
 
     def verify_image_provenance(self, identity: BuildIdentity) -> None:
+        candidate_image_ids: dict[str, str] = {}
         for service, image_ref in self.image_refs.items():
             completed = self._run(
-                [
-                    "docker",
-                    "image",
-                    "inspect",
-                    "--format",
-                    '{{ index .Config.Labels "org.opencontainers.image.revision" }}',
-                    image_ref,
-                ]
+                ["docker", "image", "inspect", image_ref]
             )
-            if completed.stdout.strip() != identity.revision:
+            try:
+                payload = json.loads(completed.stdout)
+                if not isinstance(payload, list) or len(payload) != 1:
+                    raise TypeError("image inspect must return exactly one record")
+                record = payload[0]
+                image_id = record["Id"]
+                labels = record["Config"]["Labels"]
+            except (KeyError, TypeError, IndexError, json.JSONDecodeError) as exc:
+                raise ReleaseValidationError(
+                    f"{service} image inspection is invalid"
+                ) from exc
+            if not isinstance(image_id, str) or not IMMUTABLE_IMAGE_ID.fullmatch(image_id):
+                raise ReleaseValidationError(f"{service} image identity is not immutable")
+            if not isinstance(labels, Mapping):
+                raise ReleaseValidationError(f"{service} image labels are invalid")
+            if labels.get("org.opencontainers.image.revision") != identity.revision:
                 raise ReleaseValidationError(
                     f"{service} image revision does not match {identity.revision}"
                 )
+            if labels.get("org.opencontainers.image.version") != identity.build_id:
+                raise ReleaseValidationError(
+                    f"{service} image build id does not match {identity.build_id}"
+                )
+            if labels.get("org.opencontainers.image.created") != identity.build_time:
+                raise ReleaseValidationError(
+                    f"{service} image build time does not match {identity.build_time}"
+                )
+            candidate_image_ids[service] = image_id
+        self.candidate_image_ids = candidate_image_ids
 
-    def stop_installed_owner(self) -> None:
-        self._run(
-            [
-                "systemctl",
-                "--user",
-                "stop",
-                services.TARGET_UNIT,
-                services.FRONTEND_SERVICE,
-                services.WORKFLOW_ADAPTER_SERVICE,
-                services.CORE_RUNTIME_SERVICE,
-            ],
+    def _candidate_running_image_ids(self) -> dict[str, str]:
+        if set(self.candidate_image_ids) != set(BUILD_SERVICES):
+            raise ReleaseValidationError("candidate immutable image preflight is incomplete")
+        running_image_ids: dict[str, str] = {}
+        for service in BUILD_SERVICES:
+            record = self._running_container_snapshot(service)
+            if record is None:
+                raise ReleaseValidationError(f"candidate running image is missing for {service}")
+            if (
+                record["root"] != str(self.repo_root)
+                or record["project"] != self.compose_project
+                or record["config_file"] != str(self.compose_file)
+                or record["image_id"] != self.candidate_image_ids[service]
+            ):
+                raise ReleaseValidationError(
+                    f"candidate running image/topology differs for {service}"
+                )
+            running_image_ids[service] = record["image_id"]
+        return running_image_ids
+
+    def _stop_managed_units(self) -> None:
+        stopped = self._run(
+            ["systemctl", "--user", "stop", *MANAGED_UNIT_NAMES],
             check=False,
         )
+        observed: dict[str, str] = {}
+        for unit_name in MANAGED_UNIT_NAMES:
+            state = self._run(
+                ["systemctl", "--user", "is-active", unit_name],
+                check=False,
+            )
+            observed[unit_name] = state.stdout.strip()
+        if stopped.returncode != 0:
+            detail = stopped.stderr.strip() or stopped.stdout.strip() or "unknown systemctl error"
+            raise ReleaseValidationError(f"failed to stop managed units: {detail}")
+        not_inactive = [
+            f"{unit_name}={state or 'unknown'}"
+            for unit_name, state in observed.items()
+            if state != "inactive"
+        ]
+        if not_inactive:
+            raise ReleaseValidationError(
+                "managed units remained active or indeterminate: " + ", ".join(not_inactive)
+            )
+
+    def stop_installed_owner(self) -> None:
+        self._stop_managed_units()
 
     def render_operator_frontend_unit(self, identity: BuildIdentity) -> str:
         frontend_root = self.repo_root / "platform" / "frontend"
@@ -591,13 +665,17 @@ class ProductionReleaseBackend:
 
     def restart_known_good(self, snapshot: Mapping[str, Any]) -> None:
         units = self._decoded_unit_snapshot(snapshot)
-        active = [
-            unit_name
-            for unit_name in MANAGED_UNIT_NAMES
-            if units[unit_name]["active"] is True
-        ]
-        if active:
-            self._run(["systemctl", "--user", "start", *active])
+        for unit_name in MANAGED_UNIT_NAMES:
+            if units[unit_name]["active"] is True:
+                self._run(
+                    [
+                        "systemctl",
+                        "--user",
+                        "start",
+                        "--job-mode=ignore-dependencies",
+                        unit_name,
+                    ]
+                )
 
     @staticmethod
     def _fetch(url: str) -> tuple[int, bytes]:
@@ -803,7 +881,7 @@ class ProductionReleaseBackend:
         self, units: Mapping[str, Any]
     ) -> dict[str, Any]:
         effective_units: dict[str, dict[str, str]] = {}
-        active_roots: set[Path] = set()
+        unit_roots: dict[str, Path] = {}
         any_active = False
         for unit_name in MANAGED_UNIT_NAMES:
             record = units.get(unit_name)
@@ -830,26 +908,64 @@ class ProductionReleaseBackend:
                         unit_name, "WorkingDirectory"
                     )
                 if active:
-                    active_roots.add(
-                        self._runtime_root_from_environment(properties["Environment"])
+                    unit_roots[unit_name] = self._runtime_root_from_environment(
+                        properties["Environment"]
                     )
             effective_units[unit_name] = properties
 
         if not any_active:
             return {
-                "runtime_root": None,
+                "unit_roots": {},
+                "runtime_roots": [],
                 "effective_units": effective_units,
                 "surfaces": None,
             }
-        if len(active_roots) != 1:
-            raise ReleaseValidationError("active known-good units do not share one exact runtime root")
-        runtime_root = next(iter(active_roots))
-        self._validate_listener_ownership(runtime_root)
+        if not unit_roots:
+            raise ReleaseValidationError("active known-good runtime has no exact managed unit roots")
+        self._validate_snapshot_listener_ownership(unit_roots)
         return {
-            "runtime_root": str(runtime_root),
+            "unit_roots": {
+                unit_name: str(runtime_root) for unit_name, runtime_root in unit_roots.items()
+            },
+            "runtime_roots": sorted({str(runtime_root) for runtime_root in unit_roots.values()}),
             "effective_units": effective_units,
             "surfaces": self._observe_runtime_surfaces(),
         }
+
+    def _validate_snapshot_listener_ownership(self, unit_roots: Mapping[str, Path]) -> None:
+        frontend_root = unit_roots.get(services.FRONTEND_SERVICE)
+        if frontend_root is not None:
+            operator = services.runtime_listener_ownership(
+                "operator-frontend", 5173, "dev-frontend", frontend_root
+            )
+            if operator.get("ok") is not True:
+                raise ReleaseValidationError(
+                    "listener ownership is not proven for operator frontend 5173"
+                )
+        workflow_root = unit_roots.get(services.WORKFLOW_ADAPTER_SERVICE)
+        if workflow_root is not None:
+            workflow = services.runtime_listener_ownership(
+                "workflow-adapter",
+                services.WORKFLOW_ADAPTER_PORT,
+                "workflow-adapter",
+                workflow_root,
+            )
+            if workflow.get("ok") is not True:
+                raise ReleaseValidationError(
+                    "listener ownership is not proven for workflow adapter"
+                )
+        core_root = unit_roots.get(services.CORE_RUNTIME_SERVICE)
+        if core_root is not None:
+            preflight = services.runtime_listener_preflight(
+                core_root, services.CONTAINER_RUNTIME_MODE
+            )
+            components = preflight.get("components", {})
+            for component in ("api", "frontend"):
+                record = components.get(component) if isinstance(components, Mapping) else None
+                if not isinstance(record, Mapping) or record.get("ok") is not True:
+                    raise ReleaseValidationError(
+                        f"listener ownership is not proven for {component}"
+                    )
 
     def _retry_release_validation(self, validator) -> None:
         last_error: ReleaseValidationError | None = None
@@ -868,6 +984,7 @@ class ProductionReleaseBackend:
         def validate_once() -> None:
             self._observe_runtime_surfaces(identity)
             self._validate_effective_units_and_ownership(identity)
+            self._candidate_running_image_ids()
 
         self._retry_release_validation(validate_once)
 
@@ -884,8 +1001,11 @@ class ProductionReleaseBackend:
             encoded = record.get("base")
             drop_ins = record.get("drop_ins")
             active = record.get("active")
+            enabled = record.get("enabled")
             if active is not True and active is not False:
                 raise ReleaseRollbackError(f"invalid rollback active state for {unit_name}")
+            if enabled is not True and enabled is not False:
+                raise ReleaseRollbackError(f"invalid rollback enabled state for {unit_name}")
             if not isinstance(drop_ins, Mapping):
                 raise ReleaseRollbackError(f"invalid rollback drop-ins for {unit_name}")
             try:
@@ -915,6 +1035,7 @@ class ProductionReleaseBackend:
                 "base": base,
                 "drop_ins": decoded_drop_ins,
                 "active": active,
+                "enabled": enabled,
             }
         return decoded
 
@@ -952,6 +1073,14 @@ class ProductionReleaseBackend:
                 raise ReleaseValidationError(
                     f"restored active state does not match known-good for {unit_name}"
                 )
+            enabled = self._run(
+                ["systemctl", "--user", "is-enabled", unit_name], check=False
+            )
+            observed_enabled = enabled.returncode == 0 and enabled.stdout.strip() == "enabled"
+            if observed_enabled is not record["enabled"]:
+                raise ReleaseValidationError(
+                    f"restored enabled state does not match known-good for {unit_name}"
+                )
 
         effective_units = validation.get("effective_units")
         if not isinstance(effective_units, Mapping):
@@ -972,23 +1101,39 @@ class ProductionReleaseBackend:
                         f"restored effective {property_name} differs for {unit_name}"
                     )
 
-        runtime_root_value = validation.get("runtime_root")
+        unit_roots_value = validation.get("unit_roots")
+        runtime_roots_value = validation.get("runtime_roots")
         surfaces = validation.get("surfaces")
-        if runtime_root_value is None and surfaces is None:
+        if unit_roots_value == {} and runtime_roots_value == [] and surfaces is None:
             return
-        if not isinstance(runtime_root_value, str) or not isinstance(surfaces, Mapping):
-            raise ReleaseRollbackError("rollback snapshot has invalid runtime validation truth")
-        runtime_root = Path(runtime_root_value)
         if (
-            not runtime_root.is_absolute()
-            or runtime_root.resolve() != runtime_root
-            or not SYSTEMD_SAFE_VALUE.fullmatch(runtime_root_value)
+            not isinstance(unit_roots_value, Mapping)
+            or not isinstance(runtime_roots_value, list)
+            or not isinstance(surfaces, Mapping)
         ):
-            raise ReleaseRollbackError("rollback snapshot has unsafe runtime root")
+            raise ReleaseRollbackError("rollback snapshot has invalid runtime validation truth")
+        unit_roots: dict[str, Path] = {}
+        for unit_name, runtime_root_value in unit_roots_value.items():
+            if (
+                unit_name not in MANAGED_UNIT_NAMES
+                or unit_name == services.TARGET_UNIT
+                or not isinstance(runtime_root_value, str)
+            ):
+                raise ReleaseRollbackError("rollback snapshot has unsafe unit-root truth")
+            runtime_root = Path(runtime_root_value)
+            if (
+                not runtime_root.is_absolute()
+                or runtime_root.resolve() != runtime_root
+                or not SYSTEMD_SAFE_VALUE.fullmatch(runtime_root_value)
+            ):
+                raise ReleaseRollbackError("rollback snapshot has unsafe runtime root")
+            unit_roots[unit_name] = runtime_root
+        if runtime_roots_value != sorted({str(root) for root in unit_roots.values()}):
+            raise ReleaseRollbackError("rollback snapshot has inconsistent runtime roots")
         observed_surfaces = self._observe_runtime_surfaces()
         if observed_surfaces != dict(surfaces):
             raise ReleaseValidationError("restored runtime surfaces differ from known-good snapshot")
-        self._validate_listener_ownership(runtime_root)
+        self._validate_snapshot_listener_ownership(unit_roots)
 
     def revalidate_known_good(self, snapshot: Mapping[str, Any]) -> None:
         self._retry_release_validation(lambda: self._validate_known_good_once(snapshot))
@@ -1020,6 +1165,7 @@ class ProductionReleaseBackend:
             validated_images.append((image_id, image_ref))
 
         units = self._decoded_unit_snapshot(snapshot)
+        self._stop_managed_units()
         for image_id, image_ref in validated_images:
             self._run(["docker", "image", "tag", image_id, image_ref])
 
@@ -1042,31 +1188,20 @@ class ProductionReleaseBackend:
                 dropin_dir.mkdir(parents=True, exist_ok=True)
                 (dropin_dir / dropin_name).write_bytes(dropin_content)
         self._run(["systemctl", "--user", "daemon-reload"])
+        for unit_name in MANAGED_UNIT_NAMES:
+            action = "enable" if units[unit_name]["enabled"] else "disable"
+            self._run(["systemctl", "--user", action, unit_name])
         if not _snapshot_has_restorable_runtime(snapshot):
             # A first install has no complete known-good image set to restart.
             # Stop any units that may have been partially activated, without
             # calling services.stop_all() (which would re-render current units
             # over the restored unit snapshot).
-            self._run(
-                [
-                    "systemctl",
-                    "--user",
-                    "stop",
-                    services.TARGET_UNIT,
-                    services.FRONTEND_SERVICE,
-                    services.WORKFLOW_ADAPTER_SERVICE,
-                    services.CORE_RUNTIME_SERVICE,
-                ],
-                check=False,
-            )
+            self._stop_managed_units()
 
     def commit_known_good(
         self, snapshot: Mapping[str, Any], identity: BuildIdentity
     ) -> None:
-        current_images = {
-            service: self._image_id(image_ref)
-            for service, image_ref in self.image_refs.items()
-        }
+        current_images = self._candidate_running_image_ids()
         payload = {
             "accepted_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "build": identity.as_environment(),
