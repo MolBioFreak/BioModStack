@@ -883,6 +883,23 @@ def _docker_runtime_report(required_names: set[str]) -> dict[str, object] | None
         config = item.get("Config", {})
         state = item.get("State", {})
         labels = config.get("Labels", {}) if isinstance(config, Mapping) else {}
+        host_config = item.get("HostConfig", {})
+        raw_mounts = item.get("Mounts", [])
+        mounts = sorted(
+            (
+                {
+                    "type": str(mount.get("Type", "")),
+                    "source": str(mount.get("Source", "")),
+                    "destination": str(mount.get("Destination", "")),
+                    "mode": str(mount.get("Mode", "")),
+                    "rw": mount.get("RW"),
+                    "propagation": str(mount.get("Propagation", "")),
+                }
+                for mount in raw_mounts
+                if isinstance(mount, Mapping)
+            ),
+            key=lambda mount: (mount["destination"], mount["source"]),
+        ) if isinstance(raw_mounts, list) else []
         pid = state.get("Pid") if isinstance(state, Mapping) else None
         cgroup = _process_cgroup(pid) if isinstance(pid, int) and pid > 0 else ""
         command = " ".join(
@@ -899,6 +916,9 @@ def _docker_runtime_report(required_names: set[str]) -> dict[str, object] | None
                 "cgroup": cgroup,
                 "cmdline": command,
                 "cwd": str(config.get("WorkingDir", "") or "/") if isinstance(config, Mapping) else "/",
+                "readonly_rootfs": bool(host_config.get("ReadonlyRootfs", False))
+                if isinstance(host_config, Mapping) else False,
+                "mounts": mounts,
             }
         )
     return {"containers": containers}
@@ -962,25 +982,36 @@ def _host_listener_inodes(port: int) -> list[int]:
 def _host_listener_inode_owners(inodes: list[int]) -> dict[int, list[int]]:
     if not inodes:
         return {}
-    script = r'''wanted="$1"
-find /host-proc/[0-9]*/fd -type l -exec ls -l {} + 2>/dev/null |
-awk -v wanted="$wanted" '
-BEGIN { count = split(wanted, inodes, " ") }
-{
-  path = $(NF - 2)
-  target = $NF
-  split(path, parts, "/")
-  for (i = 1; i <= count; i++) {
-    if (target == "socket:[" inodes[i] "]") {
-      printf "%s %s\n", parts[3], inodes[i]
-    }
-  }
-}' '''
+    helper = r'''import os, sys
+wanted = {int(value) for value in sys.argv[1:]}
+for proc_entry in os.scandir('/host-proc'):
+    if not proc_entry.name.isdigit() or not proc_entry.is_dir(follow_symlinks=False):
+        continue
+    fd_root = os.path.join(proc_entry.path, 'fd')
+    try:
+        fd_entries = os.scandir(fd_root)
+    except OSError:
+        continue
+    with fd_entries:
+        for fd_entry in fd_entries:
+            if not fd_entry.name.isdigit() or not fd_entry.is_symlink():
+                continue
+            try:
+                target = os.readlink(fd_entry.path)
+            except OSError:
+                continue
+            if not target.startswith('socket:[') or not target.endswith(']'):
+                continue
+            raw_inode = target[8:-1]
+            if raw_inode.isdigit() and int(raw_inode) in wanted:
+                print(f'{proc_entry.name} {raw_inode}')
+'''
     result = _run([
         "docker", "run", "--rm", "--pull=never", "--network=none", "--read-only",
-        "--privileged", "--mount", "type=bind,src=/proc,dst=/host-proc,readonly",
-        "--entrypoint", "/bin/sh", PRODUCTION_TAILNET_PROXY_IMAGE,
-        "-ec", script, "--", " ".join(str(inode) for inode in inodes),
+        "--privileged", "--user", "0:0",
+        "--mount", "type=bind,src=/proc,dst=/host-proc,readonly",
+        "--entrypoint", "/usr/local/bin/python3.10", MANAGED_API_IMAGE_ID,
+        "-c", helper, *(str(inode) for inode in inodes),
     ])
     owners: dict[int, set[int]] = {inode: set() for inode in inodes}
     for line in result.stdout.splitlines():
@@ -1409,6 +1440,17 @@ def _validated_runtime_container_listener(
         report for report in expected_process_reports
         if isinstance(report, Mapping) and report.get("pid") in all_owner_pids
     ] if isinstance(expected_process_reports, list) else []
+    report_pid_map_matches = all(
+        next(
+            (
+                report.get("container_pid") == mapping["container_pid"]
+                for report in reports
+                if report.get("pid") == mapping["host_pid"]
+            ),
+            False,
+        )
+        for mapping in listener_pid_map
+    )
     second_reported_pids = _container_listener_pids(container_name, port)
     second_container_inodes = _container_listener_inodes(container_name, port)
     second_host_inodes = _host_listener_inodes(port)
@@ -1442,6 +1484,7 @@ def _validated_runtime_container_listener(
         or not isinstance(expected_process_reports, list)
         or not _valid_container_process_roles(container_name, expected_process_reports)
         or [report.get("pid") for report in reports] != all_owner_pids
+        or not report_pid_map_matches
         or all_owner_pids != container_host_pids
         or [
             mapping["host_pid"]
@@ -1589,6 +1632,17 @@ def _validated_production_tailnet_proxy(root: Path) -> dict[str, object]:
     listener_reports = [
         report for report in process_reports if report.get("pid") in all_owner_pids
     ]
+    report_pid_map_matches = all(
+        next(
+            (
+                report.get("container_pid") == mapping["container_pid"]
+                for report in listener_reports
+                if report.get("pid") == mapping["host_pid"]
+            ),
+            False,
+        )
+        for mapping in listener_pid_map
+    )
     second_reported_pids = _container_listener_pids(
         PRODUCTION_TAILNET_PROXY_CONTAINER, PRODUCTION_TAILNET_PROXY_PORT
     )
@@ -1625,6 +1679,7 @@ def _validated_production_tailnet_proxy(root: Path) -> dict[str, object]:
             PRODUCTION_TAILNET_PROXY_CONTAINER, process_reports
         )
         or [report.get("pid") for report in listener_reports] != all_owner_pids
+        or not report_pid_map_matches
         or all_owner_pids != container_host_pids
         or len(host_listener_pids) != len(listener_pids_in_container)
         or [
@@ -1701,12 +1756,25 @@ def _validated_container_runtime(root: Path, *, require_web: bool) -> dict[str, 
         "biomodstack-api": MANAGED_API_IMAGE_ID,
         "biomodstack-web": MANAGED_WEB_IMAGE_ID,
     }
+    expected_mounts = {
+        "biomodstack-api": [{
+            "type": "bind",
+            "source": "/mnt/BioModStack",
+            "destination": "/var/lib/biomodstack",
+            "mode": "rw",
+            "rw": True,
+            "propagation": "rprivate",
+        }],
+        "biomodstack-web": [],
+    }
     if any(
         str(item.get("image_id", "")) != expected_image_ids[str(item.get("name", ""))]
         or (
             str(item.get("cmdline", "")),
             str(item.get("cwd", "")),
         ) != expected_process_identity[str(item.get("name", ""))]
+        or item.get("mounts") != expected_mounts[str(item.get("name", ""))]
+        or item.get("readonly_rootfs") is not False
         for item in selected
     ):
         raise TailnetEnvironmentError("managed container image/process identity is not pinned")
@@ -1764,6 +1832,8 @@ def _validated_container_runtime(root: Path, *, require_web: bool) -> dict[str, 
             "cwd": item.get("cwd", ""),
             "host_pids": host_pids,
             "process_reports": process_reports,
+            "readonly_rootfs": item.get("readonly_rootfs"),
+            "mounts": item.get("mounts"),
         })
     return {
         "containers": validated_containers,

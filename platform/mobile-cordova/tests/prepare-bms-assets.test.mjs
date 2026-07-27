@@ -22,11 +22,29 @@ import {
 function exactSelectionReceipt(environment) {
   const runtimeRevision = '6'.repeat(40);
   const build = { revision: runtimeRevision, build_id: 'build-1', build_time: '2026-07-26T00:00:00Z' };
+  const readinessCheck = { ready: true, required: true, status: 'ready' };
   const healthPayload = {
     build,
+    service: 'biomodstack-api',
     status: 'healthy',
     liveness: { alive: true, status: 'alive' },
-    readiness: { ready: true },
+    molbio: {
+      database_kind: 'sqlite', database_schema_current: true, database_schema_issue_count: 0,
+      foreign_key_violations: 0, immutable_trigger_count: 1, immutable_triggers_current: true,
+      latest_migration: '001', migration_count: 1, migrations_current: true,
+      owner: 'biomodstack', quick_check: 'ok', sequence_parent_cycle_count: 0,
+      sequence_parent_foreign_key_current: true, status: 'healthy',
+    },
+    readiness: {
+      ready: true,
+      mode: 'full',
+      checks: {
+        core_database: { ...readinessCheck }, frontend: { ...readinessCheck },
+        molbio_database: { ...readinessCheck }, process_liveness: { ...readinessCheck },
+        workflow_adapter: { ...readinessCheck },
+        workflow_launch: { ...readinessCheck, allowed: true },
+      },
+    },
   };
   const containerProcessReport = (name, marker, pid, containerPid = 1) => {
     const api = name === 'biomodstack-api';
@@ -60,6 +78,11 @@ function exactSelectionReceipt(environment) {
     cwd: name === 'biomodstack-api' ? '/app/platform/api' : '/',
     host_pids: [pid],
     process_reports: [containerProcessReport(name, marker, pid)],
+    readonly_rootfs: false,
+    mounts: name === 'biomodstack-api' ? [{
+      type: 'bind', source: '/mnt/BioModStack', destination: '/var/lib/biomodstack',
+      mode: 'rw', rw: true, propagation: 'rprivate',
+    }] : [],
   });
   const processReport = (pid, marker, overrides = {}) => ({
     pid,
@@ -116,8 +139,10 @@ function exactSelectionReceipt(environment) {
     project_root: '/srv/selector',
     project_revision: runtimeRevision,
     selector_revision: 'a'.repeat(40),
+    previous_serve_root_proxy: 'http://127.0.0.1:18081',
     serve_handlers: {
       '/': { Proxy: environment === 'development' ? 'http://127.0.0.1:5173' : 'http://127.0.0.1:18081' },
+      '/am': { Proxy: 'http://127.0.0.1:5174/am' },
       '/api/tailnet-environment': { Proxy: 'http://127.0.0.1:8001' },
     },
     managed_api_runtime: {
@@ -138,22 +163,52 @@ function exactSelectionReceipt(environment) {
       source_revision: 'a'.repeat(40),
     },
     health: {
-      local_frontend: { status: 200 },
-      tailnet_frontend: { status: 200 },
-      local_api: { status: 200, payload: { ...healthPayload } },
+      local_frontend: {
+        url: environment === 'development'
+          ? 'http://127.0.0.1:5173/' : 'http://127.0.0.1:18080/bms/',
+        final_url: environment === 'development'
+          ? 'http://127.0.0.1:5173/' : 'http://127.0.0.1:18080/bms/',
+        status: 200, payload: null,
+      },
+      tailnet_frontend: {
+        url: 'https://compute-node.taileb3a90.ts.net/',
+        final_url: environment === 'production'
+          ? 'https://compute-node.taileb3a90.ts.net/bms/'
+          : 'https://compute-node.taileb3a90.ts.net/',
+        status: 200, payload: null,
+      },
+      local_api: {
+        url: 'http://127.0.0.1:8000/api/health',
+        final_url: 'http://127.0.0.1:8000/api/health', status: 200, payload: { ...healthPayload },
+      },
       tailnet_api: {
+        url: 'https://compute-node.taileb3a90.ts.net/api/health',
+        final_url: 'https://compute-node.taileb3a90.ts.net/api/health',
         status: 200,
         payload: { ...healthPayload, build: { ...build }, liveness: { ...healthPayload.liveness }, readiness: { ...healthPayload.readiness } },
       },
     },
   };
   if (environment === 'production') {
+    const apiContainer = container('biomodstack-api', '1', 101);
+    const webContainer = container('biomodstack-web', '2', 202);
+    webContainer.host_pids = [202, 203];
+    webContainer.process_reports.push(containerProcessReport('biomodstack-web', '2', 203, 27));
     receipt.container_runtime = {
       validated_revision: runtimeRevision,
       validated_compose_root: '/srv/biomodstack',
-      containers: [container('biomodstack-api', '1', 101), container('biomodstack-web', '2', 202)],
+      containers: [apiContainer, webContainer],
     };
     const webListener = containerListener('biomodstack-web', '2', 18080, 202, 180801);
+    webListener.container_listener_pids = [1, 27];
+    webListener.listener_pid_map = [
+      { container_pid: 1, host_pid: 202 }, { container_pid: 27, host_pid: 203 },
+    ];
+    webListener.host_listener_pids = [202, 203];
+    webListener.listener_inodes = [180801, 180802];
+    webListener.listener_inode_owners = { 180801: [202], 180802: [203] };
+    webListener.container_host_pids = [202, 203];
+    webListener.listener_reports = webContainer.process_reports.map((report) => ({ ...report }));
     receipt.managed_frontend_listener = webListener;
     receipt.frontend_listeners = webListener.listener_reports;
     receipt.tailnet_production_proxy = {
@@ -536,31 +591,6 @@ test('selection response contract accepts exact development and production recei
   ));
 
   const multiWorker = receipt('production');
-  const webContainer = multiWorker.container_runtime.containers.find(
-    (item) => item.name === 'biomodstack-web',
-  );
-  const webListener = multiWorker.managed_frontend_listener;
-  webContainer.host_pids = [202, 203];
-  const webMasterReport = webContainer.process_reports[0];
-  const webWorkerReport = {
-    ...webMasterReport,
-    pid: 203,
-    container_pid: 27,
-    parent_container_pid: 1,
-    argv: ['nginx: worker process'],
-    uid: 101,
-  };
-  webContainer.process_reports = [webMasterReport, webWorkerReport];
-  webListener.container_listener_pids = [1, 27];
-  webListener.listener_pid_map = [
-    { container_pid: 1, host_pid: 202 },
-    { container_pid: 27, host_pid: 203 },
-  ];
-  webListener.host_listener_pids = [202, 203];
-  webListener.listener_inode_owners = { 180801: [202, 203] };
-  webListener.container_host_pids = [202, 203];
-  webListener.listener_reports = [webMasterReport, webWorkerReport];
-  multiWorker.frontend_listeners = webListener.listener_reports;
   assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
     multiWorker, 'production', 'https://compute-node.taileb3a90.ts.net',
   ));
@@ -700,6 +730,8 @@ test('selection response contract accepts exact development and production recei
     (value) => { value.health.local_api.payload.build.rogue = true; },
     (value) => { value.health.local_api.payload.liveness.rogue = true; },
     (value) => { value.health.local_api.payload.readiness.rogue = true; },
+    (value) => { value.health.local_api.payload.readiness.checks.frontend.rogue = true; },
+    (value) => { value.health.local_api.payload.molbio.rogue = true; },
     (value) => { value.serve_handlers.rogue = { Proxy: 'http://127.0.0.1:9999' }; },
     (value) => { value.serve_handlers['/'].rogue = true; },
     (value) => { value.serve_handlers['/api/tailnet-environment'].rogue = true; },
@@ -716,6 +748,28 @@ test('selection response contract accepts exact development and production recei
       value.api_listeners[0].cgroup = bare;
     },
     (value) => { value.tailnet_production_proxy.listener_pid_map.reverse(); },
+    (value) => {
+      const web = value.container_runtime.containers.find((item) => item.name === 'biomodstack-web');
+      web.process_reports[1].container_pid = 44;
+      value.managed_frontend_listener.listener_reports[1].container_pid = 44;
+      value.frontend_listeners[1].container_pid = 44;
+    },
+    (value) => {
+      value.tailnet_production_proxy.listener_reports[1].container_pid = 44;
+      value.tailnet_production_proxy_listeners[1].container_pid = 44;
+    },
+    (value) => {
+      value.managed_api_runtime.containers[0].mounts.push({
+        type: 'bind', source: '/tmp/rogue.py', destination: '/app/platform/api/main.py',
+        mode: 'ro', rw: false, propagation: 'rprivate',
+      });
+    },
+    (value) => {
+      value.container_runtime.containers.find((item) => item.name === 'biomodstack-web').mounts.push({
+        type: 'bind', source: '/tmp/rogue-ui', destination: '/usr/share/nginx/html',
+        mode: 'ro', rw: false, propagation: 'rprivate',
+      });
+    },
     (value) => { value.tailnet_production_proxy.pid = 304; },
     (value) => {
       const web = value.container_runtime.containers.find((item) => item.name === 'biomodstack-web');
