@@ -840,6 +840,37 @@ def url_is_ready(url: str, timeout_seconds: float = 2.0) -> bool:
         return False
 
 
+def git_build_identity(project_root: Path) -> dict[str, str]:
+    """Return immutable build metadata for the exact Git checkout."""
+    root = project_root.resolve()
+
+    def git_value(*args: str) -> str:
+        try:
+            completed = subprocess.run(
+                ["git", "-C", str(root), *args],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (FileNotFoundError, OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            return ""
+        return completed.stdout.strip()
+
+    revision = git_value("rev-parse", "HEAD").lower()
+    if re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+        return {"revision": "unknown", "build_id": "development", "build_time": "unknown"}
+
+    branch = git_value("symbolic-ref", "--quiet", "--short", "HEAD") or "detached"
+    branch = re.sub(r"[^A-Za-z0-9._-]+", "-", branch).strip("-") or "detached"
+    build_time = git_value("show", "-s", "--format=%cI", "HEAD") or "unknown"
+    return {
+        "revision": revision,
+        "build_id": f"{branch}-{revision[:12]}",
+        "build_time": build_time,
+    }
+
+
 def render_user_units(project_root: Path | None = None, runtime_mode: str | None = None) -> dict[str, str]:
     root = (project_root or get_project_root()).resolve()
     mode = resolve_runtime_mode(runtime_mode)
@@ -848,6 +879,10 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     if not isinstance(resolved, Mapping):
         resolved = {}
     _assert_runtime_port_contract(resolved)
+    build_identity = git_build_identity(root)
+    build_revision = build_identity["revision"]
+    build_id = build_identity["build_id"]
+    build_time = build_identity["build_time"]
     log_rotator = root / "scripts" / "rotate_biomodstack_logs.py"
     if mode == CONTAINER_RUNTIME_MODE:
         adapter_runner = root / "scripts" / "run_biomodstack_workflow_adapter.sh"
@@ -976,6 +1011,9 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment=BMS_MSA_CACHE={dev_msa_cache_dir}
         Environment=BMS_SABDAB_CACHE={dev_sabdab_cache_dir}
         Environment=BMS_CPU_POWER_STRICT=0
+        Environment=BMS_BUILD_SHA={build_revision}
+        Environment=BMS_BUILD_ID={build_id}
+        Environment=BMS_BUILD_TIME={build_time}
         Environment=PYTHONUNBUFFERED=1
         ExecStartPre=/usr/bin/mkdir -p {dev_data_root} {dev_inputs_dir} {dev_work_dir} {dev_weights_root} {dev_msa_cache_dir} {dev_sabdab_cache_dir}
         ExecStartPre=/usr/bin/env python3 {log_rotator}
@@ -1010,6 +1048,9 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment=BMS_FRONTEND_MODE=dev
         Environment=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:{dev_api_host_port}
         Environment=BMS_DEV_WEB_HOST_PORT={dev_web_host_port}
+        Environment=VITE_BMS_BUILD_SHA={build_revision}
+        Environment=VITE_BMS_BUILD_ID={build_id}
+        Environment=VITE_BMS_BUILD_TIME={build_time}
         ExecStartPre=/usr/bin/env python3 {log_rotator}
         ExecStart={frontend_runner}
         Restart=on-failure
