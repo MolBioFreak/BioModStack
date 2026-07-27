@@ -730,6 +730,36 @@ class ProductionReleaseBackend:
             source = body.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise ReleaseValidationError("operator frontend identity is not UTF-8") from exc
+        transformed_env = re.search(r"import\.meta\.env\s*=\s*(\{[^\r\n]*\});", source)
+        if transformed_env is not None:
+            try:
+                env = json.loads(transformed_env.group(1))
+            except json.JSONDecodeError as exc:
+                raise ReleaseValidationError(
+                    "operator frontend identity has invalid transformed environment"
+                ) from exc
+            layer_match = re.search(r'\blayer\s*:\s*("(?:\\.|[^"\\])*")', source)
+            if layer_match is None:
+                raise ReleaseValidationError("operator frontend identity is missing layer")
+            try:
+                layer = json.loads(layer_match.group(1))
+            except json.JSONDecodeError as exc:
+                raise ReleaseValidationError(
+                    "operator frontend identity has invalid layer"
+                ) from exc
+            transformed_fields = {
+                "layer": layer,
+                "revision": env.get("VITE_BMS_BUILD_SHA"),
+                "buildId": env.get("VITE_BMS_BUILD_ID"),
+                "buildTime": env.get("VITE_BMS_BUILD_TIME"),
+            }
+            for field, value in transformed_fields.items():
+                if not isinstance(value, str):
+                    raise ReleaseValidationError(
+                        f"operator frontend identity is missing {field}"
+                    )
+            return transformed_fields
+
         values: dict[str, str] = {}
         for field in ("layer", "revision", "buildId", "buildTime"):
             match = re.search(
