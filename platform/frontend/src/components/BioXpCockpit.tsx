@@ -371,7 +371,15 @@ export function BioXpCockpit() {
                         );
                     })}
                 </div>
-                {!connection?.startup_lifecycle && <p className="mt-3 text-sm text-amber-300">Automatic connect/readiness probing is loading lifecycle and controller evidence.</p>}
+                {!connection?.startup_lifecycle && (
+                    <p className="mt-3 text-sm text-amber-300">
+                        {connection?.active
+                            ? 'Automatic connect/readiness probing is loading lifecycle and controller evidence.'
+                            : connection?.configured
+                                ? 'Saved target is not connected; lifecycle evidence is unavailable.'
+                                : 'No saved target is configured; lifecycle evidence is unavailable.'}
+                    </p>
+                )}
             </section>
 
             <section className="rounded-xl border border-violet-700/60 bg-violet-950/20 p-5">

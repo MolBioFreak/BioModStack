@@ -99,7 +99,8 @@ def test_snapshot_completion_refreshes_status_and_lifecycle_reasons_are_operator
     from routers.bioxp import commands, connection
 
     command_source = inspect.getsource(commands.execute_command)
-    assert '{"activate_usb_for_service", "collect_hardware_snapshot"}' in command_source
+    assert "result.remote_acknowledged" in command_source
+    assert 'request.command != "stop_axis_diagnostic"' in command_source
     assert "await runtime.connection.probe()" in command_source
 
     status_source = inspect.getsource(connection.get_status)
