@@ -37,7 +37,11 @@ async def execute_command(
             request,
             mutations_enabled=True,
         )
-        if result.remote_acknowledged and result.status != "queued":
+        if (
+            result.remote_acknowledged
+            and result.status != "queued"
+            and request.command != "stop_axis_diagnostic"
+        ):
             try:
                 await runtime.connection.probe()
             except (ConnectionStateError, TargetPolicyError):
