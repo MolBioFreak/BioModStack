@@ -546,7 +546,7 @@ def test_operator_development_frontend_is_pinned_to_isolated_dev_api(monkeypatch
                 "Environment=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:18002\n"
                 f"Environment=VITE_BMS_BUILD_SHA={'a' * 40}\n"
                 f"Environment=VITE_BMS_BUILD_ID=test-{'a' * 12}\n"
-                "Environment=VITE_BMS_BUILD_TIME=2026-07-26T20:00:00-05:00\n"
+                "Environment=VITE_BMS_BUILD_TIME=2026-07-27T01:00:00Z\n"
             )
         },
     )
@@ -557,11 +557,11 @@ def test_operator_development_frontend_is_pinned_to_isolated_dev_api(monkeypatch
     )
     monkeypatch.setattr(tailnet, "daemon_reload", lambda **kwargs: None)
     monkeypatch.setattr(tailnet, "_git_revision", lambda root: "a" * 40)
-    monkeypatch.setattr(
-        tailnet,
-        "_run",
-        lambda args: type("Result", (), {"stdout": "2026-07-26T20:00:00-05:00\n"})(),
-    )
+    monkeypatch.setattr(tailnet, "git_build_identity", lambda root: {
+        "revision": "a" * 40,
+        "build_id": f"test-{'a' * 12}",
+        "build_time": "2026-07-27T01:00:00Z",
+    })
 
     tailnet._install_operator_development_frontend(tmp_path)
 
@@ -573,10 +573,13 @@ def test_operator_development_frontend_is_pinned_to_isolated_dev_api(monkeypatch
     assert "BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:18002" in dropin
     assert "ExecStart=/usr/bin/node " in dropin
     assert "/platform/frontend/node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173" in dropin
+    assert f"WorkingDirectory={tmp_path}/platform/frontend" in dropin
     assert "http://127.0.0.1:8000" not in unit
     assert "http://127.0.0.1:8000" not in dropin
     assert f"VITE_BMS_BUILD_SHA={'a' * 40}" in unit
     assert f"VITE_BMS_BUILD_SHA={'a' * 40}" in dropin
+    assert "VITE_BMS_BUILD_TIME=2026-07-27T01:00:00Z" in unit
+    assert "VITE_BMS_BUILD_TIME=2026-07-27T01:00:00Z" in dropin
 
 
 def test_development_frontend_requires_every_exclusive_loopback_vite_owner(monkeypatch, tmp_path: Path) -> None:
@@ -725,7 +728,7 @@ def test_selected_environment_rejects_local_tailnet_api_build_mismatch(monkeypat
         tailnet._verify_selected_environment(spec, tmp_path, snapshot)
 
 
-def test_selected_environment_rejects_api_health_revision_outside_managed_runtime(monkeypatch, tmp_path: Path) -> None:
+def test_selected_development_uses_isolated_api_listener_not_container_runtime(monkeypatch, tmp_path: Path) -> None:
     spec = tailnet.environment_spec("development", project_root=tmp_path)
     snapshot = tailnet.ServeSnapshot(
         origin="https://node.example.ts.net",
@@ -747,23 +750,26 @@ def test_selected_environment_rejects_api_health_revision_outside_managed_runtim
         },
     )
     monkeypatch.setattr(tailnet, "_pid_report", lambda port: [])
-    monkeypatch.setattr(tailnet, "_git_revision", lambda root: "c" * 40)
+    monkeypatch.setattr(tailnet, "_git_revision", lambda root: "a" * 40)
+    revisions: list[str] = []
+    monkeypatch.setattr(
+        tailnet,
+        "_validated_development_api_listener",
+        lambda spec, root, revision: revisions.append(revision) or {"listener_reports": []},
+    )
     monkeypatch.setattr(
         tailnet,
         "_validated_container_runtime",
-        lambda root, require_web: {"validated_revision": "b" * 40},
+        lambda *args, **kwargs: pytest.fail("development must not inspect Production containers"),
     )
+    monkeypatch.setattr(tailnet, "_validated_workflow_adapter_listener", lambda *args: {})
+    monkeypatch.setattr(tailnet, "_validated_development_frontend_listener", lambda *args: {})
 
-    with pytest.raises(tailnet.TailnetEnvironmentError, match="managed container revision"):
-        tailnet._verify_selected_environment(spec, tmp_path, snapshot)
-
-    monkeypatch.setattr(
-        tailnet,
-        "_validated_container_runtime",
-        lambda root, require_web: {"validated_revision": "a" * 40},
-    )
     report = tailnet._verify_selected_environment(spec, tmp_path, snapshot)
+    assert revisions == ["a" * 40]
     assert report["frontend_target"] == "http://127.0.0.1:5173"
+    assert "development_api_listener" in report
+    assert "managed_api_runtime" not in report
 
 
 def test_start_selected_environment_probes_only_selected_runtime_and_never_starts_shared_services(
@@ -1177,12 +1183,16 @@ def test_canonical_source_override_supersedes_old_dropins_without_deleting_them(
             "Environment=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:18002\n"
             f"Environment=VITE_BMS_BUILD_SHA={'b' * 40}\n"
             f"Environment=VITE_BMS_BUILD_ID=test-{'b' * 12}\n"
-            "Environment=VITE_BMS_BUILD_TIME=2026-07-26T20:00:00-05:00\n"
+            "Environment=VITE_BMS_BUILD_TIME=2026-07-27T01:00:00Z\n"
         )
     })
     monkeypatch.setattr(tailnet, "runtime_api_port", lambda mode, project_root=None: 18002 if mode == tailnet.DEV_RUNTIME_MODE else 8000)
     monkeypatch.setattr(tailnet, "_git_revision", lambda root: "b" * 40)
-    monkeypatch.setattr(tailnet, "_run", lambda args: type("Result", (), {"stdout": "2026-07-26T20:00:00-05:00\n"})())
+    monkeypatch.setattr(tailnet, "git_build_identity", lambda root: {
+        "revision": "b" * 40,
+        "build_id": f"test-{'b' * 12}",
+        "build_time": "2026-07-27T01:00:00Z",
+    })
     monkeypatch.setattr(tailnet, "daemon_reload", lambda **kwargs: None)
 
     tailnet._install_operator_development_frontend(tmp_path / "canonical")

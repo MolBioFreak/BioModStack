@@ -12,6 +12,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Mapping
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
 from textwrap import dedent
@@ -863,7 +864,18 @@ def git_build_identity(project_root: Path) -> dict[str, str]:
 
     branch = git_value("symbolic-ref", "--quiet", "--short", "HEAD") or "detached"
     branch = re.sub(r"[^A-Za-z0-9._-]+", "-", branch).strip("-") or "detached"
-    build_time = git_value("show", "-s", "--format=%cI", "HEAD") or "unknown"
+    raw_build_time = git_value("show", "-s", "--format=%cI", "HEAD")
+    try:
+        parsed_build_time = datetime.fromisoformat(raw_build_time.replace("Z", "+00:00"))
+        if parsed_build_time.tzinfo is None:
+            raise ValueError("Git commit time must include a UTC offset")
+        build_time = (
+            parsed_build_time.astimezone(timezone.utc)
+            .isoformat(timespec="seconds")
+            .replace("+00:00", "Z")
+        )
+    except ValueError:
+        build_time = "unknown"
     return {
         "revision": revision,
         "build_id": f"{branch}-{revision[:12]}",

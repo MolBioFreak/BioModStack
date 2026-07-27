@@ -20,12 +20,14 @@ import urllib.parse
 import urllib.request
 
 from biomodstack_services import (
+    API_SERVICE,
     CONTAINER_RUNTIME_MODE,
     DEV_RUNTIME_MODE,
     FRONTEND_SERVICE,
     ServiceManagerError,
     WORKFLOW_ADAPTER_SERVICE,
     daemon_reload,
+    git_build_identity,
     listener_pids,
     render_user_units,
     run_systemctl,
@@ -665,8 +667,9 @@ def _install_operator_development_frontend(root: Path, mutation_ledger: set[str]
     if expected_line not in frontend:
         raise TailnetEnvironmentError("could not render the canonical development frontend proxy contract")
     revision = _git_revision(root)
-    build_time = _run(["git", "-C", str(root), "show", "-s", "--format=%cI", "HEAD"]).stdout.strip()
-    build_id = f"test-{revision[:12]}"
+    build_identity = git_build_identity(root)
+    build_time = build_identity["build_time"]
+    build_id = build_identity["build_id"]
     home_line = f"Environment=BMS_HOME={root}"
     required_identity_lines = (
         home_line,
@@ -687,6 +690,7 @@ def _install_operator_development_frontend(root: Path, mutation_ledger: set[str]
         f"Environment=VITE_BMS_BUILD_SHA={revision}\n"
         f"Environment=VITE_BMS_BUILD_ID={build_id}\n"
         f"Environment=VITE_BMS_BUILD_TIME={build_time}\n"
+        f"WorkingDirectory={root}/platform/frontend\n"
         "ExecStartPre=\n"
         f"ExecStartPre=/usr/bin/sh -c 'test \"$BMS_DEV_API_PROXY_TARGET\" = \"{dev_api_target}\"'\n"
         f"ExecStartPre=/usr/bin/env python3 {root}/scripts/rotate_biomodstack_logs.py\n"
@@ -1205,6 +1209,47 @@ def _validated_development_frontend_listener(
         "systemd_service": FRONTEND_SERVICE,
         "source_root": str((root / "platform" / "frontend").resolve()),
         "source_revision": _git_revision(root),
+    })
+    return closure
+
+
+def _validated_development_api_listener(
+    spec: EnvironmentSpec,
+    root: Path,
+    runtime_revision: str,
+) -> dict[str, object]:
+    closure = _host_listener_closure(spec.api_port)
+    reports = closure.get("listener_reports")
+    if not isinstance(reports, list) or not reports:
+        raise TailnetEnvironmentError("development API listener ownership reports are unavailable")
+    expected_cwd = str((root / "platform" / "api").resolve())
+    expected_python = (root / "platform" / "api" / ".venv" / "bin" / "python").resolve()
+    expected_state = str((Path.home() / ".biomodstack-dev").resolve())
+    expected_db = str((Path(expected_state) / "biomodstack.db").resolve())
+    for report in reports:
+        pid = report.get("pid") if isinstance(report, Mapping) else None
+        executable = report.get("executable") if isinstance(report, Mapping) else None
+        if not (
+            isinstance(pid, int)
+            and report.get("cwd") == expected_cwd
+            and isinstance(executable, str)
+            and Path(executable).resolve() == expected_python
+            and report.get("build_revision") == runtime_revision
+            and _process_in_exact_systemd_unit(report.get("cgroup", ""), API_SERVICE)
+            and _pid_environment_value(pid, "BMS_HOME") == str(root)
+            and _pid_environment_value(pid, "BMS_STATE_DIR") == expected_state
+            and _pid_environment_value(pid, "BMS_DB_PATH") == expected_db
+        ):
+            raise TailnetEnvironmentError("development API listener lost exact isolated service ownership")
+    confirmed = _host_listener_closure(spec.api_port)
+    if confirmed != closure:
+        raise TailnetEnvironmentError("development API listener changed during validation")
+    closure.update({
+        "systemd_service": API_SERVICE,
+        "source_root": expected_cwd,
+        "source_revision": runtime_revision,
+        "state_root": expected_state,
+        "database_path": expected_db,
     })
     return closure
 
@@ -1917,16 +1962,24 @@ def _verify_selected_environment(
             "local and Tailnet API build provenance disagree: "
             f"local={local_api_build}, Tailnet={public_api_build}"
         )
-    managed_api_runtime = _validated_container_runtime(root, require_web=False)
-    if managed_api_runtime.get("validated_revision") != local_api_build["revision"]:
-        raise TailnetEnvironmentError(
-            "API build provenance does not match the managed container revision"
+    managed_api_runtime: dict[str, object] | None = None
+    managed_api_listener: dict[str, object] | None = None
+    development_api_listener: dict[str, object] | None = None
+    if spec.runtime_mode == CONTAINER_RUNTIME_MODE:
+        managed_api_runtime = _validated_container_runtime(root, require_web=False)
+        if managed_api_runtime.get("validated_revision") != local_api_build["revision"]:
+            raise TailnetEnvironmentError(
+                "API build provenance does not match the managed container revision"
+            )
+        managed_api_listener = _validated_runtime_container_listener(
+            managed_api_runtime,
+            container_name="biomodstack-api",
+            port=spec.api_port,
         )
-    managed_api_listener = _validated_runtime_container_listener(
-        managed_api_runtime,
-        container_name="biomodstack-api",
-        port=spec.api_port,
-    )
+    else:
+        development_api_listener = _validated_development_api_listener(
+            spec, root, local_api_build["revision"]
+        )
     production_runtime: dict[str, object] | None = None
     managed_frontend_listener: dict[str, object] | None = None
     if spec.runtime_mode == CONTAINER_RUNTIME_MODE:
@@ -1963,7 +2016,11 @@ def _verify_selected_environment(
             if managed_frontend_listener is not None
             else _pid_report(spec.frontend_port)
         ),
-        "api_listeners": managed_api_listener["listener_reports"],
+        "api_listeners": (
+            managed_api_listener["listener_reports"]
+            if managed_api_listener is not None
+            else cast(dict[str, object], development_api_listener)["listener_reports"]
+        ),
         "workflow_adapter_listener": workflow_adapter_listener,
         "health": {
             "local_frontend": local_frontend,
@@ -1972,8 +2029,12 @@ def _verify_selected_environment(
             "tailnet_api": public_api,
         },
     }
-    report["managed_api_runtime"] = managed_api_runtime
-    report["managed_api_listener"] = managed_api_listener
+    if managed_api_runtime is not None:
+        report["managed_api_runtime"] = managed_api_runtime
+    if managed_api_listener is not None:
+        report["managed_api_listener"] = managed_api_listener
+    if development_api_listener is not None:
+        report["development_api_listener"] = development_api_listener
     if development_frontend_listener is not None:
         report["development_frontend_listener"] = development_frontend_listener
     if spec.runtime_mode == CONTAINER_RUNTIME_MODE:

@@ -250,6 +250,7 @@ def test_system_features_endpoint_returns_resolved_addon_flags(monkeypatch) -> N
         "resolved": {"features": {"bioxp": False}},
     }
     monkeypatch.setattr(system, "install_profile_snapshot", lambda profile=None: snapshot, raising=False)
+    monkeypatch.setattr(system, "LOCAL_ADMIN_HOSTS", frozenset({"127.0.0.1", "::1"}))
 
     with build_client() as client:
         response = client.get("/api/system/features")
