@@ -164,7 +164,7 @@ export function deriveBioXpStatus(
             label: 'RUNTIME READY',
             ready: false,
             tone: 'warning',
-            detail: 'Runtime is reachable and ready. Hardware evidence is stale; collect an explicit snapshot before hardware-dependent writes.',
+            detail: 'Runtime is reachable and ready. Hardware evidence is stale; Automatic inline evidence refresh is pending or retrying, and hardware-dependent writes remain disabled until fresh evidence arrives.',
         };
     }
     if (connection.hardware_ready === false) {

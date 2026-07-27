@@ -37,7 +37,7 @@ async def execute_command(
             request,
             mutations_enabled=True,
         )
-        if request.command in {"activate_usb_for_service", "collect_hardware_snapshot"} and result.remote_acknowledged:
+        if result.remote_acknowledged and result.status != "queued":
             try:
                 await runtime.connection.probe()
             except (ConnectionStateError, TargetPolicyError):

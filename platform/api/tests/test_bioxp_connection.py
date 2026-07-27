@@ -108,6 +108,44 @@ def test_saved_profile_does_not_activate_on_startup_or_restart(tmp_path: Path) -
     assert clients == []
 
 
+def test_runtime_start_restores_saved_managed_connection() -> None:
+    from services.bioxp.runtime import BioXpRuntime
+
+    class Connection:
+        connected = 0
+
+        def load_profile(self):
+            return object()
+
+        async def connect(self):
+            self.connected += 1
+
+    connection = Connection()
+    runtime = BioXpRuntime(connection=connection, commands=None, jobs=None)  # type: ignore[arg-type]
+
+    asyncio.run(runtime.start())
+
+    assert connection.connected == 1
+    assert runtime.startup_warnings == []
+
+
+def test_runtime_start_keeps_failed_restore_truthful_without_crashing_api() -> None:
+    from services.bioxp.runtime import BioXpRuntime
+
+    class Connection:
+        def load_profile(self):
+            return object()
+
+        async def connect(self):
+            raise RuntimeError("robot offline")
+
+    runtime = BioXpRuntime(connection=Connection(), commands=None, jobs=None)  # type: ignore[arg-type]
+
+    asyncio.run(runtime.start())
+
+    assert runtime.startup_warnings == ["Saved BioXP profile was not restored: robot offline"]
+
+
 def test_connect_uses_only_saved_profile_and_failed_probe_is_unknown_not_ready(tmp_path: Path) -> None:
     BioXpConnectionService, BioXpProfile, BioXpProfileStore, BioXpTargetPolicy = _load()
 
