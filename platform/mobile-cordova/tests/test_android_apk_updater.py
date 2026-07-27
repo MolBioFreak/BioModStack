@@ -135,6 +135,14 @@ def test_clean_build_prepares_www_before_adding_android_platform() -> None:
     assert script.index(prepare) < script.index(platform_add)
 
 
+def test_internal_update_build_ignores_inherited_home_and_xdg_signing_roots() -> None:
+    script = BUILD_SCRIPT.read_text()
+    assert "pwd.getpwuid(os.getuid()).pw_dir" in script
+    assert 'HOME="$CANONICAL_HOME"' in script
+    assert 'XDG_CONFIG_HOME="$HOME/.local/share/biomodstack/cordova-build-config"' in script
+    assert "export HOME XDG_CONFIG_HOME" in script
+
+
 def test_build_syncs_authoritative_package_manager_instrumentation_source() -> None:
     script = BUILD_SCRIPT.read_text()
     assert 'UPDATER_ANDROID_TEST_SOURCE' in script
