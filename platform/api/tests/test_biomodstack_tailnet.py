@@ -663,7 +663,7 @@ def test_selected_environment_rejects_local_tailnet_api_build_mismatch(monkeypat
     local_build = {"revision": "a" * 40, "build_id": "local", "build_time": "2026-07-27T01:00:00.123456Z"}
     public_build = {"revision": "b" * 40, "build_id": "tailnet", "build_time": "2026-07-27T01:00:01Z"}
 
-    def probe(url: str, *, expect_json: bool = False):
+    def probe(url: str, *, expect_json: bool = False, expected_final_url: str | None = None):
         if not expect_json:
             return {"url": url, "status": 200, "payload": None}
         build = local_build if url == spec.api_health_url else public_build
@@ -697,7 +697,7 @@ def test_selected_environment_rejects_api_health_revision_outside_managed_runtim
     monkeypatch.setattr(
         tailnet,
         "_url_probe",
-        lambda url, expect_json=False: {
+        lambda url, expect_json=False, **kwargs: {
             "url": url,
             "status": 200,
             "payload": {
@@ -745,7 +745,7 @@ def test_start_selected_environment_probes_only_selected_runtime_and_never_start
     monkeypatch.setattr(
         tailnet,
         "_url_probe",
-        lambda url, expect_json=False: probes.append((url, expect_json)) or {
+        lambda url, expect_json=False, **kwargs: probes.append((url, expect_json)) or {
             "status": 200,
             "payload": health_payload if expect_json else None,
         },
@@ -855,6 +855,11 @@ def test_production_tailnet_proxy_requires_exact_read_only_config(monkeypatch, t
     assert report["image_id"] == tailnet.PRODUCTION_TAILNET_PROXY_IMAGE_ID
     assert report["listener_pids"] == [123, 124]
     assert report["container_listener_pids"] == [1, 27]
+
+    monkeypatch.setattr(tailnet, "_container_listener_pids", lambda name, port: [1])
+    with pytest.raises(tailnet.TailnetEnvironmentError, match="socket has an owner outside"):
+        tailnet._validated_production_tailnet_proxy(tmp_path)
+    monkeypatch.setattr(tailnet, "_container_listener_pids", lambda name, port: [1, 27])
 
     monkeypatch.setattr(
         tailnet, "_container_process_reports",
@@ -1095,6 +1100,22 @@ def test_host_owner_helper_uses_kernel_proc_names_not_human_ls_output(monkeypatc
     assert "os.scandir('/host-proc')" in helper
     assert "os.readlink(fd_entry.path)" in helper
     assert "ls -l" not in helper
+
+
+def test_container_listener_helpers_use_privileged_root_proc_visibility(monkeypatch) -> None:
+    captured: list[list[str]] = []
+
+    def fake_run(command, **_kwargs):
+        captured.append(command)
+        return tailnet.subprocess.CompletedProcess(command, 0, "1\n27\n", "")
+
+    monkeypatch.setattr(tailnet, "_run", fake_run)
+    assert tailnet._container_listener_pids("biomodstack-web", 18080) == [1, 27]
+    assert tailnet._container_listener_inodes("biomodstack-web", 18080) == [1, 27]
+    for command in captured:
+        assert command[:5] == [
+            "docker", "exec", "--privileged", "--user", "0:0",
+        ]
 
 
 def test_canonical_source_override_supersedes_old_dropins_without_deleting_them(
@@ -1557,7 +1578,7 @@ def test_url_probe_rejects_redirect_to_different_authority(monkeypatch) -> None:
         "build_opener",
         lambda *args: Opener("https://attacker.example/api/health"),
     )
-    with pytest.raises(tailnet.TailnetEnvironmentError, match="escaped its requested authority"):
+    with pytest.raises(tailnet.TailnetEnvironmentError, match="canonical endpoint"):
         tailnet._url_probe("http://127.0.0.1:8000/api/health")
 
     monkeypatch.setattr(
@@ -1565,7 +1586,12 @@ def test_url_probe_rejects_redirect_to_different_authority(monkeypatch) -> None:
         "build_opener",
         lambda *args: Opener("https://node.example.ts.net/bms/"),
     )
-    report = tailnet._url_probe("https://node.example.ts.net/")
+    with pytest.raises(tailnet.TailnetEnvironmentError, match="canonical endpoint"):
+        tailnet._url_probe("https://node.example.ts.net/")
+    report = tailnet._url_probe(
+        "https://node.example.ts.net/",
+        expected_final_url="https://node.example.ts.net/bms/",
+    )
     assert report["final_url"] == "https://node.example.ts.net/bms/"
 
 
@@ -1617,6 +1643,15 @@ def test_managed_runtime_listener_requires_complete_container_owned_socket(monke
         port=18080,
     )
     assert [item["pid"] for item in report["listener_reports"]] == [101, 102]
+
+    monkeypatch.setattr(tailnet, "_container_listener_pids", lambda name, port: [1])
+    with pytest.raises(tailnet.TailnetEnvironmentError, match="owner outside"):
+        REAL_VALIDATED_RUNTIME_CONTAINER_LISTENER(
+            runtime_report,
+            container_name="biomodstack-web",
+            port=18080,
+        )
+    monkeypatch.setattr(tailnet, "_container_listener_pids", lambda name, port: [1, 27])
 
     owners[44] = [101, 999]
     with pytest.raises(tailnet.TailnetEnvironmentError, match="owner outside"):

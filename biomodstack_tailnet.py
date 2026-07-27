@@ -313,7 +313,13 @@ def _control_route_needs_mutation(snapshot: ServeSnapshot) -> bool:
     return True
 
 
-def _url_probe(url: str, *, expect_json: bool = False, timeout: float = 20.0) -> dict[str, object]:
+def _url_probe(
+    url: str,
+    *,
+    expect_json: bool = False,
+    expected_final_url: str | None = None,
+    timeout: float = 20.0,
+) -> dict[str, object]:
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     request = urllib.request.Request(
         url,
@@ -326,14 +332,17 @@ def _url_probe(url: str, *, expect_json: bool = False, timeout: float = 20.0) ->
             final_url = response.geturl()
             requested = urllib.parse.urlsplit(url)
             final = urllib.parse.urlsplit(final_url)
+            expected = expected_final_url or url
             if (
                 final.scheme != requested.scheme
                 or final.netloc != requested.netloc
                 or final.username is not None
                 or final.password is not None
+                or final_url != expected
             ):
                 raise TailnetEnvironmentError(
-                    f"health probe escaped its requested authority: {url} -> {final_url}"
+                    f"health probe did not terminate at its canonical endpoint: "
+                    f"{url} -> {final_url}; expected {expected}"
                 )
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise TailnetEnvironmentError(f"health probe failed for {url}: {exc}") from exc
@@ -834,7 +843,10 @@ def _start_selected_environment(spec: EnvironmentSpec, root: Path) -> set[str]:
     if spec.runtime_mode == CONTAINER_RUNTIME_MODE:
         _url_probe(spec.frontend_url)
         _validated_production_tailnet_proxy(root)
-        _url_probe(f"http://127.0.0.1:{PRODUCTION_TAILNET_PROXY_PORT}/")
+        _url_probe(
+            f"http://127.0.0.1:{PRODUCTION_TAILNET_PROXY_PORT}/",
+            expected_final_url=f"http://127.0.0.1:{PRODUCTION_TAILNET_PROXY_PORT}/bms/",
+        )
     mutations: set[str] = set()
     try:
         # Everything below this boundary can mutate service files or process state.
@@ -936,7 +948,8 @@ for proc in /proc/[0-9]*; do
   done
 done'''
     result = _run([
-        "docker", "exec", container_name, "/bin/sh", "-ec", script, "--", str(port)
+        "docker", "exec", "--privileged", "--user", "0:0",
+        container_name, "/bin/sh", "-ec", script, "--", str(port),
     ])
     return sorted({int(line) for line in result.stdout.splitlines() if line.isdigit()})
 
@@ -953,7 +966,8 @@ for proc in /proc/[0-9]*; do
   done
 done'''
     result = _run([
-        "docker", "exec", container_name, "/bin/sh", "-ec", script, "--", str(port)
+        "docker", "exec", "--privileged", "--user", "0:0",
+        container_name, "/bin/sh", "-ec", script, "--", str(port),
     ])
     return sorted({int(line) for line in result.stdout.splitlines() if line.isdigit()})
 
@@ -1475,7 +1489,7 @@ def _validated_runtime_container_listener(
     if (
         any(not inode_owners.get(inode) for inode in host_listener_inodes)
         or not listener_pid_map
-        or not set(reported_container_listener_pids).issubset(container_listener_pids)
+        or reported_container_listener_pids != container_listener_pids
         or host_listener_pids != sorted(set(host_listener_pids))
         or host_listener_pids != all_owner_pids
         or not isinstance(expected_host_pids, list)
@@ -1671,7 +1685,7 @@ def _validated_production_tailnet_proxy(root: Path) -> dict[str, object]:
     if (
         any(not inode_owners.get(inode) for inode in host_listener_inodes)
         or not listener_pid_map
-        or not set(reported_listener_pids_in_container).issubset(listener_pids_in_container)
+        or reported_listener_pids_in_container != listener_pids_in_container
         or host_listener_pids != sorted(set(host_listener_pids))
         or host_listener_pids != all_owner_pids
         or not stable_capture
@@ -1853,7 +1867,14 @@ def _verify_selected_environment(
         )
     local_frontend = _url_probe(spec.frontend_url)
     local_api = _url_probe(spec.api_health_url, expect_json=True)
-    public_frontend = _url_probe(snapshot.origin + "/")
+    public_frontend = _url_probe(
+        snapshot.origin + "/",
+        expected_final_url=(
+            snapshot.origin + "/bms/"
+            if spec.runtime_mode == CONTAINER_RUNTIME_MODE
+            else snapshot.origin + "/"
+        ),
+    )
     public_api = _url_probe(snapshot.origin + "/api/health", expect_json=True)
     local_api_build = _api_build_identity(local_api, source="local")
     public_api_build = _api_build_identity(public_api, source="Tailnet")
