@@ -27,6 +27,7 @@ from biomodstack_services import (  # noqa: E402
     stop_api,
     stop_all,
 )
+from biomodstack_tailnet import select_tailnet_environment  # noqa: E402
 
 
 NOTIFY_ICON = "applications-science"
@@ -50,7 +51,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Manage BioModStack desktop services")
     parser.add_argument(
         "action",
-        choices=["start", "start-api", "start-target", "stop", "stop-api", "restart", "restart-api", "status"],
+        choices=["start", "start-api", "start-target", "select-tailnet", "stop", "stop-api", "restart", "restart-api", "status"],
     )
     parser.add_argument(
         "--runtime",
@@ -60,13 +61,29 @@ def main() -> int:
     parser.add_argument("--notify", action="store_true", help="send desktop notifications")
     parser.add_argument("--json", action="store_true", dest="json_output", help="emit structured JSON for supported actions")
     parser.add_argument("--target", choices=["dev", "prod", "both"], help="runtime target for start-target")
+    parser.add_argument(
+        "--environment",
+        choices=["development", "production"],
+        help="explicit canonical environment for select-tailnet",
+    )
     args = parser.parse_args()
 
-    if args.json_output and args.action != "status":
-        parser.error("--json is only supported with the status action")
+    if args.json_output and args.action not in {"status", "select-tailnet"}:
+        parser.error("--json is only supported with status or select-tailnet")
+    if args.action == "select-tailnet" and args.environment is None:
+        parser.error("select-tailnet requires --environment development or production")
 
     try:
         runtime_mode = resolve_runtime_mode(args.runtime)
+
+        if args.action == "select-tailnet":
+            if args.notify:
+                notify(f"🔀 Selecting BioModStack {args.environment} for Tailnet…")
+            report = select_tailnet_environment(args.environment, project_root=REPO_ROOT)
+            if args.notify:
+                notify(f"✅ Tailnet now mirrors BioModStack {args.environment}")
+            print(json.dumps(report, indent=2, sort_keys=True))
+            return 0
 
         if args.action == "start-target":
             target = args.target or "prod"

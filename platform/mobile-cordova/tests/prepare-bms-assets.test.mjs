@@ -19,6 +19,68 @@ import {
   patchIndexHtmlContent,
 } from '../scripts/prepare-bms-assets.mjs';
 
+function exactSelectionReceipt(environment) {
+  const runtimeRevision = '6'.repeat(40);
+  const build = { revision: runtimeRevision, build_id: 'build-1', build_time: '2026-07-26T00:00:00Z' };
+  const container = (name, marker, pid) => ({
+    name,
+    container_id: marker.repeat(64),
+    image_id: `sha256:${marker.repeat(64)}`,
+    revision: runtimeRevision,
+    compose_working_dir: '/srv/biomodstack',
+    pid,
+    cgroup: `0::/docker/${marker.repeat(64)}.scope`,
+    cmdline: name === 'biomodstack-web' ? 'nginx -g daemon off;' : 'uvicorn main:app',
+    cwd: name === 'biomodstack-web' ? '/' : '/app/platform/api',
+  });
+  const receipt = {
+    selected_environment: environment,
+    frontend_target: environment === 'development' ? 'http://127.0.0.1:5173' : 'http://127.0.0.1:18080/bms/',
+    api_health_target: 'http://127.0.0.1:8000/api/health',
+    serve_root_proxy: environment === 'development' ? 'http://127.0.0.1:5173' : 'http://127.0.0.1:18081',
+    runtime_mode: environment === 'development' ? 'dev' : 'container',
+    runtime_target: environment === 'development' ? 'dev' : 'prod',
+    tailnet_origin: 'https://compute-node.taileb3a90.ts.net',
+    project_revision: 'a'.repeat(40),
+    serve_handlers: {
+      '/': { Proxy: environment === 'development' ? 'http://127.0.0.1:5173' : 'http://127.0.0.1:18081' },
+      '/api/tailnet-environment': { Proxy: 'http://127.0.0.1:8001' },
+    },
+    managed_api_runtime: {
+      validated_revision: runtimeRevision,
+      validated_compose_root: '/srv/biomodstack',
+      containers: [container('biomodstack-api', '1', 101)],
+    },
+    health: {
+      local_frontend: { status: 200 },
+      tailnet_frontend: { status: 200 },
+      local_api: { status: 200, payload: { build } },
+      tailnet_api: { status: 200, payload: { build: { ...build } } },
+    },
+  };
+  if (environment === 'production') {
+    receipt.container_runtime = {
+      validated_revision: runtimeRevision,
+      validated_compose_root: '/srv/biomodstack',
+      containers: [container('biomodstack-api', '1', 101), container('biomodstack-web', '2', 202)],
+    };
+    receipt.tailnet_production_proxy = {
+      container_id: '3'.repeat(64),
+      image: 'nginx@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10',
+      image_id: 'sha256:6769dc3a703c719c1d2756bda113659be28ae16cf0da58dd5fd823d6b9a050ea',
+      config_path: '/srv/selector/docker/tailnet-production-proxy.conf',
+      config_sha256: '2c5943ce3ae5fa2ca35cd0a094a90c42b8e38b71c85c1fae58d2afe392082b62',
+      listener_port: 18081,
+      pid: 303,
+      listener_pids: [1, 27],
+      cgroup: `0::/docker/${'3'.repeat(64)}.scope`,
+      cmdline: '/docker-entrypoint.sh nginx -g daemon off;',
+      cwd: '/',
+    };
+  }
+  return receipt;
+}
+
 test('normalizeConfig fills in phone-friendly mobile viewport defaults while preserving extra pinch-zoom-out headroom', () => {
   const config = normalizeConfig({
     frontendCheckout: '/tmp/frontend',
@@ -250,10 +312,122 @@ test('buildUpdateLoaderScript exposes fallback boot and readiness hooks for down
   assert.match(script, /__BMS_CORDOVA_BUNDLED_DESCRIPTOR__/);
   assert.match(script, /__bms_ui__\//);
   assert.match(script, /bms-cordova-remote-ui/);
-  assert.match(script, /bootRemoteUi\(remoteUiUrl\)/);
+  assert.match(script, /awaiting-environment-selection/);
+  assert.match(script, /__BMS_CORDOVA_SELECT_AND_BOOT_REMOTE_UI__/);
+  assert.doesNotMatch(script, /__BMS_CORDOVA_BOOT_REMOTE_UI__/);
   assert.match(script, /BioModStack live UI/);
   assert.match(script, /DOMContentLoaded/);
   assert.doesNotThrow(() => new vm.Script(script));
+});
+
+test('remote-live loader clears stored bundles and cannot mount an iframe before successful selection', async () => {
+  const script = buildUpdateLoaderScript();
+  const elements = [];
+  const storage = new Map([['bms.cordova.uiBundleState', JSON.stringify({
+    descriptor: { version: 'old', shellApiVersion: 1, entryCss: [], entryJs: ['assets/old.js'] },
+    basePath: '/__bms_ui__/active/',
+  })]]);
+  const document = {
+    head: { appendChild: (element) => elements.push(element) },
+    body: { appendChild: (element) => { element.isConnected = true; elements.push(element); } },
+    querySelector: () => null,
+    getElementById: (id) => elements.find((element) => element.id === id) || null,
+    addEventListener: () => {},
+    createElement: (tagName) => ({
+      tagName,
+      id: '',
+      isConnected: false,
+      style: {},
+      setAttribute() {},
+      addEventListener() {},
+    }),
+  };
+  const context = {
+    URL,
+    Date,
+    document,
+    localStorage: {
+      getItem: (key) => storage.get(key) ?? null,
+      removeItem: (key) => storage.delete(key),
+    },
+    setTimeout,
+    clearTimeout,
+    fetch: async () => ({ ok: false, status: 503, json: async () => ({ detail: 'blocked' }) }),
+    window: {
+      __BMS_CORDOVA_RUNTIME__: {
+        apiBaseUrl: 'https://compute-node.taileb3a90.ts.net',
+        remoteUiUrl: 'https://compute-node.taileb3a90.ts.net/',
+      },
+    },
+  };
+  context.window.window = context.window;
+  vm.createContext(context);
+  new vm.Script(script).runInContext(context);
+
+  assert.equal(storage.has('bms.cordova.uiBundleState'), false);
+  assert.equal(elements.filter((element) => element.tagName === 'iframe').length, 0);
+  context.window.__BMS_CORDOVA_BOOT_UI__({
+    version: 'bypass',
+    shellApiVersion: 1,
+    entryCss: [],
+    entryJs: ['assets/bypass.js'],
+  });
+  assert.equal(elements.filter((element) => element.tagName === 'script').length, 0);
+  await assert.rejects(
+    context.window.__BMS_CORDOVA_SELECT_AND_BOOT_REMOTE_UI__(
+      'https://compute-node.taileb3a90.ts.net',
+      'development',
+    ),
+    /blocked/,
+  );
+  assert.equal(elements.filter((element) => element.tagName === 'iframe').length, 0);
+
+  context.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => exactSelectionReceipt('development'),
+  });
+  await context.window.__BMS_CORDOVA_SELECT_AND_BOOT_REMOTE_UI__(
+    'https://compute-node.taileb3a90.ts.net',
+    'development',
+  );
+  assert.equal(elements.filter((element) => element.tagName === 'iframe').length, 1);
+});
+
+test('selection response contract accepts exact development and production receipts and rejects cross-environment identities', () => {
+  const receipt = exactSelectionReceipt;
+
+  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
+    receipt('development'), 'development', 'https://compute-node.taileb3a90.ts.net',
+  ));
+  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
+    receipt('production'), 'production', 'https://compute-node.taileb3a90.ts.net',
+  ));
+
+  for (const mutation of [
+    (value) => { value.frontend_target = 'http://127.0.0.1:5173'; },
+    (value) => { value.serve_root_proxy = 'http://127.0.0.1:5173'; },
+    (value) => { value.runtime_mode = 'dev'; },
+    (value) => { value.runtime_target = 'dev'; },
+    (value) => { value.tailnet_origin = 'https://wrong.ts.net'; },
+    (value) => { value.health.tailnet_api.payload.build.revision = 'b'.repeat(40); },
+    (value) => { value.health.local_api.payload.build.build_id = ''; },
+    (value) => { value.health.local_api.payload.build.build_time = ''; },
+    (value) => { value.managed_api_runtime.validated_revision = 'b'.repeat(40); },
+    (value) => { value.managed_api_runtime.containers = []; },
+    (value) => { value.serve_handlers['/api/tailnet-environment'].Proxy = 'http://127.0.0.1:9999'; },
+    (value) => { delete value.container_runtime; },
+    (value) => { value.container_runtime.containers[1].revision = 'b'.repeat(40); },
+    (value) => { delete value.tailnet_production_proxy; },
+    (value) => { value.tailnet_production_proxy.listener_pids = []; },
+    (value) => { value.tailnet_production_proxy.image_id = 'sha256:' + '0'.repeat(64); },
+  ]) {
+    const malformed = receipt('production');
+    mutation(malformed);
+    assert.throws(() => prepareAssets.validateTailnetSelectionPayload(
+      malformed, 'production', 'https://compute-node.taileb3a90.ts.net',
+    ));
+  }
 });
 
 test('buildPreflight assets expose endpoint, manual update, and rollback controls with persistent override flow', () => {
@@ -276,11 +450,20 @@ test('buildPreflight assets expose endpoint, manual update, and rollback control
   assert.match(script, /installApkUpdate/);
   assert.doesNotMatch(script, /downloadUpdate/);
   assert.doesNotMatch(script, /openUnknownSourcesSettings/);
-  assert.match(script, /The APK never points at Vite dev automatically/);
+  assert.match(script, /Environment \<strong\>\(required before launch\)/);
+  assert.match(script, /data-role="tailnet-environment"/);
+  assert.match(script, /Choose an environment/);
+  assert.match(script, /development/);
+  assert.match(script, /production/);
+  assert.match(script, /__BMS_CORDOVA_SELECT_AND_BOOT_REMOTE_UI__/);
+  assert.match(script, /must be selected explicitly before each launch/);
   assert.match(script, /Revert to bundled UI/);
   assert.match(script, /window\.__BMS_CORDOVA_OPEN_PREFLIGHT__/);
   assert.doesNotThrow(() => new vm.Script(script));
   assert.match(css, /bms-cordova-preflight/);
+  assert.match(css, /padding-top:\s*max\(3\.5rem, calc\(1rem \+ env\(safe-area-inset-top\)\)\)/);
+  assert.match(css, /max-height:\s*calc\(100dvh - 4\.5rem\)/);
+  assert.match(css, /overflow-y:\s*auto/);
   assert.match(css, /bms-cordova-preflight-toggle/);
 });
 

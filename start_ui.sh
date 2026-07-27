@@ -1,6 +1,6 @@
 #!/bin/bash
 # BioModStack UI Service Manager
-# Usage: ./start_ui.sh [start|start-api|start-target|stop|stop-api|status|restart|restart-api] [--runtime dev|container] [--target dev|prod|both]
+# Usage: ./start_ui.sh [start|start-api|start-target|select-tailnet|stop|stop-api|status|restart|restart-api] [--runtime dev|container] [--target dev|prod|both] [--environment development|production]
 
 set -euo pipefail
 
@@ -13,11 +13,11 @@ if [ "$#" -gt 0 ]; then
 fi
 
 case "$ACTION" in
-    start|start-api|start-target|stop|stop-api|status|restart|restart-api)
+    start|start-api|start-target|select-tailnet|stop|stop-api|status|restart|restart-api)
         exec python3 "$MANAGER" "$ACTION" "$@"
         ;;
     *)
-        echo "Usage: $0 {start|start-api|start-target|stop|stop-api|status|restart|restart-api} [--runtime dev|container] [--target dev|prod|both]"
+        echo "Usage: $0 {start|start-api|start-target|select-tailnet|stop|stop-api|status|restart|restart-api} [--runtime dev|container] [--target dev|prod|both] [--environment development|production]"
         exit 1
         ;;
  esac

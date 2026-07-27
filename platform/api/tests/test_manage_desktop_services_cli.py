@@ -88,6 +88,45 @@ def test_json_flag_is_rejected_for_non_status_actions(monkeypatch) -> None:
     assert excinfo.value.code == 2
 
 
+def test_select_tailnet_requires_explicit_environment_before_side_effects(monkeypatch) -> None:
+    module = load_module()
+    monkeypatch.setattr(
+        module,
+        "select_tailnet_environment",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("selector must not run")),
+    )
+    monkeypatch.setattr(sys, "argv", ["manage_desktop_services.py", "select-tailnet"])
+
+    with pytest.raises(SystemExit) as excinfo:
+        module.main()
+
+    assert excinfo.value.code == 2
+
+
+def test_select_tailnet_prints_structured_provenance(monkeypatch, capsys) -> None:
+    module = load_module()
+    report = {
+        "selected_environment": "development",
+        "serve_root_proxy": "http://127.0.0.1:5173",
+        "project_revision": "a" * 40,
+    }
+    calls: list[tuple[str, Path]] = []
+    monkeypatch.setattr(
+        module,
+        "select_tailnet_environment",
+        lambda environment, project_root=None: calls.append((environment, project_root)) or report,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["manage_desktop_services.py", "select-tailnet", "--environment", "development", "--json"],
+    )
+
+    assert module.main() == 0
+    assert json.loads(capsys.readouterr().out) == report
+    assert calls == [("development", module.REPO_ROOT)]
+
+
 def test_start_action_reports_missing_dependency_as_error(monkeypatch, capsys) -> None:
     module = load_module()
     monkeypatch.setattr(module, "start_all", lambda runtime_mode=None: (_ for _ in ()).throw(FileNotFoundError("systemctl")))

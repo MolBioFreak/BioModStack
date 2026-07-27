@@ -1,5 +1,6 @@
 {
   "frontendCheckout": "../..",
   "apiBaseUrl": "https://compute-node.taileb3a90.ts.net",
+  "remoteUiUrl": "https://compute-node.taileb3a90.ts.net/",
   "routerBasename": "/"
 }

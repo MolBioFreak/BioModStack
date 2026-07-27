@@ -1359,11 +1359,13 @@ def test_core_runtime_compose_bounds_docker_json_logs() -> None:
     assert compose.count("logging: *bms-json-logging") == 4
 
 
-def test_core_runtime_compose_disables_docker_restart_policy() -> None:
+def test_core_runtime_compose_disables_restart_policy_for_application_services() -> None:
     compose = (services.get_project_root() / "compose.core-runtime.yml").read_text(encoding="utf-8")
 
-    assert "restart: unless-stopped" not in compose
     assert compose.count('restart: "no"') == 4
+    assert compose.count("restart: unless-stopped") == 1
+    proxy_section = compose.split("  tailnet-production-proxy:", 1)[1].split("\n  bms-web:", 1)[0]
+    assert "restart: unless-stopped" in proxy_section
 
 
 def test_stop_all_container_mode_is_prod_scoped(monkeypatch, tmp_path: Path) -> None:
