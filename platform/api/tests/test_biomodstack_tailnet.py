@@ -728,7 +728,7 @@ def test_selected_environment_rejects_local_tailnet_api_build_mismatch(monkeypat
         tailnet._verify_selected_environment(spec, tmp_path, snapshot)
 
 
-def test_selected_environment_rejects_api_health_revision_outside_managed_runtime(monkeypatch, tmp_path: Path) -> None:
+def test_selected_development_uses_isolated_api_listener_not_container_runtime(monkeypatch, tmp_path: Path) -> None:
     spec = tailnet.environment_spec("development", project_root=tmp_path)
     snapshot = tailnet.ServeSnapshot(
         origin="https://node.example.ts.net",
@@ -750,23 +750,26 @@ def test_selected_environment_rejects_api_health_revision_outside_managed_runtim
         },
     )
     monkeypatch.setattr(tailnet, "_pid_report", lambda port: [])
-    monkeypatch.setattr(tailnet, "_git_revision", lambda root: "c" * 40)
+    monkeypatch.setattr(tailnet, "_git_revision", lambda root: "a" * 40)
+    revisions: list[str] = []
+    monkeypatch.setattr(
+        tailnet,
+        "_validated_development_api_listener",
+        lambda spec, root, revision: revisions.append(revision) or {"listener_reports": []},
+    )
     monkeypatch.setattr(
         tailnet,
         "_validated_container_runtime",
-        lambda root, require_web: {"validated_revision": "b" * 40},
+        lambda *args, **kwargs: pytest.fail("development must not inspect Production containers"),
     )
+    monkeypatch.setattr(tailnet, "_validated_workflow_adapter_listener", lambda *args: {})
+    monkeypatch.setattr(tailnet, "_validated_development_frontend_listener", lambda *args: {})
 
-    with pytest.raises(tailnet.TailnetEnvironmentError, match="managed container revision"):
-        tailnet._verify_selected_environment(spec, tmp_path, snapshot)
-
-    monkeypatch.setattr(
-        tailnet,
-        "_validated_container_runtime",
-        lambda root, require_web: {"validated_revision": "a" * 40},
-    )
     report = tailnet._verify_selected_environment(spec, tmp_path, snapshot)
+    assert revisions == ["a" * 40]
     assert report["frontend_target"] == "http://127.0.0.1:5173"
+    assert "development_api_listener" in report
+    assert "managed_api_runtime" not in report
 
 
 def test_start_selected_environment_probes_only_selected_runtime_and_never_starts_shared_services(
