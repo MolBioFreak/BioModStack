@@ -1264,7 +1264,9 @@ def test_known_good_validation_records_distinct_active_unit_roots(
 
     monkeypatch.setattr(backend, "_systemd_property", fake_property)
     monkeypatch.setattr(backend, "_validate_snapshot_listener_ownership", lambda roots: None)
-    monkeypatch.setattr(backend, "_observe_runtime_surfaces", lambda: {"ready": True})
+    monkeypatch.setattr(
+        backend, "_observe_runtime_surfaces", lambda *args, **kwargs: {"ready": True}
+    )
 
     validation = backend._snapshot_known_good_validation(units)
 

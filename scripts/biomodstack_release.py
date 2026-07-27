@@ -689,7 +689,9 @@ class ProductionReleaseBackend:
             raise ReleaseValidationError(f"health request failed for {url}: {exc}") from exc
 
     @staticmethod
-    def _health_revision(url: str, label: str, status: int, body: bytes) -> str:
+    def _health_revision(
+        url: str, label: str, status: int, body: bytes, *, require_full_sha: bool = True
+    ) -> str:
         if status != 200:
             raise ReleaseValidationError(f"{label} returned HTTP {status}")
         try:
@@ -700,7 +702,9 @@ class ProductionReleaseBackend:
             raise ReleaseValidationError(f"{label} did not return valid readiness JSON") from exc
         if not ready:
             raise ReleaseValidationError(f"{label} readiness is not ready")
-        if not isinstance(revision, str) or not FULL_GIT_SHA.fullmatch(revision):
+        if not isinstance(revision, str) or not revision or (
+            require_full_sha and not FULL_GIT_SHA.fullmatch(revision)
+        ):
             raise ReleaseValidationError(f"{label} build revision is invalid")
         return revision
 
@@ -834,10 +838,16 @@ class ProductionReleaseBackend:
         self._validate_listener_ownership(self.repo_root)
 
     def _observe_runtime_surfaces(
-        self, expected_identity: BuildIdentity | None = None
+        self,
+        expected_identity: BuildIdentity | None = None,
+        *,
+        allow_unsealed: bool = False,
     ) -> dict[str, Any]:
         api_revision = self._health_revision(
-            self.api_url, "direct API health", *self._fetch(self.api_url)
+            self.api_url,
+            "direct API health",
+            *self._fetch(self.api_url),
+            require_full_sha=not allow_unsealed,
         )
         if expected_identity is not None and api_revision != expected_identity.revision:
             raise ReleaseValidationError("direct API revision does not match the built release")
@@ -848,8 +858,9 @@ class ProductionReleaseBackend:
             self.operator_api_url,
             "operator proxied API health",
             *self._fetch(self.operator_api_url),
+            require_full_sha=not allow_unsealed,
         )
-        if operator_revision != api_revision:
+        if not allow_unsealed and operator_revision != api_revision:
             raise ReleaseValidationError("operator proxied API revision differs from direct API")
 
         identity_status, identity_body = self._fetch(self.operator_identity_url)
@@ -858,7 +869,7 @@ class ProductionReleaseBackend:
                 f"operator frontend identity returned HTTP {identity_status}"
             )
         observed = self._frontend_identity(identity_body)
-        if (
+        if not allow_unsealed and (
             observed["layer"] != "frontend"
             or observed["revision"] != api_revision
             or observed["revision"] == "unknown"
@@ -931,7 +942,7 @@ class ProductionReleaseBackend:
             },
             "runtime_roots": sorted({str(runtime_root) for runtime_root in unit_roots.values()}),
             "effective_units": effective_units,
-            "surfaces": self._observe_runtime_surfaces(),
+            "surfaces": self._observe_runtime_surfaces(allow_unsealed=True),
         }
 
     def _validate_snapshot_listener_ownership(self, unit_roots: Mapping[str, Path]) -> None:
@@ -1139,7 +1150,7 @@ class ProductionReleaseBackend:
             unit_roots[unit_name] = runtime_root
         if runtime_roots_value != sorted({str(root) for root in unit_roots.values()}):
             raise ReleaseRollbackError("rollback snapshot has inconsistent runtime roots")
-        observed_surfaces = self._observe_runtime_surfaces()
+        observed_surfaces = self._observe_runtime_surfaces(allow_unsealed=True)
         if observed_surfaces != dict(surfaces):
             raise ReleaseValidationError("restored runtime surfaces differ from known-good snapshot")
         self._validate_snapshot_listener_ownership(unit_roots)
