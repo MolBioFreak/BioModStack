@@ -682,9 +682,15 @@ def _tailnet_owner_login() -> str:
     return login
 
 
-def _install_adapter_control_policy(root: Path, mutation_ledger: set[str] | None = None) -> str:
+def _install_adapter_control_policy(
+    root: Path,
+    runtime_revision: str,
+    mutation_ledger: set[str] | None = None,
+) -> str:
     login = _tailnet_owner_login()
     revision = _git_revision(root)
+    if not _GIT_REVISION_PATTERN.fullmatch(runtime_revision):
+        raise TailnetEnvironmentError("managed API runtime revision is malformed")
     dropin = _host_user_systemd_dir() / f"{WORKFLOW_ADAPTER_SERVICE}.d" / "99-tailnet-canonical-source.conf"
     if mutation_ledger is not None:
         mutation_ledger.add("adapter_files")
@@ -693,6 +699,7 @@ def _install_adapter_control_policy(root: Path, mutation_ledger: set[str] | None
         "[Service]\n"
         f"Environment=BMS_HOME={root}\n"
         f"Environment=BMS_TAILNET_CONTROL_SOURCE_REVISION={revision}\n"
+        f"Environment=BMS_BUILD_SHA={runtime_revision}\n"
         "Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=127.0.0.1\n"
         "Environment=BMS_TAILNET_CONTROL_TRUSTED_PROXY_HOSTS=127.0.0.1,::1\n"
         f"Environment=BMS_TAILNET_CONTROL_ALLOWED_TAILSCALE_USERS={login}\n"
@@ -827,7 +834,7 @@ def _start_selected_environment(spec: EnvironmentSpec, root: Path) -> set[str]:
     mutations: set[str] = set()
     try:
         # Everything below this boundary can mutate service files or process state.
-        allowed_login = _install_adapter_control_policy(root, mutations)
+        allowed_login = _install_adapter_control_policy(root, runtime_revision, mutations)
         if not _adapter_identity_policy_matches(
             root, allowed_login, runtime_revision=runtime_revision
         ):
