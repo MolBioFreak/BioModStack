@@ -565,16 +565,25 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
       && parsed.getUTCMinutes() === minute
       && parsed.getUTCSeconds() === second;
   };
+  const cgroupPaths = (cgroup) => {
+    const lines = String(cgroup || '').split(/\r?\n/).filter(Boolean);
+    if (lines.length === 0) return null;
+    const paths = [];
+    for (const line of lines) {
+      const match = line.match(/^[0-9]+:[^:]*:(\/.*)$/);
+      if (!match) return null;
+      paths.push(match[1]);
+    }
+    return paths;
+  };
   const exactContainerCgroup = (cgroup, containerId) => {
     if (!containerIdPattern.test(String(containerId || ''))) return false;
     const expectedPaths = new Set([
       `/docker/${containerId}`,
       `/system.slice/docker-${containerId}.scope`,
     ]);
-    const paths = String(cgroup || '').split(/\r?\n/)
-      .filter(Boolean)
-      .map((line) => line.split(':', 3).at(-1));
-    return paths.length > 0
+    const paths = cgroupPaths(cgroup);
+    return Array.isArray(paths)
       && paths.some((path) => expectedPaths.has(path))
       && paths.every((path) => path === '/' || expectedPaths.has(path));
   };
@@ -591,10 +600,16 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
     if (byName.size !== requiredNames.length) return false;
     return requiredNames.every((name) => {
       const container = byName.get(name);
+      const expectedIdentity = name === 'biomodstack-api'
+        ? {
+          cmdline: '/bin/sh -ec /app/platform/api/.venv/bin/python run_migrations.py && exec /app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000',
+          cwd: '/app/platform/api',
+        }
+        : { cmdline: '/docker-entrypoint.sh nginx -g daemon off;', cwd: '/' };
       if (
         !hasExactKeys(container, [
           'name', 'container_id', 'revision', 'compose_working_dir', 'pid', 'cgroup',
-          'host_pids', 'process_reports',
+          'image_id', 'cmdline', 'cwd', 'host_pids', 'process_reports',
         ])
         || !containerIdPattern.test(String(container.container_id || ''))
         || container.revision !== revision
@@ -602,6 +617,9 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
         || !Number.isInteger(container.pid) || container.pid <= 0
         || !nonEmptyBounded(container.cgroup, 4096)
         || !exactContainerCgroup(container.cgroup, container.container_id)
+        || !digestPattern.test(String(container.image_id || ''))
+        || container.cmdline !== expectedIdentity.cmdline
+        || container.cwd !== expectedIdentity.cwd
         || !sortedUniquePositiveIntegers(container.host_pids)
         || !container.host_pids.includes(container.pid)
         || (name === 'biomodstack-api'
@@ -616,6 +634,15 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
           && exactContainerCgroup(report.cgroup, container.container_id)
         ));
     });
+  };
+  const sameRuntimeContainer = (leftRuntime, rightRuntime, name) => {
+    if (
+      leftRuntime?.validated_revision !== rightRuntime?.validated_revision
+      || leftRuntime?.validated_compose_root !== rightRuntime?.validated_compose_root
+    ) return false;
+    const left = leftRuntime?.containers?.find((item) => item?.name === name);
+    const right = rightRuntime?.containers?.find((item) => item?.name === name);
+    return JSON.stringify(left) === JSON.stringify(right);
   };
   const sortedUniquePositiveIntegers = (value, allowEmpty = false) => {
     if (!Array.isArray(value) || (!allowEmpty && value.length === 0)) return false;
@@ -671,6 +698,7 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
         'container_name', 'container_id', 'port', 'bind_addresses',
         'container_listener_pids', 'listener_pid_map', 'host_listener_pids',
         'listener_inodes', 'listener_inode_owners', 'container_host_pids', 'listener_reports',
+        'runtime_image_id', 'runtime_cmdline', 'runtime_cwd',
       ])
       || !validListenerClosure(listener, port, ['127.0.0.1'])
     ) return false;
@@ -687,9 +715,12 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
       || !sortedUniquePositiveIntegers(listener.container_host_pids)
       || JSON.stringify(listener.container_host_pids) !== JSON.stringify(container.host_pids)
       || !listener.container_host_pids.includes(container.pid)
+      || listener.runtime_image_id !== container.image_id
+      || listener.runtime_cmdline !== container.cmdline
+      || listener.runtime_cwd !== container.cwd
     ) return false;
     const mappedContainerPids = listener.listener_pid_map.map((item) => item?.container_pid);
-    const mappedHostPids = listener.listener_pid_map.map((item) => item?.host_pid).sort((a, b) => a - b);
+    const mappedHostPids = listener.listener_pid_map.map((item) => item?.host_pid);
     if (
       !listener.listener_pid_map.every((item) => (
         hasExactKeys(item, ['container_pid', 'host_pid'])
@@ -698,9 +729,14 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
       ))
       || JSON.stringify(mappedContainerPids) !== JSON.stringify(listener.container_listener_pids)
       || JSON.stringify(mappedHostPids) !== JSON.stringify(listener.host_listener_pids)
+      || listener.listener_pid_map.filter((item) => item.container_pid === 1).length !== 1
+      || listener.listener_pid_map.find((item) => item.container_pid === 1)?.host_pid !== container.pid
+      || (containerName === 'biomodstack-api'
+        && JSON.stringify(listener.container_listener_pids) !== JSON.stringify([1]))
     ) return false;
-    const ownerPids = [...new Set(Object.values(listener.listener_inode_owners).flat())];
-    return listener.host_listener_pids.every((pid) => ownerPids.includes(pid))
+    const ownerPids = [...new Set(Object.values(listener.listener_inode_owners).flat())]
+      .sort((left, right) => left - right);
+    return JSON.stringify(listener.host_listener_pids) === JSON.stringify(ownerPids)
       && ownerPids.every((pid) => listener.container_host_pids.includes(pid))
       && listener.listener_reports.every((report) => (
         hasExactKeys(report, ['pid', 'cgroup'])
@@ -753,10 +789,10 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
     }))].sort((left, right) => left - right);
     const reportPids = proxy.listener_reports.map((report) => report?.pid);
     const mappedContainerPids = proxy.listener_pid_map.map((item) => item?.container_pid);
-    const mappedHostPids = proxy.listener_pid_map.map((item) => item?.host_pid).sort((a, b) => a - b);
+    const mappedHostPids = proxy.listener_pid_map.map((item) => item?.host_pid);
     return ownerPids.length > 0
       && ownerPids.every(Number.isInteger)
-      && proxy.listener_pids.every((listenerPid) => ownerPids.includes(listenerPid))
+      && JSON.stringify(proxy.listener_pids) === JSON.stringify(ownerPids)
       && ownerPids.every((ownerPid) => proxy.container_host_pids.includes(ownerPid))
       && proxy.listener_pid_map.every((item) => (
         hasExactKeys(item, ['container_pid', 'host_pid'])
@@ -765,6 +801,8 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
       ))
       && JSON.stringify(mappedContainerPids) === JSON.stringify(proxy.container_listener_pids)
       && JSON.stringify(mappedHostPids) === JSON.stringify(proxy.listener_pids)
+      && proxy.listener_pid_map.filter((item) => item.container_pid === 1).length === 1
+      && proxy.listener_pid_map.find((item) => item.container_pid === 1)?.host_pid === proxy.pid
       && JSON.stringify(reportPids) === JSON.stringify(ownerPids)
       && proxy.listener_reports.every((report) => (
         hasExactKeys(report, ['pid', 'cgroup'])
@@ -776,17 +814,19 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
     if (!/^[A-Za-z0-9_.@-]+\.service$/.test(service)) return false;
     const escaped = service.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const pattern = new RegExp(`^/user\\.slice/user-(\\d+)\\.slice/user@\\1\\.service/app\\.slice/${escaped}$`);
-    const paths = String(report?.cgroup || '').split(/\r?\n/)
-      .filter(Boolean)
-      .map((line) => line.split(':', 3).at(-1));
-    return paths.length > 0
+    const paths = cgroupPaths(report?.cgroup);
+    return Array.isArray(paths)
       && paths.some((path) => pattern.test(path))
       && paths.every((path) => path === '/' || pattern.test(path));
   };
   const validDevelopmentListener = (listener, projectRoot, revision) => {
     const sourceRoot = `${projectRoot}/platform/frontend`;
     const expectedVite = `${sourceRoot}/node_modules/vite/bin/vite.js`;
-    return validListenerClosure(listener, 5173, ['127.0.0.1'])
+    return hasExactKeys(listener, [
+      'port', 'bind_addresses', 'listener_inodes', 'listener_inode_owners',
+      'listener_reports', 'systemd_service', 'source_root', 'source_revision',
+    ])
+      && validListenerClosure(listener, 5173, ['127.0.0.1'])
       && listener.systemd_service === 'biomodstack-frontend.service'
       && listener.source_root === sourceRoot
       && listener.source_revision === revision
@@ -809,7 +849,11 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
     listener, projectRoot, selectorRevision, runtimeRevision,
   ) => {
     const apiRoot = `${projectRoot}/platform/api`;
-    return validListenerClosure(listener, 8001, ['127.0.0.1'])
+    return hasExactKeys(listener, [
+      'port', 'bind_addresses', 'listener_inodes', 'listener_inode_owners',
+      'listener_reports', 'systemd_service', 'source_root', 'source_revision',
+    ])
+      && validListenerClosure(listener, 8001, ['127.0.0.1'])
       && listener.systemd_service === 'biomodstack-workflow-adapter.service'
       && listener.source_root === projectRoot
       && listener.source_revision === selectorRevision
@@ -832,6 +876,20 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
       ));
   };
   if (!expected || !payload || typeof payload !== 'object') reject();
+  const baseKeys = [
+    'selected_environment', 'runtime_mode', 'runtime_target', 'project_root',
+    'project_revision', 'selector_revision', 'frontend_target', 'api_health_target',
+    'serve_root_proxy', 'tailnet_origin', 'serve_handlers', 'frontend_listeners',
+    'api_listeners', 'workflow_adapter_listener', 'health',
+    'managed_api_runtime', 'managed_api_listener',
+  ];
+  const environmentKeys = environment === 'development'
+    ? ['development_frontend_listener']
+    : [
+      'container_runtime', 'managed_frontend_listener',
+      'tailnet_production_proxy', 'tailnet_production_proxy_listeners',
+    ];
+  if (!hasExactKeys(payload, [...baseKeys, ...environmentKeys])) reject();
   if (
     payload.selected_environment !== environment
     || payload.frontend_target !== expected.frontendTarget
@@ -902,6 +960,11 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
     const proxy = payload.tailnet_production_proxy;
     if (
       !validContainerSet(payload.container_runtime, ['biomodstack-api', 'biomodstack-web'], localBuild.revision)
+      || !sameRuntimeContainer(
+        payload.managed_api_runtime,
+        payload.container_runtime,
+        'biomodstack-api',
+      )
       || !validContainerListener(
         payload.managed_frontend_listener,
         payload.container_runtime,
