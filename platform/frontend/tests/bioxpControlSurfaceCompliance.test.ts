@@ -16,6 +16,9 @@ test('BioXP page is status-first and command controls are server-driven', () => 
     assert.match(cockpit, /motion requires fresh ready evidence and supervised commissioning/);
     assert.match(cockpit, /restored automatically after API restart/);
     assert.match(interlinkStatus, /Automatic inline evidence refresh is pending or retrying/);
+    assert.match(cockpit, /connection\?\.active/);
+    assert.match(cockpit, /Saved target is not connected; lifecycle evidence is unavailable/);
+    assert.match(cockpit, /No saved target is configured; lifecycle evidence is unavailable/);
     assert.doesNotMatch(cockpit, /motion and retired OEM controls remain unavailable/);
     assert.doesNotMatch(`${cockpit}\n${interlinkStatus}`, /collect an explicit snapshot before hardware-dependent writes|never restored automatically|SAVED \/ DISCONNECTED is expected after an API restart/);
 });
