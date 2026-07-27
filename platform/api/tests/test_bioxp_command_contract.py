@@ -424,6 +424,8 @@ def test_axis_diagnostic_execution_holds_generation_lease_and_forwards_only_type
     class Client:
         async def request(self, route_key, *, json_data):
             events.append(("request", route_key, json_data))
+            if route_key == "collect_hardware_snapshot":
+                return {"ok": True, "published": True, "snapshot_id": "post-axis-13"}
             return {
                 "ok": True,
                 "axis": "x",
@@ -476,6 +478,11 @@ def test_axis_diagnostic_execution_holds_generation_lease_and_forwards_only_type
     assert record.status == "acknowledged"
     assert record.remote_acknowledged is True
     assert record.physical_effect_verified is False
+    assert record.handler_response["inline_hardware_evidence"] == {
+        "attempted": True,
+        "published": True,
+        "snapshot_id": "post-axis-13",
+    }
     assert events == [
         ("lease-enter", 13),
         ("request", "run_axis_diagnostic", {
@@ -485,6 +492,7 @@ def test_axis_diagnostic_execution_holds_generation_lease_and_forwards_only_type
             "reason": "supervised X relative-position test",
         }),
         ("observe", "x", "move-positive"),
+        ("request", "collect_hardware_snapshot", None),
         ("lease-exit", 13),
     ]
 
