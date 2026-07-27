@@ -566,14 +566,14 @@ class ProductionReleaseBackend:
         if stopped.returncode != 0:
             detail = stopped.stderr.strip() or stopped.stdout.strip() or "unknown systemctl error"
             raise ReleaseValidationError(f"failed to stop managed units: {detail}")
-        not_inactive = [
+        not_stopped = [
             f"{unit_name}={state or 'unknown'}"
             for unit_name, state in observed.items()
-            if state != "inactive"
+            if state not in {"inactive", "failed"}
         ]
-        if not_inactive:
+        if not_stopped:
             raise ReleaseValidationError(
-                "managed units remained active or indeterminate: " + ", ".join(not_inactive)
+                "managed units remained active or indeterminate: " + ", ".join(not_stopped)
             )
 
     def stop_installed_owner(self) -> None:
