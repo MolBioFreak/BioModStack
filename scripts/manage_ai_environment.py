@@ -7,6 +7,7 @@ import fcntl
 import json
 import os
 import re
+import shlex
 import socket
 import subprocess
 import sys
@@ -190,6 +191,30 @@ def systemctl(*args: str, check: bool = True) -> subprocess.CompletedProcess[str
     return run(["systemctl", "--user", *args], check=check)
 
 
+def parse_systemd_environment(value: str) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for entry in shlex.split(value):
+        key, separator, item = entry.partition("=")
+        if separator and key:
+            parsed[key] = item
+    return parsed
+
+
+def service_environment(unit: str) -> dict[str, str]:
+    value = systemctl("show", unit, "--property=Environment", "--value").stdout.strip()
+    return parse_systemd_environment(value)
+
+
+def installed_dev_urls() -> tuple[str, str]:
+    api_environment = service_environment("biomodstack-api.service")
+    web_environment = service_environment("biomodstack-frontend.service")
+    api_port = api_environment.get("BMS_API_BIND_PORT")
+    web_port = web_environment.get("BMS_DEV_WEB_HOST_PORT")
+    if not api_port or not api_port.isdigit() or not web_port or not web_port.isdigit():
+        raise EnvironmentError("installed development units do not publish valid API/web ports")
+    return f"http://127.0.0.1:{api_port}/api/health", f"http://127.0.0.1:{web_port}/"
+
+
 def wait_http(url: str, timeout: float = 180.0) -> None:
     deadline = time.monotonic() + timeout
     error = "not attempted"
@@ -293,8 +318,9 @@ def command_promote(args: argparse.Namespace) -> dict[str, object]:
         if not args.no_deploy:
             manager = repo / "scripts/manage_desktop_services.py"
             run([sys.executable, str(manager), "restart", "--runtime", "dev"], cwd=repo)
-            wait_http("http://127.0.0.1:8002/api/health")
-            wait_http("http://127.0.0.1:5173/")
+            api_health_url, frontend_url = installed_dev_urls()
+            wait_http(api_health_url)
+            wait_http(frontend_url)
             deployed = True
         receipt["status"] = "promoted"
         receipt["promoted_revision"] = tip

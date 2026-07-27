@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import os
 import subprocess
 import sys
@@ -8,6 +9,25 @@ from pathlib import Path
 
 
 SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "manage_ai_environment.py"
+
+
+def load_manager_module():
+    spec = importlib.util.spec_from_file_location("manage_ai_environment", SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_parse_systemd_environment_honors_profile_configured_ports() -> None:
+    manager = load_manager_module()
+
+    parsed = manager.parse_systemd_environment(
+        'BMS_HOME=/tmp/test BMS_API_BIND_PORT=18002 BMS_QUOTED="value with spaces"'
+    )
+
+    assert parsed["BMS_API_BIND_PORT"] == "18002"
+    assert parsed["BMS_QUOTED"] == "value with spaces"
 
 
 def run(*args: str, env: dict[str, str] | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:

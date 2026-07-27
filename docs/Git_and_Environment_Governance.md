@@ -9,7 +9,7 @@ BioModStack has two permanent product environments and only two permanent develo
 | Environment | Branch | Canonical worktree | Runtime | Promotion authority |
 |---|---|---|---|---|
 | Production | `main` | `/home/dalab/biomodstack/prod-main-canonical` | immutable API/web containers; `127.0.0.1:8000` and `127.0.0.1:18080` | explicit accepted release from `test` |
-| Development | `test` | `/home/dalab/biomodstack/dev-test-canonical` | native dev API on `127.0.0.1:8002`; Vite on `127.0.0.1:5173` | completed AI/spec work |
+| Development | `test` | `/home/dalab/biomodstack/dev-test-canonical` | native dev API on the profile-configured loopback port (currently `18002`); Vite on `127.0.0.1:5173` | completed AI/spec work |
 
 Both canonical worktrees must be clean and exactly equal to their corresponding `origin/*` branch before deployment. A runtime may not claim an environment merely because it uses the expected port: its source root, full Git SHA, process/container owner, image labels, state root, and HTTP build identity must match the environment receipt.
 
@@ -27,7 +27,7 @@ Both canonical worktrees must be clean and exactly equal to their corresponding 
 ### Development
 
 - Development always runs an exact, clean `test` commit.
-- Development has a separate API port and state root (`8002` and `~/.biomodstack-dev` by default).
+- Development uses its profile-configured API port (currently `18002`) and a separate state root (`~/.biomodstack-dev` by default).
 - Vite on `5173` proxies to the development API, not to Production.
 - Every completed AI/spec tranche is promoted to `origin/test`, the canonical test worktree is fast-forwarded, and the development runtime is restarted and verified at that exact SHA.
 
@@ -66,7 +66,7 @@ The manager provides:
 - `BMS_BIOXP_MUTATIONS_ENABLED=0`;
 - no Tailscale Serve handler and no production container/unit names.
 
-Temporary environments must never use ports `8000`, `8001`, `8002`, `5173`, `18080`, or `18081`; must never mount `/mnt/BioModStack` read-write; and must never actuate BioXP hardware.
+Temporary environments must never use the configured canonical Development or Production listeners (currently `18002`, `5173`, `8000`, `8001`, `18080`, and `18081`); must never mount `/mnt/BioModStack` read-write; and must never actuate BioXP hardware.
 
 ## Spec completion and closeout
 
