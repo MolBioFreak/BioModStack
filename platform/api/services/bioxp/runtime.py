@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -21,14 +22,43 @@ class BioXpRuntime:
     jobs: BioXpJobStore
     startup_warnings: list[str] = field(default_factory=list)
     legacy_jobs: LegacyMigrationResult = field(default_factory=LegacyMigrationResult)
+    _restore_task: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
+
+    async def start(self) -> None:
+        """Restore the saved managed target without activating or moving hardware."""
+        if self.connection.load_profile() is None or self._restore_task is not None:
+            return
+        self._restore_task = asyncio.create_task(
+            self._restore_saved_profile(),
+            name="bioxp-saved-profile-restore",
+        )
+        # Let an immediate in-memory probe settle, but never couple API startup
+        # to robot network or snapshot collection timeouts.
+        await asyncio.sleep(0)
+
+    async def _restore_saved_profile(self) -> None:
+        try:
+            await self.connection.connect()
+        except Exception as exc:
+            self.startup_warnings.append(
+                f"Saved BioXP profile was not restored: {str(exc) or exc.__class__.__name__}"
+            )
 
     async def close(self) -> None:
+        restore_task = self._restore_task
+        self._restore_task = None
+        if restore_task is not None and not restore_task.done():
+            restore_task.cancel()
+            try:
+                await restore_task
+            except asyncio.CancelledError:
+                pass
         await self.connection.close()
         self.jobs.close()
 
 
 def create_bioxp_runtime(*, data_root: Path | None = None) -> BioXpRuntime:
-    """Create one application-lifetime BioXP runtime without connecting to a robot."""
+    """Create one application-lifetime BioXP runtime; start() restores a saved target."""
 
     root = (data_root or get_data_root()).expanduser().resolve()
     state_root = root / "bioxp"

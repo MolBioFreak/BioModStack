@@ -489,4 +489,45 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
         normalized["wf_clone_assembly_tool"] = assembly_tool
         normalized["wf_clone_basecaller_model"] = model_id
 
+        def clone_bool(name: str, default: bool = False) -> bool:
+            value = normalized.get(name, default)
+            if not isinstance(value, bool):
+                raise ValueError(f"{name} must be boolean")
+            return value
+
+        def clone_int(name: str, default: int, minimum: int, maximum: int) -> int:
+            value = normalized.get(name, default)
+            if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
+                raise ValueError(f"{name} must be an integer from {minimum} through {maximum}")
+            return value
+
+        flye_quality = str(normalized.get("wf_clone_flye_quality") or "nano-hq").strip()
+        if flye_quality not in {"nano-hq", "nano-corr", "nano-raw"}:
+            raise ValueError("wf_clone_flye_quality must be nano-hq, nano-corr, or nano-raw")
+        normalized["wf_clone_analyse_unclassified"] = clone_bool("wf_clone_analyse_unclassified")
+        normalized["wf_clone_flye_quality"] = flye_quality
+        normalized["wf_clone_non_uniform_coverage"] = clone_bool("wf_clone_non_uniform_coverage")
+        normalized["wf_clone_canu_fast"] = clone_bool("wf_clone_canu_fast")
+        normalized["wf_clone_cutsite_mismatch"] = clone_int("wf_clone_cutsite_mismatch", 1, 0, 10)
+        normalized["wf_clone_expected_coverage"] = clone_int("wf_clone_expected_coverage", 95, 0, 100)
+        normalized["wf_clone_expected_identity"] = clone_int("wf_clone_expected_identity", 99, 0, 100)
+        primers = str(normalized.get("wf_clone_primers") or "").strip()
+        insert_reference = str(normalized.get("wf_clone_insert_reference") or "").strip()
+        host_reference = str(normalized.get("wf_clone_host_reference") or "").strip()
+        regions_bedfile = str(normalized.get("wf_clone_regions_bedfile") or "").strip()
+        if insert_reference and not primers:
+            raise ValueError("wf_clone_insert_reference requires wf_clone_primers")
+        if regions_bedfile and not host_reference:
+            raise ValueError("wf_clone_regions_bedfile requires wf_clone_host_reference")
+        for key, value in (
+            ("wf_clone_primers", primers),
+            ("wf_clone_insert_reference", insert_reference),
+            ("wf_clone_host_reference", host_reference),
+            ("wf_clone_regions_bedfile", regions_bedfile),
+        ):
+            if value:
+                normalized[key] = value
+            else:
+                normalized.pop(key, None)
+
     return normalized

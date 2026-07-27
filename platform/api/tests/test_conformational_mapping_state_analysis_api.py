@@ -158,10 +158,11 @@ async def test_state_analysis_routes_return_404_without_request_local_projection
             await cm_router.state_landscape_analysis_summary("request-b", _request(token=token_b), session)
         assert ambiguous.value.status_code == 409
 
-        summary_b = await cm_router.state_landscape_analysis_summary(
-            "request-b", _request(token=token_b), session, analysis_id="analysis-b",
-        )
-        assert summary_b["analysis_id"] == "analysis-b"
+        with pytest.raises(HTTPException) as missing_export:
+            await cm_router.state_landscape_analysis_summary(
+                "request-b", _request(token=token_b), session, analysis_id="analysis-b",
+            )
+        assert missing_export.value.status_code == 409
     finally:
         await session.close()
         await engine.dispose()

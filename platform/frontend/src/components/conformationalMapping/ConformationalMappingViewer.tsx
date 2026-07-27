@@ -185,6 +185,7 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
     const clearStateAnalysisResidueSelection = (candidateId: string) => {
         const reset = clearStateLandscapeResidueSelectionForCandidate(candidateId);
         setStateAnalysisResidueSelections(reset.residueSelections);
+        setFrustraMpnnSelection(null);
         setPendingStateResidue(null);
         setStateResidueSelectionReason(reset.residueSelectionReason);
         return reset.selectedCandidateId;
@@ -236,6 +237,7 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
         const residue = resolveStateLandscapeResidueRef(pendingStateResidue.row.identity, structureMap);
         if (!residue) {
             setStateAnalysisResidueSelections([]);
+            setFrustraMpnnSelection(null);
             setStateResidueSelectionReason('Exact author/entity/sequence identity is not mapped in this candidate structure.');
             return;
         }

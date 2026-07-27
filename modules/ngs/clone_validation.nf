@@ -39,6 +39,28 @@ process RunCloneValidation {
         error("Unsupported --wf_clone_basecaller_model '${basecallerModel}'. Supported exact identities: ${allowedModels.join(', ')}")
     }
     def largeConstruct = params.wf_clone_large_construct ? '--large_construct' : ''
+    def analyseUnclassified = params.wf_clone_analyse_unclassified ? '--analyse_unclassified' : ''
+    def flyeQuality = (params.wf_clone_flye_quality ?: 'nano-hq').toString().trim()
+    def allowedFlyeQualities = ['nano-hq', 'nano-corr', 'nano-raw'] as Set
+    if (!allowedFlyeQualities.contains(flyeQuality)) {
+        error("Unsupported --wf_clone_flye_quality '${flyeQuality}'.")
+    }
+    def nonUniformCoverage = params.wf_clone_non_uniform_coverage ? '--non_uniform_coverage' : ''
+    def canuFast = params.wf_clone_canu_fast ? '--canu_fast' : ''
+    def cutsiteMismatch = (params.wf_clone_cutsite_mismatch != null ? params.wf_clone_cutsite_mismatch : 1) as Integer
+    def expectedCoverage = (params.wf_clone_expected_coverage != null ? params.wf_clone_expected_coverage : 95) as Integer
+    def expectedIdentity = (params.wf_clone_expected_identity != null ? params.wf_clone_expected_identity : 99) as Integer
+    if (cutsiteMismatch < 0 || cutsiteMismatch > 10 || expectedCoverage < 0 || expectedCoverage > 100 || expectedIdentity < 0 || expectedIdentity > 100) {
+        error('wf_clone advanced thresholds are outside the accepted bounded policy')
+    }
+    def primersPath = (params.wf_clone_primers ?: '').toString().trim()
+    def insertReferencePath = (params.wf_clone_insert_reference ?: '').toString().trim()
+    def hostReferencePath = (params.wf_clone_host_reference ?: '').toString().trim()
+    def regionsBedfilePath = (params.wf_clone_regions_bedfile ?: '').toString().trim()
+    def primersArg = primersPath ? "--primers ${shellQuote(primersPath)}" : ''
+    def insertReferenceArg = insertReferencePath ? "--insert_reference ${shellQuote(insertReferencePath)}" : ''
+    def hostReferenceArg = hostReferencePath ? "--host_reference ${shellQuote(hostReferencePath)}" : ''
+    def regionsBedfileArg = regionsBedfilePath ? "--regions_bedfile ${shellQuote(regionsBedfilePath)}" : ''
     def referencePath = reference_fasta ? reference_fasta.toString().trim() : ''
     if (!referencePath) {
         error("wf_clone_validation requires an authoritative full reference for P3 construct verification")
@@ -77,8 +99,19 @@ process RunCloneValidation {
         --min_quality ${minQuality} \
         --trim_length ${trimLength} \
         --assembly_tool "${assemblyTool}" \
+        --flye_quality "${flyeQuality}" \
+        --cutsite_mismatch ${cutsiteMismatch} \
+        --expected_coverage ${expectedCoverage} \
+        --expected_identity ${expectedIdentity} \
+        ${analyseUnclassified} \
+        ${nonUniformCoverage} \
+        ${canuFast} \
         --override_basecaller_cfg "${basecallerModel}" \
         --full_reference "${referencePath}" \
+        ${primersArg} \
+        ${insertReferenceArg} \
+        ${hostReferenceArg} \
+        ${regionsBedfileArg} \
         ${largeConstruct}
     wf_clone_rc=\$?
     set -e

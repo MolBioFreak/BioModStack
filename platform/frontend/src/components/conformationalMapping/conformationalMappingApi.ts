@@ -75,6 +75,11 @@ export interface CmSubmitRequest {
     feature_policy: CmFeaturePolicy;
     runtime_policy: CmRuntimePolicy;
     analysis_policy: CmAnalysisPolicy;
+    state_landscape_comparison?: {
+        mode: 'pairwise';
+        target_id: string;
+        scope: 'all_within_target';
+    };
     registered_snapshot_id?: string;
     registered_artifact_ids?: string[];
     registered_sequence_id?: string;

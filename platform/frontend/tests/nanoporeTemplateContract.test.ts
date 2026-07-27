@@ -19,15 +19,47 @@ test('Nanopore FASTQ launch defaults stay compatible with bundled minimap2', () 
     assert.match(cloneState, /fastqMinimap2Preset: p\.fastq_minimap2_preset \?\? 'map-ont'/u);
 });
 
-test('Nanopore FASTQ launch is gated on reference input and finite numeric bounds', () => {
+test('Nanopore FASTQ launch is gated on reference input, finite numeric bounds, and a selected QC or clone workflow', () => {
     const template = readSource('src/components/NanoporeTemplate.tsx');
 
     assert.match(template, /const hasFastqReferenceInput = useMemo/u);
-    assert.match(template, /return fastqPath\.trim\(\) !== '' && runFastqQc && hasFastqReferenceInput && hasValidFastqNumericControls/u);
+    assert.match(template, /&& \(runFastqQc \|\| runAssembly\)\s+&& hasFastqReferenceInput\s+&& hasValidFastqNumericControls/u);
     assert.match(template, /FASTQ plasmid QC requires a reference FASTA path or a pasted\/created FASTA sequence/u);
+    assert.match(template, /Choose either FASTQ plasmid QC or vendor clone validation before submitting a FASTQ analysis/u);
     assert.match(template, /function coerceIntegerInput/u);
     assert.match(template, /FASTQ_MAX_IGV_REPORT_MAX_SITES/u);
     assert.match(template, /max=\{FASTQ_MAX_IGV_REPORT_MAX_SITES\}/u);
+});
+
+test('NGS exposes named workflow choices with input and output expectations before the detailed form', () => {
+    const template = readSource('src/components/NanoporeTemplate.tsx');
+
+    assert.match(template, /Choose what you want to do/u);
+    assert.match(template, /Validate a known plasmid \/ clone from FASTQ/u);
+    assert.match(template, /QC plasmid reads/u);
+    assert.match(template, /Basecall DNA simplex/u);
+    assert.match(template, /Basecall RNA/u);
+    assert.match(template, /Basecall DNA duplex/u);
+    assert.match(template, /Call modified bases/u);
+    assert.match(template, /Classify and demultiplex RBK114/u);
+    assert.match(template, /How to use this page:/u);
+});
+
+test('Clone-validation tuning controls serialize bounded vendor-supported settings', () => {
+    const source = readSource('src/components/NanoporeTemplate.tsx');
+    for (const setting of [
+        'wf_clone_analyse_unclassified',
+        'wf_clone_flye_quality',
+        'wf_clone_non_uniform_coverage',
+        'wf_clone_canu_fast',
+        'wf_clone_cutsite_mismatch',
+        'wf_clone_expected_coverage',
+        'wf_clone_expected_identity',
+    ]) {
+        assert.match(source, new RegExp(setting));
+    }
+    assert.match(source, /max-w-\[1440px\]/);
+    assert.match(source, /xl:grid-cols-12/);
 });
 
 test('Nanopore FASTQ CLI preview points at the executable standalone entrypoint', () => {
@@ -68,12 +100,21 @@ test('Nanopore P4 controls serialize only locked molecule, quality, duplex, and 
 test('Nanopore consensus assembly launches the wf-clone-validation workflow instead of a basecall-only workflow', () => {
     const template = readSource('src/components/NanoporeTemplate.tsx');
 
-    assert.match(template, /inputSource !== 'fastq' && runAssembly && !barcodeKit\s*\? 'wf_clone_validation'/u);
+    assert.match(template, /runAssembly && !barcodeKit\s*\? 'wf_clone_validation'/u);
     assert.match(template, /Consensus assembly requires a reference FASTA for construct verification/u);
     assert.match(template, /setRunAssembly\(false\)/u);
-    assert.match(template, /run_assembly: inputSource !== 'fastq' \? runAssembly && !barcodeKit : false/u);
+    assert.match(template, /run_assembly: runAssembly && !barcodeKit/u);
     assert.match(template, /if \(value\) \{ setModifiedBases\('none'\); setRunModkit\(false\); setRunAssembly\(false\); \}/u);
     assert.match(template, /type="range"\s+min=\{0\}/u);
+});
+
+test('Nanopore FASTQ inputs can launch the vendor-supported wf-clone-validation path', () => {
+    const template = readSource('src/components/NanoporeTemplate.tsx');
+
+    assert.match(template, /inputSource === 'fastq' \|\| inputSource === 'bam'/u);
+    assert.match(template, /if \(value && inputSource === 'fastq'\) setRunFastqQc\(false\)/u);
+    assert.match(template, /run_fastq_qc: inputSource === 'fastq' && !runAssembly/u);
+    assert.match(template, /run_assembly: runAssembly && !barcodeKit/u);
 });
 
 test('NGS runs polling is scoped to Nanopore jobs instead of pulling the whole job table', () => {

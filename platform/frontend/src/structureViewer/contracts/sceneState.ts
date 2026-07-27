@@ -58,7 +58,8 @@ export const createStructureSceneState = (input: StructureSceneStateInput): View
     if (!input.ref.viewerId.trim() || !input.ref.sceneId.trim() || !Number.isInteger(input.ref.generation) || input.ref.generation < 0) {
         return viewerUnsupported('Scene identity requires viewerId, sceneId, and a non-negative integer generation', 'scene-identity');
     }
-    if (input.documents.length === 0) return viewerUnsupported('A scene requires at least one document', 'scene-documents');
+    const mdOnlyScene = input.documents.length === 0 && input.molecularDynamics?.playbackCapability.supported === true;
+    if (input.documents.length === 0 && !mdOnlyScene) return viewerUnsupported('A scene requires at least one document or supported governed MD playback', 'scene-documents');
     const documentIds = input.documents.map((document) => document.documentId);
     if (documentIds.some((id) => !id.trim()) || !unique(documentIds)) {
         return viewerUnsupported('Scene document IDs must be non-empty and unique', 'document-identity');
@@ -66,7 +67,7 @@ export const createStructureSceneState = (input: StructureSceneStateInput): View
     if (input.documents.some((document) => document.contentSha256 !== undefined && !SHA256.test(document.contentSha256))) {
         return viewerUnsupported('Document contentSha256 must be a 64-character hexadecimal SHA-256', 'document-provenance');
     }
-    if (!documentIds.includes(input.activeDocumentId)) {
+    if (input.documents.length > 0 && !documentIds.includes(input.activeDocumentId)) {
         return viewerUnsupported('activeDocumentId must identify a document in the scene', 'scene-documents');
     }
     if (input.documents.length > 1 && !input.collection) {

@@ -129,7 +129,8 @@ def test_runtime_descriptor_for_dev_mode(tmp_path: Path, monkeypatch) -> None:
     assert descriptor["runtime_mode"] == "dev"
     assert descriptor["runtime_active"] is True
     assert descriptor["runtime_ready"] is True
-    assert descriptor["api_url"] == "http://127.0.0.1:8002"
+    expected_api_port = services.runtime_api_port("dev", project_root=project_root)
+    assert descriptor["api_url"] == f"http://127.0.0.1:{expected_api_port}"
     assert descriptor["frontend_url"] == "http://127.0.0.1:5173/"
     assert descriptor["browser_url"] == "http://127.0.0.1:5173/"
     assert descriptor["router_basename"] == "/"
@@ -564,8 +565,18 @@ def test_operator_runtime_mode_falls_back_to_default_when_no_runtime_is_fully_ac
 
 
 
-def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path) -> None:
+def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / "biomodstack"
+    monkeypatch.setattr(
+        services,
+        "git_build_identity",
+        lambda root: {
+            "revision": "0123456789abcdef0123456789abcdef01234567",
+            "build_id": "test-0123456789ab",
+            "build_time": "2026-07-27T15:00:00Z",
+        },
+        raising=False,
+    )
     units = services.render_user_units(project_root, runtime_mode="dev")
 
     assert set(units) == {services.API_SERVICE, services.FRONTEND_SERVICE, services.DEV_TARGET_UNIT}
@@ -574,8 +585,12 @@ def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path) ->
     assert f"Environment=BMS_HOME={project_root}" in api_unit
     assert "Environment=BMS_RUNTIME_MODE=dev" in api_unit
     assert "Environment=BMS_API_MODE=dev" in api_unit
-    assert f"Environment=BMS_API_BIND_PORT={services.DEV_API_PORT}" in api_unit
+    expected_dev_api_port = services.runtime_api_port("dev", project_root=project_root)
+    assert f"Environment=BMS_API_BIND_PORT={expected_dev_api_port}" in api_unit
     assert "Environment=BMS_CPU_POWER_STRICT=0" in api_unit
+    assert "Environment=BMS_BUILD_SHA=0123456789abcdef0123456789abcdef01234567" in api_unit
+    assert "Environment=BMS_BUILD_ID=test-0123456789ab" in api_unit
+    assert "Environment=BMS_BUILD_TIME=2026-07-27T15:00:00Z" in api_unit
     assert f"ExecStartPre=/usr/bin/env python3 {project_root / 'scripts' / 'rotate_biomodstack_logs.py'}" in api_unit
     assert f"ExecStart={project_root / 'scripts' / 'run_biomodstack_api.sh'}" in api_unit
     assert f"StandardOutput=append:{services.API_LOG}" in api_unit
@@ -588,7 +603,10 @@ def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path) ->
     frontend_unit = units[services.FRONTEND_SERVICE]
     assert "Environment=BMS_RUNTIME_MODE=dev" in frontend_unit
     assert "Environment=BMS_FRONTEND_MODE=dev" in frontend_unit
-    assert f"Environment=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:{services.DEV_API_PORT}" in frontend_unit
+    assert f"Environment=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:{expected_dev_api_port}" in frontend_unit
+    assert "Environment=VITE_BMS_BUILD_SHA=0123456789abcdef0123456789abcdef01234567" in frontend_unit
+    assert "Environment=VITE_BMS_BUILD_ID=test-0123456789ab" in frontend_unit
+    assert "Environment=VITE_BMS_BUILD_TIME=2026-07-27T15:00:00Z" in frontend_unit
     assert f"ExecStartPre=/usr/bin/env python3 {project_root / 'scripts' / 'rotate_biomodstack_logs.py'}" in frontend_unit
     assert f"ExecStart={project_root / 'scripts' / 'run_biomodstack_frontend.sh'}" in frontend_unit
     assert f"StandardOutput=append:{services.FRONTEND_LOG}" in frontend_unit
@@ -676,9 +694,10 @@ def test_rotate_log_file_bounds_append_only_service_logs(tmp_path: Path) -> None
 def test_biomodstack_api_process_detection_uses_cmdline_or_cwd(tmp_path: Path) -> None:
     project_root = tmp_path / "repo"
     api_dir = project_root / "platform" / "api"
+    expected_dev_port = services.runtime_api_port("dev", project_root=project_root)
 
     assert services.is_biomodstack_api_process(
-        cmdline=f"/usr/bin/python3 /home/dalab/.local/bin/uvicorn main:app --port {services.DEV_API_PORT} --host 127.0.0.1",
+        cmdline=f"/usr/bin/python3 /home/dalab/.local/bin/uvicorn main:app --port {expected_dev_port} --host 127.0.0.1",
         cwd=str(api_dir),
         project_root=project_root,
     )

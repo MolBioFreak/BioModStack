@@ -58,6 +58,14 @@ test('downloads use content-addressed API identities', () => {
     assert.match(viewer, /cmArtifactUrl/);
 });
 
+test('launcher exposes state-conditioned FrustraMPNN comparison as an explicit typed payload option', () => {
+    const launcher = source('conformationalMapping/ConformationalMappingLauncher.tsx');
+    const api = source('conformationalMapping/conformationalMappingApi.ts');
+    assert.match(launcher, /State-conditioned FrustraMPNN comparison target/);
+    assert.match(launcher, /payload\.state_landscape_comparison/);
+    assert.match(api, /state_landscape_comparison\?:/);
+});
+
 test('normal external import is mmCIF-only with server-derived snapshot authority', () => {
     const launcher = source('conformationalMapping/ConformationalMappingLauncher.tsx');
     assert.match(launcher, /Protein mmCIF upload/);

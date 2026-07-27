@@ -13,6 +13,7 @@ from sqlalchemy.orm import sessionmaker
 
 from database import Base, ConformationalMappingLandscapeRow, ConformationalMappingRecord, Job
 from services.conformational_mapping.contracts import (
+    canonical_json_bytes,
     canonical_sha256,
     candidate_id,
     request_sha256,
@@ -124,6 +125,17 @@ def _coherent_state_bundle(root: Path) -> tuple[dict, dict, dict]:
         bundle["cm_structure_maps"],
     )
     assert artifact is not None
+    state_path = root / "derived" / "cm_state_landscape_analysis_v1.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_bytes = canonical_json_bytes(artifact)
+    state_path.write_bytes(state_bytes)
+    bundle["cm_derived_files"] = [{
+        "relative_path": "derived/cm_state_landscape_analysis_v1.json",
+        "sha256": hashlib.sha256(state_bytes).hexdigest(),
+        "bytes": len(state_bytes),
+        "semantic_role": "state_landscape_analysis",
+        "candidate_id": None,
+    }]
     return request, bundle, artifact
 
 

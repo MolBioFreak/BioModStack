@@ -170,7 +170,7 @@ export default function MolstarViewer({
 
     const buildRequestedScene = useCallback(() => {
         const primaryDocument = documents[0];
-        if (!primaryDocument) return undefined;
+        if (!primaryDocument && molecularDynamics?.playbackCapability.supported !== true) return undefined;
         const presentation = latestScenePresentationRef.current;
         return createStructureSceneState({
             ref: {
@@ -191,7 +191,7 @@ export default function MolstarViewer({
                     orderedDocumentIds: documents.map((document) => document.id),
                 },
             } : {}),
-            activeDocumentId: primaryDocument.id,
+            activeDocumentId: primaryDocument?.id ?? 'governed-md-topology',
             provenance: {
                 createdBy: 'MolstarViewer compatibility facade',
                 createdAt: new Date().toISOString(),
@@ -204,7 +204,7 @@ export default function MolstarViewer({
         });
     }, [documents, molecularDynamics]);
 
-    const hasStructure = Boolean(absoluteUrl);
+    const hasStructure = Boolean(absoluteUrl) || molecularDynamics?.playbackCapability.supported === true;
     const adapterSignature = useMemo(() => JSON.stringify({
         hideControls,
         effectiveAlphafoldView,
@@ -388,7 +388,7 @@ export default function MolstarViewer({
     }, [interactionTouchAction, status]);
 
     const heightStyle = typeof height === 'number' ? `${height}px` : height;
-    if (!absoluteUrl) {
+    if (!absoluteUrl && molecularDynamics?.playbackCapability.supported !== true) {
         return (
             <div
                 className="w-full flex items-center justify-center text-slate-500 bg-slate-900"
