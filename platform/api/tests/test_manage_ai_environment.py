@@ -30,6 +30,16 @@ def test_parse_systemd_environment_honors_profile_configured_ports() -> None:
     assert parsed["BMS_QUOTED"] == "value with spaces"
 
 
+def test_frontend_install_uses_repository_pnpm_workspace_lock(tmp_path: Path) -> None:
+    manager = load_manager_module()
+    (tmp_path / "pnpm-lock.yaml").write_text("lockfileVersion: '9.0'\n", encoding="utf-8")
+
+    command, cwd = manager.frontend_install_command(tmp_path)
+
+    assert command == ["pnpm", "install", "--frozen-lockfile"]
+    assert cwd == tmp_path
+
+
 def run(*args: str, env: dict[str, str] | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
     merged = os.environ.copy()
     if env:

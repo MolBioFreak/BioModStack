@@ -126,6 +126,12 @@ def allocate_port_pair() -> tuple[int, int]:
     raise EnvironmentError("no free AI environment port pair is available")
 
 
+def frontend_install_command(worktree: Path) -> tuple[list[str], Path]:
+    if not (worktree / "pnpm-lock.yaml").is_file():
+        raise EnvironmentError("BioModStack pnpm workspace lock is missing")
+    return ["pnpm", "install", "--frozen-lockfile"], worktree
+
+
 def assert_canonical_test(repo: Path) -> str:
     if git(repo, "branch", "--show-current") != "test":
         raise EnvironmentError("--repo must be the canonical test worktree on branch test")
@@ -247,7 +253,8 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
         (isolated / child).mkdir(parents=True, exist_ok=True)
     frontend = worktree / "platform/frontend"
     if not (frontend / "node_modules").exists():
-        run(["npm", "ci"], cwd=frontend)
+        install_command, install_cwd = frontend_install_command(worktree)
+        run(install_command, cwd=install_cwd)
     api_unit, web_unit = unit_names(environment_id)
     systemctl("stop", api_unit, web_unit, check=False)
     systemctl("reset-failed", api_unit, web_unit, check=False)
@@ -270,7 +277,7 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
         f"--working-directory={frontend}",
         f"--setenv=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:{api_port}",
         "--setenv=BMS_BIOXP_MUTATIONS_ENABLED=0",
-        "npm", "run", "dev", "--", "--host", "127.0.0.1", "--port", str(web_port),
+        str(frontend / "node_modules/.bin/vite"), "--host", "127.0.0.1", "--port", str(web_port),
     ]
     run(web_command)
     wait_http(f"http://127.0.0.1:{web_port}/")
