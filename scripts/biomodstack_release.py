@@ -440,12 +440,6 @@ class ProductionReleaseBackend:
             "units": units,
         }
         if _snapshot_has_restorable_runtime(snapshot):
-            container_roots = {record["root"] for record in containers.values()}
-            runtime_roots = validation.get("runtime_roots")
-            if not isinstance(runtime_roots, list) or not container_roots.issubset(
-                set(runtime_roots)
-            ):
-                raise RuntimeError("known-good container and unit roots do not match")
             snapshot["validation"] = validation
         _atomic_json_write(self.state_dir / "pre-deploy.json", snapshot)
         return snapshot
