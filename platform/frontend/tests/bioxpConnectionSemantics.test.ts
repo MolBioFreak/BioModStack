@@ -13,7 +13,9 @@ test('connection UI distinguishes configuration, activation, transport, runtime 
     for (const marker of ['configured', 'active', 'reachable', 'runtime_ready', 'hardware_ready', 'generation']) {
         assert.match(combined, new RegExp(marker));
     }
-    assert.match(combined, /SAVED \/ DISCONNECTED/);
+    assert.doesNotMatch(combined, /SAVED \/ DISCONNECTED/);
+    assert.match(cockpit, /Saved target is not connected; lifecycle evidence is unavailable/);
+    assert.match(cockpit, /No saved target is configured; lifecycle evidence is unavailable/);
     assert.match(combined, /hardware state/i);
 });
 
