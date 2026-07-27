@@ -35,7 +35,7 @@ function exactSelectionReceipt(environment) {
     revision: runtimeRevision,
     compose_working_dir: '/srv/biomodstack',
     pid,
-    cgroup: `0::/docker/${marker.repeat(64)}.scope`,
+    cgroup: `0::/system.slice/docker-${marker.repeat(64)}.scope`,
     cmdline: name === 'biomodstack-web' ? 'nginx -g daemon off;' : 'uvicorn main:app',
     cwd: name === 'biomodstack-web' ? '/' : '/app/platform/api',
   });
@@ -45,7 +45,7 @@ function exactSelectionReceipt(environment) {
     cmdline: 'uvicorn main:app',
     argv: ['/app/platform/api/.venv/bin/python', '-m', 'uvicorn', 'main:app'],
     executable: '/usr/bin/python3',
-    cgroup: `0::/docker/${marker.repeat(64)}.scope`,
+    cgroup: `0::/system.slice/docker-${marker.repeat(64)}.scope`,
     build_revision: null,
     ...overrides,
   });
@@ -59,7 +59,7 @@ function exactSelectionReceipt(environment) {
     listener_inodes: [inode],
     listener_inode_owners: { [inode]: [pid] },
     container_host_pids: [pid],
-    listener_reports: [processReport(pid, marker)],
+    listener_reports: [{ pid, cgroup: `0::/system.slice/docker-${marker.repeat(64)}.scope` }],
   });
   const apiListener = containerListener('biomodstack-api', '1', 8000, 101, 80001);
   const adapterReport = processReport(301, '9', {
@@ -71,8 +71,9 @@ function exactSelectionReceipt(environment) {
       'workflow_adapter_app:app', '--port', '8001', '--host', '127.0.0.1',
       '--no-proxy-headers', '--no-access-log',
     ],
-    executable: '/usr/bin/python3.12',
-    cgroup: '0::/user.slice/biomodstack-workflow-adapter.service',
+    executable: '/srv/selector/platform/api/.venv/bin/python',
+    cgroup: '0::/user.slice/user-1000.slice/user@1000.service/app.slice/biomodstack-workflow-adapter.service',
+    build_revision: runtimeRevision,
   });
   const receipt = {
     selected_environment: environment,
@@ -134,17 +135,17 @@ function exactSelectionReceipt(environment) {
       listener_port: 18081,
       pid: 303,
       listener_pids: [1, 27],
-      cgroup: `0::/docker/${'3'.repeat(64)}.scope`,
+      cgroup: `0::/system.slice/docker-${'3'.repeat(64)}.scope`,
       cmdline: '/docker-entrypoint.sh nginx -g daemon off;',
       cwd: '/',
     };
   } else {
     const frontendReport = processReport(201, '8', {
       cwd: '/srv/selector/platform/frontend',
-      cmdline: 'node /srv/selector/platform/frontend/node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173',
-      argv: ['node', '/srv/selector/platform/frontend/node_modules/vite/bin/vite.js', '--host', '127.0.0.1', '--port', '5173'],
+      cmdline: '/usr/bin/node /srv/selector/platform/frontend/node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173',
+      argv: ['/usr/bin/node', '/srv/selector/platform/frontend/node_modules/vite/bin/vite.js', '--host', '127.0.0.1', '--port', '5173'],
       executable: '/usr/bin/node',
-      cgroup: '0::/user.slice/biomodstack-frontend.service',
+      cgroup: '0::/user.slice/user-1000.slice/user@1000.service/app.slice/biomodstack-frontend.service',
       build_revision: 'a'.repeat(40),
     });
     receipt.development_frontend_listener = {
@@ -512,13 +513,38 @@ test('selection response contract accepts exact development and production recei
     (value) => { value.managed_api_listener.listener_inode_owners['80001'] = [101, 999]; },
     (value) => { value.api_listeners = []; },
     (value) => { delete value.workflow_adapter_listener; },
+    (value) => { value.workflow_adapter_listener.listener_reports[0].executable = '/tmp/attacker/python'; },
+    (value) => { value.workflow_adapter_listener.listener_reports[0].cmdline = 'python -m http.server 8001'; },
+    (value) => { value.workflow_adapter_listener.listener_reports[0].build_revision = 'f'.repeat(40); },
     (value) => { value.workflow_adapter_listener.listener_reports[0].cgroup = '0::/rogue.service'; },
+    (value) => {
+      const report = value.managed_api_listener.listener_reports[0];
+      Object.assign(report, {
+        executable: '/tmp/attacker/python', cmdline: 'python -m http.server 8000',
+        argv: ['python', '-m', 'http.server', '8000'], cwd: '/tmp', build_revision: 'f'.repeat(40),
+      });
+      value.api_listeners = value.managed_api_listener.listener_reports;
+    },
+    (value) => {
+      const id = value.managed_api_listener.container_id;
+      const lookalike = `${id.slice(0, 12)}${'f'.repeat(52)}`;
+      value.managed_api_listener.listener_reports[0].cgroup = `0::/system.slice/docker-${lookalike}.scope`;
+      value.api_listeners = value.managed_api_listener.listener_reports;
+    },
     (value) => { value.serve_handlers['/api/tailnet-environment'].Proxy = 'http://127.0.0.1:9999'; },
     (value) => { delete value.container_runtime; },
     (value) => { value.container_runtime.containers[1].revision = 'b'.repeat(40); },
     (value) => { delete value.tailnet_production_proxy; },
     (value) => { delete value.managed_frontend_listener; },
     (value) => { value.managed_frontend_listener.listener_inode_owners['180801'] = [202, 999]; },
+    (value) => {
+      const report = value.managed_frontend_listener.listener_reports[0];
+      Object.assign(report, {
+        executable: '/tmp/attacker/nginx', cmdline: 'rogue nginx', argv: ['rogue'],
+        cwd: '/tmp', build_revision: 'f'.repeat(40),
+      });
+      value.frontend_listeners = value.managed_frontend_listener.listener_reports;
+    },
     (value) => { value.frontend_listeners = []; },
     (value) => { value.tailnet_production_proxy.listener_pids = []; },
     (value) => { value.tailnet_production_proxy.image_id = 'sha256:' + '0'.repeat(64); },
@@ -533,6 +559,8 @@ test('selection response contract accepts exact development and production recei
     (value) => { delete value.development_frontend_listener; },
     (value) => { value.development_frontend_listener.listener_inode_owners['51731'] = [201, 999]; },
     (value) => { value.development_frontend_listener.listener_reports[0].executable = '/tmp/attacker/node'; },
+    (value) => { value.development_frontend_listener.listener_reports[0].executable = '/home/attacker/.nvm/versions/node/v99.99.99/bin/node'; },
+    (value) => { value.development_frontend_listener.listener_reports[0].cmdline = 'python -m http.server 5173'; },
     (value) => { value.development_frontend_listener.listener_reports[0].cgroup = '0::/rogue.service'; },
     (value) => { value.frontend_listeners = []; },
   ]) {

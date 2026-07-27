@@ -1,5 +1,6 @@
 from __future__ import annotations
-
+import json
+import os
 from pathlib import Path
 
 import pytest
@@ -98,7 +99,7 @@ def test_adapter_identity_and_policy_must_match_one_listener(monkeypatch, tmp_pa
         str(expected_python), str(expected_uvicorn), "workflow_adapter_app:app",
         "--port", "8001", "--host", "127.0.0.1", "--no-proxy-headers", "--no-access-log",
     ]
-    valid_cgroup = f"0::/app/{tailnet.WORKFLOW_ADAPTER_SERVICE}"
+    valid_cgroup = f"0::/user.slice/user-1000.slice/user@1000.service/app.slice/{tailnet.WORKFLOW_ADAPTER_SERVICE}"
     monkeypatch.setattr(tailnet, "_git_revision", lambda root: revision)
     monkeypatch.setattr(tailnet, "_listener_bind_addresses", lambda port: {"127.0.0.1"})
     monkeypatch.setattr(tailnet, "_host_listener_inodes", lambda port: [77])
@@ -109,8 +110,8 @@ def test_adapter_identity_and_policy_must_match_one_listener(monkeypatch, tmp_pa
         tailnet,
         "_pid_report",
         lambda port: [
-            {"pid": 101, "cwd": expected_cwd, "cgroup": valid_cgroup},
-            {"pid": 202, "cwd": "/wrong/source", "cgroup": valid_cgroup},
+            {"pid": 101, "cwd": expected_cwd, "cgroup": valid_cgroup, "argv": expected_argv, "executable": str(expected_python)},
+            {"pid": 202, "cwd": "/wrong/source", "cgroup": valid_cgroup, "argv": expected_argv, "executable": str(expected_python)},
         ],
     )
     environment = {
@@ -134,13 +135,19 @@ def test_adapter_identity_and_policy_must_match_one_listener(monkeypatch, tmp_pa
         tailnet,
         "_pid_report",
         lambda port: [
-            {"pid": 101, "cwd": expected_cwd, "cgroup": valid_cgroup},
-            {"pid": 202, "cwd": expected_cwd, "cgroup": valid_cgroup},
+            {"pid": 101, "cwd": expected_cwd, "cgroup": valid_cgroup, "argv": expected_argv, "executable": str(expected_python)},
+            {"pid": 202, "cwd": expected_cwd, "cgroup": valid_cgroup, "argv": expected_argv, "executable": str(expected_python)},
         ],
     )
     assert tailnet._adapter_identity_policy_matches(tmp_path, "owner@example.com") is True
-    monkeypatch.setattr(tailnet, "_process_executable", lambda pid: Path("/usr/bin/python3"))
-    monkeypatch.setattr(tailnet, "_process_argv", lambda pid: ["python", "-m", "http.server", "8001"])
+    monkeypatch.setattr(
+        tailnet,
+        "_pid_report",
+        lambda port: [
+            {"pid": 101, "cwd": expected_cwd, "cgroup": valid_cgroup, "argv": ["python", "-m", "http.server", "8001"], "executable": "/usr/bin/python3"},
+            {"pid": 202, "cwd": expected_cwd, "cgroup": valid_cgroup, "argv": expected_argv, "executable": str(expected_python)},
+        ],
+    )
     assert tailnet._adapter_identity_policy_matches(tmp_path, "owner@example.com") is False
 
 
@@ -489,6 +496,8 @@ def test_operator_development_frontend_is_forced_to_managed_api(monkeypatch, tmp
     ).read_text(encoding="utf-8")
     assert "BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:8000" in unit
     assert "BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:8000" in dropin
+    assert "ExecStart=/usr/bin/node " in dropin
+    assert "/platform/frontend/node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173" in dropin
     assert "18002" not in unit
     assert "18002" not in dropin
     assert f"VITE_BMS_BUILD_SHA={'a' * 40}" in unit
@@ -503,8 +512,14 @@ def test_development_frontend_requires_every_exclusive_loopback_vite_owner(monke
         "pid": 101,
         "cwd": expected,
         "cmdline": f"node {expected}/node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173",
-        "cgroup": f"0::/user.slice/{tailnet.FRONTEND_SERVICE}\n",
+        "cgroup": f"0::/user.slice/user-1000.slice/user@1000.service/app.slice/{tailnet.FRONTEND_SERVICE}\n",
         "build_revision": revision,
+        "argv": [
+            "/usr/bin/node",
+            f"{expected}/node_modules/vite/bin/vite.js",
+            "--host", "127.0.0.1", "--port", "5173",
+        ],
+        "executable": "/usr/bin/node",
     }]
     addresses = {"127.0.0.1"}
     monkeypatch.setattr(tailnet, "_git_revision", lambda root: revision)
@@ -521,31 +536,19 @@ def test_development_frontend_requires_every_exclusive_loopback_vite_owner(monke
         "_pid_environment_value",
         lambda pid, key: revision if pid == 101 and key == "VITE_BMS_BUILD_SHA" else None,
     )
-    monkeypatch.setattr(
-        tailnet,
-        "_process_argv",
-        lambda pid: [
-            "node",
-            f"{expected}/node_modules/vite/bin/vite.js",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            "5173",
-        ] if pid == 101 else ["python", "-m", "http.server", "5173"],
-    )
-    monkeypatch.setattr(tailnet, "_process_executable", lambda pid: Path("/usr/bin/node" if pid == 101 else "/usr/bin/python3"))
     assert tailnet._dev_frontend_matches_root(spec, tmp_path) is True
 
-    monkeypatch.setattr(tailnet, "_process_executable", lambda pid: Path("/tmp/attacker/node"))
+    reports[0]["executable"] = "/tmp/attacker/node"
     assert tailnet._dev_frontend_matches_root(spec, tmp_path) is False
-    monkeypatch.setattr(tailnet, "_process_executable", lambda pid: Path("/usr/bin/node" if pid == 101 else "/usr/bin/python3"))
+    reports[0]["executable"] = "/usr/bin/node"
 
-    monkeypatch.setattr(tailnet, "_process_executable", lambda pid: Path("/usr/bin/python3"))
+    original_argv = reports[0]["argv"]
+    reports[0]["argv"] = ["python", "-m", "http.server", "5173"]
     assert tailnet._dev_frontend_matches_root(spec, tmp_path) is False
-    monkeypatch.setattr(tailnet, "_process_executable", lambda pid: Path("/usr/bin/node" if pid == 101 else "/usr/bin/python3"))
+    reports[0]["argv"] = original_argv
     reports[0]["cgroup"] = f"0::/user.slice/{tailnet.FRONTEND_SERVICE}-rogue.service\n"
     assert tailnet._dev_frontend_matches_root(spec, tmp_path) is False
-    reports[0]["cgroup"] = f"0::/user.slice/{tailnet.FRONTEND_SERVICE}\n"
+    reports[0]["cgroup"] = f"0::/user.slice/user-1000.slice/user@1000.service/app.slice/{tailnet.FRONTEND_SERVICE}\n"
 
     addresses = {"0.0.0.0"}
     assert tailnet._dev_frontend_matches_root(spec, tmp_path) is False
@@ -563,9 +566,41 @@ def test_development_frontend_requires_every_exclusive_loopback_vite_owner(monke
 
 def test_final_development_receipt_revalidates_frontend_ownership(monkeypatch, tmp_path: Path) -> None:
     spec = tailnet.environment_spec("development", project_root=tmp_path)
-    monkeypatch.setattr(tailnet, "_dev_frontend_matches_root", lambda selected, root: False)
+    monkeypatch.setattr(tailnet, "_host_listener_closure", lambda port: {"listener_reports": []})
+    monkeypatch.setattr(
+        tailnet,
+        "_dev_frontend_matches_root",
+        lambda selected, root, reports=None: False,
+    )
     with pytest.raises(tailnet.TailnetEnvironmentError, match="lost exact service ownership"):
         REAL_VALIDATED_DEVELOPMENT_FRONTEND_LISTENER(spec, tmp_path)
+
+
+def test_container_cgroup_identity_requires_the_complete_container_id() -> None:
+    container_id = "a" * 64
+    assert tailnet._process_in_exact_container_cgroup(
+        f"0::/system.slice/docker-{container_id}.scope\n", container_id
+    ) is True
+    assert tailnet._process_in_exact_container_cgroup(
+        f"1:net_cls:/\n0::/system.slice/docker-{container_id}.scope\n", container_id
+    ) is True
+    assert tailnet._process_in_exact_container_cgroup(
+        f"0::/system.slice/docker-{container_id}.scope\n0::/rogue.service\n", container_id
+    ) is False
+    assert tailnet._process_in_exact_container_cgroup(
+        f"0::/system.slice/docker-{container_id[:12]}{'b' * 52}.scope\n", container_id
+    ) is False
+    assert tailnet._process_in_exact_container_cgroup(
+        f"0::/system.slice/docker-{container_id}.scope/rogue.service\n", container_id
+    ) is False
+
+
+def test_trusted_node_executables_ignore_ambient_path(monkeypatch, tmp_path: Path) -> None:
+    attacker = tmp_path / "node"
+    attacker.write_bytes(Path("/usr/bin/node").read_bytes())
+    attacker.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ.get('PATH', '')}")
+    assert attacker.resolve() not in tailnet._trusted_node_executables()
 
 
 def test_adapter_root_match_requires_exact_source_revision(monkeypatch, tmp_path: Path) -> None:
@@ -703,7 +738,7 @@ def test_production_tailnet_proxy_requires_exact_read_only_config(monkeypatch, t
     config.write_text("server { listen 127.0.0.1:18081; }\n", encoding="utf-8")
     config_sha = tailnet.hashlib.sha256(config.read_bytes()).hexdigest()
     inspected = [{
-        "Id": "proxy-id",
+        "Id": "b" * 64,
         "Image": tailnet.PRODUCTION_TAILNET_PROXY_IMAGE_ID,
         "State": {"Running": True, "Pid": 123},
         "Path": "/docker-entrypoint.sh",
@@ -741,7 +776,7 @@ def test_production_tailnet_proxy_requires_exact_read_only_config(monkeypatch, t
         "_run",
         lambda command, **kwargs: tailnet.subprocess.CompletedProcess(command, 0, tailnet.json.dumps(inspected), ""),
     )
-    monkeypatch.setattr(tailnet, "_process_cgroup", lambda pid: "0::/docker/proxy-id\n")
+    monkeypatch.setattr(tailnet, "_process_cgroup", lambda pid: "0::/system.slice/docker-" + ("b" * 64) + ".scope\n")
     monkeypatch.setattr(tailnet, "_container_listener_pids", lambda name, port: [1, 27])
     monkeypatch.setattr(tailnet, "_container_listener_host_pids", lambda container_id, pids: [124])
     monkeypatch.setattr(tailnet, "_container_host_pids", lambda container_name: [124])
@@ -800,7 +835,7 @@ def test_production_tailnet_proxy_requires_container_owned_listener(monkeypatch,
     config.write_text("server { listen 127.0.0.1:18081; }\n", encoding="utf-8")
     config_sha = tailnet.hashlib.sha256(config.read_bytes()).hexdigest()
     inspected = [{
-        "Id": "proxy-id", "Image": tailnet.PRODUCTION_TAILNET_PROXY_IMAGE_ID,
+        "Id": "b" * 64, "Image": tailnet.PRODUCTION_TAILNET_PROXY_IMAGE_ID,
         "State": {"Running": True, "Pid": 123}, "Path": "/docker-entrypoint.sh",
         "Args": ["nginx", "-g", "daemon off;"],
         "HostConfig": {"NetworkMode": "host", "RestartPolicy": {"Name": "unless-stopped"}, "ReadonlyRootfs": True,
@@ -817,7 +852,7 @@ def test_production_tailnet_proxy_requires_container_owned_listener(monkeypatch,
         "Mounts": [{"Type": "bind", "Source": str(config.resolve()), "Destination": "/etc/nginx/conf.d/default.conf", "RW": False}],
     }]
     monkeypatch.setattr(tailnet, "_run", lambda command, **kwargs: tailnet.subprocess.CompletedProcess(command, 0, tailnet.json.dumps(inspected), ""))
-    monkeypatch.setattr(tailnet, "_process_cgroup", lambda pid: "0::/docker/proxy-id\n")
+    monkeypatch.setattr(tailnet, "_process_cgroup", lambda pid: "0::/system.slice/docker-" + ("b" * 64) + ".scope\n")
     monkeypatch.setattr(tailnet, "_container_listener_pids", lambda name, port: [])
     with pytest.raises(tailnet.TailnetEnvironmentError, match="listener"):
         tailnet._validated_production_tailnet_proxy(tmp_path)
@@ -829,7 +864,7 @@ def test_production_tailnet_proxy_rejects_unrelated_host_listener(monkeypatch, t
     config.write_text("server { listen 127.0.0.1:18081; }\n", encoding="utf-8")
     config_sha = tailnet.hashlib.sha256(config.read_bytes()).hexdigest()
     inspected = [{
-        "Id": "proxy-id", "Image": tailnet.PRODUCTION_TAILNET_PROXY_IMAGE_ID,
+        "Id": "b" * 64, "Image": tailnet.PRODUCTION_TAILNET_PROXY_IMAGE_ID,
         "State": {"Running": True, "Pid": 123}, "Path": "/docker-entrypoint.sh",
         "Args": ["nginx", "-g", "daemon off;"],
         "HostConfig": {"NetworkMode": "host", "RestartPolicy": {"Name": "unless-stopped"}, "ReadonlyRootfs": True,
@@ -854,7 +889,7 @@ def test_production_tailnet_proxy_rejects_unrelated_host_listener(monkeypatch, t
     monkeypatch.setattr(
         tailnet,
         "_process_cgroup",
-        lambda pid: "0::/docker/proxy-id\n" if pid == 123 else "0::/system.slice/unrelated.service\n",
+        lambda pid: "0::/system.slice/docker-" + ("b" * 64) + ".scope\n" if pid == 123 else "0::/system.slice/unrelated.service\n",
     )
     with pytest.raises(tailnet.TailnetEnvironmentError, match="outside the validated container"):
         tailnet._validated_production_tailnet_proxy(tmp_path)
@@ -865,7 +900,7 @@ def test_development_runtime_inspects_only_shared_api_container(monkeypatch, tmp
     commands: list[list[str]] = []
     inspected = [{
         "Name": "/biomodstack-api",
-        "Id": "api-id",
+        "Id": "a" * 64,
         "Image": "sha256:api",
         "Path": "uvicorn",
         "Args": ["main:app"],
@@ -884,7 +919,7 @@ def test_development_runtime_inspects_only_shared_api_container(monkeypatch, tmp
         return tailnet.subprocess.CompletedProcess(command, 0, tailnet.json.dumps(inspected), "")
 
     monkeypatch.setattr(tailnet, "_run", run)
-    monkeypatch.setattr(tailnet, "_process_cgroup", lambda pid: "0::/docker/api-id\n")
+    monkeypatch.setattr(tailnet, "_process_cgroup", lambda pid: "0::/system.slice/docker-" + ("a" * 64) + ".scope\n")
     monkeypatch.setattr(tailnet, "_git_revision", lambda root: revision)
     report = tailnet._validated_container_runtime(tmp_path, require_web=False)
     assert report["validated_revision"] == revision
@@ -907,8 +942,8 @@ def test_container_runtime_accepts_exact_source_owned_image_lineage(monkeypatch,
     revision = "a" * 40
     monkeypatch.setattr(tailnet, "_docker_runtime_report", lambda required_names: {
         "containers": [
-            {"name": "biomodstack-api", "container_id": "api-id", "image_id": "sha256:api", "revision": revision, "compose_working_dir": str(tmp_path), "pid": 1, "cgroup": "api-id", "cmdline": "api", "cwd": "/app"},
-            {"name": "biomodstack-web", "container_id": "web-id", "image_id": "sha256:web", "revision": revision, "compose_working_dir": str(tmp_path), "pid": 2, "cgroup": "web-id", "cmdline": "nginx", "cwd": "/"},
+            {"name": "biomodstack-api", "container_id": "a" * 64, "image_id": "sha256:api", "revision": revision, "compose_working_dir": str(tmp_path), "pid": 1, "cgroup": "0::/system.slice/docker-" + ("a" * 64) + ".scope\n", "cmdline": "api", "cwd": "/app"},
+            {"name": "biomodstack-web", "container_id": "b" * 64, "image_id": "sha256:web", "revision": revision, "compose_working_dir": str(tmp_path), "pid": 2, "cgroup": "0::/system.slice/docker-" + ("b" * 64) + ".scope\n", "cmdline": "nginx", "cwd": "/"},
         ]
     })
     monkeypatch.setattr(tailnet, "_git_revision", lambda root: revision)
@@ -1391,8 +1426,9 @@ def test_url_probe_rejects_redirect_to_different_authority(monkeypatch) -> None:
 
 
 def test_managed_runtime_listener_requires_complete_container_owned_socket(monkeypatch) -> None:
+    container_id = "a" * 64
     runtime_report = {
-        "containers": [{"name": "biomodstack-api", "container_id": "api-id-1234567890"}]
+        "containers": [{"name": "biomodstack-api", "container_id": container_id, "pid": 101}]
     }
     monkeypatch.setattr(tailnet, "_listener_bind_addresses", lambda port: {"127.0.0.1"})
     monkeypatch.setattr(tailnet, "_container_listener_pids", lambda name, port: [1])
@@ -1402,7 +1438,11 @@ def test_managed_runtime_listener_requires_complete_container_owned_socket(monke
     owners = {44: [101, 102]}
     monkeypatch.setattr(tailnet, "_host_listener_inode_owners", lambda inodes: owners)
     monkeypatch.setattr(tailnet, "_container_host_pids", lambda name: [100, 101, 102])
-    monkeypatch.setattr(tailnet, "_process_cgroup", lambda pid: "0::/docker/api-id-12345\n")
+    monkeypatch.setattr(
+        tailnet,
+        "_process_cgroup",
+        lambda pid: f"0::/system.slice/docker-{container_id}.scope\n",
+    )
     monkeypatch.setattr(
         tailnet,
         "_pid_report_for_pids",

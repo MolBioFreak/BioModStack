@@ -565,6 +565,19 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
       && parsed.getUTCMinutes() === minute
       && parsed.getUTCSeconds() === second;
   };
+  const exactContainerCgroup = (cgroup, containerId) => {
+    if (!containerIdPattern.test(String(containerId || ''))) return false;
+    const expectedPaths = new Set([
+      `/docker/${containerId}`,
+      `/system.slice/docker-${containerId}.scope`,
+    ]);
+    const paths = String(cgroup || '').split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => line.split(':', 3).at(-1));
+    return paths.length > 0
+      && paths.some((path) => expectedPaths.has(path))
+      && paths.every((path) => path === '/' || expectedPaths.has(path));
+  };
   const validContainerSet = (runtime, requiredNames, revision) => {
     if (
       !runtime
@@ -585,7 +598,7 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
         && container.compose_working_dir === runtime.validated_compose_root
         && Number.isInteger(container.pid) && container.pid > 0
         && nonEmptyBounded(container.cgroup, 4096)
-        && container.cgroup.includes(container.container_id.slice(0, 12))
+        && exactContainerCgroup(container.cgroup, container.container_id)
         && nonEmptyBounded(container.cmdline, 4096)
         && nonEmptyBounded(container.cwd, 4096);
     });
@@ -607,6 +620,10 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
     }
     return `/${parts.join('/')}`;
   };
+  const hasExactKeys = (value, keys) => value
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort());
   const validListenerClosure = (listener, port, bindAddresses) => {
     if (
       !listener
@@ -632,14 +649,7 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
     return ownerPids.length > 0
       && ownerPids.every(Number.isInteger)
       && JSON.stringify(ownerPids) === JSON.stringify(reportPids)
-      && listener.listener_reports.every((report) => (
-        nonEmptyBounded(report?.cgroup, 4096)
-        && nonEmptyBounded(report?.cmdline, 4096)
-        && nonEmptyBounded(report?.executable, 4096)
-        && report.executable.startsWith('/')
-        && Array.isArray(report.argv)
-        && report.argv.length > 0
-      ));
+      && listener.listener_reports.every((report) => nonEmptyBounded(report?.cgroup, 4096));
   };
   const validContainerListener = (listener, runtime, containerName, port) => {
     if (!validListenerClosure(listener, port, ['127.0.0.1'])) return false;
@@ -648,18 +658,31 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
       !container
       || listener.container_name !== containerName
       || listener.container_id !== container.container_id
-      || !sortedUniquePositiveIntegers(listener.container_listener_pids)
+      || JSON.stringify(listener.container_listener_pids) !== JSON.stringify([1])
       || !sortedUniquePositiveIntegers(listener.host_listener_pids)
       || !sortedUniquePositiveIntegers(listener.container_host_pids)
+      || JSON.stringify(listener.host_listener_pids) !== JSON.stringify([container.pid])
+      || !listener.container_host_pids.includes(container.pid)
     ) return false;
     const ownerPids = [...new Set(Object.values(listener.listener_inode_owners).flat())];
     return listener.host_listener_pids.every((pid) => ownerPids.includes(pid))
       && ownerPids.every((pid) => listener.container_host_pids.includes(pid))
-      && listener.listener_reports.every((report) => report.cgroup.includes(container.container_id.slice(0, 12)));
+      && listener.listener_reports.every((report) => (
+        hasExactKeys(report, ['pid', 'cgroup'])
+        && exactContainerCgroup(report.cgroup, container.container_id)
+      ));
   };
-  const reportInExactUnit = (report, service) => String(report?.cgroup || '')
-    .split(/\r?\n/)
-    .some((line) => line.split(':', 3).at(-1)?.endsWith(`/${service}`));
+  const reportInExactUnit = (report, service) => {
+    if (!/^[A-Za-z0-9_.@-]+\.service$/.test(service)) return false;
+    const escaped = service.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(`^/user\\.slice/user-(\\d+)\\.slice/user@\\1\\.service/app\\.slice/${escaped}$`);
+    const paths = String(report?.cgroup || '').split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => line.split(':', 3).at(-1));
+    return paths.length > 0
+      && paths.some((path) => pattern.test(path))
+      && paths.every((path) => path === '/' || pattern.test(path));
+  };
   const validDevelopmentListener = (listener, projectRoot, revision) => {
     const sourceRoot = `${projectRoot}/platform/frontend`;
     const expectedVite = `${sourceRoot}/node_modules/vite/bin/vite.js`;
@@ -667,28 +690,36 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
       && listener.systemd_service === 'biomodstack-frontend.service'
       && listener.source_root === sourceRoot
       && listener.source_revision === revision
-      && listener.listener_reports.every((report) => {
-        const trustedNode = report.executable === '/usr/bin/node'
-          || report.executable === '/usr/bin/nodejs'
-          || /^\/home\/[^/]+\/\.nvm\/versions\/node\/v\d+\.\d+\.\d+\/bin\/node$/.test(report.executable);
-        return trustedNode
-          && report.cwd === sourceRoot
-          && report.build_revision === revision
-          && report.argv.length === 6
-          && ['node', 'nodejs', report.executable].includes(report.argv[0])
-          && normalizeAbsolutePath(report.argv[1]) === expectedVite
-          && JSON.stringify(report.argv.slice(2)) === JSON.stringify(['--host', '127.0.0.1', '--port', '5173'])
-          && reportInExactUnit(report, 'biomodstack-frontend.service');
-      });
+      && listener.listener_reports.every((report) => (
+        hasExactKeys(report, [
+          'pid', 'cwd', 'cmdline', 'argv', 'executable', 'cgroup', 'build_revision',
+        ])
+        && report.executable === '/usr/bin/node'
+        && report.cwd === sourceRoot
+        && report.build_revision === revision
+        && report.argv.length === 6
+        && report.argv[0] === '/usr/bin/node'
+        && normalizeAbsolutePath(report.argv[1]) === expectedVite
+        && JSON.stringify(report.argv.slice(2)) === JSON.stringify(['--host', '127.0.0.1', '--port', '5173'])
+        && report.cmdline === report.argv.join(' ')
+        && reportInExactUnit(report, 'biomodstack-frontend.service')
+      ));
   };
-  const validWorkflowAdapterListener = (listener, projectRoot, revision) => {
+  const validWorkflowAdapterListener = (
+    listener, projectRoot, selectorRevision, runtimeRevision,
+  ) => {
     const apiRoot = `${projectRoot}/platform/api`;
     return validListenerClosure(listener, 8001, ['127.0.0.1'])
       && listener.systemd_service === 'biomodstack-workflow-adapter.service'
       && listener.source_root === projectRoot
-      && listener.source_revision === revision
+      && listener.source_revision === selectorRevision
       && listener.listener_reports.every((report) => (
-        report.cwd === apiRoot
+        hasExactKeys(report, [
+          'pid', 'cwd', 'cmdline', 'argv', 'executable', 'cgroup', 'build_revision',
+        ])
+        && report.executable === `${apiRoot}/.venv/bin/python`
+        && report.cwd === apiRoot
+        && report.build_revision === runtimeRevision
         && report.argv.length === 9
         && normalizeAbsolutePath(report.argv[0]) === `${apiRoot}/.venv/bin/python`
         && normalizeAbsolutePath(report.argv[1]) === `${apiRoot}/.venv/bin/uvicorn`
@@ -696,6 +727,7 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
           'workflow_adapter_app:app', '--port', '8001', '--host', '127.0.0.1',
           '--no-proxy-headers', '--no-access-log',
         ])
+        && report.cmdline === report.argv.join(' ')
         && reportInExactUnit(report, 'biomodstack-workflow-adapter.service')
       ));
   };
@@ -749,6 +781,7 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
       payload.workflow_adapter_listener,
       payload.project_root,
       payload.selector_revision,
+      localBuild.revision,
     )
   ) reject();
 
@@ -789,7 +822,7 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
       || !Array.isArray(proxy.listener_pids) || proxy.listener_pids.length === 0
       || proxy.listener_pids.some((pid) => !Number.isInteger(pid) || pid <= 0)
       || !nonEmptyBounded(proxy.cgroup, 4096)
-      || !proxy.cgroup.includes(proxy.container_id.slice(0, 12))
+      || !exactContainerCgroup(proxy.cgroup, proxy.container_id)
       || proxy.cmdline !== '/docker-entrypoint.sh nginx -g daemon off;'
       || proxy.cwd !== '/'
     ) reject();
