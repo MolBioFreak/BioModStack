@@ -90,7 +90,8 @@ def test_snapshot_completion_refreshes_status_and_lifecycle_reasons_are_operator
     command_source = inspect.getsource(commands.execute_command)
     assert "result.remote_acknowledged" in command_source
     assert 'request.command != "stop_axis_diagnostic"' in command_source
-    assert "await runtime.connection.probe()" in command_source
+    assert "await runtime.connection.probe_status_only()" in command_source
+    assert "await runtime.connection.probe()" not in command_source
 
     status_source = inspect.getsource(connection.get_status)
     assert status_source.index("lifecycle_stage_reasons") < status_source.index("requires_hardware_ready")
