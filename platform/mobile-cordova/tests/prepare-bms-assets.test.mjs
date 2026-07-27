@@ -22,6 +22,12 @@ import {
 function exactSelectionReceipt(environment) {
   const runtimeRevision = '6'.repeat(40);
   const build = { revision: runtimeRevision, build_id: 'build-1', build_time: '2026-07-26T00:00:00Z' };
+  const healthPayload = {
+    build,
+    status: 'healthy',
+    liveness: { alive: true, status: 'alive' },
+    readiness: { ready: true },
+  };
   const container = (name, marker, pid) => ({
     name,
     container_id: marker.repeat(64),
@@ -33,6 +39,41 @@ function exactSelectionReceipt(environment) {
     cmdline: name === 'biomodstack-web' ? 'nginx -g daemon off;' : 'uvicorn main:app',
     cwd: name === 'biomodstack-web' ? '/' : '/app/platform/api',
   });
+  const processReport = (pid, marker, overrides = {}) => ({
+    pid,
+    cwd: '/app/platform/api',
+    cmdline: 'uvicorn main:app',
+    argv: ['/app/platform/api/.venv/bin/python', '-m', 'uvicorn', 'main:app'],
+    executable: '/usr/bin/python3',
+    cgroup: `0::/docker/${marker.repeat(64)}.scope`,
+    build_revision: null,
+    ...overrides,
+  });
+  const containerListener = (name, marker, port, pid, inode) => ({
+    container_name: name,
+    container_id: marker.repeat(64),
+    port,
+    bind_addresses: ['127.0.0.1'],
+    container_listener_pids: [1],
+    host_listener_pids: [pid],
+    listener_inodes: [inode],
+    listener_inode_owners: { [inode]: [pid] },
+    container_host_pids: [pid],
+    listener_reports: [processReport(pid, marker)],
+  });
+  const apiListener = containerListener('biomodstack-api', '1', 8000, 101, 80001);
+  const adapterReport = processReport(301, '9', {
+    cwd: '/srv/selector/platform/api',
+    cmdline: '/srv/selector/platform/api/.venv/bin/python /srv/selector/platform/api/.venv/bin/uvicorn workflow_adapter_app:app --port 8001 --host 127.0.0.1 --no-proxy-headers --no-access-log',
+    argv: [
+      '/srv/selector/platform/api/.venv/bin/python',
+      '/srv/selector/platform/api/.venv/bin/uvicorn',
+      'workflow_adapter_app:app', '--port', '8001', '--host', '127.0.0.1',
+      '--no-proxy-headers', '--no-access-log',
+    ],
+    executable: '/usr/bin/python3.12',
+    cgroup: '0::/user.slice/biomodstack-workflow-adapter.service',
+  });
   const receipt = {
     selected_environment: environment,
     frontend_target: environment === 'development' ? 'http://127.0.0.1:5173' : 'http://127.0.0.1:18080/bms/',
@@ -41,7 +82,9 @@ function exactSelectionReceipt(environment) {
     runtime_mode: environment === 'development' ? 'dev' : 'container',
     runtime_target: environment === 'development' ? 'dev' : 'prod',
     tailnet_origin: 'https://compute-node.taileb3a90.ts.net',
-    project_revision: 'a'.repeat(40),
+    project_root: '/srv/selector',
+    project_revision: runtimeRevision,
+    selector_revision: 'a'.repeat(40),
     serve_handlers: {
       '/': { Proxy: environment === 'development' ? 'http://127.0.0.1:5173' : 'http://127.0.0.1:18081' },
       '/api/tailnet-environment': { Proxy: 'http://127.0.0.1:8001' },
@@ -51,11 +94,26 @@ function exactSelectionReceipt(environment) {
       validated_compose_root: '/srv/biomodstack',
       containers: [container('biomodstack-api', '1', 101)],
     },
+    managed_api_listener: apiListener,
+    api_listeners: apiListener.listener_reports,
+    workflow_adapter_listener: {
+      port: 8001,
+      bind_addresses: ['127.0.0.1'],
+      listener_inodes: [80011],
+      listener_inode_owners: { 80011: [301] },
+      listener_reports: [adapterReport],
+      systemd_service: 'biomodstack-workflow-adapter.service',
+      source_root: '/srv/selector',
+      source_revision: 'a'.repeat(40),
+    },
     health: {
       local_frontend: { status: 200 },
       tailnet_frontend: { status: 200 },
-      local_api: { status: 200, payload: { build } },
-      tailnet_api: { status: 200, payload: { build: { ...build } } },
+      local_api: { status: 200, payload: { ...healthPayload } },
+      tailnet_api: {
+        status: 200,
+        payload: { ...healthPayload, build: { ...build }, liveness: { ...healthPayload.liveness }, readiness: { ...healthPayload.readiness } },
+      },
     },
   };
   if (environment === 'production') {
@@ -64,6 +122,9 @@ function exactSelectionReceipt(environment) {
       validated_compose_root: '/srv/biomodstack',
       containers: [container('biomodstack-api', '1', 101), container('biomodstack-web', '2', 202)],
     };
+    const webListener = containerListener('biomodstack-web', '2', 18080, 202, 180801);
+    receipt.managed_frontend_listener = webListener;
+    receipt.frontend_listeners = webListener.listener_reports;
     receipt.tailnet_production_proxy = {
       container_id: '3'.repeat(64),
       image: 'nginx@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10',
@@ -77,6 +138,26 @@ function exactSelectionReceipt(environment) {
       cmdline: '/docker-entrypoint.sh nginx -g daemon off;',
       cwd: '/',
     };
+  } else {
+    const frontendReport = processReport(201, '8', {
+      cwd: '/srv/selector/platform/frontend',
+      cmdline: 'node /srv/selector/platform/frontend/node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173',
+      argv: ['node', '/srv/selector/platform/frontend/node_modules/vite/bin/vite.js', '--host', '127.0.0.1', '--port', '5173'],
+      executable: '/usr/bin/node',
+      cgroup: '0::/user.slice/biomodstack-frontend.service',
+      build_revision: 'a'.repeat(40),
+    });
+    receipt.development_frontend_listener = {
+      port: 5173,
+      bind_addresses: ['127.0.0.1'],
+      listener_inodes: [51731],
+      listener_inode_owners: { 51731: [201] },
+      listener_reports: [frontendReport],
+      systemd_service: 'biomodstack-frontend.service',
+      source_root: '/srv/selector/platform/frontend',
+      source_revision: 'a'.repeat(40),
+    };
+    receipt.frontend_listeners = [frontendReport];
   }
   return receipt;
 }
@@ -403,6 +484,12 @@ test('selection response contract accepts exact development and production recei
   assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
     receipt('production'), 'production', 'https://compute-node.taileb3a90.ts.net',
   ));
+  const fractionalTimestamp = receipt('production');
+  fractionalTimestamp.health.local_api.payload.build.build_time = '2026-07-27T05:29:07.904235Z';
+  fractionalTimestamp.health.tailnet_api.payload.build.build_time = '2026-07-27T05:29:07.904235Z';
+  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
+    fractionalTimestamp, 'production', 'https://compute-node.taileb3a90.ts.net',
+  ));
 
   for (const mutation of [
     (value) => { value.frontend_target = 'http://127.0.0.1:5173'; },
@@ -412,13 +499,27 @@ test('selection response contract accepts exact development and production recei
     (value) => { value.tailnet_origin = 'https://wrong.ts.net'; },
     (value) => { value.health.tailnet_api.payload.build.revision = 'b'.repeat(40); },
     (value) => { value.health.local_api.payload.build.build_id = ''; },
+    (value) => { value.health.local_api.payload.build.build_id = '   '; },
     (value) => { value.health.local_api.payload.build.build_time = ''; },
+    (value) => { value.health.local_api.payload.build.build_time = '2026-02-30T00:00:00Z'; },
+    (value) => { value.health.local_api.payload.status = 'degraded'; },
+    (value) => { value.health.local_api.payload.readiness.ready = false; },
+    (value) => { value.project_revision = 'b'.repeat(40); },
+    (value) => { delete value.selector_revision; },
     (value) => { value.managed_api_runtime.validated_revision = 'b'.repeat(40); },
     (value) => { value.managed_api_runtime.containers = []; },
+    (value) => { delete value.managed_api_listener; },
+    (value) => { value.managed_api_listener.listener_inode_owners['80001'] = [101, 999]; },
+    (value) => { value.api_listeners = []; },
+    (value) => { delete value.workflow_adapter_listener; },
+    (value) => { value.workflow_adapter_listener.listener_reports[0].cgroup = '0::/rogue.service'; },
     (value) => { value.serve_handlers['/api/tailnet-environment'].Proxy = 'http://127.0.0.1:9999'; },
     (value) => { delete value.container_runtime; },
     (value) => { value.container_runtime.containers[1].revision = 'b'.repeat(40); },
     (value) => { delete value.tailnet_production_proxy; },
+    (value) => { delete value.managed_frontend_listener; },
+    (value) => { value.managed_frontend_listener.listener_inode_owners['180801'] = [202, 999]; },
+    (value) => { value.frontend_listeners = []; },
     (value) => { value.tailnet_production_proxy.listener_pids = []; },
     (value) => { value.tailnet_production_proxy.image_id = 'sha256:' + '0'.repeat(64); },
   ]) {
@@ -426,6 +527,19 @@ test('selection response contract accepts exact development and production recei
     mutation(malformed);
     assert.throws(() => prepareAssets.validateTailnetSelectionPayload(
       malformed, 'production', 'https://compute-node.taileb3a90.ts.net',
+    ));
+  }
+  for (const mutation of [
+    (value) => { delete value.development_frontend_listener; },
+    (value) => { value.development_frontend_listener.listener_inode_owners['51731'] = [201, 999]; },
+    (value) => { value.development_frontend_listener.listener_reports[0].executable = '/tmp/attacker/node'; },
+    (value) => { value.development_frontend_listener.listener_reports[0].cgroup = '0::/rogue.service'; },
+    (value) => { value.frontend_listeners = []; },
+  ]) {
+    const malformed = receipt('development');
+    mutation(malformed);
+    assert.throws(() => prepareAssets.validateTailnetSelectionPayload(
+      malformed, 'development', 'https://compute-node.taileb3a90.ts.net',
     ));
   }
 });

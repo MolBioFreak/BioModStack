@@ -113,6 +113,33 @@ def test_host_adapter_exposes_pathless_tailscale_proxy_endpoints(monkeypatch) ->
     assert selected == ["production"]
 
 
+def test_tailnet_forwarded_nested_routes_are_not_exposed(monkeypatch) -> None:
+    invoked: list[str] = []
+    monkeypatch.setattr(
+        workflow_adapter,
+        "restart_runtime_target",
+        lambda target=None: invoked.append(target or "missing"),
+        raising=False,
+    )
+    headers = enable_tailnet_identity(monkeypatch)
+    with TestClient(workflow_adapter_app) as client:
+        response = client.post(
+            "/api/workflow-adapter/runtime/restart",
+            headers=headers,
+            json={"target": "prod"},
+        )
+    assert response.status_code == 404
+    assert invoked == []
+
+    with TestClient(workflow_adapter_app, base_url="https://compute-node.taileb3a90.ts.net") as client:
+        missing_identity = client.post(
+            "/api/workflow-adapter/runtime/restart",
+            json={"target": "prod"},
+        )
+    assert missing_identity.status_code == 404
+    assert invoked == []
+
+
 def test_host_adapter_disables_uvicorn_forwarded_client_rewrite() -> None:
     launcher = (REPO_ROOT / "scripts" / "run_biomodstack_workflow_adapter.sh").read_text()
     assert "--no-proxy-headers" in launcher

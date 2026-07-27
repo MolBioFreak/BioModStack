@@ -10,14 +10,14 @@ UPDATER_ANDROID_TEST_SOURCE="$PROJECT_DIR/local-plugins/cordova-plugin-bms-apk-u
 
 cd "$PROJECT_DIR"
 
-# Keep Cordova/configstore and the internal updater's existing Android signer
-# in a user-private durable location. The signer is required for in-place
-# upgrades from prior internal builds; production release signing remains
-# separately fail-closed below.
-XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.local/share/biomodstack/cordova-build-config}"
+# Ignore inherited desktop/configstore scope. The internal updater's signer is
+# deliberately anchored to this user-private durable build location so an
+# unrelated XDG_CONFIG_HOME cannot silently select another debug keystore.
+XDG_CONFIG_HOME="$HOME/.local/share/biomodstack/cordova-build-config"
 export XDG_CONFIG_HOME
 mkdir -p "$XDG_CONFIG_HOME"
 chmod 700 "$XDG_CONFIG_HOME"
+INTERNAL_UPDATE_SIGNER_SHA256="43cce218275179b99aad810bfc246732226a9a408e616d9d5615d5b0709b595a"
 
 if ! command -v npm >/dev/null 2>&1; then
   echo "npm is required" >&2
@@ -232,4 +232,20 @@ if [[ ! -f "$APK_PATH" ]]; then
   exit 1
 fi
 
-echo "APK ($BUILD_VARIANT): $APK_PATH"
+if [[ "$BUILD_VARIANT" == "internal-update" ]]; then
+  APKSIGNER="$SDK_ROOT/build-tools/35.0.0/apksigner"
+  if [[ ! -x "$APKSIGNER" ]]; then
+    echo "API-35 apksigner is required to verify the frozen internal-update signer" >&2
+    exit 1
+  fi
+  ACTUAL_SIGNER_SHA256="$(
+    "$APKSIGNER" verify --print-certs "$APK_PATH" \
+      | awk -F': ' '/Signer #1 certificate SHA-256 digest/ {print tolower($2); exit}'
+  )"
+  if [[ "$ACTUAL_SIGNER_SHA256" != "$INTERNAL_UPDATE_SIGNER_SHA256" ]]; then
+    echo "Internal-update signer mismatch: expected $INTERNAL_UPDATE_SIGNER_SHA256, got ${ACTUAL_SIGNER_SHA256:-missing}" >&2
+    exit 1
+  fi
+fi
+
+printf 'APK: %s\n' "$APK_PATH"

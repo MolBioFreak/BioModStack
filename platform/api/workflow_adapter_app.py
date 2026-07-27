@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.responses import JSONResponse
 
 import database
 from routers import gpu, workflow_adapter
@@ -29,6 +30,18 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type"],
 )
+
+
+@app.middleware("http")
+async def restrict_tailnet_forwarded_surface(request: Request, call_next):
+    # Tailscale Serve injects this header on identity-aware proxy requests. The
+    # adapter also serves private loopback-only API calls, so forwarded Tailnet
+    # traffic must be restricted to the two deliberately published root routes.
+    host = request.headers.get("host", "").split(":", 1)[0].rstrip(".").casefold()
+    tailnet_forwarded = "tailscale-user-login" in request.headers or host.endswith(".ts.net")
+    if tailnet_forwarded and request.url.path not in {"/status", "/select"}:
+        return JSONResponse(status_code=404, content={"detail": "Not found"})
+    return await call_next(request)
 
 app.include_router(workflow_adapter.router, prefix="/api")
 app.include_router(gpu.router, prefix="/api/gpu")

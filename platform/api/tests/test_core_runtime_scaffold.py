@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
 import importlib.util
 import tomllib
 
@@ -95,7 +96,25 @@ def test_compose_core_runtime_contract() -> None:
         "bms-cpu-power",
         "bms-host-agent",
         "bms-web",
+        "tailnet-production-proxy",
     }
+
+    proxy = compose["services"]["tailnet-production-proxy"]
+    assert "build" not in proxy
+    assert proxy["image"].startswith("nginx@sha256:")
+    assert proxy["container_name"] == "biomodstack-tailnet-production-proxy"
+    assert proxy["network_mode"] == "host"
+    assert proxy["read_only"] is True
+    assert proxy["restart"] == "unless-stopped"
+    assert proxy["volumes"] == [
+        "./docker/tailnet-production-proxy.conf:/etc/nginx/conf.d/default.conf:ro"
+    ]
+    proxy_config_sha = hashlib.sha256(
+        (REPO_ROOT / "docker" / "tailnet-production-proxy.conf").read_bytes()
+    ).hexdigest()
+    assert proxy["labels"]["com.biomodstack.tailnet-proxy-config-sha"] == (
+        "${BMS_TAILNET_PROXY_CONFIG_SHA256:-" + proxy_config_sha + "}"
+    )
 
     api = compose["services"]["bms-api"]
     assert api["build"]["dockerfile"] == "docker/api.Dockerfile"

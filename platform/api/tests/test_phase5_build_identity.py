@@ -39,6 +39,15 @@ def test_build_identity_rejects_unverified_revision_shapes(monkeypatch) -> None:
     }
 
 
+def test_build_identity_bounds_javascript_utf16_length(monkeypatch) -> None:
+    build_identity = importlib.import_module("build_identity")
+    monkeypatch.setenv("BMS_BUILD_ID", "💥" * 129)
+    assert build_identity.current_build_identity()["build_id"] == "development"
+
+    monkeypatch.setenv("BMS_BUILD_ID", "💥" * 128)
+    assert build_identity.current_build_identity()["build_id"] == "💥" * 128
+
+
 def test_every_locally_built_compose_service_receives_build_identity_and_stable_image_ref() -> None:
     compose = yaml.safe_load((REPO_ROOT / "compose.core-runtime.yml").read_text(encoding="utf-8"))
     services = compose["services"]
