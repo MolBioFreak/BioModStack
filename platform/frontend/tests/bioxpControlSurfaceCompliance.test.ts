@@ -14,7 +14,10 @@ test('BioXP page is status-first and command controls are server-driven', () => 
     assert.match(`${cockpit}\n${interlinkStatus}`, /No normal OEM commands are available/);
     assert.match(`${cockpit}\n${interlinkStatus}`, /commands are temporarily locked/);
     assert.match(cockpit, /motion requires fresh ready evidence and supervised commissioning/);
+    assert.match(cockpit, /restored automatically after API restart/);
+    assert.match(interlinkStatus, /Automatic inline evidence refresh is pending or retrying/);
     assert.doesNotMatch(cockpit, /motion and retired OEM controls remain unavailable/);
+    assert.doesNotMatch(`${cockpit}\n${interlinkStatus}`, /collect an explicit snapshot before hardware-dependent writes|never restored automatically|SAVED \/ DISCONNECTED is expected after an API restart/);
 });
 
 test('canonical compact page labels the current commissioning tranche without reviving legacy controls', () => {

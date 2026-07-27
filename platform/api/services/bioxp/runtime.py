@@ -22,13 +22,24 @@ class BioXpRuntime:
     startup_warnings: list[str] = field(default_factory=list)
     legacy_jobs: LegacyMigrationResult = field(default_factory=LegacyMigrationResult)
 
+    async def start(self) -> None:
+        """Restore the saved managed target without activating or moving hardware."""
+        try:
+            if self.connection.load_profile() is None:
+                return
+            await self.connection.connect()
+        except Exception as exc:
+            self.startup_warnings.append(
+                f"Saved BioXP profile was not restored: {str(exc) or exc.__class__.__name__}"
+            )
+
     async def close(self) -> None:
         await self.connection.close()
         self.jobs.close()
 
 
 def create_bioxp_runtime(*, data_root: Path | None = None) -> BioXpRuntime:
-    """Create one application-lifetime BioXP runtime without connecting to a robot."""
+    """Create one application-lifetime BioXP runtime; start() restores a saved target."""
 
     root = (data_root or get_data_root()).expanduser().resolve()
     state_root = root / "bioxp"

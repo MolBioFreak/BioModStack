@@ -130,9 +130,22 @@ class BioXpRobotClient:
         payload = await self.request("status", retry_read_once=True)
         if not isinstance(payload, dict):
             raise RobotTransportError("BioXP status response was not an object")
-        # Remote interlink probes are cache-only. Query-only hardware sampling
-        # remains an explicit audited collect_hardware_snapshot command; it is
-        # never hidden inside the periodic connection probe.
+        if _hardware_evidence_needs_refresh(payload):
+            try:
+                await self.request("collect_hardware_snapshot")
+                refreshed = await self.request("status", retry_read_once=True)
+                if isinstance(refreshed, dict):
+                    payload = refreshed
+            except (RobotResponseError, RobotTransportError) as exc:
+                # Runtime reachability remains truthful when only the query-only
+                # evidence refresh fails. The stale payload is still useful and
+                # must not be relabeled as a disconnected robot.
+                payload = dict(payload)
+                payload["automatic_snapshot_refresh"] = {
+                    "attempted": True,
+                    "published": False,
+                    "error": str(exc) or exc.__class__.__name__,
+                }
         return payload
 
     async def request(
@@ -184,3 +197,27 @@ class BioXpRobotClient:
 
     async def close(self) -> None:
         await self._client.aclose()
+
+
+def _hardware_evidence_needs_refresh(payload: Mapping[str, Any]) -> bool:
+    runtime_ready = payload.get("runtime_ready")
+    if not isinstance(runtime_ready, bool):
+        runtime_ready = payload.get("runtime_available")
+    if runtime_ready is not True:
+        return False
+    capabilities = payload.get("capabilities")
+    if not isinstance(capabilities, (list, tuple, set)) or "collect_hardware_snapshot" not in capabilities:
+        return False
+    freshness = payload.get("freshness")
+    freshness = freshness if isinstance(freshness, Mapping) else {}
+    available = payload.get("available") is True
+    cache_fresh = payload.get("cache_state") == "fresh" and freshness.get("state") == "fresh"
+    age_s = freshness.get("age_s")
+    fresh_for_s = freshness.get("fresh_for_s")
+    if not available or not cache_fresh:
+        return True
+    if isinstance(age_s, bool) or not isinstance(age_s, (int, float)):
+        return True
+    if isinstance(fresh_for_s, bool) or not isinstance(fresh_for_s, (int, float)) or fresh_for_s <= 0:
+        return True
+    return float(age_s) >= float(fresh_for_s) / 2.0

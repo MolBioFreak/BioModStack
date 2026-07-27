@@ -31,11 +31,14 @@ class SnapshotRefreshTransport(httpx.AsyncBaseTransport):
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         if request.method == "POST":
+            self.stale = False
+            self.age_s = 0.0
             return httpx.Response(200, json={"ok": True}, request=request)
         if self.stale and len(self.requests) == 1:
             return httpx.Response(
                 200,
                 json={
+                    "runtime_available": True,
                     "available": False,
                     "cache_state": "stale",
                     "freshness": {"state": "stale", "age_s": 31.0},
@@ -184,7 +187,7 @@ def test_lifecycle_mutation_route_fails_before_http_without_private_token_file(m
     asyncio.run(client.close())
 
 
-def test_probe_never_posts_hidden_snapshot_when_hardware_evidence_is_stale() -> None:
+def test_probe_refreshes_stale_hardware_evidence_inline() -> None:
     target = ValidatedBioXpTarget(
         api_url="http://robot:8123",
         scheme="http",
@@ -197,8 +200,10 @@ def test_probe_never_posts_hidden_snapshot_when_hardware_evidence_is_stale() -> 
 
     payload = asyncio.run(client.probe())
 
-    assert payload["cache_state"] == "stale"
+    assert payload["cache_state"] == "fresh"
     assert [(request.method, request.url.path) for request in transport.requests] == [
+        ("GET", "/status"),
+        ("POST", "/hardware/snapshot/collect"),
         ("GET", "/status"),
     ]
     asyncio.run(client.close())
@@ -222,7 +227,7 @@ def test_probe_does_not_collect_when_advertised_hardware_evidence_is_fresh() -> 
     asyncio.run(client.close())
 
 
-def test_probe_never_posts_hidden_snapshot_at_freshness_half_life() -> None:
+def test_probe_refreshes_hardware_evidence_at_freshness_half_life() -> None:
     target = ValidatedBioXpTarget(
         api_url="http://robot:8123",
         scheme="http",
@@ -236,6 +241,8 @@ def test_probe_never_posts_hidden_snapshot_at_freshness_half_life() -> None:
     asyncio.run(client.probe())
 
     assert [(request.method, request.url.path) for request in transport.requests] == [
+        ("GET", "/status"),
+        ("POST", "/hardware/snapshot/collect"),
         ("GET", "/status"),
     ]
     asyncio.run(client.close())

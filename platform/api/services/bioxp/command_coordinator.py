@@ -40,6 +40,15 @@ class ConnectionProtocol(Protocol):
     def snapshot(self) -> BioXpSnapshot: ...
 
 
+_INLINE_HARDWARE_EVIDENCE_COMMANDS = frozenset({
+    "activate_usb_for_service",
+    "initialize_oem_environment",
+    "record_oem_motor_stage_observation",
+    "collect_axis_diagnostics",
+    "run_axis_diagnostic",
+})
+
+
 class CommandCoordinator:
     """Serializes normal commands and keeps emergency delivery independent."""
 
@@ -280,6 +289,8 @@ class CommandCoordinator:
                 else:
                     status = "acknowledged" if acknowledged else "delivered_unacknowledged"
                     detail = "Robot acknowledged command" if acknowledged else "Command delivered; robot acknowledgement absent"
+                if acknowledged and not queued and request.command in _INLINE_HARDWARE_EVIDENCE_COMMANDS:
+                    handler_response["inline_hardware_evidence"] = await _collect_inline_hardware_evidence(client)
             except RobotResponseError as exc:
                 acknowledged = False
                 status = "delivery_failed"
@@ -408,6 +419,23 @@ def _set_command_active(connection: object, value: bool) -> None:
     setter = getattr(connection, "set_command_active", None)
     if callable(setter):
         setter(value)
+
+
+async def _collect_inline_hardware_evidence(client: Any) -> dict[str, Any]:
+    try:
+        response = await client.request("collect_hardware_snapshot", json_data=None)
+        payload = dict(response) if isinstance(response, Mapping) else {}
+        return {
+            "attempted": True,
+            "published": payload.get("published") is True,
+            "snapshot_id": payload.get("snapshot_id"),
+        }
+    except Exception as exc:
+        return {
+            "attempted": True,
+            "published": False,
+            "error": str(exc) or exc.__class__.__name__,
+        }
 
 
 def _fingerprint(value: object) -> str:
