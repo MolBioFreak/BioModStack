@@ -11,6 +11,12 @@ API_LAUNCHER = REPO_ROOT / "scripts" / "run_biomodstack_api.sh"
 WORKFLOW_ADAPTER_LAUNCHER = REPO_ROOT / "scripts" / "run_biomodstack_workflow_adapter.sh"
 
 
+def test_workflow_adapter_disables_proxy_header_client_rewriting() -> None:
+    launcher = WORKFLOW_ADAPTER_LAUNCHER.read_text(encoding="utf-8")
+    assert "uvicorn workflow_adapter_app:app" in launcher
+    assert "--no-proxy-headers" in launcher
+
+
 def test_dev_api_launcher_does_not_inherit_container_adapter_routing(tmp_path: Path) -> None:
     """The native dev API must collect host telemetry directly.
 
