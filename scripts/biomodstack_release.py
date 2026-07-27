@@ -580,17 +580,14 @@ class ProductionReleaseBackend:
     def stop_installed_owner(self) -> None:
         self._stop_managed_units()
         names = [CONTAINER_NAMES[service] for service in BUILD_SERVICES]
-        stopped = self._run(["docker", "stop", *names], check=False)
-        if stopped.returncode != 0:
-            detail = stopped.stderr.strip() or stopped.stdout.strip() or "unknown Docker error"
-            raise ReleaseValidationError(f"failed to stop managed containers: {detail}")
+        self._run(["docker", "stop", *names], check=False)
         still_running: list[str] = []
         for name in names:
             state = self._run(
                 ["docker", "inspect", "--format", "{{.State.Running}}", name],
                 check=False,
             )
-            if state.returncode != 0 or state.stdout.strip().lower() != "false":
+            if state.returncode == 0 and state.stdout.strip().lower() != "false":
                 still_running.append(name)
         if still_running:
             raise ReleaseValidationError(
