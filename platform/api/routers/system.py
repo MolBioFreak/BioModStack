@@ -449,8 +449,9 @@ async def put_install_profile(request: Request, payload: InstallProfilePayload):
 
 
 @router.get("/disk-usage", response_model=DiskUsage)
-async def get_disk_usage():
+async def get_disk_usage(request: Request):
     """Get disk usage for pipeline directories"""
+    _require_local_admin(request)
     work_dir = get_work_dir()
     results_dir = get_results_dir()
 
@@ -482,13 +483,14 @@ async def get_disk_usage():
 
 
 @router.post("/cleanup-work", response_model=CleanupResult)
-async def cleanup_work_directory(days: int = 30):
+async def cleanup_work_directory(request: Request, days: int = 30):
     """
     Clean up Nextflow work directory.
 
     Args:
         days: Delete files older than this many days. Use 0 for full purge.
     """
+    _require_local_admin(request)
     work_dir = get_work_dir()
 
     if not work_dir.exists():
@@ -564,7 +566,8 @@ async def cleanup_work_directory(days: int = 30):
 
 
 @router.get("/db-info", response_model=DbInfo)
-async def get_db_info():
+async def get_db_info(request: Request):
+    _require_local_admin(request)
     db_path = get_db_path()
     if not db_path.exists():
         return DbInfo(
