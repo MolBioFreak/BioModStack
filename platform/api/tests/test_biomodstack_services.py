@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -1357,6 +1358,16 @@ def test_core_runtime_compose_bounds_docker_json_logs() -> None:
     assert "max-size: ${BMS_DOCKER_LOG_MAX_SIZE:-10m}" in compose
     assert "max-file: \"${BMS_DOCKER_LOG_MAX_FILE:-5}\"" in compose
     assert compose.count("logging: *bms-json-logging") == 4
+
+
+def test_tailnet_production_proxy_is_opt_in_for_canonical_control_owner() -> None:
+    compose = yaml.safe_load(
+        (services.get_project_root() / "compose.core-runtime.yml").read_text(encoding="utf-8")
+    )
+
+    assert compose["services"]["tailnet-production-proxy"]["profiles"] == [
+        "tailnet-control"
+    ]
 
 
 def test_core_runtime_compose_disables_restart_policy_for_application_services() -> None:
