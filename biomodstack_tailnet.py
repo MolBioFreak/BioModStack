@@ -689,6 +689,7 @@ def _install_operator_development_frontend(root: Path, mutation_ledger: set[str]
         f"Environment=VITE_BMS_BUILD_SHA={revision}\n"
         f"Environment=VITE_BMS_BUILD_ID={build_id}\n"
         f"Environment=VITE_BMS_BUILD_TIME={build_time}\n"
+        f"WorkingDirectory={root}/platform/frontend\n"
         "ExecStartPre=\n"
         f"ExecStartPre=/usr/bin/sh -c 'test \"$BMS_DEV_API_PROXY_TARGET\" = \"{dev_api_target}\"'\n"
         f"ExecStartPre=/usr/bin/env python3 {root}/scripts/rotate_biomodstack_logs.py\n"

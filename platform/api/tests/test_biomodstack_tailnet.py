@@ -573,6 +573,7 @@ def test_operator_development_frontend_is_pinned_to_isolated_dev_api(monkeypatch
     assert "BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:18002" in dropin
     assert "ExecStart=/usr/bin/node " in dropin
     assert "/platform/frontend/node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173" in dropin
+    assert f"WorkingDirectory={tmp_path}/platform/frontend" in dropin
     assert "http://127.0.0.1:8000" not in unit
     assert "http://127.0.0.1:8000" not in dropin
     assert f"VITE_BMS_BUILD_SHA={'a' * 40}" in unit
