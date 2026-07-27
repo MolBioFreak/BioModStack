@@ -585,3 +585,45 @@ def test_axis_stop_preempts_inflight_diagnostic_without_waiting_for_workflow_lea
         assert events[-1] == ("lease-exit", 17)
 
     asyncio.run(scenario())
+
+
+def test_axis_stop_http_acknowledgement_never_waits_for_normal_probe_lane() -> None:
+    from types import SimpleNamespace
+
+    from routers.bioxp.commands import execute_command
+
+    class Result:
+        remote_acknowledged = True
+        status = "acknowledged"
+        command = "stop_axis_diagnostic"
+
+        def model_dump(self, *, mode):
+            return {"command": self.command, "status": self.status}
+
+    class Commands:
+        async def execute(self, request, *, mutations_enabled):
+            assert request.command == "stop_axis_diagnostic"
+            return Result()
+
+    class Connection:
+        probe_called = False
+
+        async def probe(self):
+            self.probe_called = True
+            await asyncio.Event().wait()
+
+    connection = Connection()
+    runtime = SimpleNamespace(commands=Commands(), connection=connection)
+    payload = {
+        "command": "stop_axis_diagnostic",
+        "expected_generation": 13,
+        "idempotency_key": "axis-stop-http-13",
+        "axis": "x",
+        "operator_ack": "STOP_AXIS",
+        "reason": "Operator requested immediate X stop",
+    }
+
+    result = asyncio.run(asyncio.wait_for(execute_command(payload, runtime), timeout=0.1))
+
+    assert result["command"] == "stop_axis_diagnostic"
+    assert connection.probe_called is False
