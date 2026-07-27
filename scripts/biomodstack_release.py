@@ -580,19 +580,19 @@ class ProductionReleaseBackend:
     def stop_installed_owner(self) -> None:
         self._stop_managed_units()
         names = [CONTAINER_NAMES[service] for service in BUILD_SERVICES]
-        self._run(["docker", "stop", *names], check=False)
-        still_running: list[str] = []
+        self._run(["docker", "rm", "--force", *names], check=False)
+        still_present: list[str] = []
         for name in names:
             state = self._run(
                 ["docker", "inspect", "--format", "{{.State.Running}}", name],
                 check=False,
             )
-            if state.returncode == 0 and state.stdout.strip().lower() != "false":
-                still_running.append(name)
-        if still_running:
+            if state.returncode == 0:
+                still_present.append(name)
+        if still_present:
             raise ReleaseValidationError(
-                "managed containers remained active or indeterminate: "
-                + ", ".join(still_running)
+                "managed containers remained present after removal: "
+                + ", ".join(still_present)
             )
 
     def render_operator_frontend_unit(self, identity: BuildIdentity) -> str:

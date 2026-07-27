@@ -570,10 +570,10 @@ def test_install_and_activation_use_candidate_frontend_only_after_old_owner_stop
             events.append("stop-installed")
         elif command[:3] == ["systemctl", "--user", "is-active"]:
             return subprocess.CompletedProcess(command, 3, "inactive\n", "")
-        elif command[:2] == ["docker", "stop"]:
-            events.append("stop-containers")
+        elif command[:3] == ["docker", "rm", "--force"]:
+            events.append("remove-containers")
         elif command[:4] == ["docker", "inspect", "--format", "{{.State.Running}}"]:
-            return subprocess.CompletedProcess(command, 0, "false\n", "")
+            return subprocess.CompletedProcess(command, 1, "", "No such container")
         elif command[:3] == ["systemctl", "--user", "daemon-reload"]:
             events.append("daemon-reload")
         elif command[:3] == ["systemctl", "--user", "enable"]:
@@ -589,7 +589,7 @@ def test_install_and_activation_use_candidate_frontend_only_after_old_owner_stop
 
     assert events == [
         "stop-installed",
-        "stop-containers",
+        "remove-containers",
         "install-core",
         "daemon-reload",
         "preflight-after-stop",
@@ -899,10 +899,10 @@ def test_candidate_validation_failure_restores_and_revalidates_exact_prior_runti
         if command[:3] == ["docker", "compose", "-f"] and "ps" in command:
             service = command[-1]
             return subprocess.CompletedProcess(command, 0, container_by_service[service] + "\n", "")
-        if command[:2] == ["docker", "stop"]:
+        if command[:3] == ["docker", "rm", "--force"]:
             return subprocess.CompletedProcess(command, 0, "", "")
         if command[:4] == ["docker", "inspect", "--format", "{{.State.Running}}"]:
-            return subprocess.CompletedProcess(command, 0, "false\n", "")
+            return subprocess.CompletedProcess(command, 1, "", "No such container")
         if command[:2] == ["docker", "inspect"]:
             container_name = command[-1]
             service = next(
