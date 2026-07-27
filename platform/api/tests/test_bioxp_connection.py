@@ -146,6 +146,34 @@ def test_runtime_start_keeps_failed_restore_truthful_without_crashing_api() -> N
     assert runtime.startup_warnings == ["Saved BioXP profile was not restored: robot offline"]
 
 
+def test_runtime_start_does_not_wait_for_saved_robot_probe() -> None:
+    from services.bioxp.runtime import BioXpRuntime
+
+    class Connection:
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        def load_profile(self):
+            return object()
+
+        async def connect(self):
+            self.entered.set()
+            await self.release.wait()
+
+    async def scenario() -> None:
+        connection = Connection()
+        runtime = BioXpRuntime(connection=connection, commands=None, jobs=None)  # type: ignore[arg-type]
+        start_task = asyncio.create_task(runtime.start())
+        await asyncio.wait_for(connection.entered.wait(), timeout=0.1)
+        await asyncio.sleep(0)
+        assert start_task.done() is True
+        connection.release.set()
+        await start_task
+        await asyncio.sleep(0)
+
+    asyncio.run(scenario())
+
+
 def test_connect_uses_only_saved_profile_and_failed_probe_is_unknown_not_ready(tmp_path: Path) -> None:
     BioXpConnectionService, BioXpProfile, BioXpProfileStore, BioXpTargetPolicy = _load()
 
@@ -166,14 +194,19 @@ def test_connect_uses_only_saved_profile_and_failed_probe_is_unknown_not_ready(t
         asyncio.run(service.connect())
 
     asyncio.run(service.save_profile(BioXpProfile(api_url="http://robot:8123")))
-    snapshot = asyncio.run(service.connect())
+    from services.bioxp.connection import ConnectionStateError
 
-    assert snapshot.active is True
-    assert snapshot.reachable is False
+    with pytest.raises(ConnectionStateError, match="offline"):
+        asyncio.run(service.connect())
+    snapshot = service.snapshot()
+
+    assert snapshot.active is False
+    assert snapshot.reachable is None
     assert snapshot.runtime_ready is None
     assert snapshot.hardware_ready is None
     assert snapshot.last_error == "offline"
     assert snapshot.generation == 1
+    assert clients[0].closed is True
 
 
 def test_disconnect_closes_client_increments_generation_and_clears_observation(tmp_path: Path) -> None:

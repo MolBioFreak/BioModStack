@@ -425,10 +425,28 @@ async def _collect_inline_hardware_evidence(client: Any) -> dict[str, Any]:
     try:
         response = await client.request("collect_hardware_snapshot", json_data=None)
         payload = dict(response) if isinstance(response, Mapping) else {}
+        snapshot = payload.get("snapshot")
+        snapshot_id = snapshot.get("snapshot_id") if isinstance(snapshot, Mapping) else None
+        published = (
+            payload.get("ok") is True
+            and payload.get("published") is True
+            and isinstance(snapshot_id, str)
+            and bool(snapshot_id)
+        )
+        if not published:
+            return {
+                "attempted": True,
+                "published": False,
+                "error": str(
+                    payload.get("error")
+                    or payload.get("detail")
+                    or "hardware snapshot was not published"
+                ),
+            }
         return {
             "attempted": True,
-            "published": payload.get("published") is True,
-            "snapshot_id": payload.get("snapshot_id"),
+            "published": True,
+            "snapshot_id": snapshot_id,
         }
     except Exception as exc:
         return {

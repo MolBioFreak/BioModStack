@@ -43,7 +43,7 @@ async def execute_command(
             and request.command != "stop_axis_diagnostic"
         ):
             try:
-                await runtime.connection.probe()
+                await runtime.connection.probe_status_only()
             except (ConnectionStateError, TargetPolicyError):
                 pass
     except ValidationError as exc:

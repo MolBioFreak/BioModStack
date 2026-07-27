@@ -425,7 +425,11 @@ def test_axis_diagnostic_execution_holds_generation_lease_and_forwards_only_type
         async def request(self, route_key, *, json_data):
             events.append(("request", route_key, json_data))
             if route_key == "collect_hardware_snapshot":
-                return {"ok": True, "published": True, "snapshot_id": "post-axis-13"}
+                return {
+                    "ok": True,
+                    "published": True,
+                    "snapshot": {"snapshot_id": "post-axis-13"},
+                }
             return {
                 "ok": True,
                 "axis": "x",
@@ -495,6 +499,71 @@ def test_axis_diagnostic_execution_holds_generation_lease_and_forwards_only_type
         ("request", "collect_hardware_snapshot", None),
         ("lease-exit", 13),
     ]
+
+
+def test_inline_hardware_evidence_rejects_application_level_failure_payload() -> None:
+    from services.bioxp.command_coordinator import _collect_inline_hardware_evidence
+
+    class Client:
+        async def request(self, route_key, *, json_data):
+            assert route_key == "collect_hardware_snapshot"
+            return {
+                "ok": False,
+                "published": True,
+                "snapshot": {"snapshot_id": "must-not-trust"},
+                "error": "snapshot rejected",
+            }
+
+    evidence = asyncio.run(_collect_inline_hardware_evidence(Client()))
+
+    assert evidence == {
+        "attempted": True,
+        "published": False,
+        "error": "snapshot rejected",
+    }
+
+
+def test_acknowledged_command_http_refresh_is_status_only() -> None:
+    from types import SimpleNamespace
+
+    from routers.bioxp.commands import execute_command
+
+    class Result:
+        remote_acknowledged = True
+        status = "acknowledged"
+
+        def model_dump(self, *, mode):
+            return {"command": "run_axis_diagnostic", "status": self.status}
+
+    class Commands:
+        async def execute(self, request, *, mutations_enabled):
+            return Result()
+
+    class Connection:
+        status_only_called = False
+
+        async def probe(self):
+            raise AssertionError("post-command HTTP publication must not auto-collect another snapshot")
+
+        async def probe_status_only(self):
+            self.status_only_called = True
+
+    connection = Connection()
+    runtime = SimpleNamespace(commands=Commands(), connection=connection)
+    payload = {
+        "command": "run_axis_diagnostic",
+        "expected_generation": 13,
+        "idempotency_key": "axis-status-only-13",
+        "axis": "x",
+        "operation": "home",
+        "operator_ack": "RUN_AXIS_DIAGNOSTIC",
+        "reason": "verify status-only post-command publication",
+    }
+
+    result = asyncio.run(execute_command(payload, runtime))
+
+    assert result["status"] == "acknowledged"
+    assert connection.status_only_called is True
 
 
 def test_axis_stop_preempts_inflight_diagnostic_without_waiting_for_workflow_lease() -> None:
