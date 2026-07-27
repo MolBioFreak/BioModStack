@@ -479,6 +479,7 @@ class ProductionReleaseBackend:
                 str(materialized_root / "compose.core-runtime.yml"),
                 "build",
                 "--pull",
+                "--no-cache",
                 *BUILD_SERVICES,
             ],
             cwd=materialized_root,
