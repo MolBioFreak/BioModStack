@@ -959,14 +959,14 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
       && nonEmptyBounded(build.build_id, 256)
       && validBuildTime(build.build_time)
     );
-    const validReadinessCheck = (check, launch = false) => (
+    const validReadinessCheck = (check, expectedStatus, launch = false) => (
       hasExactKeys(check, launch
         ? ['allowed', 'ready', 'required', 'status']
         : ['ready', 'required', 'status'])
-      && typeof check.ready === 'boolean'
-      && typeof check.required === 'boolean'
-      && (!launch || typeof check.allowed === 'boolean')
-      && nonEmptyBounded(check.status, 128)
+      && check.ready === true
+      && check.required === true
+      && check.status === expectedStatus
+      && (!launch || check.allowed === true)
     );
     const validApiPayload = (payload) => (
       hasExactKeys(payload, ['build', 'liveness', 'molbio', 'readiness', 'service', 'status'])
@@ -1003,10 +1003,14 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
         'core_database', 'frontend', 'molbio_database', 'process_liveness',
         'workflow_adapter', 'workflow_launch',
       ])
-      && ['core_database', 'frontend', 'molbio_database', 'process_liveness', 'workflow_adapter']
-        .every((key) => validReadinessCheck(payload.readiness.checks[key]))
-      && validReadinessCheck(payload.readiness.checks.workflow_launch, true)
-      && payload.readiness.checks.workflow_launch.allowed === true
+      && Object.entries({
+        core_database: 'ready',
+        frontend: 'http_200',
+        molbio_database: 'ready',
+        process_liveness: 'alive',
+        workflow_adapter: 'http_200',
+      }).every(([key, status]) => validReadinessCheck(payload.readiness.checks[key], status))
+      && validReadinessCheck(payload.readiness.checks.workflow_launch, 'allowed', true)
     );
     const validProbe = (report, requestedUrl, finalUrl, expectApi) => (
       hasExactKeys(report, ['url', 'final_url', 'status', 'payload'])

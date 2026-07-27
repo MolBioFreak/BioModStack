@@ -24,7 +24,7 @@ import {
 function exactSelectionReceipt(environment) {
   const runtimeRevision = '6'.repeat(40);
   const build = { revision: runtimeRevision, build_id: 'build-1', build_time: '2026-07-26T00:00:00Z' };
-  const readinessCheck = { ready: true, required: true, status: 'ready' };
+  const readinessCheck = (status) => ({ ready: true, required: true, status });
   const healthPayload = {
     build,
     service: 'biomodstack-api',
@@ -41,10 +41,10 @@ function exactSelectionReceipt(environment) {
       ready: true,
       mode: 'container',
       checks: {
-        core_database: { ...readinessCheck }, frontend: { ...readinessCheck },
-        molbio_database: { ...readinessCheck }, process_liveness: { ...readinessCheck },
-        workflow_adapter: { ...readinessCheck },
-        workflow_launch: { ...readinessCheck, allowed: true },
+        core_database: readinessCheck('ready'), frontend: readinessCheck('http_200'),
+        molbio_database: readinessCheck('ready'), process_liveness: readinessCheck('alive'),
+        workflow_adapter: readinessCheck('http_200'),
+        workflow_launch: { ...readinessCheck('allowed'), allowed: true },
       },
     },
   };
@@ -746,6 +746,36 @@ test('selection response contract accepts exact development and production recei
     (value) => { value.health.local_api.payload.liveness.rogue = true; },
     (value) => { value.health.local_api.payload.readiness.rogue = true; },
     (value) => { value.health.local_api.payload.readiness.checks.frontend.rogue = true; },
+    (value) => {
+      for (const probe of ['local_api', 'tailnet_api']) {
+        value.health[probe].payload.readiness.checks.core_database.ready = false;
+      }
+    },
+    (value) => {
+      for (const probe of ['local_api', 'tailnet_api']) {
+        value.health[probe].payload.readiness.checks.frontend.required = false;
+      }
+    },
+    (value) => {
+      for (const probe of ['local_api', 'tailnet_api']) {
+        value.health[probe].payload.readiness.checks.workflow_adapter.status = 'failed';
+      }
+    },
+    (value) => {
+      for (const probe of ['local_api', 'tailnet_api']) {
+        value.health[probe].payload.readiness.checks.workflow_launch.ready = false;
+      }
+    },
+    (value) => {
+      for (const probe of ['local_api', 'tailnet_api']) {
+        value.health[probe].payload.readiness.checks.workflow_launch.required = false;
+      }
+    },
+    (value) => {
+      for (const probe of ['local_api', 'tailnet_api']) {
+        value.health[probe].payload.readiness.checks.workflow_launch.status = 'blocked';
+      }
+    },
     (value) => { value.health.local_api.payload.molbio.rogue = true; },
     (value) => { value.serve_handlers.rogue = { Proxy: 'http://127.0.0.1:9999' }; },
     (value) => { value.serve_handlers['/'].rogue = true; },
