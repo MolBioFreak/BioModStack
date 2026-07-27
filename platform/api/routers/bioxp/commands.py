@@ -37,15 +37,21 @@ async def execute_command(
             request,
             mutations_enabled=True,
         )
-        if request.command in {"activate_usb_for_service", "collect_hardware_snapshot"} and result.remote_acknowledged:
+        if (
+            result.remote_acknowledged
+            and result.status != "queued"
+            and request.command != "stop_axis_diagnostic"
+        ):
             try:
-                await runtime.connection.probe()
+                await runtime.connection.probe_status_only()
             except (ConnectionStateError, TargetPolicyError):
                 pass
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except (CommandBusyError, CommandDeniedError, IdempotencyConflictError) as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    except ConnectionStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return result.model_dump(mode="json")
 
 

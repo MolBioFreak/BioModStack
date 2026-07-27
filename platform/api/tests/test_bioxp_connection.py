@@ -32,6 +32,8 @@ class FakeRobotClient:
         self.probe_error = probe_error
         self.closed = False
         self.probes = 0
+        self.request_started: asyncio.Event | None = None
+        self.request_release: asyncio.Event | None = None
 
     async def probe(self) -> dict[str, Any]:
         self.probes += 1
@@ -41,6 +43,13 @@ class FakeRobotClient:
 
     async def close(self) -> None:
         self.closed = True
+
+    async def request(self, route_name: str, **kwargs: Any) -> dict[str, Any]:
+        if self.request_started is not None:
+            self.request_started.set()
+        if self.request_release is not None:
+            await self.request_release.wait()
+        return {"route_name": route_name, "kwargs": kwargs}
 
 
 def _service(
@@ -99,6 +108,72 @@ def test_saved_profile_does_not_activate_on_startup_or_restart(tmp_path: Path) -
     assert clients == []
 
 
+def test_runtime_start_restores_saved_managed_connection() -> None:
+    from services.bioxp.runtime import BioXpRuntime
+
+    class Connection:
+        connected = 0
+
+        def load_profile(self):
+            return object()
+
+        async def connect(self):
+            self.connected += 1
+
+    connection = Connection()
+    runtime = BioXpRuntime(connection=connection, commands=None, jobs=None)  # type: ignore[arg-type]
+
+    asyncio.run(runtime.start())
+
+    assert connection.connected == 1
+    assert runtime.startup_warnings == []
+
+
+def test_runtime_start_keeps_failed_restore_truthful_without_crashing_api() -> None:
+    from services.bioxp.runtime import BioXpRuntime
+
+    class Connection:
+        def load_profile(self):
+            return object()
+
+        async def connect(self):
+            raise RuntimeError("robot offline")
+
+    runtime = BioXpRuntime(connection=Connection(), commands=None, jobs=None)  # type: ignore[arg-type]
+
+    asyncio.run(runtime.start())
+
+    assert runtime.startup_warnings == ["Saved BioXP profile was not restored: robot offline"]
+
+
+def test_runtime_start_does_not_wait_for_saved_robot_probe() -> None:
+    from services.bioxp.runtime import BioXpRuntime
+
+    class Connection:
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        def load_profile(self):
+            return object()
+
+        async def connect(self):
+            self.entered.set()
+            await self.release.wait()
+
+    async def scenario() -> None:
+        connection = Connection()
+        runtime = BioXpRuntime(connection=connection, commands=None, jobs=None)  # type: ignore[arg-type]
+        start_task = asyncio.create_task(runtime.start())
+        await asyncio.wait_for(connection.entered.wait(), timeout=0.1)
+        await asyncio.sleep(0)
+        assert start_task.done() is True
+        connection.release.set()
+        await start_task
+        await asyncio.sleep(0)
+
+    asyncio.run(scenario())
+
+
 def test_connect_uses_only_saved_profile_and_failed_probe_is_unknown_not_ready(tmp_path: Path) -> None:
     BioXpConnectionService, BioXpProfile, BioXpProfileStore, BioXpTargetPolicy = _load()
 
@@ -119,14 +194,19 @@ def test_connect_uses_only_saved_profile_and_failed_probe_is_unknown_not_ready(t
         asyncio.run(service.connect())
 
     asyncio.run(service.save_profile(BioXpProfile(api_url="http://robot:8123")))
-    snapshot = asyncio.run(service.connect())
+    from services.bioxp.connection import ConnectionStateError
 
-    assert snapshot.active is True
-    assert snapshot.reachable is False
+    with pytest.raises(ConnectionStateError, match="offline"):
+        asyncio.run(service.connect())
+    snapshot = service.snapshot()
+
+    assert snapshot.active is False
+    assert snapshot.reachable is None
     assert snapshot.runtime_ready is None
     assert snapshot.hardware_ready is None
     assert snapshot.last_error == "offline"
     assert snapshot.generation == 1
+    assert clients[0].closed is True
 
 
 def test_disconnect_closes_client_increments_generation_and_clears_observation(tmp_path: Path) -> None:
@@ -146,6 +226,66 @@ def test_disconnect_closes_client_increments_generation_and_clears_observation(t
     assert disconnected.hardware_ready is None
     assert disconnected.observed_at is None
     assert disconnected.capabilities == ()
+
+
+def test_generation_bound_request_lease_serializes_disconnect(tmp_path: Path) -> None:
+    _, BioXpProfile, _, _ = _load()
+    clients: list[FakeRobotClient] = []
+    service = _service(tmp_path, clients)
+
+    async def exercise() -> None:
+        await service.save_profile(BioXpProfile(api_url="http://robot:8123"))
+        connected = await service.connect()
+        robot = clients[0]
+        robot.request_started = asyncio.Event()
+        robot.request_release = asyncio.Event()
+
+        request_task = asyncio.create_task(service.request_active(
+            "plan_oem_full_lifecycle",
+            expected_generation=connected.generation,
+            json_data={"expected_generation": connected.generation},
+        ))
+        await robot.request_started.wait()
+        disconnect_task = asyncio.create_task(service.disconnect())
+        await asyncio.sleep(0)
+        assert disconnect_task.done() is False
+        assert service.snapshot().generation == connected.generation
+
+        robot.request_release.set()
+        response = await request_task
+        assert response["route_name"] == "plan_oem_full_lifecycle"
+        disconnected = await disconnect_task
+        assert disconnected.generation == connected.generation + 1
+        assert disconnected.active is False
+
+    asyncio.run(exercise())
+
+
+def test_multi_request_lease_serializes_disconnect_until_canonical_readback(tmp_path: Path) -> None:
+    _, BioXpProfile, _, _ = _load()
+    clients: list[FakeRobotClient] = []
+    service = _service(tmp_path, clients)
+
+    async def exercise() -> None:
+        await service.save_profile(BioXpProfile(api_url="http://robot:8123"))
+        connected = await service.connect()
+
+        async with service.active_request_lease(
+            expected_generation=connected.generation,
+        ) as robot:
+            assert (await robot.request("oem_full_lifecycle_contract"))["route_name"] == "oem_full_lifecycle_contract"
+            disconnect_task = asyncio.create_task(service.disconnect())
+            await asyncio.sleep(0)
+            assert disconnect_task.done() is False
+            assert (await robot.request("plan_oem_full_lifecycle"))["route_name"] == "plan_oem_full_lifecycle"
+            assert (await robot.request("get_oem_full_lifecycle_run"))["route_name"] == "get_oem_full_lifecycle_run"
+            assert disconnect_task.done() is False
+
+        disconnected = await disconnect_task
+        assert disconnected.generation == connected.generation + 1
+        assert disconnected.active is False
+
+    asyncio.run(exercise())
 
 
 def test_stale_observation_is_explicit(tmp_path: Path) -> None:

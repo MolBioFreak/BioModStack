@@ -36,6 +36,26 @@ export interface BioXpDerivedStatus {
     detail: string;
 }
 
+function localFreshnessMetadata(
+    connection: BioXpConnectionSnapshot,
+    nowMs: number,
+): 'fresh' | 'expired' | 'invalid' {
+    const observedMs = connection.observed_at ? Date.parse(connection.observed_at) : Number.NaN;
+    const budgetMs = connection.freshness_budget_seconds * 1_000;
+    if (!Number.isFinite(observedMs) || !Number.isFinite(budgetMs) || budgetMs <= 0) return 'invalid';
+    return nowMs <= observedMs + budgetMs ? 'fresh' : 'expired';
+}
+
+export function isBioXpControlPlaneFresh(
+    connection: BioXpConnectionSnapshot | undefined,
+    nowMs: number = Date.now(),
+): boolean {
+    return connection?.active === true
+        && connection.fresh === true
+        && connection.reachable === true
+        && localFreshnessMetadata(connection, nowMs) === 'fresh';
+}
+
 export function isBioXpCommandAvailable(
     availableCommands: readonly string[] | undefined,
     command: string,
@@ -81,9 +101,8 @@ export function deriveBioXpStatus(
         };
     }
     if (connection.fresh === true) {
-        const observedMs = connection.observed_at ? Date.parse(connection.observed_at) : Number.NaN;
-        const budgetMs = connection.freshness_budget_seconds * 1_000;
-        if (!Number.isFinite(observedMs) || !Number.isFinite(budgetMs) || budgetMs <= 0) {
+        const localFreshness = localFreshnessMetadata(connection, nowMs);
+        if (localFreshness === 'invalid') {
             return {
                 label: 'UNKNOWN',
                 ready: false,
@@ -91,7 +110,7 @@ export function deriveBioXpStatus(
                 detail: 'Freshness metadata is missing or malformed.',
             };
         }
-        if (nowMs > observedMs + budgetMs) {
+        if (localFreshness === 'expired') {
             return {
                 label: 'STALE',
                 ready: false,
@@ -145,7 +164,7 @@ export function deriveBioXpStatus(
             label: 'RUNTIME READY',
             ready: false,
             tone: 'warning',
-            detail: 'Runtime is reachable and ready. Hardware evidence is stale; collect an explicit snapshot before hardware-dependent writes.',
+            detail: 'Runtime is reachable and ready. Hardware evidence is stale; Automatic inline evidence refresh is pending or retrying, and hardware-dependent writes remain disabled until fresh evidence arrives.',
         };
     }
     if (connection.hardware_ready === false) {

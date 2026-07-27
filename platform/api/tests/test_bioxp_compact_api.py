@@ -23,6 +23,11 @@ EXPECTED = {
     ("GET", "/commands"),
     ("GET", "/commands/{command_id}"),
     ("POST", "/emergency-stop"),
+    ("GET", "/oem-full-lifecycle/contract"),
+    ("POST", "/oem-full-lifecycle/runs"),
+    ("GET", "/oem-full-lifecycle/runs/{run_id}"),
+    ("GET", "/oem-full-lifecycle/runs/{run_id}/ledger"),
+    ("POST", "/oem-full-lifecycle/runs/{run_id}/cancel"),
 }
 
 
@@ -48,7 +53,7 @@ def _inventory() -> set[tuple[str, str]]:
 
 def test_compact_api_inventory_is_exact_and_bounded() -> None:
     assert _inventory() == EXPECTED
-    assert len(_inventory()) <= 18
+    assert len(_inventory()) <= 23
 
 
 def test_every_non_read_route_carries_the_global_containment_dependency() -> None:
@@ -61,7 +66,13 @@ def test_every_non_read_route_carries_the_global_containment_dependency() -> Non
 
 def test_only_bounded_resource_identifiers_are_dynamic() -> None:
     dynamic = {path for _, path in _inventory() if "{" in path}
-    assert dynamic == {"/jobs/{job_id}", "/commands/{command_id}"}
+    assert dynamic == {
+        "/jobs/{job_id}",
+        "/commands/{command_id}",
+        "/oem-full-lifecycle/runs/{run_id}",
+        "/oem-full-lifecycle/runs/{run_id}/ledger",
+        "/oem-full-lifecycle/runs/{run_id}/cancel",
+    }
     assert all("{path" not in path and "{command_name" not in path for _, path in _inventory())
 
 
@@ -88,8 +99,10 @@ def test_snapshot_completion_refreshes_status_and_lifecycle_reasons_are_operator
     from routers.bioxp import commands, connection
 
     command_source = inspect.getsource(commands.execute_command)
-    assert '{"activate_usb_for_service", "collect_hardware_snapshot"}' in command_source
-    assert "await runtime.connection.probe()" in command_source
+    assert "result.remote_acknowledged" in command_source
+    assert 'request.command != "stop_axis_diagnostic"' in command_source
+    assert "await runtime.connection.probe_status_only()" in command_source
+    assert "await runtime.connection.probe()" not in command_source
 
     status_source = inspect.getsource(connection.get_status)
     assert status_source.index("lifecycle_stage_reasons") < status_source.index("requires_hardware_ready")
