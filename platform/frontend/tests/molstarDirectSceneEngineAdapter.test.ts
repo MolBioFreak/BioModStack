@@ -51,6 +51,13 @@ test('direct bridge delegates MD loading and frame selection by bounded display 
     assert.doesNotMatch(source, /selectMolecularDynamicsDisplayFrame\(frame\.sourceFrame\)/);
 });
 
+test('MD-only scene reconciliation loads an unselected governed trajectory before frame selection', () => {
+    const source = readFileSync('src/structureViewer/runtime/MolstarDirectSceneEngineAdapter.ts', 'utf8');
+
+    assert.match(source, /reconciliation\.molecularDynamicsChanged[\s\S]*?await this\.adapter\.loadMolecularDynamics\(next\.molecularDynamics\)/);
+    assert.match(source, /loadMolecularDynamics\(next\.molecularDynamics\)[\s\S]*?selectedFrame/);
+});
+
 test('direct adapter uses Molstar 4.5 GRO/XTC state transforms and bounded display indices', () => {
     const source = readFileSync('src/structureViewer/adapters/MolstarDirectAdapter.ts', 'utf8');
 

@@ -135,13 +135,25 @@ export class MolstarDirectSceneEngineAdapter implements MolstarEngineAdapter {
             if (loaded.status !== 'ok') return loaded;
         }
         if (signal.aborted) return viewerCancelled('Scene reconciliation was cancelled');
+        const previousPlayback = previous?.molecularDynamics;
+        const needsMolecularDynamicsLoad = !documentsReloaded
+            && reconciliation.molecularDynamicsChanged
+            && next.molecularDynamics?.playbackCapability.supported === true
+            && (previousPlayback?.playbackCapability.supported !== true
+                || previousPlayback.activeReplica !== next.molecularDynamics.activeReplica);
+        if (needsMolecularDynamicsLoad) {
+            const loaded = await this.adapter.loadMolecularDynamics(next.molecularDynamics);
+            if (loaded.status !== 'ok') return loaded;
+        }
         if (!documentsReloaded && reconciliation.molecularDynamicsChanged
-            && next.molecularDynamics?.playbackCapability.supported
-            && next.molecularDynamics.playback.selectedFrame) {
-            const selected = await this.adapter.selectMolecularDynamicsDisplayFrame(
-                next.molecularDynamics.playback.selectedFrame.displayFrame,
-            );
-            if (selected.status !== 'ok') return selected;
+            && next.molecularDynamics?.playbackCapability.supported) {
+            const selectedFrame = next.molecularDynamics.playback.selectedFrame;
+            if (selectedFrame) {
+                const selected = await this.adapter.selectMolecularDynamicsDisplayFrame(
+                    selectedFrame.displayFrame,
+                );
+                if (selected.status !== 'ok') return selected;
+            }
         }
         if (documentsReloaded || reconciliation.presentationChanged || reconciliation.layerChanged
             || reconciliation.selectionChanged || reconciliation.filterChanged) {
