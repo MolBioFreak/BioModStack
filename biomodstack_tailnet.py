@@ -3,6 +3,8 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
+import base64
+import binascii
 import fcntl
 import hashlib
 import json
@@ -12,7 +14,7 @@ import re
 import subprocess
 import tempfile
 import time
-from typing import Any, Iterator, Mapping
+from typing import Any, Iterator, Mapping, cast
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -47,6 +49,8 @@ PRODUCTION_TAILNET_PROXY_PORT = 18081
 PRODUCTION_TAILNET_PROXY_CONTAINER = "biomodstack-tailnet-production-proxy"
 PRODUCTION_TAILNET_PROXY_IMAGE = "nginx@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10"
 PRODUCTION_TAILNET_PROXY_IMAGE_ID = "sha256:6769dc3a703c719c1d2756bda113659be28ae16cf0da58dd5fd823d6b9a050ea"
+MANAGED_API_IMAGE_ID = "sha256:74bf34e32e2f5d0f72d3f6d117c1b4877c169e7a62c0da06ea05b75d5e0cd12c"
+MANAGED_WEB_IMAGE_ID = "sha256:7e79b645349216a2457cd2f64af53beb26d9041c7911ed8438d6708239017c3e"
 _IMAGE_ID_PATTERN = re.compile(r"sha256:[0-9a-f]{64}")
 PRODUCTION_TAILNET_PROXY_CONFIG = Path("docker/tailnet-production-proxy.conf")
 PRODUCTION_TAILNET_PROXY_SHA_LABEL = "com.biomodstack.tailnet-proxy-config-sha"
@@ -959,16 +963,19 @@ def _host_listener_inode_owners(inodes: list[int]) -> dict[int, list[int]]:
     if not inodes:
         return {}
     script = r'''wanted="$1"
-for proc in /host-proc/[0-9]*; do
-  for fd in "$proc"/fd/*; do
-    target=$(readlink "$fd" 2>/dev/null || true)
-    for inode in $wanted; do
-      if [ "$target" = "socket:[$inode]" ]; then
-        printf '%s %s\n' "${proc##*/}" "$inode"
-      fi
-    done
-  done
-done'''
+find /host-proc/[0-9]*/fd -type l -exec ls -l {} + 2>/dev/null |
+awk -v wanted="$wanted" '
+BEGIN { count = split(wanted, inodes, " ") }
+{
+  path = $(NF - 2)
+  target = $NF
+  split(path, parts, "/")
+  for (i = 1; i <= count; i++) {
+    if (target == "socket:[" inodes[i] "]") {
+      printf "%s %s\n", parts[3], inodes[i]
+    }
+  }
+}' '''
     result = _run([
         "docker", "run", "--rm", "--pull=never", "--network=none", "--read-only",
         "--privileged", "--mount", "type=bind,src=/proc,dst=/host-proc,readonly",
@@ -1185,6 +1192,153 @@ def _host_owner_pid_map(
     return mapped
 
 
+def _container_process_identities(
+    container_name: str,
+    container_pids: list[int],
+    *,
+    expected_uid: int,
+) -> dict[int, dict[str, object]]:
+    if not container_pids:
+        return {}
+    script = (
+        'for p do '
+        'printf "%s|%s|" "$p" "$(readlink "/proc/$p/exe" | base64 -w0)"; '
+        'printf "%s|" "$(readlink "/proc/$p/cwd" | base64 -w0)"; '
+        'printf "%s|" "$(base64 -w0 "/proc/$p/cmdline")"; '
+        'printf "%s|" "$(grep "^PPid:" "/proc/$p/status" | base64 -w0)"; '
+        'printf "%s\\n" "$(grep "^Uid:" "/proc/$p/status" | base64 -w0)"; '
+        'done'
+    )
+    result = _run([
+        "docker", "exec", "-u", str(expected_uid), container_name,
+        "sh", "-c", script, "--", *(str(pid) for pid in container_pids),
+    ])
+    lines = result.stdout.strip().splitlines()
+    if len(lines) != len(container_pids):
+        raise TailnetEnvironmentError(
+            f"container process identity batch is incomplete: {container_name}"
+        )
+    identities: dict[int, dict[str, object]] = {}
+    for line in lines:
+        parts = line.split("|")
+        if len(parts) != 6 or any(not part for part in parts):
+            raise TailnetEnvironmentError(
+                f"container process identity batch is unreadable: {container_name}"
+            )
+        try:
+            container_pid = int(parts[0])
+            executable = base64.b64decode(parts[1], validate=True).decode().strip()
+            cwd = base64.b64decode(parts[2], validate=True).decode().strip()
+            raw_cmdline = base64.b64decode(parts[3], validate=True)
+            parent_line = base64.b64decode(parts[4], validate=True).decode().strip()
+            uid_line = base64.b64decode(parts[5], validate=True).decode().strip()
+            argv = [item.decode() for item in raw_cmdline.split(b"\0") if item]
+            parent_pid = int(parent_line.split()[1])
+            uids = [int(value) for value in uid_line.split()[1:]]
+        except (UnicodeDecodeError, ValueError, IndexError, binascii.Error) as exc:
+            raise TailnetEnvironmentError(
+                f"container process identity batch is malformed: {container_name}"
+            ) from exc
+        if (
+            container_pid not in container_pids
+            or container_pid in identities
+            or not executable.startswith("/")
+            or not cwd.startswith("/")
+            or not argv
+            or len(uids) != 4
+            or any(uid != expected_uid for uid in uids)
+            or parent_pid < 0
+        ):
+            raise TailnetEnvironmentError(
+                f"container process identity batch is invalid: {container_name}:{container_pid}"
+            )
+        identities[container_pid] = {
+            "container_pid": container_pid,
+            "parent_container_pid": parent_pid,
+            "executable": executable,
+            "argv": argv,
+            "cwd": cwd,
+            "uid": expected_uid,
+        }
+    if set(identities) != set(container_pids):
+        raise TailnetEnvironmentError(
+            f"container process identity batch changed during capture: {container_name}"
+        )
+    return identities
+
+
+def _container_process_reports(
+    container_name: str,
+    container_id: str,
+    host_pids: list[int],
+) -> list[dict[str, object]]:
+    pid_map = _host_owner_pid_map(container_id, host_pids)
+    if len(pid_map) != len(host_pids):
+        return []
+    uid_groups: dict[int, list[int]] = {}
+    for mapping in pid_map:
+        container_pid = mapping["container_pid"]
+        expected_uid = (
+            1000 if container_name == "biomodstack-api"
+            else (0 if container_pid == 1 else 101)
+        )
+        uid_groups.setdefault(expected_uid, []).append(container_pid)
+    identities: dict[int, dict[str, object]] = {}
+    for expected_uid, container_pids in uid_groups.items():
+        identities.update(_container_process_identities(
+            container_name, container_pids, expected_uid=expected_uid
+        ))
+    reports = [{
+        "pid": mapping["host_pid"],
+        "cgroup": _process_cgroup(mapping["host_pid"]),
+        **identities[mapping["container_pid"]],
+    } for mapping in pid_map]
+    reports.sort(key=lambda report: cast(int, report["pid"]))
+    return reports
+
+
+def _valid_container_process_roles(
+    container_name: str,
+    reports: list[dict[str, object]],
+) -> bool:
+    if not reports:
+        return False
+    for report in reports:
+        container_pid = report.get("container_pid")
+        if container_name == "biomodstack-api":
+            expected = (
+                container_pid == 1
+                and report.get("parent_container_pid") == 0
+                and report.get("executable") == "/usr/local/bin/python3.10"
+                and report.get("argv") == [
+                    "/app/platform/api/.venv/bin/python",
+                    "/app/platform/api/.venv/bin/uvicorn",
+                    "main:app", "--host", "127.0.0.1", "--port", "8000",
+                ]
+                and report.get("cwd") == "/app/platform/api"
+                and report.get("uid") == 1000
+            )
+        elif container_pid == 1:
+            expected = (
+                report.get("parent_container_pid") == 0
+                and report.get("executable") == "/usr/sbin/nginx"
+                and report.get("argv") == ["nginx: master process nginx -g daemon off;"]
+                and report.get("cwd") == "/"
+                and report.get("uid") == 0
+            )
+        else:
+            expected = (
+                report.get("parent_container_pid") == 1
+                and report.get("executable") == "/usr/sbin/nginx"
+                and report.get("argv") == ["nginx: worker process"]
+                and report.get("cwd") == "/"
+                and report.get("uid") == 101
+            )
+        if not expected:
+            return False
+    return True
+
+
 def _container_listener_host_pids(container_id: str, container_pids: list[int]) -> list[int]:
     return sorted(
         item["host_pid"] for item in _container_listener_pid_map(container_id, container_pids)
@@ -1252,9 +1406,30 @@ def _validated_runtime_container_listener(
     container_host_pids = _container_host_pids(container_name)
     runtime_init_pid = item.get("pid")
     reports = [
-        {"pid": owner, "cgroup": _process_cgroup(owner)}
-        for owner in all_owner_pids
-    ]
+        report for report in expected_process_reports
+        if isinstance(report, Mapping) and report.get("pid") in all_owner_pids
+    ] if isinstance(expected_process_reports, list) else []
+    second_reported_pids = _container_listener_pids(container_name, port)
+    second_container_inodes = _container_listener_inodes(container_name, port)
+    second_host_inodes = _host_listener_inodes(port)
+    second_inode_owners = _host_listener_inode_owners(second_host_inodes)
+    second_owner_pids = sorted({pid for pids in second_inode_owners.values() for pid in pids})
+    second_listener_pid_map = _host_owner_pid_map(container_id, second_owner_pids)
+    second_container_host_pids = _container_host_pids(container_name)
+    second_process_reports = _container_process_reports(
+        container_name, container_id, second_container_host_pids
+    )
+    stable_capture = (
+        reported_container_listener_pids == second_reported_pids
+        and container_listener_inodes == second_container_inodes
+        and host_listener_inodes == second_host_inodes
+        and inode_owners == second_inode_owners
+        and all_owner_pids == second_owner_pids
+        and listener_pid_map == second_listener_pid_map
+        and container_host_pids == second_container_host_pids
+        and expected_process_reports == second_process_reports
+        and _listener_bind_addresses(port) == {"127.0.0.1"}
+    )
     if (
         any(not inode_owners.get(inode) for inode in host_listener_inodes)
         or not listener_pid_map
@@ -1263,12 +1438,11 @@ def _validated_runtime_container_listener(
         or host_listener_pids != all_owner_pids
         or not isinstance(expected_host_pids, list)
         or container_host_pids != expected_host_pids
+        or not stable_capture
         or not isinstance(expected_process_reports, list)
-        or expected_process_reports != [
-            {"pid": owner, "cgroup": _process_cgroup(owner)}
-            for owner in container_host_pids
-        ]
-        or not set(all_owner_pids).issubset(container_host_pids)
+        or not _valid_container_process_roles(container_name, expected_process_reports)
+        or [report.get("pid") for report in reports] != all_owner_pids
+        or all_owner_pids != container_host_pids
         or [
             mapping["host_pid"]
             for mapping in listener_pid_map
@@ -1409,16 +1583,49 @@ def _validated_production_tailnet_proxy(root: Path) -> dict[str, object]:
     listener_pids_in_container = [item["container_pid"] for item in listener_pid_map]
     host_listener_pids = [item["host_pid"] for item in listener_pid_map]
     container_host_pids = _container_host_pids(PRODUCTION_TAILNET_PROXY_CONTAINER)
+    process_reports = _container_process_reports(
+        PRODUCTION_TAILNET_PROXY_CONTAINER, container_id, container_host_pids
+    )
     listener_reports = [
-        {"pid": owner, "cgroup": _process_cgroup(owner)} for owner in all_owner_pids
+        report for report in process_reports if report.get("pid") in all_owner_pids
     ]
+    second_reported_pids = _container_listener_pids(
+        PRODUCTION_TAILNET_PROXY_CONTAINER, PRODUCTION_TAILNET_PROXY_PORT
+    )
+    second_container_inodes = _container_listener_inodes(
+        PRODUCTION_TAILNET_PROXY_CONTAINER, PRODUCTION_TAILNET_PROXY_PORT
+    )
+    second_host_inodes = _host_listener_inodes(PRODUCTION_TAILNET_PROXY_PORT)
+    second_inode_owners = _host_listener_inode_owners(second_host_inodes)
+    second_owner_pids = sorted({owner for owners in second_inode_owners.values() for owner in owners})
+    second_pid_map = _host_owner_pid_map(container_id, second_owner_pids)
+    second_container_host_pids = _container_host_pids(PRODUCTION_TAILNET_PROXY_CONTAINER)
+    second_process_reports = _container_process_reports(
+        PRODUCTION_TAILNET_PROXY_CONTAINER, container_id, second_container_host_pids
+    )
+    stable_capture = (
+        reported_listener_pids_in_container == second_reported_pids
+        and container_listener_inodes == second_container_inodes
+        and host_listener_inodes == second_host_inodes
+        and inode_owners == second_inode_owners
+        and all_owner_pids == second_owner_pids
+        and listener_pid_map == second_pid_map
+        and container_host_pids == second_container_host_pids
+        and process_reports == second_process_reports
+        and _listener_bind_addresses(PRODUCTION_TAILNET_PROXY_PORT) == {"127.0.0.1"}
+    )
     if (
         any(not inode_owners.get(inode) for inode in host_listener_inodes)
         or not listener_pid_map
         or not set(reported_listener_pids_in_container).issubset(listener_pids_in_container)
         or host_listener_pids != sorted(set(host_listener_pids))
         or host_listener_pids != all_owner_pids
-        or not set(all_owner_pids).issubset(container_host_pids)
+        or not stable_capture
+        or not _valid_container_process_roles(
+            PRODUCTION_TAILNET_PROXY_CONTAINER, process_reports
+        )
+        or [report.get("pid") for report in listener_reports] != all_owner_pids
+        or all_owner_pids != container_host_pids
         or len(host_listener_pids) != len(listener_pids_in_container)
         or [
             mapping["host_pid"]
@@ -1490,8 +1697,12 @@ def _validated_container_runtime(root: Path, *, require_web: bool) -> dict[str, 
         ),
         "biomodstack-web": ("/docker-entrypoint.sh nginx -g daemon off;", "/"),
     }
+    expected_image_ids = {
+        "biomodstack-api": MANAGED_API_IMAGE_ID,
+        "biomodstack-web": MANAGED_WEB_IMAGE_ID,
+    }
     if any(
-        not _IMAGE_ID_PATTERN.fullmatch(str(item.get("image_id", "")))
+        str(item.get("image_id", "")) != expected_image_ids[str(item.get("name", ""))]
         or (
             str(item.get("cmdline", "")),
             str(item.get("cwd", "")),
@@ -1525,6 +1736,7 @@ def _validated_container_runtime(root: Path, *, require_web: bool) -> dict[str, 
         container_id = str(item.get("container_id", ""))
         init_pid = item.get("pid")
         host_pids = _container_host_pids(name)
+        process_reports = _container_process_reports(name, container_id, host_pids)
         if (
             not isinstance(init_pid, int)
             or init_pid not in host_pids
@@ -1533,6 +1745,9 @@ def _validated_container_runtime(root: Path, *, require_web: bool) -> dict[str, 
                 not _process_in_exact_container_cgroup(_process_cgroup(pid), container_id)
                 for pid in host_pids
             )
+            or not _valid_container_process_roles(name, process_reports)
+            or _container_host_pids(name) != host_pids
+            or _container_process_reports(name, container_id, host_pids) != process_reports
         ):
             raise TailnetEnvironmentError(
                 f"managed container process inventory is inconsistent: {name}"
@@ -1548,9 +1763,7 @@ def _validated_container_runtime(root: Path, *, require_web: bool) -> dict[str, 
             "cmdline": item.get("cmdline", ""),
             "cwd": item.get("cwd", ""),
             "host_pids": host_pids,
-            "process_reports": [
-                {"pid": pid, "cgroup": _process_cgroup(pid)} for pid in host_pids
-            ],
+            "process_reports": process_reports,
         })
     return {
         "containers": validated_containers,

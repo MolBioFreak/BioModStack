@@ -13,6 +13,33 @@ REAL_VALIDATED_RUNTIME_CONTAINER_LISTENER = tailnet._validated_runtime_container
 REAL_VALIDATED_DEVELOPMENT_FRONTEND_LISTENER = tailnet._validated_development_frontend_listener
 
 
+def _api_process_report(host_pid: int, cgroup: str) -> dict[str, object]:
+    return {
+        "pid": host_pid, "cgroup": cgroup, "container_pid": 1,
+        "parent_container_pid": 0, "executable": "/usr/local/bin/python3.10",
+        "argv": [
+            "/app/platform/api/.venv/bin/python", "/app/platform/api/.venv/bin/uvicorn",
+            "main:app", "--host", "127.0.0.1", "--port", "8000",
+        ],
+        "cwd": "/app/platform/api", "uid": 1000,
+    }
+
+
+def _nginx_process_report(
+    host_pid: int, container_pid: int, cgroup: str,
+) -> dict[str, object]:
+    master = container_pid == 1
+    return {
+        "pid": host_pid, "cgroup": cgroup, "container_pid": container_pid,
+        "parent_container_pid": 0 if master else 1,
+        "executable": "/usr/sbin/nginx",
+        "argv": [
+            "nginx: master process nginx -g daemon off;" if master else "nginx: worker process"
+        ],
+        "cwd": "/", "uid": 0 if master else 101,
+    }
+
+
 @pytest.fixture(autouse=True)
 def _isolate_live_service_ownership(monkeypatch) -> None:
     empty = tailnet.ServiceOwnershipSnapshot(files={}, active={})
@@ -811,9 +838,17 @@ def test_production_tailnet_proxy_requires_exact_read_only_config(monkeypatch, t
         {"container_pid": 1, "host_pid": 123}, {"container_pid": 27, "host_pid": 124},
     ])
     monkeypatch.setattr(tailnet, "_container_host_pids", lambda container_name: [123, 124])
+    monkeypatch.setattr(
+        tailnet, "_container_process_reports",
+        lambda name, container_id, host_pids: [
+            _nginx_process_report(123, 1, tailnet._process_cgroup(123)),
+            _nginx_process_report(124, 27, tailnet._process_cgroup(124)),
+        ],
+    )
     monkeypatch.setattr(tailnet, "_container_listener_inodes", lambda name, port: [810, 827])
     monkeypatch.setattr(tailnet, "_host_listener_inodes", lambda port: [810, 827])
     monkeypatch.setattr(tailnet, "_host_listener_inode_owners", lambda inodes: {810: [123], 827: [124]})
+    monkeypatch.setattr(tailnet, "_listener_bind_addresses", lambda port: {"127.0.0.1"})
 
     report = tailnet._validated_production_tailnet_proxy(tmp_path)
     assert report["config_sha256"] == config_sha
@@ -934,7 +969,7 @@ def test_development_runtime_inspects_only_shared_api_container(monkeypatch, tmp
     inspected = [{
         "Name": "/biomodstack-api",
         "Id": "a" * 64,
-        "Image": "sha256:" + ("1" * 64),
+        "Image": tailnet.MANAGED_API_IMAGE_ID,
         "Path": "/bin/sh",
         "Args": [
             "-ec",
@@ -958,6 +993,10 @@ def test_development_runtime_inspects_only_shared_api_container(monkeypatch, tmp
     monkeypatch.setattr(tailnet, "_run", run)
     monkeypatch.setattr(tailnet, "_process_cgroup", lambda pid: "0::/system.slice/docker-" + ("a" * 64) + ".scope\n")
     monkeypatch.setattr(tailnet, "_container_host_pids", lambda name: [123])
+    monkeypatch.setattr(
+        tailnet, "_container_process_reports",
+        lambda name, container_id, host_pids: [_api_process_report(123, tailnet._process_cgroup(123))],
+    )
     monkeypatch.setattr(tailnet, "_git_revision", lambda root: revision)
     report = tailnet._validated_container_runtime(tmp_path, require_web=False)
     assert report["validated_revision"] == revision
@@ -980,8 +1019,8 @@ def test_container_runtime_accepts_exact_source_owned_image_lineage(monkeypatch,
     revision = "a" * 40
     monkeypatch.setattr(tailnet, "_docker_runtime_report", lambda required_names: {
         "containers": [
-            {"name": "biomodstack-api", "container_id": "a" * 64, "image_id": "sha256:" + ("1" * 64), "revision": revision, "compose_working_dir": str(tmp_path), "pid": 1, "cgroup": "0::/system.slice/docker-" + ("a" * 64) + ".scope\n", "cmdline": "/bin/sh -ec /app/platform/api/.venv/bin/python run_migrations.py && exec /app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000", "cwd": "/app/platform/api"},
-            {"name": "biomodstack-web", "container_id": "b" * 64, "image_id": "sha256:" + ("2" * 64), "revision": revision, "compose_working_dir": str(tmp_path), "pid": 2, "cgroup": "0::/system.slice/docker-" + ("b" * 64) + ".scope\n", "cmdline": "/docker-entrypoint.sh nginx -g daemon off;", "cwd": "/"},
+            {"name": "biomodstack-api", "container_id": "a" * 64, "image_id": tailnet.MANAGED_API_IMAGE_ID, "revision": revision, "compose_working_dir": str(tmp_path), "pid": 1, "cgroup": "0::/system.slice/docker-" + ("a" * 64) + ".scope\n", "cmdline": "/bin/sh -ec /app/platform/api/.venv/bin/python run_migrations.py && exec /app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000", "cwd": "/app/platform/api"},
+            {"name": "biomodstack-web", "container_id": "b" * 64, "image_id": tailnet.MANAGED_WEB_IMAGE_ID, "revision": revision, "compose_working_dir": str(tmp_path), "pid": 2, "cgroup": "0::/system.slice/docker-" + ("b" * 64) + ".scope\n", "cmdline": "/docker-entrypoint.sh nginx -g daemon off;", "cwd": "/"},
         ]
     })
     monkeypatch.setattr(tailnet, "_git_revision", lambda root: revision)
@@ -994,6 +1033,15 @@ def test_container_runtime_accepts_exact_source_owned_image_lineage(monkeypatch,
         tailnet,
         "_process_cgroup",
         lambda pid: "0::/system.slice/docker-" + (("a" if pid == 1 else "b") * 64) + ".scope\n",
+    )
+    monkeypatch.setattr(
+        tailnet,
+        "_container_process_reports",
+        lambda name, container_id, host_pids: (
+            [_api_process_report(1, tailnet._process_cgroup(1))]
+            if name == "biomodstack-api"
+            else [_nginx_process_report(2, 1, tailnet._process_cgroup(2))]
+        ),
     )
     monkeypatch.setattr(tailnet, "_run", lambda args: type("Result", (), {"stdout": ""})())
     report = tailnet._validated_container_runtime(tmp_path, require_web=True)
@@ -1479,9 +1527,10 @@ def test_managed_runtime_listener_requires_complete_container_owned_socket(monke
     runtime_report = {
         "containers": [{
             "name": "biomodstack-web", "container_id": container_id, "pid": 101,
-            "host_pids": [100, 101, 102],
+            "host_pids": [101, 102],
             "process_reports": [
-                {"pid": pid, "cgroup": cgroup} for pid in [100, 101, 102]
+                _nginx_process_report(101, 1, cgroup),
+                _nginx_process_report(102, 27, cgroup),
             ],
         }]
     }
@@ -1495,7 +1544,14 @@ def test_managed_runtime_listener_requires_complete_container_owned_socket(monke
     monkeypatch.setattr(tailnet, "_host_listener_inodes", lambda port: [44])
     owners = {44: [101, 102]}
     monkeypatch.setattr(tailnet, "_host_listener_inode_owners", lambda inodes: owners)
-    monkeypatch.setattr(tailnet, "_container_host_pids", lambda name: [100, 101, 102])
+    monkeypatch.setattr(tailnet, "_container_host_pids", lambda name: [101, 102])
+    monkeypatch.setattr(
+        tailnet, "_container_process_reports",
+        lambda name, container_id, host_pids: [
+            _nginx_process_report(101, 1, cgroup),
+            _nginx_process_report(102, 27, cgroup),
+        ],
+    )
     monkeypatch.setattr(
         tailnet,
         "_process_cgroup",
@@ -1520,6 +1576,37 @@ def test_managed_runtime_listener_requires_complete_container_owned_socket(monke
             runtime_report,
             container_name="biomodstack-web",
             port=18080,
+        )
+
+
+def test_managed_runtime_listener_rejects_mixed_epoch_capture(monkeypatch) -> None:
+    container_id = "a" * 64
+    cgroup = f"0::/system.slice/docker-{container_id}.scope\n"
+    reports = [
+        _nginx_process_report(101, 1, cgroup),
+        _nginx_process_report(102, 27, cgroup),
+    ]
+    runtime_report = {"containers": [{
+        "name": "biomodstack-web", "container_id": container_id, "pid": 101,
+        "host_pids": [101, 102], "process_reports": reports,
+    }]}
+    listener_epochs = iter(([1], [1, 27]))
+    monkeypatch.setattr(tailnet, "_listener_bind_addresses", lambda port: {"127.0.0.1"})
+    monkeypatch.setattr(tailnet, "_container_listener_pids", lambda name, port: list(next(listener_epochs)))
+    monkeypatch.setattr(tailnet, "_container_listener_inodes", lambda name, port: [44])
+    monkeypatch.setattr(tailnet, "_host_listener_inodes", lambda port: [44])
+    monkeypatch.setattr(tailnet, "_host_listener_inode_owners", lambda inodes: {44: [101, 102]})
+    monkeypatch.setattr(tailnet, "_host_owner_pid_map", lambda container_id, pids: [
+        {"container_pid": 1, "host_pid": 101},
+        {"container_pid": 27, "host_pid": 102},
+    ])
+    monkeypatch.setattr(tailnet, "_container_host_pids", lambda name: [101, 102])
+    monkeypatch.setattr(tailnet, "_container_process_reports", lambda name, container_id, pids: reports)
+    monkeypatch.setattr(tailnet, "_process_cgroup", lambda pid: cgroup)
+
+    with pytest.raises(tailnet.TailnetEnvironmentError, match="owner outside"):
+        REAL_VALIDATED_RUNTIME_CONTAINER_LISTENER(
+            runtime_report, container_name="biomodstack-web", port=18080,
         )
 
 

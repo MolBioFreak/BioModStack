@@ -28,6 +28,22 @@ function exactSelectionReceipt(environment) {
     liveness: { alive: true, status: 'alive' },
     readiness: { ready: true },
   };
+  const containerProcessReport = (name, marker, pid, containerPid = 1) => {
+    const api = name === 'biomodstack-api';
+    const master = containerPid === 1;
+    return {
+      pid,
+      cgroup: `0::/system.slice/docker-${marker.repeat(64)}.scope`,
+      container_pid: containerPid,
+      parent_container_pid: master ? 0 : 1,
+      executable: api ? '/usr/local/bin/python3.10' : '/usr/sbin/nginx',
+      argv: api
+        ? ['/app/platform/api/.venv/bin/python', '/app/platform/api/.venv/bin/uvicorn', 'main:app', '--host', '127.0.0.1', '--port', '8000']
+        : [master ? 'nginx: master process nginx -g daemon off;' : 'nginx: worker process'],
+      cwd: api ? '/app/platform/api' : '/',
+      uid: api ? 1000 : (master ? 0 : 101),
+    };
+  };
   const container = (name, marker, pid) => ({
     name,
     container_id: marker.repeat(64),
@@ -35,13 +51,15 @@ function exactSelectionReceipt(environment) {
     compose_working_dir: '/srv/biomodstack',
     pid,
     cgroup: `0::/system.slice/docker-${marker.repeat(64)}.scope`,
-    image_id: `sha256:${marker.repeat(64)}`,
+    image_id: name === 'biomodstack-api'
+      ? 'sha256:74bf34e32e2f5d0f72d3f6d117c1b4877c169e7a62c0da06ea05b75d5e0cd12c'
+      : 'sha256:7e79b645349216a2457cd2f64af53beb26d9041c7911ed8438d6708239017c3e',
     cmdline: name === 'biomodstack-api'
       ? '/bin/sh -ec /app/platform/api/.venv/bin/python run_migrations.py && exec /app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000'
       : '/docker-entrypoint.sh nginx -g daemon off;',
     cwd: name === 'biomodstack-api' ? '/app/platform/api' : '/',
     host_pids: [pid],
-    process_reports: [{ pid, cgroup: `0::/system.slice/docker-${marker.repeat(64)}.scope` }],
+    process_reports: [containerProcessReport(name, marker, pid)],
   });
   const processReport = (pid, marker, overrides = {}) => ({
     pid,
@@ -64,12 +82,14 @@ function exactSelectionReceipt(environment) {
     listener_inodes: [inode],
     listener_inode_owners: { [inode]: [pid] },
     container_host_pids: [pid],
-    runtime_image_id: `sha256:${marker.repeat(64)}`,
+    runtime_image_id: name === 'biomodstack-api'
+      ? 'sha256:74bf34e32e2f5d0f72d3f6d117c1b4877c169e7a62c0da06ea05b75d5e0cd12c'
+      : 'sha256:7e79b645349216a2457cd2f64af53beb26d9041c7911ed8438d6708239017c3e',
     runtime_cmdline: name === 'biomodstack-api'
       ? '/bin/sh -ec /app/platform/api/.venv/bin/python run_migrations.py && exec /app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000'
       : '/docker-entrypoint.sh nginx -g daemon off;',
     runtime_cwd: name === 'biomodstack-api' ? '/app/platform/api' : '/',
-    listener_reports: [{ pid, cgroup: `0::/system.slice/docker-${marker.repeat(64)}.scope` }],
+    listener_reports: [containerProcessReport(name, marker, pid)],
   });
   const apiListener = containerListener('biomodstack-api', '1', 8000, 101, 80001);
   const adapterReport = processReport(301, '9', {
@@ -153,10 +173,10 @@ function exactSelectionReceipt(environment) {
       listener_inodes: [180811, 180812],
       listener_inode_owners: { 180811: [303], 180812: [304] },
       container_host_pids: [303, 304],
-      listener_reports: [303, 304].map((pid) => ({
-        pid,
-        cgroup: `0::/system.slice/docker-${'3'.repeat(64)}.scope`,
-      })),
+      listener_reports: [
+        containerProcessReport('biomodstack-tailnet-production-proxy', '3', 303, 1),
+        containerProcessReport('biomodstack-tailnet-production-proxy', '3', 304, 27),
+      ],
       cgroup: `0::/system.slice/docker-${'3'.repeat(64)}.scope`,
       cmdline: '/docker-entrypoint.sh nginx -g daemon off;',
       cwd: '/',
@@ -520,9 +540,17 @@ test('selection response contract accepts exact development and production recei
     (item) => item.name === 'biomodstack-web',
   );
   const webListener = multiWorker.managed_frontend_listener;
-  const webCgroup = `0::/system.slice/docker-${'2'.repeat(64)}.scope`;
   webContainer.host_pids = [202, 203];
-  webContainer.process_reports = [202, 203].map((pid) => ({ pid, cgroup: webCgroup }));
+  const webMasterReport = webContainer.process_reports[0];
+  const webWorkerReport = {
+    ...webMasterReport,
+    pid: 203,
+    container_pid: 27,
+    parent_container_pid: 1,
+    argv: ['nginx: worker process'],
+    uid: 101,
+  };
+  webContainer.process_reports = [webMasterReport, webWorkerReport];
   webListener.container_listener_pids = [1, 27];
   webListener.listener_pid_map = [
     { container_pid: 1, host_pid: 202 },
@@ -531,7 +559,7 @@ test('selection response contract accepts exact development and production recei
   webListener.host_listener_pids = [202, 203];
   webListener.listener_inode_owners = { 180801: [202, 203] };
   webListener.container_host_pids = [202, 203];
-  webListener.listener_reports = [202, 203].map((pid) => ({ pid, cgroup: webCgroup }));
+  webListener.listener_reports = [webMasterReport, webWorkerReport];
   multiWorker.frontend_listeners = webListener.listener_reports;
   assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
     multiWorker, 'production', 'https://compute-node.taileb3a90.ts.net',
@@ -543,6 +571,51 @@ test('selection response contract accepts exact development and production recei
   ];
   assert.throws(() => prepareAssets.validateTailnetSelectionPayload(
     swappedWorkerMap, 'production', 'https://compute-node.taileb3a90.ts.net',
+  ));
+
+  const rogueWebOwner = structuredClone(multiWorker);
+  const rogueWebContainer = rogueWebOwner.container_runtime.containers.find(
+    (item) => item.name === 'biomodstack-web',
+  );
+  const rogueWebListener = rogueWebOwner.managed_frontend_listener;
+  const rogueWebReport = {
+    ...rogueWebContainer.process_reports[1],
+    pid: 999,
+    container_pid: 99,
+    executable: '/bin/sh',
+    argv: ['/bin/sh', '-c', 'rogue'],
+  };
+  rogueWebContainer.host_pids.push(999);
+  rogueWebContainer.process_reports.push(rogueWebReport);
+  rogueWebListener.container_listener_pids.push(99);
+  rogueWebListener.listener_pid_map.push({ container_pid: 99, host_pid: 999 });
+  rogueWebListener.host_listener_pids.push(999);
+  rogueWebListener.container_host_pids.push(999);
+  rogueWebListener.listener_inode_owners[180801].push(999);
+  rogueWebListener.listener_reports.push(rogueWebReport);
+  rogueWebOwner.frontend_listeners = rogueWebListener.listener_reports;
+  assert.throws(() => prepareAssets.validateTailnetSelectionPayload(
+    rogueWebOwner, 'production', 'https://compute-node.taileb3a90.ts.net',
+  ));
+
+  const rogueProxyOwner = structuredClone(multiWorker);
+  const proxy = rogueProxyOwner.tailnet_production_proxy;
+  const rogueProxyReport = {
+    ...proxy.listener_reports[1],
+    pid: 999,
+    container_pid: 99,
+    executable: '/bin/sh',
+    argv: ['/bin/sh', '-c', 'rogue'],
+  };
+  proxy.listener_pids.push(999);
+  proxy.container_listener_pids.push(99);
+  proxy.listener_pid_map.push({ container_pid: 99, host_pid: 999 });
+  proxy.container_host_pids.push(999);
+  proxy.listener_inode_owners[180811].push(999);
+  proxy.listener_reports.push(rogueProxyReport);
+  rogueProxyOwner.tailnet_production_proxy_listeners = proxy.listener_reports;
+  assert.throws(() => prepareAssets.validateTailnetSelectionPayload(
+    rogueProxyOwner, 'production', 'https://compute-node.taileb3a90.ts.net',
   ));
 
   for (const mutation of [
