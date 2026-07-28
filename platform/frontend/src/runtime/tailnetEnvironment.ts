@@ -10,6 +10,7 @@ export interface TailnetEnvironmentStatus {
 type FetchLike = typeof fetch;
 
 const STATUS_ENDPOINT = '/api/tailnet-environment/status';
+const LOCAL_STATS_ENTRY = 'http://127.0.0.1:18180/stats/';
 
 export async function readTailnetEnvironmentStatus(
   fetchImpl: FetchLike = fetch,
@@ -33,5 +34,8 @@ export function isTailnetHostname(hostname: string): boolean {
 }
 
 export function resolveStatsToolkitEntryUrl(entryUrl: string, hostname: string): string {
-  return isTailnetHostname(hostname) ? '/stats/embed/' : entryUrl;
+  if (isTailnetHostname(hostname)) {
+    return '/stats/embed/';
+  }
+  return entryUrl.startsWith('/') ? LOCAL_STATS_ENTRY : entryUrl;
 }
