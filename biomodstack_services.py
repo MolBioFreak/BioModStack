@@ -629,6 +629,60 @@ def runtime_listener_preflight(
     }
 
 
+def production_core_listener_preflight(
+    project_root: Path | None = None,
+) -> dict[str, object]:
+    """Validate only Production-owned container listeners.
+
+    The workflow adapter is the independent Tailnet selector control plane and
+    may be owned by canonical Development while Production is built or
+    restarted. It must therefore never participate in Production core-runtime
+    ownership or rollback.
+    """
+    result = runtime_listener_preflight(project_root, CONTAINER_RUNTIME_MODE)
+    raw_components = result.get("components", {})
+    components = (
+        {
+            component: entry
+            for component, entry in raw_components.items()
+            if component != "workflow-adapter"
+        }
+        if isinstance(raw_components, Mapping)
+        else {}
+    )
+    conflicts = [
+        component
+        for component, entry in components.items()
+        if isinstance(entry, Mapping) and entry.get("ok") is False
+    ]
+    return {
+        **result,
+        "ok": not conflicts,
+        "status": "ok" if not conflicts else "blocked",
+        "conflicts": conflicts,
+        "components": components,
+    }
+
+
+def assert_production_core_listener_preflight(
+    project_root: Path | None = None,
+) -> dict[str, object]:
+    result = production_core_listener_preflight(project_root)
+    if not result["ok"]:
+        raw_components = result.get("components", {})
+        components = raw_components if isinstance(raw_components, Mapping) else {}
+        details = "; ".join(
+            f"{component} port {entry['port']}: {entry['listeners']}"
+            for component, entry in components.items()
+            if isinstance(entry, Mapping) and entry.get("ok") is False
+        )
+        raise ServiceManagerError(
+            f"Production core launch blocked by listener ownership conflict: {details}"
+        )
+    return result
+
+
+
 def assert_runtime_listener_preflight(
     project_root: Path | None = None,
     runtime_mode: str | None = None,

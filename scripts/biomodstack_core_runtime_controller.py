@@ -288,18 +288,28 @@ def validate_storage() -> dict[str, str]:
 
 def run_preflight() -> dict[str, Any]:
     storage = validate_storage()
-    docker = run_command(["docker", "info", "--format", "{{.ServerVersion}}"], check=True, timeout=30)
+    docker = run_command(
+        ["docker", "info", "--format", "{{.ServerVersion}}"], check=True, timeout=30
+    )
     run_command(compose_command("config", "--quiet"), check=True, timeout=60)
     conflicts = validate_fixed_container_names()
     if conflicts:
-        raise RuntimeBlockedError("container-name-conflict", "Fixed container names are owned by another runtime", context={"conflicts": conflicts})
+        raise RuntimeBlockedError(
+            "container-name-conflict",
+            "Fixed container names are owned by another runtime",
+            context={"conflicts": conflicts},
+        )
 
     sys.path.insert(0, str(PROJECT_ROOT))
-    from biomodstack_services import CONTAINER_RUNTIME_MODE, runtime_listener_preflight
+    from biomodstack_services import production_core_listener_preflight
 
-    listener = runtime_listener_preflight(PROJECT_ROOT, CONTAINER_RUNTIME_MODE)
+    listener = production_core_listener_preflight(PROJECT_ROOT)
     if not listener.get("ok"):
-        raise RuntimeBlockedError("listener-ownership-conflict", "One or more stable runtime ports have the wrong owner", context={"listener_preflight": listener})
+        raise RuntimeBlockedError(
+            "listener-ownership-conflict",
+            "One or more stable runtime ports have the wrong owner",
+            context={"listener_preflight": listener},
+        )
     result = {
         "checked_at": utc_now(),
         "docker_server": docker.stdout.strip(),
