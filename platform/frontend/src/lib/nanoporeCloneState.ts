@@ -81,8 +81,6 @@ export function normalizeNanoporeCloneState(job: Job | null): Record<string, unk
         wfClonePrimerMismatch: p.wf_clone_primer_mismatch ?? 2,
         wfCloneExpectedCoverage: p.wf_clone_expected_coverage ?? 95,
         wfCloneExpectedIdentity: p.wf_clone_expected_identity ?? 99,
-        enableRotatingReferenceFrames: p.enable_rotating_reference_frames !== false,
-        rotationScanStepBp: p.rotation_scan_step_bp ?? 1,
         singleRefSplitMinMapq: p.single_ref_split_min_mapq ?? 20,
         singleRefSplitMinSegmentBp: p.single_ref_split_min_segment_bp ?? 250,
         singleRefSplitMaxQueryGapBp: p.single_ref_split_max_query_gap_bp ?? 500,
