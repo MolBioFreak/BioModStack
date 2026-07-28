@@ -32,3 +32,10 @@ test('missing mutation-access metadata fails closed instead of crashing the cock
     assert.match(cockpit, /isBioXpControlPlaneFresh\(connection, nowMs\)/);
     assert.doesNotMatch(cockpit, /status\.mutation_access\.enabled/);
 });
+
+test('connect admission is separate from commissioning mutation admission', () => {
+    assert.match(cockpit, /status\?\.connection_access\?\.enabled\s*===\s*true/);
+    assert.match(cockpit, /disabled=\{!connectionAccessEnabled\s*\|\|/);
+    assert.match(cockpit, /Connection-only access is disabled/);
+    assert.match(cockpit, /Commissioning writes are disabled/);
+});

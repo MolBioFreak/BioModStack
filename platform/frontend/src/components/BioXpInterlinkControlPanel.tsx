@@ -51,6 +51,12 @@ export function BioXpInterlinkMenu() {
     }, []);
 
     const connection = statusQuery.isError ? undefined : statusQuery.data?.connection;
+    const connectionAccessEnabled = statusQuery.isError
+        ? false
+        : statusQuery.data?.connection_access?.enabled === true;
+    const mutationAccessEnabled = statusQuery.isError
+        ? false
+        : statusQuery.data?.mutation_access?.enabled === true;
     const derived = useMemo(
         () => connection ? deriveBioXpStatus(connection, nowMs) : null,
         [connection, nowMs],
@@ -119,13 +125,13 @@ export function BioXpInterlinkMenu() {
                         <div className="mt-2 flex gap-2">
                             <button
                                 type="button"
-                                disabled={pending || !apiUrl.trim()}
+                                disabled={!mutationAccessEnabled || pending || !apiUrl.trim()}
                                 onClick={() => saveProfile.mutate({ display_name: displayName, api_url: apiUrl })}
                                 className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-xs disabled:opacity-40"
                             >Save</button>
                             <button
                                 type="button"
-                                disabled={pending || !connection?.configured}
+                                disabled={!mutationAccessEnabled || pending || !connection?.configured}
                                 onClick={() => forgetProfile.mutate(undefined)}
                                 className="flex items-center gap-1 rounded border border-red-700 px-2 py-1 text-xs text-red-300 disabled:opacity-40"
                             >Forget</button>
@@ -133,11 +139,13 @@ export function BioXpInterlinkMenu() {
                     </div>
 
                     <div className="flex flex-wrap gap-2">
-                        <button type="button" disabled={pending || !connection?.configured || connection?.active} onClick={() => connect.mutate(undefined)} className="flex items-center gap-1 rounded bg-emerald-700 px-2 py-1 text-xs disabled:opacity-40">Connect</button>
-                        <button type="button" disabled={pending || !connection?.active} onClick={() => disconnect.mutate(undefined)} className="flex items-center gap-1 rounded bg-slate-700 px-2 py-1 text-xs disabled:opacity-40">Disconnect</button>
-                        <button type="button" disabled={pending || !connection?.active} onClick={() => probe.mutate(undefined)} className="flex items-center gap-1 rounded bg-slate-700 px-2 py-1 text-xs disabled:opacity-40">Probe</button>
+                        <button type="button" disabled={!connectionAccessEnabled || pending || !connection?.configured || connection?.active} onClick={() => connect.mutate(undefined)} className="flex items-center gap-1 rounded bg-emerald-700 px-2 py-1 text-xs disabled:opacity-40">Connect</button>
+                        <button type="button" disabled={!connectionAccessEnabled || pending || !connection?.active} onClick={() => disconnect.mutate(undefined)} className="flex items-center gap-1 rounded bg-slate-700 px-2 py-1 text-xs disabled:opacity-40">Disconnect</button>
+                        <button type="button" disabled={!connectionAccessEnabled || pending || !connection?.active} onClick={() => probe.mutate(undefined)} className="flex items-center gap-1 rounded bg-slate-700 px-2 py-1 text-xs disabled:opacity-40">Probe</button>
                     </div>
                     <p className="mt-3 text-[11px] text-slate-500">Connecting activates an API client only. It does not prove runtime readiness or hardware state.</p>
+                    {!connectionAccessEnabled && <p className="mt-2 text-xs text-amber-300">Connection-only access is disabled or unavailable.</p>}
+                    {!mutationAccessEnabled && <p className="mt-2 text-xs text-amber-300">Profile writes are disabled or unavailable.</p>}
                     {statusQuery.isError && <p className="mt-2 text-xs text-red-300">Status unavailable; cached readiness is suppressed.</p>}
                     {mutationError && <p className="mt-2 text-xs text-red-300">{bioXpErrorText(mutationError)}</p>}
                 </div>

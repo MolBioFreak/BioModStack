@@ -20,6 +20,8 @@ from .target_policy import BioXpTargetPolicy, ValidatedBioXpTarget
 class RobotClientProtocol(Protocol):
     async def probe(self) -> dict[str, Any]: ...
 
+    async def probe_status_only(self) -> dict[str, Any]: ...
+
     async def request(
         self,
         route_name: str,
@@ -125,7 +127,7 @@ class BioXpConnectionService:
             self._clear_observation()
             self._active_target = target
             self._client = self.client_factory(target)
-            if not await self._probe_locked():
+            if not await self._probe_locked(status_only=True):
                 error = self._last_error or "BioXP robot probe failed"
                 await self._deactivate_locked(increment=False)
                 self._last_error = error
@@ -216,10 +218,9 @@ class BioXpConnectionService:
     async def _probe_locked(self, *, status_only: bool = False) -> bool:
         assert self._client is not None
         try:
-            status_probe = getattr(self._client, "probe_status_only", None)
             payload = (
-                await status_probe()  # type: ignore[misc]
-                if status_only and callable(status_probe)
+                await self._client.probe_status_only()
+                if status_only
                 else await self._client.probe()
             )
             startup = payload.get("startup")
@@ -315,7 +316,7 @@ class BioXpConnectionService:
         try:
             while True:
                 await asyncio.sleep(self.active_probe_interval_seconds)
-                await self.probe()
+                await self.probe_status_only()
         except asyncio.CancelledError:
             raise
         except (ConnectionStateError, TargetPolicyError):

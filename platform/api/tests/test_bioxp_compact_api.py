@@ -107,3 +107,7 @@ def test_snapshot_completion_refreshes_status_and_lifecycle_reasons_are_operator
     status_source = inspect.getsource(connection.get_status)
     assert status_source.index("lifecycle_stage_reasons") < status_source.index("requires_hardware_ready")
     assert status_source.index("lifecycle_stage_reasons") < status_source.index("required_capability")
+
+    probe_source = inspect.getsource(connection.probe)
+    assert "await runtime.connection.probe_status_only()" in probe_source
+    assert "await runtime.connection.probe()" not in probe_source

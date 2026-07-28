@@ -11,7 +11,7 @@ from services.bioxp.command_policy import (
     required_lifecycle_state_reasons,
 )
 from services.bioxp.models import BioXpProfile
-from services.bioxp.runtime import BioXpRuntime
+from services.bioxp.runtime import BioXpRuntime, bioxp_connection_enabled
 
 from .dependencies import (
     get_bioxp_runtime,
@@ -128,6 +128,11 @@ async def get_status(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict
             "physical_effect_verifiable": False,
         },
         "startup_warnings": list(runtime.startup_warnings),
+        "connection_access": {
+            "enabled": bioxp_connection_enabled(),
+            "server_setting": "BMS_BIOXP_CONNECTION_ENABLED=1",
+            "hardware_effects_authorized": False,
+        },
         "mutation_access": {
             "enabled": mutations_enabled(),
             "server_setting": "BMS_BIOXP_MUTATIONS_ENABLED=1",
@@ -154,7 +159,7 @@ async def disconnect(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict
 @router.post("/connection/probe")
 async def probe(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str, Any]:
     try:
-        snapshot = await runtime.connection.probe()
+        snapshot = await runtime.connection.probe_status_only()
     except (ConnectionStateError, TargetPolicyError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return _public_snapshot(snapshot)

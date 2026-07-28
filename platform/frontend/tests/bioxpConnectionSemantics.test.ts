@@ -45,3 +45,14 @@ test('malformed profile and backend refusal details are operator-visible', () =>
     assert.match(panel, /profileQuery\.data\.detail/);
     assert.match(client, /response\?\.data\?\.detail/);
 });
+
+test('all global BioXP write controls fail closed on missing admission metadata', () => {
+    assert.match(panel, /statusQuery\.isError\s*\n\s*\? false\s*\n\s*: statusQuery\.data\?\.connection_access\?\.enabled === true/);
+    assert.match(panel, /statusQuery\.isError\s*\n\s*\? false\s*\n\s*: statusQuery\.data\?\.mutation_access\?\.enabled === true/);
+    assert.match(panel, /disabled=\{!mutationAccessEnabled \|\| pending \|\| !apiUrl\.trim\(\)\}/);
+    assert.match(panel, /disabled=\{!mutationAccessEnabled \|\| pending \|\| !connection\?\.configured\}/);
+    assert.match(panel, /disabled=\{!connectionAccessEnabled \|\| pending \|\| !connection\?\.configured \|\| connection\?\.active\}/);
+    assert.equal((panel.match(/disabled=\{!connectionAccessEnabled \|\| pending \|\| !connection\?\.active\}/g) ?? []).length, 2);
+    assert.match(cockpit, /disabled=\{!mutationAccessEnabled \|\| submitProtocol\.isPending\}/);
+    assert.match(cockpit, /disabled=\{!mutationAccessEnabled \|\| emergencyStop\.isPending\}/);
+});

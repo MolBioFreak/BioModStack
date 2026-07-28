@@ -4,11 +4,18 @@ import os
 
 from fastapi import HTTPException, Request
 
-from services.bioxp.runtime import BioXpRuntime
+from services.bioxp.runtime import BioXpRuntime, bioxp_connection_enabled
 
 SAFE_LOCAL_MUTATIONS = frozenset(
     {
         "/protocols/compile",
+    }
+)
+CONNECTION_MUTATIONS = frozenset(
+    {
+        "/connection/connect",
+        "/connection/disconnect",
+        "/connection/probe",
     }
 )
 
@@ -37,11 +44,24 @@ def mutations_enabled() -> bool:
 def require_bioxp_mutation_access(request: Request) -> None:
     if not _mutation_guard_required(request):
         return
+    relative_path = _relative_path(request)
+    if relative_path in CONNECTION_MUTATIONS:
+        if bioxp_connection_enabled():
+            return
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "BioXP connection access is disabled; set "
+                "BMS_BIOXP_CONNECTION_ENABLED=1 to authorize status-only connection management"
+            ),
+        )
     if not mutations_enabled():
         raise HTTPException(
             status_code=503,
             detail="BioXP mutations are disabled; set BMS_BIOXP_MUTATIONS_ENABLED=1 to authorize this lane",
         )
+
+
 def get_bioxp_runtime(request: Request) -> BioXpRuntime:
     runtime = getattr(request.app.state, "bioxp_runtime", None)
     if runtime is None:

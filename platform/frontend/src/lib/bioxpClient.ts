@@ -51,6 +51,11 @@ export interface BioXpStatusResponse {
         physical_effect_verifiable: false;
     };
     startup_warnings: string[];
+    connection_access?: {
+        enabled: boolean;
+        server_setting: string;
+        hardware_effects_authorized: false;
+    };
     mutation_access?: {
         enabled: boolean;
         server_setting: string;

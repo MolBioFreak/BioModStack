@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -15,6 +16,15 @@ from .profile_store import BioXpProfileStore
 from .target_policy import BioXpTargetPolicy
 
 
+def bioxp_connection_enabled() -> bool:
+    return os.getenv("BMS_BIOXP_CONNECTION_ENABLED", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 @dataclass(slots=True)
 class BioXpRuntime:
     connection: BioXpConnectionService
@@ -26,7 +36,11 @@ class BioXpRuntime:
 
     async def start(self) -> None:
         """Restore the saved managed target without activating or moving hardware."""
-        if self.connection.load_profile() is None or self._restore_task is not None:
+        if (
+            not bioxp_connection_enabled()
+            or self.connection.load_profile() is None
+            or self._restore_task is not None
+        ):
             return
         self._restore_task = asyncio.create_task(
             self._restore_saved_profile(),

@@ -6,7 +6,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from routers import bioxp
-from routers.bioxp.dependencies import SAFE_LOCAL_MUTATIONS, require_bioxp_mutation_access
+from routers.bioxp.dependencies import (
+    CONNECTION_MUTATIONS,
+    SAFE_LOCAL_MUTATIONS,
+    require_bioxp_mutation_access,
+)
 from services.bioxp.runtime import create_bioxp_runtime
 
 def _client(tmp_path: Path) -> TestClient:
@@ -28,6 +32,13 @@ def test_every_non_get_route_carries_the_global_guard() -> None:
 
 def test_safe_local_mutations_are_exact_and_do_not_reach_robot() -> None:
     assert SAFE_LOCAL_MUTATIONS == frozenset({"/protocols/compile"})
+    assert CONNECTION_MUTATIONS == frozenset(
+        {
+            "/connection/connect",
+            "/connection/disconnect",
+            "/connection/probe",
+        }
+    )
 
 
 def test_robot_command_routes_are_default_off(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -39,8 +50,11 @@ def test_robot_command_routes_are_default_off(monkeypatch: pytest.MonkeyPatch, t
     assert emergency.status_code == 503
 
 
-def test_only_offline_compile_bypasses_robot_mutation_gate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_connection_lane_is_separate_from_commissioning_mutation_gate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setenv("BMS_BIOXP_MUTATIONS_ENABLED", "0")
+    monkeypatch.setenv("BMS_BIOXP_CONNECTION_ENABLED", "0")
     client = _client(tmp_path)
     guarded = [
         client.put("/api/bioxp/profile", json={}),
@@ -52,6 +66,35 @@ def test_only_offline_compile_bypasses_robot_mutation_gate(monkeypatch: pytest.M
     ]
     assert all(response.status_code == 503 for response in guarded)
     assert client.post("/api/bioxp/protocols/compile", json={}).status_code != 503
+
+    monkeypatch.setenv("BMS_BIOXP_CONNECTION_ENABLED", "1")
+    assert client.post("/api/bioxp/connection/connect").status_code == 409
+    assert client.post("/api/bioxp/connection/disconnect").status_code == 200
+    assert client.post("/api/bioxp/connection/probe").status_code == 409
+    assert client.post("/api/bioxp/commands", json={}).status_code == 503
+
+
+def test_commissioning_gate_cannot_open_connection_lane(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("BMS_BIOXP_MUTATIONS_ENABLED", "1")
+    monkeypatch.setenv("BMS_BIOXP_CONNECTION_ENABLED", "0")
+    client = _client(tmp_path)
+    assert client.post("/api/bioxp/connection/connect").status_code == 503
+
+
+def test_status_advertises_connection_and_commissioning_authority_separately(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("BMS_BIOXP_CONNECTION_ENABLED", "1")
+    monkeypatch.setenv("BMS_BIOXP_MUTATIONS_ENABLED", "0")
+    status = _client(tmp_path).get("/api/bioxp/status").json()
+    assert status["connection_access"] == {
+        "enabled": True,
+        "server_setting": "BMS_BIOXP_CONNECTION_ENABLED=1",
+        "hardware_effects_authorized": False,
+    }
+    assert status["mutation_access"]["enabled"] is False
 
 
 def test_enabled_mutation_lane_reaches_closed_command_policy(
