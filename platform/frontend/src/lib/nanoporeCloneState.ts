@@ -13,8 +13,25 @@ export function normalizeNanoporeCloneState(job: Job | null): Record<string, unk
         : legacyModel === 'hac' || legacyModel.includes('_hac@')
             ? 'hac'
             : 'sup';
+    const workflowId = String(p.ont_workflow_id || '');
+    const selectedWorkflow = workflowId === 'ont_construct_screening'
+        ? 'constructScreening'
+        : workflowId === 'ont_fastq_qc'
+            ? 'fastqQc'
+            : workflowId === 'wf_clone_validation' || p.run_assembly === true
+                ? 'clone'
+                : workflowId === 'ont_basecall_rna'
+                    ? 'rna'
+                    : workflowId === 'ont_methylation_analysis' || (p.modified_bases && p.modified_bases !== 'none')
+                        ? 'modified'
+                        : workflowId === 'ont_basecall_dna' && p.barcode_kit
+                            ? 'barcode'
+                            : workflowId === 'ont_basecall_dna' && p.dorado_basecall_mode === 'duplex'
+                                ? 'duplex'
+                                : (p.bam_path ? 'bamQc' : (p.fastq_path ? 'plasmidQc' : 'dna'));
     return {
-        selectedWorkflow: p.run_assembly === true ? 'clone' : (p.bam_path ? 'bamQc' : (p.fastq_path ? 'plasmidQc' : (p.modified_bases && p.modified_bases !== 'none' ? 'modified' : 'dna'))),
+        selectedWorkflow,
+        ontWorkflowId: workflowId,
         jobName: job.name,
         pinnedGpus,
         lockGpus: p.lock_gpus === true,
