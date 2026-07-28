@@ -77,6 +77,35 @@ def test_typed_artifact_manifest_reports_ready_missing_and_role_state(tmp_path: 
     assert manifest["roles"]["has_binder"] is False
 
 
+def test_artifact_manifest_persists_declared_path_across_runtime_path_aliases(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    declared_root = tmp_path / "host-data"
+    runtime_root = tmp_path / "container-data"
+    declared_path = declared_root / "bms_results" / "job-1" / "design.cif"
+    runtime_path = runtime_root / "bms_results" / "job-1" / "design.cif"
+    runtime_path.parent.mkdir(parents=True)
+    runtime_path.write_text("data_test\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        result_contracts,
+        "resolve_runtime_data_path",
+        lambda candidate: runtime_path if Path(candidate) == declared_path else Path(candidate),
+    )
+
+    manifest = result_contracts.build_review_artifact_manifest(
+        SimpleNamespace(
+            pdb_path=str(declared_path),
+            aligned_error_path=None,
+            review_role_map={},
+        )
+    )
+
+    assert manifest["artifacts"]["structure"]["state"] == "ready"
+    assert manifest["artifacts"]["structure"]["path"] == str(declared_path)
+
+
 def test_analysis_allowlist_is_derived_from_authoritative_profile() -> None:
     checker = getattr(result_contracts, "is_design_analysis_allowed", None)
     assert callable(checker), "analysis contract enforcement helper is required"

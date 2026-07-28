@@ -13,6 +13,8 @@ import {
 } from '../runtime/uiDiagnostics';
 import {
     buildRuntimeSwitchTargets,
+    buildTailnetRuntimeSwitchTargets,
+    selectTailnetRuntimeEnvironment,
     type RuntimeMode,
     type RuntimePortSettings,
 } from '../runtime/runtimeSwitch';
@@ -776,15 +778,27 @@ function DiagnosticsMenu() {
                 await window.biomodstack.switchRuntime(targetMode);
                 return;
             }
-            const [ports, payload] = await Promise.all([
-                readRuntimePortSettings().catch(() => ({} as RuntimePortSettings)),
-                diagnostics ? Promise.resolve(diagnostics) : collectUiDiagnosticsPayload(),
-            ]);
+            const payload = diagnostics ?? await collectUiDiagnosticsPayload();
             const routerBasename = payload?.fields['Shell router basename']
                 ?? payload?.fields['Router basename']
                 ?? window.__BMS_ROUTER_BASENAME__
                 ?? import.meta.env.BASE_URL
                 ?? '/';
+            const loopbackHostnames = new Set(['localhost', '127.0.0.1', '::1']);
+            if (!loopbackHostnames.has(window.location.hostname)) {
+                const targets = buildTailnetRuntimeSwitchTargets({
+                    origin: window.location.origin,
+                    currentPathname: window.location.pathname,
+                    currentSearch: window.location.search,
+                    currentHash: window.location.hash,
+                    currentRouterBasename: routerBasename,
+                });
+                await selectTailnetRuntimeEnvironment(targetMode);
+                window.location.assign(targetMode === 'dev' ? targets.dev.url : targets.stable.url);
+                return;
+            }
+
+            const ports = await readRuntimePortSettings().catch(() => ({} as RuntimePortSettings));
             const targets = buildRuntimeSwitchTargets({
                 ports,
                 currentPathname: window.location.pathname,
