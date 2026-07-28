@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import {
+    type BioXpCommandPayload,
     type BioXpProtocol,
     bioXpErrorText,
     useConnectBioXp,
@@ -164,6 +165,14 @@ export function BioXpCockpit() {
     const controlPlaneFresh = isBioXpControlPlaneFresh(connection, nowMs);
     const mutationAccessSetting = status?.mutation_access?.server_setting
         ?? 'BIOMODSTACK_BIOXP_ENABLE_MUTATIONS';
+    const maintenanceState = connection?.maintenance_state;
+    const maintenanceMotionBlocked = maintenanceState?.motion_blocked === true;
+    const availableCommands = useMemo(
+        () => new Set(status?.available_commands ?? []),
+        [status?.available_commands],
+    );
+    const serverMovementAvailable = availableCommands.has('run_axis_diagnostic')
+        || availableCommands.has('run_oem_motor_stage');
     const derived = useMemo(
         () => connection ? deriveBioXpStatus(connection, nowMs) : null,
         [connection, nowMs],
@@ -174,30 +183,33 @@ export function BioXpCockpit() {
     );
     const lifecycleContract = fullLifecycleContract.isError ? undefined : fullLifecycleContract.data;
     const lifecycleRun = cancelFullLifecycle.data ?? fullLifecycleRun.data ?? planFullLifecycle.data;
-    const lifecyclePlanAvailable = mutationAccessEnabled
+    const lifecyclePlanAvailable = !maintenanceMotionBlocked
+        && mutationAccessEnabled
         && controlPlaneFresh
         && lifecycleContract?.plan_available === true
         && lifecycleContract?.evidence_lock_verified === true
         && lifecycleContract?.source_registry_identity_verified === true
         && lifecycleContract?.machine_configuration_verified === true
         && connection?.generation !== undefined;
-    const lifecyclePlanBlockedReason = fullLifecycleContract.isError
-        ? bioXpErrorText(fullLifecycleContract.error)
-        : !mutationAccessEnabled
-            ? `BMS mutation gate ${mutationAccessSetting} is disabled.`
-            : !controlPlaneFresh
-                ? 'The process-local BioXP control plane is not fresh.'
-                : lifecycleContract?.evidence_lock_verified !== true
-                    || lifecycleContract?.source_registry_identity_verified !== true
-                    || lifecycleContract?.machine_configuration_verified !== true
-                    ? 'The robot has not verified the selected evidence lock, source registry identity, and machine configuration.'
-                    : lifecycleContract?.plan_blockers?.join('; ') || 'The robot has not admitted lifecycle planning.';
+    const lifecyclePlanBlockedReason = maintenanceMotionBlocked
+        ? `Lifecycle planning is blocked while maintenance motion is blocked${maintenanceState?.block_reason ? `: ${maintenanceState.block_reason}` : '.'}`
+        : fullLifecycleContract.isError
+            ? bioXpErrorText(fullLifecycleContract.error)
+            : !mutationAccessEnabled
+                ? `BMS mutation gate ${mutationAccessSetting} is disabled.`
+                : !controlPlaneFresh
+                    ? 'The process-local BioXP control plane is not fresh.'
+                    : lifecycleContract?.evidence_lock_verified !== true
+                        || lifecycleContract?.source_registry_identity_verified !== true
+                        || lifecycleContract?.machine_configuration_verified !== true
+                        ? 'The robot has not verified the selected evidence lock, source registry identity, and machine configuration.'
+                        : lifecycleContract?.plan_blockers?.join('; ') || 'The robot has not admitted lifecycle planning.';
     const protocol: BioXpProtocol = {
         name: protocolName,
         steps: [{ action: 'initialize_motors' }],
     };
 
-    const commandPayload = (command: CommissioningCommandName): Record<string, unknown> => {
+    const commandPayload = (command: CommissioningCommandName): BioXpCommandPayload => {
         const base = {
             command,
             expected_generation: connection?.generation ?? 0,
@@ -246,6 +258,29 @@ export function BioXpCockpit() {
         });
     };
 
+    const recoverMotionWithoutHoming = () => {
+        const operatorReason = window.prompt(
+            'Record why supervised non-homing motion recovery is required. Recovery may energize or configure motor controllers, but it must not home or translate any axis.',
+            'Recover motion after supervised maintenance',
+        );
+        if (operatorReason === null) return;
+        const reason = operatorReason.trim();
+        if (!reason) {
+            window.alert('A non-empty operator reason is required.');
+            return;
+        }
+        if (!window.confirm(
+            'Recover motion without homing? This may energize or configure motor controllers, but it must not home or translate any axis. Confirm the workspace is clear and an operator is supervising the robot.',
+        )) return;
+        executeCommand.mutate({
+            command: 'recover_motion_non_homing',
+            operator_ack: 'RECOVER_MOTION',
+            reason,
+            expected_generation: connection?.generation ?? 0,
+            idempotency_key: crypto.randomUUID(),
+        });
+    };
+
     const runFullLifecyclePlan = () => {
         if (!lifecycleContract || !connection) return;
         planFullLifecycle.mutate({
@@ -279,11 +314,13 @@ export function BioXpCockpit() {
     };
 
     const axisStatusAvailable = mutationAccessEnabled && controlPlaneFresh
-        && isBioXpCommandAvailable(status?.available_commands, 'collect_axis_diagnostics', derived?.label);
+        && availableCommands.has('collect_axis_diagnostics');
     const axisRunAvailable = mutationAccessEnabled && controlPlaneFresh
-        && isBioXpCommandAvailable(status?.available_commands, 'run_axis_diagnostic', derived?.label);
+        && availableCommands.has('run_axis_diagnostic');
     const axisStopAvailable = mutationAccessEnabled && connection?.active === true
-        && status?.available_commands?.includes('stop_axis_diagnostic') === true;
+        && availableCommands.has('stop_axis_diagnostic');
+    const recoveryAvailable = mutationAccessEnabled && controlPlaneFresh
+        && availableCommands.has('recover_motion_non_homing');
     const axisStatusBlockedReason = status?.unavailable_commands?.collect_axis_diagnostics
         ?? (statusQuery.isError ? 'Status is unavailable.' : 'Live axis status is not admitted by the robot.');
     const axisRunBlockedReason = status?.unavailable_commands?.run_axis_diagnostic
@@ -353,6 +390,46 @@ export function BioXpCockpit() {
                 {statusQuery.isError && <p className="mt-3 text-sm text-red-300">Status unavailable; cached readiness and controls are suppressed.</p>}
             </section>
 
+            <section className={`rounded-xl border p-5 ${maintenanceMotionBlocked ? 'border-amber-600/70 bg-amber-950/20' : 'border-slate-800 bg-slate-950/70'}`}>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                        <h2 className="text-lg font-semibold">Maintenance motion state</h2>
+                        <p className="mt-1 max-w-3xl text-sm text-slate-300">
+                            Maintenance motion authority is independent of connection and hardware readiness. Status collection and component stop remain separately admitted by the API.
+                        </p>
+                    </div>
+                    <span className={`rounded border px-3 py-1 text-sm font-semibold ${maintenanceMotionBlocked ? 'border-amber-600 text-amber-200' : 'border-slate-700 text-slate-300'}`}>
+                        {maintenanceMotionBlocked ? 'MOTION BLOCKED' : maintenanceState?.motion_blocked === false ? 'MOTION UNBLOCKED' : 'UNKNOWN'}
+                    </span>
+                </div>
+                <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                    <div><dt className="text-slate-500">motion_blocked</dt><dd><EvidenceValue value={maintenanceState?.motion_blocked ?? null} /></dd></div>
+                    <div><dt className="text-slate-500">recovery_required</dt><dd><EvidenceValue value={maintenanceState?.recovery_required ?? null} /></dd></div>
+                    <div><dt className="text-slate-500">usb_owner</dt><dd>{maintenanceState?.usb_owner ?? 'unknown'}</dd></div>
+                    <div><dt className="text-slate-500">blocked_by</dt><dd>{maintenanceState?.blocked_by ?? maintenanceState?.block_source ?? 'unknown'}</dd></div>
+                    <div className="sm:col-span-2 lg:col-span-4"><dt className="text-slate-500">block_reason</dt><dd className="text-amber-200">{maintenanceState?.block_reason ?? 'No block reason reported.'}</dd></div>
+                    {maintenanceState?.recovery_hint && <div className="sm:col-span-2 lg:col-span-4"><dt className="text-slate-500">recovery_hint</dt><dd>{maintenanceState.recovery_hint}</dd></div>}
+                </dl>
+                <div className="mt-4 rounded border border-amber-700/50 bg-slate-950/50 p-4">
+                    <h3 className="font-semibold">Recover Motion Without Homing</h3>
+                    <p className="mt-1 text-sm text-slate-300">
+                        This dedicated recovery may energize or configure motor controllers, but it must not home or translate an axis. It requires a reason, click-time confirmation, and the exact RECOVER_MOTION acknowledgement.
+                    </p>
+                    <button
+                        type="button"
+                        disabled={!recoveryAvailable || executeCommand.isPending}
+                        onClick={recoverMotionWithoutHoming}
+                        className="mt-3 rounded bg-amber-700 px-4 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40"
+                    >Recover Motion Without Homing</button>
+                    {!recoveryAvailable && (
+                        <p className="mt-2 text-xs text-slate-500">
+                            Blocked: {status?.unavailable_commands?.recover_motion_non_homing
+                                ?? (statusQuery.isError ? 'Status is unavailable.' : 'The server has not admitted non-homing motion recovery.')}
+                        </p>
+                    )}
+                </div>
+            </section>
+
             <BioXpCameraPanel
                 connected={connection?.active === true}
                 connectionGeneration={connection?.generation ?? null}
@@ -404,6 +481,11 @@ export function BioXpCockpit() {
                     The robot owns all branch inputs and stage order. This surface creates a persisted selected-path plan;
                     it does not enqueue execution, prove provider binding, or verify any physical effect.
                 </p>
+                {maintenanceMotionBlocked && (
+                    <p className="mt-3 rounded border border-amber-600/60 bg-amber-500/10 p-3 text-sm text-amber-200">
+                        Lifecycle planning is blocked while maintenance motion is blocked{maintenanceState?.block_reason ? `: ${maintenanceState.block_reason}` : '.'}
+                    </p>
+                )}
                 {lifecycleContract && (
                     <>
                         <dl className="mt-4 grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
@@ -430,7 +512,7 @@ export function BioXpCockpit() {
                 )}
                 <button
                     type="button"
-                    disabled={!lifecyclePlanAvailable || planFullLifecycle.isPending}
+                    disabled={maintenanceMotionBlocked || !lifecyclePlanAvailable || planFullLifecycle.isPending}
                     onClick={runFullLifecyclePlan}
                     className="mt-4 rounded bg-violet-700 px-4 py-2 text-sm font-semibold disabled:opacity-40"
                 >Create persisted dry-run plan</button>
@@ -473,6 +555,7 @@ export function BioXpCockpit() {
                     <div>
                         <h2 className="text-lg font-semibold">Per-axis OEM capability diagnostics</h2>
                         <p className="mt-2 max-w-4xl text-sm text-slate-300">Each button targets one finite robot-owned movement mechanism. Values are fixed by the robot contract; there are no arbitrary motor, current, or transport controls. Small fixed commissioning jogs, OEM switch-search homing, calibrated component positions, and stop can be verified independently before they are composed into initializeSystem.</p>
+                        <p className="mt-1 text-xs text-slate-500">Server movement commands advertised: {serverMovementAvailable ? 'yes' : 'no'}.</p>
                     </div>
                     <button
                         type="button"

@@ -21,6 +21,20 @@ export interface BioXpConnectionSnapshot {
     last_error: string | null;
     command_active: boolean;
     startup_lifecycle: BioXpStartupLifecycle | null;
+    maintenance_state: BioXpMaintenanceState | null;
+}
+
+export interface BioXpMaintenanceState {
+    motion_blocked?: boolean | null;
+    recovery_required?: boolean | null;
+    usb_owner?: string | null;
+    blocked_by?: string | null;
+    block_reason?: string | null;
+    block_source?: string | null;
+    recovery_hint?: string | null;
+    blocked_at?: string | null;
+    recovered_at?: string | null;
+    last_recovery?: Record<string, unknown> | null;
 }
 
 export interface BioXpStartupStage {
@@ -108,6 +122,37 @@ export interface BioXpCommandRecord {
     detail: string;
     handler_response: Record<string, unknown> | null;
 }
+
+export type BioXpCommandName =
+    | 'activate_usb_for_service'
+    | 'collect_hardware_snapshot'
+    | 'initialize_oem_environment'
+    | 'initialize_motors'
+    | 'run_oem_motor_stage'
+    | 'record_oem_motor_stage_observation'
+    | 'collect_axis_diagnostics'
+    | 'run_axis_diagnostic'
+    | 'stop_axis_diagnostic'
+    | 'recover_motion_non_homing'
+    | 'start_job'
+    | 'pause_job'
+    | 'resume_job'
+    | 'stop_job'
+    | 'recover_runtime';
+
+export type BioXpCommandPayload =
+    | {
+        command: 'recover_motion_non_homing';
+        expected_generation: number;
+        idempotency_key: string;
+        operator_ack: 'RECOVER_MOTION';
+        reason: string;
+    }
+    | ({
+        command: Exclude<BioXpCommandName, 'recover_motion_non_homing'>;
+        expected_generation: number;
+        idempotency_key: string;
+    } & Record<string, unknown>);
 
 export interface BioXpProfileView {
     configured: boolean;
@@ -427,7 +472,7 @@ export const useSubmitBioXpProtocol = () => useRefreshMutation(
 );
 
 export const useBioXpCommand = () => useRefreshMutation(
-    async (payload: Record<string, unknown>) => (
+    async (payload: BioXpCommandPayload) => (
         await api.post<BioXpCommandRecord>('/api/bioxp/commands', payload)
     ).data,
 );

@@ -8,6 +8,7 @@ from services.bioxp.errors import ConnectionStateError, ProfileStoreError, Targe
 from services.bioxp.connection import mask_target_url
 from services.bioxp.command_policy import (
     lifecycle_stage_reasons,
+    maintenance_state_reasons,
     required_lifecycle_state_reasons,
 )
 from services.bioxp.models import BioXpProfile
@@ -93,8 +94,10 @@ async def get_status(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict
             reason = "mutations are disabled"
         elif not snapshot.active:
             reason = "connection is not active"
-        elif snapshot.command_active:
+        elif snapshot.command_active and name != "stop_axis_diagnostic":
             reason = "another normal command is active"
+        elif maintenance_reasons := maintenance_state_reasons(definition, snapshot.maintenance_state):
+            reason = "; ".join(maintenance_reasons)
         elif required_reasons := required_lifecycle_state_reasons(
             definition, snapshot.startup_lifecycle
         ):

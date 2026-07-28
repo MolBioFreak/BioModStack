@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import secrets
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
 from math import isfinite
@@ -97,6 +97,7 @@ class BioXpConnectionService:
         self._hardware_evidence_error: str | None = None
         self._capabilities: tuple[str, ...] = ()
         self._startup_lifecycle: dict[str, Any] | None = None
+        self._maintenance_state: dict[str, Any] | None = None
         self._last_error: str | None = None
         self._command_active = False
         self._active_probe_task: asyncio.Task[None] | None = None
@@ -231,6 +232,8 @@ class BioXpConnectionService:
             )
             startup = payload.get("startup")
             self._startup_lifecycle = copy.deepcopy(startup) if isinstance(startup, dict) else None
+            found_maintenance, maintenance_state = _find_maintenance_state(payload)
+            self._maintenance_state = maintenance_state if found_maintenance else None
             raw_capabilities = payload.get("capabilities")
             self._capabilities = (
                 tuple(sorted({str(value) for value in raw_capabilities}))
@@ -338,6 +341,7 @@ class BioXpConnectionService:
         self._hardware_evidence_error = None
         self._capabilities = ()
         self._startup_lifecycle = None
+        self._maintenance_state = None
         self._last_error = None
 
     def snapshot(self) -> BioXpSnapshot:
@@ -383,6 +387,7 @@ class BioXpConnectionService:
             last_error=profile_error or self._last_error,
             command_active=self._command_active,
             startup_lifecycle=copy.deepcopy(self._startup_lifecycle),
+            maintenance_state=copy.deepcopy(self._maintenance_state),
         )
 
     @property
@@ -408,6 +413,27 @@ class BioXpConnectionService:
         startup = lifecycle.get("startup") if isinstance(lifecycle, dict) else payload.get("startup")
         if isinstance(startup, dict):
             self._startup_lifecycle = copy.deepcopy(startup)
+        found_maintenance, maintenance_state = _find_maintenance_state(payload)
+        if found_maintenance:
+            self._maintenance_state = maintenance_state
+
+
+def _find_maintenance_state(payload: Mapping[str, Any]) -> tuple[bool, dict[str, Any] | None]:
+    """Find the first maintenance_state in bounded robot response envelopes."""
+    pending: list[tuple[Any, int]] = [(payload, 0)]
+    visited = 0
+    while pending and visited < 100:
+        value, depth = pending.pop(0)
+        visited += 1
+        if isinstance(value, Mapping):
+            if "maintenance_state" in value:
+                state = value["maintenance_state"]
+                return True, copy.deepcopy(dict(state)) if isinstance(state, Mapping) else None
+            if depth < 8:
+                pending.extend((child, depth + 1) for child in value.values())
+        elif isinstance(value, (list, tuple)) and depth < 8:
+            pending.extend((child, depth + 1) for child in value)
+    return False, None
 
 
 def _optional_bool(payload: dict[str, Any], *keys: str) -> bool | None:

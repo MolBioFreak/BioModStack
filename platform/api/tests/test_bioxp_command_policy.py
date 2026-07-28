@@ -20,6 +20,7 @@ def _allow_context(Context, **changes):
         "runtime_ready": True,
         "hardware_ready": True,
         "capabilities": frozenset({"initialize_motors"}),
+        "maintenance_state": {"motion_blocked": False, "recovery_required": False},
     }
     values.update(changes)
     return Context(**values)
@@ -109,3 +110,62 @@ def test_hardware_snapshot_requires_service_runtime_ownership() -> None:
 
     owned = replace(unbound, runtime_ready=True)
     assert evaluate(request, definition, owned).allowed is True
+
+
+def test_motion_commands_fail_closed_on_missing_or_blocked_maintenance_state() -> None:
+    parse, Context, evaluate, registry = _load()
+    request = parse({
+        "command": "run_axis_diagnostic",
+        "expected_generation": 7,
+        "idempotency_key": "axis-motion-maintenance-7",
+        "axis": "x",
+        "operation": "move-positive",
+        "operator_ack": "RUN_AXIS_DIAGNOSTIC",
+        "reason": "supervised maintenance admission test",
+    })
+    base = _allow_context(Context, capabilities=frozenset({"run_axis_diagnostic"}))
+
+    for state in (
+        None,
+        {},
+        {"motion_blocked": None},
+        {"motion_blocked": True, "block_reason": "USB owner changed"},
+    ):
+        decision = evaluate(request, registry[request.command], replace(base, maintenance_state=state))
+        assert decision.allowed is False
+        assert "maintenance" in " ".join(decision.reasons).lower()
+
+    assert evaluate(request, registry[request.command], base).allowed is True
+
+
+def test_non_homing_recovery_requires_exact_maintenance_recovery_state_and_normal_gates() -> None:
+    parse, Context, evaluate, registry = _load()
+    request = parse({
+        "command": "recover_motion_non_homing",
+        "expected_generation": 7,
+        "idempotency_key": "recover-motion-7",
+        "operator_ack": "RECOVER_MOTION",
+        "reason": "Recover after supervised USB maintenance",
+    })
+    definition = registry[request.command]
+    admitted = _allow_context(
+        Context,
+        capabilities=frozenset({"recover_motion_non_homing"}),
+        maintenance_state={
+            "motion_blocked": True,
+            "recovery_required": True,
+            "block_reason": "USB owner changed",
+        },
+    )
+    assert evaluate(request, definition, admitted).allowed is True
+
+    for changes in (
+        {"maintenance_state": None},
+        {"maintenance_state": {"motion_blocked": False, "recovery_required": True}},
+        {"maintenance_state": {"motion_blocked": True, "recovery_required": False}},
+        {"observation_fresh": False},
+        {"runtime_ready": False},
+        {"hardware_ready": False},
+        {"capabilities": frozenset()},
+    ):
+        assert evaluate(request, definition, replace(admitted, **changes)).allowed is False

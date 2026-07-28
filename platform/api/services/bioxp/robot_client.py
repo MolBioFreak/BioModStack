@@ -45,6 +45,7 @@ DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
     "collect_axis_diagnostics": ("GET", "/motion/diagnostics/status", 45.0),
     "run_axis_diagnostic": ("POST", "/motion/diagnostics/execute", 180.0),
     "stop_axis_diagnostic": ("POST", "/motion/diagnostics/stop", 25.0),
+    "recover_motion_non_homing": ("POST", "/motion/arm/strict_startup", 90.0),
     "emergency_stop": ("POST", "/oem/runtime/emergency_stop", 5.0),
     "camera_status": ("GET", "/camera/status", 5.0),
     "camera_latest": ("GET", "/camera/frame/latest", 5.0),

@@ -96,6 +96,12 @@ class StopAxisDiagnosticCommand(_CommandBase):
     reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
 
 
+class RecoverMotionNonHomingCommand(_CommandBase):
+    command: Literal["recover_motion_non_homing"]
+    operator_ack: Literal["RECOVER_MOTION"]
+    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
+
+
 class StartJobCommand(_CommandBase):
     command: Literal["start_job"]
     job_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
@@ -130,6 +136,7 @@ CommandRequest: TypeAlias = Annotated[
     | CollectAxisDiagnosticsCommand
     | RunAxisDiagnosticCommand
     | StopAxisDiagnosticCommand
+    | RecoverMotionNonHomingCommand
     | StartJobCommand
     | PauseJobCommand
     | ResumeJobCommand

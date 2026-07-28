@@ -14,6 +14,7 @@ CommandName = Literal[
     "collect_axis_diagnostics",
     "run_axis_diagnostic",
     "stop_axis_diagnostic",
+    "recover_motion_non_homing",
     "start_job",
     "pause_job",
     "resume_job",
@@ -36,6 +37,7 @@ class CommandDefinition:
     lifecycle_stage: str | None = None
     repeatable: bool = False
     required_lifecycle_states: tuple[tuple[str, str], ...] = ()
+    maintenance_policy: Literal["independent", "motion_unblocked", "recovery_required"] = "independent"
 
 
 _UNVERIFIED = "Disabled until the robot-online contract and OEM mapping are verified"
@@ -79,6 +81,7 @@ DEFAULT_COMMAND_REGISTRY: Mapping[CommandName, CommandDefinition] = MappingProxy
             required_capability="run_oem_motor_stage",
             requires_hardware_ready=True,
             required_lifecycle_states=(("initial_check", "passed"),),
+            maintenance_policy="motion_unblocked",
         ),
         "record_oem_motor_stage_observation": CommandDefinition(
             name="record_oem_motor_stage_observation",
@@ -106,6 +109,7 @@ DEFAULT_COMMAND_REGISTRY: Mapping[CommandName, CommandDefinition] = MappingProxy
             requires_fresh_observation=True,
             requires_runtime_ready=True,
             requires_hardware_ready=True,
+            maintenance_policy="motion_unblocked",
         ),
         "stop_axis_diagnostic": CommandDefinition(
             name="stop_axis_diagnostic",
@@ -115,6 +119,16 @@ DEFAULT_COMMAND_REGISTRY: Mapping[CommandName, CommandDefinition] = MappingProxy
             requires_fresh_observation=False,
             requires_runtime_ready=True,
             requires_hardware_ready=False,
+        ),
+        "recover_motion_non_homing": CommandDefinition(
+            name="recover_motion_non_homing",
+            enabled=True,
+            route_key="recover_motion_non_homing",
+            required_capability="recover_motion_non_homing",
+            requires_fresh_observation=True,
+            requires_runtime_ready=True,
+            requires_hardware_ready=True,
+            maintenance_policy="recovery_required",
         ),
         **{
         name: CommandDefinition(

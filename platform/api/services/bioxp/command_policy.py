@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,6 +19,7 @@ class CommandAdmissionContext:
     hardware_ready: bool | None
     capabilities: frozenset[str]
     startup_lifecycle: dict[str, Any] | None = None
+    maintenance_state: dict[str, Any] | None = None
 
 
 def evaluate_command(
@@ -44,9 +46,34 @@ def evaluate_command(
         reasons.append("USB runtime is already active for the managed service")
     if definition.required_capability is not None and definition.required_capability not in context.capabilities:
         reasons.append(f"Required capability is unavailable: {definition.required_capability}")
+    reasons.extend(maintenance_state_reasons(definition, context.maintenance_state))
     reasons.extend(required_lifecycle_state_reasons(definition, context.startup_lifecycle))
     reasons.extend(lifecycle_stage_reasons(definition, context.startup_lifecycle))
     return ControlDecision(allowed=not reasons, reasons=tuple(reasons))
+
+
+def maintenance_state_reasons(
+    definition: CommandDefinition,
+    maintenance_state: dict[str, Any] | None,
+) -> tuple[str, ...]:
+    policy = definition.maintenance_policy
+    if policy == "independent":
+        return ()
+    if not isinstance(maintenance_state, dict):
+        return ("Maintenance state is unavailable",)
+    if policy == "motion_unblocked":
+        if maintenance_state.get("motion_blocked") is False:
+            return ()
+        block_reason = maintenance_state.get("block_reason")
+        if maintenance_state.get("motion_blocked") is True and isinstance(block_reason, str) and block_reason:
+            return (f"Maintenance motion is blocked: {json.dumps(block_reason)}",)
+        return ("Maintenance motion-block state is not explicitly unblocked",)
+    if (
+        maintenance_state.get("motion_blocked") is True
+        and maintenance_state.get("recovery_required") is True
+    ):
+        return ()
+    return ("Non-homing recovery requires an explicit blocked maintenance state with recovery_required=true",)
 
 
 def required_lifecycle_state_reasons(

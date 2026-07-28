@@ -119,6 +119,7 @@ class CommandCoordinator:
             hardware_ready=snapshot.hardware_ready,
             capabilities=frozenset(snapshot.capabilities),
             startup_lifecycle=snapshot.startup_lifecycle,
+            maintenance_state=snapshot.maintenance_state,
         )
         decision = evaluate_command(request, definition, context)
         if not decision.allowed:
@@ -209,6 +210,7 @@ class CommandCoordinator:
             hardware_ready=snapshot.hardware_ready,
             capabilities=frozenset(snapshot.capabilities),
             startup_lifecycle=snapshot.startup_lifecycle,
+            maintenance_state=snapshot.maintenance_state,
         )
         # A completed activation may itself change runtime readiness. Replays
         # still require all current authorization and generation gates; only
@@ -267,6 +269,12 @@ class CommandCoordinator:
                     "mode": "live",
                     "operator_ack": request.operator_ack,
                     "params": params,
+                }
+            elif request.command == "recover_motion_non_homing":
+                payload = {
+                    "run_homing": False,
+                    "operator_ack": request.operator_ack,
+                    "operator_reason": request.reason,
                 }
             try:
                 response = await client.request(definition.route_key, json_data=payload or None)

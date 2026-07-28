@@ -122,6 +122,7 @@ def test_default_registry_exposes_only_current_compact_commissioning_mappings() 
         "collect_axis_diagnostics",
         "run_axis_diagnostic",
         "stop_axis_diagnostic",
+        "recover_motion_non_homing",
         "start_job",
         "pause_job",
         "resume_job",
@@ -137,6 +138,7 @@ def test_default_registry_exposes_only_current_compact_commissioning_mappings() 
         "collect_axis_diagnostics": "collect_axis_diagnostics",
         "run_axis_diagnostic": "run_axis_diagnostic",
         "stop_axis_diagnostic": "stop_axis_diagnostic",
+        "recover_motion_non_homing": "recover_motion_non_homing",
     }
     for name, route_key in enabled.items():
         assert registry[name].enabled is True
@@ -231,6 +233,7 @@ def test_oem_motor_stage_requires_advertised_capability_and_translates_to_queued
                 freshness_budget_seconds=30.0,
                 observation_fresh=True,
                 startup_lifecycle={"stages": {"initial_check": {"state": "passed"}}},
+                maintenance_state={"motion_blocked": False, "recovery_required": False},
             )
 
         def observe_command_response(self, value):
@@ -462,6 +465,7 @@ def test_axis_diagnostic_execution_holds_generation_lease_and_forwards_only_type
                 observed_at=datetime.now(timezone.utc),
                 freshness_budget_seconds=30.0,
                 observation_fresh=True,
+                maintenance_state={"motion_blocked": False, "recovery_required": False},
             )
 
         def observe_command_response(self, value):
@@ -616,6 +620,7 @@ def test_axis_stop_preempts_inflight_diagnostic_without_waiting_for_workflow_lea
                     observed_at=datetime.now(timezone.utc),
                     freshness_budget_seconds=30.0,
                     observation_fresh=True,
+                    maintenance_state={"motion_blocked": False, "recovery_required": False},
                 )
 
         coordinator = CommandCoordinator(Connection(), DEFAULT_COMMAND_REGISTRY)
@@ -696,3 +701,82 @@ def test_axis_stop_http_acknowledgement_never_waits_for_normal_probe_lane() -> N
 
     assert result["command"] == "stop_axis_diagnostic"
     assert connection.probe_called is False
+
+
+def test_non_homing_recovery_is_typed_and_maps_to_exact_robot_payload() -> None:
+    from services.bioxp.command_coordinator import CommandCoordinator
+    from services.bioxp.command_models import parse_command_request
+    from services.bioxp.command_registry import DEFAULT_COMMAND_REGISTRY
+    from services.bioxp.models import BioXpSnapshot
+
+    valid_payload = {
+        "command": "recover_motion_non_homing",
+        "expected_generation": 19,
+        "idempotency_key": "recover-motion-19",
+        "operator_ack": "RECOVER_MOTION",
+        "reason": "Recover motion after supervised USB owner maintenance",
+    }
+    request = parse_command_request(valid_payload)
+    for invalid in (
+        {**valid_payload, "operator_ack": "RECOVER"},
+        {**valid_payload, "reason": "   "},
+    ):
+        with pytest.raises(ValidationError):
+            parse_command_request(invalid)
+
+    class Client:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def request(self, route_key, *, json_data):
+            self.calls.append((route_key, json_data))
+            return {
+                "ok": True,
+                "maintenance_state": {
+                    "motion_blocked": False,
+                    "recovery_required": False,
+                    "block_reason": None,
+                },
+            }
+
+    class Connection:
+        active_client = Client()
+
+        def snapshot(self):
+            return BioXpSnapshot(
+                configured=True,
+                active=True,
+                generation=19,
+                reachable=True,
+                runtime_ready=True,
+                hardware_ready=True,
+                hardware_observation_fresh=True,
+                capabilities=("recover_motion_non_homing",),
+                observed_at=datetime.now(timezone.utc),
+                freshness_budget_seconds=30.0,
+                observation_fresh=True,
+                maintenance_state={
+                    "motion_blocked": True,
+                    "recovery_required": True,
+                    "block_reason": "USB owner changed",
+                },
+            )
+
+        def observe_command_response(self, value):
+            self.observed = value
+
+    connection = Connection()
+    record = asyncio.run(
+        CommandCoordinator(connection, DEFAULT_COMMAND_REGISTRY).execute(request, mutations_enabled=True)
+    )
+
+    assert record.status == "acknowledged"
+    assert connection.active_client.calls == [(
+        "recover_motion_non_homing",
+        {
+            "run_homing": False,
+            "operator_ack": "RECOVER_MOTION",
+            "operator_reason": "Recover motion after supervised USB owner maintenance",
+        },
+    )]
+    assert DEFAULT_COMMAND_REGISTRY["recover_motion_non_homing"].required_capability == "recover_motion_non_homing"
