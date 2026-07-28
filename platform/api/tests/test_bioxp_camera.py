@@ -22,6 +22,7 @@ class FakeImage:
 class FakeCameraClient:
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.frame_age_seconds = 0.25
 
     async def camera_status(self):
         self.calls.append("status")
@@ -30,7 +31,7 @@ class FakeCameraClient:
             "available": True,
             "frame_sequence": 42,
             "frame_captured_at": "2026-07-27T12:00:00Z",
-            "frame_age_seconds": 0.25,
+            "frame_age_seconds": self.frame_age_seconds,
             "freshness_budget_seconds": 2.0,
             "provider_generation": 7,
             "dropped_frames": 3,
@@ -99,6 +100,20 @@ def test_camera_status_is_generation_bound_and_projects_freshness(monkeypatch):
     assert connection.lease_entries == [(77, False)]
     assert connection.client.calls == ["status"]
     assert "robot" not in response.text.lower()
+
+
+def test_camera_status_projects_provider_owned_aged_frame_as_stale(monkeypatch):
+    client, connection = make_client(monkeypatch)
+    assert connection.client is not None
+    connection.client.frame_age_seconds = 2.001
+
+    response = client.get("/api/bioxp/camera/status", params={"expected_generation": 77})
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "stale"
+    assert response.json()["available"] is True
+    assert response.json()["frame_sequence"] == 42
+    assert response.json()["content_sha256"] == "a" * 64
 
 
 def test_camera_generation_change_and_no_active_target_fail_before_robot_io(monkeypatch):

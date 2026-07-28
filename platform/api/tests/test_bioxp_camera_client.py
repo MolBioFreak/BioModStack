@@ -126,6 +126,7 @@ def test_camera_client_uses_only_fixed_routes_and_bounded_timeouts():
         lambda payload: payload.update({"available": False}),
         lambda payload: payload.update({"frame_age_seconds": math.inf}),
         lambda payload: payload.update({"frame_captured_at": 1785153600}),
+        lambda payload: payload.update({"frame_captured_at": "1785153600"}),
     ],
 )
 def test_camera_status_schema_fails_closed_on_malformed_or_contradictory_json(mutate):
@@ -219,6 +220,23 @@ def test_camera_image_requires_declared_content_length():
     async def handler(request: httpx.Request) -> httpx.Response:
         headers = image_headers(JPEG_BYTES)
         del headers["Content-Length"]
+        return httpx.Response(
+            200,
+            headers=headers,
+            stream=CountingStream([JPEG_BYTES]),
+            request=request,
+        )
+
+    client = BioXpRobotClient(target(), transport=CameraTransport(handler))
+    with pytest.raises(RobotTransportError, match="content length"):
+        asyncio.run(client.camera_latest())
+    asyncio.run(client.close())
+
+
+def test_camera_image_rejects_plus_prefixed_content_length_grammar():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        headers = image_headers(JPEG_BYTES)
+        headers["Content-Length"] = f"+{len(JPEG_BYTES)}"
         return httpx.Response(
             200,
             headers=headers,

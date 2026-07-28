@@ -58,6 +58,10 @@ MAX_CAMERA_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_CAMERA_STATUS_BYTES = 64 * 1024
 MAX_CAMERA_ERROR_BYTES = 1000
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_UTC_ISO8601_RE = re.compile(
+    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
+    r"(?:\.[0-9]{1,6})?(?:Z|\+00:00)$"
+)
 
 
 class _CameraStatusResponse(BaseModel):
@@ -77,7 +81,9 @@ class _CameraStatusResponse(BaseModel):
     @field_validator("frame_captured_at", mode="before")
     @classmethod
     def require_timestamp_wire_string(cls, value: object) -> object:
-        if value is not None and type(value) is not str:
+        if value is not None and (
+            type(value) is not str or _UTC_ISO8601_RE.fullmatch(value) is None
+        ):
             raise ValueError("frame_captured_at must be an ISO-8601 string")
         return value
 
@@ -450,6 +456,8 @@ def _required_bounded_content_length(
     declared = response.headers.get("content-length")
     if declared is None:
         raise RobotTransportError(f"BioXP {label} had no content length")
+    if not declared.isascii() or not declared.isdigit():
+        raise RobotTransportError(f"BioXP {label} had an invalid content length")
     try:
         parsed = int(declared)
     except ValueError as exc:
