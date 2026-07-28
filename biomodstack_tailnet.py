@@ -973,6 +973,39 @@ def _wait_for_adapter_policy(
     return False
 
 
+def ensure_tailnet_control_policy(root: Path = CANONICAL_DEVELOPMENT_ROOT) -> dict[str, object]:
+    """Synchronize the Development-owned selector policy outside selector requests.
+
+    This is called by the global Tailnet oneshot before Development's launch
+    surface is accepted. An already-correct adapter is left untouched; a stale
+    active adapter is restarted from the newly installed canonical policy.
+    """
+    canonical_root = root.resolve()
+    _validate_canonical_environment_root(canonical_root, "development")
+    revision = _git_revision(canonical_root)
+    login = _install_adapter_control_policy(canonical_root, revision)
+    daemon_reload(project_root=canonical_root)
+    restarted = False
+    if service_is_active(WORKFLOW_ADAPTER_SERVICE, project_root=canonical_root):
+        if not _adapter_identity_policy_matches(
+            canonical_root, login, runtime_revision=revision
+        ):
+            run_systemctl(
+                "restart", WORKFLOW_ADAPTER_SERVICE, project_root=canonical_root
+            )
+            restarted = True
+            if not _wait_for_adapter_policy(canonical_root, login, revision, timeout_seconds=90.0):
+                raise TailnetEnvironmentError(
+                    "workflow adapter did not restart from canonical authenticated source"
+                )
+    return {
+        "source_root": str(canonical_root),
+        "source_revision": revision,
+        "allowed_login": login,
+        "adapter_restarted": restarted,
+    }
+
+
 def _wait_for_development_frontend(spec: EnvironmentSpec, root: Path, timeout_seconds: float = 90.0) -> bool:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:

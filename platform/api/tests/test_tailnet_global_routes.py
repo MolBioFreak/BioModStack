@@ -100,3 +100,50 @@ def test_global_tailnet_policy_rejects_conflicting_route_owner_without_mutation(
 
     with pytest.raises(tailnet.TailnetEnvironmentError, match="unexpected target"):
         tailnet.ensure_global_tailnet_routes()
+
+
+def _mock_control_policy_prerequisites(monkeypatch, *, matches: bool) -> list[tuple[str, str]]:
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(tailnet, "_validate_canonical_environment_root", lambda root, environment: None)
+    monkeypatch.setattr(tailnet, "_git_revision", lambda root: "a" * 40)
+    monkeypatch.setattr(
+        tailnet,
+        "_install_adapter_control_policy",
+        lambda root, revision: "operator@example.test",
+    )
+    monkeypatch.setattr(
+        tailnet,
+        "daemon_reload",
+        lambda project_root=None: calls.append(("daemon-reload", str(project_root))),
+    )
+    monkeypatch.setattr(tailnet, "service_is_active", lambda service, project_root=None: True)
+    monkeypatch.setattr(
+        tailnet,
+        "_adapter_identity_policy_matches",
+        lambda root, login, runtime_revision: matches,
+    )
+    monkeypatch.setattr(
+        tailnet,
+        "run_systemctl",
+        lambda action, service, project_root=None: calls.append((action, service)),
+    )
+    monkeypatch.setattr(tailnet, "_wait_for_adapter_policy", lambda *args, **kwargs: True)
+    return calls
+
+
+def test_control_policy_installer_is_idempotent_for_matching_adapter(monkeypatch, tmp_path) -> None:
+    calls = _mock_control_policy_prerequisites(monkeypatch, matches=True)
+
+    report = tailnet.ensure_tailnet_control_policy(tmp_path)
+
+    assert report["adapter_restarted"] is False
+    assert [call for call in calls if call[0] == "restart"] == []
+
+
+def test_control_policy_installer_restarts_stale_active_adapter(monkeypatch, tmp_path) -> None:
+    calls = _mock_control_policy_prerequisites(monkeypatch, matches=False)
+
+    report = tailnet.ensure_tailnet_control_policy(tmp_path)
+
+    assert report["adapter_restarted"] is True
+    assert ("restart", tailnet.WORKFLOW_ADAPTER_SERVICE) in calls
