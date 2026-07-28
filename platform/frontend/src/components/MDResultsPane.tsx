@@ -30,10 +30,14 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
     const [selectedReplica, setSelectedReplica] = useState<number | null>(null);
     const [selectedPoint, setSelectedPoint] = useState<MDAnalysisPoint | null>(null);
     const [selectedDisplayFrame, setSelectedDisplayFrame] = useState<number | null>(null);
+    const [playbackState, setPlaybackState] = useState<'stopped' | 'playing' | 'paused'>('stopped');
+    const [loopPlayback, setLoopPlayback] = useState(true);
     useEffect(() => {
         setSelectedReplica(null);
         setSelectedPoint(null);
         setSelectedDisplayFrame(null);
+        setPlaybackState('stopped');
+        setLoopPlayback(true);
     }, [jobId]);
     const summary = useQuery({ queryKey: ['md-summary', jobId], queryFn: () => fetchMDSummary(jobId) });
     const artifacts = useQuery({ queryKey: ['md-artifacts', jobId], queryFn: () => fetchMDArtifacts(jobId) });
@@ -71,6 +75,20 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
     });
     const reports = analysis.data?.data.reports ?? [];
     const playbackFrames = frameMap.data?.frames ?? [];
+    useEffect(() => {
+        if (playbackState !== 'playing' || playbackFrames.length === 0) return undefined;
+        const timer = window.setInterval(() => {
+            setSelectedDisplayFrame((current) => {
+                const currentIndex = Math.max(0, playbackFrames.findIndex((frame) => frame.display_frame === current));
+                const nextIndex = currentIndex + 1;
+                if (nextIndex < playbackFrames.length) return playbackFrames[nextIndex].display_frame;
+                if (loopPlayback) return playbackFrames[0].display_frame;
+                setPlaybackState('paused');
+                return playbackFrames[currentIndex].display_frame;
+            });
+        }, 500);
+        return () => window.clearInterval(timer);
+    }, [loopPlayback, playbackFrames, playbackState]);
     const selectedFrame = (
         (selectedDisplayFrame == null
             ? undefined
@@ -98,7 +116,7 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
             }],
             playbackCapability,
             playback: {
-                state: playbackCapability.supported ? 'stopped' : 'unsupported',
+                state: playbackCapability.supported ? playbackState : 'unsupported',
                 selectedFrame: playbackCapability.supported && selectedFrame ? {
                     replica: activeReplica,
                     displayFrame: selectedFrame.display_frame,
@@ -106,10 +124,10 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
                     timePs: selectedFrame.time_ps,
                     step: selectedFrame.step,
                 } : undefined,
-                framesPerSecond: 0,
+                framesPerSecond: playbackState === 'playing' ? 2 : 0,
             },
         };
-    }, [activeReplica, artifacts.data?.data.artifacts, playbackCapability, selectedFrame, summary.data]);
+    }, [activeReplica, artifacts.data?.data.artifacts, playbackCapability, playbackState, selectedFrame, summary.data]);
     const traces = useMemo<Data[]>(() => reports
         .filter((report) => report.status === 'completed' && report.replica != null && report.points?.length)
         .map((report) => ({
@@ -181,13 +199,19 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
                     <div className="mb-3 flex items-center justify-between"><h2 className="font-semibold text-white">Replica final structure</h2>{finalStructures.length > 1 && <select value={finalStructure?.replica ?? ''} onChange={(event) => setSelectedReplica(Number(event.target.value))} className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-sm">{finalStructures.map((item) => <option key={item.id} value={item.replica}>Replica {item.replica}</option>)}</select>}</div>
                     {(finalStructure || molecularDynamics) ? <MolstarViewer structureUrl={finalStructure?.content_url ?? ''} format={finalStructure ? (finalStructure.format === 'cif' || finalStructure.format === 'mmcif' ? 'cif' : 'pdb') : 'pdb'} height={390} label={finalStructure ? `MD replica ${finalStructure.replica} final structure` : 'MD GRO+XTC trajectory'} showMetricWorkbench={false} molecularDynamics={molecularDynamics} artifactJobId={jobId} /> : <div className="py-20 text-center text-slate-400">No checksum-bound PDB/mmCIF final structure or GRO+XTC trajectory is available.</div>}
                     {summaryData.trajectory_playback.supported && playbackFrames.length > 0 && selectedFrame && <div className="mt-3 rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-3 py-3 text-xs text-cyan-100">
+                        <div className="mb-2 flex flex-wrap gap-2" aria-label="Governed trajectory playback controls">
+                            {playbackState === 'playing'
+                                ? <button type="button" data-bms-md-playback="pause" onClick={() => setPlaybackState('paused')} className="rounded border border-cyan-400/50 bg-cyan-500/10 px-3 py-1 font-medium text-cyan-50">Pause</button>
+                                : <button type="button" data-bms-md-playback="play" onClick={() => setPlaybackState('playing')} className="rounded border border-cyan-400/50 bg-cyan-500/10 px-3 py-1 font-medium text-cyan-50">Play</button>}
+                            <button type="button" aria-pressed={loopPlayback} onClick={() => setLoopPlayback((enabled) => !enabled)} className="rounded border border-slate-600 bg-slate-950/50 px-3 py-1 text-slate-200">Loop {loopPlayback ? 'on' : 'off'}</button>
+                        </div>
                         <div className="flex flex-wrap gap-2" aria-label="Governed trajectory display frames">
                             {playbackFrames.map((frame) => <button
                                 key={frame.display_frame}
                                 type="button"
                                 data-bms-md-display-frame={frame.display_frame}
                                 aria-pressed={frame.display_frame === selectedFrame.display_frame}
-                                onClick={() => setSelectedDisplayFrame(frame.display_frame)}
+                                onClick={() => { setPlaybackState('paused'); setSelectedDisplayFrame(frame.display_frame); }}
                                 className={`rounded border px-2 py-1 ${frame.display_frame === selectedFrame.display_frame ? 'border-cyan-300 bg-cyan-400/20 text-white' : 'border-slate-600 bg-slate-950/50 text-slate-300 hover:border-cyan-500/60'}`}
                             >{frame.display_frame}</button>)}
                         </div>
