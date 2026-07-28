@@ -389,8 +389,9 @@ async def get_install_features(request: Request):
 
 
 @router.get("/stats-toolkit")
-async def get_stats_toolkit_status(request: Request):
-    _require_local_admin(request)
+async def get_stats_toolkit_status():
+    # Read-only add-on discovery is safe on the Tailnet launch surface. Mutating
+    # system-admin routes remain loopback-only.
     return probe_stats_addon()
 
 

@@ -31,6 +31,7 @@ from biomodstack_services import (
 from biomodstack_tailnet import (
     TailnetEnvironmentError,
     current_tailnet_environment,
+    ensure_global_tailnet_routes,
     select_tailnet_environment,
 )
 from mobile_apk_auth import require_tailnet_environment_tailscale_identity
@@ -221,6 +222,7 @@ async def workflow_adapter_select_tailnet_environment(
 ) -> dict[str, object]:
     _require_local_adapter_request(request)
     try:
+        await asyncio.to_thread(ensure_global_tailnet_routes)
         return await asyncio.to_thread(select_tailnet_environment, payload.environment)
     except TailnetEnvironmentError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

@@ -79,9 +79,11 @@ test('layout exposes one far-left diagnostics top-bar entry with copy support', 
   assert.match(layoutSource, /Diagnostics/);
   assert.match(layoutSource, /Surface \+ API/);
   assert.match(layoutSource, /Runtime channel/);
-  assert.match(layoutSource, /Switch \+ start/);
-  assert.match(layoutSource, /Switch to Vite dev/);
-  assert.match(layoutSource, /Switch to stable \/bms\//);
+  assert.match(layoutSource, /Tailnet environment/);
+  assert.match(layoutSource, /Switch to Development/);
+  assert.match(layoutSource, /Switch to Production/);
+  assert.match(layoutSource, /readTailnetEnvironmentStatus/);
+  assert.match(layoutSource, /selectTailnetRuntimeEnvironment/);
   assert.match(layoutSource, /navigator\.clipboard\.writeText/);
   assert.match(layoutSource, /window\.biomodstack\.getShellContext/);
   assert.match(layoutSource, /window\.biomodstack\.switchRuntime/);

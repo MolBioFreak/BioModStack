@@ -30,6 +30,7 @@ from biomodstack_runtime_profile import (
 API_SERVICE = "biomodstack-api.service"
 FRONTEND_SERVICE = "biomodstack-frontend.service"
 WORKFLOW_ADAPTER_SERVICE = "biomodstack-workflow-adapter.service"
+TAILNET_GLOBAL_SERVICE = "biomodstack-tailnet-global.service"
 CORE_RUNTIME_SERVICE = "biomodstack-core-runtime.service"
 TARGET_UNIT = "biomodstack.target"
 DEV_TARGET_UNIT = "biomodstack-dev.target"
@@ -1037,6 +1038,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
 
     api_runner = root / "scripts" / "run_biomodstack_api.sh"
     frontend_runner = root / "scripts" / "run_biomodstack_frontend.sh"
+    tailnet_global_installer = root / "scripts" / "install_tailnet_global_routes.py"
     dev_api_host_port = runtime_api_port(DEV_RUNTIME_MODE, project_root=root)
     dev_web_host_port = runtime_frontend_port(DEV_RUNTIME_MODE, project_root=root)
     dev_data_root = str(resolved.get("dev_data_root", Path.home() / ".biomodstack-dev"))
@@ -1049,6 +1051,25 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     dev_sabdab_cache_dir = str(resolved.get("dev_sabdab_cache_dir", Path(dev_data_root) / "sabdab_cache"))
     api_limits = render_systemd_resource_boundaries(API_SERVICE).replace("\n", "\n        ")
     frontend_limits = render_systemd_resource_boundaries(FRONTEND_SERVICE).replace("\n", "\n        ")
+
+    tailnet_global_unit = dedent(
+        f"""\
+        [Unit]
+        Description=BioModStack global Tailnet launch-surface policy
+        After=network-online.target
+        Wants=network-online.target
+        Before={FRONTEND_SERVICE}
+
+        [Service]
+        Type=oneshot
+        Environment=BMS_HOME={root}
+        ExecStart=/usr/bin/env python3 {tailnet_global_installer}
+        TimeoutStartSec=30
+
+        [Install]
+        WantedBy={DEV_TARGET_UNIT}
+        """
+    )
 
     api_unit = dedent(
         f"""\
@@ -1102,7 +1123,8 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         [Unit]
         Description=BioModStack frontend dev service
         PartOf={DEV_TARGET_UNIT}
-        After=network-online.target
+        Requires={TAILNET_GLOBAL_SERVICE}
+        After=network-online.target {TAILNET_GLOBAL_SERVICE}
         Wants=network-online.target
         StartLimitIntervalSec=300
         StartLimitBurst=3
@@ -1136,7 +1158,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         f"""\
         [Unit]
         Description=BioModStack development UI target
-        Wants={API_SERVICE} {FRONTEND_SERVICE}
+        Wants={API_SERVICE} {FRONTEND_SERVICE} {TAILNET_GLOBAL_SERVICE}
 
         [Install]
         WantedBy=default.target
@@ -1146,6 +1168,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     return {
         API_SERVICE: api_unit,
         FRONTEND_SERVICE: frontend_unit,
+        TAILNET_GLOBAL_SERVICE: tailnet_global_unit,
         DEV_TARGET_UNIT: target_unit,
     }
 

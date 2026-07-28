@@ -26,6 +26,10 @@ import {
     useBmsFeatureState,
     useBmsFeatures,
 } from '../runtime/installFeatures';
+import {
+    readTailnetEnvironmentStatus,
+    type TailnetEnvironmentStatus,
+} from '../runtime/tailnetEnvironment';
 import { ThemeSelector } from './ThemeSelector';
 import { buildIdentity } from '../lib/buildIdentity';
 
@@ -715,6 +719,8 @@ function DiagnosticsMenu() {
     const [copyStatus, setCopyStatus] = useState<string | null>(null);
     const [runtimeAction, setRuntimeAction] = useState<string | null>(null);
     const [runtimeMessage, setRuntimeMessage] = useState<string | null>(null);
+    const [tailnetEnvironment, setTailnetEnvironment] = useState<TailnetEnvironmentStatus | null>(null);
+    const [tailnetStatusLoading, setTailnetStatusLoading] = useState(false);
 
     const refreshDiagnostics = async (): Promise<UiDiagnosticsPayload | null> => {
         setLoading(true);
@@ -748,6 +754,34 @@ function DiagnosticsMenu() {
         void refreshDiagnostics();
     }, [diagnostics, isOpen, loading]);
 
+    useEffect(() => {
+        if (!isOpen) {
+            return;
+        }
+        let cancelled = false;
+        setTailnetStatusLoading(true);
+        void readTailnetEnvironmentStatus()
+            .then((status) => {
+                if (!cancelled) {
+                    setTailnetEnvironment(status);
+                }
+            })
+            .catch((error) => {
+                if (!cancelled) {
+                    setTailnetEnvironment(null);
+                    setRuntimeMessage(`Tailnet environment status failed: ${error instanceof Error ? error.message : String(error)}`);
+                }
+            })
+            .finally(() => {
+                if (!cancelled) {
+                    setTailnetStatusLoading(false);
+                }
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [isOpen]);
+
     const handleCopyDiagnostics = async () => {
         const payload = diagnostics ?? await refreshDiagnostics();
         if (!payload) {
@@ -774,6 +808,14 @@ function DiagnosticsMenu() {
         setRuntimeAction(`switch-${targetMode}`);
         setRuntimeMessage(null);
         try {
+            if (tailnetEnvironment) {
+                const environment = targetMode === 'dev' ? 'development' : 'production';
+                await selectTailnetRuntimeEnvironment(targetMode);
+                setTailnetEnvironment({ ...tailnetEnvironment, selected_environment: environment });
+                setRuntimeMessage(`Selected Tailnet environment: ${environment}`);
+                window.location.assign(new URL('/', window.location.origin).toString());
+                return;
+            }
             if (window.biomodstack?.switchRuntime) {
                 await window.biomodstack.switchRuntime(targetMode);
                 return;
@@ -859,31 +901,41 @@ function DiagnosticsMenu() {
                         <div className="rounded-lg border border-slate-700 bg-slate-950/40 p-3 space-y-2">
                             <div className="flex items-center justify-between gap-3">
                                 <div>
-                                    <p className="text-xs font-semibold text-slate-200">Runtime channel</p>
-                                    <p className="text-[11px] text-slate-400">Switch + start</p>
+                                    <p className="text-xs font-semibold text-slate-200">
+                                        {tailnetEnvironment ? 'Tailnet environment' : 'Runtime channel'}
+                                    </p>
+                                    <p className="text-[11px] text-slate-400">
+                                        {tailnetStatusLoading
+                                            ? 'Checking global selector…'
+                                            : tailnetEnvironment
+                                                ? `Selected: ${tailnetEnvironment.selected_environment}`
+                                                : 'Local runtime switch + start'}
+                                    </p>
                                 </div>
-                                <button
-                                    onClick={() => void handleStartRuntimeTarget('both')}
-                                    disabled={runtimeAction !== null}
-                                    className="px-2 py-1 rounded border border-slate-600 text-[11px] text-slate-200 disabled:opacity-50 hover:bg-slate-800"
-                                >
-                                    {runtimeAction === 'start-both' ? 'Starting…' : 'Start Dev + Stable'}
-                                </button>
+                                {!tailnetEnvironment && !tailnetStatusLoading && (
+                                    <button
+                                        onClick={() => void handleStartRuntimeTarget('both')}
+                                        disabled={runtimeAction !== null}
+                                        className="px-2 py-1 rounded border border-slate-600 text-[11px] text-slate-200 disabled:opacity-50 hover:bg-slate-800"
+                                    >
+                                        {runtimeAction === 'start-both' ? 'Starting…' : 'Start Dev + Stable'}
+                                    </button>
+                                )}
                             </div>
                             <div className="flex flex-wrap gap-2">
                                 <button
                                     onClick={() => void handleSwitchRuntime('dev')}
-                                    disabled={runtimeAction !== null}
+                                    disabled={runtimeAction !== null || tailnetStatusLoading || tailnetEnvironment?.selected_environment === 'development'}
                                     className="px-3 py-1.5 rounded-lg text-xs font-medium bg-sky-700 text-white hover:bg-sky-600 disabled:opacity-50"
                                 >
-                                    {runtimeAction === 'switch-dev' ? 'Switching…' : 'Switch to Vite dev'}
+                                    {runtimeAction === 'switch-dev' ? 'Switching…' : 'Switch to Development'}
                                 </button>
                                 <button
                                     onClick={() => void handleSwitchRuntime('container')}
-                                    disabled={runtimeAction !== null}
+                                    disabled={runtimeAction !== null || tailnetStatusLoading || tailnetEnvironment?.selected_environment === 'production'}
                                     className="px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-700 text-white hover:bg-indigo-600 disabled:opacity-50"
                                 >
-                                    {runtimeAction === 'switch-container' ? 'Switching…' : 'Switch to stable /bms/'}
+                                    {runtimeAction === 'switch-container' ? 'Switching…' : 'Switch to Production'}
                                 </button>
                             </div>
                             {runtimeMessage && <p className="text-[11px] text-slate-300">{runtimeMessage}</p>}
