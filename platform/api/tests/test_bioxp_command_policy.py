@@ -63,7 +63,7 @@ def test_disabled_default_definition_fails_before_transport_admission() -> None:
     assert any("online contract" in reason.lower() for reason in decision.reasons)
 
 
-def test_usb_activation_requires_fresh_api_probe_but_rejects_already_active_runtime() -> None:
+def test_retired_usb_activation_is_denied_for_every_runtime_state() -> None:
     parse, Context, evaluate, registry = _load()
     request = parse({
         "command": "activate_usb_for_service",
@@ -78,15 +78,16 @@ def test_usb_activation_requires_fresh_api_probe_but_rejects_already_active_runt
         hardware_ready=None,
         capabilities=frozenset(),
     )
-    assert evaluate(request, definition, inactive).allowed is True
-
-    stale_api = replace(inactive, observation_fresh=False)
-    assert evaluate(request, definition, stale_api).allowed is False
-
-    active_runtime = replace(inactive, runtime_ready=True)
-    decision = evaluate(request, definition, active_runtime)
-    assert decision.allowed is False
-    assert "already active" in " ".join(decision.reasons).lower()
+    for context in (
+        inactive,
+        replace(inactive, observation_fresh=False),
+        replace(inactive, runtime_ready=True),
+    ):
+        decision = evaluate(request, definition, context)
+        assert decision.allowed is False
+        assert decision.reasons[0] == (
+            "robot-contract-unavailable: unsupported by the exact robot runtime contract"
+        )
 
 
 def test_hardware_snapshot_requires_service_runtime_ownership() -> None:

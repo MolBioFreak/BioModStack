@@ -160,7 +160,7 @@ def test_idempotency_returns_structured_prior_result_without_redelivery() -> Non
     asyncio.run(scenario())
 
 
-def test_activation_idempotent_replay_precedes_changed_runtime_admission() -> None:
+def test_legacy_activation_replay_semantics_require_an_explicit_non_default_mapping() -> None:
     from services.bioxp.command_coordinator import CommandDeniedError
 
     _, Coordinator, parse, registry, Snapshot = _load()
@@ -184,7 +184,14 @@ def test_activation_idempotent_replay_precedes_changed_runtime_admission() -> No
         )
         connection = FakeConnection(snapshot, client)
         client.connection = connection
-        coordinator = Coordinator(connection, registry)
+        definitions = dict(registry)
+        definitions["activate_usb_for_service"] = replace(
+            definitions["activate_usb_for_service"],
+            enabled=True,
+            route_key="activate_usb_for_service",
+            disabled_reason="",
+        )
+        coordinator = Coordinator(connection, definitions)
         request = parse({
             "command": "activate_usb_for_service",
             "expected_generation": 4,

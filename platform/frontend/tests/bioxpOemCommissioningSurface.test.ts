@@ -6,18 +6,18 @@ import test from 'node:test';
 const cockpit = readFileSync(resolve('src/components/BioXpCockpit.tsx'), 'utf8');
 const client = readFileSync(resolve('src/lib/bioxpClient.ts'), 'utf8');
 
-test('OEM startup is one operator action while internal stage evidence remains visible', () => {
+test('retired OEM startup remains display-only lifecycle evidence', () => {
     for (const marker of [
-        'Initialize BioXP OEM Environment',
-        'initialize_oem_environment',
+        'OEM Startup Lifecycle',
         'constructor_pipette_stage',
         'initialization_without_motion',
         'initial_check',
-        'stops before initializeSystem, homing, or axis motion',
     ]) {
         assert.match(cockpit, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     }
     for (const retiredControl of [
+        'Initialize BioXP OEM Environment',
+        'initialize_oem_environment',
         'Initialize/Verify Four Pipette Controllers',
         'Initialize Controllers Without Motion',
         'Run OEM Initial Check',
@@ -29,10 +29,9 @@ test('OEM startup is one operator action while internal stage evidence remains v
     }
 });
 
-test('OEM startup uses a click-time confirmation instead of a typed acknowledgement gate', () => {
-    assert.match(cockpit, /window\.confirm/);
-    assert.match(cockpit, /Run the complete OEM non-motion startup sequence/);
-    assert.match(cockpit, /operator_ack: 'INITIALIZE'/);
+test('retired OEM startup has no acknowledgement or click-time command producer', () => {
+    assert.doesNotMatch(cockpit, /Run the complete OEM non-motion startup sequence/);
+    assert.doesNotMatch(cockpit, /operator_ack: 'INITIALIZE'/);
     assert.doesNotMatch(cockpit, /Type INITIALIZE to acknowledge/);
     assert.doesNotMatch(cockpit, /oemStartupAck/);
 });

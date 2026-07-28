@@ -26,9 +26,9 @@ test('BioXP shows maintenance state and a deliberate non-homing recovery action'
   assert.match(cockpitSource, /operator_ack: 'RECOVER_MOTION'/)
 })
 
-test('BioXP uses API command availability for movement and visibly blocks lifecycle planning', () => {
-  assert.match(cockpitSource, /availableCommands\.has\('run_axis_diagnostic'\)/)
-  assert.match(cockpitSource, /availableCommands\.has\('run_oem_motor_stage'\)/)
+test('BioXP uses only finite axis command availability for movement and visibly blocks lifecycle planning', () => {
+  assert.match(cockpitSource, /const serverMovementAvailable = availableCommands\.has\('run_axis_diagnostic'\);/)
+  assert.doesNotMatch(cockpitSource, /availableCommands\.has\('run_oem_motor_stage'\)/)
   assert.match(cockpitSource, /maintenanceMotionBlocked/)
   assert.match(cockpitSource, /disabled=\{[^}]*maintenanceMotionBlocked/)
   assert.match(cockpitSource, /Lifecycle planning is blocked while maintenance motion is blocked/)

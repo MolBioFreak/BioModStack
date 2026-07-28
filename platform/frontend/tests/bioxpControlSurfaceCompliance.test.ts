@@ -23,15 +23,18 @@ test('BioXP page is status-first and command controls are server-driven', () => 
     assert.doesNotMatch(`${cockpit}\n${interlinkStatus}`, /collect an explicit snapshot before hardware-dependent writes|never restored automatically|SAVED \/ DISCONNECTED is expected after an API restart/);
 });
 
-test('canonical compact page labels the current commissioning tranche without reviving legacy controls', () => {
-    const combined = `${cockpit}\n${client}`;
-    for (const marker of [
-        'Collect Hardware Snapshot',
+test('canonical compact page keeps only the supported snapshot commissioning control', () => {
+    assert.match(cockpit, /Collect Hardware Snapshot/);
+    for (const retired of [
         'Activate USB for BioXP Service',
         'Initialize BioXP OEM Environment',
+        'activate_usb_for_service',
+        'initialize_oem_environment',
+        'run_oem_motor_stage',
+        'record_oem_motor_stage_observation',
         'INITIALIZE',
     ]) {
-        assert.match(combined, new RegExp(marker));
+        assert.doesNotMatch(cockpit, new RegExp(retired));
     }
 });
 

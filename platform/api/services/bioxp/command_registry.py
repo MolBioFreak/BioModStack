@@ -41,17 +41,21 @@ class CommandDefinition:
 
 
 _UNVERIFIED = "Disabled until the robot-online contract and OEM mapping are verified"
+_ROBOT_CONTRACT_UNAVAILABLE = (
+    "robot-contract-unavailable: unsupported by the exact robot runtime contract"
+)
 
 DEFAULT_COMMAND_REGISTRY: Mapping[CommandName, CommandDefinition] = MappingProxyType(
     {
         "activate_usb_for_service": CommandDefinition(
             name="activate_usb_for_service",
-            enabled=True,
-            route_key="activate_usb_for_service",
+            enabled=False,
+            route_key=None,
             required_capability=None,
             requires_runtime_ready=False,
             requires_hardware_ready=False,
             requires_runtime_inactive=True,
+            disabled_reason=_ROBOT_CONTRACT_UNAVAILABLE,
         ),
         "collect_hardware_snapshot": CommandDefinition(
             name="collect_hardware_snapshot",
@@ -64,10 +68,11 @@ DEFAULT_COMMAND_REGISTRY: Mapping[CommandName, CommandDefinition] = MappingProxy
         ),
         "initialize_oem_environment": CommandDefinition(
             name="initialize_oem_environment",
-            enabled=True,
-            route_key="initialize_oem_environment",
-            required_capability="initialize_oem_environment",
+            enabled=False,
+            route_key=None,
+            required_capability=None,
             requires_hardware_ready=True,
+            disabled_reason=_ROBOT_CONTRACT_UNAVAILABLE,
             required_lifecycle_states=(
                 ("constructor_pipette_stage", "not_run"),
                 ("initialization_without_motion", "blocked"),
@@ -76,20 +81,22 @@ DEFAULT_COMMAND_REGISTRY: Mapping[CommandName, CommandDefinition] = MappingProxy
         ),
         "run_oem_motor_stage": CommandDefinition(
             name="run_oem_motor_stage",
-            enabled=True,
-            route_key="run_oem_motor_stage",
-            required_capability="run_oem_motor_stage",
+            enabled=False,
+            route_key=None,
+            required_capability=None,
             requires_hardware_ready=True,
+            disabled_reason=_ROBOT_CONTRACT_UNAVAILABLE,
             required_lifecycle_states=(("initial_check", "passed"),),
             maintenance_policy="motion_unblocked",
         ),
         "record_oem_motor_stage_observation": CommandDefinition(
             name="record_oem_motor_stage_observation",
-            enabled=True,
-            route_key="record_oem_motor_stage_observation",
-            required_capability="run_oem_motor_stage",
+            enabled=False,
+            route_key=None,
+            required_capability=None,
             requires_runtime_ready=True,
             requires_hardware_ready=False,
+            disabled_reason=_ROBOT_CONTRACT_UNAVAILABLE,
             required_lifecycle_states=(("initial_check", "passed"),),
         ),
         "collect_axis_diagnostics": CommandDefinition(

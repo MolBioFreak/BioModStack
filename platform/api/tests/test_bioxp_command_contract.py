@@ -130,11 +130,7 @@ def test_default_registry_exposes_only_current_compact_commissioning_mappings() 
         "recover_runtime",
     }
     enabled = {
-        "activate_usb_for_service": "activate_usb_for_service",
         "collect_hardware_snapshot": "collect_hardware_snapshot",
-        "initialize_oem_environment": "initialize_oem_environment",
-        "run_oem_motor_stage": "run_oem_motor_stage",
-        "record_oem_motor_stage_observation": "record_oem_motor_stage_observation",
         "collect_axis_diagnostics": "collect_axis_diagnostics",
         "run_axis_diagnostic": "run_axis_diagnostic",
         "stop_axis_diagnostic": "stop_axis_diagnostic",
@@ -143,26 +139,22 @@ def test_default_registry_exposes_only_current_compact_commissioning_mappings() 
     for name, route_key in enabled.items():
         assert registry[name].enabled is True
         assert registry[name].route_key == route_key
-        expected_capability = (
-            None if name == "activate_usb_for_service"
-            else "run_oem_motor_stage" if name == "record_oem_motor_stage_observation"
-            else name
+        assert registry[name].required_capability == name
+
+    retired = {
+        "activate_usb_for_service",
+        "initialize_oem_environment",
+        "run_oem_motor_stage",
+        "record_oem_motor_stage_observation",
+    }
+    for name in retired:
+        assert registry[name].enabled is False
+        assert registry[name].route_key is None
+        assert registry[name].disabled_reason == (
+            "robot-contract-unavailable: unsupported by the exact robot runtime contract"
         )
-        assert registry[name].required_capability == expected_capability
 
-    assert registry["initialize_oem_environment"].requires_hardware_ready is True
-    assert registry["run_oem_motor_stage"].requires_hardware_ready is True
-    assert registry["record_oem_motor_stage_observation"].requires_hardware_ready is False
-    assert registry["record_oem_motor_stage_observation"].required_capability == "run_oem_motor_stage"
-    assert registry["initialize_oem_environment"].required_lifecycle_states == (
-        ("constructor_pipette_stage", "not_run"),
-        ("initialization_without_motion", "blocked"),
-        ("initial_check", "blocked"),
-    )
-    assert registry["activate_usb_for_service"].required_capability is None
-    assert registry["activate_usb_for_service"].requires_runtime_inactive is True
-
-    for name in set(registry) - set(enabled):
+    for name in set(registry) - set(enabled) - retired:
         assert registry[name].enabled is False
         assert registry[name].route_key is None
         assert "online contract" in registry[name].disabled_reason.lower()
@@ -197,7 +189,9 @@ def test_current_commissioning_command_payloads_are_typed_and_oem_startup_requir
         })
 
 
-def test_oem_motor_stage_requires_advertised_capability_and_translates_to_queued_robot_envelope() -> None:
+def test_legacy_oem_motor_stage_translation_remains_isolated_from_the_default_registry() -> None:
+    from dataclasses import replace
+
     from services.bioxp.command_coordinator import CommandCoordinator, CommandDeniedError
     from services.bioxp.command_models import parse_command_request
     from services.bioxp.command_registry import DEFAULT_COMMAND_REGISTRY
@@ -247,15 +241,23 @@ def test_oem_motor_stage_requires_advertised_capability_and_translates_to_queued
         "mode": "live",
         "operator_ack": "HOME",
     })
+    legacy_registry = dict(DEFAULT_COMMAND_REGISTRY)
+    legacy_registry["run_oem_motor_stage"] = replace(
+        legacy_registry["run_oem_motor_stage"],
+        enabled=True,
+        route_key="run_oem_motor_stage",
+        required_capability="run_oem_motor_stage",
+        disabled_reason="",
+    )
 
     async def scenario():
         missing = Connection(("collect_hardware_snapshot",))
         with pytest.raises(CommandDeniedError, match="Required capability is unavailable"):
-            await CommandCoordinator(missing, DEFAULT_COMMAND_REGISTRY).execute(request, mutations_enabled=True)
+            await CommandCoordinator(missing, legacy_registry).execute(request, mutations_enabled=True)
         assert missing.active_client.calls == []
 
         admitted = Connection(("collect_hardware_snapshot", "run_oem_motor_stage"))
-        record = await CommandCoordinator(admitted, DEFAULT_COMMAND_REGISTRY).execute(request, mutations_enabled=True)
+        record = await CommandCoordinator(admitted, legacy_registry).execute(request, mutations_enabled=True)
         assert record.status == "queued"
         assert record.remote_acknowledged is True
         assert record.physical_effect_verified is False
@@ -280,7 +282,7 @@ def test_oem_motor_stage_requires_advertised_capability_and_translates_to_queued
             )
             rejected = await CommandCoordinator(
                 malformed,
-                DEFAULT_COMMAND_REGISTRY,
+                legacy_registry,
             ).execute(request, mutations_enabled=True)
             assert rejected.status == "delivery_failed"
             assert rejected.remote_acknowledged is False
@@ -289,7 +291,9 @@ def test_oem_motor_stage_requires_advertised_capability_and_translates_to_queued
     asyncio.run(scenario())
 
 
-def test_oem_motor_stage_observation_is_typed_non_motion_and_uses_the_same_robot_queue() -> None:
+def test_legacy_oem_stage_observation_translation_remains_isolated_from_the_default_registry() -> None:
+    from dataclasses import replace
+
     from services.bioxp.command_coordinator import CommandCoordinator
     from services.bioxp.command_models import parse_command_request
     from services.bioxp.command_registry import DEFAULT_COMMAND_REGISTRY
@@ -336,10 +340,17 @@ def test_oem_motor_stage_observation_is_typed_non_motion_and_uses_the_same_robot
         "operator_ack": "OBSERVE",
         "operator_note": "Observed Z reference complete.",
     })
+    legacy_registry = dict(DEFAULT_COMMAND_REGISTRY)
+    legacy_registry["record_oem_motor_stage_observation"] = replace(
+        legacy_registry["record_oem_motor_stage_observation"],
+        enabled=True,
+        route_key="record_oem_motor_stage_observation",
+        disabled_reason="",
+    )
 
     async def scenario():
         connection = Connection()
-        record = await CommandCoordinator(connection, DEFAULT_COMMAND_REGISTRY).execute(request, mutations_enabled=True)
+        record = await CommandCoordinator(connection, legacy_registry).execute(request, mutations_enabled=True)
         assert record.status == "queued"
         assert record.remote_acknowledged is True
         assert record.physical_effect_verified is False

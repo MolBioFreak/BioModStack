@@ -78,7 +78,9 @@ class CommandCoordinator:
     ) -> CommandRecord:
         definition = self.registry[request.command]
         if not definition.enabled:
-            raise CommandDeniedError((f"command {request.command} is disabled",))
+            raise CommandDeniedError((
+                definition.disabled_reason or f"command {request.command} is disabled",
+            ))
         # A component stop is an interrupt lane, not a normal workflow. It must
         # be deliverable while the generation lease is held by an in-flight
         # diagnostic; reconnect/disconnect are already excluded by that lease.

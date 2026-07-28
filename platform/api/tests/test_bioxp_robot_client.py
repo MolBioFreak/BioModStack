@@ -118,7 +118,7 @@ def test_robot_transport_rejects_unresolved_targets() -> None:
         raise AssertionError("unresolved target must fail closed")
 
 
-def test_robot_client_routes_only_current_compact_commissioning_contracts() -> None:
+def test_robot_client_routes_only_supported_compact_commissioning_contracts() -> None:
     target = ValidatedBioXpTarget(
         api_url="http://robot:8123",
         scheme="http",
@@ -128,12 +128,22 @@ def test_robot_client_routes_only_current_compact_commissioning_contracts() -> N
     )
     client = BioXpRobotClient(target, transport=RecordingTransport())
 
-    assert client.routes["activate_usb_for_service"][:2] == ("POST", "/oem/runtime/activate_service")
-    assert client.routes["activate_usb_for_service"][2] >= 90.0
+    for retired in (
+        "activate_usb_for_service",
+        "initialize_oem_environment",
+        "run_oem_motor_stage",
+        "record_oem_motor_stage_observation",
+    ):
+        assert retired not in client.routes
     assert client.routes["collect_hardware_snapshot"][:2] == ("POST", "/hardware/snapshot/collect")
-    assert client.routes["initialize_oem_environment"][:2] == ("POST", "/oem/startup/initialize_environment")
-    assert client.routes["initialize_oem_environment"][2] >= 460.0
     assert client.routes["collect_hardware_snapshot"][2] >= 195.0
+    for command in (
+        "collect_axis_diagnostics",
+        "run_axis_diagnostic",
+        "stop_axis_diagnostic",
+        "recover_motion_non_homing",
+    ):
+        assert command in client.routes
 
     asyncio.run(client.close())
 

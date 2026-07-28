@@ -56,16 +56,26 @@ export function isBioXpControlPlaneFresh(
         && localFreshnessMetadata(connection, nowMs) === 'fresh';
 }
 
+const RETIRED_BIOXP_COMMANDS = new Set([
+    'activate_usb_for_service',
+    'initialize_oem_environment',
+    'run_oem_motor_stage',
+    'record_oem_motor_stage_observation',
+]);
+
 export function isBioXpCommandAvailable(
     availableCommands: readonly string[] | undefined,
     command: string,
     displayState: BioXpDisplayState | undefined,
 ): boolean {
     void displayState;
+    // These names are retained only for parsing historical records. A stale or
+    // mismatched server must never reactivate their operator surfaces.
+    if (RETIRED_BIOXP_COMMANDS.has(command)) return false;
     const serverAdmitted = availableCommands?.includes(command) === true;
     // The server has already evaluated lifecycle, freshness, runtime,
-    // hardware, capability, and mutation policy. Display labels are operator
-    // summaries and must not impose a second, broader admission policy.
+    // hardware, capability, and mutation policy for supported commands.
+    // Display labels must not impose a second, broader admission policy.
     return serverAdmitted;
 }
 

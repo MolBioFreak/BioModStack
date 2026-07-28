@@ -29,10 +29,7 @@ function EvidenceValue({ value }: { value: boolean | null }) {
     return <span className={value ? 'text-emerald-300' : 'text-red-300'}>{value ? 'YES' : 'NO'}</span>;
 }
 
-type CommissioningCommandName =
-    | 'activate_usb_for_service'
-    | 'collect_hardware_snapshot'
-    | 'initialize_oem_environment';
+type CommissioningCommandName = 'collect_hardware_snapshot';
 
 type AxisDiagnosticAxis = 'x' | 'y' | 'z' | 'g' | 'door';
 type AxisDiagnosticOperation =
@@ -117,22 +114,10 @@ const COMMISSIONING_COMMANDS: ReadonlyArray<{
     lifecycleStage?: string;
 }> = [
     {
-        command: 'activate_usb_for_service',
-        label: 'Activate USB for BioXP Service',
-        detail: 'Claims the Novo USB runtime for the managed service. It does not snapshot, initialize, recover motion, home, or move hardware; motion remains blocked after activation.',
-        tone: 'write',
-    },
-    {
         command: 'collect_hardware_snapshot',
         label: 'Collect Hardware Snapshot',
         detail: 'Explicit query-only diagnostic refresh. Connect, readiness probes, and synchronous semantic operations collect evidence automatically; this button never moves hardware.',
         tone: 'query',
-    },
-    {
-        command: 'initialize_oem_environment',
-        label: 'Initialize BioXP OEM Environment',
-        detail: 'One OEM-mirrored startup action: initializes and verifies all four pipettes, configures controllers and thermal boards without motion, then runs initialCheck. It stops before initializeSystem, homing, or axis motion.',
-        tone: 'write',
     },
 ];
 
@@ -171,8 +156,7 @@ export function BioXpCockpit() {
         () => new Set(status?.available_commands ?? []),
         [status?.available_commands],
     );
-    const serverMovementAvailable = availableCommands.has('run_axis_diagnostic')
-        || availableCommands.has('run_oem_motor_stage');
+    const serverMovementAvailable = availableCommands.has('run_axis_diagnostic');
     const derived = useMemo(
         () => connection ? deriveBioXpStatus(connection, nowMs) : null,
         [connection, nowMs],
@@ -210,20 +194,14 @@ export function BioXpCockpit() {
     };
 
     const commandPayload = (command: CommissioningCommandName): BioXpCommandPayload => {
-        const base = {
+        return {
             command,
             expected_generation: connection?.generation ?? 0,
             idempotency_key: crypto.randomUUID(),
         };
-        return command === 'initialize_oem_environment'
-            ? { ...base, mode: 'live', operator_ack: 'INITIALIZE' }
-            : base;
     };
 
     const runCommissioningCommand = (command: CommissioningCommandName) => {
-        if (command === 'initialize_oem_environment' && !window.confirm(
-            'Run the complete OEM non-motion startup sequence? This initializes and verifies all four pipettes, configures controllers and thermal boards, and runs initialCheck. It stops before initializeSystem, homing, or axis motion.',
-        )) return;
         executeCommand.mutate(commandPayload(command));
     };
 

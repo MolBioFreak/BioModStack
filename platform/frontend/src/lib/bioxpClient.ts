@@ -140,6 +140,13 @@ export type BioXpCommandName =
     | 'stop_job'
     | 'recover_runtime';
 
+export type BioXpActiveCommandName =
+    | 'collect_hardware_snapshot'
+    | 'collect_axis_diagnostics'
+    | 'run_axis_diagnostic'
+    | 'stop_axis_diagnostic'
+    | 'recover_motion_non_homing';
+
 export type BioXpCommandPayload =
     | {
         command: 'recover_motion_non_homing';
@@ -149,7 +156,7 @@ export type BioXpCommandPayload =
         reason: string;
     }
     | ({
-        command: Exclude<BioXpCommandName, 'recover_motion_non_homing'>;
+        command: Exclude<BioXpActiveCommandName, 'recover_motion_non_homing'>;
         expected_generation: number;
         idempotency_key: string;
     } & Record<string, unknown>);
