@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 from .errors import ConnectionStateError, ProfileStoreError, TargetPolicyError
 from .models import BioXpProfile, BioXpSnapshot
 from .profile_store import BioXpProfileStore
-from .robot_client import BioXpRobotClient
+from .robot_client import BioXpRobotClient, CameraImage
 from .target_policy import BioXpTargetPolicy, ValidatedBioXpTarget
 
 
@@ -28,6 +28,12 @@ class RobotClientProtocol(Protocol):
         params: dict[str, Any] | None = None,
         path_params: dict[str, str] | None = None,
     ) -> dict[str, Any]: ...
+
+    async def camera_status(self) -> dict[str, Any]: ...
+
+    async def camera_latest(self) -> CameraImage: ...
+
+    async def camera_snapshot(self) -> CameraImage: ...
 
     async def close(self) -> None: ...
 

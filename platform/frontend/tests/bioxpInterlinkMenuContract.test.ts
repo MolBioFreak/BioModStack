@@ -23,9 +23,13 @@ test('frontend client contains only compact and typed lifecycle BioXP endpoints'
     const allowed = [
         '/api/bioxp/status',
         '/api/bioxp/profile',
+        '/api/bioxp/connect',
         '/api/bioxp/connection/connect',
         '/api/bioxp/connection/disconnect',
         '/api/bioxp/connection/probe',
+        '/api/bioxp/camera/status',
+        '/api/bioxp/camera/frame/latest',
+        '/api/bioxp/camera/snapshot',
         '/api/bioxp/logs',
         '/api/bioxp/protocols/compile',
         '/api/bioxp/protocols/submit',
@@ -40,7 +44,7 @@ test('frontend client contains only compact and typed lifecycle BioXP endpoints'
     for (const endpoint of actual) {
         assert.ok(allowed.some((prefix) => endpoint === prefix || endpoint.startsWith(`${prefix}/`)), endpoint);
     }
-    for (const forbidden of ['/motion/', '/liquid/', '/camera/', '/vision/', '/diagnostics/', '/oem/', '/runtime/']) {
+    for (const forbidden of ['/motion/', '/liquid/', '/vision/', '/diagnostics/', '/oem/', '/runtime/']) {
         assert.doesNotMatch(client, new RegExp(forbidden.replaceAll('/', '\\/')));
     }
 });

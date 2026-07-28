@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from . import commands, connection, jobs, oem_full_lifecycle, protocols
+from . import camera, commands, connection, jobs, oem_full_lifecycle, protocols
 from .dependencies import (
     SAFE_LOCAL_MUTATIONS,
     require_bioxp_mutation_access,
@@ -11,6 +11,7 @@ from .dependencies import (
 router = APIRouter()
 for child_router in (
     connection.router,
+    camera.router,
     protocols.router,
     jobs.router,
     commands.router,

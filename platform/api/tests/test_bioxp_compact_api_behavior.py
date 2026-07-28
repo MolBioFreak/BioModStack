@@ -110,12 +110,12 @@ def test_unregistered_commands_and_stop_without_active_target_fail_closed_regard
         )
     asyncio.run(runtime.close())
 
-    assert disabled_command.status_code == 409
-    assert "Disabled until" in disabled_command.json()["detail"]
-    assert disabled_stop.status_code == 409
-    assert "active target" in disabled_stop.json()["detail"]
+    assert disabled_command.status_code == 503
+    assert "mutations are disabled" in disabled_command.json()["detail"].lower()
+    assert disabled_stop.status_code == 503
+    assert "mutations are disabled" in disabled_stop.json()["detail"].lower()
     assert authorized_command.status_code == 409
-    assert "Disabled until" in authorized_command.json()["detail"]
+    assert "disabled" in authorized_command.json()["detail"].lower()
     assert authorized_stop.status_code == 409
     assert "active target" in authorized_stop.json()["detail"]
 

@@ -62,6 +62,34 @@ export interface BioXpStatusResponse {
     };
 }
 
+export interface BioXpCameraStatus {
+    schema_version: 'bioxp.camera_status.v1';
+    state: 'live' | 'stale' | 'unavailable';
+    available: boolean;
+    frame_sequence: number | null;
+    frame_captured_at: string | null;
+    frame_age_seconds: number | null;
+    freshness_budget_seconds: number;
+    provider_generation: number;
+    dropped_frames: number;
+    content_sha256: string | null;
+    detail: string | null;
+    connection_generation: number;
+}
+
+export interface BioXpCameraImage {
+    blob: Blob;
+    etag: string;
+    sha256: string;
+    connectionGeneration: number;
+}
+
+export const BIOXP_CAMERA_ENDPOINTS = Object.freeze({
+    status: '/api/bioxp/camera/status',
+    latest: '/api/bioxp/camera/frame/latest',
+    snapshot: '/api/bioxp/camera/snapshot',
+});
+
 export interface BioXpCommandRecord {
     command_id: string;
     command: string;
@@ -213,6 +241,26 @@ const statusKey = ['bioxp', 'status'] as const;
 const profileKey = ['bioxp', 'profile'] as const;
 const jobsKey = ['bioxp', 'jobs'] as const;
 const fullLifecycleContractKey = ['bioxp', 'oem-full-lifecycle', 'contract'] as const;
+
+function cameraImageFromResponse(response: {
+    data: Blob;
+    headers: Record<string, unknown>;
+}): BioXpCameraImage {
+    if (!(response.data instanceof Blob) || response.data.type !== 'image/jpeg' || response.data.size < 1) {
+        throw new Error('BioXP camera proxy returned an invalid JPEG image');
+    }
+    const etag = String(response.headers.etag ?? '');
+    const sha256 = String(response.headers['x-content-sha256'] ?? '');
+    const generationText = String(response.headers['x-bioxp-connection-generation'] ?? '');
+    const connectionGeneration = Number(generationText);
+    if (!/^[0-9a-f]{64}$/.test(sha256)
+        || (etag !== sha256 && etag !== `"${sha256}"`)
+        || !Number.isSafeInteger(connectionGeneration)
+        || connectionGeneration < 1) {
+        throw new Error('BioXP camera proxy returned invalid image provenance');
+    }
+    return { blob: response.data, etag, sha256, connectionGeneration };
+}
 export function bioXpErrorText(error: unknown): string {
     if (error && typeof error === 'object') {
         const response = 'response' in error
@@ -245,6 +293,40 @@ export const useBioXpStatus = (enabled = true) => useQuery({
     refetchInterval: enabled ? 5_000 : false,
     retry: false,
 });
+
+export const useBioXpCameraStatus = (
+    connectionGeneration: number | null,
+    enabled = true,
+) => useQuery({
+    queryKey: ['bioxp', 'camera', 'status', connectionGeneration],
+    queryFn: async () => {
+        if (connectionGeneration === null) throw new Error('An active BioXP connection generation is required');
+        return (await api.get<BioXpCameraStatus>(BIOXP_CAMERA_ENDPOINTS.status, {
+            params: { expected_generation: connectionGeneration },
+        })).data;
+    },
+    enabled: enabled && connectionGeneration !== null,
+    refetchInterval: enabled ? 1_000 : false,
+    refetchIntervalInBackground: false,
+    retry: false,
+});
+
+export async function fetchBioXpCameraFrame(connectionGeneration: number): Promise<BioXpCameraImage> {
+    const response = await api.get<Blob>(BIOXP_CAMERA_ENDPOINTS.latest, {
+        params: { expected_generation: connectionGeneration },
+        responseType: 'blob',
+    });
+    return cameraImageFromResponse(response);
+}
+
+export async function captureBioXpCameraSnapshot(connectionGeneration: number): Promise<BioXpCameraImage> {
+    const response = await api.post<Blob>(
+        BIOXP_CAMERA_ENDPOINTS.snapshot,
+        { expected_generation: connectionGeneration },
+        { responseType: 'blob' },
+    );
+    return cameraImageFromResponse(response);
+}
 
 export const useBioXpOemFullLifecycleContract = (enabled = true) => useQuery({
     queryKey: fullLifecycleContractKey,
