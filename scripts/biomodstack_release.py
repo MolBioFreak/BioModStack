@@ -200,8 +200,8 @@ class ProductionReleaseBackend:
         api_url: str | None = None,
         browser_url: str | None = None,
         operator_url: str | None = None,
-        validation_attempts: int = 10,
-        validation_retry_delay: float = 0.5,
+        validation_attempts: int = 60,
+        validation_retry_delay: float = 1.0,
         allow_first_install: bool = False,
     ) -> None:
         self.repo_root = repo_root.resolve()
