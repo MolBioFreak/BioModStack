@@ -1189,7 +1189,16 @@ def test_candidate_validation_and_commit_require_exact_running_preflight_image_i
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     env_file = tmp_path / "runtime.env"
-    env_file.write_text("COMPOSE_PROJECT_NAME=candidate-project\n", encoding="utf-8")
+    env_file.write_text(
+        "# preserved\n"
+        "COMPOSE_PROJECT_NAME=candidate-project\n"
+        "BMS_BUILD_SHA=old\n"
+        "BMS_BUILD_ID=old\n"
+        "BMS_BUILD_TIME=old\n"
+        f"BMS_MANAGED_API_IMAGE_ID={'sha256:' + 'a' * 64}\n"
+        f"BMS_MANAGED_WEB_IMAGE_ID={'sha256:' + 'b' * 64}\n",
+        encoding="utf-8",
+    )
     monkeypatch.setenv("BMS_CORE_RUNTIME_ENV_FILE", str(env_file))
     backend = release.ProductionReleaseBackend(
         repo_root=tmp_path,
@@ -1236,4 +1245,12 @@ def test_candidate_validation_and_commit_require_exact_running_preflight_image_i
 
     payload = json.loads((tmp_path / "state" / "known-good.json").read_text(encoding="utf-8"))
     assert payload["images"] == expected_ids
+    runtime_env = release._read_runtime_env(env_file)
+    assert runtime_env["COMPOSE_PROJECT_NAME"] == "candidate-project"
+    assert runtime_env["BMS_BUILD_SHA"] == identity.revision
+    assert runtime_env["BMS_BUILD_ID"] == identity.build_id
+    assert runtime_env["BMS_BUILD_TIME"] == identity.build_time
+    assert runtime_env["BMS_MANAGED_API_IMAGE_ID"] == expected_ids["bms-api"]
+    assert runtime_env["BMS_MANAGED_WEB_IMAGE_ID"] == expected_ids["bms-web"]
+    assert env_file.read_text(encoding="utf-8").startswith("# preserved\n")
     assert selector_inspects == []

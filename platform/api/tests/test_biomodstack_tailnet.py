@@ -795,6 +795,7 @@ def test_start_selected_environment_probes_only_selected_runtime_and_never_start
 ) -> None:
     probes: list[tuple[str, bool]] = []
     waits: list[str] = []
+    policies: list[tuple[Path, str]] = []
     health_payload = {
         "status": "healthy",
         "liveness": {"alive": True},
@@ -818,7 +819,9 @@ def test_start_selected_environment_probes_only_selected_runtime_and_never_start
     monkeypatch.setattr(
         tailnet,
         "_install_adapter_control_policy",
-        lambda root, runtime_revision, ledger=None: "owner@example.com",
+        lambda root, runtime_revision, ledger=None: (
+            policies.append((root, runtime_revision)) or "owner@example.com"
+        ),
     )
     monkeypatch.setattr(
         tailnet,
@@ -836,9 +839,14 @@ def test_start_selected_environment_probes_only_selected_runtime_and_never_start
         (development.api_health_url, True),
     ]
     assert waits == [development.frontend_url, development.api_health_url]
+    assert policies == [(tmp_path, "a" * 40)]
 
     probes.clear()
     waits.clear()
+    development_control_root = tmp_path / "development-control"
+    monkeypatch.setattr(tailnet, "CANONICAL_PRODUCTION_ROOT", tmp_path)
+    monkeypatch.setattr(tailnet, "CANONICAL_DEVELOPMENT_ROOT", development_control_root)
+    monkeypatch.setattr(tailnet, "_git_revision", lambda root: "c" * 40)
     production = tailnet.environment_spec("production", project_root=tmp_path)
     tailnet._start_selected_environment(production, tmp_path)
     assert probes == [
@@ -849,6 +857,7 @@ def test_start_selected_environment_probes_only_selected_runtime_and_never_start
         (production.api_health_url, True),
     ]
     assert waits == [production.frontend_url, production.api_health_url]
+    assert policies[-1] == (development_control_root.resolve(), "c" * 40)
 
 
 def test_production_tailnet_proxy_requires_exact_read_only_config(monkeypatch, tmp_path: Path) -> None:
