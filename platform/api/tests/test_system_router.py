@@ -39,8 +39,8 @@ def test_runtime_state_endpoint_returns_runtime_descriptor(monkeypatch) -> None:
     assert response.json() == descriptor
 
 
-def test_stats_toolkit_status_endpoint_returns_live_addon_probe(monkeypatch) -> None:
-    expected = {
+def test_stats_toolkit_status_always_publishes_same_origin_entry(monkeypatch) -> None:
+    probe = {
         "id": "bms-stats-toolkit",
         "display_name": "BioModStack Stats Toolkit",
         "available": True,
@@ -51,49 +51,14 @@ def test_stats_toolkit_status_endpoint_returns_live_addon_probe(monkeypatch) -> 
         "entry_url": "http://127.0.0.1:18180/stats/",
         "detail": "standalone service ready",
     }
-    monkeypatch.setattr(system, "probe_stats_addon", lambda: expected)
+    expected = {**probe, "entry_url": "/stats/embed/"}
+    monkeypatch.setattr(system, "probe_stats_addon", lambda: probe)
 
-    with build_client(client_host="100.64.0.8") as client:
-        response = client.get("/api/system/stats-toolkit")
-
-    assert response.status_code == 200
-    assert response.json() == expected
-
-
-def test_stats_toolkit_status_publishes_tailnet_relative_entry_at_local_serve_boundary(monkeypatch) -> None:
-    expected = {
-        "id": "bms-stats-toolkit",
-        "ready": True,
-        "entry_url": "http://127.0.0.1:18180/stats/",
-    }
-    monkeypatch.setattr(system, "probe_stats_addon", lambda: expected)
-
-    with build_client(client_host="127.0.0.1") as client:
-        response = client.get(
-            "/api/system/stats-toolkit",
-            headers={"Tailscale-User-Login": "operator@example.test"},
-        )
-
-    assert response.status_code == 200
-    assert response.json() == {**expected, "entry_url": "/stats/embed/"}
-
-
-def test_stats_toolkit_status_does_not_trust_tailnet_header_from_remote_socket(monkeypatch) -> None:
-    expected = {
-        "id": "bms-stats-toolkit",
-        "ready": True,
-        "entry_url": "http://127.0.0.1:18180/stats/",
-    }
-    monkeypatch.setattr(system, "probe_stats_addon", lambda: expected)
-
-    with build_client(client_host="100.64.0.8") as client:
-        response = client.get(
-            "/api/system/stats-toolkit",
-            headers={"Tailscale-User-Login": "spoofed@example.test"},
-        )
-
-    assert response.status_code == 200
-    assert response.json() == expected
+    for client_host in ("127.0.0.1", "100.64.0.8"):
+        with build_client(client_host=client_host) as client:
+            response = client.get("/api/system/stats-toolkit")
+        assert response.status_code == 200
+        assert response.json() == expected
 
 
 def test_runtime_start_endpoint_invokes_service_layer(monkeypatch) -> None:
