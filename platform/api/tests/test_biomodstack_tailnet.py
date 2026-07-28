@@ -122,10 +122,17 @@ def test_adapter_policy_pins_and_verifies_loopback_binding(monkeypatch, tmp_path
     monkeypatch.setattr(tailnet, "_host_user_systemd_dir", lambda: systemd_dir)
     monkeypatch.setattr(tailnet, "_tailnet_owner_login", lambda: "owner@example.com")
     monkeypatch.setattr(tailnet, "_git_revision", lambda root: "a" * 40)
+    api_image_id = "sha256:" + "1" * 64
+    web_image_id = "sha256:" + "2" * 64
+    monkeypatch.setenv("BMS_MANAGED_API_IMAGE_ID", api_image_id)
+    monkeypatch.setenv("BMS_MANAGED_WEB_IMAGE_ID", web_image_id)
     tailnet._install_adapter_control_policy(tmp_path, "b" * 40)
     dropin = systemd_dir / f"{tailnet.WORKFLOW_ADAPTER_SERVICE}.d" / "99-tailnet-canonical-source.conf"
-    assert "Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=127.0.0.1" in dropin.read_text()
-    assert f"Environment=BMS_BUILD_SHA={'b' * 40}" in dropin.read_text()
+    dropin_text = dropin.read_text()
+    assert "Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=127.0.0.1" in dropin_text
+    assert f"Environment=BMS_BUILD_SHA={'b' * 40}" in dropin_text
+    assert f"Environment=BMS_MANAGED_API_IMAGE_ID={api_image_id}" in dropin_text
+    assert f"Environment=BMS_MANAGED_WEB_IMAGE_ID={web_image_id}" in dropin_text
 
     monkeypatch.setattr(tailnet, "_pid_report", lambda port: [{"pid": 123}])
     monkeypatch.setattr(tailnet, "_host_listener_inodes", lambda port: [77])
@@ -436,7 +443,27 @@ def test_set_serve_root_requires_exact_loopback_authority(monkeypatch) -> None:
     assert len(commands) == 1
 
 
-def test_control_route_rejects_preexisting_conflict(monkeypatch) -> None:
+def test_set_serve_path_allows_loopback_origin_without_trailing_slash(monkeypatch) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        tailnet,
+        "_run",
+        lambda command, **kwargs: calls.append(command) or subprocess.CompletedProcess(command, 0, "", ""),
+    )
+
+    tailnet._set_serve_path(tailnet.CONTROL_PATH, tailnet.CONTROL_TARGET)
+
+    assert calls == [[
+        "tailscale",
+        "serve",
+        "--bg",
+        "--yes",
+        f"--set-path={tailnet.CONTROL_PATH}",
+        tailnet.CONTROL_TARGET,
+    ]]
+
+
+def test_control_route_refuses_unexpected_existing_target(monkeypatch) -> None:
     assert tailnet.CONTROL_TARGET == "http://127.0.0.1:8001"
     snapshot = tailnet.ServeSnapshot(
         origin="https://node.example.ts.net",

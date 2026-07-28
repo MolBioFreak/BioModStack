@@ -18,10 +18,10 @@ for root in (API_ROOT, REPO_ROOT):
 from routers import system
 
 
-def build_client() -> TestClient:
+def build_client(*, client_host: str = "testclient") -> TestClient:
     app = FastAPI()
     app.include_router(system.router, prefix="/api")
-    return TestClient(app)
+    return TestClient(app, client=(client_host, 50000))
 
 
 def _local_request():
@@ -53,8 +53,44 @@ def test_stats_toolkit_status_endpoint_returns_live_addon_probe(monkeypatch) -> 
     }
     monkeypatch.setattr(system, "probe_stats_addon", lambda: expected)
 
-    with build_client() as client:
+    with build_client(client_host="100.64.0.8") as client:
         response = client.get("/api/system/stats-toolkit")
+
+    assert response.status_code == 200
+    assert response.json() == expected
+
+
+def test_stats_toolkit_status_publishes_tailnet_relative_entry_at_local_serve_boundary(monkeypatch) -> None:
+    expected = {
+        "id": "bms-stats-toolkit",
+        "ready": True,
+        "entry_url": "http://127.0.0.1:18180/stats/",
+    }
+    monkeypatch.setattr(system, "probe_stats_addon", lambda: expected)
+
+    with build_client(client_host="127.0.0.1") as client:
+        response = client.get(
+            "/api/system/stats-toolkit",
+            headers={"Tailscale-User-Login": "operator@example.test"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {**expected, "entry_url": "/stats/embed/"}
+
+
+def test_stats_toolkit_status_does_not_trust_tailnet_header_from_remote_socket(monkeypatch) -> None:
+    expected = {
+        "id": "bms-stats-toolkit",
+        "ready": True,
+        "entry_url": "http://127.0.0.1:18180/stats/",
+    }
+    monkeypatch.setattr(system, "probe_stats_addon", lambda: expected)
+
+    with build_client(client_host="100.64.0.8") as client:
+        response = client.get(
+            "/api/system/stats-toolkit",
+            headers={"Tailscale-User-Login": "spoofed@example.test"},
+        )
 
     assert response.status_code == 200
     assert response.json() == expected

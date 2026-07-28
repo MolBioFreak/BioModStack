@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { resolveStatsToolkitEntryUrl } from '../runtime/tailnetEnvironment';
 
 interface StatsToolkitStatus {
   id: string;
@@ -52,7 +53,7 @@ export function StatsToolkitLauncher() {
     <section className="h-[calc(100vh-3rem)] min-h-[36rem] w-full bg-[var(--bg-primary)]" aria-label="BioModStack Stats Toolkit workspace">
       <iframe
         title="BioModStack Stats Toolkit"
-        src={status.entry_url}
+        src={resolveStatsToolkitEntryUrl(status.entry_url, window.location.hostname)}
         className="h-full w-full border-0"
         allow="clipboard-read; clipboard-write"
       />
