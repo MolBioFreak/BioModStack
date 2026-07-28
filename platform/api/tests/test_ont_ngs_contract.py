@@ -171,6 +171,35 @@ class TestWorkflowAliases:
         assert "nanopore_methylation" not in ONT_WORKFLOW_ALIASES
 
 
+class TestCloneAndDimerNormalization:
+    def test_clone_uses_its_own_quality_default_and_fractional_thresholds(self):
+        normalized = normalize_ont_launch_params(
+            "wf_clone_validation",
+            {"wf_clone_expected_coverage": 92.5, "wf_clone_expected_identity": 98.25},
+        )
+        assert normalized["wf_clone_min_quality"] == 9
+        assert normalized["wf_clone_primer_mismatch"] == 2
+        assert normalized["wf_clone_expected_coverage"] == 92.5
+        assert normalized["wf_clone_expected_identity"] == 98.25
+        assert "wf_clone_analyse_unclassified" not in normalized
+
+    @pytest.mark.parametrize("key, value", [("wf_clone_min_quality", 61), ("wf_clone_primer_mismatch", -1), ("wf_clone_expected_identity", 100.1)])
+    def test_clone_rejects_out_of_policy_vendor_values(self, key, value):
+        with pytest.raises(ValueError):
+            normalize_ont_launch_params("wf_clone_validation", {key: value})
+
+    def test_plasmid_qc_normalizes_only_bounded_dimer_controls(self):
+        normalized = normalize_ont_launch_params(
+            "ont_plasmid_qc",
+            {"rotation_scan_step_bp": 5, "single_ref_split_min_mapq": 30},
+        )
+        assert normalized["enable_rotating_reference_frames"] is True
+        assert normalized["rotation_scan_step_bp"] == 5
+        assert normalized["single_ref_split_min_mapq"] == 30
+        with pytest.raises(ValueError, match="single_ref_split_min_mapq"):
+            normalize_ont_launch_params("ont_plasmid_qc", {"single_ref_split_min_mapq": 61})
+
+
 class TestManifestContract:
     """Validate that manifest contract matches our schema."""
 

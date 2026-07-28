@@ -341,6 +341,7 @@ WORKFLOW_DEFAULTS: dict[str, dict[str, Any]] = {
         "modified_bases": "none",
         "wf_clone_assembly_tool": "flye",
         "wf_clone_basecaller_model": "dna_r10.4.1_e8.2_400bps_hac@v5.0.0",
+        "wf_clone_min_quality": 9,
     },
 }
 
@@ -479,6 +480,7 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
     normalized["manifest_contract"] = MANIFEST_SCHEMA
 
     if canonical_id == "wf_clone_validation":
+        normalized.pop("wf_clone_analyse_unclassified", None)
         assembly_tool = str(normalized.get("wf_clone_assembly_tool") or "").strip()
         if assembly_tool not in {"flye", "canu"}:
             raise ValueError("wf_clone_assembly_tool must preserve an exact supported value: flye or canu")
@@ -501,16 +503,23 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
                 raise ValueError(f"{name} must be an integer from {minimum} through {maximum}")
             return value
 
+        def clone_number(name: str, default: float, minimum: float, maximum: float) -> float:
+            value = normalized.get(name, default)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not minimum <= value <= maximum:
+                raise ValueError(f"{name} must be a number from {minimum:g} through {maximum:g}")
+            return float(value)
+
         flye_quality = str(normalized.get("wf_clone_flye_quality") or "nano-hq").strip()
         if flye_quality not in {"nano-hq", "nano-corr", "nano-raw"}:
             raise ValueError("wf_clone_flye_quality must be nano-hq, nano-corr, or nano-raw")
-        normalized["wf_clone_analyse_unclassified"] = clone_bool("wf_clone_analyse_unclassified")
         normalized["wf_clone_flye_quality"] = flye_quality
         normalized["wf_clone_non_uniform_coverage"] = clone_bool("wf_clone_non_uniform_coverage")
         normalized["wf_clone_canu_fast"] = clone_bool("wf_clone_canu_fast")
+        normalized["wf_clone_min_quality"] = clone_int("wf_clone_min_quality", 9, 0, 60)
         normalized["wf_clone_cutsite_mismatch"] = clone_int("wf_clone_cutsite_mismatch", 1, 0, 10)
-        normalized["wf_clone_expected_coverage"] = clone_int("wf_clone_expected_coverage", 95, 0, 100)
-        normalized["wf_clone_expected_identity"] = clone_int("wf_clone_expected_identity", 99, 0, 100)
+        normalized["wf_clone_primer_mismatch"] = clone_int("wf_clone_primer_mismatch", 2, 0, 10)
+        normalized["wf_clone_expected_coverage"] = clone_number("wf_clone_expected_coverage", 95, 0, 100)
+        normalized["wf_clone_expected_identity"] = clone_number("wf_clone_expected_identity", 99, 0, 100)
         primers = str(normalized.get("wf_clone_primers") or "").strip()
         insert_reference = str(normalized.get("wf_clone_insert_reference") or "").strip()
         host_reference = str(normalized.get("wf_clone_host_reference") or "").strip()
@@ -529,5 +538,25 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
                 normalized[key] = value
             else:
                 normalized.pop(key, None)
+
+    dimer_workflows = {"ont_plasmid_qc", "ont_construct_screening", "ont_fastq_qc", "wf_clone_validation"}
+    if canonical_id in dimer_workflows:
+        def dimer_bool(name: str, default: bool) -> bool:
+            value = normalized.get(name, default)
+            if not isinstance(value, bool):
+                raise ValueError(f"{name} must be boolean")
+            return value
+
+        def dimer_int(name: str, default: int, minimum: int, maximum: int) -> int:
+            value = normalized.get(name, default)
+            if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
+                raise ValueError(f"{name} must be an integer from {minimum} through {maximum}")
+            return value
+
+        normalized["enable_rotating_reference_frames"] = dimer_bool("enable_rotating_reference_frames", True)
+        normalized["rotation_scan_step_bp"] = dimer_int("rotation_scan_step_bp", 1, 1, 10_000)
+        normalized["single_ref_split_min_mapq"] = dimer_int("single_ref_split_min_mapq", 20, 0, 60)
+        normalized["single_ref_split_min_segment_bp"] = dimer_int("single_ref_split_min_segment_bp", 250, 1, 1_000_000)
+        normalized["single_ref_split_max_query_gap_bp"] = dimer_int("single_ref_split_max_query_gap_bp", 500, 0, 1_000_000)
 
     return normalized

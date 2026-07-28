@@ -4037,7 +4037,6 @@ export function NGSToolkit() {
                                         ['Assembly coverage', selectedJob.params?.wf_clone_assm_coverage],
                                         ['Assembly trim length', selectedJob.params?.wf_clone_trim_length],
                                         ['Assembly min quality', selectedJob.params?.wf_clone_min_quality],
-                                        ['Pinned upstream model', selectedJob.params?.wf_clone_basecaller_model || 'dna_r10.4.1_e8.2_400bps_hac@v5.0.0'],
                                         ['wf-clone sample', selectedJob.params?.wf_clone_sample],
                                         ['Large construct mode', selectedJob.params?.wf_clone_large_construct],
                                     ].map(([label, value]) => (
