@@ -82,7 +82,7 @@ def test_managed_image_receipt_accepts_only_exact_deploy_time_image_ids(monkeypa
         tailnet._managed_image_id("BMS_MANAGED_API_IMAGE_ID", tailnet.MANAGED_API_IMAGE_ID)
 
 
-def test_host_listener_owner_helper_uses_stable_pinned_proxy_image(monkeypatch) -> None:
+def test_host_listener_owner_helper_uses_stable_pinned_python_image(monkeypatch) -> None:
     commands: list[list[str]] = []
 
     def fake_run(command: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
@@ -93,10 +93,10 @@ def test_host_listener_owner_helper_uses_stable_pinned_proxy_image(monkeypatch) 
 
     assert tailnet._host_listener_inode_owners([77]) == {77: [123]}
     command = commands[0]
-    assert command[command.index("--entrypoint") + 1] == "/bin/sh"
-    assert tailnet.PRODUCTION_TAILNET_PROXY_IMAGE_ID in command
+    assert command[command.index("--entrypoint") + 1] == "/usr/local/bin/python3.10"
+    assert tailnet.HOST_PROC_HELPER_IMAGE in command
     assert tailnet.MANAGED_API_IMAGE_ID not in command
-    assert "host-proc-helper" in command
+    assert command[-1] == "77"
 
 
 def test_git_revision_rejects_dirty_or_nested_selector_source(tmp_path: Path) -> None:
@@ -1160,11 +1160,11 @@ def test_host_owner_helper_uses_kernel_proc_names_not_human_ls_output(monkeypatc
     assert tailnet._host_listener_inode_owners([77]) == {77: [123]}
     assert captured[captured.index("--user") + 1] == "0:0"
     helper = captured[captured.index("-c") + 1]
-    assert "/host-proc/[0-9]*/fd/[0-9]*" in helper
-    assert "readlink \"$fd\"" in helper
+    assert "os.scandir('/host-proc')" in helper
+    assert "os.readlink(fd_entry.path)" in helper
     assert "ls -l" not in helper
-    assert captured[captured.index("--entrypoint") + 1] == "/bin/sh"
-    assert tailnet.PRODUCTION_TAILNET_PROXY_IMAGE_ID in captured
+    assert captured[captured.index("--entrypoint") + 1] == "/usr/local/bin/python3.10"
+    assert tailnet.HOST_PROC_HELPER_IMAGE in captured
 
 
 def test_container_listener_helpers_use_privileged_root_proc_visibility(monkeypatch) -> None:

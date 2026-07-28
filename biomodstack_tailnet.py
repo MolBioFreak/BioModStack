@@ -53,6 +53,7 @@ PRODUCTION_TAILNET_PROXY_PORT = 18081
 PRODUCTION_TAILNET_PROXY_CONTAINER = "biomodstack-tailnet-production-proxy"
 PRODUCTION_TAILNET_PROXY_IMAGE = "nginx@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10"
 PRODUCTION_TAILNET_PROXY_IMAGE_ID = "sha256:6769dc3a703c719c1d2756bda113659be28ae16cf0da58dd5fd823d6b9a050ea"
+HOST_PROC_HELPER_IMAGE = "python:3.10-slim-bookworm@sha256:9643927a6fc74bd81b0f1bbb5cce3cb4a491f46b4c5dbee770f28e575f180015"
 MANAGED_API_IMAGE_ID = "sha256:74bf34e32e2f5d0f72d3f6d117c1b4877c169e7a62c0da06ea05b75d5e0cd12c"
 MANAGED_WEB_IMAGE_ID = "sha256:7e79b645349216a2457cd2f64af53beb26d9041c7911ed8438d6708239017c3e"
 _IMAGE_ID_PATTERN = re.compile(r"sha256:[0-9a-f]{64}")
@@ -1032,30 +1033,37 @@ def _host_listener_inodes(port: int) -> list[int]:
 def _host_listener_inode_owners(inodes: list[int]) -> dict[int, list[int]]:
     if not inodes:
         return {}
-    helper = r'''wanted=" $* "
-for fd in /host-proc/[0-9]*/fd/[0-9]*; do
-    [ -L "$fd" ] || continue
-    target=$(readlink "$fd" 2>/dev/null) || continue
-    case "$target" in
-        socket:\[*\]) inode=${target#socket:[}; inode=${inode%]} ;;
-        *) continue ;;
-    esac
-    case "$wanted" in
-        *" $inode "*)
-            pid=${fd#/host-proc/}
-            pid=${pid%%/*}
-            printf '%s %s\n' "$pid" "$inode"
-            ;;
-    esac
-done
+    helper = r'''import os, sys
+wanted = {int(value) for value in sys.argv[1:]}
+for proc_entry in os.scandir('/host-proc'):
+    if not proc_entry.name.isdigit() or not proc_entry.is_dir(follow_symlinks=False):
+        continue
+    fd_root = os.path.join(proc_entry.path, 'fd')
+    try:
+        fd_entries = os.scandir(fd_root)
+    except OSError:
+        continue
+    with fd_entries:
+        for fd_entry in fd_entries:
+            if not fd_entry.name.isdigit() or not fd_entry.is_symlink():
+                continue
+            try:
+                target = os.readlink(fd_entry.path)
+            except OSError:
+                continue
+            if not target.startswith('socket:[') or not target.endswith(']'):
+                continue
+            raw_inode = target[8:-1]
+            if raw_inode.isdigit() and int(raw_inode) in wanted:
+                print(f'{proc_entry.name} {raw_inode}')
 '''
     result = _run([
         "docker", "run", "--rm", "--pull=never", "--network=none", "--read-only",
         "--privileged", "--user", "0:0",
         "--mount", "type=bind,src=/proc,dst=/host-proc,readonly",
-        "--entrypoint", "/bin/sh",
-        PRODUCTION_TAILNET_PROXY_IMAGE_ID,
-        "-c", helper, "host-proc-helper", *(str(inode) for inode in inodes),
+        "--entrypoint", "/usr/local/bin/python3.10",
+        HOST_PROC_HELPER_IMAGE,
+        "-c", helper, *(str(inode) for inode in inodes),
     ])
     owners: dict[int, set[int]] = {inode: set() for inode in inodes}
     for line in result.stdout.splitlines():
