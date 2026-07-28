@@ -1032,37 +1032,30 @@ def _host_listener_inodes(port: int) -> list[int]:
 def _host_listener_inode_owners(inodes: list[int]) -> dict[int, list[int]]:
     if not inodes:
         return {}
-    helper = r'''import os, sys
-wanted = {int(value) for value in sys.argv[1:]}
-for proc_entry in os.scandir('/host-proc'):
-    if not proc_entry.name.isdigit() or not proc_entry.is_dir(follow_symlinks=False):
-        continue
-    fd_root = os.path.join(proc_entry.path, 'fd')
-    try:
-        fd_entries = os.scandir(fd_root)
-    except OSError:
-        continue
-    with fd_entries:
-        for fd_entry in fd_entries:
-            if not fd_entry.name.isdigit() or not fd_entry.is_symlink():
-                continue
-            try:
-                target = os.readlink(fd_entry.path)
-            except OSError:
-                continue
-            if not target.startswith('socket:[') or not target.endswith(']'):
-                continue
-            raw_inode = target[8:-1]
-            if raw_inode.isdigit() and int(raw_inode) in wanted:
-                print(f'{proc_entry.name} {raw_inode}')
+    helper = r'''wanted=" $* "
+for fd in /host-proc/[0-9]*/fd/[0-9]*; do
+    [ -L "$fd" ] || continue
+    target=$(readlink "$fd" 2>/dev/null) || continue
+    case "$target" in
+        socket:\[*\]) inode=${target#socket:[}; inode=${inode%]} ;;
+        *) continue ;;
+    esac
+    case "$wanted" in
+        *" $inode "*)
+            pid=${fd#/host-proc/}
+            pid=${pid%%/*}
+            printf '%s %s\n' "$pid" "$inode"
+            ;;
+    esac
+done
 '''
     result = _run([
         "docker", "run", "--rm", "--pull=never", "--network=none", "--read-only",
         "--privileged", "--user", "0:0",
         "--mount", "type=bind,src=/proc,dst=/host-proc,readonly",
-        "--entrypoint", "/usr/local/bin/python3.10",
-        _managed_image_id("BMS_MANAGED_API_IMAGE_ID", MANAGED_API_IMAGE_ID),
-        "-c", helper, *(str(inode) for inode in inodes),
+        "--entrypoint", "/bin/sh",
+        PRODUCTION_TAILNET_PROXY_IMAGE_ID,
+        "-c", helper, "host-proc-helper", *(str(inode) for inode in inodes),
     ])
     owners: dict[int, set[int]] = {inode: set() for inode in inodes}
     for line in result.stdout.splitlines():
