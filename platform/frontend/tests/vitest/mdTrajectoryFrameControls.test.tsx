@@ -58,6 +58,43 @@ const seedPlayback = (client: QueryClient, jobId: string) => {
 afterEach(() => document.body.replaceChildren());
 
 describe('governed MD trajectory frame controls', () => {
+    it('plays, pauses, and loops the governed display-frame sequence', async () => {
+        vi.useFakeTimers();
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+        seedPlayback(client, 'job-md-playback');
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+
+        await act(async () => {
+            root.render(<QueryClientProvider client={client}><MDResultsPane jobId="job-md-playback" /></QueryClientProvider>);
+            await Promise.resolve();
+        });
+
+        const receipt = () => container.querySelector('[data-bms-md-frame-receipt]')?.textContent ?? '';
+        const play = container.querySelector<HTMLButtonElement>('[data-bms-md-playback="play"]');
+        expect(play).toBeTruthy();
+        await act(async () => play!.click());
+        expect(container.querySelector('[data-bms-md-playback="pause"]')).toBeTruthy();
+
+        await act(async () => { vi.advanceTimersByTime(500); });
+        expect(receipt()).toContain('Display frame 1');
+        await act(async () => { vi.advanceTimersByTime(2_000); });
+        expect(receipt()).toContain('Display frame 5');
+        await act(async () => { vi.advanceTimersByTime(500); });
+        expect(receipt()).toContain('Display frame 0');
+
+        const pause = container.querySelector<HTMLButtonElement>('[data-bms-md-playback="pause"]');
+        await act(async () => pause!.click());
+        await act(async () => { vi.advanceTimersByTime(1_000); });
+        expect(receipt()).toContain('Display frame 0');
+        expect(container.textContent).toContain('Loop on');
+
+        await act(async () => root.unmount());
+        vi.useRealTimers();
+        client.clear();
+    });
+
     it('addresses bounded display frames while showing authoritative source/time/step provenance', async () => {
         const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
         seedPlayback(client, 'job-md');
