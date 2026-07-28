@@ -2021,7 +2021,7 @@ def _verify_selected_environment(
         "runtime_target": spec.runtime_target,
         "project_root": str(root),
         "project_revision": local_api_build["revision"],
-        "selector_revision": _git_revision(root),
+        "selector_revision": adapter_revision,
         "frontend_target": (
             spec.frontend_url.rstrip("/")
             if spec.environment == "development"
