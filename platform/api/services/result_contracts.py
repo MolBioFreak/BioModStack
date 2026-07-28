@@ -369,7 +369,7 @@ def build_review_artifact_manifest(design: Any) -> Dict[str, Any]:
         return {
             "kind": kind,
             "state": "ready" if ready else "missing",
-            "path": str(resolved) if ready and resolved else (text or None),
+            "path": text or None,
             "reason": reason,
         }
 
