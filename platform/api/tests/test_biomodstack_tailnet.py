@@ -82,6 +82,29 @@ def test_managed_image_receipt_accepts_only_exact_deploy_time_image_ids(monkeypa
         tailnet._managed_image_id("BMS_MANAGED_API_IMAGE_ID", tailnet.MANAGED_API_IMAGE_ID)
 
 
+def test_accepted_release_image_ids_are_bound_to_revision(monkeypatch, tmp_path: Path) -> None:
+    production_root = tmp_path / "prod"
+    production_root.mkdir()
+    state = tmp_path / ".local/state/biomodstack/releases"
+    state.mkdir(parents=True)
+    revision = "a" * 40
+    api_id = "sha256:" + "b" * 64
+    web_id = "sha256:" + "c" * 64
+    (state / "known-good.json").write_text(json.dumps({
+        "build": {"BMS_BUILD_SHA": revision},
+        "images": {"bms-api": api_id, "bms-web": web_id},
+    }))
+    monkeypatch.setattr(tailnet, "CANONICAL_PRODUCTION_ROOT", production_root)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+
+    assert tailnet._accepted_release_image_ids(production_root, revision) == {
+        "biomodstack-api": api_id,
+        "biomodstack-web": web_id,
+    }
+    with pytest.raises(tailnet.TailnetEnvironmentError, match="revision does not match"):
+        tailnet._accepted_release_image_ids(production_root, "d" * 40)
+
+
 def test_host_listener_owner_helper_uses_stable_pinned_python_image(monkeypatch) -> None:
     commands: list[list[str]] = []
 
