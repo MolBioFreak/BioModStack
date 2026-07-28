@@ -4,6 +4,7 @@ System administration routes for cache cleanup, runtime control, and install-pro
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import os
 import shutil
 import sqlite3
@@ -389,10 +390,18 @@ async def get_install_features(request: Request):
 
 
 @router.get("/stats-toolkit")
-async def get_stats_toolkit_status():
+async def get_stats_toolkit_status(request: Request):
     # Read-only add-on discovery is safe on the Tailnet launch surface. Mutating
     # system-admin routes remain loopback-only.
-    return probe_stats_addon()
+    status = probe_stats_addon()
+    client_host = request.client.host if request.client else ""
+    try:
+        local_boundary = ipaddress.ip_address(client_host).is_loopback
+    except ValueError:
+        local_boundary = False
+    if local_boundary and request.headers.get("Tailscale-User-Login"):
+        return {**status, "entry_url": "/stats/embed/"}
+    return status
 
 
 @router.put("/features")
