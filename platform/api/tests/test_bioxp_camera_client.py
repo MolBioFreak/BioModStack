@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import math
 from ipaddress import ip_address
 
 import httpx
 import pytest
 
 from services.bioxp.errors import RobotTransportError
-from services.bioxp.robot_client import BioXpRobotClient
+from services.bioxp.robot_client import BioXpRobotClient, DEFAULT_ROBOT_ROUTES
 from services.bioxp.target_policy import ValidatedBioXpTarget
 
 
@@ -44,6 +45,20 @@ class CameraTransport(httpx.AsyncBaseTransport):
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         return await self.handler(request)
+
+
+class CountingStream(httpx.AsyncByteStream):
+    def __init__(self, chunks: list[bytes], *, delay: float = 0.0) -> None:
+        self.chunks = chunks
+        self.delay = delay
+        self.yielded = 0
+
+    async def __aiter__(self):
+        for chunk in self.chunks:
+            if self.delay:
+                await asyncio.sleep(self.delay)
+            self.yielded += 1
+            yield chunk
 
 
 async def response(request: httpx.Request, *, content: bytes = JPEG_BYTES, headers=None, json=None):
@@ -109,6 +124,8 @@ def test_camera_client_uses_only_fixed_routes_and_bounded_timeouts():
         lambda payload: payload.update({"frame_sequence": -1}),
         lambda payload: payload.update({"content_sha256": "not-a-hash"}),
         lambda payload: payload.update({"available": False}),
+        lambda payload: payload.update({"frame_age_seconds": math.inf}),
+        lambda payload: payload.update({"frame_captured_at": 1785153600}),
     ],
 )
 def test_camera_status_schema_fails_closed_on_malformed_or_contradictory_json(mutate):
@@ -195,4 +212,84 @@ def test_camera_timeout_is_reported_as_bounded_transport_failure():
     client = BioXpRobotClient(target(), transport=CameraTransport(handler))
     with pytest.raises(RobotTransportError, match="timed out"):
         asyncio.run(client.camera_latest())
+    asyncio.run(client.close())
+
+
+def test_camera_image_requires_declared_content_length():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        headers = image_headers(JPEG_BYTES)
+        del headers["Content-Length"]
+        return httpx.Response(
+            200,
+            headers=headers,
+            stream=CountingStream([JPEG_BYTES]),
+            request=request,
+        )
+
+    client = BioXpRobotClient(target(), transport=CameraTransport(handler))
+    with pytest.raises(RobotTransportError, match="content length"):
+        asyncio.run(client.camera_latest())
+    asyncio.run(client.close())
+
+
+def test_camera_image_rejects_bare_noncanonical_etag():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        headers = image_headers(JPEG_BYTES)
+        headers["ETag"] = hashlib.sha256(JPEG_BYTES).hexdigest()
+        return await response(request, content=JPEG_BYTES, headers=headers)
+
+    client = BioXpRobotClient(target(), transport=CameraTransport(handler))
+    with pytest.raises(RobotTransportError, match="ETag"):
+        asyncio.run(client.camera_latest())
+    asyncio.run(client.close())
+
+
+def test_camera_error_body_is_bounded_before_rejection():
+    stream = CountingStream([b"x" * (1024 * 1024) for _ in range(9)])
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(502, stream=stream, request=request)
+
+    client = BioXpRobotClient(target(), transport=CameraTransport(handler))
+    with pytest.raises(RobotTransportError, match="error response exceeded"):
+        asyncio.run(client.camera_latest())
+    assert stream.yielded <= 1
+    asyncio.run(client.close())
+
+
+def test_camera_status_body_is_bounded_before_json_validation():
+    stream = CountingStream([b"x" * (1024 * 1024) for _ in range(9)])
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/json"},
+            stream=stream,
+            request=request,
+        )
+
+    client = BioXpRobotClient(target(), transport=CameraTransport(handler))
+    with pytest.raises(RobotTransportError, match="camera status"):
+        asyncio.run(client.camera_status())
+    assert stream.yielded <= 1
+    asyncio.run(client.close())
+
+
+def test_camera_transaction_has_absolute_wall_clock_deadline():
+    stream = CountingStream([b"x"] * 100, delay=0.01)
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers=image_headers(JPEG_BYTES),
+            stream=stream,
+            request=request,
+        )
+
+    routes = dict(DEFAULT_ROBOT_ROUTES)
+    routes["camera_latest"] = ("GET", "/camera/frame/latest", 0.03)
+    client = BioXpRobotClient(target(), routes=routes, transport=CameraTransport(handler))
+    with pytest.raises(RobotTransportError, match="timed out"):
+        asyncio.run(client.camera_latest())
+    assert stream.yielded < 100
     asyncio.run(client.close())
