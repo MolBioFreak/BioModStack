@@ -279,7 +279,7 @@ def _set_serve_path(path: str, target: str) -> None:
     target_origin = f"{parsed.scheme}://{parsed.netloc}"
     if (
         _canonical_loopback_http_target(target_origin) != target_origin
-        or not parsed.path.startswith("/")
+        or (parsed.path and not parsed.path.startswith("/"))
         or parsed.query
         or parsed.fragment
     ):

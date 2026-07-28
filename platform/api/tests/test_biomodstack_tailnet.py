@@ -443,7 +443,27 @@ def test_set_serve_root_requires_exact_loopback_authority(monkeypatch) -> None:
     assert len(commands) == 1
 
 
-def test_control_route_rejects_preexisting_conflict(monkeypatch) -> None:
+def test_set_serve_path_allows_loopback_origin_without_trailing_slash(monkeypatch) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        tailnet,
+        "_run",
+        lambda command, **kwargs: calls.append(command) or subprocess.CompletedProcess(command, 0, "", ""),
+    )
+
+    tailnet._set_serve_path(tailnet.CONTROL_PATH, tailnet.CONTROL_TARGET)
+
+    assert calls == [[
+        "tailscale",
+        "serve",
+        "--bg",
+        "--yes",
+        f"--set-path={tailnet.CONTROL_PATH}",
+        tailnet.CONTROL_TARGET,
+    ]]
+
+
+def test_control_route_refuses_unexpected_existing_target(monkeypatch) -> None:
     assert tailnet.CONTROL_TARGET == "http://127.0.0.1:8001"
     snapshot = tailnet.ServeSnapshot(
         origin="https://node.example.ts.net",
