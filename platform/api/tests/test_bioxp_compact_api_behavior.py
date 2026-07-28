@@ -124,7 +124,7 @@ def test_malformed_persisted_profile_is_sanitized_without_auto_connect(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("BMS_BIOXP_MUTATIONS_ENABLED", "1")
+    monkeypatch.setenv("BMS_BIOXP_CONNECTION_ENABLED", "1")
     runtime = create_bioxp_runtime(data_root=tmp_path)
     profile_path = tmp_path / "bioxp" / "profile.json"
     profile_path.write_text('{"api_url":"http://robot:8123","secret":"do-not-leak"}', encoding="utf-8")

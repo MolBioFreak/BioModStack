@@ -159,6 +159,7 @@ export function BioXpCockpit() {
 
     const status = statusQuery.isError ? undefined : statusQuery.data;
     const connection = status?.connection;
+    const connectionAccessEnabled = status?.connection_access?.enabled === true;
     const mutationAccessEnabled = status?.mutation_access?.enabled === true;
     const controlPlaneFresh = isBioXpControlPlaneFresh(connection, nowMs);
     const mutationAccessSetting = status?.mutation_access?.server_setting
@@ -314,7 +315,7 @@ export function BioXpCockpit() {
                         <button
                             type="button"
                             onClick={() => connect.mutate(undefined)}
-                            disabled={!connection?.configured || connection?.active === true || connect.isPending}
+                            disabled={!connectionAccessEnabled || !connection?.configured || connection?.active === true || connect.isPending}
                             className="rounded bg-cyan-700 px-3 py-1 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"
                         >
                             {connect.isPending
@@ -338,6 +339,11 @@ export function BioXpCockpit() {
                 </dl>
                 {connection?.last_error && <p className="mt-3 text-sm text-red-300">last_error: {connection.last_error}</p>}
                 {connect.error && <p className="mt-3 text-sm text-red-300">Connect failed: {bioXpErrorText(connect.error)}</p>}
+                {status && !connectionAccessEnabled && (
+                    <p className="mt-3 rounded border border-amber-600/50 bg-amber-500/10 p-3 text-sm text-amber-200">
+                        Connection-only access is disabled. Set <code>{status.connection_access?.server_setting ?? 'BMS_BIOXP_CONNECTION_ENABLED=1'}</code> to authorize bounded status probes without enabling commissioning writes.
+                    </p>
+                )}
                 {status && !mutationAccessEnabled && (
                     <p className="mt-3 rounded border border-amber-600/50 bg-amber-500/10 p-3 text-sm text-amber-200">
                         Commissioning writes are disabled or were not advertised by the BMS server. Set <code>{mutationAccessSetting}</code>. No API key or secret is required.
@@ -568,7 +574,7 @@ export function BioXpCockpit() {
                 <section className="rounded-xl border border-red-700/60 bg-red-950/20 p-5">
                     <h2 className="flex items-center gap-2 text-lg font-semibold text-red-200">Emergency Stop Delivery</h2>
                     <p className="mt-2 text-sm text-red-100">This separate action attempts a short-timeout delivery. A transport response does not prove physical effect.</p>
-                    <button type="button" disabled={emergencyStop.isPending} onClick={() => emergencyStop.mutate({ generation: connection.generation })} className="mt-3 block rounded bg-red-700 px-4 py-2 font-semibold disabled:opacity-40">Attempt emergency-stop delivery</button>
+                    <button type="button" disabled={!mutationAccessEnabled || emergencyStop.isPending} onClick={() => emergencyStop.mutate({ generation: connection.generation })} className="mt-3 block rounded bg-red-700 px-4 py-2 font-semibold disabled:opacity-40">Attempt emergency-stop delivery</button>
                     {emergencyStop.data && (
                         <dl className="mt-3 grid gap-2 text-sm md:grid-cols-3">
                             <div><dt>delivery_attempted</dt><dd>{String(emergencyStop.data.delivery_attempted)}</dd></div>
@@ -586,7 +592,7 @@ export function BioXpCockpit() {
                 <input value={protocolName} onChange={(event) => setProtocolName(event.target.value)} className="mt-3 w-full max-w-lg rounded border border-slate-700 bg-slate-900 px-3 py-2" />
                 <div className="mt-3 flex gap-2">
                     <button type="button" onClick={() => compileProtocol.mutate(protocol)} className="rounded bg-slate-700 px-3 py-2 text-sm">Validate offline</button>
-                    <button type="button" disabled={submitProtocol.isPending} onClick={() => submitProtocol.mutate({ protocol, idempotencyKey: crypto.randomUUID() })} className="rounded bg-blue-700 px-3 py-2 text-sm disabled:opacity-40">Save blocked local job</button>
+                    <button type="button" disabled={!mutationAccessEnabled || submitProtocol.isPending} onClick={() => submitProtocol.mutate({ protocol, idempotencyKey: crypto.randomUUID() })} className="rounded bg-blue-700 px-3 py-2 text-sm disabled:opacity-40">Save blocked local job</button>
                 </div>
                 {compileProtocol.data && <p className="mt-3 text-sm text-emerald-300">{compileProtocol.data.validation_status}: {compileProtocol.data.compiled_hash.slice(0, 16)}… · executable={String(compileProtocol.data.executable)}</p>}
                 {compileProtocol.error && <p className="mt-2 text-sm text-red-300">{bioXpErrorText(compileProtocol.error)}</p>}

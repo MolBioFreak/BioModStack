@@ -32,11 +32,18 @@ class FakeRobotClient:
         self.probe_error = probe_error
         self.closed = False
         self.probes = 0
+        self.status_only_probes = 0
         self.request_started: asyncio.Event | None = None
         self.request_release: asyncio.Event | None = None
 
     async def probe(self) -> dict[str, Any]:
         self.probes += 1
+        if self.probe_error:
+            raise self.probe_error
+        return self.probe_result
+
+    async def probe_status_only(self) -> dict[str, Any]:
+        self.status_only_probes += 1
         if self.probe_error:
             raise self.probe_error
         return self.probe_result
@@ -108,8 +115,10 @@ def test_saved_profile_does_not_activate_on_startup_or_restart(tmp_path: Path) -
     assert clients == []
 
 
-def test_runtime_start_restores_saved_managed_connection() -> None:
+def test_runtime_start_restores_saved_managed_connection(monkeypatch) -> None:
     from services.bioxp.runtime import BioXpRuntime
+
+    monkeypatch.setenv("BMS_BIOXP_CONNECTION_ENABLED", "1")
 
     class Connection:
         connected = 0
@@ -129,8 +138,10 @@ def test_runtime_start_restores_saved_managed_connection() -> None:
     assert runtime.startup_warnings == []
 
 
-def test_runtime_start_keeps_failed_restore_truthful_without_crashing_api() -> None:
+def test_runtime_start_keeps_failed_restore_truthful_without_crashing_api(monkeypatch) -> None:
     from services.bioxp.runtime import BioXpRuntime
+
+    monkeypatch.setenv("BMS_BIOXP_CONNECTION_ENABLED", "1")
 
     class Connection:
         def load_profile(self):
@@ -146,8 +157,33 @@ def test_runtime_start_keeps_failed_restore_truthful_without_crashing_api() -> N
     assert runtime.startup_warnings == ["Saved BioXP profile was not restored: robot offline"]
 
 
-def test_runtime_start_does_not_wait_for_saved_robot_probe() -> None:
+def test_runtime_start_does_not_contact_saved_robot_when_connection_access_is_disabled(monkeypatch) -> None:
     from services.bioxp.runtime import BioXpRuntime
+
+    monkeypatch.setenv("BMS_BIOXP_CONNECTION_ENABLED", "0")
+
+    class Connection:
+        connected = 0
+
+        def load_profile(self):
+            return object()
+
+        async def connect(self):
+            self.connected += 1
+
+    connection = Connection()
+    runtime = BioXpRuntime(connection=connection, commands=None, jobs=None)  # type: ignore[arg-type]
+
+    asyncio.run(runtime.start())
+
+    assert connection.connected == 0
+    assert runtime._restore_task is None
+
+
+def test_runtime_start_does_not_wait_for_saved_robot_probe(monkeypatch) -> None:
+    from services.bioxp.runtime import BioXpRuntime
+
+    monkeypatch.setenv("BMS_BIOXP_CONNECTION_ENABLED", "1")
 
     class Connection:
         entered = asyncio.Event()
@@ -346,7 +382,7 @@ def test_stale_hardware_cache_does_not_relabel_live_runtime_probe_as_stale(tmp_p
     assert "stale" in snapshot.hardware_evidence_error.lower()
 
 
-def test_explicit_active_connection_monitor_renews_observation_and_stops_on_disconnect(tmp_path: Path) -> None:
+def test_connection_and_active_monitor_are_status_only_and_stop_on_disconnect(tmp_path: Path) -> None:
     _, BioXpProfile, _, _ = _load()
     clients: list[FakeRobotClient] = []
 
@@ -362,14 +398,52 @@ def test_explicit_active_connection_monitor_renews_observation_and_stops_on_disc
         await asyncio.sleep(0.08)
 
         assert service.snapshot().observation_fresh is True
-        assert clients[0].probes >= 3
+        assert clients[0].status_only_probes >= 3
+        assert clients[0].probes == 0
 
         await service.disconnect()
-        stopped_at = clients[0].probes
+        stopped_at = clients[0].status_only_probes
         await asyncio.sleep(0.04)
-        assert clients[0].probes == stopped_at
+        assert clients[0].status_only_probes == stopped_at
 
     asyncio.run(scenario())
+
+
+def test_status_only_connection_fails_closed_without_status_only_client_method(tmp_path: Path) -> None:
+    BioXpConnectionService, BioXpProfile, BioXpProfileStore, BioXpTargetPolicy = _load()
+
+    async def resolver(_: str) -> tuple[str, ...]:
+        return ("100.64.0.10",)
+
+    class RichProbeOnlyClient:
+        rich_probes = 0
+
+        async def probe(self):
+            self.rich_probes += 1
+            raise AssertionError("rich probe must not be called by connection-only admission")
+
+        async def close(self) -> None:
+            return None
+
+    client = RichProbeOnlyClient()
+    policy = BioXpTargetPolicy(
+        allowed_hosts={"robot"},
+        allowed_cidrs={"100.64.0.0/10"},
+        resolver=resolver,
+    )
+    store = BioXpProfileStore(tmp_path / "profile.json")
+    service = BioXpConnectionService(
+        store,
+        policy,
+        client_factory=lambda _: client,  # type: ignore[arg-type,return-value]
+        initial_generation=0,
+    )
+    store.save(BioXpProfile(api_url="http://robot:8123", display_name="BioXP 3200"))
+
+    with pytest.raises(Exception, match="probe_status_only"):
+        asyncio.run(service.connect())
+
+    assert client.rich_probes == 0
 
 
 def test_concurrent_connect_and_disconnect_leave_one_coherent_generation(tmp_path: Path) -> None:
