@@ -62,12 +62,15 @@ def maintenance_state_reasons(
     if not isinstance(maintenance_state, dict):
         return ("Maintenance state is unavailable",)
     if policy == "motion_unblocked":
-        if maintenance_state.get("motion_blocked") is False:
+        if (
+            maintenance_state.get("motion_blocked") is False
+            and maintenance_state.get("recovery_required") is False
+        ):
             return ()
         block_reason = maintenance_state.get("block_reason")
         if maintenance_state.get("motion_blocked") is True and isinstance(block_reason, str) and block_reason:
             return (f"Maintenance motion is blocked: {json.dumps(block_reason)}",)
-        return ("Maintenance motion-block state is not explicitly unblocked",)
+        return ("Maintenance state is not explicitly motion_blocked=false and recovery_required=false",)
     if (
         maintenance_state.get("motion_blocked") is True
         and maintenance_state.get("recovery_required") is True

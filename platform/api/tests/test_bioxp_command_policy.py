@@ -130,7 +130,12 @@ def test_motion_commands_fail_closed_on_missing_or_blocked_maintenance_state() -
         None,
         {},
         {"motion_blocked": None},
-        {"motion_blocked": True, "block_reason": "USB owner changed"},
+        {"motion_blocked": False},
+        {"motion_blocked": False, "recovery_required": True},
+        {"motion_blocked": False, "recovery_required": "true"},
+        {"motion_blocked": "false", "recovery_required": False},
+        {"motion_blocked": True, "recovery_required": False, "block_reason": "USB owner changed"},
+        {"motion_blocked": True, "recovery_required": True, "block_reason": "USB owner changed"},
     ):
         decision = evaluate(request, registry[request.command], replace(base, maintenance_state=state))
         assert decision.allowed is False
