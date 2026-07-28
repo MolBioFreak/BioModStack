@@ -191,6 +191,14 @@ def _atomic_json_write(path: Path, payload: Mapping[str, Any]) -> None:
     os.replace(temporary, path)
 
 
+def _atomic_text_write(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    temporary.write_text(content, encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+
+
 class ProductionReleaseBackend:
     def __init__(
         self,
@@ -1183,6 +1191,29 @@ class ProductionReleaseBackend:
         self, snapshot: Mapping[str, Any], identity: BuildIdentity
     ) -> None:
         current_images = self._candidate_running_image_ids()
+        runtime_receipt = {
+            **identity.as_environment(),
+            "BMS_MANAGED_API_IMAGE_ID": current_images["bms-api"],
+            "BMS_MANAGED_WEB_IMAGE_ID": current_images["bms-web"],
+        }
+        existing_lines = (
+            self.runtime_env_file.read_text(encoding="utf-8").splitlines()
+            if self.runtime_env_file.is_file()
+            else []
+        )
+        updated_lines: list[str] = []
+        remaining = dict(runtime_receipt)
+        for line in existing_lines:
+            key = line.split("=", 1)[0] if "=" in line else ""
+            if key in remaining:
+                updated_lines.append(f"{key}={remaining.pop(key)}")
+            else:
+                updated_lines.append(line)
+        updated_lines.extend(f"{key}={value}" for key, value in remaining.items())
+        _atomic_text_write(
+            self.runtime_env_file,
+            "\n".join(updated_lines).rstrip("\n") + "\n",
+        )
         payload = {
             "accepted_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "build": identity.as_environment(),
