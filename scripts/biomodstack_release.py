@@ -65,9 +65,6 @@ CONTAINER_NAMES = {
 IMMUTABLE_IMAGE_ID = re.compile(r"^sha256:[0-9a-f]{64}$")
 COMPOSE_PROJECT_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 MANAGED_UNIT_NAMES = (
-    services.TARGET_UNIT,
-    services.FRONTEND_SERVICE,
-    services.WORKFLOW_ADAPTER_SERVICE,
     services.CORE_RUNTIME_SERVICE,
 )
 
@@ -637,41 +634,29 @@ class ProductionReleaseBackend:
         )
 
     def install_units(self, identity: BuildIdentity) -> None:
-        services.install_user_units(
-            project_root=self.repo_root,
-            runtime_mode=services.CONTAINER_RUNTIME_MODE,
-        )
         systemd_dir = services.get_user_systemd_dir()
         systemd_dir.mkdir(parents=True, exist_ok=True)
+        rendered = services.render_user_units(
+            self.repo_root,
+            runtime_mode=services.CONTAINER_RUNTIME_MODE,
+        )
         for unit_name in MANAGED_UNIT_NAMES:
             dropin_dir = systemd_dir / f"{unit_name}.d"
             if dropin_dir.exists():
                 if not dropin_dir.is_dir() or dropin_dir.is_symlink():
-                    raise RuntimeError(f"unsafe systemd drop-in directory for {unit_name}")
-                shutil.rmtree(dropin_dir)
-        (systemd_dir / services.FRONTEND_SERVICE).write_text(
-            self.render_operator_frontend_unit(identity),
-            encoding="utf-8",
+                    raise RuntimeError(
+                        f"unsafe systemd drop-in directory for {unit_name}"
         )
+                shutil.rmtree(dropin_dir)
+            (systemd_dir / unit_name).write_text(rendered[unit_name], encoding="utf-8")
         self._run(["systemctl", "--user", "daemon-reload"])
 
     def start_candidate(self) -> None:
-        services.assert_runtime_listener_preflight(
+        services.assert_production_core_listener_preflight(
             project_root=self.repo_root,
-            runtime_mode=services.CONTAINER_RUNTIME_MODE,
         )
-        self._run(["systemctl", "--user", "enable", services.TARGET_UNIT])
-        self._run(
-            [
-                "systemctl",
-                "--user",
-                "start",
-                services.WORKFLOW_ADAPTER_SERVICE,
-                services.CORE_RUNTIME_SERVICE,
-                services.FRONTEND_SERVICE,
-                services.TARGET_UNIT,
-            ]
-        )
+        self._run(["systemctl", "--user", "enable", services.CORE_RUNTIME_SERVICE])
+        self._run(["systemctl", "--user", "start", services.CORE_RUNTIME_SERVICE])
 
     def stop_candidate(self) -> None:
         self.stop_installed_owner()
@@ -815,23 +800,16 @@ class ProductionReleaseBackend:
         return root
 
     def _validate_listener_ownership(self, runtime_root: Path) -> None:
-        preflight = services.runtime_listener_preflight(
-            runtime_root, services.CONTAINER_RUNTIME_MODE
-        )
+        preflight = services.production_core_listener_preflight(runtime_root)
         components = preflight.get("components", {})
-        for component in ("workflow-adapter", "api", "frontend"):
-            record = components.get(component) if isinstance(components, Mapping) else None
+        for component in ("api", "frontend", "cpu-power", "host-agent"):
+            record = (
+                components.get(component) if isinstance(components, Mapping) else None
+            )
             if not isinstance(record, Mapping) or record.get("ok") is not True:
                 raise ReleaseValidationError(
                     f"listener ownership is not proven for {component}"
                 )
-        operator = services.runtime_listener_ownership(
-            "operator-frontend", 5173, "dev-frontend", runtime_root
-        )
-        if operator.get("ok") is not True:
-            raise ReleaseValidationError(
-                "listener ownership is not proven for operator frontend 5173"
-            )
 
     def _validate_effective_units_and_ownership(self, identity: BuildIdentity) -> None:
         systemd_dir = services.get_user_systemd_dir()
@@ -841,41 +819,13 @@ class ProductionReleaseBackend:
                 raise ReleaseValidationError(
                     f"effective unit source for {unit_name} is not the candidate unit"
                 )
-        frontend_path = systemd_dir / services.FRONTEND_SERVICE
-        try:
-            installed_frontend = frontend_path.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise ReleaseValidationError("operator frontend unit is not readable") from exc
-        if installed_frontend != self.render_operator_frontend_unit(identity):
-            raise ReleaseValidationError("operator frontend unit bytes do not match the candidate")
-
-        environment = self._systemd_property(services.FRONTEND_SERVICE, "Environment")
-        required_environment = (
-            f"BMS_HOME={self.repo_root}",
-            "BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:8000",
-            f"VITE_BMS_BUILD_SHA={identity.revision}",
-            f"VITE_BMS_BUILD_ID={identity.build_id}",
-            f"VITE_BMS_BUILD_TIME={identity.build_time}",
+        environment = self._systemd_property(
+            services.CORE_RUNTIME_SERVICE, "Environment"
         )
-        if not all(token in environment.split() for token in required_environment):
-            if "BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:8000" not in environment.split():
-                raise ReleaseValidationError("effective operator proxy target is not API 8000")
-            raise ReleaseValidationError("effective operator frontend identity/root is incorrect")
         if self._runtime_root_from_environment(environment) != self.repo_root:
-            raise ReleaseValidationError("effective operator frontend root is not the candidate root")
-        expected_working_directory = str(self.repo_root / "platform" / "frontend")
-        if (
-            self._systemd_property(services.FRONTEND_SERVICE, "WorkingDirectory")
-            != expected_working_directory
-        ):
-            raise ReleaseValidationError("effective operator frontend working directory is incorrect")
-        expected_vite = str(
-            self.repo_root / "platform" / "frontend" / "node_modules" / ".bin" / "vite"
+            raise ReleaseValidationError(
+                "effective production core root is not the candidate root"
         )
-        if expected_vite not in self._systemd_property(
-            services.FRONTEND_SERVICE, "ExecStart"
-        ):
-            raise ReleaseValidationError("effective operator frontend executable is incorrect")
         self._validate_listener_ownership(self.repo_root)
 
     def _observe_runtime_surfaces(
@@ -891,47 +841,14 @@ class ProductionReleaseBackend:
             require_full_sha=not allow_unsealed,
         )
         if expected_identity is not None and api_revision != expected_identity.revision:
-            raise ReleaseValidationError("direct API revision does not match the built release")
+            raise ReleaseValidationError(
+                "direct API revision does not match the built release"
+            )
 
         self._require_html("container browser health", *self._fetch(self.browser_url))
-        self._require_html("operator frontend health", *self._fetch(self.operator_url))
-        operator_revision = self._health_revision(
-            self.operator_api_url,
-            "operator proxied API health",
-            *self._fetch(self.operator_api_url),
-            require_full_sha=not allow_unsealed,
-        )
-        if not allow_unsealed and operator_revision != api_revision:
-            raise ReleaseValidationError("operator proxied API revision differs from direct API")
-
-        identity_status, identity_body = self._fetch(self.operator_identity_url)
-        if identity_status != 200:
-            raise ReleaseValidationError(
-                f"operator frontend identity returned HTTP {identity_status}"
-            )
-        if allow_unsealed:
-            observed = {"sourceSha256": hashlib.sha256(identity_body).hexdigest()}
-        else:
-            observed = self._frontend_identity(identity_body)
-            if (
-                observed["layer"] != "frontend"
-                or observed["revision"] != api_revision
-                or observed["revision"] == "unknown"
-                or observed["buildId"] in {"", "development"}
-                or observed["buildTime"] in {"", "unknown"}
-            ):
-                raise ReleaseValidationError("operator frontend identity tuple is not exact")
-            observed_identity = BuildIdentity(
-                observed["revision"], observed["buildId"], observed["buildTime"]
-            )
-            if expected_identity is not None and observed_identity != expected_identity:
-                raise ReleaseValidationError("operator frontend identity does not match the built release")
         return {
             "api_revision": api_revision,
             "browser_html": True,
-            "operator_html": True,
-            "operator_api_revision": operator_revision,
-            "operator_identity": observed,
         }
 
     def _snapshot_known_good_validation(
