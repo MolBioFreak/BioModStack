@@ -160,6 +160,12 @@ def test_release_plan_is_explicit_and_validation_precedes_commit() -> None:
     )
 
 
+def test_default_validation_window_covers_slow_container_startup(tmp_path: Path) -> None:
+    backend = release.ProductionReleaseBackend(repo_root=tmp_path, allow_first_install=True)
+
+    assert backend.validation_attempts * backend.validation_retry_delay >= 60
+
+
 class _FailingValidationBackend:
     def __init__(self) -> None:
         self.events: list[str] = []
