@@ -18,6 +18,10 @@ test('Tailnet detection and Stats Toolkit entry stay same-origin on the stable h
     resolveStatsToolkitEntryUrl('http://127.0.0.1:18180/stats/', '127.0.0.1'),
     'http://127.0.0.1:18180/stats/',
   );
+  assert.equal(
+    resolveStatsToolkitEntryUrl('/stats/embed/', '127.0.0.1'),
+    'http://127.0.0.1:18180/stats/',
+  );
 });
 
 test('Tailnet status treats absent local control surfaces as unavailable', async () => {
