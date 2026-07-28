@@ -877,6 +877,14 @@ def _start_selected_environment(spec: EnvironmentSpec, root: Path) -> set[str]:
     # (and immutable production web, when selected) to be healthy first.
     api_probe = _url_probe(spec.api_health_url, expect_json=True)
     runtime_revision = _api_build_identity(api_probe, source="local")["revision"]
+    control_root = root
+    control_revision = runtime_revision
+    if root.resolve() == CANONICAL_PRODUCTION_ROOT.resolve():
+        # The authenticated Tailnet selector is an independently owned control
+        # lane. Keep it on canonical Development source while selecting either
+        # runtime so a request never restarts the process serving that request.
+        control_root = CANONICAL_DEVELOPMENT_ROOT.resolve()
+        control_revision = _git_revision(control_root)
     if spec.runtime_mode == CONTAINER_RUNTIME_MODE:
         _url_probe(spec.frontend_url)
         _validated_production_tailnet_proxy(root)
@@ -887,17 +895,23 @@ def _start_selected_environment(spec: EnvironmentSpec, root: Path) -> set[str]:
     mutations: set[str] = set()
     try:
         # Everything below this boundary can mutate service files or process state.
-        allowed_login = _install_adapter_control_policy(root, runtime_revision, mutations)
+        allowed_login = _install_adapter_control_policy(
+            control_root, control_revision, mutations
+        )
         if not _adapter_identity_policy_matches(
-            root, allowed_login, runtime_revision=runtime_revision
+            control_root, allowed_login, runtime_revision=control_revision
         ):
             adapter_unit = _host_user_systemd_dir() / WORKFLOW_ADAPTER_SERVICE
             if not adapter_unit.is_file():
                 raise TailnetEnvironmentError("managed workflow-adapter systemd unit is not installed")
             mutations.add("adapter_service")
-            daemon_reload(project_root=root)
-            run_systemctl("restart", WORKFLOW_ADAPTER_SERVICE, project_root=root)
-            if not _wait_for_adapter_policy(root, allowed_login, runtime_revision):
+            daemon_reload(project_root=control_root)
+            run_systemctl(
+                "restart", WORKFLOW_ADAPTER_SERVICE, project_root=control_root
+            )
+            if not _wait_for_adapter_policy(
+                control_root, allowed_login, control_revision
+            ):
                 raise TailnetEnvironmentError("workflow adapter did not restart from canonical authenticated source")
         if spec.runtime_mode == DEV_RUNTIME_MODE:
             _install_operator_development_frontend(root, mutations)
