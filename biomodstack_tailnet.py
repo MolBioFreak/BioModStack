@@ -826,6 +826,8 @@ def _install_adapter_control_policy(
     revision = _git_revision(root)
     if not _GIT_REVISION_PATTERN.fullmatch(runtime_revision):
         raise TailnetEnvironmentError("managed API runtime revision is malformed")
+    api_image_id = _managed_image_id("BMS_MANAGED_API_IMAGE_ID", MANAGED_API_IMAGE_ID)
+    web_image_id = _managed_image_id("BMS_MANAGED_WEB_IMAGE_ID", MANAGED_WEB_IMAGE_ID)
     dropin = _host_user_systemd_dir() / f"{WORKFLOW_ADAPTER_SERVICE}.d" / "99-tailnet-canonical-source.conf"
     if mutation_ledger is not None:
         mutation_ledger.add("adapter_files")
@@ -835,6 +837,8 @@ def _install_adapter_control_policy(
         f"Environment=BMS_HOME={root}\n"
         f"Environment=BMS_TAILNET_CONTROL_SOURCE_REVISION={revision}\n"
         f"Environment=BMS_BUILD_SHA={runtime_revision}\n"
+        f"Environment=BMS_MANAGED_API_IMAGE_ID={api_image_id}\n"
+        f"Environment=BMS_MANAGED_WEB_IMAGE_ID={web_image_id}\n"
         "Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=127.0.0.1\n"
         "Environment=BMS_TAILNET_CONTROL_TRUSTED_PROXY_HOSTS=127.0.0.1,::1\n"
         f"Environment=BMS_TAILNET_CONTROL_ALLOWED_TAILSCALE_USERS={login}\n"
