@@ -565,6 +565,22 @@ export function MolBioToolkitV2() {
     const [selectedRnaTrackId, setSelectedRnaTrackId] = useState<string | null>(null);
     const [demoPlasmids, setDemoPlasmids] = useState<SequenceData[]>([]);
     const [demoLoading, setDemoLoading] = useState(true);
+    const [ngsWorkups, setNgsWorkups] = useState<Array<{ job_id: string; scientific_status: 'PASS' | 'FAIL' | 'REVIEW'; revision_relation: 'current' | 'historical'; manifest_available: boolean }>>([]);
+
+    useEffect(() => {
+        if (!selectedSequenceId) {
+            setNgsWorkups([]);
+            return;
+        }
+        let cancelled = false;
+        fetch(`/api/molbio/sequences/${encodeURIComponent(selectedSequenceId)}/ngs-workup`)
+            .then((response) => response.ok ? response.json() : { workups: [] })
+            .then((payload: { workups?: typeof ngsWorkups }) => {
+                if (!cancelled) setNgsWorkups(Array.isArray(payload.workups) ? payload.workups : []);
+            })
+            .catch(() => { if (!cancelled) setNgsWorkups([]); });
+        return () => { cancelled = true; };
+    }, [selectedSequenceId]);
 
     // Enzymes currently displayed on the viewer - controlled by DigestPanel
     const [selectedEnzymes, setSelectedEnzymes] = useState<string[]>([
@@ -1887,6 +1903,23 @@ export function MolBioToolkitV2() {
                             onToggleToolPanel={toggleToolPanel}
                             historyJournal={historyJournal}
                         />
+                    )}
+
+                    {!isViewerFullscreen && selectedSequenceId && (
+                        <section className="mx-3 mt-2 rounded border border-slate-700 bg-slate-800/60 px-3 py-2 text-xs" aria-label="Sequencing verification workup">
+                            <div className="flex items-center justify-between gap-3">
+                                <span className="font-medium text-slate-200">Sequencing verification (read-only)</span>
+                                <a className="text-blue-300 hover:text-blue-200" href={`/ngs?molbio_sequence_id=${encodeURIComponent(selectedSequenceId)}`}>Hand off immutable revision to Nanopore</a>
+                            </div>
+                            {ngsWorkups.length === 0 ? (
+                                <p className="mt-1 text-slate-400">No revision-bound NGS evidence. Job completion is not a scientific PASS.</p>
+                            ) : ngsWorkups.map((workup) => (
+                                <div key={workup.job_id} className="mt-1 flex items-center justify-between text-slate-300">
+                                    <span>{workup.scientific_status} · {workup.revision_relation === 'current' ? 'current revision' : 'historical revision'} · {workup.manifest_available ? 'validated manifest' : 'evidence unavailable/review'}</span>
+                                    <a className="text-blue-300 hover:text-blue-200" href={`/jobs/${encodeURIComponent(workup.job_id)}`}>Job</a>
+                                </div>
+                            ))}
+                        </section>
                     )}
 
                     {!isViewerFullscreen && (

@@ -24,7 +24,7 @@ test('Nanopore FASTQ launch is gated on reference input, finite numeric bounds, 
 
     assert.match(template, /const hasFastqReferenceInput = useMemo/u);
     assert.match(template, /selectedWorkflow === 'clone' \|\| selectedWorkflow === 'plasmidQc' \|\| selectedWorkflow === 'constructScreening' \|\| selectedWorkflow === 'fastqQc'/u);
-    assert.match(template, /&& hasFastqReferenceInput\s+&& hasValidFastqNumericControls/u);
+    assert.match(template, /&& \(hasFastqReferenceInput \|\| Boolean\(molbioSequenceId\)\)\s+&& hasValidFastqNumericControls/u);
     assert.match(template, /This workflow requires a reference FASTA path or a pasted\/created FASTA sequence/u);
     assert.match(template, /function coerceIntegerInput/u);
     assert.match(template, /FASTQ_MAX_IGV_REPORT_MAX_SITES/u);

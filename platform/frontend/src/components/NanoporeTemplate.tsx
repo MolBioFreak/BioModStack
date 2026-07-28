@@ -47,6 +47,14 @@ interface SavedReferenceEntry {
     updatedAt: string;
 }
 
+interface ApprovedComparisonPanel {
+    id: string;
+    version: number;
+    status: 'APPROVED';
+    label: string;
+    snapshot_sha256: string;
+}
+
 interface NanoporeTemplateProps {
     onBack: () => void;
     initialValues?: Record<string, unknown>;
@@ -407,6 +415,9 @@ function normalizeReferenceLabel(name: string): string {
 // Main Component
 // ============================================================================
 export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProps) {
+    // Resolved server-side against an immutable MolBio revision at submission.
+    const [molbioSequenceId] = useState(() => new URLSearchParams(window.location.search).get('molbio_sequence_id') || '');
+    const [approvedComparisonPanelId, setApprovedComparisonPanelId] = useState('');
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     // Analysis workflows use the scheduler's fixed safe policy; this surface does
@@ -440,6 +451,17 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     );
     const [fastqPath, setFastqPath] = useState(initialValues?.fastqPath as string || '');
     const [referencePath, setReferencePath] = useState(initialValues?.referencePath as string || '');
+    const { data: approvedPanelResponse } = useQuery({
+        queryKey: ['approved-ngs-comparison-panels'],
+        queryFn: async () => {
+            const response = await fetch('/api/molbio/ngs-comparison-panels');
+            if (!response.ok) throw new Error('Unable to load approved comparison panels.');
+            return response.json() as Promise<{ panels?: ApprovedComparisonPanel[]; absence_label?: string | null }>;
+        },
+        enabled: Boolean(molbioSequenceId),
+        staleTime: 30_000,
+    });
+    const approvedComparisonPanels = approvedPanelResponse?.panels || [];
 
     // ============================================================================
     // State: Basecalling Config
@@ -617,16 +639,16 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const canSubmit = useMemo(() => {
         if (!jobName.trim()) return false;
         const requiresReference = selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc' || selectedWorkflow === 'bamQc' || selectedWorkflow === 'modified';
-        if (requiresReference && !hasFastqReferenceInput) return false;
+        if (requiresReference && !hasFastqReferenceInput && !molbioSequenceId) return false;
         if (inputSource === 'pod5') return pod5Dir.trim() !== '';
         if (inputSource === 'bam') return bamPath.trim() !== '';
         // FASTQ can run either BMS plasmid QC or the vendor clone-validation
         // workflow. They are deliberately mutually exclusive, not sequential.
         return fastqPath.trim() !== ''
             && (selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc')
-            && hasFastqReferenceInput
+            && (hasFastqReferenceInput || Boolean(molbioSequenceId))
             && hasValidFastqNumericControls;
-    }, [jobName, inputSource, pod5Dir, bamPath, fastqPath, runAssembly, runFastqQc, hasFastqReferenceInput, hasValidFastqNumericControls, selectedWorkflow]);
+    }, [jobName, inputSource, pod5Dir, bamPath, fastqPath, runAssembly, runFastqQc, hasFastqReferenceInput, hasValidFastqNumericControls, selectedWorkflow, molbioSequenceId]);
     const selectedSavedReference = useMemo(
         () => savedReferences.find((entry) => entry.id === selectedSavedReferenceId) || null,
         [savedReferences, selectedSavedReferenceId]
@@ -634,35 +656,6 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
 
     const methylationEnabled = modifiedBases !== 'none';
     const canRunModkit = selectedWorkflow === 'modified' && methylationEnabled;
-    const fastqCliPreview = useMemo(() => {
-        if (inputSource !== 'fastq' || !runFastqQc) return '';
-        const referenceHint = referencePath.trim() || '<uploaded/pasted FASTA>';
-        return [
-            `--fastq_path ${fastqPath || '<fastq path>'}`,
-            `--reference_fasta ${referenceHint}`,
-            `--run_fastq_qc true`,
-            `--expected_plasmid_size ${expectedPlasmidSize}`,
-            `--min_fastq_read_length ${minFastqReadLength}`,
-            `--fastq_minimap2_preset ${fastqMinimap2Preset}`,
-            `--fastq_minimap2_allow_secondary ${fastqMinimap2AllowSecondary}`,
-            `--igv_track_window_bp ${igvTrackWindowBp}`,
-            `--igv_report_max_sites ${igvReportMaxSites}`,
-            `--igv_report_flanking_bp ${igvReportFlankingBp}`,
-        ].join(' \\\n  ');
-    }, [
-        expectedPlasmidSize,
-        fastqMinimap2AllowSecondary,
-        fastqMinimap2Preset,
-        fastqPath,
-        igvReportFlankingBp,
-        igvReportMaxSites,
-        igvTrackWindowBp,
-        inputSource,
-        minFastqReadLength,
-        referencePath,
-        runFastqQc,
-    ]);
-
     const applySavedReferences = (entries: SavedReferenceEntry[]) => {
         const sorted = [...entries].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
         setSavedReferences(sorted);
@@ -797,6 +790,28 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const submitMutation = useMutation({
         mutationFn: async () => {
             let effectiveReferencePath = '';
+            let molbioNgsReceiptId = '';
+            let comparisonPanelReceiptId = '';
+
+            if (molbioSequenceId) {
+                const receiptResponse = await fetch(`/api/molbio/sequences/${encodeURIComponent(molbioSequenceId)}/ngs-receipts`, { method: 'POST' });
+                if (!receiptResponse.ok) {
+                    throw new Error('Unable to prepare the immutable molecular-reference handoff. Save or refresh the sequence, then try again.');
+                }
+                const receipt = await receiptResponse.json() as { receipt_id?: string };
+                molbioNgsReceiptId = String(receipt.receipt_id || '').trim();
+                if (!molbioNgsReceiptId) throw new Error('The molecular-reference handoff did not return a receipt.');
+                if (approvedComparisonPanelId) {
+                    const panelResponse = await fetch(`/api/molbio/ngs-comparison-panels/${encodeURIComponent(approvedComparisonPanelId)}/receipts`, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ expected_receipt_id: molbioNgsReceiptId }),
+                    });
+                    if (!panelResponse.ok) throw new Error('Unable to prepare the approved comparison-panel receipt.');
+                    const panelReceipt = await panelResponse.json() as { receipt_id?: string };
+                    comparisonPanelReceiptId = String(panelReceipt.receipt_id || '').trim();
+                    if (!comparisonPanelReceiptId) throw new Error('The approved comparison panel did not return a receipt.');
+                }
+            }
 
             const createTabFasta = (
                 referenceTab === 'create'
@@ -830,7 +845,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             }
 
             const requiresReference = selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc' || selectedWorkflow === 'bamQc' || selectedWorkflow === 'modified';
-            if (requiresReference && !effectiveReferencePath) {
+            if (requiresReference && !effectiveReferencePath && !molbioNgsReceiptId) {
                 throw new Error('This workflow requires a reference FASTA (path or pasted sequence).');
             }
 
@@ -851,6 +866,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                 name: jobName || `nanopore_${Date.now()}`,
                 params: {
                     reference_fasta: effectiveReferencePath || undefined,
+                    ...(molbioNgsReceiptId && { molbio_ngs_receipt_id: molbioNgsReceiptId }),
+                    ...(comparisonPanelReceiptId && { ngs_comparison_panel_receipt_id: comparisonPanelReceiptId }),
                     min_qscore: inputSource === 'pod5' ? minQscore : undefined,
                     run_modkit: runModkit && canRunModkit,
                     run_fastq_qc: inputSource === 'fastq' && selectedWorkflow !== 'clone',
@@ -1442,6 +1459,26 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         <p className="text-xs text-[var(--text-secondary)]">{referenceLibraryNotice}</p>
                     )}
                 </div>
+
+                {molbioSequenceId && ['plasmidQc', 'constructScreening', 'fastqQc', 'bamQc'].includes(selectedWorkflow) && (
+                    <div className="mb-3 p-3 rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/40">
+                        <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">Approved comparison panel (optional)</label>
+                        <select
+                            value={approvedComparisonPanelId}
+                            onChange={(event) => setApprovedComparisonPanelId(event.target.value)}
+                            className="w-full bg-[var(--bg-secondary)] border border-[var(--border-primary)] rounded px-3 py-2 text-[var(--text-primary)] text-sm"
+                        >
+                            <option value="">No comparison panel</option>
+                            {approvedComparisonPanels.map((panel) => (
+                                <option key={panel.id} value={panel.id}>{panel.label}</option>
+                            ))}
+                        </select>
+                        {approvedComparisonPanels.length === 0 && (
+                            <p className="text-xs text-[var(--text-secondary)] mt-1">{approvedPanelResponse?.absence_label || 'No approved comparison panels are available.'}</p>
+                        )}
+                        <p className="text-xs text-[var(--text-secondary)] mt-1">Server-approved references only; the expected plasmid remains the MolBio receipt reference.</p>
+                    </div>
+                )}
 
                 {referenceTab === 'browse' && (
                     <>
