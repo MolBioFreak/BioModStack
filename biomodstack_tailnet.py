@@ -59,6 +59,10 @@ GLOBAL_SERVE_HANDLERS: Mapping[str, str] = {
     "/stats/embed/api/v1/capabilities": f"{STATS_TOOLKIT_TARGET}/api/v1/capabilities",
     "/stats/embed/api/v1/tools": f"{STATS_TOOLKIT_TARGET}/api/v1/tools",
 }
+DEPRECATED_SERVE_HANDLERS: Mapping[str, str] = {
+    "/am": "http://127.0.0.1:5174/am",
+    "/vlm": "http://127.0.0.1:8010",
+}
 PRODUCTION_TAILNET_PROXY_PORT = 18081
 PRODUCTION_TAILNET_PROXY_CONTAINER = "biomodstack-tailnet-production-proxy"
 PRODUCTION_TAILNET_PROXY_IMAGE = "nginx@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10"
@@ -288,7 +292,7 @@ def _set_serve_path(path: str, target: str) -> None:
 
 
 def _clear_serve_path(path: str) -> None:
-    if path not in GLOBAL_SERVE_HANDLERS:
+    if path not in GLOBAL_SERVE_HANDLERS and path not in DEPRECATED_SERVE_HANDLERS:
         raise TailnetEnvironmentError("refusing to clear an unexpected Tailnet path")
     _run(["tailscale", "serve", "--bg", "--yes", f"--set-path={path}", "off"])
 
@@ -350,19 +354,19 @@ def _control_route_needs_mutation(snapshot: ServeSnapshot) -> bool:
 
 
 def ensure_global_tailnet_routes() -> ServeSnapshot:
-    """Install the selector and Stats Toolkit routes without changing Serve `/`.
+    """Install global routes and remove exact dead legacy mappings without changing `/`.
 
-    The operation is additive, rejects conflicting route owners, preserves all
+    The operation rejects conflicting managed-route owners, preserves arbitrary
     unrelated handlers byte-for-byte, and rolls back to the exact prior Serve
-    document if any setter or verification step fails.
+    document if any setter, removal, or verification step fails.
     """
     prior = _read_serve_snapshot()
     expected_handlers = dict(prior.handlers)
-    paths_to_set: list[tuple[str, str]] = []
+    mutations: list[tuple[str, str | None]] = []
     for path, target in GLOBAL_SERVE_HANDLERS.items():
         existing = prior.handlers.get(path)
         if existing is None:
-            paths_to_set.append((path, target))
+            mutations.append((path, target))
         else:
             existing_target = str(existing.get("Proxy", "")).rstrip("/")
             allowed_existing = {target}
@@ -373,14 +377,26 @@ def ensure_global_tailnet_routes() -> ServeSnapshot:
                     f"global Tailnet path {path} is already owned by an unexpected target: {existing}"
                 )
             if existing_target != target:
-                paths_to_set.append((path, target))
+                mutations.append((path, target))
         expected_handlers[path] = {"Proxy": target}
 
-    attempted: list[str] = []
+    for path, dead_target in DEPRECATED_SERVE_HANDLERS.items():
+        existing = prior.handlers.get(path)
+        if existing is None:
+            continue
+        existing_target = str(existing.get("Proxy", "")).rstrip("/")
+        if existing_target == dead_target:
+            mutations.append((path, None))
+            expected_handlers.pop(path, None)
+
+    attempted: list[tuple[str, str | None]] = []
     try:
-        for path, target in paths_to_set:
-            attempted.append(path)
-            _set_serve_path(path, target)
+        for path, target in mutations:
+            attempted.append((path, target))
+            if target is None:
+                _clear_serve_path(path)
+            else:
+                _set_serve_path(path, target)
         installed = _read_serve_snapshot()
         if installed.root_proxy != prior.root_proxy:
             raise TailnetEnvironmentError("global Tailnet policy changed Serve root")
@@ -389,14 +405,20 @@ def ensure_global_tailnet_routes() -> ServeSnapshot:
         return installed
     except Exception as exc:
         rollback_errors: list[str] = []
-        for path in reversed(attempted):
+        for path, _target in reversed(attempted):
             try:
                 previous = prior.handlers.get(path)
                 if previous is None:
                     _clear_serve_path(path)
                 else:
                     previous_target = str(previous.get("Proxy", "")).rstrip("/")
-                    _set_serve_path(path, previous_target)
+                    if path in DEPRECATED_SERVE_HANDLERS:
+                        _run([
+                            "tailscale", "serve", "--bg", "--yes",
+                            f"--set-path={path}", previous_target,
+                        ])
+                    else:
+                        _set_serve_path(path, previous_target)
             except Exception as rollback_exc:
                 rollback_errors.append(f"{path}: {rollback_exc}")
         try:

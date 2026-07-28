@@ -12,10 +12,12 @@ if str(REPO_ROOT) not in sys.path:
 import biomodstack_tailnet as tailnet  # noqa: E402
 
 
-def test_global_tailnet_policy_adds_selector_and_stats_without_touching_root_or_unrelated_handlers(monkeypatch) -> None:
+def test_global_tailnet_policy_adds_managed_routes_removes_exact_dead_routes_and_preserves_others(monkeypatch) -> None:
     handlers: dict[str, dict[str, str]] = {
         "/": {"Proxy": "http://127.0.0.1:5173"},
         "/am": {"Proxy": "http://127.0.0.1:5174/am"},
+        "/vlm": {"Proxy": "http://127.0.0.1:8010"},
+        "/other": {"Proxy": "http://127.0.0.1:9000"},
     }
 
     def snapshot() -> tailnet.ServeSnapshot:
@@ -26,22 +28,57 @@ def test_global_tailnet_policy_adds_selector_and_stats_without_touching_root_or_
             raw={"handlers": {path: dict(handler) for path, handler in handlers.items()}},
         )
 
-    calls: list[tuple[str, str]] = []
+    set_calls: list[tuple[str, str]] = []
+    clear_calls: list[str] = []
 
     def set_path(path: str, target: str) -> None:
-        calls.append((path, target))
+        set_calls.append((path, target))
         handlers[path] = {"Proxy": target}
+
+    def clear_path(path: str) -> None:
+        clear_calls.append(path)
+        handlers.pop(path, None)
 
     monkeypatch.setattr(tailnet, "_read_serve_snapshot", snapshot)
     monkeypatch.setattr(tailnet, "_set_serve_path", set_path)
+    monkeypatch.setattr(tailnet, "_clear_serve_path", clear_path)
 
     installed = tailnet.ensure_global_tailnet_routes()
 
     assert installed.root_proxy == "http://127.0.0.1:5173"
-    assert installed.handlers["/am"] == {"Proxy": "http://127.0.0.1:5174/am"}
-    assert calls == list(tailnet.GLOBAL_SERVE_HANDLERS.items())
+    assert installed.handlers["/other"] == {"Proxy": "http://127.0.0.1:9000"}
+    assert "/am" not in installed.handlers
+    assert "/vlm" not in installed.handlers
+    assert set_calls == list(tailnet.GLOBAL_SERVE_HANDLERS.items())
+    assert clear_calls == ["/am", "/vlm"]
     for path, target in tailnet.GLOBAL_SERVE_HANDLERS.items():
         assert installed.handlers[path] == {"Proxy": target}
+
+
+def test_global_tailnet_policy_preserves_reassigned_deprecated_path(monkeypatch) -> None:
+    handlers = {
+        "/": {"Proxy": "http://127.0.0.1:5173"},
+        "/am": {"Proxy": "http://127.0.0.1:9001"},
+        **{path: {"Proxy": target} for path, target in tailnet.GLOBAL_SERVE_HANDLERS.items()},
+    }
+
+    def snapshot() -> tailnet.ServeSnapshot:
+        return tailnet.ServeSnapshot(
+            origin="https://node.example.ts.net",
+            root_proxy=handlers["/"]["Proxy"],
+            handlers={path: dict(handler) for path, handler in handlers.items()},
+            raw={"handlers": {path: dict(handler) for path, handler in handlers.items()}},
+        )
+
+    monkeypatch.setattr(tailnet, "_read_serve_snapshot", snapshot)
+    monkeypatch.setattr(
+        tailnet,
+        "_clear_serve_path",
+        lambda *args: (_ for _ in ()).throw(AssertionError("must preserve reassigned route")),
+    )
+
+    installed = tailnet.ensure_global_tailnet_routes()
+    assert installed.handlers["/am"] == {"Proxy": "http://127.0.0.1:9001"}
 
 
 def test_global_tailnet_policy_rejects_conflicting_route_owner_without_mutation(monkeypatch) -> None:
