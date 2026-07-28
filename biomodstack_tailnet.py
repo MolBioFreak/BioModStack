@@ -1969,6 +1969,28 @@ def _validated_production_tailnet_proxy(root: Path) -> dict[str, object]:
     }
 
 
+def _accepted_release_image_ids(root: Path, revision: str) -> dict[str, str] | None:
+    """Read immutable image IDs from the accepted Production release receipt."""
+    if root.resolve() != CANONICAL_PRODUCTION_ROOT.resolve():
+        return None
+    receipt_path = Path.home() / ".local" / "state" / "biomodstack" / "releases" / "known-good.json"
+    try:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        build = receipt["build"]
+        images = receipt["images"]
+        accepted_revision = str(build["BMS_BUILD_SHA"])
+        api_image = str(images["bms-api"])
+        web_image = str(images["bms-web"])
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise TailnetEnvironmentError("accepted Production image receipt is unavailable") from exc
+    if accepted_revision != revision:
+        raise TailnetEnvironmentError("accepted Production receipt revision does not match the runtime")
+    for image_id in (api_image, web_image):
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
+            raise TailnetEnvironmentError("accepted Production image receipt is malformed")
+    return {"biomodstack-api": api_image, "biomodstack-web": web_image}
+
+
 def _validated_container_runtime(root: Path, *, require_web: bool) -> dict[str, object]:
     required_names = {"biomodstack-api"}
     if require_web:
@@ -2004,7 +2026,7 @@ def _validated_container_runtime(root: Path, *, require_web: bool) -> dict[str, 
         ),
         "biomodstack-web": ("/docker-entrypoint.sh nginx -g daemon off;", "/"),
     }
-    expected_image_ids = {
+    expected_image_ids = _accepted_release_image_ids(root, next(iter(revisions))) or {
         "biomodstack-api": _managed_image_id("BMS_MANAGED_API_IMAGE_ID", MANAGED_API_IMAGE_ID),
         "biomodstack-web": _managed_image_id("BMS_MANAGED_WEB_IMAGE_ID", MANAGED_WEB_IMAGE_ID),
     }
