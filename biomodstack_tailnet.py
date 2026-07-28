@@ -49,6 +49,16 @@ CANONICAL_PRODUCTION_ROOT = Path("/home/dalab/biomodstack/prod-main-canonical")
 CONTROL_PATH = "/api/tailnet-environment"
 CONTROL_TARGET = "http://127.0.0.1:8001"
 LEGACY_CONTROL_TARGET = "http://127.0.0.1:8001/api/workflow-adapter/tailnet-environment"
+STATS_TOOLKIT_TARGET = "http://127.0.0.1:18180"
+GLOBAL_SERVE_HANDLERS: Mapping[str, str] = {
+    CONTROL_PATH: CONTROL_TARGET,
+    "/stats/embed": f"{STATS_TOOLKIT_TARGET}/stats",
+    "/stats/assets": f"{STATS_TOOLKIT_TARGET}/stats/assets",
+    "/stats/embed/health/live": f"{STATS_TOOLKIT_TARGET}/health/live",
+    "/stats/embed/health/ready": f"{STATS_TOOLKIT_TARGET}/health/ready",
+    "/stats/embed/api/v1/capabilities": f"{STATS_TOOLKIT_TARGET}/api/v1/capabilities",
+    "/stats/embed/api/v1/tools": f"{STATS_TOOLKIT_TARGET}/api/v1/tools",
+}
 PRODUCTION_TAILNET_PROXY_PORT = 18081
 PRODUCTION_TAILNET_PROXY_CONTAINER = "biomodstack-tailnet-production-proxy"
 PRODUCTION_TAILNET_PROXY_IMAGE = "nginx@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10"
@@ -259,13 +269,26 @@ def _set_serve_root(target: str) -> None:
 
 
 def _set_serve_path(path: str, target: str) -> None:
-    if path != CONTROL_PATH or target not in (CONTROL_TARGET, LEGACY_CONTROL_TARGET):
-        raise TailnetEnvironmentError("refusing an unexpected Tailnet control-path mapping")
+    allowed_targets = dict(GLOBAL_SERVE_HANDLERS)
+    allowed_targets[CONTROL_PATH] = CONTROL_TARGET
+    if path == CONTROL_PATH and target == LEGACY_CONTROL_TARGET:
+        pass
+    elif allowed_targets.get(path) != target:
+        raise TailnetEnvironmentError("refusing an unexpected global Tailnet path mapping")
+    parsed = urllib.parse.urlsplit(target)
+    target_origin = f"{parsed.scheme}://{parsed.netloc}"
+    if (
+        _canonical_loopback_http_target(target_origin) != target_origin
+        or not parsed.path.startswith("/")
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise TailnetEnvironmentError("refusing a non-loopback global Tailnet target")
     _run(["tailscale", "serve", "--bg", "--yes", f"--set-path={path}", target])
 
 
 def _clear_serve_path(path: str) -> None:
-    if path != CONTROL_PATH:
+    if path not in GLOBAL_SERVE_HANDLERS:
         raise TailnetEnvironmentError("refusing to clear an unexpected Tailnet path")
     _run(["tailscale", "serve", "--bg", "--yes", f"--set-path={path}", "off"])
 
@@ -324,6 +347,68 @@ def _control_route_needs_mutation(snapshot: ServeSnapshot) -> bool:
             f"Tailnet control path is already owned by an unexpected target: {existing}"
         )
     return True
+
+
+def ensure_global_tailnet_routes() -> ServeSnapshot:
+    """Install the selector and Stats Toolkit routes without changing Serve `/`.
+
+    The operation is additive, rejects conflicting route owners, preserves all
+    unrelated handlers byte-for-byte, and rolls back to the exact prior Serve
+    document if any setter or verification step fails.
+    """
+    prior = _read_serve_snapshot()
+    expected_handlers = dict(prior.handlers)
+    paths_to_set: list[tuple[str, str]] = []
+    for path, target in GLOBAL_SERVE_HANDLERS.items():
+        existing = prior.handlers.get(path)
+        if existing is None:
+            paths_to_set.append((path, target))
+        else:
+            existing_target = str(existing.get("Proxy", "")).rstrip("/")
+            allowed_existing = {target}
+            if path == CONTROL_PATH:
+                allowed_existing.add(LEGACY_CONTROL_TARGET)
+            if existing_target not in allowed_existing:
+                raise TailnetEnvironmentError(
+                    f"global Tailnet path {path} is already owned by an unexpected target: {existing}"
+                )
+            if existing_target != target:
+                paths_to_set.append((path, target))
+        expected_handlers[path] = {"Proxy": target}
+
+    attempted: list[str] = []
+    try:
+        for path, target in paths_to_set:
+            attempted.append(path)
+            _set_serve_path(path, target)
+        installed = _read_serve_snapshot()
+        if installed.root_proxy != prior.root_proxy:
+            raise TailnetEnvironmentError("global Tailnet policy changed Serve root")
+        if installed.handlers != expected_handlers:
+            raise TailnetEnvironmentError("global Tailnet policy installation did not verify")
+        return installed
+    except Exception as exc:
+        rollback_errors: list[str] = []
+        for path in reversed(attempted):
+            try:
+                previous = prior.handlers.get(path)
+                if previous is None:
+                    _clear_serve_path(path)
+                else:
+                    previous_target = str(previous.get("Proxy", "")).rstrip("/")
+                    _set_serve_path(path, previous_target)
+            except Exception as rollback_exc:
+                rollback_errors.append(f"{path}: {rollback_exc}")
+        try:
+            restored = _read_serve_snapshot()
+            if restored.raw != prior.raw:
+                raise TailnetEnvironmentError("Serve bytes differ from the prior snapshot")
+        except Exception as rollback_exc:
+            rollback_errors.append(f"verification: {rollback_exc}")
+        detail = f"; rollback also failed: {' | '.join(rollback_errors)}" if rollback_errors else ""
+        raise TailnetEnvironmentError(
+            f"global Tailnet policy installation failed: {exc}{detail}"
+        ) from exc
 
 
 def _url_probe(

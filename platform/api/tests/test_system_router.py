@@ -18,10 +18,10 @@ for root in (API_ROOT, REPO_ROOT):
 from routers import system
 
 
-def build_client() -> TestClient:
+def build_client(*, client_host: str = "testclient") -> TestClient:
     app = FastAPI()
     app.include_router(system.router, prefix="/api")
-    return TestClient(app)
+    return TestClient(app, client=(client_host, 50000))
 
 
 def _local_request():
@@ -53,7 +53,7 @@ def test_stats_toolkit_status_endpoint_returns_live_addon_probe(monkeypatch) -> 
     }
     monkeypatch.setattr(system, "probe_stats_addon", lambda: expected)
 
-    with build_client() as client:
+    with build_client(client_host="100.64.0.8") as client:
         response = client.get("/api/system/stats-toolkit")
 
     assert response.status_code == 200

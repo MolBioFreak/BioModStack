@@ -599,7 +599,12 @@ def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path, mo
     )
     units = services.render_user_units(project_root, runtime_mode="dev")
 
-    assert set(units) == {services.API_SERVICE, services.FRONTEND_SERVICE, services.DEV_TARGET_UNIT}
+    assert set(units) == {
+        services.API_SERVICE,
+        services.FRONTEND_SERVICE,
+        services.TAILNET_GLOBAL_SERVICE,
+        services.DEV_TARGET_UNIT,
+    }
 
     api_unit = units[services.API_SERVICE]
     assert f"Environment=BMS_HOME={project_root}" in api_unit
@@ -635,10 +640,16 @@ def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path, mo
     assert "StartLimitIntervalSec=300" in frontend_unit
     assert "StartLimitBurst=3" in frontend_unit
     assert f"PartOf={services.DEV_TARGET_UNIT}" in frontend_unit
+    assert f"Requires={services.TAILNET_GLOBAL_SERVICE}" in frontend_unit
     assert f"Wants={services.API_SERVICE}" not in frontend_unit
 
+    tailnet_unit = units[services.TAILNET_GLOBAL_SERVICE]
+    assert "Type=oneshot" in tailnet_unit
+    assert f"Before={services.FRONTEND_SERVICE}" in tailnet_unit
+    assert f"ExecStart=/usr/bin/env python3 {project_root}/scripts/install_tailnet_global_routes.py" in tailnet_unit
+
     target_unit = units[services.DEV_TARGET_UNIT]
-    assert f"Wants={services.API_SERVICE} {services.FRONTEND_SERVICE}" in target_unit
+    assert f"Wants={services.API_SERVICE} {services.FRONTEND_SERVICE} {services.TAILNET_GLOBAL_SERVICE}" in target_unit
     assert "WantedBy=default.target" in target_unit
 
 
