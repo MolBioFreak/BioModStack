@@ -1,5 +1,5 @@
 <?xml version='1.0' encoding='utf-8'?>
-<widget id="org.biomodstack.mobile" version="0.4.1" android-versionCode="401" xmlns="http://www.w3.org/ns/widgets" xmlns:android="http://schemas.android.com/apk/res/android" xmlns:cdv="http://cordova.apache.org/ns/1.0">
+<widget id="org.biomodstack.mobile" version="0.4.2" android-versionCode="402" xmlns="http://www.w3.org/ns/widgets" xmlns:android="http://schemas.android.com/apk/res/android" xmlns:cdv="http://apache.org/ns/1.0">
     <name>BioModStack</name>
     <description>Standalone Cordova Android wrapper for the BioModStack frontend.</description>
     <author email="noreply@example.com" href="https://biomodstack.invalid">BioModStack</author>
