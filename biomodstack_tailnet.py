@@ -2168,11 +2168,8 @@ def _verify_selected_environment(
             container_name="biomodstack-web",
             port=spec.frontend_port,
         )
-    adapter_root = root
-    adapter_revision = local_api_build["revision"]
-    if root.resolve() == CANONICAL_PRODUCTION_ROOT.resolve():
-        adapter_root = CANONICAL_DEVELOPMENT_ROOT.resolve()
-        adapter_revision = _git_revision(adapter_root)
+    adapter_root = CANONICAL_DEVELOPMENT_ROOT.resolve()
+    adapter_revision = _git_revision(adapter_root)
     workflow_adapter_listener = _validated_workflow_adapter_listener(
         adapter_root, adapter_revision
     )
