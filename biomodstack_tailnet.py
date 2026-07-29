@@ -52,6 +52,8 @@ LEGACY_CONTROL_TARGET = "http://127.0.0.1:8001/api/workflow-adapter/tailnet-envi
 STATS_TOOLKIT_TARGET = "http://127.0.0.1:18180"
 GLOBAL_SERVE_HANDLERS: Mapping[str, str] = {
     CONTROL_PATH: CONTROL_TARGET,
+    "/api/mobile-apk": "http://127.0.0.1:8000/api/mobile-apk",
+    "/api/mobile-ui": "http://127.0.0.1:8000/api/mobile-ui",
     "/stats/embed": f"{STATS_TOOLKIT_TARGET}/stats",
     "/stats/assets": f"{STATS_TOOLKIT_TARGET}/stats/assets",
     "/stats/embed/health/live": f"{STATS_TOOLKIT_TARGET}/health/live",
