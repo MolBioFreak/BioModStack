@@ -1,7 +1,7 @@
 {
   "name": "biomodstack-cordova-android",
   "private": true,
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Standalone Apache Cordova Android wrapper for the BioModStack frontend",
   "scripts": {
     "doctor:android": "npx cordova requirements android",
