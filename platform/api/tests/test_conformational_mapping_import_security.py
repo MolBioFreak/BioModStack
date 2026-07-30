@@ -205,12 +205,12 @@ def test_cm6_010_limits_and_collision_safe_names(tmp_path: Path) -> None:
         verify_registered_artifact(bad, principal_id="alice")
 
 
-def test_cm6_011_authorized_registered_id(tmp_path: Path) -> None:
+def test_cm6_011_registered_id_is_personal_workflow_accessible_and_content_verified(tmp_path: Path) -> None:
     (tmp_path / "input.pdb").write_bytes(PDB)
     artifact = _registered(tmp_path)
-    assert verify_registered_artifact(artifact, principal_id="alice") == (artifact.content_sha256, artifact.size_bytes)
-    with pytest.raises(ImportStagingError, match="authorized"):
-        verify_registered_artifact(artifact, principal_id="mallory")
+    expected = (artifact.content_sha256, artifact.size_bytes)
+    assert verify_registered_artifact(artifact, principal_id="alice") == expected
+    assert verify_registered_artifact(artifact, principal_id="historical-owner") == expected
 
 
 def test_cm6_012_immutable_receipt_and_import_identity(tmp_path: Path) -> None:

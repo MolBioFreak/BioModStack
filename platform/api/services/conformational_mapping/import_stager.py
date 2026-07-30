@@ -54,8 +54,6 @@ def verify_registered_artifact(
 ) -> tuple[str, int]:
     """Revalidate a registered regular file without materializing its bytes."""
 
-    if artifact.principal_id != principal_id:
-        raise ImportStagingError("registered artifact is not authorized for this principal")
     descriptor, before = _open_registered(artifact)
     try:
         if before.st_size > maximum_bytes:
@@ -77,8 +75,6 @@ def read_registered_artifact(
 ) -> bytes:
     """Read immutable registered bytes through a no-follow descriptor and revalidate identity."""
 
-    if artifact.principal_id != principal_id:
-        raise ImportStagingError("registered artifact is not authorized for this principal")
     descriptor, before = _open_registered(artifact)
     try:
         if before.st_size > maximum_bytes:
@@ -111,15 +107,15 @@ def stage_registered_assets(
     destination_root: Path | str,
     maximum_bytes: int = MAX_IMPORT_BYTES,
 ) -> dict[str, Path]:
-    """Copy authenticated non-structure runtime assets by registered identity."""
+    """Copy immutable non-structure runtime assets by registered identity."""
 
     destination = Path(destination_root)
     destination.mkdir(parents=True, exist_ok=False)
     staged: dict[str, Path] = {}
     try:
         for artifact in artifacts:
-            if artifact.principal_id != principal_id or artifact.artifact_id in staged:
-                raise ImportStagingError("runtime asset identity is unauthorized or duplicated")
+            if artifact.artifact_id in staged:
+                raise ImportStagingError("runtime asset identity is duplicated")
             descriptor, before = _open_registered(artifact)
             try:
                 if before.st_size > maximum_bytes:
@@ -282,12 +278,10 @@ def stage_registered_artifacts(
 ) -> StagedImport:
     """Copy registered IDs into an immutable request-owned directory.
 
-    Authorization, descriptor identity, content identity and order are checked
-    before a receipt is published. The caller schedules only after this returns.
+    Descriptor identity, content identity and order are checked before a receipt
+    is published. The caller schedules only after this returns.
     """
 
-    if not principal_id:
-        raise ImportStagingError("an authenticated principal is required")
     if not artifacts or len(artifacts) > MAX_IMPORT_FILES:
         raise ImportStagingError("import artifact cardinality is outside the allowed range")
     artifact_ids = [item.artifact_id for item in artifacts]
@@ -303,8 +297,6 @@ def stage_registered_artifacts(
     content_hashes: set[str] = set()
     try:
         for index, artifact in enumerate(artifacts):
-            if artifact.principal_id != principal_id:
-                raise ImportStagingError("registered artifact is not authorized for this principal")
             descriptor, before = _open_registered(artifact)
             try:
                 if before.st_size > maximum_bytes:

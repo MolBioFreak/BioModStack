@@ -66,113 +66,15 @@ def test_registered_source_format_is_server_normalized() -> None:
     assert _registered_source_format("legacy/content.pdb") == "pdb"
 
 
-def test_cm_application_principal_requires_server_authenticated_proxy_boundary(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("BMS_CM_OPERATOR_TOKEN", raising=False)
-    monkeypatch.delenv("BMS_CM_TRUSTED_PROXY_SECRET", raising=False)
-    with pytest.raises(HTTPException) as denied:
-        _principal(_http_request(client_host="127.0.0.1"))
-    assert denied.value.status_code == 401
-
-    monkeypatch.setenv("BMS_CM_TRUSTED_PROXY_SECRET", "server-only-proxy-secret")
-    request = _http_request(
-        client_host="127.0.0.1",
-        headers={"X-BMS-CM-Proxy-Secret": "server-only-proxy-secret"},
+def test_cm_personal_workflow_principal_is_available_without_proxy_or_operator_credentials() -> None:
+    assert _principal(_http_request(client_host="127.0.0.1")) == "local-personal-workflow"
+    assert _principal(_http_request(client_host="100.64.0.12", headers={"Authorization": "Bearer ignored"})) == (
+        "local-personal-workflow"
     )
-    assert _principal(request) == "local-application-operator"
 
 
-def test_cm_application_principal_ignores_unverifiable_tailscale_login(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("BMS_CM_OPERATOR_TOKEN", raising=False)
-    monkeypatch.setenv("BMS_CM_TRUSTED_PROXY_SECRET", "server-only-proxy-secret")
-    base_headers = {
-        "X-BMS-CM-Proxy-Secret": "server-only-proxy-secret",
-        "Tailscale-User-Login": "Christian@Example.COM",
-    }
-    request = _http_request(client_host="::1", headers=base_headers)
-    assert _principal(request) == "local-application-operator"
-
-
-def test_cm_application_principal_uses_server_proof_after_forwarded_client_rewrite(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("BMS_CM_OPERATOR_TOKEN", raising=False)
-    monkeypatch.setenv("BMS_CM_TRUSTED_PROXY_SECRET", "server-only-proxy-secret")
-    forwarded = _http_request(
-        client_host="100.64.0.12",
-        headers={"X-BMS-CM-Proxy-Secret": "server-only-proxy-secret"},
-    )
-    assert _principal(forwarded) == "local-application-operator"
-    for client_host, headers in (
-        ("127.0.0.1", {"X-BMS-CM-Proxy-Secret": "wrong"}),
-        ("127.0.0.1", {"Tailscale-User-Login": "forged@example.com"}),
-    ):
-        with pytest.raises(HTTPException) as denied:
-            _principal(_http_request(client_host=client_host, headers=headers))
-        assert denied.value.status_code == 401
-
-
-def test_cm_proxy_contract_strips_browser_operator_token_and_injects_server_secret() -> None:
-    root = Path(__file__).resolve().parents[3]
-    nginx = (root / "docker/web/nginx.conf").read_text(encoding="utf-8")
-    compose = (root / "compose.core-runtime.yml").read_text(encoding="utf-8")
-    assert 'proxy_set_header X-BMS-CM-Operator-Token "";' in nginx
-    assert 'proxy_set_header Tailscale-User-Login "";' in nginx
-    assert 'proxy_set_header X-Forwarded-Host $http_host;' in nginx
-    assert 'proxy_set_header X-BMS-CM-Proxy-Secret "${BMS_CM_TRUSTED_PROXY_SECRET}";' in nginx
-    assert 'if ($host !~* ^(${BMS_CM_ALLOWED_HOST_PATTERN})$) { return 421; }' in nginx
-    assert compose.count("      BMS_CM_TRUSTED_PROXY_SECRET:") == 2
-    assert "BMS_CM_ALLOWED_ORIGINS:" in compose
-    assert "BMS_CM_ALLOWED_HOST_PATTERN:" in compose
-
-
-def test_cm_proxy_mutations_require_same_origin(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("BMS_CM_OPERATOR_TOKEN", raising=False)
-    monkeypatch.setenv("BMS_CM_TRUSTED_PROXY_SECRET", "server-only-proxy-secret")
-    monkeypatch.setenv("BMS_CM_ALLOWED_ORIGINS", "https://bms.example.test:18080")
-    base = {
-        "Host": "bms-api:8000",
-        "X-Forwarded-Host": "bms.example.test:18080",
-        "X-Forwarded-Proto": "https",
-        "X-BMS-CM-Proxy-Secret": "server-only-proxy-secret",
-    }
-    accepted = _http_request(
-        client_host="127.0.0.1",
-        headers={**base, "Origin": "https://bms.example.test:18080"},
-    )
-    assert _mutation_principal(accepted) == "local-application-operator"
-
-    for origin in (None, "https://attacker.example"):
-        headers = dict(base)
-        if origin is not None:
-            headers["Origin"] = origin
-        with pytest.raises(HTTPException) as denied:
-            _mutation_principal(_http_request(client_host="127.0.0.1", headers=headers))
-        assert denied.value.status_code == 403
-
-    rebound = {
-        **base,
-        "X-Forwarded-Host": "attacker-controlled.example:18080",
-        "Origin": "https://attacker-controlled.example:18080",
-    }
-    with pytest.raises(HTTPException) as denied:
-        _mutation_principal(_http_request(client_host="127.0.0.1", headers=rebound))
-    assert denied.value.status_code == 403
-
-
-def test_cm_explicit_operator_mutation_does_not_require_browser_origin(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("BMS_CM_TRUSTED_PROXY_SECRET", raising=False)
-    monkeypatch.setenv("BMS_CM_OPERATOR_TOKEN", "operator-secret")
-    request = _http_request(
-        client_host="127.0.0.1",
-        headers={"X-BMS-CM-Operator-Token": "operator-secret"},
-    )
-    assert _mutation_principal(request) == "configured-cm-operator"
+def test_cm_personal_workflow_mutations_need_no_browser_origin_or_operator_credential() -> None:
+    assert _mutation_principal(_http_request(client_host="127.0.0.1")) == "local-personal-workflow"
 
 
 @pytest.mark.asyncio

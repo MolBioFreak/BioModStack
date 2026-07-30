@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import secrets
+
 import shutil
 import uuid
 import copy
@@ -53,7 +53,7 @@ from services.conformational_mapping.persistence import (
     MAX_STATE_LANDSCAPE_ANALYSIS_PAGE_OFFSET,
     StateLandscapeAnalysisProjectionAbsent,
     StateLandscapeAnalysisProjectionAmbiguous,
-    capability_matches,
+
     get_request,
     issue_request_capability,
     paged_landscape,
@@ -77,7 +77,7 @@ from services.job_control import cancel_job_lineage
 
 
 router = APIRouter(prefix="/api/conformational-mapping", tags=["conformational-mapping"])
-_OPERATOR_HEADER = "X-BMS-CM-Operator-Token"
+_PERSONAL_WORKFLOW_PRINCIPAL = "local-personal-workflow"
 _APPLICATION_PROXY_HEADER = "X-BMS-CM-Proxy-Secret"
 _COOKIE_PREFIX = "bms_cm_access_"
 
@@ -264,11 +264,9 @@ def _runtime_registry(backend: str) -> dict[str, Any]:
 
 @router.get("/sources")
 async def list_sources(request: Request, session: AsyncSession = Depends(get_session)):
-    principal_id = _principal(request)
     rows = (
         await session.execute(
             select(ConformationalMappingSource).where(
-                ConformationalMappingSource.principal_id == principal_id,
                 ConformationalMappingSource.immutable.is_(True),
             ).order_by(ConformationalMappingSource.created_at, ConformationalMappingSource.source_id)
         )
@@ -412,88 +410,13 @@ async def register_source(
     }
 
 
-def _trusted_application_boundary(request: Request) -> bool:
-    proxy_secret = os.getenv("BMS_CM_TRUSTED_PROXY_SECRET", "")
-    supplied_proxy_secret = request.headers.get(_APPLICATION_PROXY_HEADER, "")
-    return bool(
-        proxy_secret
-        and supplied_proxy_secret
-        and secrets.compare_digest(proxy_secret, supplied_proxy_secret)
-    )
-
-
-def _require_same_origin_proxy_mutation(request: Request) -> None:
-    if not _trusted_application_boundary(request):
-        return
-    origin = request.headers.get("origin", "").strip()
-    forwarded_proto = request.headers.get("x-forwarded-proto", "").partition(",")[0].strip().lower()
-    scheme = forwarded_proto or request.url.scheme.lower()
-    host = (
-        request.headers.get("x-forwarded-host")
-        or request.headers.get("host", "")
-    ).partition(",")[0].strip().lower()
-    try:
-        parsed = urlsplit(origin)
-    except ValueError as exc:
-        raise HTTPException(status_code=403, detail="same-origin mutation proof required") from exc
-    allowed_origins = {
-        value.strip().lower().rstrip("/")
-        for value in os.getenv(
-            "BMS_CM_ALLOWED_ORIGINS",
-            "http://127.0.0.1:18080,http://localhost:18080",
-        ).split(",")
-        if value.strip()
-    }
-    normalized_origin = f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
-    if (
-        scheme not in {"http", "https"}
-        or not host
-        or parsed.scheme.lower() != scheme
-        or parsed.netloc.lower() != host
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.path not in {"", "/"}
-        or parsed.query
-        or parsed.fragment
-        or normalized_origin not in allowed_origins
-    ):
-        raise HTTPException(status_code=403, detail="same-origin mutation proof required")
-
-
 def _principal(request: Request) -> str:
-    principal = getattr(request.state, "authenticated_principal", None)
-    if principal is not None:
-        if isinstance(principal, Mapping):
-            principal_id = principal.get("id") or principal.get("subject")
-            roles = principal.get("roles") or []
-        else:
-            principal_id = getattr(principal, "id", None) or getattr(principal, "subject", None)
-            roles = getattr(principal, "roles", [])
-        role_set = {str(role).strip().lower() for role in roles}
-        if principal_id and role_set.intersection({"operator", "scientist", "admin"}):
-            return str(principal_id)
-    if _trusted_application_boundary(request):
-        return "local-application-operator"
-    configured = os.getenv("BMS_CM_OPERATOR_TOKEN", "")
-    supplied = request.headers.get(_OPERATOR_HEADER, "")
-    if configured and supplied and secrets.compare_digest(configured, supplied):
-        return "configured-cm-operator"
-    raise HTTPException(status_code=401, detail="authenticated conformational-mapping principal required")
+    """CM is a personal-workflow lane: local callers share one owner identity."""
+    return _PERSONAL_WORKFLOW_PRINCIPAL
 
 
 def _mutation_principal(request: Request) -> str:
-    principal = _principal(request)
-    _require_same_origin_proxy_mutation(request)
-    return principal
-
-
-def _request_token(request: Request, request_id: str) -> str | None:
-    authorization = request.headers.get("authorization", "")
-    scheme, _, credential = authorization.partition(" ")
-    if scheme.lower() == "bearer" and credential.strip():
-        return credential.strip()
-    value = request.cookies.get(f"{_COOKIE_PREFIX}{request_id.replace('-', '_')}")
-    return value.strip() if value else None
+    return _principal(request)
 
 
 async def _authorized_record(
@@ -506,30 +429,20 @@ async def _authorized_record(
     record = await get_request(session, request_id)
     if record is None:
         raise HTTPException(status_code=404, detail="conformational-mapping request not found")
-    if mutation:
-        _require_same_origin_proxy_mutation(request)
-    principal: str | None
-    try:
-        principal = _principal(request)
-    except HTTPException:
-        principal = None
-    expected = (record.progress_json or {}).get("request_capability_sha256")
-    if principal != record.principal_id and not capability_matches(_request_token(request, request_id), expected):
-        raise HTTPException(status_code=403, detail="conformational-mapping request access denied")
     return record
 
 
 async def _source(
     session: AsyncSession,
     source_id: str | None,
-    principal_id: str,
+    _principal_id: str,
     allowed_kinds: set[str],
 ) -> ConformationalMappingSource:
     if not source_id:
         raise HTTPException(status_code=422, detail="registered source ID is required")
     source = await session.get(ConformationalMappingSource, source_id)
-    if source is None or source.principal_id != principal_id or source.source_kind not in allowed_kinds or not source.immutable:
-        raise HTTPException(status_code=403, detail="registered source is unavailable or unauthorized")
+    if source is None or source.source_kind not in allowed_kinds or not source.immutable:
+        raise HTTPException(status_code=403, detail="registered source is unavailable")
     return source
 
 
