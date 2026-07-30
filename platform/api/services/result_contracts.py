@@ -50,6 +50,22 @@ _CM_VIEWER_CAPABILITIES = [
 
 _RESULT_CONTRACT_DEFINITIONS: List[ResultContractDefinition] = [
     ResultContractDefinition(
+        contract_id="shape_blueprint",
+        model_ids=["protein_modification_experimental"],
+        stage_families=["shape_blueprint"],
+        stage_modes=["shape_blueprint"],
+        artifact_classes=["shape_candidate"],
+        result_sets=["shape_candidates"],
+        supported_analyzers=[*_STRUCTURE_ANALYZERS, *_CONFIDENCE_ANALYZERS],
+        viewer_capabilities=[
+            "result_filter", "structure_viewer", "structure_confidence_metrics",
+            "shape_geometry_overlay", "shape_candidate_metrics", "content_addressed_download",
+        ],
+        required_fields=["artifact_class"],
+        required_artifacts=["structure", "metrics"],
+        notes="Canonical Shape-guided, sequence-designed, ESMFold2-refolded structural candidates.",
+    ),
+    ResultContractDefinition(
         contract_id="antibody_backbone_v1",
         model_ids=["rfantibody"],
         stage_families=["rfantibody"],
@@ -371,6 +387,25 @@ def build_review_artifact_manifest(design: Any) -> Dict[str, Any]:
             "state": "ready" if ready else "missing",
             "path": text or None,
             "reason": reason,
+        }
+
+    if profile_id == "shape_blueprint":
+        supplied = getattr(design, "review_artifact_manifest", None)
+        supplied = supplied if isinstance(supplied, dict) else {}
+        structure_raw = supplied.get("structure")
+        metrics_raw = supplied.get("metrics")
+        structure_descriptor: Dict[str, Any] = structure_raw if isinstance(structure_raw, dict) else {}
+        metrics_descriptor: Dict[str, Any] = metrics_raw if isinstance(metrics_raw, dict) else {}
+        structure_artifact = artifact(getattr(design, "pdb_path", None), kind="structure")
+        metrics_artifact = artifact(getattr(design, "json_path", None), kind="shape_metrics")
+        for target, source in ((structure_artifact, structure_descriptor), (metrics_artifact, metrics_descriptor)):
+            for key in ("sha256", "bytes", "format", "relative_path"):
+                if key in source:
+                    target[key] = source[key]
+        return {
+            "schema": REVIEW_ARTIFACT_SCHEMA,
+            "artifacts": {"structure": structure_artifact, "metrics": metrics_artifact},
+            "roles": {**role_map, "has_binder": False},
         }
 
     return {

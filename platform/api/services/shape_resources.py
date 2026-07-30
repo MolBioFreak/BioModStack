@@ -51,7 +51,12 @@ def _publish(path: Path, payload: bytes) -> None:
             stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, path)
+        try:
+            os.link(temporary, path, follow_symlinks=False)
+        except FileExistsError:
+            if path.is_symlink() or path.stat().st_nlink != 1 or path.read_bytes() != payload:
+                raise RuntimeError(f"immutable Shape artifact conflict: {path.name}")
+            return
         directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
         try:
             os.fsync(directory)

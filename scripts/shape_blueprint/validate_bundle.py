@@ -46,6 +46,8 @@ def validate_bundle(
     manifest = _load_json(manifest_path)
     if request.get("schema") != "bms_shape_design_request_v1":
         raise ValueError("unsupported Shape request schema")
+    if manifest.get("schema") != "bms_shape_canonical_geometry_v1":
+        raise ValueError("unsupported Shape geometry manifest schema")
     request_hash = str(request.get("request_sha256") or "")
     unhashed = dict(request)
     unhashed.pop("request_sha256", None)
@@ -55,6 +57,12 @@ def validate_bundle(
         raise ValueError("request and geometry manifest disagree")
     if request.get("point_pool_sha256") != manifest.get("point_pool_sha256"):
         raise ValueError("request and point-pool manifest disagree")
+    if request.get("sdf_sha256") != manifest.get("sdf_sha256"):
+        raise ValueError("request and SDF manifest disagree")
+    if request.get("sdf_sign") != "positive_inside" or manifest.get("sdf_sign") != "positive_inside":
+        raise ValueError("Shape SDF must use the positive_inside convention")
+    if request.get("sdf_grid_shape") != manifest.get("sdf_grid_shape"):
+        raise ValueError("request and SDF grid shape disagree")
 
     vertex_count = int(manifest["vertex_count"])
     face_count = int(manifest["face_count"])
@@ -77,6 +85,7 @@ def validate_bundle(
         "vertices_sha256": vertices_hash,
         "faces_sha256": faces_hash,
         "sdf_sha256": sdf_hash,
+        "sdf_sign": "positive_inside",
         "sdf_grid_shape": sdf_shape,
         "vertex_count": vertex_count,
         "face_count": face_count,

@@ -91,6 +91,14 @@ async def materialize_shape_request(
     point_pool_sha256 = str(geometry.manifest.get("point_pool_sha256") or "")
     if point_pool_sha256 != submitted.expected_point_pool_sha256:
         raise ShapeRequestError("point_pool_hash_mismatch", "Shape point pool hash does not match the request")
+    sdf_sha256 = str(geometry.manifest.get("sdf_sha256") or "")
+    sdf_sign = str(geometry.manifest.get("sdf_sign") or "")
+    sdf_grid_shape = geometry.manifest.get("sdf_grid_shape")
+    if not _SHA256.fullmatch(sdf_sha256) or sdf_sign != "positive_inside" or sdf_grid_shape != [48, 48, 48]:
+        raise ShapeRequestError(
+            "sdf_contract_invalid",
+            "Shape geometry lacks the canonical positive-inside 48^3 SDF",
+        )
 
     spec = {
         "schema": "bms_shape_design_request_v1",
@@ -98,6 +106,9 @@ async def materialize_shape_request(
         "geometry_id": geometry.geometry_id,
         "geometry_sha256": geometry.geometry_sha256,
         "point_pool_sha256": point_pool_sha256,
+        "sdf_sha256": sdf_sha256,
+        "sdf_sign": sdf_sign,
+        "sdf_grid_shape": sdf_grid_shape,
         "target_length": submitted.target_length,
         "num_backbones": submitted.num_backbones,
         "sequences_per_backbone": submitted.sequences_per_backbone,
@@ -128,7 +139,6 @@ async def materialize_shape_request(
     points_path, points = _checked_artifact(
         geometry_root, str(artifact_map["points_f32"]), point_pool_sha256
     )
-    sdf_sha256 = str(geometry.manifest["sdf_sha256"])
     sdf_path, sdf = _checked_artifact(geometry_root, str(artifact_map["sdf_f32"]), sdf_sha256)
     del vertices_path, faces_path, points_path, sdf_path
 

@@ -28,7 +28,7 @@ from antibody_pipeline_contract import (
     normalize_antibody_artifact_class,
     normalize_antibody_pipeline_contract_version,
 )
-from database import Design, Job
+from database import Design, Job, ShapeDesignGeometry, ShapeDesignRequest
 from paths import get_data_root, resolve_runtime_data_path
 from services.rfantibody_metadata import load_rfantibody_trb_summary
 from services.cdr_annotator import extract_sequence_from_pdb, identify_binder_chains
@@ -2621,6 +2621,209 @@ async def ingest_confornets_results(
     return processed_count
 
 
+class ShapeNoCandidates(RuntimeError):
+    """A scientifically successful Shape run with declared zero candidate yield."""
+
+    integrity_state = "no_candidates"
+
+    def __init__(self, reason: Dict[str, Any]):
+        self.reason = reason
+        super().__init__(str(reason.get("message") or reason.get("code") or "Shape produced no candidates"))
+
+
+def _shape_contained_artifact(output_root: Path, descriptor: Dict[str, Any], label: str) -> Path:
+    relative = descriptor.get("relative_path")
+    if not isinstance(relative, str) or not relative or Path(relative).is_absolute():
+        raise RuntimeError(f"Shape {label} path must be a non-empty relative path")
+    lexical = output_root / relative
+    current = output_root
+    for part in Path(relative).parts:
+        if part in {"", ".", ".."}:
+            raise RuntimeError(f"Shape {label} path is unsafe")
+        current = current / part
+        if current.is_symlink():
+            raise RuntimeError(f"Shape {label} path contains a symlink")
+    resolved = lexical.resolve()
+    if not resolved.is_relative_to(output_root.resolve()) or not resolved.is_file():
+        raise RuntimeError(f"Shape {label} is missing or outside the job output root")
+    stat = resolved.stat()
+    if stat.st_nlink != 1:
+        raise RuntimeError(f"Shape {label} must not be hard-linked")
+    expected_bytes = descriptor.get("bytes")
+    if not isinstance(expected_bytes, int) or expected_bytes != stat.st_size:
+        raise RuntimeError(f"Shape {label} byte count mismatch")
+    expected_sha = descriptor.get("sha256")
+    actual_sha = hashlib.sha256(resolved.read_bytes()).hexdigest()
+    if not isinstance(expected_sha, str) or expected_sha != actual_sha:
+        raise RuntimeError(f"Shape {label} SHA-256 mismatch")
+    return resolved
+
+
+async def _ingest_shape_result_manifest(
+    job: Job,
+    output_root: Path,
+    session: AsyncSession,
+    *,
+    commit: bool,
+) -> int:
+    manifest_path = output_root / "results" / "shape_result_manifest.json"
+    current = output_root
+    for part in ("results", "shape_result_manifest.json"):
+        current = current / part
+        if current.is_symlink():
+            raise RuntimeError("Shape result manifest path contains a symlink")
+    resolved_manifest = manifest_path.resolve()
+    if (
+        not resolved_manifest.is_relative_to(output_root.resolve())
+        or not resolved_manifest.is_file()
+        or resolved_manifest.stat().st_nlink != 1
+    ):
+        raise RuntimeError("Shape result manifest is absent or unsafe")
+    try:
+        manifest = json.loads(resolved_manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Shape result manifest is malformed: {exc}") from exc
+    if not isinstance(manifest, dict) or manifest.get("schema") != "bms_shape_result_v1":
+        raise RuntimeError("Shape result manifest schema is invalid")
+
+    request = (
+        await session.execute(select(ShapeDesignRequest).where(ShapeDesignRequest.job_id == str(job.id)))
+    ).scalar_one_or_none()
+    if request is None:
+        raise RuntimeError("Shape job has no immutable ShapeDesignRequest")
+    request_spec = dict(request.request_spec or {})
+    declared_request_sha = request_spec.pop("request_sha256", None)
+    computed_request_sha = hashlib.sha256(
+        json.dumps(request_spec, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    ).hexdigest()
+    if declared_request_sha != request.request_sha256 or computed_request_sha != request.request_sha256:
+        raise RuntimeError("canonical Shape request SHA-256 is invalid")
+    geometry = await session.get(ShapeDesignGeometry, request.geometry_id)
+    if geometry is None:
+        raise RuntimeError("Shape request geometry is absent")
+    geometry_manifest = dict(geometry.manifest or {})
+    bindings = {
+        "job_id": str(job.id),
+        "request_id": request.request_id,
+        "request_sha256": request.request_sha256,
+        "geometry_id": geometry.geometry_id,
+        "geometry_sha256": geometry.geometry_sha256,
+        "point_pool_sha256": geometry_manifest.get("point_pool_sha256"),
+        "sdf_sha256": geometry_manifest.get("sdf_sha256"),
+        "sdf_sign": geometry_manifest.get("sdf_sign"),
+    }
+    for key in ("geometry_id", "geometry_sha256", "point_pool_sha256", "sdf_sha256", "sdf_sign"):
+        if request_spec.get(key) != bindings[key]:
+            raise RuntimeError(f"canonical Shape request {key} binding mismatch")
+    if bindings["sdf_sign"] != "positive_inside":
+        raise RuntimeError("canonical Shape SDF convention is invalid")
+    for key, expected in bindings.items():
+        if not expected or manifest.get(key) != expected:
+            raise RuntimeError(f"Shape result manifest {key} binding mismatch")
+
+    candidates = manifest.get("candidates")
+    outcome = manifest.get("outcome")
+    if not isinstance(candidates, list) or manifest.get("candidate_count") != len(candidates):
+        raise RuntimeError("Shape result manifest candidate count mismatch")
+    if outcome == "no_candidates":
+        reason = manifest.get("reason")
+        if candidates or not isinstance(reason, dict) or not reason.get("code"):
+            raise RuntimeError("Shape no_candidates result lacks an explicit reason")
+        raise ShapeNoCandidates(reason)
+    if outcome != "candidates" or not candidates:
+        raise RuntimeError("Shape candidate result must contain at least one candidate")
+
+    created = 0
+    seen_ids: set[str] = set()
+    seen_names: set[str] = set()
+    for item in candidates:
+        if not isinstance(item, dict):
+            raise RuntimeError("Shape candidate entry must be an object")
+        candidate_id = item.get("candidate_id")
+        name = item.get("name")
+        if not isinstance(candidate_id, str) or not candidate_id or candidate_id in seen_ids:
+            raise RuntimeError("Shape candidate IDs must be unique non-empty strings")
+        if not isinstance(name, str) or not name or name in seen_names or name != candidate_id:
+            raise RuntimeError("Shape candidate names must uniquely equal candidate IDs")
+        seen_ids.add(candidate_id)
+        seen_names.add(name)
+        structure = _shape_contained_artifact(output_root, item.get("structure") or {}, f"{candidate_id} structure")
+        metrics_path = _shape_contained_artifact(output_root, item.get("metrics") or {}, f"{candidate_id} metrics")
+        try:
+            metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"Shape candidate metrics are malformed: {candidate_id}") from exc
+        if not isinstance(metrics, dict) or metrics.get("schema") != "bms_shape_candidate_metrics_v1":
+            raise RuntimeError(f"Shape candidate metrics schema is invalid: {candidate_id}")
+        metric_bindings = {
+            "candidate_id": candidate_id,
+            "geometry_sha256": bindings["geometry_sha256"],
+            "point_pool_sha256": bindings["point_pool_sha256"],
+            "sdf_sha256": bindings["sdf_sha256"],
+        }
+        for key, expected in metric_bindings.items():
+            if metrics.get(key) != expected:
+                raise RuntimeError(f"Shape candidate metrics {key} binding mismatch: {candidate_id}")
+        existing = (
+            await session.execute(select(Design).where(Design.job_id == str(job.id), Design.name == name))
+        ).scalar_one_or_none()
+        if existing is not None:
+            if Path(existing.pdb_path).resolve() != structure or Path(existing.json_path or "").resolve() != metrics_path:
+                raise RuntimeError(f"Shape candidate conflicts with an existing Design: {name}")
+            continue
+        producer_provenance = item.get("provenance") or {}
+        if not isinstance(producer_provenance, dict):
+            raise RuntimeError(f"Shape candidate provenance is invalid: {candidate_id}")
+        design = Design(
+            id=str(uuid.uuid4()),
+            job_id=str(job.id),
+            name=name,
+            pdb_path=str(structure),
+            json_path=str(metrics_path),
+            lineage_root_job_id=str(job.id),
+            stage_family="shape_blueprint",
+            stage_mode="shape_blueprint",
+            source_stage_job_id=str(job.id),
+            source_stage_family="shape_blueprint",
+            source_stage_mode="shape_blueprint",
+            artifact_class="shape_candidate",
+            artifact_schema_version=1,
+            review_profile_id="shape_blueprint",
+            review_contract_version=1,
+            review_contract_source="producer",
+            review_artifact_manifest={
+                "structure": item["structure"],
+                "metrics": item["metrics"],
+            },
+            review_role_map={"designed_structure": item["structure"]["relative_path"]},
+            provenance={
+                **producer_provenance,
+                **bindings,
+                "candidate_id": candidate_id,
+                "shape_result_manifest": str(resolved_manifest),
+            },
+            plddt_overall=metrics.get("plddt_overall"),
+            confidence_metrics=metrics,
+        )
+        session.add(design)
+        created += 1
+    await session.flush()
+    persisted = (
+        await session.execute(
+            select(Design).where(
+                Design.job_id == str(job.id),
+                Design.stage_family == "shape_blueprint",
+            )
+        )
+    ).scalars().all()
+    persisted_ids = [str((row.provenance or {}).get("candidate_id") or "") for row in persisted]
+    if len(persisted_ids) != len(seen_ids) or set(persisted_ids) != seen_ids:
+        raise RuntimeError("persisted Shape Designs do not exactly match the terminal manifest")
+    if commit:
+        await session.commit()
+    return created
+
+
 async def ingest_job_results(
     job_id: str, 
     output_dir: str, 
@@ -2655,6 +2858,12 @@ async def ingest_job_results(
 
     job_result = await session.execute(select(Job).where(Job.id == job_id))
     current_job = job_result.scalar_one_or_none()
+    if (
+        current_job
+        and str(current_job.model_id or "").strip().lower() == "protein_modification_experimental"
+        and str(current_job.mode or "").strip().lower() == "shape_blueprint"
+    ):
+        return await _ingest_shape_result_manifest(current_job, output_path, session, commit=commit)
     if current_job and str(current_job.model_id or "") == "conformational_mapping":
         cm_request = await get_cm_request(session, job_id)
         if cm_request is None:
