@@ -1045,7 +1045,10 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     dev_inputs_dir = str(resolved.get("dev_inputs_dir", Path(dev_data_root) / "inputs"))
     dev_db_path = str(resolved.get("dev_db_path", Path(dev_data_root) / "biomodstack.db"))
     dev_work_dir = str(resolved.get("dev_work_dir", Path(dev_data_root) / "work"))
-    dev_weights_root = str(resolved.get("dev_weights_root", Path(dev_data_root) / "weights"))
+    # Model weights are immutable shared runtime assets, not lane-owned job
+    # state.  Native Development keeps its DB/work/results isolated while
+    # reusing the profile's canonical weights root (as container mode does).
+    dev_weights_root = str(resolved.get("weights_root", Path("/mnt/BioModStack") / "weights"))
     dev_colabfold_db = str(resolved.get("dev_colabfold_db", Path(dev_data_root) / "colabfold_db"))
     dev_msa_cache_dir = str(resolved.get("dev_msa_cache_dir", Path(dev_data_root) / "msa_cache"))
     dev_sabdab_cache_dir = str(resolved.get("dev_sabdab_cache_dir", Path(dev_data_root) / "sabdab_cache"))
