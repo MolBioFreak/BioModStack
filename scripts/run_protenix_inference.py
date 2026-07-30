@@ -145,7 +145,11 @@ def _install_coordinate_ledger(ledger_path: Path, context_path: Path) -> None:
                 artifacts.append(
                     {
                         "semantic_role": role,
-                        "relative_path": path.resolve().relative_to(Path(self.base_dir).resolve()).as_posix(),
+                        # Ledger paths are resolved by the CM finalizer against
+                        # the declared native runtime root (the ledger parent),
+                        # not Protenix's internal base_dir.  Keep one portable,
+                        # containment-checked coordinate namespace.
+                        "relative_path": path.resolve().relative_to(ledger_path.parent.resolve()).as_posix(),
                         "sha256": file_sha256,
                         "bytes": size_bytes,
                     }
