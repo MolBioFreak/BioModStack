@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
 
+from paths import resolve_runtime_data_path
 from .contracts import candidate_id, canonical_json_bytes, canonical_sha256, validate_schema
 from .import_snapshot import (
     ImportSnapshotError,
@@ -206,7 +207,7 @@ def _canonical_relative(value: str) -> PurePosixPath:
 
 def _open_registered(artifact: RegisteredArtifact) -> tuple[int, os.stat_result]:
     relative = _canonical_relative(artifact.relative_path)
-    root = artifact.storage_root.resolve(strict=True)
+    root = resolve_runtime_data_path(artifact.storage_root).resolve(strict=True)
     root_fd = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     current_fd = root_fd
     try:

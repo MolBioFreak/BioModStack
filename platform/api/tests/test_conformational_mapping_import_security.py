@@ -88,6 +88,28 @@ def _registered(root: Path, relative: str = "input.pdb", *, principal: str = "al
     return RegisteredArtifact("artifact-1", principal, root, relative, hashlib.sha256(payload).hexdigest(), len(payload))
 
 
+def test_container_recorded_root_resolves_to_active_native_state_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A container-produced immutable source remains readable by the native dev API."""
+    host_state = tmp_path / "native-state"
+    content = host_state / "conformational_mapping_sources" / "snapshot" / "content.json"
+    content.parent.mkdir(parents=True)
+    payload = b'{"target_id":"1UBQ-live","target_order":0}'
+    content.write_bytes(payload)
+
+    import paths
+    monkeypatch.setattr(
+        paths,
+        "_runtime_paths",
+        lambda: {"data_root": str(host_state), "container_state_path": "/var/lib/biomodstack"},
+    )
+    artifact = RegisteredArtifact(
+        "snapshot", "historical-owner", Path("/var/lib/biomodstack"),
+        "conformational_mapping_sources/snapshot/content.json", hashlib.sha256(payload).hexdigest(), len(payload),
+    )
+
+    assert import_stager.read_registered_artifact(artifact, principal_id="local-personal-workflow") == payload
+
+
 def test_mmcif_probe_admits_a_coordinate_loop_after_a_large_metadata_block(tmp_path: Path) -> None:
     """Real deposited mmCIF files may place atom-site data well after metadata."""
     source = tmp_path / "late_atoms.cif"
