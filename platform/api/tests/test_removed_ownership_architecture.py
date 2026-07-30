@@ -86,7 +86,11 @@ GENERATED_PARTS = frozenset(
 )
 HISTORICAL_BANNER = "> **Historical / superseded:**"
 FROZEN_STATIC_EVIDENCE_PATHS = frozenset(
-    {"docs/audits/bioxp-phase0-baseline-2026-07-17.json"}
+    {
+        "docs/audits/bioxp-phase0-baseline-2026-07-17.json",
+        "docs/audits/ngs-discrepancy-closure-2026-07-19.md",
+        "docs/audits/ngs-phase0-3-acceptance-ledger-2026-07-17.md",
+    }
 )
 
 
