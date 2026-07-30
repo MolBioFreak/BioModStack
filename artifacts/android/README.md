@@ -5,6 +5,10 @@ This directory tracks manually exported Android wrapper artifacts that are built
 Current staged artifact:
 - `BioModStack-debug-phone-2026.06.09-molbio-drag-header-beta-007.apk`
 
+Archived superseded artifact:
+- beta-006 is retained outside active source trees in the GitHub release [`android-beta-006-archive`](https://github.com/MolBioFreak/BioModStack/releases/tag/android-beta-006-archive).
+- APK SHA-256: `3b2f94d81a8053df60516963a5eef81519f86f66a4b0aee5fb1cd79d5ede06ba`.
+
 Source wrapper project:
 - `/home/dalab/Desktop/BioModStack Android APK/BioModStack Cordova Android Project`
 
