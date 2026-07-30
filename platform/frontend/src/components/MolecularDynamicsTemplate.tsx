@@ -183,7 +183,11 @@ export function MolecularDynamicsTemplate({ onBack, initialValues }: MolecularDy
             if (launchForm.inputMode === 'structure' && !selectedChemistryProfile) {
                 throw new Error('The selected chemistry profile is stale; reload the deployed catalog.');
             }
-            const mdJobSpec = buildMolecularDynamicsJobSpec(launchForm, selectedChemistryProfile);
+            const mdJobSpec = buildMolecularDynamicsJobSpec(
+                launchForm,
+                selectedChemistryProfile,
+                chemistryCatalogQuery.data?.catalog_digest,
+            );
             await submitJob({
                 name: launchForm.jobName.trim(),
                 model_id: 'molecular_dynamics',

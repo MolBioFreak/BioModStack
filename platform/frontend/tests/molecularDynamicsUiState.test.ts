@@ -83,10 +83,11 @@ const validProfile = (): MolecularDynamicsChemistryProfile => ({
 } as MolecularDynamicsChemistryProfile);
 
 describe('molecular dynamics launcher contract', () => {
-    it('builds an authoritative engine-neutral bms.md.job.v1 specification', () => {
-        const spec = buildMolecularDynamicsJobSpec(validForm(), validProfile());
+    it('builds an authoritative durable bms.md.job.v2 specification for profile-based GROMACS', () => {
+        const catalogDigest = 'd'.repeat(64);
+        const spec = buildMolecularDynamicsJobSpec(validForm(), validProfile(), catalogDigest);
 
-        assert.equal(spec.schema, 'bms.md.job.v1');
+        assert.equal(spec.schema, 'bms.md.job.v2');
         assert.equal(spec.engine, 'gromacs');
         assert.equal(spec.replicas, 1);
         assert.deepEqual(spec.input, { structure: '/data/1aki.pdb' });
@@ -97,6 +98,21 @@ describe('molecular dynamics launcher contract', () => {
         assert.equal(spec.stages.npt.steps, 50_000);
         assert.equal(spec.execution.gpu_id, '0');
         assert.equal(spec.execution.ntomp, 8);
+        assert.equal(spec.execution.gpu_offload, 'full_forces');
+        assert.deepEqual((spec as Extract<typeof spec, { schema: 'bms.md.job.v2' }>).chemistry, {
+            profile_id: validProfile().id,
+            profile_sha256: validProfile().profile_sha256,
+            catalog_digest: catalogDigest,
+            requested_scope: validProfile().scientific_validation.scope.launch_scope,
+        });
+        assert.equal('chemistry_assurance' in spec.preparation, false);
+    });
+
+    it('fails closed when a profile-based launch has no catalog generation digest', () => {
+        assert.throws(
+            () => buildMolecularDynamicsJobSpec(validForm(), validProfile()),
+            /catalog digest/i,
+        );
     });
 
     it('requires prepared coordinates and topology for the OpenMM alpha adapter', () => {
