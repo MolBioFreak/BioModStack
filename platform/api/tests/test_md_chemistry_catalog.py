@@ -281,6 +281,44 @@ def test_modern_profile_can_be_runtime_qualified_without_becoming_selectable() -
     assert modern["runtime_identity"] == preparation_probe.runtime_identity.as_public_dict()
 
 
+def test_candidate_profile_qualification_lane_is_explicit_dev_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _catalog_module()
+    preparation_probe = module.RuntimeProbeResult(
+        runtime_id="md-preparation-v1",
+        runtime_version="1",
+        available=True,
+        asset_ids=frozenset({"amber/ff19SB", "water/opc", "ions/opc-monovalent-pinned"}),
+        checked_at="2026-07-30T16:00:00Z",
+        sif_sha256="625d81608118af006295601b8275389e7681a1d98a6fb0622e6241c5d101df4b",
+    )
+    catalog = module.ChemistryCatalog(
+        config_dir=CATALOG_DIR,
+        probe=lambda: [_probe("amber99sb-ildn.ff"), preparation_probe],
+    )
+    modern = _profile(catalog, "amber_ff19sb_opc_protein_v1")
+    selection = {
+        "profile_id": modern["id"],
+        "profile_sha256": modern["profile_sha256"],
+        "force_field": "ff19SB",
+        "water_model": "opc",
+        "engine": "gromacs",
+        "requested_scope": "modern_protein_candidate",
+    }
+
+    monkeypatch.setenv("BMS_RUNTIME_MODE", "dev")
+    monkeypatch.setenv("BMS_MD_QUALIFICATION_PROFILE_IDS", modern["id"])
+    selected = catalog.validate_v1_profile_selection(**selection)
+    assert selected["id"] == modern["id"]
+    assert selected["states"]["selectable"] is False
+
+    monkeypatch.setenv("BMS_RUNTIME_MODE", "production")
+    with pytest.raises(module.ChemistryProfileSelectionError) as error:
+        catalog.validate_v1_profile_selection(**selection)
+    assert error.value.code == "MD_CHEMISTRY_PROFILE_UNAVAILABLE"
+
+
 def test_ff19sb_ol15_opc_profile_is_runtime_qualified_but_not_selectable_or_scientifically_validated() -> None:
     module = _catalog_module()
     preparation_probe = module.RuntimeProbeResult(
