@@ -11,6 +11,7 @@ import {
     useDisconnectBioXp,
 } from '../lib/bioxpClient';
 import { BioXpCameraPanel } from './BioXpCameraPanel';
+import { deriveCockpitMutationState } from './bioxpCockpitState';
 
 type Axis = 'x' | 'y' | 'z' | 'g' | 'door';
 type Operation =
@@ -102,7 +103,12 @@ export function BioXpCockpit() {
         [status?.available_commands],
     );
     const isAvailable = (command: BioXpActiveCommandName) => active && available.has(command);
-    const busy = executeCommand.isPending || stopCommand.isPending;
+    const cockpitState = deriveCockpitMutationState<{ detail: string; remote_acknowledged: boolean }>({
+        execute: executeCommand,
+        stop: stopCommand,
+        emergency: emergencyStop,
+    });
+    const busy = cockpitState.normalCommandBlocked;
     const connectedLabel = active
         ? connection?.reachable === false ? 'Connection error' : 'Connected'
         : 'Disconnected';
@@ -130,8 +136,8 @@ export function BioXpCockpit() {
         axis,
     });
 
-    const latestResult = stopCommand.data ?? executeCommand.data;
-    const error = stopCommand.error ?? executeCommand.error ?? connect.error ?? disconnect.error;
+    const latestResult = cockpitState.latestResult;
+    const error = cockpitState.latestError ?? connect.error ?? disconnect.error;
 
     return (
         <div className="space-y-4 p-4 text-slate-100 md:p-6">
@@ -190,7 +196,7 @@ export function BioXpCockpit() {
                                 <h3 className="font-semibold">{label}</h3>
                                 <button
                                     type="button"
-                                    disabled={!isAvailable('stop_axis_diagnostic') || stopCommand.isPending}
+                                    disabled={!isAvailable('stop_axis_diagnostic') || cockpitState.stopBlocked}
                                     onClick={() => stopAxis(axis)}
                                     className="rounded bg-red-800 px-3 py-1.5 text-sm font-semibold hover:bg-red-700 disabled:opacity-35"
                                 >Stop</button>
