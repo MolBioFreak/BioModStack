@@ -249,6 +249,33 @@ def _prepare_system(
     return coordinates, topology, required
 
 
+def _consume_preparation_bundle(
+    config: Mapping[str, Any], bundle: Path, output_dir: Path, ledger: StageLedger,
+) -> tuple[Path, Path, list[Path]]:
+    from .chemistry.prepare import verify_preparation_bundle
+
+    chemistry = config.get("chemistry") or {}
+    manifest = verify_preparation_bundle(
+        bundle,
+        expected_profile_id=chemistry.get("profile_id"),
+        expected_profile_sha256=chemistry.get("profile_sha256"),
+    )
+    system_dir = output_dir / "system"
+    system_dir.mkdir(parents=True, exist_ok=True)
+    coordinates = system_dir / "prepared.gro"
+    topology = system_dir / "topol.top"
+    required = [coordinates, topology]
+    if not ledger.is_complete("preparation", required):
+        ledger.mark_running("preparation", ["consume-immutable-bundle", manifest["bundle_sha256"]])
+        shutil.copy2(Path(bundle) / "system.gro", coordinates)
+        shutil.copy2(Path(bundle) / "system.top", topology)
+        ledger.mark_completed(
+            "preparation", required,
+            performance={"bundle_sha256": manifest["bundle_sha256"]},
+        )
+    return coordinates, topology, required
+
+
 def _run_stage(
     stage_name: str,
     config: Mapping[str, Any],
@@ -382,10 +409,25 @@ def run_gromacs_job(
     replica_index: int = 0,
     gmx_binary: str = "gmx",
     _prepared_config: Mapping[str, Any] | None = None,
+    preparation_bundle: Path | None = None,
+    resume_checkpoint: Path | None = None,
 ) -> Path:
     config_path = Path(config_path).expanduser().resolve()
     output_dir = Path(output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    if resume_checkpoint is not None:
+        resume_checkpoint = Path(resume_checkpoint).expanduser().resolve(strict=True)
+        try:
+            resume_relative = resume_checkpoint.relative_to(output_dir)
+        except ValueError as exc:
+            raise ValueError("resume checkpoint must belong to the resumed replica output") from exc
+        allowed_stages = {"minimization", "nvt", "npt", "production"}
+        if (
+            len(resume_relative.parts) != 2
+            or resume_relative.parts[0] not in allowed_stages
+            or resume_relative.name != f"{resume_relative.parts[0]}.cpt"
+        ):
+            raise ValueError("resume checkpoint path does not match a canonical stage checkpoint")
     config = dict(_prepared_config) if _prepared_config is not None else prepare_verified_worker_inputs(
         config_path,
         output_dir / ".worker_inputs",
@@ -405,13 +447,20 @@ def run_gromacs_job(
     _atomic_json(normalized_config, config)
     ledger = StageLedger(output_dir / "stage_state.json")
 
-    coordinates, topology, _ = _prepare_system(
-        config,
-        config_path=config_path,
-        output_dir=output_dir,
-        gmx_binary=gmx_binary,
-        ledger=ledger,
-    )
+    if config.get("schema") == "bms.md.job.v2":
+        if preparation_bundle is None:
+            raise ValueError("bms.md.job.v2 requires an immutable preparation bundle")
+        coordinates, topology, _ = _consume_preparation_bundle(
+            config, preparation_bundle, output_dir, ledger,
+        )
+    else:
+        coordinates, topology, _ = _prepare_system(
+            config,
+            config_path=config_path,
+            output_dir=output_dir,
+            gmx_binary=gmx_binary,
+            ledger=ledger,
+        )
     restraint_reference = coordinates
     previous_checkpoint: Path | None = None
     stage_artifacts: dict[str, list[Path]] = {}

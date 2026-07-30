@@ -2,7 +2,8 @@
 System monitoring API router - GPU, CPU, RAM statistics.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any, Union
 from pydantic import BaseModel, Field
@@ -26,6 +27,7 @@ from urllib.parse import quote as urlquote
 import psutil
 
 from paths import get_code_root
+from database import get_session
 from runtime_policy import core_runtime_mode_enabled
 from services.gpu_config import (
     read_scheduler_config,
@@ -36,7 +38,7 @@ from services.gpu_config import (
     PROTECTED_CONCURRENCY_LIMITS,
 )
 from services.gpu_metadata import HARDWARE_LIMITS
-from services.job_control import force_launch_job as force_launch_job_service
+from services.job_control import force_launch_job as force_launch_job_service, reject_generic_md_lifecycle_control
 from services.workflow_adapter import WorkflowAdapterRequestError, request_via_workflow_adapter
 
 router = APIRouter()
@@ -3600,13 +3602,18 @@ class ForceRunRequest(BaseModel):
 
 
 @router.post("/force-run/{job_id}")
-async def force_run_job(job_id: str, request: ForceRunRequest):
+async def force_run_job(
+    job_id: str,
+    request: ForceRunRequest,
+    session: AsyncSession = Depends(get_session),
+):
     """
     Pin a queued job to a GPU and return it to the orchestrator-owned queue.
 
     This does not bypass VRAM checks, concurrency limits, disabled-GPU policy,
     or the orchestrator's sole ownership of process launch.
     """
+    await reject_generic_md_lifecycle_control(job_id, session)
     import logging
     logger = logging.getLogger("api.gpu")
 

@@ -108,8 +108,9 @@ def test_md_workflow_uses_bounded_singleton_entrypoints() -> None:
 
     replica_entrypoint = (workflow_root / "replica.nf").read_text(encoding="utf-8")
     assert "params.md_replica_index" in replica_entrypoint
+    assert "params.md_preparation_bundle" in replica_entrypoint
     assert "params.gpu_id" in replica_entrypoint
-    assert "tuple(params.md_replica_index as int, config)" in replica_entrypoint
+    assert "tuple(params.md_replica_index as int, config, bundle)" in replica_entrypoint
     assert ".flatten" not in replica_entrypoint
 
     orchestrator = (workflow_root / "orchestrator.nf").read_text(encoding="utf-8")

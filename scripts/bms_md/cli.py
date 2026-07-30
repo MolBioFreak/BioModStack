@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .aggregate import write_aggregate
 from .analysis import write_analysis_report
+from .checkpoint_receipt import write_checkpoint_receipt
 from .contract import normalize_job_config
 from .engine_adapters import run_md_replica
 from .feature_gate import require_experimental_md_feature
@@ -33,6 +34,15 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--config", type=Path, required=True)
     run.add_argument("--output-dir", type=Path, required=True)
     run.add_argument("--replica-index", type=int, default=0)
+    run.add_argument("--preparation-bundle", type=Path)
+    run.add_argument("--resume-checkpoint", type=Path)
+
+    checkpoint_receipt = subparsers.add_parser(
+        "checkpoint-receipt", help="validate and publish the latest interrupted GROMACS checkpoint"
+    )
+    checkpoint_receipt.add_argument("--config", type=Path, required=True)
+    checkpoint_receipt.add_argument("--output-dir", type=Path, required=True)
+    checkpoint_receipt.add_argument("--gmx-binary", default="gmx")
 
     aggregate = subparsers.add_parser("aggregate", help="combine completed replica manifests")
     aggregate.add_argument("--manifests", type=Path, nargs="+", required=True)
@@ -88,8 +98,17 @@ def main() -> None:
             args.config,
             args.output_dir,
             replica_index=args.replica_index,
+            preparation_bundle=args.preparation_bundle,
+            resume_checkpoint=args.resume_checkpoint,
         )
         print(manifest)
+        return
+    if args.command == "checkpoint-receipt":
+        print(write_checkpoint_receipt(
+            config_path=args.config,
+            output_dir=args.output_dir,
+            gmx_binary=args.gmx_binary,
+        ))
         return
     if args.command == "aggregate":
         print(write_aggregate(args.manifests, args.output))

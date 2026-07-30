@@ -21,6 +21,7 @@ from services.analysis_worker import AnalysisWorker
 from services.boltz_api_jobs import BoltzApiJobWorker
 from services.external_imports.worker import ExternalImportWorker
 from services.gpu_orchestrator import GPUOrchestrator
+from services.md.reconcile import MdReconcilerWorker
 from routers.gpu import get_gpu_stats
 
 # Configure logging
@@ -32,6 +33,7 @@ _orchestrator: GPUOrchestrator = None
 _analysis_worker: AnalysisWorker = None
 _external_import_worker: ExternalImportWorker | None = None
 _boltz_api_job_worker: BoltzApiJobWorker | None = None
+_md_reconciler: MdReconcilerWorker | None = None
 
 
 async def _orchestrator_launch_job(job_id, model_id, mode, params, output_dir):
@@ -56,6 +58,7 @@ async def lifespan(app: FastAPI):
     global _analysis_worker
     global _external_import_worker
     global _boltz_api_job_worker
+    global _md_reconciler
     bioxp_runtime = None
     
     # Initialize independently owned core and MolBio persistence stores.
@@ -74,8 +77,12 @@ async def lifespan(app: FastAPI):
         # Start orchestrator in background
         await _orchestrator.start()
         logger.info("[STARTUP] GPU Orchestrator started")
+        _md_reconciler = MdReconcilerWorker(async_session, poll_interval=5.0)
+        await _md_reconciler.start()
+        logger.info("[STARTUP] MD lifecycle reconciler started")
     else:
         _orchestrator = None
+        _md_reconciler = None
         logger.warning("[STARTUP] %s", workflow_launch_block_detail("start the GPU workflow scheduler"))
 
     _analysis_worker = AnalysisWorker(
@@ -118,6 +125,9 @@ async def lifespan(app: FastAPI):
     if _orchestrator:
         await _orchestrator.stop()
         logger.info("[SHUTDOWN] GPU Orchestrator stopped")
+    if _md_reconciler:
+        await _md_reconciler.stop()
+        logger.info("[SHUTDOWN] MD lifecycle reconciler stopped")
     if _analysis_worker:
         await _analysis_worker.stop()
         logger.info("[SHUTDOWN] Analysis worker stopped")
