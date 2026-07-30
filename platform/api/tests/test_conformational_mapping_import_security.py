@@ -102,6 +102,11 @@ def test_container_recorded_root_resolves_to_active_native_state_root(tmp_path: 
         "_runtime_paths",
         lambda: {"data_root": str(host_state), "container_state_path": "/var/lib/biomodstack"},
     )
+    monkeypatch.setenv("BMS_STATE_DIR", str(host_state))
+    monkeypatch.setenv("BMS_CONTAINER_STATE_PATH", "/var/lib/biomodstack")
+    # The registered-source reader must honor the declared container → host
+    # mapping even when a generic alias resolver cannot materialize the alias.
+    monkeypatch.setattr(import_stager, "resolve_runtime_data_path", lambda _value: Path("/var/lib/biomodstack"))
     artifact = RegisteredArtifact(
         "snapshot", "historical-owner", Path("/var/lib/biomodstack"),
         "conformational_mapping_sources/snapshot/content.json", hashlib.sha256(payload).hexdigest(), len(payload),

@@ -205,9 +205,29 @@ def _canonical_relative(value: str) -> PurePosixPath:
     return path
 
 
+def _resolve_registered_storage_root(storage_root: Path) -> Path:
+    """Translate the configured container state root before opening a registered source.
+
+    Source descriptors are immutable and may have been registered by the
+    container runtime.  Native Development owns the same state tree at
+    ``BMS_STATE_DIR``; resolve that configured alias lexically first so the
+    subsequent descriptor traversal can still enforce no-follow semantics.
+    """
+    container_root = os.environ.get("BMS_CONTAINER_STATE_PATH", "").strip()
+    native_root = os.environ.get("BMS_STATE_DIR", "").strip()
+    if container_root and native_root:
+        try:
+            suffix = storage_root.relative_to(Path(container_root))
+        except ValueError:
+            pass
+        else:
+            return Path(native_root) / suffix
+    return resolve_runtime_data_path(storage_root)
+
+
 def _open_registered(artifact: RegisteredArtifact) -> tuple[int, os.stat_result]:
     relative = _canonical_relative(artifact.relative_path)
-    root = resolve_runtime_data_path(artifact.storage_root).resolve(strict=True)
+    root = _resolve_registered_storage_root(artifact.storage_root).resolve(strict=True)
     root_fd = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     current_fd = root_fd
     try:
