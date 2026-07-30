@@ -37,13 +37,13 @@ const validForm = (): MolecularDynamicsForm => ({
 });
 
 const validProfile = (): MolecularDynamicsChemistryProfile => ({
-    id: 'gmx_amber99sb_ildn_tip3p_smoke_v1',
-    version: '1.0.0',
+    id: 'amber_ff19sb_opc_protein_v1',
+    version: '1.0.0-candidate',
     profile_sha256: 'a'.repeat(64),
-    display_name: 'AMBER99SB-ILDN + TIP3P infrastructure smoke',
+    display_name: 'AMBER ff19SB + OPC protein candidate',
     family: 'amber',
-    assurance: 'smoke_fixture',
-    legacy: true,
+    assurance: 'curated_profile',
+    legacy: false,
     automatic_preparation: true,
     inventory_class: 'selectable',
     availability_explanation: 'Selectable only for smoke_auto.',
