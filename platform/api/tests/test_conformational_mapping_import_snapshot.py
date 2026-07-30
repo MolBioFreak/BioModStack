@@ -76,6 +76,20 @@ ATOM 8 O O . GLY ASYM_A 1 2 ? 7 0 0 1.00 10.00 11 GLY A O 1
 """
 
 
+AUDIT_QUOTED_UNDERSCORE_MMCIF = MMCIF.replace(
+    b"_entry.id minimal\n",
+    b"""loop_
+_pdbx_audit_revision_item.ordinal
+_pdbx_audit_revision_item.revision_ordinal
+_pdbx_audit_revision_item.data_content_type
+_pdbx_audit_revision_item.item
+1 4 'Structure model' '_database_2.pdbx_DOI'
+#
+_entry.id minimal
+""",
+)
+
+
 REAL_1UBQ_DIR = (
     Path(__file__).parent / "fixtures" / "conformational_mapping" / "real_1ubq"
 )
@@ -96,6 +110,16 @@ def test_real_1ubq_mmcif_is_retained_and_admitted_without_omission() -> None:
     assert snapshot["admission"]["conversion_omissions"] == []
     assert snapshot["unsupported_fields"] == []
 
+
+
+def test_import_snapshot_accepts_quoted_leading_underscore_loop_values() -> None:
+    snapshot = build_import_snapshot_from_mmcif(
+        AUDIT_QUOTED_UNDERSCORE_MMCIF,
+        target_id="quoted-audit-control",
+        candidate_id="cm_imp_quoted_audit_000000_deadbeef",
+        original_source_path="registered_import/quoted-audit.cif",
+    )
+    assert snapshot["admission"]["atom_count"] == 8
 
 
 def test_import_snapshot_is_deterministic_and_binds_explicit_mmcif_identity() -> None:
