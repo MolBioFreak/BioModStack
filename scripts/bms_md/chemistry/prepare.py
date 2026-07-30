@@ -21,6 +21,7 @@ REQUIRED_OUTPUTS = (
     "system.pdb",
     "system.prmtop",
     "system.top",
+    "posre.itp",
 )
 
 

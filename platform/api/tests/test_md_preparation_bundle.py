@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -57,7 +58,7 @@ def test_bundle_is_atomic_immutable_and_checksum_bound(tmp_path: Path) -> None:
         for name, content in {
             "system.top": "[ system ]\nTiny\n", "system.pdb": "END\n",
             "system.gro": "Tiny\n0\n1 1 1\n", "system.prmtop": "prmtop\n",
-            "system.inpcrd": "inpcrd\n",
+            "system.inpcrd": "inpcrd\n", "posre.itp": "[ position_restraints ]\n",
         }.items():
             (cwd / name).write_text(content)
         (cwd / "preparation_report.json").write_text(json.dumps({
@@ -73,7 +74,8 @@ def test_bundle_is_atomic_immutable_and_checksum_bound(tmp_path: Path) -> None:
     assert manifest["source"]["sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
     assert manifest["runtime"]["lock_sha256"] == hashlib.sha256(lock.read_bytes()).hexdigest()
     assert {item["path"] for item in manifest["files"]} == {
-        "source.pdb", "system.gro", "system.inpcrd", "system.pdb", "system.prmtop", "system.top"}
+        "source.pdb", "system.gro", "system.inpcrd", "system.pdb", "system.prmtop", "system.top",
+        "posre.itp"}
     for item in manifest["files"]:
         artifact = destination / item["path"]
         assert item["bytes"] == artifact.stat().st_size
@@ -101,6 +103,7 @@ def test_bundle_verification_rejects_tampered_artifact(tmp_path: Path) -> None:
             "source.pdb": "ATOM\n", "system.gro": "Tiny\n0\n1 1 1\n",
             "system.inpcrd": "coords\n", "system.pdb": "END\n",
             "system.prmtop": "top\n", "system.top": "[ system ]\nTiny\n",
+            "posre.itp": "[ position_restraints ]\n",
         }.items(): (cwd / name).write_text(content)
         (cwd / "preparation_report.json").write_text(json.dumps({"profile_id": request["profile"]["id"]}))
         return subprocess.CompletedProcess(command, 0, "", "")
@@ -140,3 +143,26 @@ def test_nextflow_preparation_runs_directly_in_pinned_preparation_image() -> Non
     assert "md_preparation_container" in label
     assert "BMS_MD_PREPARATION_SIF=/opt/bms-md-preparation-runtime.sif" in label
     assert "BMS_MD_PREPARATION_RUNTIME_LOCK=/opt/bms-md-preparation-runtime.lock" in label
+
+
+def test_position_restraints_are_bound_to_the_first_solute_molecule(tmp_path: Path, monkeypatch) -> None:
+    from scripts.bms_md.chemistry.amber_prepare_worker import _install_position_restraints
+
+    atoms = [
+        SimpleNamespace(idx=0, atomic_number=6, residue=SimpleNamespace(name="ALA")),
+        SimpleNamespace(idx=1, atomic_number=1, residue=SimpleNamespace(name="ALA")),
+        SimpleNamespace(idx=2, atomic_number=8, residue=SimpleNamespace(name="WAT")),
+    ]
+    topology = tmp_path / "system.top"
+    topology.write_text(
+        "[ moleculetype ]\n; solute\n[ atoms ]\n1 C\n\n[ moleculetype ]\n; water\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    count = _install_position_restraints(SimpleNamespace(atoms=atoms), topology)
+
+    assert count == 1
+    assert (tmp_path / "posre.itp").read_text(encoding="utf-8").count("1000.0") == 3
+    rendered = topology.read_text(encoding="utf-8")
+    assert rendered.index('#include "posre.itp"') < rendered.rindex("[ moleculetype ]")
