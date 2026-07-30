@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 from fastapi import HTTPException
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 API_ROOT = Path(__file__).resolve().parents[1]
@@ -36,6 +37,11 @@ def _request() -> dict:
 @pytest_asyncio.fixture
 async def session(tmp_path: Path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'state.db'}")
+    @event.listens_for(engine.sync_engine, "connect")
+    def _enable_foreign_keys(dbapi_connection, _connection_record) -> None:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     maker = async_sessionmaker(engine, expire_on_commit=False)

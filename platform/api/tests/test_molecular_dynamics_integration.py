@@ -161,7 +161,7 @@ def test_md_workflow_uses_bounded_singleton_entrypoints() -> None:
 def test_md_nextflow_profile_propagates_the_feature_gate_into_containers() -> None:
     config = (REPO_ROOT / "nextflow.config").read_text(encoding="utf-8")
     assert "def mdFeatureFlag = System.getenv('BMS_FEATURE_MOLECULAR_DYNAMICS') ?: '0'" in config
-    assert config.count("--env BMS_FEATURE_MOLECULAR_DYNAMICS=${mdFeatureFlag}") == 4
+    assert config.count("--env BMS_FEATURE_MOLECULAR_DYNAMICS=${mdFeatureFlag}") == 5
     assert "molecular_dynamics_experimental" in config
     assert "withLabel: MolecularDynamicsGromacs" in config
     assert "withLabel: MolecularDynamicsOpenMM" in config
