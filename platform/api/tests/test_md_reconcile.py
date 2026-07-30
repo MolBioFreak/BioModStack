@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from pathlib import Path
 
@@ -11,7 +12,7 @@ API_ROOT = Path(__file__).resolve().parents[1]
 if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
-from database import Base, Job
+from database import Base, Job, MdAttemptSegment
 from services.md.reconcile import acquire_reconciler_lease, reconcile_md_state
 from services.md.state import create_md_run, create_replica_attempt
 
@@ -39,16 +40,17 @@ async def test_reconciliation_dry_run_then_apply_is_lease_owned_and_idempotent(t
         session.add_all([parent, child]); await session.flush()
         run = await create_md_run(session, job=parent, normalized_request=_request())
         run.phase = "replicas_running"
-        replica, _ = await create_replica_attempt(
+        replica, segment = await create_replica_attempt(
             session, job_id=parent.id, replica_index=0, attempt=0, engine="gromacs",
             execution_plan_sha256="b" * 64, compatibility_key="c" * 64,
             child_job_id=child.id,
         )
+        segment_id = segment.id
         replica.state = "running"; await session.commit()
 
     async with maker() as session:
         dry = await reconcile_md_state(session, owner_id="owner-a", apply=False)
-        assert dry["dry_run"] is True and dry["change_count"] == 2
+        assert dry["dry_run"] is True and dry["change_count"] == 3
         assert replica.state == "running"
     async with maker() as session:
         applied = await reconcile_md_state(session, owner_id="owner-a", apply=True)
@@ -57,6 +59,55 @@ async def test_reconciliation_dry_run_then_apply_is_lease_owned_and_idempotent(t
     async with maker() as session:
         settled = await reconcile_md_state(session, owner_id="owner-a", apply=False)
         assert settled["change_count"] == 0
+        stored_segment = await session.get(MdAttemptSegment, segment_id)
+        assert stored_segment is not None and stored_segment.state == "completed"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_repairs_terminal_segment_from_validated_manifest(tmp_path) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'terminal.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    output = tmp_path / "results"
+    manifest = output / "replicas" / "replica_0" / "manifest.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({
+        "schema": "bms.md.run.v1",
+        "job_id": "md-terminal",
+        "replica_index": 0,
+        "config": {"stages": {"production": {
+            "enabled": True, "steps": 5_000, "timestep_fs": 2.0,
+        }}},
+        "stages": {"production": {"status": "completed"}},
+    }))
+    async with maker() as session:
+        parent = Job(id="md-terminal", name="MD", status="completed", model_id="md",
+                     mode="molecular_dynamics", params={}, output_dir=str(output))
+        child = Job(id="md-terminal-child", name="replica", status="completed", model_id="md",
+                    mode="replica", params={}, parent_job_id=parent.id)
+        session.add_all([parent, child]); await session.flush()
+        run = await create_md_run(session, job=parent, normalized_request=_request())
+        replica, segment = await create_replica_attempt(
+            session, job_id=parent.id, replica_index=0, attempt=0, engine="gromacs",
+            execution_plan_sha256="b" * 64, compatibility_key="c" * 64,
+            child_job_id=child.id,
+        )
+        run.phase = "completed"
+        replica.state = "completed"; replica.active = False
+        segment_id = segment.id
+        await session.commit()
+
+    async with maker() as session:
+        receipt = await reconcile_md_state(session, owner_id="repair-owner", apply=True)
+        await session.commit()
+        assert any(change["kind"] == "segment_state" for change in receipt["changes"])
+        stored = await session.get(MdAttemptSegment, segment_id)
+        assert stored is not None and stored.state == "completed"
+        assert stored.end_step == 5_000
+        assert stored.end_time_ps == 10.0
 
     await engine.dispose()
 
