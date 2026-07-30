@@ -70,7 +70,7 @@ describe('Boltz API native controls', () => {
             model: 'boltz-2.1',
             sequence: 'ACDE',
             primary_chain_id: 'A',
-            complex_components: [{ id: 'B', type: 'ligand', ccd: 'ATP' }],
+            complex_components: [{ type: 'ligand_ccd', chain_ids: ['B'], value: 'ATP' }],
             num_samples: 10,
             use_msa: true,
         });

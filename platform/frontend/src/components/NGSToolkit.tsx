@@ -2058,6 +2058,19 @@ function stageDisplayName(stage: string | null | undefined): string {
     return STAGE_LABELS[key] || stage;
 }
 
+function ontWorkflowDisplayName(workflowId: unknown, fallbackMode: string): string {
+    const labels: Record<string, string> = {
+        ont_basecall_dna: 'ONT DNA Basecalling',
+        ont_basecall_rna: 'ONT RNA Basecalling',
+        ont_plasmid_qc: 'ONT Plasmid QC',
+        ont_construct_screening: 'ONT Construct Screening',
+        ont_methylation_analysis: 'ONT Methylation Analysis',
+        ont_fastq_qc: 'ONT FASTQ QC',
+        wf_clone_validation: 'wf-clone-validation',
+    };
+    return typeof workflowId === 'string' && labels[workflowId] ? labels[workflowId] : fallbackMode.replace(/_/g, ' ');
+}
+
 function formatParamValue(value: unknown): string {
     if (value === undefined || value === null || value === '') return '—';
     if (typeof value === 'boolean') return value ? 'true' : 'false';
@@ -3885,6 +3898,7 @@ export function NGSToolkit() {
                                 <thead className="bg-[var(--bg-tertiary)] text-[var(--text-secondary)]">
                                     <tr>
                                         <th className="text-left px-4 py-2">Job</th>
+                                        <th className="text-left px-4 py-2">Workflow</th>
                                         <th className="text-left px-4 py-2">Status</th>
                                         <th className="text-left px-4 py-2">Stage</th>
                                         <th className="text-left px-4 py-2">Created</th>
@@ -3894,11 +3908,11 @@ export function NGSToolkit() {
                                 <tbody>
                                     {isLoading ? (
                                         <tr>
-                                            <td colSpan={5} className="px-4 py-6 text-center text-[var(--text-secondary)]">Loading nanopore jobs...</td>
+                                            <td colSpan={6} className="px-4 py-6 text-center text-[var(--text-secondary)]">Loading nanopore jobs...</td>
                                         </tr>
                                     ) : filteredJobs.length === 0 ? (
                                         <tr>
-                                            <td colSpan={5} className="px-4 py-6 text-center text-[var(--text-secondary)]">No nanopore jobs found for current filters.</td>
+                                            <td colSpan={6} className="px-4 py-6 text-center text-[var(--text-secondary)]">No nanopore jobs found for current filters.</td>
                                         </tr>
                                     ) : (
                                         filteredJobs.map((job) => (
@@ -3907,6 +3921,7 @@ export function NGSToolkit() {
                                                 className={`border-t border-[var(--border-primary)] hover:bg-[var(--bg-tertiary)] ${selectedJobId === job.id ? 'bg-[var(--bg-tertiary)]' : ''}`}
                                             >
                                                 <td className="px-4 py-2 text-[var(--text-primary)]">{job.name}</td>
+                                                <td className="px-4 py-2 text-[var(--text-secondary)]">{ontWorkflowDisplayName(job.params?.ont_workflow_id, job.mode)}</td>
                                                 <td className="px-4 py-2">
                                                     <span className={`px-2 py-0.5 rounded text-xs font-medium ${job.status === 'completed'
                                                         ? 'bg-emerald-500/20 text-emerald-400'
@@ -4037,7 +4052,6 @@ export function NGSToolkit() {
                                         ['Assembly coverage', selectedJob.params?.wf_clone_assm_coverage],
                                         ['Assembly trim length', selectedJob.params?.wf_clone_trim_length],
                                         ['Assembly min quality', selectedJob.params?.wf_clone_min_quality],
-                                        ['Pinned upstream model', selectedJob.params?.wf_clone_basecaller_model || 'dna_r10.4.1_e8.2_400bps_hac@v5.0.0'],
                                         ['wf-clone sample', selectedJob.params?.wf_clone_sample],
                                         ['Large construct mode', selectedJob.params?.wf_clone_large_construct],
                                     ].map(([label, value]) => (

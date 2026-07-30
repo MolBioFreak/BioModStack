@@ -20,6 +20,8 @@ def _allow_context(Context, **changes):
         "runtime_ready": True,
         "hardware_ready": True,
         "capabilities": frozenset({"initialize_motors"}),
+        "maintenance_state": {"motion_blocked": False, "recovery_required": False},
+        "ownership": {"transport": "owned", "usb": "service", "router": "running"},
     }
     values.update(changes)
     return Context(**values)
@@ -62,7 +64,7 @@ def test_disabled_default_definition_fails_before_transport_admission() -> None:
     assert any("online contract" in reason.lower() for reason in decision.reasons)
 
 
-def test_usb_activation_requires_fresh_api_probe_but_rejects_already_active_runtime() -> None:
+def test_usb_activation_requires_fresh_canonical_unbound_ownership() -> None:
     parse, Context, evaluate, registry = _load()
     request = parse({
         "command": "activate_usb_for_service",
@@ -76,16 +78,18 @@ def test_usb_activation_requires_fresh_api_probe_but_rejects_already_active_runt
         runtime_ready=None,
         hardware_ready=None,
         capabilities=frozenset(),
+        ownership={"transport": "unbound", "usb": "unbound", "router": "unbound"},
     )
     assert evaluate(request, definition, inactive).allowed is True
-
-    stale_api = replace(inactive, observation_fresh=False)
-    assert evaluate(request, definition, stale_api).allowed is False
-
-    active_runtime = replace(inactive, runtime_ready=True)
-    decision = evaluate(request, definition, active_runtime)
+    assert evaluate(request, definition, replace(inactive, observation_fresh=False)).allowed is False
+    assert evaluate(request, definition, replace(inactive, ownership=None)).allowed is False
+    claimed = replace(
+        inactive,
+        ownership={"transport": "owned", "usb": "service", "router": "running"},
+    )
+    decision = evaluate(request, definition, claimed)
     assert decision.allowed is False
-    assert "already active" in " ".join(decision.reasons).lower()
+    assert "already claimed" in " ".join(decision.reasons).lower()
 
 
 def test_hardware_snapshot_requires_service_runtime_ownership() -> None:
@@ -109,3 +113,95 @@ def test_hardware_snapshot_requires_service_runtime_ownership() -> None:
 
     owned = replace(unbound, runtime_ready=True)
     assert evaluate(request, definition, owned).allowed is True
+
+
+def test_finite_motion_relay_fails_closed_on_robot_motion_latch() -> None:
+    parse, Context, evaluate, registry = _load()
+    request = parse({
+        "command": "run_axis_diagnostic",
+        "expected_generation": 7,
+        "idempotency_key": "axis-motion-maintenance-7",
+        "axis": "x",
+        "operation": "move-positive",
+    })
+    base = _allow_context(Context, capabilities=frozenset({"run_axis_diagnostic"}))
+
+    for state in (
+        None,
+        {},
+        {"motion_blocked": None},
+        {"motion_blocked": False},
+        {"motion_blocked": False, "recovery_required": True},
+        {"motion_blocked": False, "recovery_required": "true"},
+        {"motion_blocked": "false", "recovery_required": False},
+        {"motion_blocked": True, "recovery_required": False, "block_reason": "USB owner changed"},
+        {"motion_blocked": True, "recovery_required": True, "block_reason": "USB owner changed"},
+    ):
+        decision = evaluate(request, registry[request.command], replace(base, maintenance_state=state))
+        assert decision.allowed is False
+
+    assert evaluate(request, registry[request.command], base).allowed is True
+
+
+def test_non_homing_recovery_does_not_require_preexisting_runtime_or_hardware_readiness() -> None:
+    parse, Context, evaluate, registry = _load()
+    request = parse({
+        "command": "recover_motion_non_homing",
+        "expected_generation": 7,
+        "idempotency_key": "recover-motion-unready-7",
+    })
+    definition = registry[request.command]
+    base = _allow_context(
+        Context,
+        capabilities=frozenset({"recover_motion_non_homing"}),
+        maintenance_state={
+            "motion_blocked": True,
+            "recovery_required": True,
+            "block_reason": "Service startup requires recovery",
+        },
+    )
+
+    assert definition.requires_runtime_ready is False
+    assert definition.requires_hardware_ready is False
+    for runtime_ready in (False, None):
+        for hardware_ready in (False, None):
+            assert evaluate(
+                request,
+                definition,
+                replace(base, runtime_ready=runtime_ready, hardware_ready=hardware_ready),
+            ).allowed is True
+
+
+def test_non_homing_initialization_requires_capability_owned_transport_and_recovery_latch() -> None:
+    parse, Context, evaluate, registry = _load()
+    request = parse({
+        "command": "recover_motion_non_homing",
+        "expected_generation": 7,
+        "idempotency_key": "recover-motion-7",
+    })
+    definition = registry[request.command]
+    admitted = _allow_context(
+        Context,
+        capabilities=frozenset({"recover_motion_non_homing"}),
+        maintenance_state={
+            "motion_blocked": True,
+            "recovery_required": True,
+            "block_reason": "USB owner changed",
+        },
+    )
+    assert evaluate(request, definition, admitted).allowed is True
+
+    for changes in (
+        {"maintenance_state": None},
+        {"maintenance_state": {"motion_blocked": False, "recovery_required": True}},
+        {"maintenance_state": {"motion_blocked": True, "recovery_required": False}},
+        {"observation_fresh": False},
+        {"ownership": {"transport": "unbound", "usb": "unbound", "router": "unbound"}},
+    ):
+        assert evaluate(request, definition, replace(admitted, **changes)).allowed is False
+
+    assert evaluate(
+        request,
+        definition,
+        replace(admitted, capabilities=frozenset()),
+    ).allowed is False

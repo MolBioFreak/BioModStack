@@ -53,7 +53,6 @@ import { StabilityHeatmap } from './MetricCharts';
 import { BatchComparePane } from './BatchComparePane';
 import { DesignComparePane } from './DesignComparePane';
 import { DataViewerLanding } from './DataViewerLanding';
-// ReferenceSelector and MetricOverlay - unused, kept for reference
 import { AnalyticsDashboard } from './AnalyticsDashboard';
 import StructureViewerPane from './StructureViewerPane';
 import MDResultsPane from './MDResultsPane';

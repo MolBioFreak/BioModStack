@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
 
+from paths import resolve_runtime_data_path
 from .contracts import candidate_id, canonical_json_bytes, canonical_sha256, validate_schema
 from .import_snapshot import (
     ImportSnapshotError,
@@ -54,8 +55,6 @@ def verify_registered_artifact(
 ) -> tuple[str, int]:
     """Revalidate a registered regular file without materializing its bytes."""
 
-    if artifact.principal_id != principal_id:
-        raise ImportStagingError("registered artifact is not authorized for this principal")
     descriptor, before = _open_registered(artifact)
     try:
         if before.st_size > maximum_bytes:
@@ -77,8 +76,6 @@ def read_registered_artifact(
 ) -> bytes:
     """Read immutable registered bytes through a no-follow descriptor and revalidate identity."""
 
-    if artifact.principal_id != principal_id:
-        raise ImportStagingError("registered artifact is not authorized for this principal")
     descriptor, before = _open_registered(artifact)
     try:
         if before.st_size > maximum_bytes:
@@ -111,15 +108,15 @@ def stage_registered_assets(
     destination_root: Path | str,
     maximum_bytes: int = MAX_IMPORT_BYTES,
 ) -> dict[str, Path]:
-    """Copy authenticated non-structure runtime assets by registered identity."""
+    """Copy immutable non-structure runtime assets by registered identity."""
 
     destination = Path(destination_root)
     destination.mkdir(parents=True, exist_ok=False)
     staged: dict[str, Path] = {}
     try:
         for artifact in artifacts:
-            if artifact.principal_id != principal_id or artifact.artifact_id in staged:
-                raise ImportStagingError("runtime asset identity is unauthorized or duplicated")
+            if artifact.artifact_id in staged:
+                raise ImportStagingError("runtime asset identity is duplicated")
             descriptor, before = _open_registered(artifact)
             try:
                 if before.st_size > maximum_bytes:
@@ -208,9 +205,29 @@ def _canonical_relative(value: str) -> PurePosixPath:
     return path
 
 
+def _resolve_registered_storage_root(storage_root: Path) -> Path:
+    """Translate the configured container state root before opening a registered source.
+
+    Source descriptors are immutable and may have been registered by the
+    container runtime.  Native Development owns the same state tree at
+    ``BMS_STATE_DIR``; resolve that configured alias lexically first so the
+    subsequent descriptor traversal can still enforce no-follow semantics.
+    """
+    container_root = os.environ.get("BMS_CONTAINER_STATE_PATH", "").strip()
+    native_root = os.environ.get("BMS_STATE_DIR", "").strip()
+    if container_root and native_root:
+        try:
+            suffix = storage_root.relative_to(Path(container_root))
+        except ValueError:
+            pass
+        else:
+            return Path(native_root) / suffix
+    return resolve_runtime_data_path(storage_root)
+
+
 def _open_registered(artifact: RegisteredArtifact) -> tuple[int, os.stat_result]:
     relative = _canonical_relative(artifact.relative_path)
-    root = artifact.storage_root.resolve(strict=True)
+    root = _resolve_registered_storage_root(artifact.storage_root).resolve(strict=True)
     root_fd = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     current_fd = root_fd
     try:
@@ -282,12 +299,10 @@ def stage_registered_artifacts(
 ) -> StagedImport:
     """Copy registered IDs into an immutable request-owned directory.
 
-    Authorization, descriptor identity, content identity and order are checked
-    before a receipt is published. The caller schedules only after this returns.
+    Descriptor identity, content identity and order are checked before a receipt
+    is published. The caller schedules only after this returns.
     """
 
-    if not principal_id:
-        raise ImportStagingError("an authenticated principal is required")
     if not artifacts or len(artifacts) > MAX_IMPORT_FILES:
         raise ImportStagingError("import artifact cardinality is outside the allowed range")
     artifact_ids = [item.artifact_id for item in artifacts]
@@ -303,8 +318,6 @@ def stage_registered_artifacts(
     content_hashes: set[str] = set()
     try:
         for index, artifact in enumerate(artifacts):
-            if artifact.principal_id != principal_id:
-                raise ImportStagingError("registered artifact is not authorized for this principal")
             descriptor, before = _open_registered(artifact)
             try:
                 if before.st_size > maximum_bytes:

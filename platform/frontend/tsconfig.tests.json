@@ -17,7 +17,7 @@
     "src/components/structureViewerLayout.ts",
     "src/components/molstarTouchInteraction.ts",
     "src/components/bioxpConnectionSemantics.ts",
-    "src/components/bioxpInterlinkStatus.ts",
+
     "src/components/MolBioToolkit/utils/alignmentLabels.ts",
     "src/components/MolBioToolkit/utils/nucleotides.ts",
     "src/components/MolBioToolkit/utils/orfs.ts",

@@ -198,7 +198,17 @@ def _parse_document(source_bytes: bytes) -> _CifDocument:
                 raise ImportSnapshotError(f"mmCIF category {category} has ambiguous multiple definitions")
             rows: list[list[str]] = []
             row: list[str] = []
-            while (candidate := stream.peek()) is not None and not _is_control(candidate):
+            # shlex removes quote delimiters.  A quoted mmCIF value may begin
+            # with "_" (for example an audit item name), so preserve it while
+            # completing an already-started row; at a row boundary, leading
+            # underscores still introduce the next tag/category.
+            while (
+                (candidate := stream.peek()) is not None
+                and (
+                    not _is_control(candidate)
+                    or (bool(row) and candidate.startswith("_"))
+                )
+            ):
                 row.append(str(stream.pop()))
                 if len(row) == len(tags):
                     rows.append(row)

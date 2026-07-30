@@ -396,6 +396,8 @@ def test_render_user_units_exports_configured_dev_frontend_port(tmp_path: Path, 
             "dev_inputs_dir": "/srv/biomodstack-dev/inputs",
             "dev_db_path": "/srv/biomodstack-dev/biomodstack.db",
             "dev_work_dir": "/srv/biomodstack-dev/work",
+            "weights_root": "/srv/biomodstack/weights",
+            "colabfold_db": "/srv/biomodstack/colabfold_db",
             "dev_weights_root": "/srv/biomodstack-dev/weights",
             "dev_colabfold_db": "/srv/biomodstack-dev/colabfold_db",
             "dev_msa_cache_dir": "/srv/biomodstack-dev/msa_cache",
@@ -409,6 +411,10 @@ def test_render_user_units_exports_configured_dev_frontend_port(tmp_path: Path, 
     assert "Environment=BMS_API_BIND_PORT=8179" in units[services.API_SERVICE]
     assert "Environment=BMS_DATA=/srv/biomodstack-dev" in units[services.API_SERVICE]
     assert "Environment=BMS_DB_PATH=/srv/biomodstack-dev/biomodstack.db" in units[services.API_SERVICE]
+    assert "Environment=BMS_WEIGHTS=/srv/biomodstack/weights" in units[services.API_SERVICE]
+    assert "Environment=BMS_COLABFOLD_DB=/srv/biomodstack/colabfold_db" in units[services.API_SERVICE]
+    assert "Environment=BMS_WEIGHTS=/srv/biomodstack-dev/weights" not in units[services.API_SERVICE]
+    assert "Environment=BMS_COLABFOLD_DB=/srv/biomodstack-dev/colabfold_db" not in units[services.API_SERVICE]
     assert "ExecStartPre=/usr/bin/mkdir -p /srv/biomodstack-dev" in units[services.API_SERVICE]
     assert "Environment=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:8179" in units[services.FRONTEND_SERVICE]
     assert "Environment=BMS_DEV_WEB_HOST_PORT=5179" in units[services.FRONTEND_SERVICE]

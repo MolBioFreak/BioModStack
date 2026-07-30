@@ -25,6 +25,8 @@ from migrations.enforce_state_landscape_analysis_pair_row_integrity import (
 from migrations.add_state_landscape_analysis_page_order_index import (
     migrate as migrate_state_landscape_analysis_page_order_index,
 )
+from migrations.add_molbio_ngs_receipts import migrate as migrate_molbio_ngs_receipts
+from migrations.add_approved_ngs_comparison_panels import migrate as migrate_approved_ngs_comparison_panels
 from run_migration import migrate as migrate_stage_tracking
 
 
@@ -58,6 +60,8 @@ MIGRATIONS: List[Migration] = [
         "add_state_landscape_analysis_page_order_index",
         migrate_state_landscape_analysis_page_order_index,
     ),
+    Migration(15, "add_molbio_ngs_receipts", migrate_molbio_ngs_receipts),
+    Migration(16, "add_approved_ngs_comparison_panels", migrate_approved_ngs_comparison_panels),
 ]
 
 

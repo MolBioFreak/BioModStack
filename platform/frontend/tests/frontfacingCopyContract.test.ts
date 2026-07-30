@@ -37,28 +37,6 @@ test('Data Viewer landing keeps import/open surfaces concise', () => {
     }
 });
 
-test('BioXP top-bar control avoids explainer subtitles', () => {
-    const source = readSource('src', 'components', 'BioXpInterlinkControlPanel.tsx');
-
-    for (const snippet of [
-        'BioXP',
-        'Profile',
-        'Connect',
-        'Disconnect',
-        'Probe',
-    ]) {
-        requireSnippet(source, snippet);
-    }
-
-    for (const stale of [
-        'Actions + logs.',
-        'State, actions, logs.',
-        'BIOXP LINK',
-    ]) {
-        rejectSnippet(source, stale);
-    }
-});
-
 test('analytics, BioXP USB, and quality panels keep copy terse', () => {
     const source = readSource('src', 'components', 'AnalyticsDashboard.tsx')
         + readSource('src', 'components', 'BioXpCockpit.tsx')
@@ -68,7 +46,7 @@ test('analytics, BioXP USB, and quality panels keep copy terse', () => {
         'Backbone screen: target contacts, hotspot coverage, RFA quality.',
         'Generator-native confidence, affinity priors, batch shape.',
         'PAE matrix; chain bands when available.',
-        'Status-first operator surface',
+        'Direct OEM operator controls',
         'Stage presets tune start_t, samples, ranking, and anchor strictness.',
     ]) {
         requireSnippet(source, snippet);
@@ -173,23 +151,30 @@ test('Results, structure viewer, and quality settings avoid explainer paragraphs
 });
 
 test('BioXP handler cockpit uses terse operator copy, not explainer paragraphs', () => {
-    const source = [
-        readSource('src', 'components', 'BioXpCockpit.tsx'),
-        readSource('src', 'components', 'bioxpInterlinkStatus.ts'),
-    ].join('\n');
+    const source = readSource('src', 'components', 'BioXpCockpit.tsx');
 
     for (const snippet of [
+        'Connection',
+        'Claim USB Transport',
+        'Non-homing Recovery',
+        'X Axis',
+        'Camera',
+        'Emergency Stop',
+    ]) {
+        requireSnippet(source, snippet);
+    }
+
+    for (const stale of [
         'Status-first operator surface',
         'UNKNOWN or STALE evidence never authorizes controls.',
         'Normal Commands',
         'No normal OEM commands are available.',
         'Offline Protocol Validation',
         'Local Jobs',
-    ]) {
-        requireSnippet(source, snippet);
-    }
-
-    for (const stale of [
+        'Profile',
+        'Probe',
+        'runtime_ready',
+        'hardware_ready',
         'OEM/liquid-handler-first BMS proxy for the robot-local BioXP runtime',
         'Operator-readable gantry/grabber controls: arm first',
         'X/Y/Z plus Grabber are live axis controls. Speed/acc inputs are per card.',

@@ -33,7 +33,6 @@ import {
 import { ThemeSelector } from './ThemeSelector';
 import { buildIdentity } from '../lib/buildIdentity';
 
-import { BioXpInterlinkMenu } from './BioXpInterlinkControlPanel';
 import {
     InfraControlStateCollector,
     InfraTelemetryCollector,
@@ -380,14 +379,9 @@ function TopbarUtilityControls({
     onSetShowSystemAnalyticsTab,
     onSetShowDevFeatures,
 }: TopbarUtilityControlsProps) {
-    const bmsFeatureState = useBmsFeatureState();
-    const showBioXpDevFeature = isBmsFeatureVisible(bmsFeatureState, 'bioxp', showDevFeatures);
-
-
     return (
         <>
             <ThemeSelector />
-            {showBioXpDevFeature && <BioXpInterlinkMenu />}
             {showSystemMenus && <PowerControlMenu />}
 
             {showSystemMenus && <MSAServerSettingsMenu />}

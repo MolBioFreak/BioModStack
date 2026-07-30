@@ -59,7 +59,7 @@ test('top-bar utility menus stay compact and action-first', () => {
 
     for (const marker of [
         'Surface + API',
-        'Switch + start',
+        'Local runtime switch + start',
         'CoolerControl active.',
         'Per-GPU channel control.',
         'Default GPU for MSA controls.',

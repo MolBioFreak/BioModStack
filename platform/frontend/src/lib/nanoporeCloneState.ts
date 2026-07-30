@@ -13,7 +13,25 @@ export function normalizeNanoporeCloneState(job: Job | null): Record<string, unk
         : legacyModel === 'hac' || legacyModel.includes('_hac@')
             ? 'hac'
             : 'sup';
+    const workflowId = String(p.ont_workflow_id || '');
+    const selectedWorkflow = workflowId === 'ont_construct_screening'
+        ? 'constructScreening'
+        : workflowId === 'ont_fastq_qc'
+            ? 'fastqQc'
+            : workflowId === 'wf_clone_validation' || p.run_assembly === true
+                ? 'clone'
+                : workflowId === 'ont_basecall_rna'
+                    ? 'rna'
+                    : workflowId === 'ont_methylation_analysis' || (p.modified_bases && p.modified_bases !== 'none')
+                        ? 'modified'
+                        : workflowId === 'ont_basecall_dna' && p.barcode_kit
+                            ? 'barcode'
+                            : workflowId === 'ont_basecall_dna' && p.dorado_basecall_mode === 'duplex'
+                                ? 'duplex'
+                                : (p.bam_path ? 'bamQc' : (p.fastq_path ? 'plasmidQc' : 'dna'));
     return {
+        selectedWorkflow,
+        ontWorkflowId: workflowId,
         jobName: job.name,
         pinnedGpus,
         lockGpus: p.lock_gpus === true,
@@ -50,13 +68,22 @@ export function normalizeNanoporeCloneState(job: Job | null): Record<string, unk
         assemblyCoverage: p.wf_clone_assm_coverage ?? 60,
         assemblyTrimLength: p.wf_clone_trim_length ?? 0,
         assemblyMinQuality: p.wf_clone_min_quality ?? 9,
-        wfCloneBasecallerModel: p.wf_clone_basecaller_model || 'dna_r10.4.1_e8.2_400bps_hac@v5.0.0',
         wfCloneSample: p.wf_clone_sample || '',
         wfClonePrimers: p.wf_clone_primers || '',
         wfCloneInsertReference: p.wf_clone_insert_reference || '',
         wfCloneHostReference: p.wf_clone_host_reference || '',
         wfCloneRegionsBedfile: p.wf_clone_regions_bedfile || '',
         wfCloneLargeConstruct: p.wf_clone_large_construct === true,
+        wfCloneFlyeQuality: p.wf_clone_flye_quality || 'nano-hq',
+        wfCloneNonUniformCoverage: p.wf_clone_non_uniform_coverage === true,
+        wfCloneCanuFast: p.wf_clone_canu_fast === true,
+        wfCloneCutsiteMismatch: p.wf_clone_cutsite_mismatch ?? 1,
+        wfClonePrimerMismatch: p.wf_clone_primer_mismatch ?? 2,
+        wfCloneExpectedCoverage: p.wf_clone_expected_coverage ?? 95,
+        wfCloneExpectedIdentity: p.wf_clone_expected_identity ?? 99,
+        singleRefSplitMinMapq: p.single_ref_split_min_mapq ?? 20,
+        singleRefSplitMinSegmentBp: p.single_ref_split_min_segment_bp ?? 250,
+        singleRefSplitMaxQueryGapBp: p.single_ref_split_max_query_gap_bp ?? 500,
         emitSummary: p.emit_summary !== false,
         batchSize: p.dorado_batch_size ?? null,
         minQscore: p.min_qscore ?? 10,

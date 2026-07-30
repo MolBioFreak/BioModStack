@@ -50,13 +50,12 @@ export function StatsToolkitLauncher() {
   }
 
   return (
-    <section className="h-[calc(100vh-3rem)] min-h-[36rem] w-full bg-[var(--bg-primary)]" aria-label="BioModStack Stats Toolkit workspace">
+    <div className="h-[calc(100vh-3.5rem)] min-h-[42rem] w-full overflow-hidden bg-[var(--bg-primary)]">
       <iframe
-        title="BioModStack Stats Toolkit"
-        src={resolveStatsToolkitEntryUrl(status.entry_url, window.location.hostname)}
         className="h-full w-full border-0"
-        allow="clipboard-read; clipboard-write"
+        src={resolveStatsToolkitEntryUrl(status.entry_url, window.location.hostname)}
+        title="BioModStack Stats Toolkit workspace"
       />
-    </section>
+    </div>
   );
 }

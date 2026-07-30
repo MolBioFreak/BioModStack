@@ -1,8 +1,26 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, cast
+
+
+def _legacy_definition(definition):
+    return replace(
+        definition,
+        enabled=True,
+        route_key="initialize_oem_environment",
+        disabled_reason="",
+    )
+
+
+def _legacy_registry(registry):
+    definitions = dict(registry)
+    definitions["initialize_oem_environment"] = _legacy_definition(
+        definitions["initialize_oem_environment"]
+    )
+    return definitions
 
 
 def _startup(*, constructor="not_run", no_motion="blocked", initial="blocked"):
@@ -43,12 +61,12 @@ def _context(startup, *, hardware_ready: bool | None = True):
     )
 
 
-def test_aggregate_oem_startup_is_admitted_only_for_a_fresh_ownership_epoch():
+def test_legacy_aggregate_oem_startup_policy_remains_parseable_but_is_not_default():
     from services.bioxp.command_policy import evaluate_command
     from services.bioxp.command_registry import DEFAULT_COMMAND_REGISTRY
 
     request = _request(7, "oem-startup-1")
-    definition = DEFAULT_COMMAND_REGISTRY[request.command]
+    definition = _legacy_definition(DEFAULT_COMMAND_REGISTRY[request.command])
 
     assert evaluate_command(request, definition, _context(_startup(), hardware_ready=True)).allowed
     unknown_hardware = evaluate_command(
@@ -67,7 +85,7 @@ def test_aggregate_oem_startup_is_admitted_only_for_a_fresh_ownership_epoch():
         assert any("fresh ownership epoch" in reason.lower() for reason in decision.reasons)
 
 
-def test_command_record_preserves_aggregate_handler_failure_and_lifecycle_response():
+def test_legacy_aggregate_handler_failure_translation_requires_explicit_test_mapping():
     from services.bioxp.command_coordinator import CommandCoordinator
     from services.bioxp.command_registry import DEFAULT_COMMAND_REGISTRY
     from services.bioxp.models import BioXpSnapshot
@@ -112,7 +130,7 @@ def test_command_record_preserves_aggregate_handler_failure_and_lifecycle_respon
 
     async def scenario():
         connection = Connection()
-        coordinator = CommandCoordinator(connection, DEFAULT_COMMAND_REGISTRY)
+        coordinator = CommandCoordinator(connection, _legacy_registry(DEFAULT_COMMAND_REGISTRY))
         record = await coordinator.execute(_request(4, "preserve-failure"), mutations_enabled=True)
         assert record.status == "delivery_failed"
         assert record.remote_acknowledged is False
@@ -122,12 +140,12 @@ def test_command_record_preserves_aggregate_handler_failure_and_lifecycle_respon
     asyncio.run(scenario())
 
 
-def test_aggregate_admission_rejects_missing_null_unknown_and_wrong_stage_states():
+def test_legacy_aggregate_policy_rejects_missing_null_unknown_and_wrong_stage_states():
     from services.bioxp.command_policy import evaluate_command
     from services.bioxp.command_registry import DEFAULT_COMMAND_REGISTRY
 
     request = _request(7, "malformed-lifecycle")
-    definition = DEFAULT_COMMAND_REGISTRY[request.command]
+    definition = _legacy_definition(DEFAULT_COMMAND_REGISTRY[request.command])
 
     malformed = (
         None,
@@ -142,7 +160,7 @@ def test_aggregate_admission_rejects_missing_null_unknown_and_wrong_stage_states
         assert any("lifecycle" in reason.lower() or "fresh ownership epoch" in reason.lower() for reason in decision.reasons)
 
 
-def test_http_error_updates_cached_lifecycle_before_aggregate_failure_record_is_returned():
+def test_legacy_http_error_translation_requires_explicit_test_mapping():
     from services.bioxp.command_coordinator import CommandCoordinator
     from services.bioxp.command_registry import DEFAULT_COMMAND_REGISTRY
     from services.bioxp.errors import RobotResponseError
@@ -190,7 +208,7 @@ def test_http_error_updates_cached_lifecycle_before_aggregate_failure_record_is_
 
     async def scenario():
         connection = Connection()
-        coordinator = CommandCoordinator(connection, DEFAULT_COMMAND_REGISTRY)
+        coordinator = CommandCoordinator(connection, _legacy_registry(DEFAULT_COMMAND_REGISTRY))
         record = await coordinator.execute(_request(4, "http-lifecycle-failure"), mutations_enabled=True)
         assert record.status == "delivery_failed"
         assert isinstance(record.handler_response, dict)
@@ -220,7 +238,7 @@ def test_production_connection_cache_unwraps_http_409_lifecycle_envelope():
     assert service.snapshot().startup_lifecycle == failed
 
 
-def test_status_applies_fresh_epoch_predicate_used_by_execution(monkeypatch):
+def test_status_reports_robot_contract_unavailable_before_legacy_lifecycle_predicates(monkeypatch):
     from types import SimpleNamespace
 
     from routers.bioxp.connection import get_status
@@ -252,6 +270,6 @@ def test_status_applies_fresh_epoch_predicate_used_by_execution(monkeypatch):
     status = asyncio.run(get_status(cast(Any, runtime)))
 
     assert "initialize_oem_environment" not in status["available_commands"]
-    assert "fresh ownership epoch" in status["unavailable_commands"][
-        "initialize_oem_environment"
-    ].lower()
+    assert status["unavailable_commands"]["initialize_oem_environment"] == (
+        "robot-contract-unavailable: unsupported by the exact robot runtime contract"
+    )

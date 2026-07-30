@@ -108,6 +108,7 @@ def test_cm5_011_resume_key_and_manifest_authority() -> None:
     source = inspect.getsource(__import__("services.conformational_mapping.protenix", fromlist=["finalize_protenix"]).finalize_protenix)
     assert "ResumeDescriptor(" in source
     assert '"resume_key": resume_descriptor.resume_key' in source
+    assert 'model_dump(mode="json", exclude_computed_fields=True)' in source
     assert '"native_manifest_sha256": native_hash' in source
 
 

@@ -52,6 +52,8 @@ LEGACY_CONTROL_TARGET = "http://127.0.0.1:8001/api/workflow-adapter/tailnet-envi
 STATS_TOOLKIT_TARGET = "http://127.0.0.1:18180"
 GLOBAL_SERVE_HANDLERS: Mapping[str, str] = {
     CONTROL_PATH: CONTROL_TARGET,
+    "/api/mobile-apk": "http://127.0.0.1:8000/api/mobile-apk",
+    "/api/mobile-ui": "http://127.0.0.1:8000/api/mobile-ui",
     "/stats/embed": f"{STATS_TOOLKIT_TARGET}/stats",
     "/stats/assets": f"{STATS_TOOLKIT_TARGET}/stats/assets",
     "/stats/embed/health/live": f"{STATS_TOOLKIT_TARGET}/health/live",
@@ -1020,15 +1022,13 @@ def _start_selected_environment(spec: EnvironmentSpec, root: Path) -> set[str]:
     # restart it, nor start the unselected environment. Require the shared API
     # (and immutable production web, when selected) to be healthy first.
     api_probe = _url_probe(spec.api_health_url, expect_json=True)
-    runtime_revision = _api_build_identity(api_probe, source="local")["revision"]
-    control_root = root
-    control_revision = runtime_revision
-    if root.resolve() == CANONICAL_PRODUCTION_ROOT.resolve():
-        # The authenticated Tailnet selector is an independently owned control
-        # lane. Keep it on canonical Development source while selecting either
-        # runtime so a request never restarts the process serving that request.
-        control_root = CANONICAL_DEVELOPMENT_ROOT.resolve()
-        control_revision = _git_revision(control_root)
+    _api_build_identity(api_probe, source="local")
+    # The authenticated Tailnet selector is an independently owned control lane.
+    # Always keep it on canonical Development source, regardless of which runtime
+    # is being selected or whether Development's API revision temporarily lags
+    # its live source. A selector request must never restart its own process.
+    control_root = CANONICAL_DEVELOPMENT_ROOT.resolve()
+    control_revision = _git_revision(control_root)
     if spec.runtime_mode == CONTAINER_RUNTIME_MODE:
         _url_probe(spec.frontend_url)
         _validated_production_tailnet_proxy(root)
@@ -2170,11 +2170,8 @@ def _verify_selected_environment(
             container_name="biomodstack-web",
             port=spec.frontend_port,
         )
-    adapter_root = root
-    adapter_revision = local_api_build["revision"]
-    if root.resolve() == CANONICAL_PRODUCTION_ROOT.resolve():
-        adapter_root = CANONICAL_DEVELOPMENT_ROOT.resolve()
-        adapter_revision = _git_revision(adapter_root)
+    adapter_root = CANONICAL_DEVELOPMENT_ROOT.resolve()
+    adapter_revision = _git_revision(adapter_root)
     workflow_adapter_listener = _validated_workflow_adapter_listener(
         adapter_root, adapter_revision
     )

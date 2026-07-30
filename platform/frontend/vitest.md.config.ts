@@ -8,6 +8,8 @@ export default defineConfig({
             './tests/vitest/mdResultsMolstarMounted.test.tsx',
             './tests/vitest/boltzApiNativeControls.test.tsx',
             './tests/vitest/stateLandscapeWorkspacePanel.test.tsx',
+            './tests/vitest/bioxpCockpitMounted.test.tsx',
+            './tests/vitest/bioxpCameraMounted.test.tsx',
         ],
     },
 });

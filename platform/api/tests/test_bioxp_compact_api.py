@@ -11,6 +11,9 @@ EXPECTED = {
     ("PUT", "/profile"),
     ("DELETE", "/profile"),
     ("GET", "/status"),
+    ("GET", "/camera/status"),
+    ("GET", "/camera/frame/latest"),
+    ("POST", "/camera/snapshot"),
     ("POST", "/connection/connect"),
     ("POST", "/connection/disconnect"),
     ("POST", "/connection/probe"),
@@ -53,7 +56,7 @@ def _inventory() -> set[tuple[str, str]]:
 
 def test_compact_api_inventory_is_exact_and_bounded() -> None:
     assert _inventory() == EXPECTED
-    assert len(_inventory()) <= 23
+    assert len(_inventory()) <= 26
 
 
 def test_every_non_read_route_carries_the_global_containment_dependency() -> None:

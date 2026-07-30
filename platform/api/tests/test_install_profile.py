@@ -38,6 +38,10 @@ def clear_inherited_runtime_environment(monkeypatch) -> None:
         "BMS_DEV_API_HOST_PORT",
         "BMS_DEV_WEB_HOST_PORT",
         "BMS_WEB_HOST_PORT",
+        "BMS_API_IMAGE",
+        "BMS_WEB_IMAGE",
+        "BMS_HOST_AGENT_IMAGE",
+        "BMS_CPU_POWER_IMAGE",
         "CORS_ORIGINS",
         "BMS_CORE_RUNTIME_MODE",
         "BMS_FEATURE_BIOXP",
@@ -78,6 +82,10 @@ def test_save_install_profile_writes_compatibility_exports(tmp_path: Path, monke
             "dev_web_host_port": 5179,
             "api_host_port": 8000,
             "web_host_port": 5174,
+            "api_image": "biomodstack/api:release-deadbee",
+            "web_image": "biomodstack/web:release-deadbee",
+            "host_agent_image": "biomodstack/host-agent:release-deadbee",
+            "cpu_power_image": "biomodstack/cpu-power:release-deadbee",
         }
     )
 
@@ -112,7 +120,63 @@ def test_save_install_profile_writes_compatibility_exports(tmp_path: Path, monke
     assert "BMS_DEV_WEB_HOST_PORT=5179" in core_runtime_text
     assert f"CORS_ORIGINS={EXPECTED_CORS_ORIGINS}" in core_runtime_text
     assert "BMS_WORKFLOW_ADAPTER_URL=http://127.0.0.1:8001" in core_runtime_text
+    assert "BMS_API_IMAGE=biomodstack/api:release-deadbee" in core_runtime_text
+    assert "BMS_WEB_IMAGE=biomodstack/web:release-deadbee" in core_runtime_text
+    assert "BMS_HOST_AGENT_IMAGE=biomodstack/host-agent:release-deadbee" in core_runtime_text
+    assert "BMS_CPU_POWER_IMAGE=biomodstack/cpu-power:release-deadbee" in core_runtime_text
     assert core_runtime_env.stat().st_mode & 0o777 == 0o600
+
+
+def test_resaving_install_profile_preserves_immutable_image_selectors(tmp_path: Path, monkeypatch) -> None:
+    home_dir = tmp_path / "home"
+    config_home = home_dir / ".config"
+    home_dir.mkdir()
+    config_home.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+    runtime_profile.save_install_profile(
+        {
+            "data_root": "~/BioModStackData",
+            "api_image": "biomodstack/api:release-a229e2f",
+            "web_image": "biomodstack/web:release-a229e2f",
+        }
+    )
+    updated = runtime_profile.load_install_profile()
+    updated["dev_api_host_port"] = 18002
+    runtime_profile.save_install_profile(updated)
+
+    persisted = runtime_profile.load_install_profile()
+    assert persisted["api_image"] == "biomodstack/api:release-a229e2f"
+    assert persisted["web_image"] == "biomodstack/web:release-a229e2f"
+    core_runtime_text = runtime_profile.get_core_runtime_env_path().read_text(encoding="utf-8")
+    assert "BMS_API_IMAGE=biomodstack/api:release-a229e2f" in core_runtime_text
+    assert "BMS_WEB_IMAGE=biomodstack/web:release-a229e2f" in core_runtime_text
+
+
+def test_export_preserves_deployment_only_core_runtime_settings(tmp_path: Path, monkeypatch) -> None:
+    home_dir = tmp_path / "home"
+    config_home = home_dir / ".config"
+    home_dir.mkdir()
+    config_home.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    core_env = runtime_profile.get_core_runtime_env_path()
+    core_env.parent.mkdir(parents=True)
+    core_env.write_text(
+        "BMS_API_IMAGE=biomodstack/api:release-a229e2f\n"
+        "BMS_BIOXP_MUTATIONS_ENABLED=1\n"
+        "BMS_CM_TRUSTED_PROXY_SECRET=do-not-drop\n",
+        encoding="utf-8",
+    )
+
+    runtime_profile.save_install_profile({"data_root": "~/BioModStackData", "dev_api_host_port": 18002})
+
+    core_runtime_text = core_env.read_text(encoding="utf-8")
+    assert "BMS_API_IMAGE=biomodstack/api:release-a229e2f" in core_runtime_text
+    assert "BMS_BIOXP_MUTATIONS_ENABLED=1" in core_runtime_text
+    assert "BMS_CM_TRUSTED_PROXY_SECRET=do-not-drop" in core_runtime_text
+    assert "BMS_DEV_API_HOST_PORT=18002" in core_runtime_text
 
 
 def test_resolve_runtime_paths_defaults_include_cordova_and_loopback_cors_origins(tmp_path: Path, monkeypatch) -> None:

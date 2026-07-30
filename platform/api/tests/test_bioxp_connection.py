@@ -262,6 +262,56 @@ def test_disconnect_closes_client_increments_generation_and_clears_observation(t
     assert disconnected.hardware_ready is None
     assert disconnected.observed_at is None
     assert disconnected.capabilities == ()
+    assert disconnected.maintenance_state is None
+
+
+def test_maintenance_state_projects_from_status_and_nested_command_or_error_responses(tmp_path: Path) -> None:
+    _, BioXpProfile, _, _ = _load()
+    clients: list[FakeRobotClient] = []
+    service = _service(
+        tmp_path,
+        clients,
+        probe_result={
+            "status": "ok",
+            "available": True,
+            "cache_state": "fresh",
+            "freshness": {"state": "fresh", "age_s": 0.0, "fresh_for_s": 30.0},
+            "runtime_ready": True,
+            "hardware_connected": True,
+            "capabilities": ["recover_motion_non_homing"],
+            "maintenance_state": {
+                "motion_blocked": True,
+                "recovery_required": True,
+                "block_reason": "USB owner changed",
+            },
+        },
+    )
+    asyncio.run(service.save_profile(BioXpProfile(api_url="http://robot:8123")))
+    connected = asyncio.run(service.connect())
+    assert connected.maintenance_state == {
+        "motion_blocked": True,
+        "recovery_required": True,
+        "block_reason": "USB owner changed",
+    }
+
+    service.observe_command_response({
+        "detail": {
+            "error": "post_maintenance_motion_recovery_required",
+            "maintenance_state": {
+                "motion_blocked": False,
+                "recovery_required": False,
+                "block_reason": None,
+            },
+        },
+    })
+    assert service.snapshot().maintenance_state == {
+        "motion_blocked": False,
+        "recovery_required": False,
+        "block_reason": None,
+    }
+
+    asyncio.run(service.disconnect())
+    assert service.snapshot().maintenance_state is None
 
 
 def test_generation_bound_request_lease_serializes_disconnect(tmp_path: Path) -> None:

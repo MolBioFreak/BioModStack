@@ -79,8 +79,6 @@ class RunAxisDiagnosticCommand(_CommandBase):
     command: Literal["run_axis_diagnostic"]
     axis: AxisDiagnosticAxis
     operation: AxisDiagnosticOperation
-    operator_ack: Literal["RUN_AXIS_DIAGNOSTIC"]
-    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
 
     @model_validator(mode="after")
     def validate_axis_operation(self) -> "RunAxisDiagnosticCommand":
@@ -92,8 +90,10 @@ class RunAxisDiagnosticCommand(_CommandBase):
 class StopAxisDiagnosticCommand(_CommandBase):
     command: Literal["stop_axis_diagnostic"]
     axis: AxisDiagnosticAxis
-    operator_ack: Literal["STOP_AXIS"]
-    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
+
+
+class RecoverMotionNonHomingCommand(_CommandBase):
+    command: Literal["recover_motion_non_homing"]
 
 
 class StartJobCommand(_CommandBase):
@@ -130,6 +130,7 @@ CommandRequest: TypeAlias = Annotated[
     | CollectAxisDiagnosticsCommand
     | RunAxisDiagnosticCommand
     | StopAxisDiagnosticCommand
+    | RecoverMotionNonHomingCommand
     | StartJobCommand
     | PauseJobCommand
     | ResumeJobCommand

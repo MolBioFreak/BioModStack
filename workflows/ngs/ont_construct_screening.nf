@@ -17,6 +17,7 @@ include { FastqPlasmidQC } from '../../modules/ngs/fastq_plasmid_qc.nf'
 include { FastqDimerAnalysis; BuildDimerCanonicalOutputs } from '../../modules/ngs/fastq_dimer_qc.nf'
 include { ConstructVerify } from '../../modules/ngs/construct_verify.nf'
 include { RunCloneValidation } from '../../modules/ngs/clone_validation.nf'
+include { ComparisonPanelAttribution } from '../../modules/ngs/comparison_panel_attribution.nf'
 
 def reportStage(params, stageName, files) {
     def jobId = params.containsKey('job_id') ? params.job_id : null
@@ -236,6 +237,19 @@ workflow ONT_CONSTRUCT_SCREENING {
                 "${params.out_dir}/fastq_qc/igv_report.html",
                 "${params.out_dir}/fastq_qc/fastq_consensus.fasta",
             ])
+        }
+        if (params.comparison_panel_snapshot && params.comparison_panel_snapshot.toString().trim()) {
+            def comparisonSnapshot = file(params.comparison_panel_snapshot)
+            if (!comparisonSnapshot.exists()) error("Comparison panel snapshot not found")
+            // Deliberately separate from both FastqAlign primary BAM and dimer BAM.
+            ComparisonPanelAttribution(Channel.of(file(params.fastq_path)), Channel.of(reference_file), Channel.of(comparisonSnapshot))
+            ComparisonPanelAttribution.out.summary.subscribe { _ignored ->
+                reportStage(params, "comparison_panel", [
+                    "${params.out_dir}/comparison_panel/comparison_panel_summary.json",
+                    "${params.out_dir}/comparison_panel/comparison_panel.bam",
+                    "${params.out_dir}/comparison_panel/comparison_panel.bam.bai",
+                ])
+            }
         }
     }
 }

@@ -67,6 +67,16 @@ def test_every_locally_built_compose_service_receives_build_identity_and_stable_
         assert services[service_name]["image"] == image_ref
 
 
+def test_core_runtime_forwards_independent_bioxp_connection_policy() -> None:
+    compose = yaml.safe_load((REPO_ROOT / "compose.core-runtime.yml").read_text(encoding="utf-8"))
+    api_environment = compose["services"]["bms-api"]["environment"]
+
+    assert api_environment["BMS_BIOXP_CONNECTION_ENABLED"] == "${BMS_BIOXP_CONNECTION_ENABLED:-0}"
+    assert api_environment["BMS_BIOXP_MUTATIONS_ENABLED"] == "${BMS_BIOXP_MUTATIONS_ENABLED:-0}"
+    assert api_environment["BMS_BIOXP_ALLOWED_HOSTS"] == "${BMS_BIOXP_ALLOWED_HOSTS:-robot}"
+    assert api_environment["BMS_BIOXP_ALLOWED_CIDRS"] == "${BMS_BIOXP_ALLOWED_CIDRS:-}"
+
+
 def test_built_images_publish_oci_revision_labels() -> None:
     for relative_path in ("docker/api.Dockerfile", "docker/web.Dockerfile"):
         source = (REPO_ROOT / relative_path).read_text(encoding="utf-8")

@@ -21,6 +21,28 @@ export interface BioXpConnectionSnapshot {
     last_error: string | null;
     command_active: boolean;
     startup_lifecycle: BioXpStartupLifecycle | null;
+    maintenance_state: BioXpMaintenanceState | null;
+    ownership: BioXpOwnership | null;
+}
+
+export interface BioXpOwnership {
+    transport?: string | null;
+    usb?: string | null;
+    router?: string | null;
+    camera?: string | null;
+}
+
+export interface BioXpMaintenanceState {
+    motion_blocked?: boolean | null;
+    recovery_required?: boolean | null;
+    usb_owner?: string | null;
+    blocked_by?: string | null;
+    block_reason?: string | null;
+    block_source?: string | null;
+    recovery_hint?: string | null;
+    blocked_at?: string | null;
+    recovered_at?: string | null;
+    last_recovery?: Record<string, unknown> | null;
 }
 
 export interface BioXpStartupStage {
@@ -67,6 +89,34 @@ export interface BioXpStatusResponse {
     };
 }
 
+export interface BioXpCameraStatus {
+    schema_version: 'bioxp.camera_status.v1';
+    state: 'live' | 'stale' | 'unavailable';
+    available: boolean;
+    frame_sequence: number | null;
+    frame_captured_at: string | null;
+    frame_age_seconds: number | null;
+    freshness_budget_seconds: number;
+    provider_generation: number;
+    dropped_frames: number;
+    content_sha256: string | null;
+    detail: string | null;
+    connection_generation: number;
+}
+
+export interface BioXpCameraImage {
+    blob: Blob;
+    etag: string;
+    sha256: string;
+    connectionGeneration: number;
+}
+
+export const BIOXP_CAMERA_ENDPOINTS = Object.freeze({
+    status: '/api/bioxp/camera/status',
+    latest: '/api/bioxp/camera/frame/latest',
+    snapshot: '/api/bioxp/camera/snapshot',
+});
+
 export interface BioXpCommandRecord {
     command_id: string;
     command: string;
@@ -80,6 +130,67 @@ export interface BioXpCommandRecord {
     detail: string;
     handler_response: Record<string, unknown> | null;
 }
+
+export interface BioXpCommandHistoryResponse {
+    commands: BioXpCommandRecord[];
+}
+
+export type BioXpCommandName =
+    | 'activate_usb_for_service'
+    | 'collect_hardware_snapshot'
+    | 'initialize_oem_environment'
+    | 'initialize_motors'
+    | 'run_oem_motor_stage'
+    | 'record_oem_motor_stage_observation'
+    | 'collect_axis_diagnostics'
+    | 'run_axis_diagnostic'
+    | 'stop_axis_diagnostic'
+    | 'recover_motion_non_homing'
+    | 'start_job'
+    | 'pause_job'
+    | 'resume_job'
+    | 'stop_job'
+    | 'recover_runtime';
+
+export type BioXpActiveCommandName =
+    | 'activate_usb_for_service'
+    | 'collect_hardware_snapshot'
+    | 'collect_axis_diagnostics'
+    | 'run_axis_diagnostic'
+    | 'stop_axis_diagnostic'
+    | 'recover_motion_non_homing';
+
+export type BioXpCommandPayload =
+    | {
+        command: 'activate_usb_for_service';
+        expected_generation: number;
+        idempotency_key: string;
+    }
+    | {
+        command: 'recover_motion_non_homing';
+        expected_generation: number;
+        idempotency_key: string;
+    }
+    | {
+        command: 'run_axis_diagnostic';
+        expected_generation: number;
+        idempotency_key: string;
+        axis: 'x' | 'y' | 'z' | 'g' | 'door';
+        operation:
+            | 'move-negative'
+            | 'move-positive'
+            | 'home'
+            | 'commission-home'
+            | 'close'
+            | 'open'
+            | 'open-wide';
+    }
+    | {
+        command: 'stop_axis_diagnostic';
+        expected_generation: number;
+        idempotency_key: string;
+        axis: 'x' | 'y' | 'z' | 'g' | 'door';
+    };
 
 export interface BioXpProfileView {
     configured: boolean;
@@ -215,29 +326,83 @@ export interface BioXpOemFullLifecycleRun {
 }
 
 const statusKey = ['bioxp', 'status'] as const;
+const commandHistoryKey = ['bioxp', 'commands'] as const;
 const profileKey = ['bioxp', 'profile'] as const;
 const jobsKey = ['bioxp', 'jobs'] as const;
 const fullLifecycleContractKey = ['bioxp', 'oem-full-lifecycle', 'contract'] as const;
+
+function cameraImageFromResponse(response: {
+    data: Blob;
+    headers: Record<string, unknown>;
+}): BioXpCameraImage {
+    if (!(response.data instanceof Blob) || response.data.type !== 'image/jpeg' || response.data.size < 1) {
+        throw new Error('BioXP camera proxy returned an invalid JPEG image');
+    }
+    const etag = String(response.headers.etag ?? '');
+    const sha256 = String(response.headers['x-content-sha256'] ?? '');
+    const generationText = String(response.headers['x-bioxp-connection-generation'] ?? '');
+    const connectionGeneration = Number(generationText);
+    if (!/^[0-9a-f]{64}$/.test(sha256)
+        || (etag !== sha256 && etag !== `"${sha256}"`)
+        || !Number.isSafeInteger(connectionGeneration)
+        || connectionGeneration < 1) {
+        throw new Error('BioXP camera proxy returned invalid image provenance');
+    }
+    return { blob: response.data, etag, sha256, connectionGeneration };
+}
+const OPERATOR_DETAIL_LIMIT = 2_048;
+const COMMAND_RECORD_TEXT_LIMIT = 4_096;
+const TRUNCATED_SUFFIX = '…[truncated]';
+
+function boundedOperatorText(value: string, limit = OPERATOR_DETAIL_LIMIT): string {
+    const normalized = value.trim();
+    if (normalized.length <= limit) return normalized;
+    return `${normalized.slice(0, Math.max(0, limit - TRUNCATED_SUFFIX.length))}${TRUNCATED_SUFFIX}`;
+}
+
+function nestedOperatorDetail(value: unknown, depth = 0): string | null {
+    if (depth > 8 || value === null || value === undefined) return null;
+    if (typeof value === 'string') return boundedOperatorText(value) || null;
+    if (Array.isArray(value)) {
+        const normalized = value.map((entry) => {
+            if (entry && typeof entry === 'object' && 'msg' in entry) {
+                const item = entry as { loc?: unknown; msg?: unknown };
+                const location = Array.isArray(item.loc) ? item.loc.map(String).join('.') : '';
+                const message = typeof item.msg === 'string'
+                    ? item.msg
+                    : nestedOperatorDetail(item.msg, depth + 1);
+                return message ? (location ? `${location}: ${message}` : message) : null;
+            }
+            return nestedOperatorDetail(entry, depth + 1);
+        }).filter((entry): entry is string => Boolean(entry));
+        const joined = normalized.length ? normalized.join('; ') : null;
+        return joined ? boundedOperatorText(joined) : null;
+    }
+    if (typeof value !== 'object') return null;
+    const record = value as Record<string, unknown>;
+    for (const key of ['detail', 'error', 'message', 'reason', 'block_reason', 'startup_error']) {
+        if (key in record) {
+            const found = nestedOperatorDetail(record[key], depth + 1);
+            if (found) return found;
+        }
+    }
+    return null;
+}
+
+export function bioXpCommandRecordText(record: BioXpCommandRecord): string {
+    const detail = boundedOperatorText(record.detail, COMMAND_RECORD_TEXT_LIMIT);
+    const upstream = nestedOperatorDetail(record.handler_response);
+    const combined = upstream && upstream !== detail ? `${detail} — ${upstream}` : detail;
+    return boundedOperatorText(combined, COMMAND_RECORD_TEXT_LIMIT);
+}
+
 export function bioXpErrorText(error: unknown): string {
     if (error && typeof error === 'object') {
         const response = 'response' in error
             ? (error as { response?: { data?: { detail?: unknown } } }).response
             : undefined;
-        const detail = response?.data?.detail;
-        if (typeof detail === 'string' && detail.trim()) return detail;
-        if (Array.isArray(detail)) {
-            const normalized = detail
-                .map((entry) => {
-                    if (!entry || typeof entry !== 'object') return String(entry);
-                    const item = entry as { loc?: unknown; msg?: unknown };
-                    const location = Array.isArray(item.loc) ? item.loc.map(String).join('.') : '';
-                    const message = typeof item.msg === 'string' ? item.msg : JSON.stringify(entry);
-                    return location ? `${location}: ${message}` : message;
-                })
-                .filter(Boolean)
-                .join('; ');
-            if (normalized) return normalized;
-        }
+        const detail = nestedOperatorDetail(response?.data?.detail);
+        if (detail) return detail;
         if ('message' in error && typeof error.message === 'string') return error.message;
     }
     return String(error ?? 'Unknown error');
@@ -250,6 +415,48 @@ export const useBioXpStatus = (enabled = true) => useQuery({
     refetchInterval: enabled ? 5_000 : false,
     retry: false,
 });
+
+export const useBioXpCommandHistory = (enabled = true) => useQuery({
+    queryKey: commandHistoryKey,
+    queryFn: async () => (await api.get<BioXpCommandHistoryResponse>('/api/bioxp/commands')).data,
+    enabled,
+    refetchInterval: enabled ? 2_000 : false,
+    retry: false,
+});
+
+export const useBioXpCameraStatus = (
+    connectionGeneration: number | null,
+    enabled = true,
+) => useQuery({
+    queryKey: ['bioxp', 'camera', 'status', connectionGeneration],
+    queryFn: async () => {
+        if (connectionGeneration === null) throw new Error('An active BioXP connection generation is required');
+        return (await api.get<BioXpCameraStatus>(BIOXP_CAMERA_ENDPOINTS.status, {
+            params: { expected_generation: connectionGeneration },
+        })).data;
+    },
+    enabled: enabled && connectionGeneration !== null,
+    refetchInterval: enabled ? 1_000 : false,
+    refetchIntervalInBackground: false,
+    retry: false,
+});
+
+export async function fetchBioXpCameraFrame(connectionGeneration: number): Promise<BioXpCameraImage> {
+    const response = await api.get<Blob>(BIOXP_CAMERA_ENDPOINTS.latest, {
+        params: { expected_generation: connectionGeneration },
+        responseType: 'blob',
+    });
+    return cameraImageFromResponse(response);
+}
+
+export async function captureBioXpCameraSnapshot(connectionGeneration: number): Promise<BioXpCameraImage> {
+    const response = await api.post<Blob>(
+        BIOXP_CAMERA_ENDPOINTS.snapshot,
+        { expected_generation: connectionGeneration },
+        { responseType: 'blob' },
+    );
+    return cameraImageFromResponse(response);
+}
 
 export const useBioXpOemFullLifecycleContract = (enabled = true) => useQuery({
     queryKey: fullLifecycleContractKey,
@@ -296,6 +503,7 @@ const useRefreshMutation = <TVariables, TData>(
         onSuccess: async () => {
             await Promise.all([
                 queryClient.invalidateQueries({ queryKey: statusKey }),
+                queryClient.invalidateQueries({ queryKey: commandHistoryKey }),
                 queryClient.invalidateQueries({ queryKey: profileKey }),
                 queryClient.invalidateQueries({ queryKey: jobsKey }),
                 queryClient.invalidateQueries({ queryKey: fullLifecycleContractKey }),
@@ -345,7 +553,7 @@ export const useSubmitBioXpProtocol = () => useRefreshMutation(
 );
 
 export const useBioXpCommand = () => useRefreshMutation(
-    async (payload: Record<string, unknown>) => (
+    async (payload: BioXpCommandPayload) => (
         await api.post<BioXpCommandRecord>('/api/bioxp/commands', payload)
     ).data,
 );

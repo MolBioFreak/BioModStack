@@ -39,6 +39,7 @@ from biomodstack_panel_compat import build_toggle_row  # noqa: E402
 from biomodstack_services import (  # noqa: E402
     API_LOG as API_LOG_PATH,
     CORE_RUNTIME_LOG as CORE_RUNTIME_LOG_PATH,
+    CONTAINER_RUNTIME_MODE,
     DEV_RUNTIME_MODE,
     FRONTEND_LOG as FRONTEND_LOG_PATH,
     WORKFLOW_ADAPTER_LOG as WORKFLOW_ADAPTER_LOG_PATH,
@@ -46,11 +47,15 @@ from biomodstack_services import (  # noqa: E402
     operator_frontend_url,
     operator_runtime_mode,
     runtime_api_health_url,
+    runtime_descriptor,
     runtime_port_settings,
     save_runtime_port_settings,
 )
 
-PROJECT_ROOT = get_code_root()
+# Service-control scripts must belong to the checkout that supplied this panel.
+# An inherited BMS_HOME may describe a deployed data/runtime profile, but it must
+# not silently redirect control actions into a different source tree.
+PROJECT_ROOT = Path(__file__).resolve().parent
 API_PORT = 8000
 API_URL = f"http://localhost:{API_PORT}"
 
@@ -114,43 +119,99 @@ def save_config(config: dict):
 # SERVICE STATUS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def check_api_status(runtime_mode: str | None = None) -> bool:
-    """Return true only when the selected operator API health endpoint responds.
-
-    A systemd unit or matching process can remain alive while the service is
-    unavailable (or bound to an obsolete port).  It is therefore diagnostic
-    evidence, never a green-status fallback.
-    """
-    selected_runtime = runtime_mode or operator_runtime_mode(project_root=PROJECT_ROOT)
+def _api_health_ready(runtime_mode: str) -> bool:
+    """Require a fresh semantic-ready response from the selected API lane."""
     try:
         import urllib.request
+
         req = urllib.request.Request(
-            runtime_api_health_url(runtime_mode=selected_runtime, project_root=PROJECT_ROOT),
+            runtime_api_health_url(runtime_mode=runtime_mode, project_root=PROJECT_ROOT),
+            headers={"Accept": "application/json", "Cache-Control": "no-cache"},
             method="GET",
         )
         with urllib.request.urlopen(req, timeout=2) as resp:
-            return resp.status == 200
+            if resp.status != 200:
+                return False
+            payload = json.loads(resp.read().decode("utf-8"))
     except Exception:
         return False
+
+    return (
+        isinstance(payload, dict)
+        and payload.get("status") == "healthy"
+        and isinstance(payload.get("liveness"), dict)
+        and payload["liveness"].get("alive") is True
+        and isinstance(payload.get("readiness"), dict)
+        and payload["readiness"].get("ready") is True
+    )
+
+
+def _component_ready(descriptor: dict, component_id: str) -> bool:
+    components = descriptor.get("components")
+    if not isinstance(components, dict):
+        return False
+    component = components.get(component_id)
+    return (
+        isinstance(component, dict)
+        and component.get("active") is True
+        and component.get("ready") is True
+        and component.get("owner_verified") is True
+    )
+
+
+def runtime_status_snapshot(runtime_mode: str) -> dict:
+    """Return a fail-closed operator status for one explicit runtime lane."""
+    try:
+        descriptor = runtime_descriptor(
+            project_root=PROJECT_ROOT,
+            runtime_mode=runtime_mode,
+        )
+    except Exception:
+        descriptor = {}
+
+    api_health_ready = _api_health_ready(runtime_mode)
+    required_components = []
+    components = descriptor.get("components")
+    if isinstance(components, dict):
+        required_components = [
+            component_id
+            for component_id, component in components.items()
+            if isinstance(component, dict) and component.get("required") is True
+        ]
+    required_ready = bool(required_components) and all(
+        _component_ready(descriptor, component_id)
+        for component_id in required_components
+    )
+    runtime_ready = (
+        descriptor.get("runtime_active") is True
+        and descriptor.get("runtime_ready") is True
+        and required_ready
+        and api_health_ready
+    )
+
+    # Component checks are gated by aggregate runtime readiness. A partial lane
+    # must never render as an all-green operator surface.
+    return {
+        "runtime_mode": runtime_mode,
+        "runtime_ready": runtime_ready,
+        "api_ready": runtime_ready and _component_ready(descriptor, "api"),
+        "frontend_ready": runtime_ready and _component_ready(descriptor, "frontend"),
+        "adapter_ready": (
+            runtime_ready and _component_ready(descriptor, "workflow-adapter")
+            if runtime_mode == "container"
+            else None
+        ),
+    }
+
+
+def check_api_status(runtime_mode: str | None = None) -> bool:
+    selected_runtime = runtime_mode or operator_runtime_mode(project_root=PROJECT_ROOT)
+    return runtime_status_snapshot(selected_runtime)["api_ready"]
 
 
 def check_frontend_status(runtime_mode: str | None = None) -> bool:
-    """Return true only when the selected operator frontend URL responds.
-
-    Do not paint the launcher green merely because a dev service manager or a
-    stale Vite process exists; neither establishes that operators can reach the
-    selected runtime surface.
-    """
     selected_runtime = runtime_mode or operator_runtime_mode(project_root=PROJECT_ROOT)
-    frontend_url = operator_frontend_url(project_root=PROJECT_ROOT, runtime_mode=selected_runtime)
-    try:
-        import urllib.request
-
-        req = urllib.request.Request(frontend_url, method="GET")
-        with urllib.request.urlopen(req, timeout=2) as resp:
-            return resp.status == 200
-    except Exception:
-        return False
+    return runtime_status_snapshot(selected_runtime)["frontend_ready"]
 
 STATUS_DB_TIMEOUT_SECONDS = 0.25
 
@@ -395,49 +456,59 @@ class BioModStackPanel(Adw.Application):
         self.window.present()
     
     def _build_status_section(self) -> Gtk.Widget:
-        """Status indicators section."""
+        """Runtime-scoped status indicators section."""
         group = Adw.PreferencesGroup()
         group.set_title("Status")
-        
-        # Status row
-        self.status_row = Adw.ActionRow()
-        self.status_row.set_title("Services")
-        self._update_status_row()
-        group.add(self.status_row)
-        
-        # Jobs row
+
+        self.dev_status_row = Adw.ActionRow()
+        self.dev_status_row.set_title("Development")
+        group.add(self.dev_status_row)
+
+        self.prod_status_row = Adw.ActionRow()
+        self.prod_status_row.set_title("Production")
+        group.add(self.prod_status_row)
+
+        self._update_status_rows()
+
         self.jobs_row = Adw.ActionRow()
-        self.jobs_row.set_title("Jobs")
+        self.jobs_row.set_title("Production database rows")
         self._update_jobs_row()
         group.add(self.jobs_row)
-        
+
         return group
-    
-    def _update_status_row(self):
-        selected_runtime = operator_runtime_mode(project_root=PROJECT_ROOT)
-        api_ok = check_api_status(selected_runtime)
-        frontend_ok = check_frontend_status(selected_runtime)
-        
-        api_icon = "✓" if api_ok else "✗"
-        frontend_icon = "✓" if frontend_ok else "✗"
-        api_color = "green" if api_ok else "red"
-        frontend_color = "green" if frontend_ok else "red"
-        
-        self.status_row.set_subtitle(
-            f"<span foreground='{api_color}'>API {api_icon}</span>  |  "
-            f"<span foreground='{frontend_color}'>Frontend {frontend_icon}</span>"
-        )
-        self.status_row.set_subtitle_lines(1)
-        # Enable markup - GTK4 way
-        subtitle_label = self.status_row.get_last_child()
+
+    @staticmethod
+    def _status_part(label: str, ready: bool) -> str:
+        icon = "✓" if ready else "✗"
+        color = "green" if ready else "red"
+        return f"<span foreground='{color}'>{label} {icon}</span>"
+
+    def _update_runtime_status_row(self, row, runtime_mode: str):
+        status = runtime_status_snapshot(runtime_mode)
+        parts = [
+            self._status_part("Runtime", status["runtime_ready"]),
+            self._status_part("API", status["api_ready"]),
+            self._status_part("Frontend", status["frontend_ready"]),
+        ]
+        if status["adapter_ready"] is not None:
+            parts.append(self._status_part("Adapter", status["adapter_ready"]))
+        row.set_subtitle("  |  ".join(parts))
+        row.set_subtitle_lines(1)
+        subtitle_label = row.get_last_child()
         while subtitle_label:
             if isinstance(subtitle_label, Gtk.Label):
                 subtitle_label.set_use_markup(True)
             subtitle_label = subtitle_label.get_prev_sibling()
+
+    def _update_status_rows(self):
+        self._update_runtime_status_row(self.dev_status_row, DEV_RUNTIME_MODE)
+        self._update_runtime_status_row(self.prod_status_row, CONTAINER_RUNTIME_MODE)
     
     def _update_jobs_row(self):
         running, queued, total = get_job_counts()
-        self.jobs_row.set_subtitle(f"{running} running  |  {queued} queued  |  {total} total")
+        self.jobs_row.set_subtitle(
+            f"{running} running  |  {queued} queued  |  {total:,} raw production DB rows"
+        )
 
     def _load_runtime_port_settings(self) -> dict:
         try:
@@ -580,9 +651,15 @@ class BioModStackPanel(Adw.Application):
         btn_ui.connect("clicked", self._on_open_ui)
         button_box.append(btn_ui)
 
-        btn_browser = Gtk.Button(label="🌐 Browser")
-        btn_browser.connect("clicked", self._on_open_browser)
-        button_box.append(btn_browser)
+        btn_dev_browser = Gtk.Button(label="🌐 Dev")
+        btn_dev_browser.set_tooltip_text("Open development UI backed by the isolated development database")
+        btn_dev_browser.connect("clicked", self._on_open_browser, DEV_RUNTIME_MODE)
+        button_box.append(btn_dev_browser)
+
+        btn_prod_browser = Gtk.Button(label="🌐 Production")
+        btn_prod_browser.set_tooltip_text("Open production UI backed by the main production database")
+        btn_prod_browser.connect("clicked", self._on_open_browser, CONTAINER_RUNTIME_MODE)
+        button_box.append(btn_prod_browser)
 
         # Results folder
         btn_results = Gtk.Button(label="📂 Results")
@@ -590,25 +667,30 @@ class BioModStackPanel(Adw.Application):
         button_box.append(btn_results)
         
         # Start services (new!)
-        btn_start = Gtk.Button(label="▶ Start")
-        btn_start.connect("clicked", self._on_start_all)
-        button_box.append(btn_start)
+        self.btn_start = Gtk.Button(label="▶ Start")
+        self.btn_start.connect("clicked", self._on_start_all)
+        button_box.append(self.btn_start)
         
         # Restart all
-        btn_restart = Gtk.Button(label="🔄 Restart")
-        btn_restart.connect("clicked", self._on_restart_all)
-        button_box.append(btn_restart)
+        self.btn_restart = Gtk.Button(label="🔄 Restart")
+        self.btn_restart.connect("clicked", self._on_restart_all)
+        button_box.append(self.btn_restart)
         
         # Stop all
-        btn_stop = Gtk.Button(label="⏹ Stop")
-        btn_stop.add_css_class("destructive-action")
-        btn_stop.connect("clicked", self._on_stop_all)
-        button_box.append(btn_stop)
+        self.btn_stop = Gtk.Button(label="⏹ Stop")
+        self.btn_stop.add_css_class("destructive-action")
+        self.btn_stop.connect("clicked", self._on_stop_all)
+        button_box.append(self.btn_stop)
         
         # Wrap in a simple row
         row = Adw.ActionRow()
         row.set_child(button_box)
         group.add(row)
+
+        self.action_status_row = Adw.ActionRow()
+        self.action_status_row.set_title("Last action")
+        self.action_status_row.set_subtitle("Ready")
+        group.add(self.action_status_row)
         
         return group
 
@@ -647,8 +729,10 @@ class BioModStackPanel(Adw.Application):
             env=self._script_env(),
         )
 
-    def _on_open_browser(self, button):
-        webbrowser.open(operator_frontend_url(project_root=PROJECT_ROOT))
+    def _on_open_browser(self, button, runtime_mode: str):
+        settings = runtime_port_settings(project_root=PROJECT_ROOT)
+        key = "dev_url" if runtime_mode == DEV_RUNTIME_MODE else "prod_url"
+        webbrowser.open(str(settings[key]))
 
     def _selected_runtime_target(self) -> str:
         combo = getattr(self, "runtime_target_combo", None)
@@ -660,28 +744,85 @@ class BioModStackPanel(Adw.Application):
     
     def _on_start_all(self, button):
         target = self._selected_runtime_target()
-        show_notification("Starting", f"Starting BioModStack runtime target: {target}")
-        subprocess.Popen(["bash", str(START_SCRIPT), "start-target", "--target", target], env=self._script_env())
-        GLib.timeout_add_seconds(5, self._refresh_status_once)
+        self._run_service_action(
+            f"Start {target}",
+            ["bash", str(START_SCRIPT), "start-target", "--target", target],
+        )
     
     def _on_restart_all(self, button):
-        show_notification("Restarting", "Restarting all services...")
         runtime_mode = operator_runtime_mode(project_root=PROJECT_ROOT)
-        subprocess.Popen(["bash", str(START_SCRIPT), "restart", "--runtime", runtime_mode], env=self._script_env())
-        GLib.timeout_add_seconds(3, self._refresh_status_once)
+        self._run_service_action(
+            "Restart",
+            ["bash", str(START_SCRIPT), "restart", "--runtime", runtime_mode],
+        )
     
     def _on_stop_all(self, button):
-        show_notification("Stopping", "Stopping all services...")
         runtime_mode = operator_runtime_mode(project_root=PROJECT_ROOT)
-        subprocess.Popen(["bash", str(STOP_SCRIPT), "--runtime", runtime_mode], env=self._script_env())
-        GLib.timeout_add_seconds(2, self._refresh_status_once)
+        self._run_service_action(
+            "Stop",
+            ["bash", str(STOP_SCRIPT), "--runtime", runtime_mode],
+        )
+
+    def _run_service_action(self, label: str, command: list[str]) -> None:
+        if getattr(self, "_service_action_active", False):
+            show_notification("Action In Progress", "Wait for the current BioModStack service action to finish.")
+            return
+
+        self._service_action_active = True
+        if hasattr(self, "action_status_row"):
+            self.action_status_row.set_subtitle(f"{label} in progress…")
+        show_notification(label, "BioModStack service action started.")
+
+        def worker() -> None:
+            result = None
+            error = None
+            try:
+                result = subprocess.run(
+                    command,
+                    env=self._script_env(),
+                    capture_output=True,
+                    text=True,
+                    timeout=360,
+                    check=False,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                error = exc
+            GLib.idle_add(self._finish_service_action, label, result, error)
+
+        threading.Thread(target=worker, name="biomodstack-service-action", daemon=True).start()
+
+    def _finish_service_action(self, label: str, result, error) -> bool:
+        self._service_action_active = False
+        if error is not None:
+            detail = str(error).strip() or "service action could not be executed"
+            subtitle = f"{label} failed: {detail}"
+            notification_title = f"{label} Failed"
+        else:
+            returncode = int(getattr(result, "returncode", 1))
+            raw_output = getattr(result, "stderr", "") if returncode else getattr(result, "stdout", "")
+            lines = [line.strip() for line in str(raw_output or "").splitlines() if line.strip()]
+            detail = lines[-1] if lines else ("completed" if returncode == 0 else "no diagnostic output")
+            detail = detail.removeprefix("ERROR:").strip()
+            if returncode == 0:
+                subtitle = f"{label} completed: {detail}"
+                notification_title = f"{label} Complete"
+            else:
+                subtitle = f"{label} failed (exit {returncode}): {detail}"
+                notification_title = f"{label} Failed"
+
+        if hasattr(self, "action_status_row"):
+            self.action_status_row.set_subtitle(subtitle)
+        show_notification(notification_title, detail)
+        self._refresh_status_once()
+        return False
 
     def _script_env(self) -> dict:
         env = os.environ.copy()
+        for key in list(env):
+            if key.startswith("BMS_") or key == "COMPOSE_PROJECT_NAME":
+                env.pop(key, None)
         if self.cached_sudo_password:
             env["BMS_SUDO_PASSWORD"] = self.cached_sudo_password
-        else:
-            env.pop("BMS_SUDO_PASSWORD", None)
         return env
     
     def _build_logs_section(self) -> Gtk.Widget:
@@ -913,7 +1054,7 @@ X-GNOME-Autostart-enabled=true
     
     def _refresh_status(self):
         """Refresh all status displays."""
-        self._update_status_row()
+        self._update_status_rows()
         self._update_jobs_row()
         self._update_db_info()
         self._update_bioxp_row()

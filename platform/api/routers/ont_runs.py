@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Job, get_session
+from services.molbio_ngs_receipts import consume_molbio_ngs_receipt
+from services.ngs_comparison_panels import consume_comparison_panel_receipt, materialize_comparison_launch
 from paths import get_allowed_roots, resolve_allowed_path
 from schemas import JobCreate, JobResponse
 from services import alignment_access, ont_run_control, ont_submission_trust
@@ -70,6 +73,16 @@ ONT_REFERENCE_REQUIRED_WORKFLOWS = frozenset(
         "wf_clone_validation",
     }
 )
+
+ONT_COMPARISON_PANEL_WORKFLOWS = frozenset({"ont_plasmid_qc", "ont_construct_screening", "ont_fastq_qc"})
+
+
+def _validate_comparison_panel_launch(workflow_id: str, expected_receipt_id: str, panel_receipt_id: str) -> None:
+    """Keep comparison attribution out of vendor clone and non-QC routes."""
+    if panel_receipt_id and not expected_receipt_id:
+        raise ValueError("comparison attribution requires both expected-construct and approved-panel receipts")
+    if panel_receipt_id and workflow_id not in ONT_COMPARISON_PANEL_WORKFLOWS:
+        raise ValueError("approved comparison panels are only available for generic plasmid QC, construct screening, or FASTQ QC")
 
 
 class OntNgsSubmitRequest(BaseModel):
@@ -249,6 +262,10 @@ def _job_create_for_ont_submit(
     trusted_result_paths: frozenset[str] = frozenset(),
 ) -> JobCreate:
     submitted_params = dict(request.params)
+    if any(key in submitted_params for key in ("comparison_panel_snapshot", "comparison_panel_min_mapq", "ngs_comparison_panel_receipt_id")):
+        raise ValueError(
+            "comparison-panel paths are not accepted from ordinary NGS submissions; use a server-staged operator receipt"
+        )
     reserved_params = ONT_SERVER_CONTROLLED_PROVENANCE_PARAMS | ONT_SERVER_CONTROLLED_RUNTIME_PARAMS
     submitted_server_controlled = sorted(
         reserved_params.intersection(submitted_params) - trusted_server_params
@@ -415,13 +432,77 @@ async def ont_submit_ngs_workflow(
     behavior remain identical to other BioModStack jobs.
     """
     try:
-        job = _job_create_for_ont_submit(workflow_id, request)
+        submitted = dict(request.params)
+        if str(submitted.get("molbio_sequence_id") or "").strip():
+            raise ValueError("molbio_sequence_id is not accepted at submission; submit a server-issued molbio_ngs_receipt_id")
+        receipt_id = str(submitted.pop("molbio_ngs_receipt_id", "") or "").strip()
+        panel_receipt_id = str(submitted.pop("ngs_comparison_panel_receipt_id", "") or "").strip()
+        canonical_id = resolve_ont_workflow_alias(workflow_id)
+        _validate_comparison_panel_launch(canonical_id, receipt_id, panel_receipt_id)
+        receipt = None
+        panel_receipt = None
+        if receipt_id:
+            receipt = await consume_molbio_ngs_receipt(session, receipt_id=receipt_id)
+            submitted["reference_fasta"] = receipt.reference_snapshot_path
+        if panel_receipt_id:
+            panel_receipt = await consume_comparison_panel_receipt(
+                session, receipt_id=panel_receipt_id, expected_receipt_id=receipt_id
+            )
+            staged = materialize_comparison_launch(
+                expected_fasta=receipt.reference_snapshot_path,
+                expected_sha256=receipt.reference_snapshot_sha256,
+                panel_receipt=panel_receipt,
+            )
+            submitted["reference_fasta"] = staged["reference_fasta"]
+        job = _job_create_for_ont_submit(workflow_id, request.model_copy(update={"params": submitted}))
+        if receipt is not None:
+            job.params["molbio_revision_binding"] = {
+                "sequence_id": receipt.sequence_id,
+                "revision_id": receipt.revision_id,
+                "revision_sha256": receipt.revision_sha256,
+                "reference_snapshot_sha256": receipt.reference_snapshot_sha256,
+                "receipt_id": receipt.id,
+                "binding_source": "server_issued_one_time_receipt",
+            }
+            receipt.consumed_at = datetime.utcnow()
+            # Flush the one-time state before queueing so a competing submit
+            # cannot observe an unused receipt while this request is creating a job.
+            await session.flush()
+        if panel_receipt is not None:
+            panel_receipt.consumed_at = datetime.utcnow()
+            job.params["comparison_panel_snapshot"] = staged["comparison_panel_snapshot"]
+            job.params["comparison_panel_binding"] = {
+                "panel_id": panel_receipt.panel_id,
+                "panel_version": panel_receipt.panel_version,
+                "panel_snapshot_sha256": panel_receipt.panel_snapshot_sha256,
+                "receipt_id": panel_receipt.id,
+                "task_input_root": staged["input_root"],
+                "binding_source": "server_approved_panel_receipt",
+            }
+            await session.flush()
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    return await _create_pipeline_job(job, background_tasks, session, response, http_request)
+    try:
+        created = await _create_pipeline_job(job, background_tasks, session, response, http_request)
+    except Exception:
+        # The receipt pair is a launch transaction: a queueing failure must not
+        # strand either one-time receipt as consumed.
+        if receipt is not None:
+            receipt.consumed_at = None
+        if panel_receipt is not None:
+            panel_receipt.consumed_at = None
+        await session.commit()
+        raise
+    if receipt is not None:
+        receipt.consumed_job_id = created.id
+    if panel_receipt is not None:
+        panel_receipt.consumed_job_id = created.id
+    if receipt is not None or panel_receipt is not None:
+        await session.commit()
+    return created
 
 
 @barcode_router.get("/{job_id}/barcode-units")

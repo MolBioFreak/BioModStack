@@ -51,3 +51,29 @@ test('P4 clone derives quality from exact retained model identities and disables
     assert.equal(restored?.doradoModel, 'fast');
     assert.equal(restored?.runAssembly, false);
 });
+
+test('Clone validation restores bounded vendor and plasmid-dimer tuning selections', () => {
+    const restored = normalizeNanoporeCloneState({
+        id: 'clone-source', name: 'Clone source', model_id: 'nanopore', mode: 'clone_validation', status: 'completed',
+        params: {
+            fastq_path: '/data/clone.fastq', run_assembly: true,
+            wf_clone_flye_quality: 'nano-raw',
+            wf_clone_non_uniform_coverage: true, wf_clone_canu_fast: false,
+            wf_clone_cutsite_mismatch: 3, wf_clone_primer_mismatch: 4,
+            wf_clone_expected_coverage: 92.5, wf_clone_expected_identity: 98.25,
+            enable_rotating_reference_frames: false, rotation_scan_step_bp: 5,
+            single_ref_split_min_mapq: 30, single_ref_split_min_segment_bp: 300, single_ref_split_max_query_gap_bp: 700,
+        },
+    } as never);
+    assert.equal(restored?.selectedWorkflow, 'clone');
+    assert.equal(restored?.wfCloneFlyeQuality, 'nano-raw');
+    assert.equal(restored?.wfCloneNonUniformCoverage, true);
+    assert.equal(restored?.wfCloneCanuFast, false);
+    assert.equal(restored?.wfCloneCutsiteMismatch, 3);
+    assert.equal(restored?.wfClonePrimerMismatch, 4);
+    assert.equal(restored?.wfCloneExpectedCoverage, 92.5);
+    assert.equal(restored?.wfCloneExpectedIdentity, 98.25);
+    assert.equal(restored?.enableRotatingReferenceFrames, false);
+    assert.equal(restored?.rotationScanStepBp, 5);
+    assert.equal(restored?.singleRefSplitMinMapq, 30);
+});

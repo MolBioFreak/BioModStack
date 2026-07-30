@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import secrets
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
 from math import isfinite
@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 from .errors import ConnectionStateError, ProfileStoreError, TargetPolicyError
 from .models import BioXpProfile, BioXpSnapshot
 from .profile_store import BioXpProfileStore
-from .robot_client import BioXpRobotClient
+from .robot_client import BioXpRobotClient, CameraImage
 from .target_policy import BioXpTargetPolicy, ValidatedBioXpTarget
 
 
@@ -30,6 +30,12 @@ class RobotClientProtocol(Protocol):
         params: dict[str, Any] | None = None,
         path_params: dict[str, str] | None = None,
     ) -> dict[str, Any]: ...
+
+    async def camera_status(self) -> dict[str, Any]: ...
+
+    async def camera_latest(self) -> CameraImage: ...
+
+    async def camera_snapshot(self) -> CameraImage: ...
 
     async def close(self) -> None: ...
 
@@ -91,6 +97,8 @@ class BioXpConnectionService:
         self._hardware_evidence_error: str | None = None
         self._capabilities: tuple[str, ...] = ()
         self._startup_lifecycle: dict[str, Any] | None = None
+        self._maintenance_state: dict[str, Any] | None = None
+        self._ownership: dict[str, Any] | None = None
         self._last_error: str | None = None
         self._command_active = False
         self._active_probe_task: asyncio.Task[None] | None = None
@@ -225,6 +233,10 @@ class BioXpConnectionService:
             )
             startup = payload.get("startup")
             self._startup_lifecycle = copy.deepcopy(startup) if isinstance(startup, dict) else None
+            found_maintenance, maintenance_state = _find_maintenance_state(payload)
+            self._maintenance_state = maintenance_state if found_maintenance else None
+            ownership = payload.get("ownership")
+            self._ownership = copy.deepcopy(ownership) if isinstance(ownership, dict) else None
             raw_capabilities = payload.get("capabilities")
             self._capabilities = (
                 tuple(sorted({str(value) for value in raw_capabilities}))
@@ -256,6 +268,7 @@ class BioXpConnectionService:
             self._last_runtime_ready = None
             self._last_hardware_ready = None
             self._capabilities = ()
+            self._ownership = None
             self._last_error = str(exc) or exc.__class__.__name__
             self._observed_at = self.clock()
             return False
@@ -332,6 +345,8 @@ class BioXpConnectionService:
         self._hardware_evidence_error = None
         self._capabilities = ()
         self._startup_lifecycle = None
+        self._maintenance_state = None
+        self._ownership = None
         self._last_error = None
 
     def snapshot(self) -> BioXpSnapshot:
@@ -377,6 +392,8 @@ class BioXpConnectionService:
             last_error=profile_error or self._last_error,
             command_active=self._command_active,
             startup_lifecycle=copy.deepcopy(self._startup_lifecycle),
+            maintenance_state=copy.deepcopy(self._maintenance_state),
+            ownership=copy.deepcopy(self._ownership),
         )
 
     @property
@@ -402,6 +419,50 @@ class BioXpConnectionService:
         startup = lifecycle.get("startup") if isinstance(lifecycle, dict) else payload.get("startup")
         if isinstance(startup, dict):
             self._startup_lifecycle = copy.deepcopy(startup)
+        found_maintenance, maintenance_state = _find_maintenance_state(payload)
+        if found_maintenance:
+            self._maintenance_state = maintenance_state
+        found_ownership, ownership = _find_named_mapping(payload, "ownership")
+        if found_ownership:
+            self._ownership = ownership
+
+
+def _find_maintenance_state(payload: Mapping[str, Any]) -> tuple[bool, dict[str, Any] | None]:
+    """Find the first maintenance_state in bounded robot response envelopes."""
+    pending: list[tuple[Any, int]] = [(payload, 0)]
+    visited = 0
+    while pending and visited < 100:
+        value, depth = pending.pop(0)
+        visited += 1
+        if isinstance(value, Mapping):
+            if "maintenance_state" in value:
+                state = value["maintenance_state"]
+                return True, copy.deepcopy(dict(state)) if isinstance(state, Mapping) else None
+            if depth < 8:
+                pending.extend((child, depth + 1) for child in value.values())
+        elif isinstance(value, (list, tuple)) and depth < 8:
+            pending.extend((child, depth + 1) for child in value)
+    return False, None
+
+
+def _find_named_mapping(
+    payload: Mapping[str, Any],
+    key: str,
+) -> tuple[bool, dict[str, Any] | None]:
+    pending: list[tuple[Any, int]] = [(payload, 0)]
+    visited = 0
+    while pending and visited < 100:
+        value, depth = pending.pop(0)
+        visited += 1
+        if isinstance(value, Mapping):
+            if key in value:
+                found = value[key]
+                return True, copy.deepcopy(dict(found)) if isinstance(found, Mapping) else None
+            if depth < 8:
+                pending.extend((child, depth + 1) for child in value.values())
+        elif isinstance(value, (list, tuple)) and depth < 8:
+            pending.extend((child, depth + 1) for child in value)
+    return False, None
 
 
 def _optional_bool(payload: dict[str, Any], *keys: str) -> bool | None:

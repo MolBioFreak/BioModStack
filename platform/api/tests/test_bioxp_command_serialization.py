@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import replace
 from typing import Any
 
@@ -160,7 +161,7 @@ def test_idempotency_returns_structured_prior_result_without_redelivery() -> Non
     asyncio.run(scenario())
 
 
-def test_activation_idempotent_replay_precedes_changed_runtime_admission() -> None:
+def test_legacy_activation_replay_semantics_require_an_explicit_non_default_mapping() -> None:
     from services.bioxp.command_coordinator import CommandDeniedError
 
     _, Coordinator, parse, registry, Snapshot = _load()
@@ -173,18 +174,33 @@ def test_activation_idempotent_replay_precedes_changed_runtime_admission() -> No
         async def request(self, route_name: str, **__: object):
             self.calls.append(route_name)
             if route_name == "activate_usb_for_service":
-                self.connection._snapshot = self.connection._snapshot.model_copy(update={"runtime_ready": True})
+                self.connection._snapshot = self.connection._snapshot.model_copy(update={
+                    "runtime_ready": True,
+                    "ownership": {"transport": "owned", "usb": "service", "router": "running"},
+                })
                 return {"acknowledged": True, "ok": True}
-            return {"ok": True, "published": True, "snapshot_id": "post-activation"}
+            raise AssertionError(f"unexpected hidden request: {route_name}")
 
     async def scenario() -> None:
         client = ActivatingClient()
         snapshot = _ready_snapshot(Snapshot).model_copy(
-            update={"runtime_ready": False, "hardware_ready": None, "capabilities": ()}
+            update={
+                "runtime_ready": False,
+                "hardware_ready": None,
+                "capabilities": (),
+                "ownership": {"transport": "unbound", "usb": "unbound", "router": "unbound"},
+            }
         )
         connection = FakeConnection(snapshot, client)
         client.connection = connection
-        coordinator = Coordinator(connection, registry)
+        definitions = dict(registry)
+        definitions["activate_usb_for_service"] = replace(
+            definitions["activate_usb_for_service"],
+            enabled=True,
+            route_key="activate_usb_for_service",
+            disabled_reason="",
+        )
+        coordinator = Coordinator(connection, definitions)
         request = parse({
             "command": "activate_usb_for_service",
             "expected_generation": 4,
@@ -195,12 +211,28 @@ def test_activation_idempotent_replay_precedes_changed_runtime_admission() -> No
         second = await coordinator.execute(request, mutations_enabled=True)
 
         assert second == first
-        assert client.calls == ["activate_usb_for_service", "collect_hardware_snapshot"]
+        assert client.calls == ["activate_usb_for_service"]
+
+        for invalid_ownership in (
+            {"transport": "owned", "usb": "foreign", "router": "running"},
+            {"transport": "owned", "usb": "service", "router": "stopped"},
+            {"transport": "quarantined", "usb": "quarantined", "router": "stopped"},
+            {"transport": "unbound", "usb": None, "router": "unbound"},
+            None,
+        ):
+            connection._snapshot = connection._snapshot.model_copy(update={"ownership": invalid_ownership})
+            with pytest.raises(CommandDeniedError, match="canonical|ownership"):
+                await coordinator.execute(request, mutations_enabled=True)
+            assert client.calls == ["activate_usb_for_service"]
+
+        connection._snapshot = connection._snapshot.model_copy(update={
+            "ownership": {"transport": "owned", "usb": "service", "router": "running"},
+        })
 
         connection._snapshot = connection._snapshot.model_copy(update={"generation": 5})
         with pytest.raises(CommandDeniedError, match="generation"):
             await coordinator.execute(request, mutations_enabled=True)
-        assert client.calls == ["activate_usb_for_service", "collect_hardware_snapshot"]
+        assert client.calls == ["activate_usb_for_service"]
 
     asyncio.run(scenario())
 
@@ -226,6 +258,48 @@ def test_idempotent_replay_does_not_redeliver() -> None:
         request = parse({"command": "initialize_motors", "expected_generation": 4, "idempotency_key": "auth-replay"})
         await coordinator.execute(request, mutations_enabled=True)
         await coordinator.execute(request, mutations_enabled=True)
+        assert client.calls == 1
+
+    asyncio.run(scenario())
+
+
+def test_motion_replay_is_denied_after_ownership_loss_without_redelivery() -> None:
+    from services.bioxp.command_coordinator import CommandDeniedError
+
+    _, Coordinator, parse, registry, Snapshot = _load()
+
+    class ImmediateClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def request(self, *_: object, **__: object):
+            self.calls += 1
+            return {"acknowledged": True, "ok": True}
+
+    async def scenario() -> None:
+        client = ImmediateClient()
+        snapshot = _ready_snapshot(Snapshot).model_copy(update={
+            "capabilities": ("run_axis_diagnostic",),
+            "ownership": {"transport": "owned", "usb": "service", "router": "running"},
+            "maintenance_state": {"motion_blocked": False, "recovery_required": False},
+        })
+        connection = FakeConnection(snapshot, client)
+        coordinator = Coordinator(connection, registry)
+        request = parse({
+            "command": "run_axis_diagnostic",
+            "expected_generation": 4,
+            "idempotency_key": "motion-ownership-replay",
+            "axis": "x",
+            "operation": "home",
+        })
+
+        first = await coordinator.execute(request, mutations_enabled=True)
+        assert first.status == "acknowledged"
+        connection._snapshot = connection._snapshot.model_copy(update={
+            "ownership": {"transport": "unbound", "usb": "unbound", "router": "unbound"},
+        })
+        with pytest.raises(CommandDeniedError, match="not service-owned and running"):
+            await coordinator.execute(request, mutations_enabled=True)
         assert client.calls == 1
 
     asyncio.run(scenario())
@@ -269,3 +343,99 @@ def test_remote_acknowledgement_requires_literal_true() -> None:
     result = asyncio.run(coordinator.execute(request, mutations_enabled=True))
     assert result.remote_acknowledged is False
     assert result.status == "delivered_unacknowledged"
+
+
+def test_history_eviction_also_evicts_idempotency_replay_state() -> None:
+    _, Coordinator, parse, registry, Snapshot = _load()
+
+    class Client:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def request(self, *_: object, **__: object):
+            self.calls += 1
+            return {"acknowledged": True}
+
+    async def scenario() -> None:
+        client = Client()
+        definitions = dict(registry)
+        definitions["initialize_motors"] = replace(
+            definitions["initialize_motors"], enabled=True, route_key="initialize_motors", disabled_reason=""
+        )
+        coordinator = Coordinator(FakeConnection(_ready_snapshot(Snapshot), client), definitions, history_limit=2)
+        requests = [parse({
+            "command": "initialize_motors",
+            "expected_generation": 4,
+            "idempotency_key": f"bounded-{index}",
+        }) for index in range(3)]
+        records = [await coordinator.execute(request, mutations_enabled=True) for request in requests]
+
+        assert coordinator.get(records[0].command_id) is None
+        replayed = await coordinator.execute(requests[0], mutations_enabled=True)
+        assert replayed.command_id != records[0].command_id
+        assert client.calls == 4
+        assert len(coordinator._idempotent) <= 2
+
+    asyncio.run(scenario())
+
+
+def test_upstream_receipt_is_bounded_before_command_record_persistence() -> None:
+    _, Coordinator, parse, registry, Snapshot = _load()
+
+    class HugeClient:
+        async def request(self, *_: object, **__: object):
+            return {"ok": False, "detail": {"detail": "X" * 1_000_000}}
+
+    definitions = dict(registry)
+    definitions["initialize_motors"] = replace(
+        definitions["initialize_motors"], enabled=True, route_key="initialize_motors", disabled_reason=""
+    )
+    coordinator = Coordinator(FakeConnection(_ready_snapshot(Snapshot), HugeClient()), definitions)
+    request = parse({"command": "initialize_motors", "expected_generation": 4, "idempotency_key": "huge"})
+
+    result = asyncio.run(coordinator.execute(request, mutations_enabled=True))
+    assert len(result.model_dump_json()) < 30_000
+    assert len(result.detail) <= 4_096
+    assert len(str(result.handler_response)) < 20_000
+
+
+def test_wide_receipts_and_interrupt_exceptions_have_hard_record_size_limits() -> None:
+    _, Coordinator, parse, registry, Snapshot = _load()
+
+    class WideClient:
+        async def request(self, route_name: str, **__: object):
+            if route_name in {"stop_axis_diagnostic", "emergency_stop"}:
+                raise RuntimeError("E" * 1_000_000)
+            payload = {f"wide-key-{index}-" + ("K" * 1_000): index for index in range(200)}
+            payload["acknowledged"] = True
+            return payload
+
+    async def scenario() -> None:
+        definitions = dict(registry)
+        for name in ("initialize_motors", "stop_axis_diagnostic"):
+            definitions[name] = replace(definitions[name], enabled=True, route_key=name, disabled_reason="")
+        snapshot = _ready_snapshot(Snapshot).model_copy(update={
+            "capabilities": (*_ready_snapshot(Snapshot).capabilities, "stop_axis_diagnostic"),
+        })
+        coordinator = Coordinator(FakeConnection(snapshot, WideClient()), definitions)
+
+        normal = await coordinator.execute(parse({
+            "command": "initialize_motors", "expected_generation": 4, "idempotency_key": "wide",
+        }), mutations_enabled=True)
+        assert len(normal.model_dump_json()) < 20_000
+        assert len(json.dumps(normal.handler_response, ensure_ascii=False, sort_keys=True, separators=(",", ":"))) <= 8_192
+
+        stopped = await coordinator.execute(parse({
+            "command": "stop_axis_diagnostic", "axis": "x",
+            "expected_generation": 4, "idempotency_key": "stop-huge",
+        }), mutations_enabled=True)
+        assert len(stopped.detail) <= 4_096
+        assert len(stopped.model_dump_json()) < 20_000
+
+        emergency = await coordinator.emergency_stop(
+            expected_generation=4, idempotency_key="emergency-huge", mutations_enabled=True,
+        )
+        assert len(emergency.detail) <= 4_096
+        assert len(emergency.model_dump_json()) < 20_000
+
+    asyncio.run(scenario())

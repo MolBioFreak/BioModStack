@@ -102,7 +102,7 @@ async def _seed_analysis(
 
 
 @pytest.mark.asyncio
-async def test_state_analysis_summary_is_compact_authorized_and_projection_backed(tmp_path: Path) -> None:
+async def test_state_analysis_summary_is_compact_personal_workflow_and_projection_backed(tmp_path: Path) -> None:
     session, engine = await _session(tmp_path)
     try:
         token = await _seed_request(session, "request-a")
@@ -124,9 +124,10 @@ async def test_state_analysis_summary_is_compact_authorized_and_projection_backe
         assert summary["artifact"]["download_url"].endswith("/artifacts/artifact-state-a")
         assert "rows" not in summary and "exclusion_ledger" not in summary
 
-        with pytest.raises(HTTPException) as denied:
-            await cm_router.state_landscape_analysis_summary("request-a", _request(principal="bob"), session)
-        assert denied.value.status_code == 403
+        public_summary = await cm_router.state_landscape_analysis_summary(
+            "request-a", _request(principal="bob"), session,
+        )
+        assert public_summary["analysis_id"] == "analysis-a"
     finally:
         await session.close()
         await engine.dispose()

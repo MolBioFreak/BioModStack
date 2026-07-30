@@ -12,6 +12,11 @@ if str(REPO_ROOT) not in sys.path:
 import biomodstack_tailnet as tailnet  # noqa: E402
 
 
+def test_global_tailnet_policy_installs_governed_mobile_update_routes() -> None:
+    assert tailnet.GLOBAL_SERVE_HANDLERS["/api/mobile-apk"] == "http://127.0.0.1:8000/api/mobile-apk"
+    assert tailnet.GLOBAL_SERVE_HANDLERS["/api/mobile-ui"] == "http://127.0.0.1:8000/api/mobile-ui"
+
+
 def test_global_tailnet_policy_adds_managed_routes_removes_exact_dead_routes_and_preserves_others(monkeypatch) -> None:
     handlers: dict[str, dict[str, str]] = {
         "/": {"Proxy": "http://127.0.0.1:5173"},

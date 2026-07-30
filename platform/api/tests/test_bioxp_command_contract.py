@@ -122,6 +122,7 @@ def test_default_registry_exposes_only_current_compact_commissioning_mappings() 
         "collect_axis_diagnostics",
         "run_axis_diagnostic",
         "stop_axis_diagnostic",
+        "recover_motion_non_homing",
         "start_job",
         "pause_job",
         "resume_job",
@@ -129,38 +130,36 @@ def test_default_registry_exposes_only_current_compact_commissioning_mappings() 
         "recover_runtime",
     }
     enabled = {
-        "activate_usb_for_service": "activate_usb_for_service",
         "collect_hardware_snapshot": "collect_hardware_snapshot",
-        "initialize_oem_environment": "initialize_oem_environment",
-        "run_oem_motor_stage": "run_oem_motor_stage",
-        "record_oem_motor_stage_observation": "record_oem_motor_stage_observation",
         "collect_axis_diagnostics": "collect_axis_diagnostics",
         "run_axis_diagnostic": "run_axis_diagnostic",
         "stop_axis_diagnostic": "stop_axis_diagnostic",
+        "recover_motion_non_homing": "recover_motion_non_homing",
     }
     for name, route_key in enabled.items():
         assert registry[name].enabled is True
         assert registry[name].route_key == route_key
-        expected_capability = (
-            None if name == "activate_usb_for_service"
-            else "run_oem_motor_stage" if name == "record_oem_motor_stage_observation"
-            else name
+        assert registry[name].required_capability == name
+
+    activation = registry["activate_usb_for_service"]
+    assert activation.enabled is True
+    assert activation.route_key == "activate_usb_for_service"
+    assert activation.required_capability is None
+    assert activation.ownership_policy == "unbound"
+
+    retired = {
+        "initialize_oem_environment",
+        "run_oem_motor_stage",
+        "record_oem_motor_stage_observation",
+    }
+    for name in retired:
+        assert registry[name].enabled is False
+        assert registry[name].route_key is None
+        assert registry[name].disabled_reason == (
+            "robot-contract-unavailable: unsupported by the exact robot runtime contract"
         )
-        assert registry[name].required_capability == expected_capability
 
-    assert registry["initialize_oem_environment"].requires_hardware_ready is True
-    assert registry["run_oem_motor_stage"].requires_hardware_ready is True
-    assert registry["record_oem_motor_stage_observation"].requires_hardware_ready is False
-    assert registry["record_oem_motor_stage_observation"].required_capability == "run_oem_motor_stage"
-    assert registry["initialize_oem_environment"].required_lifecycle_states == (
-        ("constructor_pipette_stage", "not_run"),
-        ("initialization_without_motion", "blocked"),
-        ("initial_check", "blocked"),
-    )
-    assert registry["activate_usb_for_service"].required_capability is None
-    assert registry["activate_usb_for_service"].requires_runtime_inactive is True
-
-    for name in set(registry) - set(enabled):
+    for name in set(registry) - set(enabled) - retired - {"activate_usb_for_service"}:
         assert registry[name].enabled is False
         assert registry[name].route_key is None
         assert "online contract" in registry[name].disabled_reason.lower()
@@ -195,7 +194,9 @@ def test_current_commissioning_command_payloads_are_typed_and_oem_startup_requir
         })
 
 
-def test_oem_motor_stage_requires_advertised_capability_and_translates_to_queued_robot_envelope() -> None:
+def test_legacy_oem_motor_stage_translation_remains_isolated_from_the_default_registry() -> None:
+    from dataclasses import replace
+
     from services.bioxp.command_coordinator import CommandCoordinator, CommandDeniedError
     from services.bioxp.command_models import parse_command_request
     from services.bioxp.command_registry import DEFAULT_COMMAND_REGISTRY
@@ -231,6 +232,7 @@ def test_oem_motor_stage_requires_advertised_capability_and_translates_to_queued
                 freshness_budget_seconds=30.0,
                 observation_fresh=True,
                 startup_lifecycle={"stages": {"initial_check": {"state": "passed"}}},
+                maintenance_state={"motion_blocked": False, "recovery_required": False},
             )
 
         def observe_command_response(self, value):
@@ -244,15 +246,23 @@ def test_oem_motor_stage_requires_advertised_capability_and_translates_to_queued
         "mode": "live",
         "operator_ack": "HOME",
     })
+    legacy_registry = dict(DEFAULT_COMMAND_REGISTRY)
+    legacy_registry["run_oem_motor_stage"] = replace(
+        legacy_registry["run_oem_motor_stage"],
+        enabled=True,
+        route_key="run_oem_motor_stage",
+        required_capability="run_oem_motor_stage",
+        disabled_reason="",
+    )
 
     async def scenario():
         missing = Connection(("collect_hardware_snapshot",))
         with pytest.raises(CommandDeniedError, match="Required capability is unavailable"):
-            await CommandCoordinator(missing, DEFAULT_COMMAND_REGISTRY).execute(request, mutations_enabled=True)
+            await CommandCoordinator(missing, legacy_registry).execute(request, mutations_enabled=True)
         assert missing.active_client.calls == []
 
         admitted = Connection(("collect_hardware_snapshot", "run_oem_motor_stage"))
-        record = await CommandCoordinator(admitted, DEFAULT_COMMAND_REGISTRY).execute(request, mutations_enabled=True)
+        record = await CommandCoordinator(admitted, legacy_registry).execute(request, mutations_enabled=True)
         assert record.status == "queued"
         assert record.remote_acknowledged is True
         assert record.physical_effect_verified is False
@@ -277,7 +287,7 @@ def test_oem_motor_stage_requires_advertised_capability_and_translates_to_queued
             )
             rejected = await CommandCoordinator(
                 malformed,
-                DEFAULT_COMMAND_REGISTRY,
+                legacy_registry,
             ).execute(request, mutations_enabled=True)
             assert rejected.status == "delivery_failed"
             assert rejected.remote_acknowledged is False
@@ -286,7 +296,9 @@ def test_oem_motor_stage_requires_advertised_capability_and_translates_to_queued
     asyncio.run(scenario())
 
 
-def test_oem_motor_stage_observation_is_typed_non_motion_and_uses_the_same_robot_queue() -> None:
+def test_legacy_oem_stage_observation_translation_remains_isolated_from_the_default_registry() -> None:
+    from dataclasses import replace
+
     from services.bioxp.command_coordinator import CommandCoordinator
     from services.bioxp.command_models import parse_command_request
     from services.bioxp.command_registry import DEFAULT_COMMAND_REGISTRY
@@ -333,10 +345,17 @@ def test_oem_motor_stage_observation_is_typed_non_motion_and_uses_the_same_robot
         "operator_ack": "OBSERVE",
         "operator_note": "Observed Z reference complete.",
     })
+    legacy_registry = dict(DEFAULT_COMMAND_REGISTRY)
+    legacy_registry["record_oem_motor_stage_observation"] = replace(
+        legacy_registry["record_oem_motor_stage_observation"],
+        enabled=True,
+        route_key="record_oem_motor_stage_observation",
+        disabled_reason="",
+    )
 
     async def scenario():
         connection = Connection()
-        record = await CommandCoordinator(connection, DEFAULT_COMMAND_REGISTRY).execute(request, mutations_enabled=True)
+        record = await CommandCoordinator(connection, legacy_registry).execute(request, mutations_enabled=True)
         assert record.status == "queued"
         assert record.remote_acknowledged is True
         assert record.physical_effect_verified is False
@@ -374,8 +393,6 @@ def test_axis_diagnostic_commands_are_finite_typed_and_m02_is_retired() -> None:
         "idempotency_key": "axis-x-positive-11",
         "axis": "x",
         "operation": "move-positive",
-        "operator_ack": "RUN_AXIS_DIAGNOSTIC",
-        "reason": "supervised X relative-position test",
     })
     assert run.axis == "x" and run.operation == "move-positive"
 
@@ -384,8 +401,6 @@ def test_axis_diagnostic_commands_are_finite_typed_and_m02_is_retired() -> None:
         "expected_generation": 11,
         "idempotency_key": "axis-x-stop-11",
         "axis": "x",
-        "operator_ack": "STOP_AXIS",
-        "reason": "operator stop",
     })
     assert stop.axis == "x"
 
@@ -406,7 +421,7 @@ def test_axis_diagnostic_commands_are_finite_typed_and_m02_is_retired() -> None:
         })
 
     assert registry["collect_axis_diagnostics"].requires_hardware_ready is False
-    assert registry["run_axis_diagnostic"].requires_hardware_ready is True
+    assert registry["run_axis_diagnostic"].requires_hardware_ready is False
     assert registry["stop_axis_diagnostic"].requires_hardware_ready is False
     assert registry["stop_axis_diagnostic"].requires_fresh_observation is False
 
@@ -424,12 +439,6 @@ def test_axis_diagnostic_execution_holds_generation_lease_and_forwards_only_type
     class Client:
         async def request(self, route_key, *, json_data):
             events.append(("request", route_key, json_data))
-            if route_key == "collect_hardware_snapshot":
-                return {
-                    "ok": True,
-                    "published": True,
-                    "snapshot": {"snapshot_id": "post-axis-13"},
-                }
             return {
                 "ok": True,
                 "axis": "x",
@@ -462,6 +471,8 @@ def test_axis_diagnostic_execution_holds_generation_lease_and_forwards_only_type
                 observed_at=datetime.now(timezone.utc),
                 freshness_budget_seconds=30.0,
                 observation_fresh=True,
+                maintenance_state={"motion_blocked": False, "recovery_required": False},
+                ownership={"transport": "owned", "usb": "service", "router": "running"},
             )
 
         def observe_command_response(self, value):
@@ -473,8 +484,6 @@ def test_axis_diagnostic_execution_holds_generation_lease_and_forwards_only_type
         "idempotency_key": "axis-x-positive-13",
         "axis": "x",
         "operation": "move-positive",
-        "operator_ack": "RUN_AXIS_DIAGNOSTIC",
-        "reason": "supervised X relative-position test",
     })
 
     record = asyncio.run(CommandCoordinator(Connection(), DEFAULT_COMMAND_REGISTRY).execute(request, mutations_enabled=True))
@@ -482,45 +491,19 @@ def test_axis_diagnostic_execution_holds_generation_lease_and_forwards_only_type
     assert record.status == "acknowledged"
     assert record.remote_acknowledged is True
     assert record.physical_effect_verified is False
-    assert record.handler_response["inline_hardware_evidence"] == {
-        "attempted": True,
-        "published": True,
-        "snapshot_id": "post-axis-13",
-    }
+    assert record.handler_response is not None
+    assert "inline_hardware_evidence" not in record.handler_response
     assert events == [
         ("lease-enter", 13),
         ("request", "run_axis_diagnostic", {
             "axis": "x",
             "operation": "move-positive",
             "operator_ack": "RUN_AXIS_DIAGNOSTIC",
-            "reason": "supervised X relative-position test",
+            "reason": "BMS operator requested x move-positive",
         }),
         ("observe", "x", "move-positive"),
-        ("request", "collect_hardware_snapshot", None),
         ("lease-exit", 13),
     ]
-
-
-def test_inline_hardware_evidence_rejects_application_level_failure_payload() -> None:
-    from services.bioxp.command_coordinator import _collect_inline_hardware_evidence
-
-    class Client:
-        async def request(self, route_key, *, json_data):
-            assert route_key == "collect_hardware_snapshot"
-            return {
-                "ok": False,
-                "published": True,
-                "snapshot": {"snapshot_id": "must-not-trust"},
-                "error": "snapshot rejected",
-            }
-
-    evidence = asyncio.run(_collect_inline_hardware_evidence(Client()))
-
-    assert evidence == {
-        "attempted": True,
-        "published": False,
-        "error": "snapshot rejected",
-    }
 
 
 def test_acknowledged_command_http_refresh_is_status_only() -> None:
@@ -556,8 +539,6 @@ def test_acknowledged_command_http_refresh_is_status_only() -> None:
         "idempotency_key": "axis-status-only-13",
         "axis": "x",
         "operation": "home",
-        "operator_ack": "RUN_AXIS_DIAGNOSTIC",
-        "reason": "verify status-only post-command publication",
     }
 
     result = asyncio.run(execute_command(payload, runtime))
@@ -616,6 +597,8 @@ def test_axis_stop_preempts_inflight_diagnostic_without_waiting_for_workflow_lea
                     observed_at=datetime.now(timezone.utc),
                     freshness_budget_seconds=30.0,
                     observation_fresh=True,
+                    maintenance_state={"motion_blocked": False, "recovery_required": False},
+                    ownership={"transport": "owned", "usb": "service", "router": "running"},
                 )
 
         coordinator = CommandCoordinator(Connection(), DEFAULT_COMMAND_REGISTRY)
@@ -625,16 +608,12 @@ def test_axis_stop_preempts_inflight_diagnostic_without_waiting_for_workflow_lea
             "idempotency_key": "axis-x-run-preemption-17",
             "axis": "x",
             "operation": "move-positive",
-            "operator_ack": "RUN_AXIS_DIAGNOSTIC",
-            "reason": "supervised preemption contract",
         })
         stop_request = parse_command_request({
             "command": "stop_axis_diagnostic",
             "expected_generation": 17,
             "idempotency_key": "axis-x-stop-preemption-17",
             "axis": "x",
-            "operator_ack": "STOP_AXIS",
-            "reason": "operator requested immediate stop",
         })
 
         run_task = asyncio.create_task(coordinator.execute(run_request, mutations_enabled=True))
@@ -688,11 +667,87 @@ def test_axis_stop_http_acknowledgement_never_waits_for_normal_probe_lane() -> N
         "expected_generation": 13,
         "idempotency_key": "axis-stop-http-13",
         "axis": "x",
-        "operator_ack": "STOP_AXIS",
-        "reason": "Operator requested immediate X stop",
     }
 
     result = asyncio.run(asyncio.wait_for(execute_command(payload, runtime), timeout=0.1))
 
     assert result["command"] == "stop_axis_diagnostic"
     assert connection.probe_called is False
+
+
+def test_non_homing_recovery_is_typed_and_maps_to_exact_robot_payload() -> None:
+    from services.bioxp.command_coordinator import CommandCoordinator
+    from services.bioxp.command_models import parse_command_request
+    from services.bioxp.command_registry import DEFAULT_COMMAND_REGISTRY
+    from services.bioxp.models import BioXpSnapshot
+
+    valid_payload = {
+        "command": "recover_motion_non_homing",
+        "expected_generation": 19,
+        "idempotency_key": "recover-motion-19",
+    }
+    request = parse_command_request(valid_payload)
+    for invalid in (
+        {**valid_payload, "operator_ack": "RECOVER_MOTION"},
+        {**valid_payload, "reason": "unnecessary BMS prompt"},
+    ):
+        with pytest.raises(ValidationError):
+            parse_command_request(invalid)
+
+    class Client:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def request(self, route_key, *, json_data):
+            self.calls.append((route_key, json_data))
+            return {
+                "ok": True,
+                "maintenance_state": {
+                    "motion_blocked": False,
+                    "recovery_required": False,
+                    "block_reason": None,
+                },
+            }
+
+    class Connection:
+        active_client = Client()
+
+        def snapshot(self):
+            return BioXpSnapshot(
+                configured=True,
+                active=True,
+                generation=19,
+                reachable=True,
+                runtime_ready=True,
+                hardware_ready=True,
+                hardware_observation_fresh=True,
+                capabilities=("recover_motion_non_homing",),
+                observed_at=datetime.now(timezone.utc),
+                freshness_budget_seconds=30.0,
+                observation_fresh=True,
+                maintenance_state={
+                    "motion_blocked": True,
+                    "recovery_required": True,
+                    "block_reason": "USB owner changed",
+                },
+                ownership={"transport": "owned", "usb": "service", "router": "running"},
+                )
+
+        def observe_command_response(self, value):
+            self.observed = value
+
+    connection = Connection()
+    record = asyncio.run(
+        CommandCoordinator(connection, DEFAULT_COMMAND_REGISTRY).execute(request, mutations_enabled=True)
+    )
+
+    assert record.status == "acknowledged"
+    assert connection.active_client.calls == [(
+        "recover_motion_non_homing",
+        {
+            "run_homing": False,
+            "operator_ack": "RECOVER_MOTION",
+            "operator_reason": "BMS operator requested controller initialization",
+        },
+    )]
+    assert DEFAULT_COMMAND_REGISTRY["recover_motion_non_homing"].required_capability == "recover_motion_non_homing"

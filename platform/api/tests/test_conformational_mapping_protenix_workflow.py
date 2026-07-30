@@ -47,7 +47,9 @@ def test_protenix_coordinate_ledger_appends_all_seeds_then_seals(tmp_path: Path,
     dumper.dump_predictions({}, tmp_path, "target", None, None, 1)
     dumper.dump_predictions({}, tmp_path, "target", None, None, 2)
 
-    assert [json.loads(line)["coordinates"]["ordered_seed"] for line in ledger.read_text(encoding="utf-8").splitlines()] == [1, 2]
+    records = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
+    assert [record["coordinates"]["ordered_seed"] for record in records] == [1, 2]
+    assert all(item["relative_path"].startswith("predictions/") for record in records for item in record["artifacts"])
     assert stat.S_IMODE(ledger.stat().st_mode) == 0o640
     runtime._seal_coordinate_ledger(ledger)
     assert stat.S_IMODE(ledger.stat().st_mode) == 0o440

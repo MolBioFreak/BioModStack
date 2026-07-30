@@ -88,6 +88,33 @@ def _registered(root: Path, relative: str = "input.pdb", *, principal: str = "al
     return RegisteredArtifact("artifact-1", principal, root, relative, hashlib.sha256(payload).hexdigest(), len(payload))
 
 
+def test_container_recorded_root_resolves_to_active_native_state_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A container-produced immutable source remains readable by the native dev API."""
+    host_state = tmp_path / "native-state"
+    content = host_state / "conformational_mapping_sources" / "snapshot" / "content.json"
+    content.parent.mkdir(parents=True)
+    payload = b'{"target_id":"1UBQ-live","target_order":0}'
+    content.write_bytes(payload)
+
+    import paths
+    monkeypatch.setattr(
+        paths,
+        "_runtime_paths",
+        lambda: {"data_root": str(host_state), "container_state_path": "/var/lib/biomodstack"},
+    )
+    monkeypatch.setenv("BMS_STATE_DIR", str(host_state))
+    monkeypatch.setenv("BMS_CONTAINER_STATE_PATH", "/var/lib/biomodstack")
+    # The registered-source reader must honor the declared container → host
+    # mapping even when a generic alias resolver cannot materialize the alias.
+    monkeypatch.setattr(import_stager, "resolve_runtime_data_path", lambda _value: Path("/var/lib/biomodstack"))
+    artifact = RegisteredArtifact(
+        "snapshot", "historical-owner", Path("/var/lib/biomodstack"),
+        "conformational_mapping_sources/snapshot/content.json", hashlib.sha256(payload).hexdigest(), len(payload),
+    )
+
+    assert import_stager.read_registered_artifact(artifact, principal_id="local-personal-workflow") == payload
+
+
 def test_mmcif_probe_admits_a_coordinate_loop_after_a_large_metadata_block(tmp_path: Path) -> None:
     """Real deposited mmCIF files may place atom-site data well after metadata."""
     source = tmp_path / "late_atoms.cif"
@@ -205,12 +232,12 @@ def test_cm6_010_limits_and_collision_safe_names(tmp_path: Path) -> None:
         verify_registered_artifact(bad, principal_id="alice")
 
 
-def test_cm6_011_authorized_registered_id(tmp_path: Path) -> None:
+def test_cm6_011_registered_id_is_personal_workflow_accessible_and_content_verified(tmp_path: Path) -> None:
     (tmp_path / "input.pdb").write_bytes(PDB)
     artifact = _registered(tmp_path)
-    assert verify_registered_artifact(artifact, principal_id="alice") == (artifact.content_sha256, artifact.size_bytes)
-    with pytest.raises(ImportStagingError, match="authorized"):
-        verify_registered_artifact(artifact, principal_id="mallory")
+    expected = (artifact.content_sha256, artifact.size_bytes)
+    assert verify_registered_artifact(artifact, principal_id="alice") == expected
+    assert verify_registered_artifact(artifact, principal_id="historical-owner") == expected
 
 
 def test_cm6_012_immutable_receipt_and_import_identity(tmp_path: Path) -> None:

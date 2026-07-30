@@ -1,14 +1,30 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import re
 import time
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
 import httpx
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictFloat,
+    StrictInt,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from .errors import RobotResponseError, RobotTransportError
 from .target_policy import ValidatedBioXpTarget
@@ -16,11 +32,8 @@ from .target_policy import ValidatedBioXpTarget
 
 DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
     "status": ("GET", "/status", 5.0),
-    "activate_usb_for_service": ("POST", "/oem/runtime/activate_service", 90.0),
+    "activate_usb_for_service": ("POST", "/reconnect", 30.0),
     "collect_hardware_snapshot": ("POST", "/hardware/snapshot/collect", 210.0),
-    "initialize_oem_environment": ("POST", "/oem/startup/initialize_environment", 470.0),
-    "run_oem_motor_stage": ("POST", "/oem/runtime/commands/enqueue", 30.0),
-    "record_oem_motor_stage_observation": ("POST", "/oem/runtime/commands/enqueue", 15.0),
     "oem_full_lifecycle_contract": ("GET", "/oem/runtime/movement-runs/contract", 10.0),
     "plan_oem_full_lifecycle": ("POST", "/oem/runtime/movement-runs", 30.0),
     "get_oem_full_lifecycle_run": ("GET", "/oem/runtime/movement-runs/{run_id}", 10.0),
@@ -29,12 +42,70 @@ DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
     "collect_axis_diagnostics": ("GET", "/motion/diagnostics/status", 45.0),
     "run_axis_diagnostic": ("POST", "/motion/diagnostics/execute", 180.0),
     "stop_axis_diagnostic": ("POST", "/motion/diagnostics/stop", 25.0),
+    "recover_motion_non_homing": ("POST", "/motion/arm/strict_startup", 90.0),
     "emergency_stop": ("POST", "/oem/runtime/emergency_stop", 5.0),
+    "camera_status": ("GET", "/camera/status", 5.0),
+    "camera_latest": ("GET", "/camera/frame/latest", 5.0),
+    "camera_snapshot": ("POST", "/camera/snapshot", 15.0),
 }
 
 _ROUTE_PARAMETER_RE = re.compile(r"\{([A-Za-z][A-Za-z0-9_]*)\}")
 _OEM_LIFECYCLE_MUTATION_ROUTES = frozenset({"plan_oem_full_lifecycle", "cancel_oem_full_lifecycle_run"})
 _AUTOMATIC_SNAPSHOT_TIMEOUT_SECONDS = 15.0
+MAX_CAMERA_IMAGE_BYTES = 8 * 1024 * 1024
+MAX_CAMERA_STATUS_BYTES = 64 * 1024
+MAX_CAMERA_ERROR_BYTES = 1000
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_UTC_ISO8601_RE = re.compile(
+    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
+    r"(?:\.[0-9]{1,6})?(?:Z|\+00:00)$"
+)
+
+
+class _CameraStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = Field(pattern=r"^bioxp\.camera_status\.v1$")
+    available: StrictBool
+    frame_sequence: StrictInt | None = Field(default=None, ge=0)
+    frame_captured_at: AwareDatetime | None = None
+    frame_age_seconds: StrictFloat | None = Field(default=None, ge=0, allow_inf_nan=False)
+    freshness_budget_seconds: StrictFloat = Field(gt=0, le=60, allow_inf_nan=False)
+    provider_generation: StrictInt = Field(ge=0)
+    dropped_frames: StrictInt = Field(ge=0)
+    content_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    detail: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("frame_captured_at", mode="before")
+    @classmethod
+    def require_timestamp_wire_string(cls, value: object) -> object:
+        if value is not None and (
+            type(value) is not str or _UTC_ISO8601_RE.fullmatch(value) is None
+        ):
+            raise ValueError("frame_captured_at must be an ISO-8601 string")
+        return value
+
+    @model_validator(mode="after")
+    def validate_frame_availability(self) -> "_CameraStatusResponse":
+        frame_values = (
+            self.frame_sequence,
+            self.frame_captured_at,
+            self.frame_age_seconds,
+            self.content_sha256,
+        )
+        if self.available and any(value is None for value in frame_values):
+            raise ValueError("available camera status requires complete frame metadata")
+        if not self.available and any(value is not None for value in frame_values):
+            raise ValueError("unavailable camera status cannot claim frame metadata")
+        return self
+
+
+@dataclass(frozen=True, slots=True)
+class CameraImage:
+    content: bytes
+    content_type: str
+    etag: str
+    sha256: str
 
 
 def _read_oem_lifecycle_token(path: Path | None) -> str:
@@ -177,6 +248,142 @@ class BioXpRobotClient:
             raise RobotTransportError("BioXP status response was not an object")
         return payload
 
+    async def camera_status(self) -> dict[str, Any]:
+        try:
+            method, path_template, timeout_seconds = self.routes["camera_status"]
+        except KeyError as exc:
+            raise RobotTransportError("Unknown BioXP robot route key: camera_status") from exc
+        path = _render_route_path(path_template, None)
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                async with self._client.stream(
+                    method,
+                    path,
+                    timeout=_bounded_timeout(timeout_seconds),
+                ) as response:
+                    if 300 <= response.status_code < 400:
+                        raise RobotTransportError("BioXP target redirects are forbidden")
+                    if response.is_error:
+                        error_bytes = await _read_limited_body(
+                            response,
+                            limit=MAX_CAMERA_ERROR_BYTES,
+                            overflow_message="BioXP camera error response exceeded the size limit",
+                        )
+                        raise RobotResponseError(
+                            response.status_code,
+                            error_bytes.decode("utf-8", errors="replace"),
+                        )
+                    content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                    if content_type != "application/json":
+                        raise RobotTransportError("BioXP robot returned a malformed camera status")
+                    declared_length = _required_bounded_content_length(
+                        response,
+                        limit=MAX_CAMERA_STATUS_BYTES,
+                        label="camera status",
+                    )
+                    body = await _read_limited_body(
+                        response,
+                        limit=MAX_CAMERA_STATUS_BYTES,
+                        overflow_message="BioXP camera status exceeded the size limit",
+                    )
+                    if len(body) != declared_length:
+                        raise RobotTransportError(
+                            "BioXP camera status content length did not match received bytes"
+                        )
+                    payload = json.loads(body)
+        except RobotResponseError:
+            raise
+        except RobotTransportError:
+            raise
+        except TimeoutError as exc:
+            raise RobotTransportError("BioXP camera transport is unreachable or timed out") from exc
+        except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout, httpx.WriteTimeout) as exc:
+            raise RobotTransportError("BioXP camera transport is unreachable or timed out") from exc
+        except (httpx.HTTPError, ValueError, json.JSONDecodeError) as exc:
+            raise RobotTransportError("BioXP robot returned a malformed camera status") from exc
+        try:
+            status = _CameraStatusResponse.model_validate(payload)
+        except ValidationError as exc:
+            raise RobotTransportError("BioXP robot returned a malformed camera status") from exc
+        return status.model_dump(mode="json")
+
+    async def camera_latest(self) -> CameraImage:
+        return await self._camera_image("camera_latest")
+
+    async def camera_snapshot(self) -> CameraImage:
+        return await self._camera_image("camera_snapshot")
+
+    async def _camera_image(self, route_name: str) -> CameraImage:
+        try:
+            method, path_template, timeout_seconds = self.routes[route_name]
+        except KeyError as exc:
+            raise RobotTransportError(f"Unknown BioXP robot route key: {route_name}") from exc
+        path = _render_route_path(path_template, None)
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                async with self._client.stream(
+                    method,
+                    path,
+                    timeout=_bounded_timeout(timeout_seconds),
+                ) as response:
+                    if 300 <= response.status_code < 400:
+                        raise RobotTransportError("BioXP target redirects are forbidden")
+                    if response.is_error:
+                        error_bytes = await _read_limited_body(
+                            response,
+                            limit=MAX_CAMERA_ERROR_BYTES,
+                            overflow_message="BioXP camera error response exceeded the size limit",
+                        )
+                        raise RobotResponseError(
+                            response.status_code,
+                            error_bytes.decode("utf-8", errors="replace"),
+                        )
+                    content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                    if content_type != "image/jpeg":
+                        raise RobotTransportError("BioXP camera response was not a JPEG image")
+                    parsed_length = _required_bounded_content_length(
+                        response,
+                        limit=MAX_CAMERA_IMAGE_BYTES,
+                        label="camera response",
+                    )
+                    content = await _read_limited_body(
+                        response,
+                        limit=MAX_CAMERA_IMAGE_BYTES,
+                        overflow_message="BioXP camera image exceeded the size limit",
+                    )
+                    received = len(content)
+                    if not content:
+                        raise RobotTransportError("BioXP camera returned an empty image")
+                    if received != parsed_length:
+                        raise RobotTransportError(
+                            "BioXP camera response content length did not match received bytes"
+                        )
+                    if not (content.startswith(b"\xff\xd8") and content.endswith(b"\xff\xd9")):
+                        raise RobotTransportError("BioXP camera response had invalid JPEG framing")
+                    digest = sha256(content).hexdigest()
+                    upstream_hash = response.headers.get("x-content-sha256", "")
+                    canonical_etag = f'\"{digest}\"'
+                    if not _SHA256_RE.fullmatch(upstream_hash) or upstream_hash != digest:
+                        raise RobotTransportError("BioXP camera image content hash was missing or invalid")
+                    if response.headers.get("etag", "") != canonical_etag:
+                        raise RobotTransportError("BioXP camera image ETag did not match its content hash")
+                    return CameraImage(
+                        content=content,
+                        content_type=content_type,
+                        etag=canonical_etag,
+                        sha256=digest,
+                    )
+        except RobotResponseError:
+            raise
+        except RobotTransportError:
+            raise
+        except TimeoutError as exc:
+            raise RobotTransportError("BioXP camera transport is unreachable or timed out") from exc
+        except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout, httpx.WriteTimeout) as exc:
+            raise RobotTransportError("BioXP camera transport is unreachable or timed out") from exc
+        except httpx.HTTPError as exc:
+            raise RobotTransportError("BioXP camera returned an invalid transport response") from exc
+
     async def request(
         self,
         route_name: str,
@@ -204,7 +411,7 @@ class BioXpRobotClient:
                     json=json_data,
                     params=params,
                     headers=headers,
-                    timeout=timeout if timeout_override is None else timeout_override,
+                    timeout=_bounded_timeout(timeout if timeout_override is None else timeout_override),
                 )
                 if 300 <= response.status_code < 400:
                     raise RobotTransportError("BioXP target redirects are forbidden")
@@ -227,6 +434,49 @@ class BioXpRobotClient:
 
     async def close(self) -> None:
         await self._client.aclose()
+
+
+def _bounded_timeout(read_seconds: float) -> httpx.Timeout:
+    return httpx.Timeout(
+        connect=min(3.0, read_seconds),
+        read=read_seconds,
+        write=min(5.0, read_seconds),
+        pool=min(3.0, read_seconds),
+    )
+
+
+def _required_bounded_content_length(
+    response: httpx.Response,
+    *,
+    limit: int,
+    label: str,
+) -> int:
+    declared = response.headers.get("content-length")
+    if declared is None:
+        raise RobotTransportError(f"BioXP {label} had no content length")
+    if not declared.isascii() or not declared.isdigit():
+        raise RobotTransportError(f"BioXP {label} had an invalid content length")
+    try:
+        parsed = int(declared)
+    except ValueError as exc:
+        raise RobotTransportError(f"BioXP {label} had an invalid content length") from exc
+    if parsed < 1 or parsed > limit:
+        raise RobotTransportError(f"BioXP {label} exceeded the size limit")
+    return parsed
+
+
+async def _read_limited_body(
+    response: httpx.Response,
+    *,
+    limit: int,
+    overflow_message: str,
+) -> bytes:
+    body = bytearray()
+    async for chunk in response.aiter_bytes():
+        if len(body) + len(chunk) > limit:
+            raise RobotTransportError(overflow_message)
+        body.extend(chunk)
+    return bytes(body)
 
 
 def _hardware_evidence_needs_refresh(payload: Mapping[str, Any]) -> bool:

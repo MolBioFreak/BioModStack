@@ -817,8 +817,11 @@ def test_selected_development_uses_isolated_api_listener_not_container_runtime(m
         },
     )
     monkeypatch.setattr(tailnet, "_pid_report", lambda port: [])
-    monkeypatch.setattr(tailnet, "_git_revision", lambda root: "a" * 40)
+    control_root = tmp_path / "development-control"
+    monkeypatch.setattr(tailnet, "CANONICAL_DEVELOPMENT_ROOT", control_root)
+    monkeypatch.setattr(tailnet, "_git_revision", lambda root: "c" * 40)
     revisions: list[str] = []
+    adapter_validations: list[tuple[Path, str]] = []
     monkeypatch.setattr(
         tailnet,
         "_validated_development_api_listener",
@@ -829,11 +832,17 @@ def test_selected_development_uses_isolated_api_listener_not_container_runtime(m
         "_validated_container_runtime",
         lambda *args, **kwargs: pytest.fail("development must not inspect Production containers"),
     )
-    monkeypatch.setattr(tailnet, "_validated_workflow_adapter_listener", lambda *args: {})
+    monkeypatch.setattr(
+        tailnet,
+        "_validated_workflow_adapter_listener",
+        lambda root, revision: adapter_validations.append((root, revision)) or {},
+    )
     monkeypatch.setattr(tailnet, "_validated_development_frontend_listener", lambda *args: {})
 
     report = tailnet._verify_selected_environment(spec, tmp_path, snapshot)
     assert revisions == ["a" * 40]
+    assert adapter_validations == [(control_root.resolve(), "c" * 40)]
+    assert report["selector_revision"] == "c" * 40
     assert report["frontend_target"] == "http://127.0.0.1:5173"
     assert "development_api_listener" in report
     assert "managed_api_runtime" not in report
@@ -880,6 +889,9 @@ def test_start_selected_environment_probes_only_selected_runtime_and_never_start
     )
     monkeypatch.setattr(tailnet, "_install_operator_development_frontend", lambda root, ledger=None: None)
     monkeypatch.setattr(tailnet, "_dev_frontend_matches_root", lambda spec, root: True)
+    development_control_root = tmp_path / "development-control"
+    monkeypatch.setattr(tailnet, "CANONICAL_DEVELOPMENT_ROOT", development_control_root)
+    monkeypatch.setattr(tailnet, "_git_revision", lambda root: "c" * 40)
 
     development = tailnet.environment_spec("development", project_root=tmp_path)
     tailnet._start_selected_environment(development, tmp_path)
@@ -889,14 +901,11 @@ def test_start_selected_environment_probes_only_selected_runtime_and_never_start
         (development.api_health_url, True),
     ]
     assert waits == [development.frontend_url, development.api_health_url]
-    assert policies == [(tmp_path, "a" * 40)]
+    assert policies == [(development_control_root.resolve(), "c" * 40)]
 
     probes.clear()
     waits.clear()
-    development_control_root = tmp_path / "development-control"
     monkeypatch.setattr(tailnet, "CANONICAL_PRODUCTION_ROOT", tmp_path)
-    monkeypatch.setattr(tailnet, "CANONICAL_DEVELOPMENT_ROOT", development_control_root)
-    monkeypatch.setattr(tailnet, "_git_revision", lambda root: "c" * 40)
     production = tailnet.environment_spec("production", project_root=tmp_path)
     tailnet._start_selected_environment(production, tmp_path)
     assert probes == [
