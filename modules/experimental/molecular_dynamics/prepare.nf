@@ -2,7 +2,7 @@ nextflow.enable.dsl=2
 
 process MD_PREPARE_CONFIG {
     tag "md-prepare:${params.job_id ?: 'unassigned'}"
-    label 'MolecularDynamicsCpu'
+    label 'MolecularDynamicsPreparation'
     publishDir "${params.out_dir}/preparation", mode: 'copy', overwrite: true
 
     input:
@@ -32,7 +32,7 @@ bundle = Path('preparation_bundle')
 if config.get('schema') == 'bms.md.job.v2':
     chemistry = config['chemistry']
     runtime_image = Path(os.environ.get(
-        'BMS_MD_PREPARATION_SIF', '/mnt/BioModStack/apptainer/md-preparation-v1.sif'
+        'BMS_MD_PREPARATION_SIF', '/opt/bms-md-preparation-runtime.sif'
     ))
     if not runtime_image.is_file():
         raise SystemExit('pinned MD preparation SIF is unavailable')
@@ -43,9 +43,8 @@ if config.get('schema') == 'bms.md.job.v2':
         profile_sha256=chemistry['profile_sha256'],
         runtime_lock=Path(os.environ.get(
             'BMS_MD_PREPARATION_RUNTIME_LOCK',
-            '/mnt/BioModStack/md-preparation/env-v1-explicit.txt',
+            '/opt/bms-md-preparation-runtime.lock',
         )),
-        worker_command=['apptainer', 'exec', str(runtime_image), 'python'],
         runtime_image=runtime_image,
     )
     bundle_sha = manifest['bundle_sha256']
