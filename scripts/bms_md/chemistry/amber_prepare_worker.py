@@ -123,6 +123,14 @@ def _install_position_restraints(structure: Any, topology_path: Path) -> int:
     return len(restrained)
 
 
+def _grompp_validation_command(gmx: Path) -> list[str]:
+    return [
+        str(gmx), "grompp", "-f", "bundle-validation.mdp", "-c", "system.gro",
+        "-r", "system.gro", "-p", "system.top", "-o", "bundle-validation.tpr",
+        "-maxwarn", "0",
+    ]
+
+
 def _validate_engine_consumption() -> dict[str, Any]:
     from openmm.app import AmberInpcrdFile, AmberPrmtopFile, HBonds, PME
     from openmm import unit
@@ -147,8 +155,7 @@ def _validate_engine_consumption() -> dict[str, Any]:
     )
     gmx = Path(sys.executable).resolve().parent / "gmx"
     completed = subprocess.run(
-        [str(gmx), "grompp", "-f", str(mdp), "-c", "system.gro", "-p", "system.top",
-         "-o", "bundle-validation.tpr", "-maxwarn", "0"],
+        _grompp_validation_command(gmx),
         check=False, capture_output=True, text=True, timeout=300,
     )
     if completed.returncode != 0:
