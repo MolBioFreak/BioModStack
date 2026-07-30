@@ -18,21 +18,6 @@ interface OntInstrumentPanelProps {
 
 type OutputKey = 'pod5' | 'fastq' | 'bam';
 
-const TEST_MODE_MK1D_DEVICE: OntLiveDevice = {
-    position: 'TEST-MK1D',
-    device_type: 'mk1d',
-    state: 'test_mode_connected',
-    running: false,
-    available_for_run: true,
-    fake_or_demo_device: true,
-    flow_cell: {
-        present: true,
-        flow_cell_id: 'FAKE-FLOWCELL',
-        product_code: 'FLO-MIN114',
-        sample_rate: 5000,
-    },
-};
-
 const DEFAULT_OUTPUTS: Record<OutputKey, boolean> = { pod5: true, fastq: true, bam: false };
 const OUTPUT_LABELS: Array<[OutputKey, string]> = [
     ['pod5', 'POD5 raw signal'],
@@ -77,7 +62,6 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
     const [selectedPosition, setSelectedPosition] = useState<string>('');
     const [lastRun, setLastRun] = useState<OntInstrumentRun | null>(null);
     const [hardwareCheckMessage, setHardwareCheckMessage] = useState<string>('');
-    const [testModeEnabled, setTestModeEnabled] = useState<boolean>(false);
     const [sampleId, setSampleId] = useState<string>('plasmid-qc-test');
     const [experimentGroup, setExperimentGroup] = useState<string>('bms_plasmid_verification');
     const [kit, setKit] = useState<string>('SQK-LSK114');
@@ -89,7 +73,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
         refetchInterval: (query) => jobPollingInterval(10000, query),
     });
     const liveDevices = data?.live_devices ?? [];
-    const devices = testModeEnabled ? [TEST_MODE_MK1D_DEVICE, ...liveDevices] : liveDevices;
+    const devices = liveDevices.filter((device) => device.device_type === 'mk1d');
     const availableDevices = useMemo(
         () => devices.filter((device) => device.available_for_run && device.position),
         [devices],
@@ -108,7 +92,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
 
     const refreshPosition = useMutation({
         mutationFn: async () => {
-            if (!selectedDevice?.position || selectedDevice.fake_or_demo_device) {
+            if (!selectedDevice?.position) {
                 throw new Error('No real ONT position selected for refresh');
             }
             const response = await refreshOntPosition(selectedDevice.position);
@@ -119,7 +103,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
 
     const beginHardwareCheck = useMutation({
         mutationFn: async () => {
-            if (!selectedDevice?.position || selectedDevice.fake_or_demo_device) {
+            if (!selectedDevice?.position) {
                 throw new Error('No real ONT position selected for hardware check');
             }
             const ok = window.confirm('Start a MinKNOW hardware check on this position? This is diagnostic, not sequencing, but it will start a MinKNOW check protocol.');
@@ -140,17 +124,6 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
         mutationFn: async () => {
             if (!selectedDevice?.position) {
                 throw new Error('No real available ONT position selected');
-            }
-            if (selectedDevice.fake_or_demo_device) {
-                return {
-                    id: `test-ont-run-${Date.now()}`,
-                    minknow_run_id: 'fake-minknow-run-test-mode',
-                    position: selectedDevice.position,
-                    status: 'test_mode_running',
-                    handoff_ready: false,
-                    output_files: { fastq: [], pod5: [], bam: [] },
-                    fake_or_demo_devices: true,
-                } satisfies OntInstrumentRun;
             }
             const response = await startOntInstrumentRun(selectedDevice.position, {
                 sample_id: sampleId.trim(),
@@ -192,11 +165,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                         <span className="rounded-full border border-cyan-500/40 bg-cyan-500/10 px-2 py-1 text-xs font-semibold uppercase tracking-wide text-cyan-100">
                             Mk1D / MinKNOW
                         </span>
-                        {testModeEnabled ? (
-                            <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs font-semibold uppercase tracking-wide text-amber-100">
-                                test mode
-                            </span>
-                        ) : null}
+
                     </div>
                     <p className="max-w-2xl text-sm text-[var(--text-secondary)]">
                         Select a MinKNOW position, confirm run metadata, then start acquisition. Real starts remain disabled until a real available position is present.
@@ -210,16 +179,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                     >
                         Analyze existing data
                     </button>
-                    <button
-                        type="button"
-                        onClick={() => {
-                            setTestModeEnabled((value) => !value);
-                            setSelectedPosition('TEST-MK1D');
-                        }}
-                        className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm font-semibold text-amber-100 hover:bg-amber-500/20"
-                    >
-                        {testModeEnabled ? 'Hide fake Mk1D' : 'Test mode: fake Mk1D'}
-                    </button>
+
                 </div>
             </div>
 
@@ -242,18 +202,13 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                 </div>
             </div>
 
-            {testModeEnabled ? (
-                <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">
-                    Test mode is local UI simulation only; it does not prove MinKNOW connectivity or start a real instrument run.
-                </div>
-            ) : null}
 
             <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
                 <div className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4">
                     <div className="flex items-center justify-between gap-3">
                         <div>
                             <h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Instrument positions</h3>
-                            <p className="text-xs text-[var(--text-secondary)]">Live cards populate from MinKNOW; fake Mk1D is visibly labeled.</p>
+                            <p className="text-xs text-[var(--text-secondary)]">Live Mk1D cards populate directly from MinKNOW.</p>
                         </div>
                         <button type="button" onClick={() => void refetch()} className="text-sm text-[var(--accent-secondary)]">
                             Refresh
@@ -263,7 +218,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                     <div className="grid gap-3 md:grid-cols-2">
                         {devices.length === 0 ? (
                             <div className="rounded-lg border border-dashed border-[var(--border-primary)] bg-[var(--bg-secondary)] p-4 text-sm text-[var(--text-secondary)]">
-                                No MinKNOW positions reported. Use test mode to exercise the Mk1D UI without hardware.
+                                No live Mk1D positions reported by MinKNOW.
                             </div>
                         ) : devices.map((device) => {
                             const isSelected = selectedDevice?.position === device.position;
