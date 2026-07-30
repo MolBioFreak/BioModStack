@@ -133,7 +133,7 @@ DEFAULT_COMMAND_REGISTRY: Mapping[CommandName, CommandDefinition] = MappingProxy
             route_key="recover_motion_non_homing",
             required_capability="recover_motion_non_homing",
             requires_fresh_observation=True,
-            requires_runtime_ready=True,
+            requires_runtime_ready=False,
             requires_hardware_ready=False,
             maintenance_policy="recovery_required",
         ),
