@@ -5,6 +5,10 @@ import test from 'node:test';
 
 const cockpit = readFileSync(resolve('src/components/BioXpCockpit.tsx'), 'utf8');
 const client = readFileSync(resolve('src/lib/bioxpClient.ts'), 'utf8');
+const payloadType = client.slice(
+    client.indexOf('export type BioXpCommandPayload'),
+    client.indexOf('export interface BioXpProfileView'),
+);
 
 test('BioXP cockpit is a compact OEM operator surface', () => {
     for (const marker of [
@@ -55,4 +59,7 @@ test('compact cockpit can reconnect and sends terse typed commands', () => {
 
     assert.doesNotMatch(client, /operator_ack:\s*'RECOVER_MOTION'/);
     assert.doesNotMatch(client, /reason:\s*string/);
+    assert.doesNotMatch(payloadType, /Record<string, unknown>/);
+    assert.match(payloadType, /command:\s*'run_axis_diagnostic'[\s\S]*axis:\s*'x'\s*\|\s*'y'\s*\|\s*'z'\s*\|\s*'g'\s*\|\s*'door'/);
+    assert.match(payloadType, /command:\s*'stop_axis_diagnostic'[\s\S]*axis:\s*'x'\s*\|\s*'y'\s*\|\s*'z'\s*\|\s*'g'\s*\|\s*'door'/);
 });

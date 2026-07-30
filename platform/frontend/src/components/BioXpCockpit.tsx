@@ -11,7 +11,7 @@ import {
     useDisconnectBioXp,
 } from '../lib/bioxpClient';
 import { BioXpCameraPanel } from './BioXpCameraPanel';
-import { deriveCockpitMutationState } from './bioxpCockpitState';
+import { currentStatusData, deriveCockpitMutationState } from './bioxpCockpitState';
 
 type Axis = 'x' | 'y' | 'z' | 'g' | 'door';
 type Operation =
@@ -93,7 +93,7 @@ export function BioXpCockpit() {
     const stopCommand = useBioXpCommand();
     const emergencyStop = useBioXpEmergencyStop();
 
-    const status = statusQuery.data;
+    const status = currentStatusData(statusQuery);
     const connection = status?.connection;
     const active = connection?.active === true;
     const configured = connection?.configured === true;

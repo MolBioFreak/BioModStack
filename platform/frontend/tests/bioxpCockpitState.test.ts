@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { deriveCockpitMutationState, type MutationSnapshot } from '../src/components/bioxpCockpitState';
+import {
+    currentStatusData,
+    deriveCockpitMutationState,
+    type MutationSnapshot,
+} from '../src/components/bioxpCockpitState';
 
 interface Result {
     detail: string;
@@ -14,6 +18,15 @@ const mutation = (overrides: Partial<MutationSnapshot<Result>> = {}): MutationSn
     isPending: false,
     submittedAt: 0,
     ...overrides,
+});
+
+test('failed status refetch discards retained active command data', () => {
+    const retained = {
+        connection: { active: true },
+        available_commands: ['run_axis_diagnostic'],
+    };
+    assert.equal(currentStatusData({ data: retained, isError: true }), undefined);
+    assert.equal(currentStatusData({ data: retained, isError: false }), retained);
 });
 
 test('newer command results replace retained stop receipts', () => {

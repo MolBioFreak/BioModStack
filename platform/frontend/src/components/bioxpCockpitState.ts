@@ -12,6 +12,16 @@ export interface CockpitMutationState<T> {
     stopBlocked: boolean;
 }
 
+export function currentStatusData<T>({
+    data,
+    isError,
+}: {
+    data: T | undefined;
+    isError: boolean;
+}): T | undefined {
+    return isError ? undefined : data;
+}
+
 export function deriveCockpitMutationState<T>({
     execute,
     stop,

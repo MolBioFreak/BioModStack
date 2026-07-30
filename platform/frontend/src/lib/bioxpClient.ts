@@ -153,11 +153,26 @@ export type BioXpCommandPayload =
         expected_generation: number;
         idempotency_key: string;
     }
-    | ({
-        command: Exclude<BioXpActiveCommandName, 'recover_motion_non_homing'>;
+    | {
+        command: 'run_axis_diagnostic';
         expected_generation: number;
         idempotency_key: string;
-    } & Record<string, unknown>);
+        axis: 'x' | 'y' | 'z' | 'g' | 'door';
+        operation:
+            | 'move-negative'
+            | 'move-positive'
+            | 'home'
+            | 'commission-home'
+            | 'close'
+            | 'open'
+            | 'open-wide';
+    }
+    | {
+        command: 'stop_axis_diagnostic';
+        expected_generation: number;
+        idempotency_key: string;
+        axis: 'x' | 'y' | 'z' | 'g' | 'door';
+    };
 
 export interface BioXpProfileView {
     configured: boolean;

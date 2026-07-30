@@ -22,11 +22,9 @@ test('BioXP frontend route is always declared and redirects fail-closed until th
     assert.doesNotMatch(appSource, /bmsFeatures\.bioxp\s*&&\s*\(\s*<Route path="\/bioxp"/);
 });
 
-test('topbar BioXP controls render only when enabled and dev tools are visible', () => {
+test('BioXP exposes only its feature-gated navigation route, not a duplicate topbar menu', () => {
     const utilityBlock = sourceBetween(layoutSource, 'function TopbarUtilityControls', 'function MobileTopbarTools');
-    assert.match(utilityBlock, /useBmsFeatureState/);
-    assert.match(utilityBlock, /isBmsFeatureVisible/);
-    assert.match(utilityBlock, /showBioXpDevFeature && <BioXpInterlinkMenu \/>/);
+    assert.doesNotMatch(utilityBlock, /BioXpInterlinkMenu|BioXP|bioxp/);
 
     const navBlock = sourceBetween(layoutSource, 'to="/ngs"', '</DragScrollRail>');
     assert.match(navBlock, /showBioXpDevFeature\s*&&\s*\(/);
