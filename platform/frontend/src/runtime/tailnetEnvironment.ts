@@ -11,7 +11,7 @@ type FetchLike = typeof fetch;
 
 const STATUS_ENDPOINT = '/api/tailnet-environment/status';
 const LOCAL_STATS_ENTRY = 'http://127.0.0.1:18180/stats/';
-const TAILNET_STATS_ENTRY = '/stats/embed/?ui=5eff945';
+const TAILNET_STATS_ENTRY = '/stats/embed/?ui=66882da';
 
 export async function readTailnetEnvironmentStatus(
   fetchImpl: FetchLike = fetch,
