@@ -2,55 +2,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import test from 'node:test';
-
-const cockpit = readFileSync(resolve('src/components/BioXpCockpit.tsx'), 'utf8');
-const client = readFileSync(resolve('src/lib/bioxpClient.ts'), 'utf8');
-const interlinkStatus = readFileSync(resolve('src/components/bioxpInterlinkStatus.ts'), 'utf8');
-
-test('BioXP page is status-first and command controls are server-driven', () => {
-    for (const marker of ['Connection Status', 'Profile', 'Offline Protocol Validation', 'Local Jobs', 'COMMISSIONING_COMMANDS.map']) {
-        assert.match(cockpit, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-    }
-    assert.match(`${cockpit}\n${interlinkStatus}`, /No normal OEM commands are available/);
-    assert.match(`${cockpit}\n${interlinkStatus}`, /commands are temporarily locked/);
-    assert.match(cockpit, /motion requires fresh ready evidence and supervised commissioning/);
-    assert.match(cockpit, /restored automatically after API restart/);
-    assert.match(interlinkStatus, /Automatic inline evidence refresh is pending or retrying/);
-    assert.match(cockpit, /connection\?\.active/);
-    assert.match(cockpit, /Saved target is not connected; lifecycle evidence is unavailable/);
-    assert.match(cockpit, /No saved target is configured; lifecycle evidence is unavailable/);
-    assert.doesNotMatch(cockpit, /motion and retired OEM controls remain unavailable/);
-    assert.doesNotMatch(`${cockpit}\n${interlinkStatus}`, /collect an explicit snapshot before hardware-dependent writes|never restored automatically|SAVED \/ DISCONNECTED is expected after an API restart/);
+const source = readFileSync(resolve('src/components/BioXpCockpit.tsx'), 'utf8');
+test('operator surface is compact and server-command driven', () => {
+  for (const label of ['BioXP 3200', 'Connection', 'Initialize Controllers', 'Manual Controls', 'BioXpCameraPanel', 'Emergency Stop']) assert.match(source, new RegExp(label));
+  assert.match(source, /available_commands/);
 });
-
-test('canonical compact page keeps only the supported snapshot commissioning control', () => {
-    assert.match(cockpit, /Collect Hardware Snapshot/);
-    for (const retired of [
-        'Activate USB for BioXP Service',
-        'Initialize BioXP OEM Environment',
-        'activate_usb_for_service',
-        'initialize_oem_environment',
-        'run_oem_motor_stage',
-        'record_oem_motor_stage_observation',
-        'INITIALIZE',
-    ]) {
-        assert.doesNotMatch(cockpit, new RegExp(retired));
-    }
-});
-
-test('retired hardware and host controls are absent', () => {
-    const combined = `${cockpit}\n${client}`;
-    for (const marker of [
-        'Manual Movement', 'Commissioning Motion', 'AxisControls', 'Aspirate', 'Dispense',
-        'Generic Gripper', 'USB Capture', 'Robot logs', 'Restart runtime', 'Reboot host',
-        'HomeXY', 'InitializeMotion', 'Clear Head Lock', 'CameraHoldJog', 'shell', 'SSH',
-    ]) {
-        assert.doesNotMatch(combined, new RegExp(marker, 'i'));
-    }
-    for (const approvedCapability of ['Search and set Z reference', 'OEM clear + home', 'Close gripper', 'Open gripper']) {
-        assert.match(cockpit, new RegExp(approvedCapability.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-    }
-    for (const retiredStage of ['M01 · Z reference', 'M02 · Gripper current 31', 'M03 · Gripper clear +10000', 'M04 · Gripper home']) {
-        assert.doesNotMatch(cockpit, new RegExp(retiredStage.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-    }
+test('operator surface excludes rejected planning and evidence UI', () => {
+  for (const label of ['runtime_ready', 'hardware_ready', 'Maintenance motion state', 'Full OEM Lifecycle', 'Offline Protocol', 'Local Jobs', 'Profile', 'evidence_lock', 'mutationAccessSetting']) assert.doesNotMatch(source, new RegExp(label));
 });

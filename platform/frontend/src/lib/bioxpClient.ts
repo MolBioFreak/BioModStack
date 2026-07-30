@@ -152,8 +152,6 @@ export type BioXpCommandPayload =
         command: 'recover_motion_non_homing';
         expected_generation: number;
         idempotency_key: string;
-        operator_ack: 'RECOVER_MOTION';
-        reason: string;
     }
     | ({
         command: Exclude<BioXpActiveCommandName, 'recover_motion_non_homing'>;

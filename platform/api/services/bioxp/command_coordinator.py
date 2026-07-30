@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, Mapping, Protocol, cast
 from uuid import uuid4
 
-from .command_models import CommandRequest
+from .command_models import CommandRequest, StopAxisDiagnosticCommand
 from .command_policy import CommandAdmissionContext, evaluate_command
 from .command_registry import CommandDefinition, CommandName
 from .errors import RobotResponseError
@@ -105,7 +105,7 @@ class CommandCoordinator:
 
     async def _execute_interrupt(
         self,
-        request: CommandRequest,
+        request: StopAxisDiagnosticCommand,
         *,
         mutations_enabled: bool,
     ) -> CommandRecord:
@@ -149,7 +149,11 @@ class CommandCoordinator:
         started_at = _utcnow()
         command_id = str(uuid4())
         try:
-            payload = request.model_dump(mode="json", exclude={"command", "expected_generation", "idempotency_key"})
+            payload = {
+                "axis": request.axis,
+                "operator_ack": "STOP_AXIS",
+                "reason": f"BMS operator requested {request.axis} stop",
+            }
             try:
                 response = await client.request(definition.route_key, json_data=payload or None)
                 handler_response = dict(response) if isinstance(response, Mapping) else {"response": response}
@@ -275,8 +279,15 @@ class CommandCoordinator:
             elif request.command == "recover_motion_non_homing":
                 payload = {
                     "run_homing": False,
-                    "operator_ack": request.operator_ack,
-                    "operator_reason": request.reason,
+                    "operator_ack": "RECOVER_MOTION",
+                    "operator_reason": "BMS operator requested controller initialization",
+                }
+            elif request.command == "run_axis_diagnostic":
+                payload = {
+                    "axis": request.axis,
+                    "operation": request.operation,
+                    "operator_ack": "RUN_AXIS_DIAGNOSTIC",
+                    "reason": f"BMS operator requested {request.axis} {request.operation}",
                 }
             try:
                 response = await client.request(definition.route_key, json_data=payload or None)

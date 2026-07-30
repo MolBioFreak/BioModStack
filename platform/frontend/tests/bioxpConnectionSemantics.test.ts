@@ -4,55 +4,24 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 
 const cockpit = readFileSync(resolve('src/components/BioXpCockpit.tsx'), 'utf8');
-const panel = readFileSync(resolve('src/components/BioXpInterlinkControlPanel.tsx'), 'utf8');
 const client = readFileSync(resolve('src/lib/bioxpClient.ts'), 'utf8');
-const status = readFileSync(resolve('src/components/bioxpInterlinkStatus.ts'), 'utf8');
 
-test('connection UI distinguishes configuration, activation, transport, runtime and hardware truth', () => {
-    const combined = `${cockpit}\n${panel}`;
-    for (const marker of ['configured', 'active', 'reachable', 'runtime_ready', 'hardware_ready', 'generation']) {
-        assert.match(combined, new RegExp(marker));
-    }
-    assert.doesNotMatch(combined, /SAVED \/ DISCONNECTED/);
-    assert.match(cockpit, /Saved target is not connected; lifecycle evidence is unavailable/);
-    assert.match(cockpit, /No saved target is configured; lifecycle evidence is unavailable/);
-    assert.match(combined, /hardware state/i);
+test('connection state is connected, connection error, or disconnected without a synthetic unknown state', () => {
+    assert.match(cockpit, /connection\?\.active === true/);
+    assert.match(cockpit, /connection\?\.reachable === false \? 'Connection error' : 'Connected'/);
+    assert.match(cockpit, /: 'Disconnected'/);
+    assert.doesNotMatch(cockpit, /UNKNOWN|STALE|runtime_ready|hardware_ready/);
 });
 
-test('status surfaces mask the target and do not render a raw saved URL', () => {
-    assert.match(cockpit, /target_url/);
-    assert.doesNotMatch(cockpit, /robot_api_url/);
-    assert.doesNotMatch(panel, /recommended_url|robot_ssh_host|connection_mode/);
+test('saved connection is explicitly reconnectable and disconnectable', () => {
+    assert.match(client, /\/api\/bioxp\/connection\/connect/);
+    assert.match(client, /\/api\/bioxp\/connection\/disconnect/);
+    assert.match(cockpit, /active \? 'Reconnect' : 'Connect'/);
+    assert.match(cockpit, /onClick=\{\(\) => disconnect\.mutate\(undefined\)\}/);
 });
 
-test('failed refreshes and aged cached evidence fail closed in both operator surfaces', () => {
-    for (const source of [cockpit, panel]) {
-        assert.match(source, /statusQuery\.isError/);
-        assert.match(source, /setInterval/);
-    }
-    assert.match(client, /freshness_budget_seconds/);
-    assert.match(client, /retry: false/);
-    assert.match(status, /observedMs \+ budgetMs/);
-    assert.match(cockpit, /isBioXpCommandAvailable\(status\?\.available_commands, command, derived\?\.label\)/);
-    assert.match(status, /return serverAdmitted/);
-    assert.doesNotMatch(status, /displayState === '(?:HARDWARE NOT READY|STALE)'/);
-    assert.match(cockpit, /disabled=\{!available \|\| executeCommand\.isPending\}/);
-    assert.match(cockpit, /cached readiness and controls are suppressed/i);
-});
-
-test('malformed profile and backend refusal details are operator-visible', () => {
-    assert.match(panel, /Invalid saved profile/);
-    assert.match(panel, /profileQuery\.data\.detail/);
-    assert.match(client, /response\?\.data\?\.detail/);
-});
-
-test('all global BioXP write controls fail closed on missing admission metadata', () => {
-    assert.match(panel, /statusQuery\.isError\s*\n\s*\? false\s*\n\s*: statusQuery\.data\?\.connection_access\?\.enabled === true/);
-    assert.match(panel, /statusQuery\.isError\s*\n\s*\? false\s*\n\s*: statusQuery\.data\?\.mutation_access\?\.enabled === true/);
-    assert.match(panel, /disabled=\{!mutationAccessEnabled \|\| pending \|\| !apiUrl\.trim\(\)\}/);
-    assert.match(panel, /disabled=\{!mutationAccessEnabled \|\| pending \|\| !connection\?\.configured\}/);
-    assert.match(panel, /disabled=\{!connectionAccessEnabled \|\| pending \|\| !connection\?\.configured \|\| connection\?\.active\}/);
-    assert.equal((panel.match(/disabled=\{!connectionAccessEnabled \|\| pending \|\| !connection\?\.active\}/g) ?? []).length, 2);
-    assert.match(cockpit, /disabled=\{!mutationAccessEnabled \|\| submitProtocol\.isPending\}/);
-    assert.match(cockpit, /disabled=\{!mutationAccessEnabled \|\| emergencyStop\.isPending\}/);
+test('operator errors stay visible without exposing configuration scaffolding', () => {
+    assert.match(cockpit, /connection\?\.last_error/);
+    assert.match(cockpit, /bioXpErrorText\(error\)/);
+    assert.doesNotMatch(cockpit, /server_setting|mutationAccessSetting|target_url|Profile/);
 });

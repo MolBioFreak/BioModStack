@@ -113,7 +113,7 @@ def test_hardware_snapshot_requires_service_runtime_ownership() -> None:
     assert evaluate(request, definition, owned).allowed is True
 
 
-def test_motion_commands_fail_closed_on_missing_or_blocked_maintenance_state() -> None:
+def test_finite_motion_relay_does_not_apply_bms_maintenance_state_policy() -> None:
     parse, Context, evaluate, registry = _load()
     request = parse({
         "command": "run_axis_diagnostic",
@@ -121,8 +121,6 @@ def test_motion_commands_fail_closed_on_missing_or_blocked_maintenance_state() -
         "idempotency_key": "axis-motion-maintenance-7",
         "axis": "x",
         "operation": "move-positive",
-        "operator_ack": "RUN_AXIS_DIAGNOSTIC",
-        "reason": "supervised maintenance admission test",
     })
     base = _allow_context(Context, capabilities=frozenset({"run_axis_diagnostic"}))
 
@@ -138,8 +136,7 @@ def test_motion_commands_fail_closed_on_missing_or_blocked_maintenance_state() -
         {"motion_blocked": True, "recovery_required": True, "block_reason": "USB owner changed"},
     ):
         decision = evaluate(request, registry[request.command], replace(base, maintenance_state=state))
-        assert decision.allowed is False
-        assert "maintenance" in " ".join(decision.reasons).lower()
+        assert decision.allowed is True
 
     assert evaluate(request, registry[request.command], base).allowed is True
 
@@ -150,8 +147,6 @@ def test_non_homing_recovery_does_not_require_preexisting_runtime_or_hardware_re
         "command": "recover_motion_non_homing",
         "expected_generation": 7,
         "idempotency_key": "recover-motion-unready-7",
-        "operator_ack": "RECOVER_MOTION",
-        "reason": "Recover runtime and hardware readiness after service restart",
     })
     definition = registry[request.command]
     base = _allow_context(
@@ -175,14 +170,12 @@ def test_non_homing_recovery_does_not_require_preexisting_runtime_or_hardware_re
             ).allowed is True
 
 
-def test_non_homing_recovery_requires_exact_maintenance_recovery_state_and_normal_gates() -> None:
+def test_non_homing_initialization_requires_active_exact_capability_not_bms_derived_state() -> None:
     parse, Context, evaluate, registry = _load()
     request = parse({
         "command": "recover_motion_non_homing",
         "expected_generation": 7,
         "idempotency_key": "recover-motion-7",
-        "operator_ack": "RECOVER_MOTION",
-        "reason": "Recover after supervised USB maintenance",
     })
     definition = registry[request.command]
     admitted = _allow_context(
@@ -201,6 +194,11 @@ def test_non_homing_recovery_requires_exact_maintenance_recovery_state_and_norma
         {"maintenance_state": {"motion_blocked": False, "recovery_required": True}},
         {"maintenance_state": {"motion_blocked": True, "recovery_required": False}},
         {"observation_fresh": False},
-        {"capabilities": frozenset()},
     ):
-        assert evaluate(request, definition, replace(admitted, **changes)).allowed is False
+        assert evaluate(request, definition, replace(admitted, **changes)).allowed is True
+
+    assert evaluate(
+        request,
+        definition,
+        replace(admitted, capabilities=frozenset()),
+    ).allowed is False

@@ -113,10 +113,10 @@ DEFAULT_COMMAND_REGISTRY: Mapping[CommandName, CommandDefinition] = MappingProxy
             enabled=True,
             route_key="run_axis_diagnostic",
             required_capability="run_axis_diagnostic",
-            requires_fresh_observation=True,
-            requires_runtime_ready=True,
-            requires_hardware_ready=True,
-            maintenance_policy="motion_unblocked",
+            requires_fresh_observation=False,
+            requires_runtime_ready=False,
+            requires_hardware_ready=False,
+            maintenance_policy="independent",
         ),
         "stop_axis_diagnostic": CommandDefinition(
             name="stop_axis_diagnostic",
@@ -124,7 +124,7 @@ DEFAULT_COMMAND_REGISTRY: Mapping[CommandName, CommandDefinition] = MappingProxy
             route_key="stop_axis_diagnostic",
             required_capability="stop_axis_diagnostic",
             requires_fresh_observation=False,
-            requires_runtime_ready=True,
+            requires_runtime_ready=False,
             requires_hardware_ready=False,
         ),
         "recover_motion_non_homing": CommandDefinition(
@@ -132,10 +132,10 @@ DEFAULT_COMMAND_REGISTRY: Mapping[CommandName, CommandDefinition] = MappingProxy
             enabled=True,
             route_key="recover_motion_non_homing",
             required_capability="recover_motion_non_homing",
-            requires_fresh_observation=True,
+            requires_fresh_observation=False,
             requires_runtime_ready=False,
             requires_hardware_ready=False,
-            maintenance_policy="recovery_required",
+            maintenance_policy="independent",
         ),
         **{
         name: CommandDefinition(

@@ -388,8 +388,6 @@ def test_axis_diagnostic_commands_are_finite_typed_and_m02_is_retired() -> None:
         "idempotency_key": "axis-x-positive-11",
         "axis": "x",
         "operation": "move-positive",
-        "operator_ack": "RUN_AXIS_DIAGNOSTIC",
-        "reason": "supervised X relative-position test",
     })
     assert run.axis == "x" and run.operation == "move-positive"
 
@@ -398,8 +396,6 @@ def test_axis_diagnostic_commands_are_finite_typed_and_m02_is_retired() -> None:
         "expected_generation": 11,
         "idempotency_key": "axis-x-stop-11",
         "axis": "x",
-        "operator_ack": "STOP_AXIS",
-        "reason": "operator stop",
     })
     assert stop.axis == "x"
 
@@ -420,7 +416,7 @@ def test_axis_diagnostic_commands_are_finite_typed_and_m02_is_retired() -> None:
         })
 
     assert registry["collect_axis_diagnostics"].requires_hardware_ready is False
-    assert registry["run_axis_diagnostic"].requires_hardware_ready is True
+    assert registry["run_axis_diagnostic"].requires_hardware_ready is False
     assert registry["stop_axis_diagnostic"].requires_hardware_ready is False
     assert registry["stop_axis_diagnostic"].requires_fresh_observation is False
 
@@ -488,8 +484,6 @@ def test_axis_diagnostic_execution_holds_generation_lease_and_forwards_only_type
         "idempotency_key": "axis-x-positive-13",
         "axis": "x",
         "operation": "move-positive",
-        "operator_ack": "RUN_AXIS_DIAGNOSTIC",
-        "reason": "supervised X relative-position test",
     })
 
     record = asyncio.run(CommandCoordinator(Connection(), DEFAULT_COMMAND_REGISTRY).execute(request, mutations_enabled=True))
@@ -508,7 +502,7 @@ def test_axis_diagnostic_execution_holds_generation_lease_and_forwards_only_type
             "axis": "x",
             "operation": "move-positive",
             "operator_ack": "RUN_AXIS_DIAGNOSTIC",
-            "reason": "supervised X relative-position test",
+            "reason": "BMS operator requested x move-positive",
         }),
         ("observe", "x", "move-positive"),
         ("request", "collect_hardware_snapshot", None),
@@ -571,8 +565,6 @@ def test_acknowledged_command_http_refresh_is_status_only() -> None:
         "idempotency_key": "axis-status-only-13",
         "axis": "x",
         "operation": "home",
-        "operator_ack": "RUN_AXIS_DIAGNOSTIC",
-        "reason": "verify status-only post-command publication",
     }
 
     result = asyncio.run(execute_command(payload, runtime))
@@ -641,16 +633,12 @@ def test_axis_stop_preempts_inflight_diagnostic_without_waiting_for_workflow_lea
             "idempotency_key": "axis-x-run-preemption-17",
             "axis": "x",
             "operation": "move-positive",
-            "operator_ack": "RUN_AXIS_DIAGNOSTIC",
-            "reason": "supervised preemption contract",
         })
         stop_request = parse_command_request({
             "command": "stop_axis_diagnostic",
             "expected_generation": 17,
             "idempotency_key": "axis-x-stop-preemption-17",
             "axis": "x",
-            "operator_ack": "STOP_AXIS",
-            "reason": "operator requested immediate stop",
         })
 
         run_task = asyncio.create_task(coordinator.execute(run_request, mutations_enabled=True))
@@ -704,8 +692,6 @@ def test_axis_stop_http_acknowledgement_never_waits_for_normal_probe_lane() -> N
         "expected_generation": 13,
         "idempotency_key": "axis-stop-http-13",
         "axis": "x",
-        "operator_ack": "STOP_AXIS",
-        "reason": "Operator requested immediate X stop",
     }
 
     result = asyncio.run(asyncio.wait_for(execute_command(payload, runtime), timeout=0.1))
@@ -724,13 +710,11 @@ def test_non_homing_recovery_is_typed_and_maps_to_exact_robot_payload() -> None:
         "command": "recover_motion_non_homing",
         "expected_generation": 19,
         "idempotency_key": "recover-motion-19",
-        "operator_ack": "RECOVER_MOTION",
-        "reason": "Recover motion after supervised USB owner maintenance",
     }
     request = parse_command_request(valid_payload)
     for invalid in (
-        {**valid_payload, "operator_ack": "RECOVER"},
-        {**valid_payload, "reason": "   "},
+        {**valid_payload, "operator_ack": "RECOVER_MOTION"},
+        {**valid_payload, "reason": "unnecessary BMS prompt"},
     ):
         with pytest.raises(ValidationError):
             parse_command_request(invalid)
@@ -787,7 +771,7 @@ def test_non_homing_recovery_is_typed_and_maps_to_exact_robot_payload() -> None:
         {
             "run_homing": False,
             "operator_ack": "RECOVER_MOTION",
-            "operator_reason": "Recover motion after supervised USB owner maintenance",
+            "operator_reason": "BMS operator requested controller initialization",
         },
     )]
     assert DEFAULT_COMMAND_REGISTRY["recover_motion_non_homing"].required_capability == "recover_motion_non_homing"

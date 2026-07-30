@@ -147,7 +147,7 @@ def test_malformed_persisted_profile_is_sanitized_without_auto_connect(
     assert "malformed" in connect.json()["detail"].lower()
 
 
-def test_status_motion_admission_matches_maintenance_state_and_quotes_block_reason(monkeypatch) -> None:
+def test_status_motion_admission_follows_robot_capabilities_not_bms_maintenance_projection(monkeypatch) -> None:
     from datetime import datetime, timezone
     from types import SimpleNamespace
 
@@ -193,9 +193,7 @@ def test_status_motion_admission_matches_maintenance_state_and_quotes_block_reas
     status = asyncio.run(get_status(runtime))
 
     assert "recover_motion_non_homing" in status["available_commands"]
-    assert "run_axis_diagnostic" not in status["available_commands"]
+    assert "run_axis_diagnostic" in status["available_commands"]
     assert "run_oem_motor_stage" not in status["available_commands"]
-    assert status["unavailable_commands"]["run_axis_diagnostic"] == (
-        'Maintenance motion is blocked: "USB owner changed"'
-    )
+    assert "run_axis_diagnostic" not in status["unavailable_commands"]
     assert "stop_axis_diagnostic" in status["available_commands"]
