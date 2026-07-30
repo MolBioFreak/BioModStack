@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -143,7 +144,12 @@ def build_preparation_bundle(
         if not report_path.is_file():
             raise PreparationError("preparation worker produced no report")
         report = json.loads(report_path.read_text(encoding="utf-8"))
-        for relative in REQUIRED_OUTPUTS:
+        restraint_outputs = tuple(
+            path.name for path in sorted(temporary.glob("posre_*.itp"))
+            if re.fullmatch(r"posre_[1-9][0-9]*\.itp", path.name)
+        )
+        output_names = (*REQUIRED_OUTPUTS, *restraint_outputs)
+        for relative in output_names:
             path = temporary / relative
             if not path.is_file() or path.is_symlink():
                 raise PreparationError(f"required preparation artifact is absent: {relative}")
@@ -154,7 +160,7 @@ def build_preparation_bundle(
             "source": {"sha256": source_digest, "bytes": source_structure.stat().st_size},
             "runtime": {"lock_sha256": runtime_digest, "image_sha256": runtime_image_digest},
             "preparation": report,
-            "files": [_artifact(temporary, name) for name in REQUIRED_OUTPUTS],
+            "files": [_artifact(temporary, name) for name in output_names],
         }
         manifest["bundle_sha256"] = _canonical_digest(manifest)
         (temporary / "preparation_manifest.json").write_text(
@@ -202,7 +208,17 @@ def verify_preparation_bundle(
     if expected_profile_sha256 is not None and profile.get("sha256") != expected_profile_sha256:
         raise PreparationError("preparation profile digest mismatch")
     files = manifest.get("files")
-    if not isinstance(files, list) or {record.get("path") for record in files if isinstance(record, dict)} != set(REQUIRED_OUTPUTS):
+    file_names = {record.get("path") for record in files if isinstance(record, dict)} if isinstance(files, list) else set()
+    if (
+        not isinstance(files, list)
+        or not set(REQUIRED_OUTPUTS).issubset(file_names)
+        or any(
+            name not in REQUIRED_OUTPUTS and not (
+                isinstance(name, str) and re.fullmatch(r"posre_[1-9][0-9]*\.itp", name)
+            )
+            for name in file_names
+        )
+    ):
         raise PreparationError("preparation bundle file inventory is incomplete")
     for record in files:
         name = record.get("path") if isinstance(record, dict) else None
