@@ -7,15 +7,15 @@ const appSource = readFileSync(resolve('src/App.tsx'), 'utf8');
 const layoutSource = readFileSync(resolve('src/components/Layout.tsx'), 'utf8');
 const launcherSource = readFileSync(resolve('src/components/StatsToolkitLauncher.tsx'), 'utf8');
 
-test('core embeds the isolated Stats Toolkit inside the BioModStack tab', () => {
+test('core routes /stats directly into the isolated interactive application', () => {
   assert.match(appSource, /path="\/stats" element=\{<StatsToolkitLauncher \/>\}/);
   assert.match(layoutSource, /to="\/stats"/);
   assert.match(layoutSource, />\s*Stats Toolkit\s*<\/Link>/);
   assert.match(launcherSource, /fetch\('\/api\/system\/stats-toolkit'/);
-  assert.match(launcherSource, /<iframe/);
-  assert.match(launcherSource, /import \{ resolveStatsToolkitEntryUrl \} from '\.\.\/runtime\/tailnetEnvironment'/);
-  assert.match(launcherSource, /src=\{resolveStatsToolkitEntryUrl\(status\.entry_url, window\.location\.hostname\)\}/);
-  assert.match(launcherSource, /BioModStack Stats Toolkit workspace/);
+  assert.match(launcherSource, /import \{ useEffect \} from 'react'/);
+  assert.match(launcherSource, /resolveStatsToolkitEntryUrl\(status\.entry_url, window\.location\.hostname\)/);
+  assert.match(launcherSource, /window\.location\.replace\(entryUrl\)/);
+  assert.match(launcherSource, /Opening BioModStack Stats Toolkit/);
+  assert.doesNotMatch(launcherSource, /<iframe/);
   assert.doesNotMatch(launcherSource, /Open Stats Toolkit/);
-  assert.doesNotMatch(launcherSource, /href=\{status\?\.entry_url/);
 });
