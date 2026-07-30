@@ -1,5 +1,4 @@
 import { useQuery } from '@tanstack/react-query';
-import { useEffect } from 'react';
 import { resolveStatsToolkitEntryUrl } from '../runtime/tailnetEnvironment';
 
 interface StatsToolkitStatus {
@@ -20,18 +19,6 @@ async function fetchStatsToolkitStatus(): Promise<StatsToolkitStatus> {
     throw new Error(`status probe failed (${response.status})`);
   }
   return response.json() as Promise<StatsToolkitStatus>;
-}
-
-function StatsToolkitRedirect({ entryUrl }: { entryUrl: string }) {
-  useEffect(() => {
-    window.location.replace(entryUrl);
-  }, [entryUrl]);
-
-  return (
-    <div className="flex min-h-[24rem] items-center justify-center text-sm text-[var(--text-secondary)]">
-      Opening BioModStack Stats Toolkit…
-    </div>
-  );
 }
 
 export function StatsToolkitLauncher() {
@@ -62,6 +49,13 @@ export function StatsToolkitLauncher() {
     );
   }
 
-  const entryUrl = resolveStatsToolkitEntryUrl(status.entry_url, window.location.hostname);
-  return <StatsToolkitRedirect entryUrl={entryUrl} />;
+  return (
+    <div className="h-[calc(100vh-3.5rem)] min-h-[42rem] w-full overflow-hidden bg-[var(--bg-primary)]">
+      <iframe
+        className="h-full w-full border-0"
+        src={resolveStatsToolkitEntryUrl(status.entry_url, window.location.hostname)}
+        title="BioModStack Stats Toolkit workspace"
+      />
+    </div>
+  );
 }
