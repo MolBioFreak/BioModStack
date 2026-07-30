@@ -12,7 +12,7 @@ test('Tailnet detection and Stats Toolkit entry stay same-origin on the stable h
   assert.equal(isTailnetHostname('127.0.0.1'), false);
   assert.equal(
     resolveStatsToolkitEntryUrl('http://127.0.0.1:18180/stats/', 'compute-node.taileb3a90.ts.net'),
-    '/stats/embed/',
+    '/stats/embed/?ui=f978753',
   );
   assert.equal(
     resolveStatsToolkitEntryUrl('http://127.0.0.1:18180/stats/', '127.0.0.1'),

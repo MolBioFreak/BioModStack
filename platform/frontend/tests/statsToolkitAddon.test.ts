@@ -14,6 +14,7 @@ test('core routes /stats directly into the isolated interactive application', ()
   assert.match(launcherSource, /fetch\('\/api\/system\/stats-toolkit'/);
   assert.match(launcherSource, /import \{ useEffect \} from 'react'/);
   assert.match(launcherSource, /resolveStatsToolkitEntryUrl\(status\.entry_url, window\.location\.hostname\)/);
+  assert.match(readFileSync(resolve('src/runtime/tailnetEnvironment.ts'), 'utf8'), /\/stats\/embed\/\?ui=f978753/);
   assert.match(launcherSource, /window\.location\.replace\(entryUrl\)/);
   assert.match(launcherSource, /Opening BioModStack Stats Toolkit/);
   assert.doesNotMatch(launcherSource, /<iframe/);
