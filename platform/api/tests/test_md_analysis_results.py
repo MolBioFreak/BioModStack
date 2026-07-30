@@ -469,8 +469,8 @@ def test_all_live_md_terminal_writers_route_through_the_md_completion_barrier() 
     nextflow = (REPO_ROOT / "platform/api/services/nextflow.py").read_text()
     orchestrator = (REPO_ROOT / "platform/api/services/gpu_orchestrator.py").read_text()
     completion = (REPO_ROOT / "platform/api/services/md/completion.py").read_text()
-    assert "validate_and_finalize_md_job(job)" in nextflow
-    assert "validate_and_finalize_md_job(job)" in orchestrator
+    assert "validate_and_finalize_md_job(job, session)" in nextflow
+    assert "validate_and_finalize_md_job(job, session)" in orchestrator
     assert "def validate_and_finalize_md_job" in completion
 
 

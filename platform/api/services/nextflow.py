@@ -2535,7 +2535,7 @@ async def launch_nextflow_job(
                             if is_md_parent:
                                 from services.md.completion import validate_and_finalize_md_job
 
-                                validate_and_finalize_md_job(job)
+                                validate_and_finalize_md_job(job, session)
                                 logger.info("Validated the immutable MD completion generation for job %s", job_id)
                             else:
                                 from services.result_state_integrity import finalize_successful_job

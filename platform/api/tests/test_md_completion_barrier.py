@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
+
+import services.md.completion as completion_module
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -15,3 +18,23 @@ def test_md_completion_service_is_the_named_terminal_authority() -> None:
     assert "md_analysis_v1.schema.json" in results
     assert "replica_manifest_set_sha256" in results
     assert "MD_COMPLETION_CONFLICT" in results
+
+
+def test_md_terminal_authority_closes_durable_run_state_in_the_callers_transaction(monkeypatch) -> None:
+    job = SimpleNamespace(id="job-1")
+    run = SimpleNamespace(phase="finalizing", verification_status="not_run", state_version=7, controls_blocked=True)
+
+    class Session:
+        def get(self, model, identity):
+            assert identity == "job-1"
+            return run
+
+    monkeypatch.setattr(completion_module, "apply_completion_barrier", lambda candidate: {"state": "completed"})
+
+    result = completion_module.validate_and_finalize_md_job(job, Session())
+
+    assert result == {"state": "completed"}
+    assert run.phase == "completed"
+    assert run.verification_status == "verified"
+    assert run.state_version == 8
+    assert run.controls_blocked is False
