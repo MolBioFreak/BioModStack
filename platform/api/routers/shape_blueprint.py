@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import ShapeDesignGeometry, get_session
+from database import Job, ShapeDesignGeometry, ShapeDesignRequest, get_session
 from paths import get_data_root
+from routers import jobs as jobs_router
+from schemas import JobCreate
 from services.shape_geometry import MAX_OBJ_BYTES, ShapeGeometryError
+from services.shape_requests import ShapeRequestError, SubmittedShapeRequest, materialize_shape_request
 from services.shape_resources import AdmittedGeometry, admit_obj_geometry
 
 
@@ -26,6 +30,10 @@ _UNIT_TO_ANGSTROM = {
     "meter": 10_000_000_000.0,
     "inch": 254_000_000.0,
 }
+
+
+def _feature_enabled() -> bool:
+    return os.getenv("BMS_SHAPE_BLUEPRINT_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _summary(row: ShapeDesignGeometry | AdmittedGeometry) -> dict[str, object]:
@@ -103,3 +111,71 @@ async def get_geometry_preview(geometry_id: str, session: AsyncSession = Depends
     if not path.is_relative_to(root) or not path.is_file() or path.is_symlink() or path.stat().st_nlink != 1:
         raise HTTPException(status_code=409, detail="Shape preview artifact is unavailable")
     return FileResponse(path, media_type="text/plain", filename=f"{geometry_id}.obj")
+
+
+@router.post("/requests", status_code=status.HTTP_201_CREATED)
+async def submit_shape_request(
+    submitted: SubmittedShapeRequest,
+    background_tasks: BackgroundTasks,
+    session: AsyncSession = Depends(get_session),
+):
+    if not _feature_enabled():
+        raise HTTPException(status_code=404, detail="Shape Blueprint is disabled")
+    try:
+        staged = await materialize_shape_request(
+            session,
+            data_root=get_data_root(),
+            submitted=submitted,
+        )
+    except ShapeRequestError as exc:
+        if exc.code == "geometry_not_found":
+            status_code = 404
+        elif "mismatch" in exc.code or "conflict" in exc.code:
+            status_code = 409
+        else:
+            status_code = 422
+        raise HTTPException(status_code=status_code, detail={"code": exc.code, "message": str(exc)}) from exc
+
+    request_row = await session.get(ShapeDesignRequest, staged.request_id)
+    if request_row is None:
+        raise HTTPException(status_code=500, detail="Shape request staging was not persisted")
+    if request_row.job_id:
+        existing_job = await session.get(Job, request_row.job_id)
+        if existing_job is None:
+            raise HTTPException(status_code=409, detail="Shape request references a missing job")
+        return {
+            "request_id": staged.request_id,
+            "request_sha256": staged.request_sha256,
+            "job_id": existing_job.id,
+            "job_status": existing_job.status,
+            "reused": True,
+        }
+
+    job_response = await jobs_router.create_job(
+        JobCreate(
+            name=staged.name,
+            model_id=staged.model_id,
+            mode=staged.mode,
+            params=staged.launch_params,
+            pinned_gpu=None,
+            parent_job_id=None,
+            child_stage=None,
+            batch_id=None,
+            batch_name=None,
+            sequence_length=int(str(staged.launch_params["shape_target_length"])),
+        ),
+        background_tasks,
+        session,
+    )
+    request_row = await session.get(ShapeDesignRequest, staged.request_id)
+    if request_row is None:
+        raise HTTPException(status_code=500, detail="Shape request disappeared during job creation")
+    request_row.job_id = job_response.id
+    await session.commit()
+    return {
+        "request_id": staged.request_id,
+        "request_sha256": staged.request_sha256,
+        "job_id": job_response.id,
+        "job_status": str(job_response.status),
+        "reused": False,
+    }

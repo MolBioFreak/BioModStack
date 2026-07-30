@@ -34,6 +34,25 @@ modes:
       - disco_experiment
       - disco_effort
       - disco_input_json_path
+  - id: shape_blueprint
+    name: Generate Into Shape
+    description: Generate, sequence, and refold proteins against immutable canonical geometry
+    params:
+      - shape_request_path
+      - shape_geometry_manifest_path
+      - shape_vertices_path
+      - shape_faces_path
+      - shape_points_path
+      - shape_request_sha256
+      - shape_geometry_sha256
+      - shape_point_pool_sha256
+      - shape_target_length
+      - shape_num_backbones
+      - shape_sequences_per_backbone
+      - shape_seed
+      - shape_generator
+      - shape_sequence_engines
+      - shape_predictor
   - id: region_redesign
     name: Region Redesign
     description: Modify selected regions of an existing protein or complex

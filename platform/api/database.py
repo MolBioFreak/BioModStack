@@ -193,6 +193,20 @@ class ShapeDesignGeometry(Base):
     created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
 
 
+class ShapeDesignRequest(Base):
+    """Immutable Shape scientific intent linked to the existing Job lifecycle."""
+
+    __tablename__ = "shape_design_requests"
+
+    request_id = Column(String(42), primary_key=True)
+    geometry_id = Column(String(41), ForeignKey("shape_design_geometries.geometry_id"), nullable=False, index=True)
+    request_sha256 = Column(String(64), nullable=False, unique=True, index=True)
+    request_spec = Column(JSON, nullable=False)
+    stage_relative_path = Column(String(500), nullable=False)
+    job_id = Column(String(36), ForeignKey("jobs.id"), nullable=True, unique=True, index=True)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
 class MolBioNgsReceipt(Base):
     """One-time server-issued binding from an immutable MolBio revision to ONT input."""
 

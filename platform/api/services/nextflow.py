@@ -358,6 +358,7 @@ MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
     ("rfantibody_child", "antibody_backbone"): "workflows/rfantibody_backbone.nf",
     ("fampnn_child", "sequence_design"): "workflows/fampnn_child.nf",
     ("protein_modification_experimental", "de_novo_design"): "workflows/protein_cad_experimental.nf",
+    ("protein_modification_experimental", "shape_blueprint"): "workflows/shape_blueprint_design.nf",
     ("protein_modification_experimental", "region_redesign"): "workflows/protein_local_redesign.nf",
     ("molecular_dynamics", "simulate"): "workflows/experimental/molecular_dynamics/orchestrator.nf",
     ("molecular_dynamics", "replica"): "workflows/experimental/molecular_dynamics/replica.nf",
@@ -2922,6 +2923,7 @@ def build_nextflow_command(
         ('protein_local_redesign', 'local_redesign'): 'protein_local_redesign',
         ('protein_cad_experimental', 'design'): 'protein_cad_experimental',
         ('protein_modification_experimental', 'de_novo_design'): 'protein_cad_experimental',
+        ('protein_modification_experimental', 'shape_blueprint'): 'shape_blueprint',
         ('protein_modification_experimental', 'region_redesign'): 'protein_local_redesign',
 
         ('boltz_cp_experimental', 'design'): 'boltz_cp_experimental',
