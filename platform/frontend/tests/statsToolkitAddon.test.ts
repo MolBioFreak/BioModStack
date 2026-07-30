@@ -14,7 +14,7 @@ test('core keeps Stats Toolkit inside the canonical BioModStack navigation plane
   assert.match(launcherSource, /fetch\('\/api\/system\/stats-toolkit'/);
   assert.match(launcherSource, /<iframe/);
   assert.match(launcherSource, /src=\{resolveStatsToolkitEntryUrl\(status\.entry_url, window\.location\.hostname\)\}/);
-  assert.match(readFileSync(resolve('src/runtime/tailnetEnvironment.ts'), 'utf8'), /\/stats\/embed\/\?ui=7a2243d/);
+  assert.match(readFileSync(resolve('src/runtime/tailnetEnvironment.ts'), 'utf8'), /\/stats\/embed\/\?ui=5eff945/);
   assert.match(launcherSource, /BioModStack Stats Toolkit workspace/);
   assert.doesNotMatch(launcherSource, /window\.location\.replace/);
   assert.doesNotMatch(launcherSource, /Back to BioModStack/);
