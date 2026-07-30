@@ -14,7 +14,9 @@ test('BioXP cockpit is a compact OEM operator surface', () => {
     for (const marker of [
         'BioXP 3200',
         'Connection',
-        'Initialize Controllers',
+        'Controller Transport & Recovery',
+        'Claim USB Transport',
+        'Non-homing Recovery',
         'Manual Controls',
         'Camera',
         'Emergency Stop',
@@ -53,6 +55,7 @@ test('BioXP cockpit is a compact OEM operator surface', () => {
 test('compact cockpit can reconnect and sends terse typed commands', () => {
     assert.match(cockpit, /useConnectBioXp/);
     assert.match(cockpit, /useDisconnectBioXp/);
+    assert.match(cockpit, /command:\s*'activate_usb_for_service'/);
     assert.match(cockpit, /command:\s*'recover_motion_non_homing'/);
     assert.match(cockpit, /command:\s*'run_axis_diagnostic'/);
     assert.match(cockpit, /command:\s*'stop_axis_diagnostic'/);

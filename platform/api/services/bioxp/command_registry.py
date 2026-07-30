@@ -38,6 +38,7 @@ class CommandDefinition:
     repeatable: bool = False
     required_lifecycle_states: tuple[tuple[str, str], ...] = ()
     maintenance_policy: Literal["independent", "motion_unblocked", "recovery_required"] = "independent"
+    ownership_policy: Literal["independent", "unbound", "owned"] = "independent"
 
 
 _UNVERIFIED = "Disabled until the robot-online contract and OEM mapping are verified"
@@ -49,13 +50,13 @@ DEFAULT_COMMAND_REGISTRY: Mapping[CommandName, CommandDefinition] = MappingProxy
     {
         "activate_usb_for_service": CommandDefinition(
             name="activate_usb_for_service",
-            enabled=False,
-            route_key=None,
+            enabled=True,
+            route_key="activate_usb_for_service",
             required_capability=None,
             requires_runtime_ready=False,
             requires_hardware_ready=False,
-            requires_runtime_inactive=True,
-            disabled_reason=_ROBOT_CONTRACT_UNAVAILABLE,
+            requires_runtime_inactive=False,
+            ownership_policy="unbound",
         ),
         "collect_hardware_snapshot": CommandDefinition(
             name="collect_hardware_snapshot",
@@ -113,10 +114,11 @@ DEFAULT_COMMAND_REGISTRY: Mapping[CommandName, CommandDefinition] = MappingProxy
             enabled=True,
             route_key="run_axis_diagnostic",
             required_capability="run_axis_diagnostic",
-            requires_fresh_observation=False,
+            requires_fresh_observation=True,
             requires_runtime_ready=False,
             requires_hardware_ready=False,
-            maintenance_policy="independent",
+            maintenance_policy="motion_unblocked",
+            ownership_policy="owned",
         ),
         "stop_axis_diagnostic": CommandDefinition(
             name="stop_axis_diagnostic",
@@ -132,10 +134,11 @@ DEFAULT_COMMAND_REGISTRY: Mapping[CommandName, CommandDefinition] = MappingProxy
             enabled=True,
             route_key="recover_motion_non_homing",
             required_capability="recover_motion_non_homing",
-            requires_fresh_observation=False,
+            requires_fresh_observation=True,
             requires_runtime_ready=False,
             requires_hardware_ready=False,
-            maintenance_policy="independent",
+            maintenance_policy="recovery_required",
+            ownership_policy="owned",
         ),
         **{
         name: CommandDefinition(

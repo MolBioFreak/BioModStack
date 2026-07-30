@@ -129,7 +129,6 @@ def test_robot_client_routes_only_supported_compact_commissioning_contracts() ->
     client = BioXpRobotClient(target, transport=RecordingTransport())
 
     for retired in (
-        "activate_usb_for_service",
         "initialize_oem_environment",
         "run_oem_motor_stage",
         "record_oem_motor_stage_observation",

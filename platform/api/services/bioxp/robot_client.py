@@ -32,6 +32,7 @@ from .target_policy import ValidatedBioXpTarget
 
 DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
     "status": ("GET", "/status", 5.0),
+    "activate_usb_for_service": ("POST", "/reconnect", 30.0),
     "collect_hardware_snapshot": ("POST", "/hardware/snapshot/collect", 210.0),
     "oem_full_lifecycle_contract": ("GET", "/oem/runtime/movement-runs/contract", 10.0),
     "plan_oem_full_lifecycle": ("POST", "/oem/runtime/movement-runs", 30.0),

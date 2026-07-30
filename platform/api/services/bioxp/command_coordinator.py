@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import replace
@@ -40,15 +40,6 @@ class ConnectionProtocol(Protocol):
     def snapshot(self) -> BioXpSnapshot: ...
 
 
-_INLINE_HARDWARE_EVIDENCE_COMMANDS = frozenset({
-    "activate_usb_for_service",
-    "initialize_oem_environment",
-    "record_oem_motor_stage_observation",
-    "collect_axis_diagnostics",
-    "run_axis_diagnostic",
-})
-
-
 class CommandCoordinator:
     """Serializes normal commands and keeps emergency delivery independent."""
 
@@ -59,12 +50,15 @@ class CommandCoordinator:
         *,
         history_limit: int = 100,
     ) -> None:
+        if history_limit < 1:
+            raise ValueError("history_limit must be at least 1")
         self.connection = connection
         self.registry = registry
         self._normal_busy = False
+        self._history_limit = history_limit
         self._history: deque[CommandRecord] = deque(maxlen=history_limit)
         self._by_id: dict[str, CommandRecord] = {}
-        self._idempotent: dict[str, tuple[str, CommandRecord | EmergencyStopResult]] = {}
+        self._idempotent: OrderedDict[str, tuple[str, CommandRecord | EmergencyStopResult]] = OrderedDict()
         self._inflight: dict[
             str,
             tuple[str, asyncio.Future[CommandRecord | EmergencyStopResult]],
@@ -122,6 +116,7 @@ class CommandCoordinator:
             capabilities=frozenset(snapshot.capabilities),
             startup_lifecycle=snapshot.startup_lifecycle,
             maintenance_state=snapshot.maintenance_state,
+            ownership=snapshot.ownership,
         )
         decision = evaluate_command(request, definition, context)
         if not decision.allowed:
@@ -156,25 +151,28 @@ class CommandCoordinator:
             }
             try:
                 response = await client.request(definition.route_key, json_data=payload or None)
-                handler_response = dict(response) if isinstance(response, Mapping) else {"response": response}
+                handler_response = _bounded_handler_response(response)
                 acknowledged = _strict_acknowledgement(response)
                 semantic_rejected = isinstance(response, Mapping) and response.get("ok") is False
                 if semantic_rejected:
                     status = "delivery_failed"
-                    detail = f"Robot reported stop failure: {response.get('error') or response.get('detail') or 'ok=false'}"
+                    detail = _bounded_text(
+                        f"Robot reported stop failure: {response.get('error') or response.get('detail') or 'ok=false'}",
+                        limit=4_096,
+                    )
                 else:
                     status = "acknowledged" if acknowledged else "delivered_unacknowledged"
                     detail = "Robot acknowledged component stop" if acknowledged else "Component stop delivered; robot acknowledgement absent"
             except RobotResponseError as exc:
                 acknowledged = False
                 status = "delivery_failed"
-                handler_response = {"http_status": exc.status_code, "detail": exc.detail}
+                handler_response = _bounded_handler_response({"http_status": exc.status_code, "detail": exc.detail})
                 detail = f"Robot rejected component stop with HTTP {exc.status_code}"
             except Exception as exc:
                 acknowledged = False
                 status = "delivery_failed"
                 handler_response = None
-                detail = str(exc) or exc.__class__.__name__
+                detail = _bounded_text(str(exc) or exc.__class__.__name__, limit=4_096)
             record = CommandRecord(
                 command_id=command_id,
                 command=request.command,
@@ -189,7 +187,7 @@ class CommandCoordinator:
                 handler_response=handler_response,
             )
             self._remember(record)
-            self._idempotent[request.idempotency_key] = (fingerprint, record)
+            self._remember_idempotent(request.idempotency_key, fingerprint, record)
             future.set_result(record)
             return record
         except BaseException:
@@ -217,11 +215,27 @@ class CommandCoordinator:
             capabilities=frozenset(snapshot.capabilities),
             startup_lifecycle=snapshot.startup_lifecycle,
             maintenance_state=snapshot.maintenance_state,
+            ownership=snapshot.ownership,
         )
-        # A completed activation may itself change runtime readiness. Replays
-        # still require all current authorization and generation gates; only
-        # that activation-mutated predicate is suppressed before replay lookup.
-        replay_definition = replace(definition, requires_runtime_inactive=False)
+        # Activation changes the exact predicates that admitted it. Its replay
+        # may suppress only those activation-mutated gates; every other command
+        # must satisfy its current ownership and runtime policy before lookup.
+        is_activation = request.command == "activate_usb_for_service"
+        if is_activation and not _activation_replay_ownership_is_canonical(context.ownership):
+            ownership = context.ownership
+            raise CommandDeniedError((
+                "Activation replay requires canonical unbound or service-owned current ownership "
+                f"(ownership={ownership!r})",
+            ))
+        replay_definition = (
+            replace(
+                definition,
+                requires_runtime_inactive=False,
+                ownership_policy="independent",
+            )
+            if request.command == "activate_usb_for_service"
+            else definition
+        )
         replay_decision = evaluate_command(request, replay_definition, context)
         if not replay_decision.allowed:
             raise CommandDeniedError(replay_decision.reasons)
@@ -291,7 +305,7 @@ class CommandCoordinator:
                 }
             try:
                 response = await client.request(definition.route_key, json_data=payload or None)
-                handler_response = dict(response) if isinstance(response, Mapping) else {"response": response}
+                handler_response = _bounded_handler_response(response)
                 observer = getattr(self.connection, "observe_command_response", None)
                 if callable(observer):
                     observer(response)
@@ -303,19 +317,20 @@ class CommandCoordinator:
                 )
                 if semantic_rejected:
                     status = "delivery_failed"
-                    detail = f"Robot reported command failure: {response.get('error') or response.get('detail') or 'ok=false'}"
+                    detail = _bounded_text(
+                        f"Robot reported command failure: {response.get('error') or response.get('detail') or 'ok=false'}",
+                        limit=4_096,
+                    )
                 elif queued:
                     status = "queued"
                     detail = "Robot accepted the command into its queue; execution and physical effect are not yet observed"
                 else:
                     status = "acknowledged" if acknowledged else "delivered_unacknowledged"
                     detail = "Robot acknowledged command" if acknowledged else "Command delivered; robot acknowledgement absent"
-                if acknowledged and not queued and request.command in _INLINE_HARDWARE_EVIDENCE_COMMANDS:
-                    handler_response["inline_hardware_evidence"] = await _collect_inline_hardware_evidence(client)
             except RobotResponseError as exc:
                 acknowledged = False
                 status = "delivery_failed"
-                handler_response = {"http_status": exc.status_code, "detail": exc.detail}
+                handler_response = _bounded_handler_response({"http_status": exc.status_code, "detail": exc.detail})
                 observer = getattr(self.connection, "observe_command_response", None)
                 if callable(observer):
                     observer(exc.detail)
@@ -324,7 +339,7 @@ class CommandCoordinator:
                 acknowledged = False
                 status = "delivery_failed"
                 handler_response = None
-                detail = str(exc) or exc.__class__.__name__
+                detail = _bounded_text(str(exc) or exc.__class__.__name__, limit=4_096)
             record = CommandRecord(
                 command_id=command_id,
                 command=request.command,
@@ -339,7 +354,7 @@ class CommandCoordinator:
                 handler_response=handler_response,
             )
             self._remember(record)
-            self._idempotent[request.idempotency_key] = (fingerprint, record)
+            self._remember_idempotent(request.idempotency_key, fingerprint, record)
             future.set_result(record)
             return record
         except BaseException:
@@ -403,7 +418,10 @@ class CommandCoordinator:
                 )
             except Exception as exc:
                 acknowledged = False
-                detail = f"Emergency-stop delivery failed; physical effect is not verified: {exc}"
+                detail = _bounded_text(
+                    f"Emergency-stop delivery failed; physical effect is not verified: {exc}",
+                    limit=4_096,
+                )
             result = EmergencyStopResult(
                 idempotency_key=idempotency_key,
                 generation=snapshot.generation,
@@ -413,7 +431,7 @@ class CommandCoordinator:
                 physical_effect_verified=False,
                 detail=detail,
             )
-            self._idempotent[idempotency_key] = (fingerprint, result)
+            self._remember_idempotent(idempotency_key, fingerprint, result)
             future.set_result(result)
             return result
         except BaseException:
@@ -432,49 +450,136 @@ class CommandCoordinator:
         if len(self._history) == self._history.maxlen and self._history:
             evicted = self._history[0]
             self._by_id.pop(evicted.command_id, None)
+            self._idempotent.pop(evicted.idempotency_key, None)
         self._history.append(record)
         self._by_id[record.command_id] = record
+
+    def _remember_idempotent(
+        self,
+        key: str,
+        fingerprint: str,
+        result: CommandRecord | EmergencyStopResult,
+    ) -> None:
+        self._idempotent.pop(key, None)
+        self._idempotent[key] = (fingerprint, result)
+        while len(self._idempotent) > self._history_limit:
+            self._idempotent.popitem(last=False)
+
+
+_MAX_HANDLER_DEPTH = 8
+_MAX_HANDLER_ITEMS = 32
+_MAX_HANDLER_NODES = 512
+_MAX_HANDLER_TEXT = 2_048
+_MAX_HANDLER_BUDGET = 8_192
+_TRUNCATED = "…[truncated]"
+
+
+def _bounded_text(value: object, *, limit: int = _MAX_HANDLER_TEXT) -> str:
+    text = str(value)
+    if len(text) <= limit:
+        return text
+    keep = max(0, limit - len(_TRUNCATED))
+    return f"{text[:keep]}{_TRUNCATED}"
+
+
+def _bounded_handler_response(value: object) -> dict[str, Any]:
+    budget = [_MAX_HANDLER_BUDGET]
+    nodes = [_MAX_HANDLER_NODES]
+
+    def normalize(item: object, depth: int) -> Any:
+        if nodes[0] <= 0 or budget[0] <= 0:
+            return _TRUNCATED
+        nodes[0] -= 1
+        if item is None or isinstance(item, (bool, int, float)):
+            return item
+        if isinstance(item, str):
+            allowed = min(_MAX_HANDLER_TEXT, budget[0])
+            text = _bounded_text(item, limit=max(len(_TRUNCATED), allowed))
+            budget[0] -= len(text)
+            return text
+        if depth >= _MAX_HANDLER_DEPTH:
+            return _TRUNCATED
+        if isinstance(item, Mapping):
+            result: dict[str, Any] = {}
+            for index, (key, child) in enumerate(item.items()):
+                if index >= _MAX_HANDLER_ITEMS or nodes[0] <= 0 or budget[0] <= 0:
+                    result["_truncated"] = True
+                    break
+                result[_bounded_text(key, limit=128)] = normalize(child, depth + 1)
+            return result
+        if isinstance(item, (list, tuple)):
+            list_result = [normalize(child, depth + 1) for child in item[:_MAX_HANDLER_ITEMS]]
+            if len(item) > _MAX_HANDLER_ITEMS:
+                list_result.append(_TRUNCATED)
+            return list_result
+        return _bounded_text(item)
+
+    bounded = normalize(value, 0)
+    response = bounded if isinstance(bounded, dict) else {"response": bounded}
+    if _serialized_chars(response) <= _MAX_HANDLER_BUDGET:
+        return response
+
+    # The recursive budget above preserves useful ordinary structure, while
+    # this final projection is the authoritative whole-record size guard. It
+    # accounts for mapping keys, scalar serialization, and JSON punctuation.
+    summary: dict[str, Any] = {"_truncated": True}
+    if isinstance(value, Mapping):
+        for key in ("ok", "acknowledged", "queued", "http_status", "status"):
+            scalar = value.get(key)
+            if scalar is None or isinstance(scalar, (bool, int, float)):
+                if key in value:
+                    summary[key] = scalar
+    detail = _receipt_operator_detail(value)
+    if detail:
+        summary["detail"] = detail
+    # Fixed keys plus one capped detail keep this comfortably below the hard
+    # ceiling; retain the assertion as a fail-closed invariant.
+    if _serialized_chars(summary) > _MAX_HANDLER_BUDGET:
+        summary = {"_truncated": True, "detail": _bounded_text(detail or "receipt omitted", limit=2_048)}
+    assert _serialized_chars(summary) <= _MAX_HANDLER_BUDGET
+    return summary
+
+
+def _serialized_chars(value: object) -> int:
+    return len(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str))
+
+
+def _receipt_operator_detail(value: object, depth: int = 0) -> str | None:
+    if depth > _MAX_HANDLER_DEPTH or value is None:
+        return None
+    if isinstance(value, str):
+        text = _bounded_text(value, limit=4_096).strip()
+        return text or None
+    if isinstance(value, Mapping):
+        for key in ("detail", "error", "message", "reason", "block_reason", "startup_error"):
+            if key in value:
+                found = _receipt_operator_detail(value[key], depth + 1)
+                if found:
+                    return found
+        return None
+    if isinstance(value, (list, tuple)):
+        details = []
+        for child in value[:_MAX_HANDLER_ITEMS]:
+            found = _receipt_operator_detail(child, depth + 1)
+            if found:
+                details.append(found)
+            if sum(len(item) for item in details) >= 4_096:
+                break
+        return _bounded_text("; ".join(details), limit=4_096) if details else None
+    return None
+
+
+def _activation_replay_ownership_is_canonical(ownership: object) -> bool:
+    if not isinstance(ownership, Mapping):
+        return False
+    projection = (ownership.get("transport"), ownership.get("usb"), ownership.get("router"))
+    return projection == ("unbound", "unbound", "unbound") or projection == ("owned", "service", "running")
 
 
 def _set_command_active(connection: object, value: bool) -> None:
     setter = getattr(connection, "set_command_active", None)
     if callable(setter):
         setter(value)
-
-
-async def _collect_inline_hardware_evidence(client: Any) -> dict[str, Any]:
-    try:
-        response = await client.request("collect_hardware_snapshot", json_data=None)
-        payload = dict(response) if isinstance(response, Mapping) else {}
-        snapshot = payload.get("snapshot")
-        snapshot_id = snapshot.get("snapshot_id") if isinstance(snapshot, Mapping) else None
-        published = (
-            payload.get("ok") is True
-            and payload.get("published") is True
-            and isinstance(snapshot_id, str)
-            and bool(snapshot_id)
-        )
-        if not published:
-            return {
-                "attempted": True,
-                "published": False,
-                "error": str(
-                    payload.get("error")
-                    or payload.get("detail")
-                    or "hardware snapshot was not published"
-                ),
-            }
-        return {
-            "attempted": True,
-            "published": True,
-            "snapshot_id": snapshot_id,
-        }
-    except Exception as exc:
-        return {
-            "attempted": True,
-            "published": False,
-            "error": str(exc) or exc.__class__.__name__,
-        }
 
 
 def _fingerprint(value: object) -> str:

@@ -22,6 +22,14 @@ export interface BioXpConnectionSnapshot {
     command_active: boolean;
     startup_lifecycle: BioXpStartupLifecycle | null;
     maintenance_state: BioXpMaintenanceState | null;
+    ownership: BioXpOwnership | null;
+}
+
+export interface BioXpOwnership {
+    transport?: string | null;
+    usb?: string | null;
+    router?: string | null;
+    camera?: string | null;
 }
 
 export interface BioXpMaintenanceState {
@@ -123,6 +131,10 @@ export interface BioXpCommandRecord {
     handler_response: Record<string, unknown> | null;
 }
 
+export interface BioXpCommandHistoryResponse {
+    commands: BioXpCommandRecord[];
+}
+
 export type BioXpCommandName =
     | 'activate_usb_for_service'
     | 'collect_hardware_snapshot'
@@ -141,6 +153,7 @@ export type BioXpCommandName =
     | 'recover_runtime';
 
 export type BioXpActiveCommandName =
+    | 'activate_usb_for_service'
     | 'collect_hardware_snapshot'
     | 'collect_axis_diagnostics'
     | 'run_axis_diagnostic'
@@ -148,6 +161,11 @@ export type BioXpActiveCommandName =
     | 'recover_motion_non_homing';
 
 export type BioXpCommandPayload =
+    | {
+        command: 'activate_usb_for_service';
+        expected_generation: number;
+        idempotency_key: string;
+    }
     | {
         command: 'recover_motion_non_homing';
         expected_generation: number;
@@ -308,6 +326,7 @@ export interface BioXpOemFullLifecycleRun {
 }
 
 const statusKey = ['bioxp', 'status'] as const;
+const commandHistoryKey = ['bioxp', 'commands'] as const;
 const profileKey = ['bioxp', 'profile'] as const;
 const jobsKey = ['bioxp', 'jobs'] as const;
 const fullLifecycleContractKey = ['bioxp', 'oem-full-lifecycle', 'contract'] as const;
@@ -331,26 +350,59 @@ function cameraImageFromResponse(response: {
     }
     return { blob: response.data, etag, sha256, connectionGeneration };
 }
+const OPERATOR_DETAIL_LIMIT = 2_048;
+const COMMAND_RECORD_TEXT_LIMIT = 4_096;
+const TRUNCATED_SUFFIX = '…[truncated]';
+
+function boundedOperatorText(value: string, limit = OPERATOR_DETAIL_LIMIT): string {
+    const normalized = value.trim();
+    if (normalized.length <= limit) return normalized;
+    return `${normalized.slice(0, Math.max(0, limit - TRUNCATED_SUFFIX.length))}${TRUNCATED_SUFFIX}`;
+}
+
+function nestedOperatorDetail(value: unknown, depth = 0): string | null {
+    if (depth > 8 || value === null || value === undefined) return null;
+    if (typeof value === 'string') return boundedOperatorText(value) || null;
+    if (Array.isArray(value)) {
+        const normalized = value.map((entry) => {
+            if (entry && typeof entry === 'object' && 'msg' in entry) {
+                const item = entry as { loc?: unknown; msg?: unknown };
+                const location = Array.isArray(item.loc) ? item.loc.map(String).join('.') : '';
+                const message = typeof item.msg === 'string'
+                    ? item.msg
+                    : nestedOperatorDetail(item.msg, depth + 1);
+                return message ? (location ? `${location}: ${message}` : message) : null;
+            }
+            return nestedOperatorDetail(entry, depth + 1);
+        }).filter((entry): entry is string => Boolean(entry));
+        const joined = normalized.length ? normalized.join('; ') : null;
+        return joined ? boundedOperatorText(joined) : null;
+    }
+    if (typeof value !== 'object') return null;
+    const record = value as Record<string, unknown>;
+    for (const key of ['detail', 'error', 'message', 'reason', 'block_reason', 'startup_error']) {
+        if (key in record) {
+            const found = nestedOperatorDetail(record[key], depth + 1);
+            if (found) return found;
+        }
+    }
+    return null;
+}
+
+export function bioXpCommandRecordText(record: BioXpCommandRecord): string {
+    const detail = boundedOperatorText(record.detail, COMMAND_RECORD_TEXT_LIMIT);
+    const upstream = nestedOperatorDetail(record.handler_response);
+    const combined = upstream && upstream !== detail ? `${detail} — ${upstream}` : detail;
+    return boundedOperatorText(combined, COMMAND_RECORD_TEXT_LIMIT);
+}
+
 export function bioXpErrorText(error: unknown): string {
     if (error && typeof error === 'object') {
         const response = 'response' in error
             ? (error as { response?: { data?: { detail?: unknown } } }).response
             : undefined;
-        const detail = response?.data?.detail;
-        if (typeof detail === 'string' && detail.trim()) return detail;
-        if (Array.isArray(detail)) {
-            const normalized = detail
-                .map((entry) => {
-                    if (!entry || typeof entry !== 'object') return String(entry);
-                    const item = entry as { loc?: unknown; msg?: unknown };
-                    const location = Array.isArray(item.loc) ? item.loc.map(String).join('.') : '';
-                    const message = typeof item.msg === 'string' ? item.msg : JSON.stringify(entry);
-                    return location ? `${location}: ${message}` : message;
-                })
-                .filter(Boolean)
-                .join('; ');
-            if (normalized) return normalized;
-        }
+        const detail = nestedOperatorDetail(response?.data?.detail);
+        if (detail) return detail;
         if ('message' in error && typeof error.message === 'string') return error.message;
     }
     return String(error ?? 'Unknown error');
@@ -361,6 +413,14 @@ export const useBioXpStatus = (enabled = true) => useQuery({
     queryFn: async () => (await api.get<BioXpStatusResponse>('/api/bioxp/status')).data,
     enabled,
     refetchInterval: enabled ? 5_000 : false,
+    retry: false,
+});
+
+export const useBioXpCommandHistory = (enabled = true) => useQuery({
+    queryKey: commandHistoryKey,
+    queryFn: async () => (await api.get<BioXpCommandHistoryResponse>('/api/bioxp/commands')).data,
+    enabled,
+    refetchInterval: enabled ? 2_000 : false,
     retry: false,
 });
 
@@ -443,6 +503,7 @@ const useRefreshMutation = <TVariables, TData>(
         onSuccess: async () => {
             await Promise.all([
                 queryClient.invalidateQueries({ queryKey: statusKey }),
+                queryClient.invalidateQueries({ queryKey: commandHistoryKey }),
                 queryClient.invalidateQueries({ queryKey: profileKey }),
                 queryClient.invalidateQueries({ queryKey: jobsKey }),
                 queryClient.invalidateQueries({ queryKey: fullLifecycleContractKey }),

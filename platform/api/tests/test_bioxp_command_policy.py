@@ -21,6 +21,7 @@ def _allow_context(Context, **changes):
         "hardware_ready": True,
         "capabilities": frozenset({"initialize_motors"}),
         "maintenance_state": {"motion_blocked": False, "recovery_required": False},
+        "ownership": {"transport": "owned", "usb": "service", "router": "running"},
     }
     values.update(changes)
     return Context(**values)
@@ -63,7 +64,7 @@ def test_disabled_default_definition_fails_before_transport_admission() -> None:
     assert any("online contract" in reason.lower() for reason in decision.reasons)
 
 
-def test_retired_usb_activation_is_denied_for_every_runtime_state() -> None:
+def test_usb_activation_requires_fresh_canonical_unbound_ownership() -> None:
     parse, Context, evaluate, registry = _load()
     request = parse({
         "command": "activate_usb_for_service",
@@ -77,17 +78,18 @@ def test_retired_usb_activation_is_denied_for_every_runtime_state() -> None:
         runtime_ready=None,
         hardware_ready=None,
         capabilities=frozenset(),
+        ownership={"transport": "unbound", "usb": "unbound", "router": "unbound"},
     )
-    for context in (
+    assert evaluate(request, definition, inactive).allowed is True
+    assert evaluate(request, definition, replace(inactive, observation_fresh=False)).allowed is False
+    assert evaluate(request, definition, replace(inactive, ownership=None)).allowed is False
+    claimed = replace(
         inactive,
-        replace(inactive, observation_fresh=False),
-        replace(inactive, runtime_ready=True),
-    ):
-        decision = evaluate(request, definition, context)
-        assert decision.allowed is False
-        assert decision.reasons[0] == (
-            "robot-contract-unavailable: unsupported by the exact robot runtime contract"
-        )
+        ownership={"transport": "owned", "usb": "service", "router": "running"},
+    )
+    decision = evaluate(request, definition, claimed)
+    assert decision.allowed is False
+    assert "already claimed" in " ".join(decision.reasons).lower()
 
 
 def test_hardware_snapshot_requires_service_runtime_ownership() -> None:
@@ -113,7 +115,7 @@ def test_hardware_snapshot_requires_service_runtime_ownership() -> None:
     assert evaluate(request, definition, owned).allowed is True
 
 
-def test_finite_motion_relay_does_not_apply_bms_maintenance_state_policy() -> None:
+def test_finite_motion_relay_fails_closed_on_robot_motion_latch() -> None:
     parse, Context, evaluate, registry = _load()
     request = parse({
         "command": "run_axis_diagnostic",
@@ -136,7 +138,7 @@ def test_finite_motion_relay_does_not_apply_bms_maintenance_state_policy() -> No
         {"motion_blocked": True, "recovery_required": True, "block_reason": "USB owner changed"},
     ):
         decision = evaluate(request, registry[request.command], replace(base, maintenance_state=state))
-        assert decision.allowed is True
+        assert decision.allowed is False
 
     assert evaluate(request, registry[request.command], base).allowed is True
 
@@ -170,7 +172,7 @@ def test_non_homing_recovery_does_not_require_preexisting_runtime_or_hardware_re
             ).allowed is True
 
 
-def test_non_homing_initialization_requires_active_exact_capability_not_bms_derived_state() -> None:
+def test_non_homing_initialization_requires_capability_owned_transport_and_recovery_latch() -> None:
     parse, Context, evaluate, registry = _load()
     request = parse({
         "command": "recover_motion_non_homing",
@@ -194,8 +196,9 @@ def test_non_homing_initialization_requires_active_exact_capability_not_bms_deri
         {"maintenance_state": {"motion_blocked": False, "recovery_required": True}},
         {"maintenance_state": {"motion_blocked": True, "recovery_required": False}},
         {"observation_fresh": False},
+        {"ownership": {"transport": "unbound", "usb": "unbound", "router": "unbound"}},
     ):
-        assert evaluate(request, definition, replace(admitted, **changes)).allowed is True
+        assert evaluate(request, definition, replace(admitted, **changes)).allowed is False
 
     assert evaluate(
         request,
