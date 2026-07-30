@@ -5193,7 +5193,12 @@ async def create_job(
 
         if job_data.model_id == "molecular_dynamics" and job_data.mode == "simulate":
             try:
-                job_data.params["md_job_spec"] = normalize_md_job_spec(
+                # Validate the caller-owned request without replacing it with the
+                # server-resolved preview.  Materialization below performs the one
+                # authoritative resolution after the durable job id/output root
+                # exist.  Feeding the preview back into materialization would make
+                # our own resolved chemistry fields look forged by the caller.
+                normalize_md_job_spec(
                     params=job_data.params,
                     job_id="validation-preview",
                     resolve_runtime_path=_resolve_md_input_path_for_runtime,

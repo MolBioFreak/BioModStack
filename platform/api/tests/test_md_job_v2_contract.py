@@ -97,6 +97,16 @@ def test_v2_normalization_binds_catalog_generation_and_server_resolved_profile()
     assert "force_field" not in normalized["preparation"] and "water_model" not in normalized["preparation"]
 
 
+def test_create_route_keeps_validation_preview_out_of_caller_owned_spec() -> None:
+    """The raw request must reach materialization; resolved previews are server-only."""
+    source = (API_ROOT / "routers" / "jobs.py").read_text(encoding="utf-8")
+    start = source.index('if job_data.model_id == "molecular_dynamics" and job_data.mode == "simulate":')
+    end = source.index("# Skip validation for template jobs", start)
+    preview_block = source[start:end]
+    assert "normalize_md_job_spec(" in preview_block
+    assert 'job_data.params["md_job_spec"] = normalize_md_job_spec(' not in preview_block
+
+
 def test_v2_normalization_rejects_stale_catalog_generation() -> None:
     catalog = _catalog(); view = catalog.view(); profile = view.get_profile("gmx_amber99sb_ildn_tip3p_smoke_v1")
     assert profile is not None
