@@ -144,6 +144,31 @@ def test_motion_commands_fail_closed_on_missing_or_blocked_maintenance_state() -
     assert evaluate(request, registry[request.command], base).allowed is True
 
 
+def test_non_homing_recovery_does_not_require_preexisting_hardware_readiness() -> None:
+    parse, Context, evaluate, registry = _load()
+    request = parse({
+        "command": "recover_motion_non_homing",
+        "expected_generation": 7,
+        "idempotency_key": "recover-motion-unready-7",
+        "operator_ack": "RECOVER_MOTION",
+        "reason": "Recover hardware readiness after service restart",
+    })
+    definition = registry[request.command]
+    base = _allow_context(
+        Context,
+        capabilities=frozenset({"recover_motion_non_homing"}),
+        maintenance_state={
+            "motion_blocked": True,
+            "recovery_required": True,
+            "block_reason": "Service startup requires recovery",
+        },
+    )
+
+    assert definition.requires_hardware_ready is False
+    assert evaluate(request, definition, replace(base, hardware_ready=False)).allowed is True
+    assert evaluate(request, definition, replace(base, hardware_ready=None)).allowed is True
+
+
 def test_non_homing_recovery_requires_exact_maintenance_recovery_state_and_normal_gates() -> None:
     parse, Context, evaluate, registry = _load()
     request = parse({
@@ -171,7 +196,6 @@ def test_non_homing_recovery_requires_exact_maintenance_recovery_state_and_norma
         {"maintenance_state": {"motion_blocked": True, "recovery_required": False}},
         {"observation_fresh": False},
         {"runtime_ready": False},
-        {"hardware_ready": False},
         {"capabilities": frozenset()},
     ):
         assert evaluate(request, definition, replace(admitted, **changes)).allowed is False
