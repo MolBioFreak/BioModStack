@@ -69,9 +69,10 @@ export function BioXpCameraPanel({
         }
     }, [connected, connectionGeneration]);
 
+    const cameraStatus = statusQuery.isError ? undefined : statusQuery.data;
     const cameraState = !connected
         ? 'Disconnected'
-        : statusQuery.data?.available ? 'Ready' : 'Unavailable';
+        : cameraStatus?.available ? 'Ready' : 'Unavailable';
 
     return (
         <section className="rounded-xl border border-sky-800/70 bg-sky-950/20 p-4">
@@ -101,7 +102,7 @@ export function BioXpCameraPanel({
                 >{pendingAction === 'snapshot' ? 'Capturing…' : 'Capture'}</button>
             </div>
 
-            {statusQuery.data?.detail && <p className="mt-2 text-sm text-amber-300">{statusQuery.data.detail}</p>}
+            {cameraStatus?.detail && <p className="mt-2 text-sm text-amber-300">{cameraStatus.detail}</p>}
             {statusQuery.isError && <p role="alert" className="mt-2 text-sm text-red-300">{bioXpErrorText(statusQuery.error)}</p>}
             {imageError && <p role="alert" className="mt-2 text-sm text-red-300">{imageError}</p>}
         </section>

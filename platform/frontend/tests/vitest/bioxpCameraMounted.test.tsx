@@ -14,14 +14,15 @@ interface PendingFrame {
 
 const camera = vi.hoisted(() => ({
     pending: [] as PendingFrame[],
+    status: {
+        data: { available: true, detail: null as string | null },
+        isError: false,
+        error: null as unknown | null,
+    },
 }));
 
 vi.mock('../../src/lib/bioxpClient', () => ({
-    useBioXpCameraStatus: () => ({
-        data: { available: true, detail: null },
-        isError: false,
-        error: null,
-    }),
+    useBioXpCameraStatus: () => camera.status,
     fetchBioXpCameraFrame: (generation: number) => new Promise<CameraImage>((resolve) => {
         camera.pending.push({ generation, resolve });
     }),
@@ -60,6 +61,9 @@ async function resolveNext(expectedGeneration: number) {
 
 beforeEach(() => {
     camera.pending.length = 0;
+    camera.status.data = { available: true, detail: null };
+    camera.status.isError = false;
+    camera.status.error = null;
     nextUrl = 1;
     createObjectURL = vi.fn(() => `blob:test-${nextUrl++}`);
     revokeObjectURL = vi.fn();
@@ -79,6 +83,16 @@ afterEach(async () => {
 });
 
 describe('mounted BioXP camera URL ownership', () => {
+    it('does not display Ready from retained status data after a refetch error', async () => {
+        camera.status.isError = true;
+        camera.status.error = new Error('camera status refetch failed');
+        await renderPanel(1);
+
+        expect(container.textContent).toContain('Unavailable');
+        expect(container.textContent).toContain('camera status refetch failed');
+        expect(container.textContent).not.toContain('Ready');
+    });
+
     it('rejects stale completions, revokes replacements, and disposes the live frame', async () => {
         await renderPanel(1);
         await act(async () => button('Refresh')!.click());
