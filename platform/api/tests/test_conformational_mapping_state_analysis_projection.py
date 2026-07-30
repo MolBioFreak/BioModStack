@@ -260,9 +260,9 @@ def test_state_analysis_projection_migration_is_ordered_and_idempotent(tmp_path:
             assert {row[1] for row in connection.execute(f"PRAGMA table_info({table})")} == expected_columns
 
     runner = importlib.import_module("migrations.runner")
-    assert [(migration.version, migration.name) for migration in runner.MIGRATIONS][-1] == (
-        14, "add_state_landscape_analysis_page_order_index",
-    )
+    migration_history = [(migration.version, migration.name) for migration in runner.MIGRATIONS]
+    assert (14, "add_state_landscape_analysis_page_order_index") in migration_history
+    assert [version for version, _ in migration_history] == sorted(version for version, _ in migration_history)
 
 
 def test_state_analysis_projection_page_index_matches_canonical_order_without_sqlite_sort(
