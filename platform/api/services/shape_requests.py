@@ -128,7 +128,9 @@ async def materialize_shape_request(
     points_path, points = _checked_artifact(
         geometry_root, str(artifact_map["points_f32"]), point_pool_sha256
     )
-    del vertices_path, faces_path, points_path
+    sdf_sha256 = str(geometry.manifest["sdf_sha256"])
+    sdf_path, sdf = _checked_artifact(geometry_root, str(artifact_map["sdf_f32"]), sdf_sha256)
+    del vertices_path, faces_path, points_path, sdf_path
 
     stage_relative = f"requests/{request_id}"
     stage = (shape_root / stage_relative).resolve()
@@ -141,6 +143,7 @@ async def materialize_shape_request(
         "vertices.f64le": vertices,
         "faces.u32le": faces,
         "points.f32le": points,
+        "sdf.f32le": sdf,
     }
     for filename, payload in staged_payloads.items():
         _publish(stage / filename, payload)
@@ -170,6 +173,7 @@ def _staged(row: ShapeDesignRequest, *, data_root: Path, name: str) -> StagedSha
         "shape_vertices_path": str(stage / "vertices.f64le"),
         "shape_faces_path": str(stage / "faces.u32le"),
         "shape_points_path": str(stage / "points.f32le"),
+        "shape_sdf_path": str(stage / "sdf.f32le"),
         "shape_geometry_id": row.geometry_id,
         "shape_geometry_sha256": row.request_spec["geometry_sha256"],
         "shape_point_pool_sha256": row.request_spec["point_pool_sha256"],

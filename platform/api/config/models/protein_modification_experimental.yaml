@@ -43,6 +43,7 @@ modes:
       - shape_vertices_path
       - shape_faces_path
       - shape_points_path
+      - shape_sdf_path
       - shape_request_sha256
       - shape_geometry_sha256
       - shape_point_pool_sha256

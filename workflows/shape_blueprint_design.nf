@@ -19,5 +19,6 @@ workflow {
         file(params.shape_vertices_path, checkIfExists: true),
         file(params.shape_faces_path, checkIfExists: true),
         file(params.shape_points_path, checkIfExists: true),
+        file(params.shape_sdf_path, checkIfExists: true),
     )
 }

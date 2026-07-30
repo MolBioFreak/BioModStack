@@ -269,6 +269,7 @@ async def test_staged_bundle_validator_emits_hash_bound_receipt(tmp_path: Path) 
                 "--vertices", str(stage / "vertices.f64le"),
                 "--faces", str(stage / "faces.u32le"),
                 "--points", str(stage / "points.f32le"),
+                "--sdf", str(stage / "sdf.f32le"),
                 "--output", str(receipt),
             ],
             text=True,
@@ -279,5 +280,8 @@ async def test_staged_bundle_validator_emits_hash_bound_receipt(tmp_path: Path) 
         assert payload["status"] == "validated"
         assert payload["request_sha256"] == staged.request_sha256
         assert payload["geometry_sha256"] == geometry.geometry_sha256
+        assert payload["point_pool_sha256"] == geometry.point_pool_sha256
+        assert payload["sdf_sha256"] == geometry.manifest["sdf_sha256"]
+        assert payload["sdf_grid_shape"] == geometry.manifest["sdf_grid_shape"]
     finally:
         await engine.dispose()

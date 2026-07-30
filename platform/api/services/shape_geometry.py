@@ -13,12 +13,14 @@ import hashlib
 import json
 import math
 import numpy as np
+import trimesh
 
 
 MAX_OBJ_BYTES = 16 * 1024 * 1024
 MAX_VERTICES = 20_000
 MAX_FACES = 40_000
 POINT_COUNT = 4096
+SDF_GRID_SIZE = 48
 POINT_BATCH = 8192
 MAX_POINT_DRAWS = 4_000_000
 
@@ -37,6 +39,11 @@ class CanonicalGeometry:
     vertices_f64: bytes
     faces_u32: bytes
     points_f32: bytes
+    sdf_f32: bytes
+    sdf_sha256: str
+    sdf_shape: list[int]
+    sdf_origin_angstrom: list[float]
+    sdf_spacing_angstrom: list[float]
     preview_obj: bytes
     vertex_count: int
     face_count: int
@@ -292,6 +299,32 @@ def _point_pool(vertices: np.ndarray, faces: np.ndarray, geometry_sha256: str) -
     return points
 
 
+def _signed_distance_grid(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+) -> tuple[np.ndarray, list[float], list[float]]:
+    lower = vertices.min(axis=0)
+    upper = vertices.max(axis=0)
+    extent = upper - lower
+    padding = max(4.0, float(extent.max()) * 0.1)
+    origin = lower - padding
+    limit = upper + padding
+    axes = [np.linspace(origin[i], limit[i], SDF_GRID_SIZE, dtype=np.float64) for i in range(3)]
+    spacing = [(float(limit[i] - origin[i]) / (SDF_GRID_SIZE - 1)) for i in range(3)]
+    grid = np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1).reshape((-1, 3))
+    mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False, validate=False)
+    values = np.empty(len(grid), dtype=np.float64)
+    for start in range(0, len(grid), 16_384):
+        values[start : start + 16_384] = trimesh.proximity.signed_distance(
+            mesh, grid[start : start + 16_384]
+        )
+    if not np.all(np.isfinite(values)):
+        _fail("sdf_generation_failed", "canonical signed-distance grid is non-finite")
+    sdf = values.reshape((SDF_GRID_SIZE, SDF_GRID_SIZE, SDF_GRID_SIZE)).astype("<f4")
+    sdf[sdf == 0] = 0.0
+    return sdf, [float(value) for value in origin], spacing
+
+
 def _preview_obj(vertices: np.ndarray, faces: np.ndarray) -> bytes:
     lines = ["# bms_shape_canonical_obj_v1"]
     lines.extend(f"v {x:.17g} {y:.17g} {z:.17g}" for x, y, z in vertices)
@@ -329,7 +362,20 @@ def canonicalize_obj(payload: bytes, *, angstrom_per_unit: float) -> CanonicalGe
     points = _point_pool(vertices, faces_u32.astype(np.int64), geometry_sha256)
     point_bytes = points.tobytes(order="C")
     point_pool_sha256 = hashlib.sha256(point_bytes).hexdigest()
-    manifest = {**manifest, "geometry_sha256": geometry_sha256, "point_count": POINT_COUNT, "point_pool_sha256": point_pool_sha256}
+    sdf, sdf_origin, sdf_spacing = _signed_distance_grid(vertices, faces_u32.astype(np.int64))
+    sdf_bytes = sdf.tobytes(order="C")
+    sdf_sha256 = hashlib.sha256(sdf_bytes).hexdigest()
+    manifest = {
+        **manifest,
+        "geometry_sha256": geometry_sha256,
+        "point_count": POINT_COUNT,
+        "point_pool_sha256": point_pool_sha256,
+        "sdf_grid_shape": [SDF_GRID_SIZE, SDF_GRID_SIZE, SDF_GRID_SIZE],
+        "sdf_origin_angstrom": sdf_origin,
+        "sdf_spacing_angstrom": sdf_spacing,
+        "sdf_sha256": sdf_sha256,
+        "sdf_sign": "positive_inside",
+    }
     return CanonicalGeometry(
         source_sha256=source_sha256,
         geometry_sha256=geometry_sha256,
@@ -337,6 +383,11 @@ def canonicalize_obj(payload: bytes, *, angstrom_per_unit: float) -> CanonicalGe
         vertices_f64=vertex_bytes,
         faces_u32=face_bytes,
         points_f32=point_bytes,
+        sdf_f32=sdf_bytes,
+        sdf_sha256=sdf_sha256,
+        sdf_shape=[SDF_GRID_SIZE, SDF_GRID_SIZE, SDF_GRID_SIZE],
+        sdf_origin_angstrom=sdf_origin,
+        sdf_spacing_angstrom=sdf_spacing,
         preview_obj=_preview_obj(vertices, faces_u32),
         vertex_count=len(vertices),
         face_count=len(faces_u32),

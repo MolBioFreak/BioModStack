@@ -109,6 +109,7 @@ async def admit_obj_geometry(
         "vertices_f64": f"{geometry_prefix}/vertices.f64le",
         "faces_u32": f"{geometry_prefix}/faces.u32le",
         "points_f32": f"{geometry_prefix}/points.f32le",
+        "sdf_f32": f"{geometry_prefix}/sdf.f32le",
         "preview_obj": f"{geometry_prefix}/preview.obj",
         "manifest": f"{geometry_prefix}/manifest.json",
     }
@@ -118,6 +119,7 @@ async def admit_obj_geometry(
         artifacts["vertices_f64"]: canonical.vertices_f64,
         artifacts["faces_u32"]: canonical.faces_u32,
         artifacts["points_f32"]: canonical.points_f32,
+        artifacts["sdf_f32"]: canonical.sdf_f32,
         artifacts["preview_obj"]: canonical.preview_obj,
         artifacts["manifest"]: _canonical_json(final_manifest),
     }

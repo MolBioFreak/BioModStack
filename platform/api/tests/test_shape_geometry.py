@@ -59,6 +59,21 @@ def test_closed_obj_canonicalization_is_deterministic() -> None:
     assert np.all(points >= -10.0) and np.all(points <= 10.0)
 
 
+def test_canonical_sdf_grid_is_deterministic_and_signed() -> None:
+    geometry = _geometry()
+    first = geometry.canonicalize_obj(CUBE_OBJ, angstrom_per_unit=10.0)
+    second = geometry.canonicalize_obj(CUBE_OBJ, angstrom_per_unit=10.0)
+
+    assert first.sdf_f32 == second.sdf_f32
+    assert first.sdf_sha256 == second.sdf_sha256
+    assert first.sdf_shape == [48, 48, 48]
+    sdf = np.frombuffer(first.sdf_f32, dtype="<f4").reshape(first.sdf_shape)
+    center = tuple(d // 2 for d in first.sdf_shape)
+    assert sdf[center] > 0.0
+    assert sdf[0, 0, 0] < 0.0
+    assert all(np.isfinite(sdf.flat))
+
+
 def test_same_source_bytes_with_different_units_produce_different_geometry() -> None:
     geometry = _geometry()
 

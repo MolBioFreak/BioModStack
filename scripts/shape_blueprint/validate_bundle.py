@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 from pathlib import Path
 
 
@@ -39,6 +40,7 @@ def validate_bundle(
     vertices_path: Path,
     faces_path: Path,
     points_path: Path,
+    sdf_path: Path,
 ) -> dict:
     request = _load_json(request_path)
     manifest = _load_json(manifest_path)
@@ -60,6 +62,10 @@ def validate_bundle(
     vertices_hash = _verify(vertices_path, str(manifest["vertices_sha256"]), vertex_count * 3 * 8)
     faces_hash = _verify(faces_path, str(manifest["faces_sha256"]), face_count * 3 * 4)
     points_hash = _verify(points_path, str(manifest["point_pool_sha256"]), point_count * 3 * 4)
+    sdf_shape = [int(value) for value in manifest["sdf_grid_shape"]]
+    if len(sdf_shape) != 3 or any(value <= 1 for value in sdf_shape):
+        raise ValueError("invalid SDF grid shape")
+    sdf_hash = _verify(sdf_path, str(manifest["sdf_sha256"]), math.prod(sdf_shape) * 4)
     return {
         "schema": "bms_shape_input_receipt_v1",
         "status": "validated",
@@ -70,6 +76,8 @@ def validate_bundle(
         "point_pool_sha256": points_hash,
         "vertices_sha256": vertices_hash,
         "faces_sha256": faces_hash,
+        "sdf_sha256": sdf_hash,
+        "sdf_grid_shape": sdf_shape,
         "vertex_count": vertex_count,
         "face_count": face_count,
         "point_count": point_count,
@@ -83,6 +91,7 @@ def main() -> int:
     parser.add_argument("--vertices", type=Path, required=True)
     parser.add_argument("--faces", type=Path, required=True)
     parser.add_argument("--points", type=Path, required=True)
+    parser.add_argument("--sdf", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     receipt = validate_bundle(
@@ -91,6 +100,7 @@ def main() -> int:
         vertices_path=args.vertices,
         faces_path=args.faces,
         points_path=args.points,
+        sdf_path=args.sdf,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_bytes(_canonical(receipt) + b"\n")
