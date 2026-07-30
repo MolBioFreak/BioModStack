@@ -13,7 +13,8 @@ test('core embeds the isolated Stats Toolkit inside the BioModStack tab', () => 
   assert.match(layoutSource, />\s*Stats Toolkit\s*<\/Link>/);
   assert.match(launcherSource, /fetch\('\/api\/system\/stats-toolkit'/);
   assert.match(launcherSource, /<iframe/);
-  assert.match(launcherSource, /src=\{status\.entry_url\}/);
+  assert.match(launcherSource, /import \{ resolveStatsToolkitEntryUrl \} from '\.\.\/runtime\/tailnetEnvironment'/);
+  assert.match(launcherSource, /src=\{resolveStatsToolkitEntryUrl\(status\.entry_url, window\.location\.hostname\)\}/);
   assert.match(launcherSource, /BioModStack Stats Toolkit workspace/);
   assert.doesNotMatch(launcherSource, /Open Stats Toolkit/);
   assert.doesNotMatch(launcherSource, /href=\{status\?\.entry_url/);

@@ -11,6 +11,7 @@ import { useState, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { fetchFiles, submitOntNgsJob, uploadFile } from '../lib/api';
+import { useLiveGpuCatalog } from './useLiveGpuCatalog';
 
 
 // ============================================================================
@@ -420,9 +421,9 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const [approvedComparisonPanelId, setApprovedComparisonPanelId] = useState('');
     const navigate = useNavigate();
     const queryClient = useQueryClient();
-    // Analysis workflows use the scheduler's fixed safe policy; this surface does
-    // not inspect or admit runtime resources.
-    const gpuOptions: Array<{ index: number; label: string }> = [];
+    // Pinning remains operator-selected; available labels are read from the
+    // server-authoritative catalog and do not admit or reserve runtime resources.
+    const { gpuOptions } = useLiveGpuCatalog();
 
     // ============================================================================
     // State: Core Configuration

@@ -435,7 +435,7 @@ async def ont_submit_ngs_workflow(
         submitted = dict(request.params)
         if str(submitted.get("molbio_sequence_id") or "").strip():
             raise ValueError("molbio_sequence_id is not accepted at submission; submit a server-issued molbio_ngs_receipt_id")
-        receipt_id = str(submitted.pop("molbio_ngs_receipt_id") or "").strip()
+        receipt_id = str(submitted.pop("molbio_ngs_receipt_id", "") or "").strip()
         panel_receipt_id = str(submitted.pop("ngs_comparison_panel_receipt_id", "") or "").strip()
         canonical_id = resolve_ont_workflow_alias(workflow_id)
         _validate_comparison_panel_launch(canonical_id, receipt_id, panel_receipt_id)
