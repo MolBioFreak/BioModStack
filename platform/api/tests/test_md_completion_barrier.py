@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import services.md.completion as completion_module
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -20,18 +21,19 @@ def test_md_completion_service_is_the_named_terminal_authority() -> None:
     assert "MD_COMPLETION_CONFLICT" in results
 
 
-def test_md_terminal_authority_closes_durable_run_state_in_the_callers_transaction(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_md_terminal_authority_closes_durable_run_state_in_the_callers_transaction(monkeypatch) -> None:
     job = SimpleNamespace(id="job-1")
     run = SimpleNamespace(phase="finalizing", verification_status="not_run", state_version=7, controls_blocked=True)
 
     class Session:
-        def get(self, model, identity):
+        async def get(self, model, identity):
             assert identity == "job-1"
             return run
 
     monkeypatch.setattr(completion_module, "apply_completion_barrier", lambda candidate: {"state": "completed"})
 
-    result = completion_module.validate_and_finalize_md_job(job, Session())
+    result = await completion_module.validate_and_finalize_md_job(job, Session())
 
     assert result == {"state": "completed"}
     assert run.phase == "completed"
