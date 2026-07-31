@@ -16,7 +16,13 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Job, MdAttemptSegment, MdReconcilerLease, MdReplicaRun, MdRun
-from services.md.state import TERMINAL_PHASES, MdStateError, append_event_cas, finalize_pause
+from services.md.state import (
+    RETRYABLE_INFRASTRUCTURE_FAILURES,
+    TERMINAL_PHASES,
+    MdStateError,
+    append_event_cas,
+    finalize_pause,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +85,12 @@ def _failure_from_child(job: Job | None, projected: str) -> dict | None:
     if job is None or projected not in {"failed", "orphaned"}:
         return None
     message = str(job.error_message or "worker ended without a failure receipt")[:2000]
+    receipt = (job.provenance or {}).get("failure_receipt")
+    if isinstance(receipt, dict):
+        code = str(receipt.get("code") or "")
+        source = str(receipt.get("source") or "")
+        if code in RETRYABLE_INFRASTRUCTURE_FAILURES and source == "scheduler_launch":
+            return {"code": code, "message": str(receipt.get("message") or message)[:2000], "source": source}
     if projected == "failed" and str(job.status) not in {"failed", "cancelled"} and str(job.queue_status) == "failed":
         return {"code": "spawn_rejected", "message": message, "source": "scheduler_launch"}
     return {"code": "execution_failed", "message": message, "source": "worker_terminal"}

@@ -140,9 +140,14 @@ async def test_reconciliation_classifies_launch_rejection_without_retrying_execu
     async with maker() as session:
         parent = Job(id="md-failure", name="MD", status="running", model_id="md", mode="molecular_dynamics", params={})
         launch_child = Job(
-            id="md-launch-rejected", name="launch", status="queued", queue_status="failed",
+            id="md-launch-rejected", name="launch", status="failed", queue_status="failed",
             model_id="md", mode="replica", params={}, parent_job_id=parent.id,
             error_message="workflow adapter unavailable during launch",
+            provenance={"failure_receipt": {
+                "code": "spawn_rejected",
+                "message": "workflow adapter unavailable during launch",
+                "source": "scheduler_launch",
+            }},
         )
         execution_child = Job(
             id="md-execution-failed", name="execution", status="failed", queue_status="failed",

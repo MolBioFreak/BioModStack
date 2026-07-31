@@ -2686,6 +2686,18 @@ async def launch_nextflow_job(
                     job.status = JobStatus.FAILED.value
                     job.queue_status = 'failed'  # Update queue_status so job leaves the queue UI
                     job.error_message = str(e)
+                    if (
+                        job.model_id == "molecular_dynamics"
+                        and job.mode == "replica"
+                        and not job.nextflow_run_id
+                    ):
+                        provenance = dict(job.provenance or {})
+                        provenance["failure_receipt"] = {
+                            "code": "spawn_rejected",
+                            "message": str(e)[:2000],
+                            "source": "scheduler_launch",
+                        }
+                        job.provenance = provenance
                     job.completed_at = datetime.utcnow()
                     changes = {
                         attribute.key: attribute.value
