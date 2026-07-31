@@ -3340,7 +3340,7 @@ export interface OntLiveDevice {
     acquisition_runs?: Array<Record<string, unknown>>;
     hardware_check_runs?: Array<Record<string, unknown>>;
     connection_error?: string | null;
-    fake_or_demo_device?: boolean;
+    fake_or_demo_device?: false;
 }
 
 export interface OntDeviceStatus {
@@ -3358,7 +3358,7 @@ export interface OntInstrumentRun {
     status: string;
     handoff_ready?: boolean;
     output_files?: Record<string, string[]>;
-    fake_or_demo_devices: boolean;
+    fake_or_demo_devices: false;
 }
 
 export interface OntProtocolOptions {

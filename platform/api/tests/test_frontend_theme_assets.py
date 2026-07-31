@@ -112,6 +112,7 @@ def test_square_corner_usage_is_explicit_and_contextual() -> None:
         "components/AnalyticsDashboard.tsx",
         "components/NGSToolkit.tsx",
         "components/BioXpCockpit.tsx",
+        "components/conformationalMapping/ConformationalMappingViewer.tsx",
     }
     offenders: list[str] = []
     for path in FRONTEND_SRC.rglob("*"):

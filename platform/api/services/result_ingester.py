@@ -1267,6 +1267,9 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
             stage_family = "fampnn"
         elif "antibody" in model_id or "antibody" in mode:
             stage_family = "antibody"
+        elif mode == "shape_blueprint":
+            stage_family = "shape_blueprint"
+            stage_mode = stage_mode or "shape_blueprint"
 
     selected_loop_scope = _normalize_scope_value(params.get("selected_loop_scope"))
     if selected_loop_scope is None:

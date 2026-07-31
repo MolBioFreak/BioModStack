@@ -51,7 +51,10 @@ _CM_VIEWER_CAPABILITIES = [
 _RESULT_CONTRACT_DEFINITIONS: List[ResultContractDefinition] = [
     ResultContractDefinition(
         contract_id="shape_blueprint",
-        model_ids=["protein_modification_experimental"],
+        # This product model owns multiple modes.  Model identity alone must
+        # never grant Shape review authority; persisted stage/mode identity or
+        # a producer artifact contract is required.
+        model_ids=[],
         stage_families=["shape_blueprint"],
         stage_modes=["shape_blueprint"],
         artifact_classes=["shape_candidate"],
