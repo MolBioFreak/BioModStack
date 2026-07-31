@@ -261,6 +261,8 @@ def _existing_output_files(raw_files: Any) -> dict[str, list[str]]:
             if not isinstance(value, str) or not value.strip() or len(value) > 2048:
                 continue
             path = Path(value).expanduser()
+            if path.is_symlink():
+                continue
             try:
                 resolved = path.resolve(strict=True)
             except OSError:

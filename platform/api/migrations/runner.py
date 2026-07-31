@@ -181,6 +181,13 @@ def _validate_applied_migration_identities(applied: dict[int, str]) -> None:
             raise RuntimeError(
                 f"schema migration {name!r} is recorded at version {version}; expected version {expected_version}"
             )
+    expected_prefix = {
+        migration.version: migration.name for migration in MIGRATIONS[: len(applied)]
+    }
+    if applied != expected_prefix:
+        raise RuntimeError(
+            "schema migration ledger must be a contiguous exact prefix of the registered migration history"
+        )
 
 
 def _run_migration(migration: Migration, db_path: str) -> None:

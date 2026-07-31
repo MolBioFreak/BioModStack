@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
-import re
 from typing import Any, Callable, Iterable
 
 DEFAULT_MINKNOW_HOST = "localhost"
@@ -389,7 +388,7 @@ def restart_position(position_name: str, payload: dict[str, Any]) -> tuple[int, 
     }
 
 def stop_protocol(minknow_run_id: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-    if not bool(payload.get("confirm_stop")):
+    if payload.get("confirm_stop") is not True:
         return 400, {"detail": "confirm_stop=true is required before stopping a MinKNOW run"}
     return 501, {
         "detail": "MinKNOW protocol stop is not implemented until live run-control wiring is validated",
@@ -465,13 +464,43 @@ def observe_run(minknow_run_id: str) -> dict[str, Any]:
         if matching is None:
             continue
         raw_state = str(matching.get("state") or matching.get("status") or "").strip().lower()
-        state_tokens = frozenset(token for token in re.split(r"[^a-z0-9]+", raw_state) if token)
-        if state_tokens & {"failed", "failure", "error"}:
-            observed = "failed"
-        elif state_tokens & {"stop", "stopped", "cancel", "canceled", "cancelled", "abort", "aborted"}:
-            observed = "stopped"
-        elif state_tokens & {"complete", "completed", "finish", "finished", "end", "ended"}:
-            observed = "completed"
+        exact_states = {
+            "active": "active",
+            "running": "active",
+            "protocol_running": "active",
+            "protocol_state_running": "active",
+            "acquisition_running": "active",
+            "acquisition_state_running": "active",
+            "complete": "completed",
+            "completed": "completed",
+            "finished": "completed",
+            "protocol_finished": "completed",
+            "protocol_completed": "completed",
+            "protocol_state_finished": "completed",
+            "protocol_state_completed": "completed",
+            "acquisition_finished": "completed",
+            "acquisition_completed": "completed",
+            "acquisition_state_finished": "completed",
+            "acquisition_state_completed": "completed",
+            "failed": "failed",
+            "failure": "failed",
+            "error": "failed",
+            "protocol_error": "failed",
+            "protocol_state_error": "failed",
+            "acquisition_error": "failed",
+            "acquisition_state_error": "failed",
+            "stop": "stopped",
+            "stopped": "stopped",
+            "cancelled": "stopped",
+            "canceled": "stopped",
+            "aborted": "stopped",
+            "protocol_stopped": "stopped",
+            "protocol_state_stopped": "stopped",
+            "acquisition_stopped": "stopped",
+            "acquisition_state_stopped": "stopped",
+        }
+        if raw_state in exact_states:
+            observed = exact_states[raw_state]
         elif bool(device.get("running")) or matching is current:
             observed = "active"
         else:

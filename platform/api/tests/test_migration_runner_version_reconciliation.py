@@ -100,3 +100,15 @@ def test_runner_fails_closed_when_applied_version_has_wrong_name(tmp_path) -> No
 
     with pytest.raises(RuntimeError, match="version 18.*unrelated_migration.*add_ont_instrument_run_ledger"):
         runner.run_all(str(db_path))
+
+
+@pytest.mark.parametrize(
+    "applied",
+    [
+        {22: "unrelated_migration"},
+        {21: "enforce_ont_terminal_artifact_manifest_immutability"},
+    ],
+)
+def test_migration_ledger_must_be_an_exact_contiguous_known_prefix(applied: dict[int, str]) -> None:
+    with pytest.raises(RuntimeError, match="contiguous exact prefix"):
+        runner._validate_applied_migration_identities(applied)

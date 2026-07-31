@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -317,6 +318,27 @@ async def test_intent_start_requires_literal_true_before_database_access() -> No
                 "not-loaded",
                 {"confirm_start": invalid_confirmation, "intent_generation": 1},
             )
+
+
+@pytest.mark.parametrize("invalid_confirmation", ["true", "false", 0, 1, None])
+def test_intent_start_request_model_rejects_coercible_confirmations(invalid_confirmation) -> None:
+    with pytest.raises(ValidationError):
+        ont_runs.OntIntentStartRequest.model_validate(
+            {"confirm_start": invalid_confirmation, "intent_generation": 1}
+        )
+
+
+def test_terminal_output_filter_rejects_host_reported_symlink(tmp_path: Path) -> None:
+    target = tmp_path / "real.fastq"
+    target.write_text("@read\nACGT\n+\n!!!!\n", encoding="utf-8")
+    link = tmp_path / "reported.fastq"
+    link.symlink_to(target)
+
+    assert ont_run_control._existing_output_files({"fastq": [str(link)]}) == {
+        "fastq": [],
+        "pod5": [],
+        "bam": [],
+    }
 
 
 def test_protocol_catalog_maps_arbitrary_host_blockers_to_finite_public_reason() -> None:

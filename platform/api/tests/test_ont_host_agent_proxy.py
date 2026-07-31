@@ -3,6 +3,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 API_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = API_ROOT.parent.parent
 SCRIPTS_ROOT = REPO_ROOT / "scripts"
@@ -383,3 +385,44 @@ def test_protocol_run_state_uses_protobuf_enum_name() -> None:
     normalized = ont_minknow_host.normalize_protocol_run(Run())
 
     assert normalized["state"] == "PROTOCOL_STATE_RUNNING"
+
+
+@pytest.mark.parametrize(
+    ("raw_state", "expected"),
+    [
+        ("PROTOCOL_STATE_RUNNING", "active"),
+        ("PROTOCOL_STATE_COMPLETED", "completed"),
+        ("error_recovery_pending", "unknown"),
+    ],
+)
+def test_observe_run_uses_only_finite_exact_state_mappings(monkeypatch, raw_state: str, expected: str) -> None:
+    from lib import ont_minknow_host  # noqa: PLC0415
+
+    monkeypatch.setattr(
+        ont_minknow_host,
+        "discover_status",
+        lambda: {
+            "implementation_status": ont_minknow_host.MINKNOW_STATUS_CONFIGURED,
+            "live_devices": [
+                {
+                    "running": False,
+                    "current_protocol": {},
+                    "protocol_runs": [{"run_id": "run-exact", "state": raw_state}],
+                    "acquisition_runs": [],
+                }
+            ],
+        },
+    )
+
+    assert ont_minknow_host.observe_run("run-exact")["status"] == expected
+
+
+@pytest.mark.parametrize("invalid_confirmation", [False, "false", "true", 0, 1, None])
+def test_host_stop_requires_literal_true(invalid_confirmation) -> None:
+    from lib import ont_minknow_host  # noqa: PLC0415
+
+    status, _payload = ont_minknow_host.stop_protocol(
+        "run-exact", {"confirm_stop": invalid_confirmation}
+    )
+
+    assert status == 400
