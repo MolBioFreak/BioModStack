@@ -23,6 +23,8 @@ class OperatorInputSpec(BaseModel):
     enum_values: list[str] = Field(default_factory=list, max_length=128)
     minimum: StrictFloat | StrictInt | None = None
     maximum: StrictFloat | StrictInt | None = None
+    exclusive_minimum: StrictFloat | StrictInt | None = None
+    exclusive_maximum: StrictFloat | StrictInt | None = None
     default: Any = None
 
 

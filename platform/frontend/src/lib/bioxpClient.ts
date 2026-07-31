@@ -191,6 +191,8 @@ export interface BioXpOperatorInputSpec {
     enum_values: string[];
     minimum: number | null;
     maximum: number | null;
+    exclusive_minimum: number | null;
+    exclusive_maximum: number | null;
     default: unknown;
 }
 

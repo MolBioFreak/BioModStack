@@ -55,7 +55,14 @@ def catalog():
             "dependencies": [{"key": "motion_enabled", "label": "Motion enabled", "met": False, "reason": "Motion is inactive. Activate motion before moving this motor."}],
             "requires_confirmation": True,
             "timeout_seconds": 300,
-            "inputs": [],
+            "inputs": [{
+                "name": "timeout_s", "wire_name": "timeout_s", "label": "Timeout S",
+                "value_type": "number", "location": "body", "required": True,
+                "description": "Bounded timeout.", "unit": "s", "enum_values": [],
+                "minimum": None, "maximum": 60.0,
+                "exclusive_minimum": 0.1, "exclusive_maximum": None,
+                "default": 12.0,
+            }],
             "stages": ["home_x", "home_y", "verify_xy"],
         }],
     }
@@ -159,6 +166,7 @@ def test_catalog_is_robot_owned_and_strict(monkeypatch):
     response = client.get("/api/bioxp/operator-controls/catalog")
     assert response.status_code == 200
     assert response.json()["actions"][0]["action_id"] == "motion.home_xy"
+    assert response.json()["actions"][0]["inputs"][0]["exclusive_minimum"] == 0.1
     assert runtime.connection.client.calls == [("operator_control_catalog", {})]
 
 
