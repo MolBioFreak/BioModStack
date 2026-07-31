@@ -41,6 +41,8 @@ class PreparationProfile:
 _PROFILES = {
     "amber_ff19sb_opc_protein_v1": PreparationProfile(
         "amber_ff19sb_opc_protein_v1", ("leaprc.protein.ff19SB", "leaprc.water.opc")),
+    "amber_ff19sb_opc_lifecycle_v1": PreparationProfile(
+        "amber_ff19sb_opc_lifecycle_v1", ("leaprc.protein.ff19SB", "leaprc.water.opc")),
     "amber_ff19sb_ol15_opc_protein_dna_v1": PreparationProfile(
         "amber_ff19sb_ol15_opc_protein_dna_v1",
         ("leaprc.protein.ff19SB", "leaprc.DNA.OL15", "leaprc.water.opc")),

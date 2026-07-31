@@ -323,13 +323,24 @@ def test_lifecycle_control_profile_is_dev_qualification_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = _catalog_module()
-    catalog = _stock_catalog("amber99sb-ildn.ff", "charmm27.ff", "oplsaa.ff")
-    profile = _profile(catalog, "gmx_amber99sb_ildn_tip3p_lifecycle_v1")
+    preparation_probe = module.RuntimeProbeResult(
+        runtime_id="md-preparation-v1",
+        runtime_version="1",
+        available=True,
+        asset_ids=frozenset({"amber/ff19SB", "water/opc", "ions/opc-monovalent-pinned"}),
+        checked_at="2026-07-30T19:00:00Z",
+        sif_sha256="625d81608118af006295601b8275389e7681a1d98a6fb0622e6241c5d101df4b",
+    )
+    catalog = module.ChemistryCatalog(
+        config_dir=CATALOG_DIR,
+        probe=lambda: [_probe("amber99sb-ildn.ff"), preparation_probe],
+    )
+    profile = _profile(catalog, "amber_ff19sb_opc_lifecycle_v1")
     selection = {
         "profile_id": profile["id"],
         "profile_sha256": profile["profile_sha256"],
-        "force_field": "amber99sb-ildn",
-        "water_model": "tip3p",
+        "force_field": "ff19SB",
+        "water_model": "opc",
         "engine": "gromacs",
         "requested_scope": "lifecycle_control_only",
     }

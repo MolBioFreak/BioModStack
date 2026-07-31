@@ -22,6 +22,10 @@ def test_profiles_are_exact_and_reject_free_form_chemistry() -> None:
     assert protein_dna.leaprc == (
         "leaprc.protein.ff19SB", "leaprc.DNA.OL15", "leaprc.water.opc")
     assert protein_dna.gromacs_gpu_offload == "full_forces"
+    lifecycle = preparation_profile("amber_ff19sb_opc_lifecycle_v1")
+    assert lifecycle.leaprc == ("leaprc.protein.ff19SB", "leaprc.water.opc")
+    assert lifecycle.solvent_box == "OPCBOX"
+    assert lifecycle.gromacs_gpu_offload == "full_forces"
     with pytest.raises(ValueError, match="unsupported preparation profile"):
         preparation_profile("operator_supplied_force_field")
 
