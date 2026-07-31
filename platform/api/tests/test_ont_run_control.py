@@ -888,6 +888,62 @@ async def test_reconcile_preserves_terminal_projection_when_host_is_unavailable(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("false_terminal", ["completed", "failed", "stopped"])
+async def test_reconcile_corrects_unmanifested_false_terminal_with_valid_running_observation(
+    monkeypatch, false_terminal: str
+) -> None:
+    run_id = await _seed_server_observed_run(state=false_terminal)
+    monkeypatch.setattr(
+        ont_run_control,
+        "request_host_agent",
+        lambda *_args, **_kwargs: {
+            "status": "running",
+            "minknow_run_id": "PRIVATE-MINKNOW-RUN",
+            "output_files": {"fastq": [], "pod5": [], "bam": []},
+        },
+    )
+
+    reconciled = await ont_run_control.reconcile_instrument_run(run_id)
+
+    assert reconciled["state"] == "running"
+    assert reconciled["observed_generation"] == 2
+    assert [event["event_type"] for event in reconciled["events"]] == [
+        "status_observed",
+        "terminal_state_corrected",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_reconcile_does_not_supersede_hash_bound_terminal_manifest(monkeypatch, tmp_path: Path) -> None:
+    fastq = tmp_path / "manifest.fastq"
+    fastq.write_text("@r1\nACGT\n+\n!!!!\n", encoding="utf-8")
+    run_id = await _seed_server_observed_run(state="running")
+    snapshots = iter(
+        [
+            {
+                "status": "completed",
+                "minknow_run_id": "PRIVATE-MINKNOW-RUN",
+                "output_files": {"fastq": [str(fastq)], "pod5": [], "bam": []},
+            },
+            {
+                "status": "running",
+                "minknow_run_id": "PRIVATE-MINKNOW-RUN",
+                "output_files": {"fastq": [], "pod5": [], "bam": []},
+            },
+        ]
+    )
+    monkeypatch.setattr(ont_run_control, "request_host_agent", lambda *_args, **_kwargs: next(snapshots))
+
+    completed = await ont_run_control.reconcile_instrument_run(run_id)
+    repeated = await ont_run_control.reconcile_instrument_run(run_id)
+
+    assert completed["state"] == "completed"
+    assert completed["terminal_artifact_manifest"]["sha256"]
+    assert repeated["state"] == "completed"
+    assert repeated["observed_generation"] == completed["observed_generation"]
+
+
+@pytest.mark.asyncio
 async def test_terminal_manifest_freezes_first_observation_and_canonicalizes_reordered_artifacts(monkeypatch, tmp_path: Path) -> None:
     first_fastq = tmp_path / "first.fastq"
     second_fastq = tmp_path / "second.fastq"

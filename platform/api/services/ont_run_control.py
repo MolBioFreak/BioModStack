@@ -493,8 +493,18 @@ async def _append_observation(
     state: str,
     minknow_payload: dict[str, Any] | None,
     output_files: dict[str, list[str]] | None = None,
+    allow_unmanifested_terminal_correction: bool = False,
 ) -> None:
-    _validate_state_edge(record.state, state)
+    if allow_unmanifested_terminal_correction:
+        if (
+            record.state not in TERMINAL_RUN_STATES
+            or state != "running"
+            or record.terminal_artifact_manifest is not None
+            or record.terminal_artifact_manifest_sha256 is not None
+        ):
+            raise RuntimeError("terminal correction requires unmanifested terminal state and live running evidence")
+    else:
+        _validate_state_edge(record.state, state)
     observed_at = _utc_now()
     next_generation = record.observed_generation + 1
     normalized_output_files = output_files if output_files is not None else (record.output_files or {"fastq": [], "pod5": [], "bam": []})
@@ -815,10 +825,25 @@ async def reconcile_instrument_run(run_id: str) -> dict[str, Any]:
             if record.state in TERMINAL_RUN_STATES:
                 return await _run_response(session, record)
             raise ValueError("host-agent returned an invalid run status") from None
-        # A terminal observation and its manifest are immutable evidence. Later
-        # host retention/output churn must not advance this projection and detach
-        # the manifest's bound observation generation.
+        # A hash-bound terminal manifest is immutable evidence. An unmanifested
+        # terminal projection may be corrected only by positive live-running
+        # evidence; the prior event remains append-only audit history.
         if record.state in TERMINAL_RUN_STATES:
+            if (
+                state == "running"
+                and record.terminal_artifact_manifest is None
+                and record.terminal_artifact_manifest_sha256 is None
+            ):
+                await _append_observation(
+                    session,
+                    record,
+                    event_type="terminal_state_corrected",
+                    state=state,
+                    minknow_payload=bounded_snapshot,
+                    output_files=output_files,
+                    allow_unmanifested_terminal_correction=True,
+                )
+                await session.commit()
             return await _run_response(session, record)
         previous = record.last_minknow_payload if isinstance(record.last_minknow_payload, dict) else {}
         if previous.get("observation_digest") == bounded_snapshot["observation_digest"]:

@@ -41,16 +41,16 @@ def test_migration_versions_are_unique_with_md_before_ont() -> None:
     assert len({migration.version for migration in MIGRATIONS}) == len(MIGRATIONS)
 
 
-def test_legacy_ont_17_to_20_ledger_is_transactionally_shifted_for_md_17() -> None:
+def _canonical_prefix_through_16() -> tuple[tuple[int, str], ...]:
+    return tuple((migration.version, migration.name) for migration in MIGRATIONS[:16])
+
+
+def test_legacy_ont_17_to_20_ledger_is_transactionally_shifted_with_md_17() -> None:
     connection = sqlite3.connect(":memory:")
     _ensure_migrations_table(connection)
-    _insert_rows(connection, LEGACY_ONT_ROWS)
+    _insert_rows(connection, _canonical_prefix_through_16() + LEGACY_ONT_ROWS)
 
     _reconcile_legacy_ont_migration_versions(connection)
-    connection.execute(
-        "INSERT INTO schema_migrations (version, name, applied_at) VALUES (17, 'add_md_lifecycle', 'now')"
-    )
-    connection.commit()
 
     assert connection.execute(
         "SELECT version, name FROM schema_migrations WHERE version >= 17 ORDER BY version"
@@ -61,6 +61,44 @@ def test_legacy_ont_17_to_20_ledger_is_transactionally_shifted_for_md_17() -> No
         (20, "add_ont_terminal_artifact_manifests"),
         (21, "enforce_ont_terminal_artifact_manifest_immutability"),
     ]
+
+
+def test_full_runner_upgrades_complete_legacy_ont_history_to_canonical_v21(tmp_path) -> None:
+    db_path = tmp_path / "legacy-ont.db"
+    connection = sqlite3.connect(db_path)
+    _ensure_migrations_table(connection)
+    _insert_rows(connection, _canonical_prefix_through_16() + LEGACY_ONT_ROWS)
+    connection.close()
+
+    runner.run_all(str(db_path))
+
+    connection = sqlite3.connect(db_path)
+    assert connection.execute(
+        "SELECT version, name FROM schema_migrations ORDER BY version"
+    ).fetchall() == [(migration.version, migration.name) for migration in MIGRATIONS]
+    assert connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'md_runs'"
+    ).fetchone() == (1,)
+    connection.close()
+
+
+def test_legacy_reconciliation_rolls_back_the_entire_ledger_on_validation_failure(monkeypatch) -> None:
+    connection = sqlite3.connect(":memory:")
+    _ensure_migrations_table(connection)
+    original = _canonical_prefix_through_16() + LEGACY_ONT_ROWS
+    _insert_rows(connection, original)
+    monkeypatch.setattr(
+        runner,
+        "_validate_applied_migration_identities",
+        lambda _applied: (_ for _ in ()).throw(RuntimeError("forced validation failure")),
+    )
+
+    with pytest.raises(RuntimeError, match="forced validation failure"):
+        _reconcile_legacy_ont_migration_versions(connection)
+
+    assert connection.execute(
+        "SELECT version, name FROM schema_migrations ORDER BY version"
+    ).fetchall() == list(original)
 
 
 def test_legacy_ont_remap_fails_closed_and_rolls_back_on_unrelated_collision() -> None:

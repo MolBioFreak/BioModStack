@@ -107,6 +107,26 @@ _LEGACY_ONT_TARGET_VERSIONS = {
 }
 
 
+def _has_exact_legacy_ont_prefix(conn: sqlite3.Connection) -> bool:
+    """Recognize only the unpublished contiguous ledger that needs MD insertion."""
+    rows = [
+        (int(version), str(name))
+        for version, name in conn.execute(
+            "SELECT version, name FROM schema_migrations ORDER BY version"
+        ).fetchall()
+    ]
+    canonical_prefix = [
+        (migration.version, migration.name) for migration in MIGRATIONS[:16]
+    ]
+    legacy_tail = [
+        (target - 1, name) for name, target in _LEGACY_ONT_TARGET_VERSIONS.items()
+    ]
+    if len(rows) <= len(canonical_prefix):
+        return False
+    expected = canonical_prefix + legacy_tail[: len(rows) - len(canonical_prefix)]
+    return rows == expected
+
+
 def _reconcile_legacy_ont_migration_versions(conn: sqlite3.Connection) -> None:
     """Move the unpublished ONT 17..20 ledger to 18..21 before MD owns version 17."""
     rows = conn.execute("SELECT version, name FROM schema_migrations ORDER BY version").fetchall()
@@ -156,6 +176,11 @@ def _reconcile_legacy_ont_migration_versions(conn: sqlite3.Connection) -> None:
             )
             if cursor.rowcount != 1:
                 raise RuntimeError(f"failed to publish remapped migration version for {name}")
+        conn.execute(
+            "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
+            (17, "add_md_lifecycle", datetime.utcnow().isoformat()),
+        )
+        _validate_applied_migration_identities(_get_applied_migrations(conn))
         conn.commit()
     except Exception:
         conn.rollback()
@@ -203,6 +228,11 @@ def run_all(db_path: str | None = None) -> None:
     conn = _connect(db_path)
     try:
         _ensure_migrations_table(conn)
+        if _has_exact_legacy_ont_prefix(conn):
+            # Apply the additive MD schema before atomically publishing its ledger
+            # identity alongside the ONT version remap. If this fails, the ledger
+            # remains byte-for-byte unchanged and a retry is safe.
+            _run_migration(MIGRATIONS[16], db_path)
         _reconcile_legacy_ont_migration_versions(conn)
         applied = _get_applied_migrations(conn)
         _validate_applied_migration_identities(applied)
