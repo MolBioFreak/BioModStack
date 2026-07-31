@@ -22,6 +22,21 @@ const safetyTone: Record<BioXpOperatorActionSpec['safety_class'], string> = {
     emergency: 'border-red-700/70 bg-red-950/30',
 };
 
+type PrimitiveGroup = 'critical' | 'motion-power' | 'transport-evidence' | 'safety-recovery' | 'initialization' | 'all' | string;
+
+function criticalGroup(action: BioXpOperatorActionSpec): Exclude<PrimitiveGroup, 'critical' | 'all'> | null {
+    const path = action.informational_path.toLowerCase();
+    if (action.subsystem === 'motion.power') return 'motion-power';
+    if (path === '/reconnect' || path.includes('/maintenance/usb') || path.includes('/hardware/snapshot')) return 'transport-evidence';
+    if (action.safety_class === 'stop' || action.safety_class === 'emergency' || path.includes('/recover') || path.includes('/strict_startup')) return 'safety-recovery';
+    if (path.includes('/initial') || path.includes('/startup')) return 'initialization';
+    return null;
+}
+
+function isCriticalAction(action: BioXpOperatorActionSpec): boolean {
+    return criticalGroup(action) !== null;
+}
+
 function initialInputs(action: BioXpOperatorActionSpec | undefined): Record<string, unknown> {
     if (!action) return {};
     return Object.fromEntries(action.inputs.flatMap((input) => input.default === null || input.default === undefined
@@ -85,16 +100,44 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
     const invoke = useInvokeBioXpOperatorAction();
     const assess = useAssessBioXpOperatorAction();
     const [pane, setPane] = useState<Pane>('primitive');
+    const [subsystemFilter, setSubsystemFilter] = useState<PrimitiveGroup>('all');
+    const [actionSearch, setActionSearch] = useState('');
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [inputs, setInputs] = useState<Record<string, unknown>>({});
     const [localError, setLocalError] = useState<string | null>(null);
     const [assessmentNote, setAssessmentNote] = useState('');
 
-    const actions = useMemo(
-        () => (catalogQuery.error ? [] : (catalogQuery.data?.actions ?? [])).filter((action) => action.kind === pane),
-        [catalogQuery.data?.actions, catalogQuery.error, pane],
+    const primitiveActions = useMemo(
+        () => (catalogQuery.error ? [] : (catalogQuery.data?.actions ?? [])).filter((action) => action.kind === 'primitive'),
+        [catalogQuery.data?.actions, catalogQuery.error],
     );
-    const selected = actions.find((action) => action.action_id === selectedId) ?? actions[0];
+    const subsystemOptions = useMemo(
+        () => [...new Set(primitiveActions.map((action) => action.subsystem))].sort(),
+        [primitiveActions],
+    );
+    const criticalActions = useMemo(() => primitiveActions.filter(isCriticalAction), [primitiveActions]);
+    const browseActions = useMemo(() => {
+        let rows = primitiveActions;
+        if (subsystemFilter === 'motion-power') rows = rows.filter((action) => criticalGroup(action) === 'motion-power');
+        else if (subsystemFilter === 'transport-evidence') rows = rows.filter((action) => criticalGroup(action) === 'transport-evidence');
+        else if (subsystemFilter === 'safety-recovery') rows = rows.filter((action) => criticalGroup(action) === 'safety-recovery');
+        else if (subsystemFilter === 'initialization') rows = rows.filter((action) => criticalGroup(action) === 'initialization');
+        else if (subsystemFilter !== 'all') rows = rows.filter((action) => action.subsystem === subsystemFilter);
+        const query = actionSearch.trim().toLowerCase();
+        if (query) rows = rows.filter((action) => [action.label, action.action_id, action.subsystem, action.informational_path].some((value) => value.toLowerCase().includes(query)));
+        return rows;
+    }, [actionSearch, primitiveActions, subsystemFilter]);
+    const groupedBrowseActions = useMemo(
+        () => [...new Set(browseActions.map((action) => action.subsystem))].sort().map((subsystem) => ({
+            subsystem,
+            actions: browseActions.filter((action) => action.subsystem === subsystem),
+        })),
+        [browseActions],
+    );
+    const paneActions = pane === 'meta'
+        ? (catalogQuery.data?.actions ?? []).filter((action) => action.kind === pane)
+        : pane === 'primitive' ? primitiveActions : [];
+    const selected = paneActions.find((action) => action.action_id === selectedId) ?? paneActions[0];
     const normalizedForAdmission = useMemo(() => {
         if (!selected) return null;
         try {
@@ -106,6 +149,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
     const admission = useBioXpOperatorActionAdmission(
         selected?.action_id ?? null,
         generation,
+        catalogQuery.data?.ownership_generation ?? 0,
         normalizedForAdmission,
         connected,
     );
@@ -127,7 +171,12 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
         try {
             const normalized = normalizeInput(selected, inputs);
             if (selected.requires_confirmation && !window.confirm(`Run ${selected.label}?\n\n${selected.description}`)) return;
-            invoke.mutate({ actionId: selected.action_id, generation, inputs: normalized });
+            invoke.mutate({
+                actionId: selected.action_id,
+                connectionGeneration: generation,
+                ownershipGeneration: catalogQuery.data?.ownership_generation ?? 0,
+                inputs: normalized,
+            });
         } catch (error) {
             setLocalError(error instanceof Error ? error.message : String(error));
         }
@@ -139,7 +188,13 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
             setLocalError('A non-empty operator observation is required for PASS/FAIL.');
             return;
         }
-        assess.mutate({ commandId: receipt.command_id, generation, verdict, note });
+        assess.mutate({
+            commandId: receipt.command_id,
+            connectionGeneration: generation,
+            ownershipGeneration: catalogQuery.data?.ownership_generation ?? 0,
+            verdict,
+            note,
+        });
     };
 
     const contractError = catalogQuery.error ? bioXpErrorText(catalogQuery.error) : null;
@@ -153,7 +208,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
                     <p className="text-sm text-slate-400">Robot-owned action catalog; one tab and one auditable receipt per action. Meta actions execute only robot-owned stage sequences.</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                    <button type="button" className={paneClass(pane === 'primitive')} onClick={() => setPane('primitive')}>Every Action</button>
+                    <button type="button" className={paneClass(pane === 'primitive')} onClick={() => setPane('primitive')}>Individual Controls</button>
                     <button type="button" className={paneClass(pane === 'meta')} onClick={() => setPane('meta')}>Meta Actions</button>
                     <button type="button" className={paneClass(pane === 'logs')} onClick={() => setPane('logs')}>Logs</button>
                 </div>
@@ -177,21 +232,65 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
                 </div>
             ) : (
                 <>
-                    <div className="mt-4 flex gap-2 overflow-x-auto pb-2" role="tablist" aria-label={pane === 'meta' ? 'Meta actions' : 'Every action'}>
-                        {actions.map((action) => (
-                            <button
-                                key={action.action_id}
-                                type="button"
-                                role="tab"
-                                aria-selected={selected?.action_id === action.action_id}
-                                onClick={() => setSelectedId(action.action_id)}
-                                className={`shrink-0 rounded border px-3 py-2 text-left text-xs ${selected?.action_id === action.action_id ? 'border-cyan-500 bg-cyan-950/60' : 'border-slate-700 bg-slate-900'}`}
-                            >
-                                <span className="block font-semibold">{action.label}</span>
-                                <span className="text-slate-500">{action.subsystem} · {action.safety_class}</span>
-                            </button>
-                        ))}
-                    </div>
+                    {pane === 'primitive' ? (
+                        <>
+                            <section className="mt-4 rounded border border-cyan-800/60 bg-cyan-950/20 p-3" data-critical-controls>
+                                <h3 className="font-semibold text-cyan-100">Critical Controls</h3>
+                                <p className="mt-1 text-xs text-slate-400">Always visible robot-published power, transport/evidence, safety/recovery, and initialization actions.</p>
+                                <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                                    {criticalActions.map((action) => (
+                                        <button key={action.action_id} type="button" data-action-id={action.action_id} onClick={() => setSelectedId(action.action_id)} className={`rounded border px-3 py-2 text-left text-xs ${selected?.action_id === action.action_id ? 'border-cyan-400 bg-cyan-950/70' : 'border-slate-700 bg-slate-900'}`}>
+                                            <span className="block font-semibold">{action.label}</span>
+                                            <span className="text-slate-500">{criticalGroup(action)} · {action.safety_class}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            </section>
+                            <div className="mt-4 grid gap-3 rounded border border-slate-800 bg-slate-900/60 p-3 md:grid-cols-[minmax(14rem,20rem)_1fr]">
+                                <label className="text-xs text-slate-300">
+                                    Control group
+                                    <select value={subsystemFilter} onChange={(event) => setSubsystemFilter(event.target.value)} className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 text-sm">
+                                        <option value="all">All Individual Controls</option>
+                                        <option value="motion-power">Motion Power</option>
+                                        <option value="transport-evidence">Transport / Evidence</option>
+                                        <option value="safety-recovery">Safety / Recovery</option>
+                                        <option value="initialization">Initialization</option>
+                                        {subsystemOptions.map((subsystem) => <option key={subsystem} value={subsystem}>{subsystem}</option>)}
+                                    </select>
+                                </label>
+                                <label className="text-xs text-slate-300">
+                                    Search individual controls
+                                    <input type="search" value={actionSearch} onChange={(event) => setActionSearch(event.target.value)} placeholder="24 V, snapshot, stop, axis…" className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 text-sm" />
+                                </label>
+                                <p className="text-xs text-slate-500 md:col-span-2">Showing {browseActions.length} of {primitiveActions.length} authoritative individual controls.</p>
+                            </div>
+                            <div className="mt-4 space-y-3" data-individual-control-groups>
+                                {groupedBrowseActions.map((group) => (
+                                    <section key={group.subsystem} className="rounded border border-slate-800 bg-slate-950/60 p-3" data-subsystem={group.subsystem}>
+                                        <h3 className="text-sm font-semibold text-slate-200">{group.subsystem} <span className="text-slate-500">({group.actions.length})</span></h3>
+                                        <div className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                                            {group.actions.map((action) => (
+                                                <button key={action.action_id} type="button" data-action-id={action.action_id} onClick={() => setSelectedId(action.action_id)} className={`rounded border px-3 py-2 text-left text-xs ${selected?.action_id === action.action_id ? 'border-cyan-500 bg-cyan-950/60' : 'border-slate-700 bg-slate-900'}`}>
+                                                    <span className="block font-semibold">{action.label}</span>
+                                                    <span className="text-slate-500">{action.safety_class}</span>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </section>
+                                ))}
+                            </div>
+                            {browseActions.length === 0 && <p className="mt-2 rounded border border-amber-800/60 bg-amber-950/30 p-3 text-sm text-amber-200">No authoritative controls match this group or search.</p>}
+                        </>
+                    ) : (
+                        <div className="mt-4 flex gap-2 overflow-x-auto pb-2" role="tablist" aria-label="Meta actions">
+                            {paneActions.map((action) => (
+                                <button key={action.action_id} type="button" role="tab" aria-selected={selected?.action_id === action.action_id} onClick={() => setSelectedId(action.action_id)} className={`shrink-0 rounded border px-3 py-2 text-left text-xs ${selected?.action_id === action.action_id ? 'border-cyan-500 bg-cyan-950/60' : 'border-slate-700 bg-slate-900'}`}>
+                                    <span className="block font-semibold">{action.label}</span>
+                                    <span className="text-slate-500">{action.subsystem} · {action.safety_class}</span>
+                                </button>
+                            ))}
+                        </div>
+                    )}
                     {selected && (
                         <article className={`mt-2 rounded border p-4 ${safetyTone[selected.safety_class]}`} role="tabpanel">
                             <div className="flex flex-wrap justify-between gap-3">

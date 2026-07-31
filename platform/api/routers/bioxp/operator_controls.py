@@ -84,10 +84,10 @@ async def operator_action_admission(
     try:
         payload = await runtime.connection.request_active(
             "operator_action_admission",
-            expected_generation=request.expected_generation,
+            expected_generation=request.expected_connection_generation,
             require_fresh=True,
             path_params={"action_id": action_id},
-            json_data={"expected_generation": request.expected_generation, "inputs": request.inputs},
+            json_data={"expected_generation": request.expected_ownership_generation, "inputs": request.inputs},
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
@@ -110,11 +110,11 @@ async def invoke_operator_action(
     try:
         payload = await runtime.connection.request_active(
             "invoke_operator_action",
-            expected_generation=request.expected_generation,
+            expected_generation=request.expected_connection_generation,
             require_fresh=True,
             path_params={"action_id": action_id},
             json_data={
-                "expected_generation": request.expected_generation,
+                "expected_generation": request.expected_ownership_generation,
                 "idempotency_key": request.idempotency_key,
                 "inputs": request.inputs,
             },
@@ -177,11 +177,11 @@ async def assess_operator_action(
     try:
         payload = await runtime.connection.request_active(
             "assess_operator_action",
-            expected_generation=request.expected_generation,
+            expected_generation=request.expected_connection_generation,
             require_fresh=True,
             path_params={"command_id": command_id},
             json_data={
-                "expected_generation": request.expected_generation,
+                "expected_generation": request.expected_ownership_generation,
                 "idempotency_key": request.idempotency_key,
                 "verdict": request.verdict,
                 "note": request.note,

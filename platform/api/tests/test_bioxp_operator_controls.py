@@ -187,7 +187,8 @@ def test_dashboard_and_input_admission_are_robot_owned(monkeypatch):
     client, runtime = make_client(monkeypatch)
     dashboard = client.get("/api/bioxp/operator-controls/dashboard")
     admission = client.post("/api/bioxp/operator-controls/actions/motion.home_xy/admission", json={
-        "expected_generation": 77,
+        "expected_connection_generation": 77,
+        "expected_ownership_generation": 7,
         "inputs": {},
     })
     assert dashboard.status_code == 200, dashboard.text
@@ -199,14 +200,15 @@ def test_dashboard_and_input_admission_are_robot_owned(monkeypatch):
     assert admission.json()["disabled_reason"] == "Motion is inactive. Activate motion before moving this motor."
     assert runtime.connection.client.calls == [
         ("operator_dashboard", {}),
-        ("operator_action_admission", {"path_params": {"action_id": "motion.home_xy"}, "json_data": {"expected_generation": 77, "inputs": {}}}),
+        ("operator_action_admission", {"path_params": {"action_id": "motion.home_xy"}, "json_data": {"expected_generation": 7, "inputs": {}}}),
     ]
 
 
 def test_one_invocation_maps_to_one_action_id_not_a_browser_path(monkeypatch):
     client, runtime = make_client(monkeypatch)
     response = client.post("/api/bioxp/operator-controls/actions/motion.home_xy", json={
-        "expected_generation": 77,
+        "expected_connection_generation": 77,
+        "expected_ownership_generation": 7,
         "idempotency_key": "invoke-12345678",
         "inputs": {},
     })
@@ -217,7 +219,7 @@ def test_one_invocation_maps_to_one_action_id_not_a_browser_path(monkeypatch):
         {
             "path_params": {"action_id": "motion.home_xy"},
             "json_data": {
-                "expected_generation": 77,
+                "expected_generation": 7,
                 "idempotency_key": "invoke-12345678",
                 "inputs": {},
             },
@@ -229,7 +231,8 @@ def test_receipt_identity_mismatch_fails_closed(monkeypatch):
     client, runtime = make_client(monkeypatch)
     runtime.connection.client.responses["invoke_operator_action"] = receipt(action_id="motion.home_z")
     response = client.post("/api/bioxp/operator-controls/actions/motion.home_xy", json={
-        "expected_generation": 77,
+        "expected_connection_generation": 77,
+        "expected_ownership_generation": 7,
         "idempotency_key": "invoke-12345678",
         "inputs": {},
     })
@@ -239,16 +242,19 @@ def test_receipt_identity_mismatch_fails_closed(monkeypatch):
 def test_mutation_gate_blocks_action_and_assessment(monkeypatch):
     client, runtime = make_client(monkeypatch, mutations=False)
     admission = client.post("/api/bioxp/operator-controls/actions/motion.home_xy/admission", json={
-        "expected_generation": 77,
+        "expected_connection_generation": 77,
+        "expected_ownership_generation": 7,
         "inputs": {},
     })
     invoke = client.post("/api/bioxp/operator-controls/actions/motion.home_xy", json={
-        "expected_generation": 77,
+        "expected_connection_generation": 77,
+        "expected_ownership_generation": 7,
         "idempotency_key": "invoke-12345678",
         "inputs": {},
     })
     assess = client.post("/api/bioxp/operator-controls/receipts/cmd-1/assessment", json={
-        "expected_generation": 77,
+        "expected_connection_generation": 77,
+        "expected_ownership_generation": 7,
         "idempotency_key": "assess-12345678",
         "verdict": "pass",
         "note": "Observed X/Y references.",
@@ -259,11 +265,27 @@ def test_mutation_gate_blocks_action_and_assessment(monkeypatch):
     assert runtime.connection.client.calls == []
 
 
+def test_operator_requests_require_both_generation_domains(monkeypatch):
+    client, runtime = make_client(monkeypatch)
+    missing_ownership = client.post("/api/bioxp/operator-controls/actions/motion.home_xy/admission", json={
+        "expected_connection_generation": 77,
+        "inputs": {},
+    })
+    missing_connection = client.post("/api/bioxp/operator-controls/actions/motion.home_xy/admission", json={
+        "expected_ownership_generation": 7,
+        "inputs": {},
+    })
+    assert missing_ownership.status_code == 422
+    assert missing_connection.status_code == 422
+    assert runtime.connection.client.calls == []
+
+
 def test_history_and_operator_assessment_are_robot_authoritative(monkeypatch):
     client, runtime = make_client(monkeypatch)
     history = client.get("/api/bioxp/operator-controls/history")
     assessed = client.post("/api/bioxp/operator-controls/receipts/cmd-1/assessment", json={
-        "expected_generation": 77,
+        "expected_connection_generation": 77,
+        "expected_ownership_generation": 7,
         "idempotency_key": "assess-12345678",
         "verdict": "pass",
         "note": "Observed X/Y references.",
@@ -278,7 +300,7 @@ def test_history_and_operator_assessment_are_robot_authoritative(monkeypatch):
         ("assess_operator_action", {
             "path_params": {"command_id": "cmd-1"},
             "json_data": {
-                "expected_generation": 77,
+                "expected_generation": 7,
                 "idempotency_key": "assess-12345678",
                 "verdict": "pass",
                 "note": "Observed X/Y references.",

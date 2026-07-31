@@ -8,11 +8,16 @@ const client = readFileSync(resolve('src/lib/bioxpClient.ts'), 'utf8');
 const cockpit = readFileSync(resolve('src/components/BioXpCockpit.tsx'), 'utf8');
 const dashboard = readFileSync(resolve('src/components/BioXpQuickDashboard.tsx'), 'utf8');
 
-test('catalog-driven control plane renders every action, meta actions, and logs as separate panes', () => {
+test('catalog-driven control plane renders every action, critical groups, meta actions, and logs as separate panes', () => {
     for (const label of [
-        'OEM Route Control Plane', 'Every Action', 'Meta Actions', 'Logs',
-        'role="tablist"', 'role="tab"', 'role="tabpanel"', 'Run exactly this action',
+        'OEM Route Control Plane', 'Individual Controls', 'Critical Controls', 'All Individual Controls',
+        'Motion Power', 'Transport / Evidence', 'Safety / Recovery', 'Initialization',
+        'Meta Actions', 'Logs', 'role="tablist"', 'role="tab"', 'role="tabpanel"',
+        'Run exactly this action', 'Search individual controls',
     ]) assert.match(source, new RegExp(label));
+    for (const token of ['isCriticalAction', 'action.subsystem === subsystemFilter', 'catalogQuery.data?.actions']) {
+        assert.ok(source.includes(token), `missing catalog grouping token: ${token}`);
+    }
     assert.match(cockpit, /BioXpOperatorControlTabs/);
 });
 
@@ -22,6 +27,10 @@ test('action forms and route provenance come only from the robot catalog and adm
         'selected.source_anchor', 'selected.stages', 'selected.enabled', 'selected.disabled_reason',
         'selected.dependencies', 'admission.data?.enabled', 'source_authority_verified',
     ]) assert.ok(source.includes(field), `missing source token: ${field}`);
+    assert.match(source, /catalogQuery\.data\?\.ownership_generation/);
+    assert.match(client, /expected_connection_generation/);
+    assert.match(client, /expected_ownership_generation/);
+    assert.doesNotMatch(client, /\{ expected_generation: generation, inputs:/);
     assert.doesNotMatch(source, /api\.post\([^)]*selected\.informational_path/);
     assert.match(source, /selected\?\.safety_class === 'stop'/);
     assert.match(source, /selected\?\.safety_class === 'emergency'/);
