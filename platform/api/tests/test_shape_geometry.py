@@ -218,12 +218,64 @@ def test_invalid_obj_is_rejected(payload: bytes, code: str) -> None:
     assert exc.value.code == code
 
 
+def test_self_intersection_gate_rejects_coplanar_overlap() -> None:
+    geometry = _geometry()
+    vertices = np.asarray(
+        [
+            [0.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+            [0.0, 3.0, 0.0],
+            [0.5, 0.5, 0.0],
+            [2.5, 0.5, 0.0],
+            [0.5, 2.5, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    faces = np.asarray([[0, 1, 2], [3, 4, 5]], dtype=np.int64)
+
+    with pytest.raises(geometry.ShapeGeometryError) as exc:
+        geometry._reject_self_intersections(vertices, faces)
+
+    assert exc.value.code == "self_intersection"
+
+
+def test_self_intersection_gate_rejects_crossing_faces_that_share_one_vertex() -> None:
+    geometry = _geometry()
+    vertices = np.asarray(
+        [
+            [0.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [0.0, 2.0, 0.0],
+            [1.0, -1.0, -1.0],
+            [1.0, 1.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    faces = np.asarray([[0, 1, 2], [0, 3, 4]], dtype=np.int64)
+
+    with pytest.raises(geometry.ShapeGeometryError) as exc:
+        geometry._reject_self_intersections(vertices, faces)
+
+    assert exc.value.code == "self_intersection"
+
+
 def test_conversion_bounds_are_enforced() -> None:
     geometry = _geometry()
 
-    with pytest.raises(geometry.ShapeGeometryError) as exc:
-        geometry.canonicalize_obj(CUBE_OBJ, angstrom_per_unit=0.0)
-    assert exc.value.code == "invalid_scale"
+    meter_scaled = geometry.canonicalize_obj(CUBE_OBJ, angstrom_per_unit=10_000_000_000.0)
+    assert meter_scaled.bounds_angstrom == [
+        -10_000_000_000.0,
+        -10_000_000_000.0,
+        -10_000_000_000.0,
+        10_000_000_000.0,
+        10_000_000_000.0,
+        10_000_000_000.0,
+    ]
+
+    for invalid_scale in (0.0, 10_000_000_001.0):
+        with pytest.raises(geometry.ShapeGeometryError) as exc:
+            geometry.canonicalize_obj(CUBE_OBJ, angstrom_per_unit=invalid_scale)
+        assert exc.value.code == "invalid_scale"
 
 
 def test_builtin_box_preset_is_deterministic_and_uses_obj_admission() -> None:
@@ -307,6 +359,7 @@ async def test_shape_geometry_http_upload_list_and_preview(tmp_path: Path, monke
             assert uploaded.status_code == 201, uploaded.text
             body = uploaded.json()
             assert body["vertex_count"] == 8 and body["point_count"] == 4096
+            assert len(body["preview_obj_sha256"]) == 64
             assert "principal" not in body and "owner" not in body
 
             listed = await client.get("/api/shape-blueprint/geometries")
@@ -316,6 +369,17 @@ async def test_shape_geometry_http_upload_list_and_preview(tmp_path: Path, monke
             preview = await client.get(f"/api/shape-blueprint/geometries/{body['geometry_id']}/preview.obj")
             assert preview.status_code == 200
             assert preview.content.startswith(b"# bms_shape_canonical_obj_v1")
+
+            preview_path = next(
+                (tmp_path / "data" / "shape_blueprint" / "geometries").glob("*/preview.obj")
+            )
+            preview_path.chmod(0o640)
+            preview_path.write_bytes(preview.content + b"# corrupted\n")
+            corrupted = await client.get(
+                f"/api/shape-blueprint/geometries/{body['geometry_id']}/preview.obj"
+            )
+            assert corrupted.status_code == 409
+            assert corrupted.json()["detail"] == "Shape preview artifact hash mismatch"
     finally:
         await engine.dispose()
 

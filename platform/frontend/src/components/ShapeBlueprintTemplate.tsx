@@ -65,6 +65,8 @@ export default function ShapeBlueprintTemplate() {
         [geometries, selectedId],
     );
     const selectedMaxDimension = selected ? Math.max(...selected.dimensions_angstrom) : null;
+    const hasHashBoundSurface = Boolean(selected?.preview_obj_sha256);
+    const effectiveReviewMode = reviewMode === 'surface' && hasHashBoundSurface ? 'surface' : 'points';
 
     const upload = useMutation({
         mutationFn: () => {
@@ -127,7 +129,7 @@ export default function ShapeBlueprintTemplate() {
                     {file?.name.toLowerCase().endsWith('.stl') && <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-xs leading-5 text-amber-100"><strong>Confirm source units.</strong> STL files do not encode units. For protein-scale shape borrowing, the default treats each STL coordinate unit as 1 Å; literal millimeter scaling is usually far too large.</div>}
                     <div className="grid grid-cols-[1fr_auto] gap-2">
                         <select value={unit} onChange={(event) => setUnit(event.target.value)} className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white">
-                            <option value="angstrom">Ångström (1 mesh unit = 1 Å)</option><option value="nanometer">Nanometer</option><option value="micrometer">Micrometer</option><option value="millimeter">Millimeter</option><option value="centimeter">Centimeter</option><option value="inch">Inch</option>
+                            <option value="angstrom">Ångström (1 mesh unit = 1 Å)</option><option value="nanometer">Nanometer</option><option value="micrometer">Micrometer</option><option value="millimeter">Millimeter</option><option value="centimeter">Centimeter</option><option value="meter">Meter</option><option value="inch">Inch</option><option value="foot">Foot</option>
                         </select>
                         <button type="button" disabled={!file || upload.isPending} onClick={() => upload.mutate()} className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-40">{upload.isPending ? 'Validating mesh…' : 'Admit mesh'}</button>
                     </div>
@@ -152,14 +154,14 @@ export default function ShapeBlueprintTemplate() {
                 <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/80">
                     <div className="border-b border-slate-800 p-4">
                         <div className="flex flex-wrap items-start justify-between gap-3">
-                            <div><h2 className="font-semibold text-white">Canonical geometry review</h2><p className="mt-1 text-xs text-slate-400">Review the exact server-canonicalized surface or hash-bound point pool—not the raw upload or a browser reconstruction.</p></div>
+                            <div><h2 className="font-semibold text-white">Canonical geometry review</h2><p className="mt-1 text-xs text-slate-400">{hasHashBoundSurface ? 'Review the exact hash-bound server-canonicalized surface or point pool—not the raw upload or a browser reconstruction.' : 'This legacy surface is not hash-bound; exact review is limited to the canonical point pool.'}</p></div>
                             <div className="flex rounded-lg border border-slate-700 p-1 text-xs">
-                                <button type="button" onClick={() => setReviewMode('surface')} className={`rounded px-3 py-1 ${reviewMode === 'surface' ? 'bg-cyan-600 text-white' : 'text-slate-300'}`}>Surface</button>
-                                <button type="button" onClick={() => setReviewMode('points')} className={`rounded px-3 py-1 ${reviewMode === 'points' ? 'bg-cyan-600 text-white' : 'text-slate-300'}`}>Points</button>
+                                <button type="button" disabled={!hasHashBoundSurface} onClick={() => setReviewMode('surface')} className={`rounded px-3 py-1 disabled:cursor-not-allowed disabled:opacity-40 ${effectiveReviewMode === 'surface' ? 'bg-cyan-600 text-white' : 'text-slate-300'}`}>Surface</button>
+                                <button type="button" onClick={() => setReviewMode('points')} className={`rounded px-3 py-1 ${effectiveReviewMode === 'points' ? 'bg-cyan-600 text-white' : 'text-slate-300'}`}>Points</button>
                             </div>
                         </div>
                     </div>
-                    {selected ? (reviewMode === 'surface'
+                    {selected ? (effectiveReviewMode === 'surface'
                         ? <CanonicalMeshPreview url={`/api/shape-blueprint/geometries/${selected.geometry_id}/preview.obj`} height={430} label="Canonical Shape surface" />
                         : <MolstarViewer structureUrl={`/api/shape-blueprint/geometries/${selected.geometry_id}/points.cif`} format="cif" height={430} label="Canonical Shape point pool" />)
                         : <div className="flex h-[430px] items-center justify-center text-sm text-slate-500">Select geometry to preview</div>}
@@ -169,6 +171,7 @@ export default function ShapeBlueprintTemplate() {
                         <div className="sm:col-span-2">Dimensions <span className="font-mono text-cyan-200">{selected.dimensions_angstrom.map(formatAngstrom).join(' × ')}</span></div>
                         <div>Source bytes <span className="font-mono text-cyan-200" title={selected.source_sha256}>{shortHash(selected.source_sha256)}</span></div>
                         <div>Geometry <span className="font-mono text-cyan-200" title={selected.geometry_sha256}>{shortHash(selected.geometry_sha256)}</span></div>
+                        {selected.preview_obj_sha256 && <div>Surface <span className="font-mono text-cyan-200" title={selected.preview_obj_sha256}>{shortHash(selected.preview_obj_sha256)}</span></div>}
                         <div>Points <span className="font-mono text-cyan-200" title={selected.point_pool_sha256}>{shortHash(selected.point_pool_sha256)}</span></div>
                         <div>SDF <span className="font-mono text-cyan-200" title={selected.sdf_sha256}>{shortHash(selected.sdf_sha256)}</span></div>
                         <div>Convention <span className="text-emerald-300">{selected.sdf_sign}</span> • {selected.sdf_grid_shape.join('×')}</div>

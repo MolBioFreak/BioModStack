@@ -1,4 +1,4 @@
-"""Deterministic, bounded Shape Blueprint OBJ admission.
+"""Deterministic, bounded Shape Blueprint OBJ/STL admission.
 
 This module intentionally owns only geometry. It has no user, policy, job, or
 workflow concepts. Canonical buffers are little-endian and point sampling is
@@ -25,6 +25,7 @@ POINT_COUNT = 4096
 SDF_GRID_SIZE = 48
 POINT_BATCH = 8192
 MAX_POINT_DRAWS = 4_000_000
+MAX_ANGSTROM_PER_UNIT = 10_000_000_000.0
 
 
 class ShapeGeometryError(ValueError):
@@ -264,31 +265,147 @@ def _validate_topology(vertices: np.ndarray, faces: np.ndarray) -> None:
     _reject_self_intersections(vertices, faces)
 
 
-def _segment_crosses_triangle(start: np.ndarray, end: np.ndarray, triangle: np.ndarray) -> bool:
-    direction = end - start
-    edge1 = triangle[1] - triangle[0]
-    edge2 = triangle[2] - triangle[0]
-    h = np.cross(direction, edge2)
-    determinant = float(np.dot(edge1, h))
-    if abs(determinant) <= 1e-12:
-        return False
-    inverse = 1.0 / determinant
-    offset = start - triangle[0]
-    u = inverse * float(np.dot(offset, h))
-    if u < -1e-10 or u > 1.0 + 1e-10:
-        return False
-    q = np.cross(offset, edge1)
-    v = inverse * float(np.dot(direction, q))
-    if v < -1e-10 or u + v > 1.0 + 1e-10:
-        return False
-    distance = inverse * float(np.dot(edge2, q))
-    return 1e-10 < distance < 1.0 - 1e-10
+def _intersection_tolerance(first: np.ndarray, second: np.ndarray) -> float:
+    coordinate_scale = max(1.0, float(np.max(np.abs(np.concatenate((first, second), axis=0)))))
+    return float(np.finfo(np.float64).eps * 256.0 * coordinate_scale)
 
 
-def _triangles_cross(first: np.ndarray, second: np.ndarray) -> bool:
+def _same_point(point: np.ndarray, candidates: list[np.ndarray], tolerance: float) -> bool:
+    return any(float(np.linalg.norm(point - candidate)) <= tolerance for candidate in candidates)
+
+
+def _segment_triangle_intersection(
+    start: np.ndarray,
+    end: np.ndarray,
+    triangle: np.ndarray,
+    tolerance: float,
+) -> np.ndarray | None:
+    normal = np.cross(triangle[1] - triangle[0], triangle[2] - triangle[0])
+    normal_length = float(np.linalg.norm(normal))
+    if normal_length <= tolerance:
+        return None
+    normal /= normal_length
+    start_distance = float(np.dot(start - triangle[0], normal))
+    end_distance = float(np.dot(end - triangle[0], normal))
+    if (start_distance > tolerance and end_distance > tolerance) or (
+        start_distance < -tolerance and end_distance < -tolerance
+    ):
+        return None
+    denominator = start_distance - end_distance
+    if abs(denominator) <= tolerance:
+        return None
+    fraction = start_distance / denominator
+    if fraction < -tolerance or fraction > 1.0 + tolerance:
+        return None
+    point = start + fraction * (end - start)
+
+    edge0 = triangle[1] - triangle[0]
+    edge1 = triangle[2] - triangle[0]
+    offset = point - triangle[0]
+    dot00 = float(np.dot(edge0, edge0))
+    dot01 = float(np.dot(edge0, edge1))
+    dot11 = float(np.dot(edge1, edge1))
+    dot20 = float(np.dot(offset, edge0))
+    dot21 = float(np.dot(offset, edge1))
+    barycentric_denominator = dot00 * dot11 - dot01 * dot01
+    if abs(barycentric_denominator) <= tolerance * tolerance:
+        return None
+    u = (dot11 * dot20 - dot01 * dot21) / barycentric_denominator
+    v = (dot00 * dot21 - dot01 * dot20) / barycentric_denominator
+    barycentric_tolerance = 1e-10
+    if u < -barycentric_tolerance or v < -barycentric_tolerance or u + v > 1.0 + barycentric_tolerance:
+        return None
+    return point
+
+
+def _orient_2d(first: np.ndarray, second: np.ndarray, third: np.ndarray) -> float:
+    return float((second[0] - first[0]) * (third[1] - first[1]) - (second[1] - first[1]) * (third[0] - first[0]))
+
+
+def _point_strictly_inside_triangle_2d(point: np.ndarray, triangle: np.ndarray, tolerance: float) -> bool:
+    orientations = [_orient_2d(triangle[index], triangle[(index + 1) % 3], point) for index in range(3)]
+    return (all(value > tolerance for value in orientations) or all(value < -tolerance for value in orientations))
+
+
+def _point_on_segment_2d(point: np.ndarray, start: np.ndarray, end: np.ndarray, tolerance: float) -> bool:
+    if abs(_orient_2d(start, end, point)) > tolerance:
+        return False
+    return bool(np.all(point >= np.minimum(start, end) - tolerance) and np.all(point <= np.maximum(start, end) + tolerance))
+
+
+def _coplanar_triangles_overlap(
+    first: np.ndarray,
+    second: np.ndarray,
+    shared_points: list[np.ndarray],
+    tolerance: float,
+) -> bool:
+    normal = np.cross(first[1] - first[0], first[2] - first[0])
+    drop_axis = int(np.argmax(np.abs(normal)))
+    first_2d = np.delete(first, drop_axis, axis=1)
+    second_2d = np.delete(second, drop_axis, axis=1)
+    shared_2d = [np.delete(point, drop_axis) for point in shared_points]
+    area_tolerance = tolerance * max(1.0, float(np.max(np.abs(np.concatenate((first_2d, second_2d), axis=0)))))
+
+    if any(_point_strictly_inside_triangle_2d(point, second_2d, area_tolerance) for point in first_2d):
+        return True
+    if any(_point_strictly_inside_triangle_2d(point, first_2d, area_tolerance) for point in second_2d):
+        return True
+
+    for first_index in range(3):
+        first_start = first_2d[first_index]
+        first_end = first_2d[(first_index + 1) % 3]
+        for second_index in range(3):
+            second_start = second_2d[second_index]
+            second_end = second_2d[(second_index + 1) % 3]
+            orientations = (
+                _orient_2d(first_start, first_end, second_start),
+                _orient_2d(first_start, first_end, second_end),
+                _orient_2d(second_start, second_end, first_start),
+                _orient_2d(second_start, second_end, first_end),
+            )
+            if orientations[0] * orientations[1] < -(area_tolerance**2) and orientations[2] * orientations[3] < -(area_tolerance**2):
+                return True
+            if all(abs(value) <= area_tolerance for value in orientations):
+                axis = int(np.argmax(np.abs(first_end - first_start)))
+                overlap = min(first_end[axis], second_end[axis]) - max(first_start[axis], second_start[axis])
+                if overlap > tolerance:
+                    return True
+            for point, start, end in (
+                (first_start, second_start, second_end),
+                (first_end, second_start, second_end),
+                (second_start, first_start, first_end),
+                (second_end, first_start, first_end),
+            ):
+                if _point_on_segment_2d(point, start, end, area_tolerance) and not _same_point(point, shared_2d, tolerance):
+                    return True
+    return False
+
+
+def _triangles_intersect(
+    first: np.ndarray,
+    second: np.ndarray,
+    shared_points: list[np.ndarray],
+) -> bool:
+    tolerance = _intersection_tolerance(first, second)
+    first_normal = np.cross(first[1] - first[0], first[2] - first[0])
+    second_normal = np.cross(second[1] - second[0], second[2] - second[0])
+    first_length = float(np.linalg.norm(first_normal))
+    second_length = float(np.linalg.norm(second_normal))
+    first_unit = first_normal / first_length
+    second_unit = second_normal / second_length
+    coplanar = (
+        float(np.linalg.norm(np.cross(first_unit, second_unit))) <= tolerance
+        and all(abs(float(np.dot(point - first[0], first_unit))) <= tolerance for point in second)
+    )
+    if coplanar:
+        return _coplanar_triangles_overlap(first, second, shared_points, tolerance)
+
     for triangle, target in ((first, second), (second, first)):
         for index in range(3):
-            if _segment_crosses_triangle(triangle[index], triangle[(index + 1) % 3], target):
+            point = _segment_triangle_intersection(
+                triangle[index], triangle[(index + 1) % 3], target, tolerance
+            )
+            if point is not None and not _same_point(point, shared_points, tolerance):
                 return True
     return False
 
@@ -305,7 +422,8 @@ def _reject_self_intersections(vertices: np.ndarray, faces: np.ndarray) -> None:
         active = [other for other in active if upper[other, 0] >= lower[index, 0] - 1e-12]
         face_vertices = set(faces[index].tolist())
         for other in active:
-            if face_vertices.intersection(faces[other].tolist()):
+            shared_indices = sorted(face_vertices.intersection(faces[other].tolist()))
+            if len(shared_indices) >= 2:
                 continue
             if (
                 upper[other, 1] < lower[index, 1] - 1e-12
@@ -317,7 +435,8 @@ def _reject_self_intersections(vertices: np.ndarray, faces: np.ndarray) -> None:
             comparisons += 1
             if comparisons > 2_000_000:
                 _fail("mesh_too_complex", "self-intersection broad phase exceeded its bounded work limit")
-            if _triangles_cross(triangles[index], triangles[other]):
+            shared_points = [vertices[vertex_index] for vertex_index in shared_indices]
+            if _triangles_intersect(triangles[index], triangles[other], shared_points):
                 _fail("self_intersection", "mesh contains intersecting non-adjacent triangles")
         active.append(index)
 
@@ -481,6 +600,8 @@ def _canonicalize_parsed(
     sdf, sdf_origin, sdf_spacing = _signed_distance_grid(vertices, faces_u32.astype(np.int64))
     sdf_bytes = sdf.tobytes(order="C")
     sdf_sha256 = hashlib.sha256(sdf_bytes).hexdigest()
+    preview_obj = _preview_obj(vertices, faces_u32)
+    preview_obj_sha256 = hashlib.sha256(preview_obj).hexdigest()
     manifest = {
         **manifest,
         "geometry_sha256": geometry_sha256,
@@ -491,6 +612,7 @@ def _canonicalize_parsed(
         "sdf_spacing_angstrom": sdf_spacing,
         "sdf_sha256": sdf_sha256,
         "sdf_sign": "positive_inside",
+        "preview_obj_sha256": preview_obj_sha256,
     }
     return CanonicalGeometry(
         source_sha256=source_sha256,
@@ -504,7 +626,7 @@ def _canonicalize_parsed(
         sdf_shape=[SDF_GRID_SIZE, SDF_GRID_SIZE, SDF_GRID_SIZE],
         sdf_origin_angstrom=sdf_origin,
         sdf_spacing_angstrom=sdf_spacing,
-        preview_obj=_preview_obj(vertices, faces_u32),
+        preview_obj=preview_obj,
         vertex_count=len(vertices),
         face_count=len(faces_u32),
         point_count=POINT_COUNT,
@@ -514,8 +636,8 @@ def _canonicalize_parsed(
 
 
 def canonicalize_obj(payload: bytes, *, angstrom_per_unit: float) -> CanonicalGeometry:
-    if not math.isfinite(angstrom_per_unit) or angstrom_per_unit <= 0 or angstrom_per_unit > 1e9:
-        _fail("invalid_scale", "angstrom_per_unit must be finite and in (0, 1e9]")
+    if not math.isfinite(angstrom_per_unit) or angstrom_per_unit <= 0 or angstrom_per_unit > MAX_ANGSTROM_PER_UNIT:
+        _fail("invalid_scale", "angstrom_per_unit must be finite and in (0, 1e10]")
     vertices, faces = _parse_obj(payload)
     return _canonicalize_parsed(
         payload,
@@ -536,8 +658,8 @@ def canonicalize_mesh(
         return canonicalize_obj(payload, angstrom_per_unit=angstrom_per_unit)
     if normalized_format != "stl":
         _fail("unsupported_format", "supported mesh formats are OBJ and STL")
-    if not math.isfinite(angstrom_per_unit) or angstrom_per_unit <= 0 or angstrom_per_unit > 1e9:
-        _fail("invalid_scale", "angstrom_per_unit must be finite and in (0, 1e9]")
+    if not math.isfinite(angstrom_per_unit) or angstrom_per_unit <= 0 or angstrom_per_unit > MAX_ANGSTROM_PER_UNIT:
+        _fail("invalid_scale", "angstrom_per_unit must be finite and in (0, 1e10]")
     vertices, faces, parser = _parse_stl(payload)
     return _canonicalize_parsed(
         payload,

@@ -67,6 +67,53 @@ test('Shape Blueprint numeric state stays within the API integer contract', asyn
     client.clear();
 });
 
+test('legacy Shape geometry without a surface digest defaults to hash-bound points', async () => {
+    memory.clear();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client.setQueryData(['shape-geometries'], [{
+        geometry_id: 'geom_legacy',
+        source_id: 'cad_legacy',
+        geometry_sha256: '1'.repeat(64),
+        source_sha256: '2'.repeat(64),
+        preview_obj_sha256: null,
+        point_pool_sha256: '3'.repeat(64),
+        sdf_sha256: '4'.repeat(64),
+        sdf_sign: 'positive_inside',
+        sdf_grid_shape: [48, 48, 48],
+        vertex_count: 8,
+        face_count: 12,
+        point_count: 4096,
+        bounds_angstrom: [-1, -1, -1, 1, 1, 1],
+        dimensions_angstrom: [2, 2, 2],
+        source_format: 'obj',
+        source_parser: 'obj_strict_v1',
+        source_unit: 'angstrom',
+        angstrom_per_unit: 1,
+    }]);
+    let renderer: ReactTestRenderer;
+
+    await act(async () => {
+        renderer = create(React.createElement(
+            QueryClientProvider,
+            { client },
+            React.createElement(MemoryRouter, null, React.createElement(ShapeBlueprintTemplate)),
+        ));
+    });
+
+    const root = renderer!.root;
+    const surfaceButton = root.findAllByType('button').find((node) => node.children.join('') === 'Surface');
+    assert.ok(surfaceButton);
+    assert.equal(surfaceButton.props.disabled, true);
+    const renderedText = root.findAll(() => true)
+        .flatMap((node) => node.children)
+        .filter((value): value is string => typeof value === 'string')
+        .join(' ');
+    assert.match(renderedText, /legacy surface.*not hash-bound/i);
+
+    await act(async () => { renderer!.unmount(); });
+    client.clear();
+});
+
 test('Shape Blueprint admits OBJ and STL while making STL units explicit', async () => {
     memory.clear();
     const client = new QueryClient({ defaultOptions: { queries: { enabled: false, retry: false } } });
@@ -90,6 +137,10 @@ test('Shape Blueprint admits OBJ and STL while making STL units explicit', async
         node.findAllByType('option').some((option) => option.props.value === 'millimeter'));
     assert.ok(unitSelect);
     assert.equal(unitSelect.props.value, 'angstrom');
+    const unitValues = unitSelect.findAllByType('option').map((option) => option.props.value);
+    assert.deepEqual(unitValues, [
+        'angstrom', 'nanometer', 'micrometer', 'millimeter', 'centimeter', 'meter', 'inch', 'foot',
+    ]);
 
     const renderedText = root.findAll(() => true)
         .flatMap((node) => node.children)

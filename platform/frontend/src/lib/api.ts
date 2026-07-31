@@ -483,6 +483,7 @@ export interface ShapeGeometrySummary {
     source_id: string;
     geometry_sha256: string;
     source_sha256: string;
+    preview_obj_sha256: string | null;
     point_pool_sha256: string;
     sdf_sha256: string;
     sdf_sign: 'positive_inside';

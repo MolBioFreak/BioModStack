@@ -10,7 +10,7 @@ from typing import cast
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import Response
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,6 +35,7 @@ _UNIT_TO_ANGSTROM = {
     "centimeter": 100_000_000.0,
     "meter": 10_000_000_000.0,
     "inch": 254_000_000.0,
+    "foot": 3_048_000_000.0,
 }
 
 
@@ -59,6 +60,7 @@ def _summary(row: ShapeDesignGeometry | AdmittedGeometry) -> dict[str, object]:
         "source_sha256": manifest["source_sha256"],
         "point_pool_sha256": manifest["point_pool_sha256"],
         "sdf_sha256": manifest["sdf_sha256"],
+        "preview_obj_sha256": manifest.get("preview_obj_sha256"),
         "sdf_sign": manifest["sdf_sign"],
         "sdf_grid_shape": manifest["sdf_grid_shape"],
         "vertex_count": int(manifest["vertex_count"]),
@@ -139,7 +141,20 @@ async def get_geometry_preview(geometry_id: str, session: AsyncSession = Depends
     path = (root / relative).resolve()
     if not path.is_relative_to(root) or not path.is_file() or path.is_symlink() or path.stat().st_nlink != 1:
         raise HTTPException(status_code=409, detail="Shape preview artifact is unavailable")
-    return FileResponse(path, media_type="text/plain", filename=f"{geometry_id}.obj")
+    expected_sha256 = row.manifest.get("preview_obj_sha256")
+    if not isinstance(expected_sha256, str) or len(expected_sha256) != 64:
+        raise HTTPException(status_code=409, detail="Shape preview artifact is not hash-bound")
+    payload = path.read_bytes()
+    if hashlib.sha256(payload).hexdigest() != expected_sha256:
+        raise HTTPException(status_code=409, detail="Shape preview artifact hash mismatch")
+    return Response(
+        content=payload,
+        media_type="text/plain",
+        headers={
+            "Content-Disposition": f'inline; filename="{geometry_id}.obj"',
+            "X-BMS-Preview-OBJ-SHA256": expected_sha256,
+        },
+    )
 
 
 @router.get("/geometries/{geometry_id}/points.cif")
