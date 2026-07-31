@@ -2775,11 +2775,46 @@ async def _ingest_shape_result_manifest(
                 "source_backbone": dict(item["source_backbone"]),
                 "metrics": dict(item["metrics"]),
             }
+            stored_manifest = existing.review_artifact_manifest
+            role_map = existing.review_role_map if isinstance(existing.review_role_map, dict) else {}
+
+            def normalized_artifact(
+                descriptor: dict[str, Any], *, kind: str, path: str
+            ) -> dict[str, Any]:
+                return {
+                    "kind": kind,
+                    "state": "ready",
+                    "path": path,
+                    "reason": None,
+                    **{
+                        key: descriptor[key]
+                        for key in ("sha256", "bytes", "format", "relative_path")
+                        if key in descriptor
+                    },
+                }
+
+            expected_stored_manifest = {
+                "schema": REVIEW_ARTIFACT_SCHEMA,
+                "artifacts": {
+                    "structure": normalized_artifact(
+                        expected_manifest["structure"], kind="structure", path=str(existing.pdb_path)
+                    ),
+                    "source_backbone": normalized_artifact(
+                        expected_manifest["source_backbone"],
+                        kind="source_backbone",
+                        path=str(existing.source_pdb_path),
+                    ),
+                    "metrics": normalized_artifact(
+                        expected_manifest["metrics"], kind="shape_metrics", path=str(existing.json_path)
+                    ),
+                },
+                "roles": {**role_map, "has_binder": False},
+            }
             if (
                 Path(existing.pdb_path).resolve() != structure
                 or Path(existing.source_pdb_path or "").resolve() != source_backbone
                 or Path(existing.json_path or "").resolve() != metrics_path
-                or existing.review_artifact_manifest != expected_manifest
+                or stored_manifest != expected_stored_manifest
             ):
                 raise RuntimeError(f"Shape candidate conflicts with an existing Design: {name}")
             continue

@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -183,6 +183,33 @@ async def test_shape_candidate_manifest_creates_hash_bound_design(tmp_path: Path
         assert designs[0].stage_family == "shape_blueprint"
         assert designs[0].artifact_class == "shape_candidate"
         assert designs[0].provenance["geometry_sha256"] == "3" * 64
+        assert designs[0].review_artifact_manifest["schema"] == "bms.review-artifacts.v1"
+        assert await _ingest_shape_result_manifest(job, output, session, commit=False) == 0
+        normalized_manifest = designs[0].review_artifact_manifest
+        malformed_manifest = {
+            "schema": "bms.review-artifacts.v1",
+            "artifacts": {
+                "structure": dict(candidate["structure"]),
+                "source_backbone": dict(candidate["source_backbone"]),
+                "metrics": dict(candidate["metrics"]),
+            },
+        }
+        await session.execute(
+            update(Design)
+            .where(Design.id == designs[0].id)
+            .values(review_artifact_manifest=malformed_manifest)
+        )
+        await session.flush()
+        session.expire(designs[0], ["review_artifact_manifest"])
+        with pytest.raises(RuntimeError, match="conflicts with an existing Design"):
+            await _ingest_shape_result_manifest(job, output, session, commit=False)
+        await session.execute(
+            update(Design)
+            .where(Design.id == designs[0].id)
+            .values(review_artifact_manifest=normalized_manifest)
+        )
+        await session.flush()
+        session.expire(designs[0], ["review_artifact_manifest"])
         substituted_metrics = json.loads(metrics.read_text())
         substituted_metrics["source_backbone_sha256"] = "9" * 64
         metrics.write_text(json.dumps(substituted_metrics))

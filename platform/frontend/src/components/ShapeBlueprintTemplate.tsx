@@ -11,9 +11,10 @@ import {
 import MolstarViewer from './MolstarViewer';
 
 const shortHash = (value: string) => `${value.slice(0, 12)}…${value.slice(-8)}`;
-const numeric = (value: string, fallback: number) => {
+const boundedInteger = (value: string, fallback: number, minimum: number, maximum: number) => {
     const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : fallback;
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.min(maximum, Math.max(minimum, Math.trunc(parsed)));
 };
 
 const SHAPE_CLIENT_REQUEST_KEY = 'bms.shape-blueprint.client-request-id';
@@ -37,7 +38,7 @@ export default function ShapeBlueprintTemplate() {
     const [targetLength, setTargetLength] = useState(120);
     const [numBackbones, setNumBackbones] = useState(1);
     const [sequencesPerBackbone, setSequencesPerBackbone] = useState(1);
-    const [seed, setSeed] = useState(1);
+    const [seed, setSeed] = useState(0);
     const [error, setError] = useState<string | null>(null);
 
     const geometriesQuery = useQuery({
@@ -120,10 +121,10 @@ export default function ShapeBlueprintTemplate() {
                         <h2 className="font-semibold text-white">2. Launch settings</h2>
                         <label className="mt-3 block text-xs text-slate-400">Job name<input value={name} onChange={(event) => setName(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white" /></label>
                         <div className="mt-3 grid grid-cols-2 gap-3">
-                            <label className="text-xs text-slate-400">Target length<input type="number" min={40} max={600} value={targetLength} onChange={(event) => setTargetLength(numeric(event.target.value, 120))} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white" /></label>
-                            <label className="text-xs text-slate-400">RFD3 backbones<input type="number" min={1} max={32} value={numBackbones} onChange={(event) => setNumBackbones(numeric(event.target.value, 1))} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white" /></label>
-                            <label className="text-xs text-slate-400">Sequences / lane<input type="number" min={1} max={8} value={sequencesPerBackbone} onChange={(event) => setSequencesPerBackbone(numeric(event.target.value, 1))} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white" /></label>
-                            <label className="text-xs text-slate-400">Deterministic seed<input type="number" min={0} max={2147483647} value={seed} onChange={(event) => setSeed(numeric(event.target.value, 0))} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white" /></label>
+                            <label className="text-xs text-slate-400">Target length<input type="number" min={40} max={600} value={targetLength} onChange={(event) => setTargetLength(boundedInteger(event.target.value, 120, 40, 600))} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white" /></label>
+                            <label className="text-xs text-slate-400">RFD3 backbones<input type="number" min={1} max={32} value={numBackbones} onChange={(event) => setNumBackbones(boundedInteger(event.target.value, 1, 1, 32))} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white" /></label>
+                            <label className="text-xs text-slate-400">Sequences / lane<input type="number" min={1} max={8} value={sequencesPerBackbone} onChange={(event) => setSequencesPerBackbone(boundedInteger(event.target.value, 1, 1, 8))} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white" /></label>
+                            <label className="text-xs text-slate-400">Deterministic seed<input type="number" min={0} max={2147483647} value={seed} onChange={(event) => setSeed(boundedInteger(event.target.value, 0, 0, 2147483647))} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white" /></label>
                         </div>
                     </div>
                     <button type="button" disabled={!selected || launch.isPending} onClick={() => launch.mutate()} className="w-full rounded-xl bg-emerald-600 px-4 py-3 font-semibold text-white hover:bg-emerald-500 disabled:opacity-40">{launch.isPending ? 'Staging immutable request…' : 'Launch Shape Blueprint'}</button>
