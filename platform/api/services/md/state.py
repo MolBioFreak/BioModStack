@@ -362,10 +362,20 @@ async def retry_replica_attempt(
         MdAttemptSegment.replica_run_id == previous.id,
     ).order_by(MdAttemptSegment.segment_index.desc()).limit(1))
     previous_child = await session.get(Job, previous.child_job_id) if previous.child_job_id else None
-    if source is None or previous_child is None:
+    parent_job = await session.get(Job, job_id)
+    if source is None or previous_child is None or parent_job is None or not parent_job.output_dir:
         raise MdStateError("MD_STATE_CORRUPT", "retry source lineage is incomplete")
 
     next_attempt = previous.attempt + 1
+    parent_output_root = Path(parent_job.output_dir).expanduser().resolve()
+    retry_output_dir = (
+        parent_output_root
+        / "md_retry_attempts"
+        / f"replica_{replica_index:03d}"
+        / f"attempt_{next_attempt:03d}"
+    ).resolve()
+    if retry_output_dir == parent_output_root or parent_output_root not in retry_output_dir.parents:
+        raise MdStateError("MD_STATE_CORRUPT", "retry output lineage escapes the parent result root")
     child_params = copy.deepcopy(previous_child.params or {})
     child_params["md_attempt"] = next_attempt
     child_id = str(uuid.uuid4())
@@ -377,6 +387,7 @@ async def retry_replica_attempt(
         model_id=previous_child.model_id,
         mode=previous_child.mode,
         params=child_params,
+        output_dir=str(retry_output_dir),
         parent_job_id=job_id,
         batch_id=previous_child.batch_id or job_id,
         batch_name=previous_child.batch_name,
@@ -403,10 +414,8 @@ async def retry_replica_attempt(
     await session.flush()
     session.add(segment)
     await session.flush()
-    parent_job = await session.get(Job, job_id)
-    if parent_job is not None:
-        parent_job.status = "queued"; parent_job.queue_status = "queued"
-        parent_job.completed_at = None; parent_job.error_message = None
+    parent_job.status = "running"; parent_job.queue_status = "running"
+    parent_job.completed_at = None; parent_job.error_message = None
     await append_event_cas(
         session, job_id=job_id, idempotency_key=idempotency_key,
         event_type="retry_requested", expected_version=expected_version,
