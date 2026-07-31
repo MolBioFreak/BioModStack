@@ -501,8 +501,6 @@ def observe_run(minknow_run_id: str) -> dict[str, Any]:
         }
         if raw_state in exact_states:
             observed = exact_states[raw_state]
-        elif bool(device.get("running")) or matching is current:
-            observed = "active"
         else:
             observed = "unknown"
         return {"status": observed, "minknow_run_id": requested, "output_files": {"fastq": [], "pod5": [], "bam": []}, "fake_or_demo_devices": False}

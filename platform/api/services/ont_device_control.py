@@ -51,9 +51,9 @@ def _public_mk1d_device(device: Any) -> dict[str, Any] | None:
         "position": str(device.get("position") or "").strip() or "Mk1D position",
         "device_type": "mk1d",
         "state": state,
-        "running": bool(device.get("running")),
-        "available_for_run": bool(device.get("available_for_run")),
-        "flow_cell": {"present": bool(flow_cell.get("present"))},
+        "running": device.get("running") is True,
+        "available_for_run": device.get("available_for_run") is True,
+        "flow_cell": {"present": flow_cell.get("present") is True},
         "fake_or_demo_device": False,
     }
 

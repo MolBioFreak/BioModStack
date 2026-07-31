@@ -102,6 +102,25 @@ def test_host_agent_ont_run_route_delegates_to_read_only_run_observation(monkeyp
     }
 
 
+def test_host_agent_public_device_requires_literal_booleans() -> None:
+    import bms_host_agent  # noqa: PLC0415
+
+    projected = bms_host_agent._public_ont_device(
+        {
+            "position": "X1",
+            "device_type": "mk1d",
+            "running": "false",
+            "available_for_run": 1,
+            "flow_cell": {"present": "true"},
+        }
+    )
+
+    assert projected is not None
+    assert projected["running"] is False
+    assert projected["available_for_run"] is False
+    assert projected["flow_cell"]["present"] is False
+
+
 def test_host_agent_ont_routes_return_discovery_payload(monkeypatch) -> None:
     import bms_host_agent  # noqa: PLC0415
 
@@ -415,6 +434,39 @@ def test_observe_run_uses_only_finite_exact_state_mappings(monkeypatch, raw_stat
     )
 
     assert ont_minknow_host.observe_run("run-exact")["status"] == expected
+
+
+@pytest.mark.parametrize(
+    ("raw_state", "expected"),
+    [
+        ("running", "active"),
+        ("pending", "unknown"),
+        ("error_recovery_pending", "unknown"),
+        ("finished", "completed"),
+    ],
+)
+def test_current_protocol_uses_only_finite_exact_state_mappings(
+    monkeypatch, raw_state: str, expected: str
+) -> None:
+    from lib import ont_minknow_host  # noqa: PLC0415
+
+    monkeypatch.setattr(
+        ont_minknow_host,
+        "discover_status",
+        lambda: {
+            "implementation_status": ont_minknow_host.MINKNOW_STATUS_CONFIGURED,
+            "live_devices": [
+                {
+                    "running": False,
+                    "current_protocol": {"run_id": "run-current", "state": raw_state},
+                    "protocol_runs": [],
+                    "acquisition_runs": [],
+                }
+            ],
+        },
+    )
+
+    assert ont_minknow_host.observe_run("run-current")["status"] == expected
 
 
 @pytest.mark.parametrize("invalid_confirmation", [False, "false", "true", 0, 1, None])

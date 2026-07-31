@@ -82,7 +82,7 @@ def _canonical_digest(value: Any) -> str:
 
 def _flow_cell_identity(position: dict[str, Any]) -> str:
     flow_cell = position.get("flow_cell") if isinstance(position, dict) else None
-    if not isinstance(flow_cell, dict) or not flow_cell.get("present"):
+    if not isinstance(flow_cell, dict) or flow_cell.get("present") is not True:
         return _canonical_digest({"present": False})
     return _canonical_digest(
         {
@@ -106,7 +106,7 @@ def _option_snapshot(position: str, host_payload: dict[str, Any]) -> dict[str, A
         "position": position,
         "protocol_id": host_payload.get("protocol_id"),
         "kit": host_payload.get("kit"),
-        "basecalling_enabled": bool(host_payload.get("basecalling_enabled")),
+        "basecalling_enabled": host_payload.get("basecalling_enabled") is True,
         "basecalling_options": host_payload.get("basecalling_options") if isinstance(host_payload.get("basecalling_options"), dict) else {},
         "output_directories": host_payload.get("output_directories") if isinstance(host_payload.get("output_directories"), dict) else {},
         "flow_cell": host_payload.get("flow_cell") if isinstance(host_payload.get("flow_cell"), dict) else {"present": False},
@@ -151,7 +151,7 @@ def _json_datetime(value: datetime) -> str:
 
 def _flowcell_present(position: dict[str, Any]) -> bool:
     flow_cell = position.get("flow_cell") if isinstance(position, dict) else None
-    return bool(isinstance(flow_cell, dict) and flow_cell.get("present"))
+    return isinstance(flow_cell, dict) and flow_cell.get("present") is True
 
 
 def build_start_preflight(
@@ -246,6 +246,12 @@ def _validate_state_edge(previous: str, next_state: str) -> None:
         )
 
 
+def _submitted_path_has_symlink_component(path: Path) -> bool:
+    """Reject aliases in the submitted path before canonical resolution."""
+    absolute = path.absolute()
+    return any(component.is_symlink() for component in (absolute, *absolute.parents))
+
+
 def _existing_output_files(raw_files: Any) -> dict[str, list[str]]:
     """Accept only bounded, regular files reported by the host-agent snapshot."""
     normalized: dict[str, list[str]] = {"fastq": [], "pod5": [], "bam": []}
@@ -261,7 +267,7 @@ def _existing_output_files(raw_files: Any) -> dict[str, list[str]]:
             if not isinstance(value, str) or not value.strip() or len(value) > 2048:
                 continue
             path = Path(value).expanduser()
-            if path.is_symlink():
+            if _submitted_path_has_symlink_component(path):
                 continue
             try:
                 resolved = path.resolve(strict=True)
@@ -566,12 +572,13 @@ async def issue_position_protocol_catalog(position: str) -> dict[str, Any]:
     if not isinstance(host_payload, dict):
         raise RuntimeError(f"host-agent returned non-object protocol options payload: {host_payload!r}")
     blockers = _catalog_blockers(host_payload)
-    can_start = bool(host_payload.get("can_start")) and not blockers
+    flow_cell_present = _flowcell_present(host_payload)
+    can_start = host_payload.get("can_start") is True and flow_cell_present and not blockers
     safe_response: dict[str, Any] = {
         "position": position,
         "can_start": can_start,
         "blockers": blockers,
-        "flow_cell_present": _flowcell_present(host_payload),
+        "flow_cell_present": flow_cell_present,
         "options": [],
         "fake_or_demo_devices": False,
     }
@@ -733,7 +740,10 @@ async def validate_armed_intent_start(run_id: str, payload: dict[str, Any]) -> d
             invalid_reason = "flowcell_absent"
         elif _flow_cell_identity(live) != preflight.flow_cell_identity_sha256:
             invalid_reason = "flowcell_mismatch"
-        elif bool(live.get("running")) or live.get("current_protocol"):
+        elif (
+            (live.get("running") is not None and live.get("running") is not False)
+            or live.get("current_protocol")
+        ):
             invalid_reason = "position_protocol_changed"
         else:
             fresh_catalog = get_position_protocol_options(record.position_id)
@@ -741,7 +751,7 @@ async def validate_armed_intent_start(run_id: str, payload: dict[str, Any]) -> d
                 invalid_reason = "protocol_capability_unavailable"
             elif str(fresh_catalog.get("device_type") or "").strip().lower() != "mk1d":
                 invalid_reason = "unsupported_device_type"
-            elif not bool(fresh_catalog.get("can_start")) or _catalog_blockers(fresh_catalog):
+            elif fresh_catalog.get("can_start") is not True or _catalog_blockers(fresh_catalog):
                 invalid_reason = "protocol_capability_unavailable"
             else:
                 fresh_snapshot = _option_snapshot(record.position_id, fresh_catalog)

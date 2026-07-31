@@ -85,6 +85,23 @@ def test_analysis_handoff_rejects_fast5_and_workflow_incompatible_inputs(tmp_pat
         )
 
 
+def test_public_mk1d_device_requires_literal_host_booleans() -> None:
+    projected = ont_device_control._public_mk1d_device(
+        {
+            "position": "X1",
+            "device_type": "mk1d",
+            "running": "false",
+            "available_for_run": 1,
+            "flow_cell": {"present": "true"},
+        }
+    )
+
+    assert projected is not None
+    assert projected["running"] is False
+    assert projected["available_for_run"] is False
+    assert projected["flow_cell"]["present"] is False
+
+
 def test_ont_device_router_exposes_truthful_not_configured_status() -> None:
     app = FastAPI()
     app.include_router(ont_devices.router, prefix="/api/ont")

@@ -341,6 +341,21 @@ def test_terminal_output_filter_rejects_host_reported_symlink(tmp_path: Path) ->
     }
 
 
+def test_terminal_output_filter_rejects_symlinked_parent_before_resolution(tmp_path: Path) -> None:
+    actual = tmp_path / "actual"
+    actual.mkdir()
+    target = actual / "reads.fastq"
+    target.write_text("@read\nACGT\n+\n!!!!\n", encoding="utf-8")
+    alias = tmp_path / "alias"
+    alias.symlink_to(actual, target_is_directory=True)
+
+    assert ont_run_control._existing_output_files({"fastq": [str(alias / "reads.fastq")]}) == {
+        "fastq": [],
+        "pod5": [],
+        "bam": [],
+    }
+
+
 def test_protocol_catalog_maps_arbitrary_host_blockers_to_finite_public_reason() -> None:
     blockers = ont_run_control._catalog_blockers(
         {
@@ -351,6 +366,34 @@ def test_protocol_catalog_maps_arbitrary_host_blockers_to_finite_public_reason()
 
     assert blockers == ["flowcell_absent", "host_preflight_unavailable"]
     assert "/secret" not in " ".join(blockers)
+
+
+@pytest.mark.asyncio
+async def test_protocol_catalog_requires_literal_host_booleans(monkeypatch) -> None:
+    malformed = {
+        "position": "X1",
+        "device_type": "mk1d",
+        "can_start": "false",
+        "blockers": [],
+        "protocol_id": "sequencing/opaque",
+        "kit": "SQK-LSK114",
+        "basecalling_enabled": "false",
+        "basecalling_options": {},
+        "output_directories": {"reads": "/var/lib/minknow/data"},
+        "flow_cell": {"present": "false"},
+    }
+    monkeypatch.setattr(
+        ont_run_control,
+        "get_position_protocol_options",
+        lambda *_args, **_kwargs: malformed,
+    )
+
+    catalog = await ont_run_control.issue_position_protocol_catalog("X1")
+
+    assert catalog["can_start"] is False
+    assert catalog["flow_cell_present"] is False
+    assert catalog["options"] == []
+    assert ont_run_control._option_snapshot("X1", malformed)["basecalling_enabled"] is False
 
 
 def test_browser_stop_endpoint_is_tombstoned_before_service_dispatch(monkeypatch) -> None:
@@ -650,6 +693,37 @@ async def test_armed_intent_revalidates_without_any_raw_host_start_call(monkeypa
     assert persisted is not None
     assert persisted["state"] == "armed"
     assert [event["event_type"] for event in persisted["events"]] == ["preflight_armed", "preflight_revalidated"]
+
+
+@pytest.mark.asyncio
+async def test_armed_intent_revalidation_rejects_nonliteral_host_can_start(monkeypatch) -> None:
+    host_preflight = {
+        "position": "X1",
+        "device_type": "mk1d",
+        "can_start": True,
+        "blockers": [],
+        "protocol_id": "PRIVATE-PROTOCOL",
+        "kit": "PRIVATE-KIT",
+        "basecalling_enabled": True,
+        "basecalling_options": {"simplex_models": ["PRIVATE-MODEL"]},
+        "output_directories": {"reads": "/private/output"},
+        "flow_cell": {"present": True, "flow_cell_id": "PRIVATE-FLOWCELL"},
+    }
+    monkeypatch.setattr(
+        ont_run_control,
+        "get_position_protocol_options",
+        lambda *_args, **_kwargs: host_preflight,
+    )
+    option = (await ont_run_control.issue_position_protocol_catalog("X1"))["options"][0]
+    intent = await ont_run_control.create_run_intent(
+        "X1", {"option_id": option["option_id"], "option_receipt_id": option["option_receipt_id"]}
+    )
+    host_preflight["can_start"] = "false"
+
+    with pytest.raises(ValueError, match="protocol_capability_unavailable"):
+        await ont_run_control.validate_armed_intent_start(
+            intent["id"], {"confirm_start": True, "intent_generation": intent["observed_generation"]}
+        )
 
 
 @pytest.mark.asyncio
