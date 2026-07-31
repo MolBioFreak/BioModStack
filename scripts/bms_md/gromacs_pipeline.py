@@ -437,17 +437,28 @@ def run_gromacs_job(
             and resume_relative.parts[0] in allowed_stages
             and resume_relative.name == f"{resume_relative.parts[0]}.cpt"
         )
-        immutable_snapshot = (
+        snapshot_bytes: bytes | None = None
+        immutable_snapshot = False
+        if (
             len(resume_relative.parts) == 3
             and resume_relative.parts[0] == ".bms-checkpoints"
             and re.fullmatch(r"[0-9a-f]{64}\.cpt", resume_relative.name) is not None
-            and hashlib.sha256(resume_checkpoint.read_bytes()).hexdigest()
-            == resume_checkpoint.stem
-        )
+        ):
+            snapshot_bytes = resume_checkpoint.read_bytes()
+            immutable_snapshot = hashlib.sha256(snapshot_bytes).hexdigest() == resume_checkpoint.stem
         if not canonical_stage_checkpoint and not immutable_snapshot:
             raise ValueError(
                 "resume checkpoint path does not match a canonical stage checkpoint or immutable snapshot"
             )
+        if immutable_snapshot:
+            assert snapshot_bytes is not None
+            canonical_resume = output_dir / "production" / "production.cpt"
+            canonical_resume.parent.mkdir(parents=True, exist_ok=True)
+            previous_mode = canonical_resume.stat().st_mode & 0o777 if canonical_resume.exists() else 0o664
+            temporary_resume = canonical_resume.with_suffix(".cpt.resume.tmp")
+            temporary_resume.write_bytes(snapshot_bytes)
+            os.chmod(temporary_resume, previous_mode)
+            os.replace(temporary_resume, canonical_resume)
     config = dict(_prepared_config) if _prepared_config is not None else prepare_verified_worker_inputs(
         config_path,
         output_dir / ".worker_inputs",
