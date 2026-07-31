@@ -78,9 +78,3 @@ The shell also uses per-user Electron storage under the normal Electron
 The Electron package is separate from the optional Android thin-shell path.
 They share the same hosted UI contract and mobile/Electron docs should describe
 that commonality, but this package does not build the APK wrapper.
-
-## Related docs
-
-- [../../docs/Desktop_Runtime_and_Shell_Architecture.md](../../docs/Desktop_Runtime_and_Shell_Architecture.md)
-- [../../docs/Workstation Set Up and Install Guide.md](../../docs/Workstation%20Set%20Up%20and%20Install%20Guide.md)
-- [../../README.md](../../README.md)

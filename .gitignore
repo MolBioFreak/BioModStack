@@ -38,7 +38,7 @@ molbio_toolkit.db*
 biomodstack_runtime.db*
 output/
 rcsb/
-docs/evidence/
+
 lib/NO_*
 
 # Nextflow/local run artifacts
