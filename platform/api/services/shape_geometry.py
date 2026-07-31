@@ -12,11 +12,13 @@ from dataclasses import dataclass
 import hashlib
 import json
 import math
+import struct
 import numpy as np
 import trimesh
 
 
 MAX_OBJ_BYTES = 16 * 1024 * 1024
+MAX_MESH_BYTES = MAX_OBJ_BYTES
 MAX_VERTICES = 20_000
 MAX_FACES = 40_000
 POINT_COUNT = 4096
@@ -110,6 +112,115 @@ def _parse_obj(payload: bytes) -> tuple[np.ndarray, np.ndarray]:
     if set(index for face in faces for index in face) != set(range(len(vertices))):
         _fail("invalid_obj", "every admitted vertex must be referenced")
     return np.asarray(vertices, dtype=np.float64), np.asarray(faces, dtype=np.int64)
+
+
+def _index_triangle_soup(triangles: list[tuple[tuple[float, float, float], ...]]) -> tuple[np.ndarray, np.ndarray]:
+    vertices: list[tuple[float, float, float]] = []
+    vertex_indices: dict[tuple[float, float, float], int] = {}
+    faces: list[tuple[int, int, int]] = []
+    for triangle in triangles:
+        face: list[int] = []
+        for raw_vertex in triangle:
+            vertex = tuple(0.0 if value == 0.0 else value for value in raw_vertex)
+            typed_vertex = (vertex[0], vertex[1], vertex[2])
+            index = vertex_indices.get(typed_vertex)
+            if index is None:
+                index = len(vertices)
+                vertex_indices[typed_vertex] = index
+                vertices.append(typed_vertex)
+                if len(vertices) > MAX_VERTICES:
+                    _fail("invalid_stl", "STL exceeds the vertex limit")
+            face.append(index)
+        if len(set(face)) != 3:
+            _fail("degenerate_face", "STL triangle contains repeated vertices")
+        faces.append(tuple(face))  # type: ignore[arg-type]
+    if len(vertices) < 4 or len(faces) < 4:
+        _fail("open_mesh", "mesh is too small to enclose a volume")
+    return np.asarray(vertices, dtype=np.float64), np.asarray(faces, dtype=np.int64)
+
+
+def _parse_binary_stl(payload: bytes, triangle_count: int) -> tuple[np.ndarray, np.ndarray]:
+    if triangle_count > MAX_FACES:
+        _fail("invalid_stl", "STL exceeds the face limit")
+    expected_size = 84 + triangle_count * 50
+    if len(payload) != expected_size:
+        _fail("invalid_stl", "binary STL length does not match its triangle count")
+    triangles: list[tuple[tuple[float, float, float], ...]] = []
+    for index in range(triangle_count):
+        values = struct.unpack_from("<12fH", payload, 84 + index * 50)
+        if not all(math.isfinite(value) for value in values[:12]):
+            _fail("non_finite_vertex", f"binary STL facet {index + 1} contains a non-finite float")
+        if values[12] != 0:
+            _fail("unsupported_stl_attribute", "binary STL facet attributes are not supported")
+        triangles.append((values[3:6], values[6:9], values[9:12]))  # type: ignore[arg-type]
+    return _index_triangle_soup(triangles)
+
+
+def _parse_ascii_stl(payload: bytes) -> tuple[np.ndarray, np.ndarray]:
+    try:
+        text = payload.decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise ShapeGeometryError("invalid_stl", "ASCII STL must contain ASCII text") from exc
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(lines) < 3 or lines[0].split(maxsplit=1)[0].lower() != "solid":
+        _fail("invalid_stl", "ASCII STL must start with solid")
+    triangles: list[tuple[tuple[float, float, float], ...]] = []
+    cursor = 1
+    while cursor < len(lines) and lines[cursor].split(maxsplit=1)[0].lower() == "facet":
+        fields = lines[cursor].split()
+        if len(fields) != 5 or fields[0].lower() != "facet" or fields[1].lower() != "normal":
+            _fail("invalid_stl", f"line {cursor + 1}: expected facet normal")
+        try:
+            normal = tuple(float(value) for value in fields[2:])
+        except ValueError as exc:
+            raise ShapeGeometryError("invalid_stl", f"line {cursor + 1}: invalid facet normal") from exc
+        if not all(math.isfinite(value) for value in normal):
+            _fail("invalid_stl", f"line {cursor + 1}: facet normal is not finite")
+        cursor += 1
+        if cursor >= len(lines) or lines[cursor].lower() != "outer loop":
+            _fail("invalid_stl", f"line {cursor + 1}: expected outer loop")
+        cursor += 1
+        triangle: list[tuple[float, float, float]] = []
+        for _ in range(3):
+            if cursor >= len(lines):
+                _fail("invalid_stl", "ASCII STL ended inside a facet")
+            fields = lines[cursor].split()
+            if len(fields) != 4 or fields[0].lower() != "vertex":
+                _fail("invalid_stl", f"line {cursor + 1}: expected vertex with three coordinates")
+            try:
+                vertex = tuple(float(value) for value in fields[1:])
+            except ValueError as exc:
+                raise ShapeGeometryError("invalid_stl", f"line {cursor + 1}: invalid vertex") from exc
+            if not all(math.isfinite(value) for value in vertex):
+                _fail("non_finite_vertex", f"line {cursor + 1}: vertex is not finite")
+            triangle.append(vertex)  # type: ignore[arg-type]
+            cursor += 1
+        if cursor >= len(lines) or lines[cursor].lower() != "endloop":
+            _fail("invalid_stl", f"line {cursor + 1}: expected endloop")
+        cursor += 1
+        if cursor >= len(lines) or lines[cursor].lower() != "endfacet":
+            _fail("invalid_stl", f"line {cursor + 1}: expected endfacet")
+        cursor += 1
+        triangles.append(tuple(triangle))
+        if len(triangles) > MAX_FACES:
+            _fail("invalid_stl", "STL exceeds the face limit")
+    if cursor >= len(lines) or lines[cursor].split(maxsplit=1)[0].lower() != "endsolid":
+        _fail("invalid_stl", f"line {cursor + 1}: expected endsolid")
+    if cursor != len(lines) - 1:
+        _fail("invalid_stl", "ASCII STL contains trailing records")
+    return _index_triangle_soup(triangles)
+
+
+def _parse_stl(payload: bytes) -> tuple[np.ndarray, np.ndarray, str]:
+    if not payload or len(payload) > MAX_MESH_BYTES:
+        _fail("invalid_stl", "STL is empty or exceeds the 16 MiB limit")
+    if len(payload) >= 84:
+        triangle_count = struct.unpack_from("<I", payload, 80)[0]
+        if len(payload) == 84 + triangle_count * 50:
+            vertices, faces = _parse_binary_stl(payload, triangle_count)
+            return vertices, faces, "stl_binary_v1"
+    vertices, faces = _parse_ascii_stl(payload)
+    return vertices, faces, "stl_ascii_v1"
 
 
 def _validate_topology(vertices: np.ndarray, faces: np.ndarray) -> None:
@@ -332,11 +443,15 @@ def _preview_obj(vertices: np.ndarray, faces: np.ndarray) -> bytes:
     return ("\n".join(lines) + "\n").encode("ascii")
 
 
-def canonicalize_obj(payload: bytes, *, angstrom_per_unit: float) -> CanonicalGeometry:
-    if not math.isfinite(angstrom_per_unit) or angstrom_per_unit <= 0 or angstrom_per_unit > 1e9:
-        _fail("invalid_scale", "angstrom_per_unit must be finite and in (0, 1e9]")
+def _canonicalize_parsed(
+    payload: bytes,
+    *,
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    angstrom_per_unit: float,
+    source_manifest: dict[str, object] | None = None,
+) -> CanonicalGeometry:
     source_sha256 = hashlib.sha256(payload).hexdigest()
-    vertices, faces = _parse_obj(payload)
     vertices = vertices * float(angstrom_per_unit)
     _validate_topology(vertices, faces)
     faces, _ = _positive_oriented(vertices, faces)
@@ -356,6 +471,7 @@ def canonicalize_obj(payload: bytes, *, angstrom_per_unit: float) -> CanonicalGe
         "vertices_sha256": hashlib.sha256(vertex_bytes).hexdigest(),
         "faces_sha256": hashlib.sha256(face_bytes).hexdigest(),
         "bounds_angstrom": [float(value) for value in np.concatenate((vertices.min(axis=0), vertices.max(axis=0)))],
+        **(source_manifest or {}),
     }
     manifest_bytes = json.dumps(manifest, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
     geometry_sha256 = hashlib.sha256(manifest_bytes + vertex_bytes + face_bytes).hexdigest()
@@ -394,4 +510,39 @@ def canonicalize_obj(payload: bytes, *, angstrom_per_unit: float) -> CanonicalGe
         point_count=POINT_COUNT,
         bounds_angstrom=manifest["bounds_angstrom"],  # type: ignore[arg-type]
         manifest=manifest,
+    )
+
+
+def canonicalize_obj(payload: bytes, *, angstrom_per_unit: float) -> CanonicalGeometry:
+    if not math.isfinite(angstrom_per_unit) or angstrom_per_unit <= 0 or angstrom_per_unit > 1e9:
+        _fail("invalid_scale", "angstrom_per_unit must be finite and in (0, 1e9]")
+    vertices, faces = _parse_obj(payload)
+    return _canonicalize_parsed(
+        payload,
+        vertices=vertices,
+        faces=faces,
+        angstrom_per_unit=angstrom_per_unit,
+    )
+
+
+def canonicalize_mesh(
+    payload: bytes,
+    *,
+    source_format: str,
+    angstrom_per_unit: float,
+) -> CanonicalGeometry:
+    normalized_format = source_format.strip().lower()
+    if normalized_format == "obj":
+        return canonicalize_obj(payload, angstrom_per_unit=angstrom_per_unit)
+    if normalized_format != "stl":
+        _fail("unsupported_format", "supported mesh formats are OBJ and STL")
+    if not math.isfinite(angstrom_per_unit) or angstrom_per_unit <= 0 or angstrom_per_unit > 1e9:
+        _fail("invalid_scale", "angstrom_per_unit must be finite and in (0, 1e9]")
+    vertices, faces, parser = _parse_stl(payload)
+    return _canonicalize_parsed(
+        payload,
+        vertices=vertices,
+        faces=faces,
+        angstrom_per_unit=angstrom_per_unit,
+        source_manifest={"source_format": "stl", "source_parser": parser},
     )

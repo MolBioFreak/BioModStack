@@ -66,3 +66,38 @@ test('Shape Blueprint numeric state stays within the API integer contract', asyn
     await act(async () => { renderer!.unmount(); });
     client.clear();
 });
+
+test('Shape Blueprint admits OBJ and STL while making STL units explicit', async () => {
+    memory.clear();
+    const client = new QueryClient({ defaultOptions: { queries: { enabled: false, retry: false } } });
+    let renderer: ReactTestRenderer;
+
+    await act(async () => {
+        renderer = create(React.createElement(
+            QueryClientProvider,
+            { client },
+            React.createElement(MemoryRouter, null, React.createElement(ShapeBlueprintTemplate)),
+        ));
+    });
+
+    const root = renderer!.root;
+    const fileInput = root.findAllByType('input').find((node) => node.props.type === 'file');
+    assert.ok(fileInput);
+    assert.equal(fileInput.props.accept, '.obj,.stl');
+
+    await act(async () => fileInput.props.onChange({ target: { files: [{ name: 'printed-part.stl' }] } }));
+    const unitSelect = root.findAllByType('select').find((node) =>
+        node.findAllByType('option').some((option) => option.props.value === 'millimeter'));
+    assert.ok(unitSelect);
+    assert.equal(unitSelect.props.value, 'angstrom');
+
+    const renderedText = root.findAll(() => true)
+        .flatMap((node) => node.children)
+        .filter((value): value is string => typeof value === 'string')
+        .join(' ');
+    assert.match(renderedText, /STL files do not encode units/i);
+    assert.match(renderedText, /Admit mesh/i);
+
+    await act(async () => { renderer!.unmount(); });
+    client.clear();
+});

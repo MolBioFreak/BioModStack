@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 from pathlib import Path
+import struct
 
 import numpy as np
 import pytest
@@ -34,6 +35,32 @@ f 3 8 7
 f 4 1 5
 f 4 5 8
 """
+
+TETRA_TRIANGLES = (
+    ((0.0, 0.0, 0.0), (0.0, 1.0, 0.0), (1.0, 0.0, 0.0)),
+    ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
+    ((0.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, 1.0, 0.0)),
+    ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
+)
+
+
+def _ascii_stl(triangles=TETRA_TRIANGLES) -> bytes:
+    lines = ["solid tetra"]
+    for triangle in triangles:
+        lines.extend(("facet normal 0 0 0", "outer loop"))
+        lines.extend(f"vertex {x} {y} {z}" for x, y, z in triangle)
+        lines.extend(("endloop", "endfacet"))
+    lines.append("endsolid tetra")
+    return ("\n".join(lines) + "\n").encode("ascii")
+
+
+def _binary_stl(triangles=TETRA_TRIANGLES) -> bytes:
+    payload = bytearray(b"BioModStack binary STL".ljust(80, b"\0"))
+    payload.extend(struct.pack("<I", len(triangles)))
+    for triangle in triangles:
+        coordinates = tuple(value for vertex in triangle for value in vertex)
+        payload.extend(struct.pack("<12fH", 0.0, 0.0, 0.0, *coordinates, 0))
+    return bytes(payload)
 
 
 def _geometry():
@@ -83,6 +110,93 @@ def test_same_source_bytes_with_different_units_produce_different_geometry() -> 
     assert angstrom.source_sha256 == millimeter.source_sha256
     assert angstrom.geometry_sha256 != millimeter.geometry_sha256
     assert angstrom.bounds_angstrom != millimeter.bounds_angstrom
+
+
+@pytest.mark.parametrize(
+    ("payload", "encoding"),
+    [
+        (_ascii_stl(), "ascii"),
+        (_binary_stl(), "binary"),
+    ],
+)
+def test_closed_stl_canonicalization_is_deterministic(payload: bytes, encoding: str) -> None:
+    geometry = _geometry()
+
+    first = geometry.canonicalize_mesh(payload, source_format="stl", angstrom_per_unit=10.0)
+    second = geometry.canonicalize_mesh(payload, source_format="stl", angstrom_per_unit=10.0)
+
+    assert first.geometry_sha256 == second.geometry_sha256
+    assert first.vertices_f64 == second.vertices_f64
+    assert first.faces_u32 == second.faces_u32
+    assert first.manifest["source_format"] == "stl"
+    assert first.manifest["source_parser"] == f"stl_{encoding}_v1"
+    assert first.vertex_count == 4
+    assert first.face_count == 4
+    assert first.bounds_angstrom == [-2.5, -2.5, -2.5, 7.5, 7.5, 7.5]
+
+
+def test_stl_and_obj_sources_have_distinct_source_bound_geometry_identity() -> None:
+    geometry = _geometry()
+    tetra_obj = b"v 0 0 0\nv 0 1 0\nv 1 0 0\nv 0 0 1\nf 1 2 3\nf 1 3 4\nf 1 4 2\nf 3 2 4\n"
+
+    obj = geometry.canonicalize_obj(tetra_obj, angstrom_per_unit=10.0)
+    stl = geometry.canonicalize_mesh(_ascii_stl(), source_format="stl", angstrom_per_unit=10.0)
+
+    assert obj.vertices_f64 == stl.vertices_f64
+    assert obj.faces_u32 == stl.faces_u32
+    assert obj.geometry_sha256 != stl.geometry_sha256
+    assert "source_format" not in obj.manifest
+    assert stl.manifest["source_format"] == "stl"
+
+
+@pytest.mark.parametrize(
+    ("payload", "code"),
+    [
+        (_binary_stl() + b"trailing", "invalid_stl"),
+        (_binary_stl()[:100], "invalid_stl"),
+        (_ascii_stl(TETRA_TRIANGLES[:1]), "open_mesh"),
+        (_ascii_stl().replace(b"vertex 0.0 0.0 0.0", b"vertex nan 0.0 0.0", 1), "non_finite_vertex"),
+        (
+            _ascii_stl(
+                TETRA_TRIANGLES
+                + tuple(tuple((x + 3.0, y, z) for x, y, z in triangle) for triangle in TETRA_TRIANGLES)
+            ),
+            "disconnected_mesh",
+        ),
+    ],
+)
+def test_invalid_stl_is_rejected(payload: bytes, code: str) -> None:
+    geometry = _geometry()
+
+    with pytest.raises(geometry.ShapeGeometryError) as exc:
+        geometry.canonicalize_mesh(payload, source_format="stl", angstrom_per_unit=1.0)
+
+    assert exc.value.code == code
+
+
+def test_binary_stl_rejects_non_finite_and_attribute_payloads() -> None:
+    geometry = _geometry()
+
+    non_finite = bytearray(_binary_stl())
+    struct.pack_into("<f", non_finite, 84, float("nan"))
+    with pytest.raises(geometry.ShapeGeometryError) as exc:
+        geometry.canonicalize_mesh(bytes(non_finite), source_format="stl", angstrom_per_unit=1.0)
+    assert exc.value.code == "non_finite_vertex"
+
+    attributed = bytearray(_binary_stl())
+    struct.pack_into("<H", attributed, 84 + 48, 1)
+    with pytest.raises(geometry.ShapeGeometryError) as exc:
+        geometry.canonicalize_mesh(bytes(attributed), source_format="stl", angstrom_per_unit=1.0)
+    assert exc.value.code == "unsupported_stl_attribute"
+
+
+def test_unknown_mesh_format_is_rejected() -> None:
+    geometry = _geometry()
+
+    with pytest.raises(geometry.ShapeGeometryError) as exc:
+        geometry.canonicalize_mesh(CUBE_OBJ, source_format="step", angstrom_per_unit=1.0)
+
+    assert exc.value.code == "unsupported_format"
 
 
 @pytest.mark.parametrize(
@@ -202,5 +316,59 @@ async def test_shape_geometry_http_upload_list_and_preview(tmp_path: Path, monke
             preview = await client.get(f"/api/shape-blueprint/geometries/{body['geometry_id']}/preview.obj")
             assert preview.status_code == 200
             assert preview.content.startswith(b"# bms_shape_canonical_obj_v1")
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_shape_geometry_http_accepts_binary_stl_with_reviewable_provenance(tmp_path: Path, monkeypatch) -> None:
+    database = importlib.import_module("database")
+    router = importlib.import_module("routers.shape_blueprint")
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'shape-stl-api.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(database.Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    async def session_override():
+        async with factory() as session:
+            yield session
+
+    monkeypatch.setattr(router, "get_data_root", lambda: tmp_path / "data")
+    app = FastAPI()
+    app.include_router(router.router, prefix="/api/shape-blueprint")
+    app.dependency_overrides[router.get_session] = session_override
+    payload = _binary_stl()
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            unsupported = await client.post(
+                "/api/shape-blueprint/geometries",
+                data={"unit": "millimeter"},
+                files={"file": ("part.step", b"STEP", "application/octet-stream")},
+            )
+            assert unsupported.status_code == 422
+            assert unsupported.json()["detail"]["code"] == "unsupported_format"
+
+            uploaded = await client.post(
+                "/api/shape-blueprint/geometries",
+                data={"unit": "millimeter"},
+                files={"file": ("printed-part.stl", payload, "model/stl")},
+            )
+            assert uploaded.status_code == 201, uploaded.text
+            body = uploaded.json()
+            assert body["source_format"] == "stl"
+            assert body["source_parser"] == "stl_binary_v1"
+            assert body["source_unit"] == "millimeter"
+            assert body["angstrom_per_unit"] == 10_000_000.0
+            assert body["dimensions_angstrom"] == [10_000_000.0, 10_000_000.0, 10_000_000.0]
+
+        async with factory() as session:
+            source = await session.get(database.ShapeCadSource, body["source_id"])
+            geometry = await session.get(database.ShapeDesignGeometry, body["geometry_id"])
+            assert source is not None and geometry is not None
+            assert source.original_filename == "printed-part.stl"
+            assert source.relative_path.endswith("/source.stl")
+            assert (tmp_path / "data" / "shape_blueprint" / source.relative_path).read_bytes() == payload
+            assert geometry.manifest["source_format"] == "stl"
+            assert geometry.manifest["source_unit"] == "millimeter"
     finally:
         await engine.dispose()

@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import ShapeCadSource, ShapeDesignGeometry
-from services.shape_geometry import canonicalize_obj
+from services.shape_geometry import canonicalize_mesh
 
 
 @dataclass(frozen=True)
@@ -78,15 +78,22 @@ def _result(row: ShapeDesignGeometry) -> AdmittedGeometry:
     )
 
 
-async def admit_obj_geometry(
+async def admit_mesh_geometry(
     session: AsyncSession,
     *,
     data_root: Path,
     payload: bytes,
     filename: str,
+    source_format: str,
+    source_unit: str,
     angstrom_per_unit: float,
 ) -> AdmittedGeometry:
-    canonical = canonicalize_obj(payload, angstrom_per_unit=angstrom_per_unit)
+    normalized_format = source_format.strip().lower()
+    canonical = canonicalize_mesh(
+        payload,
+        source_format=normalized_format,
+        angstrom_per_unit=angstrom_per_unit,
+    )
     source_id = f"cad_{canonical.source_sha256[:32]}"
     geometry_id = f"geom_{canonical.geometry_sha256[:32]}"
     conversion = {
@@ -94,6 +101,14 @@ async def admit_obj_geometry(
         "angstrom_per_unit": float(angstrom_per_unit),
         "center_mode": "volume_centroid_v1",
     }
+    if normalized_format == "stl":
+        conversion.update(
+            {
+                "source_format": "stl",
+                "source_parser": canonical.manifest["source_parser"],
+                "source_unit": source_unit,
+            }
+        )
     conversion_sha256 = hashlib.sha256(_canonical_json(conversion)).hexdigest()
 
     existing = await session.scalar(
@@ -108,7 +123,7 @@ async def admit_obj_geometry(
         return _result(existing)
 
     root = (data_root / "shape_blueprint").resolve()
-    source_relative = f"sources/{canonical.source_sha256}/source.obj"
+    source_relative = f"sources/{canonical.source_sha256}/source.{normalized_format}"
     geometry_prefix = f"geometries/{canonical.geometry_sha256}"
     artifacts = {
         "vertices_f64": f"{geometry_prefix}/vertices.f64le",
@@ -118,7 +133,12 @@ async def admit_obj_geometry(
         "preview_obj": f"{geometry_prefix}/preview.obj",
         "manifest": f"{geometry_prefix}/manifest.json",
     }
-    final_manifest = {**canonical.manifest, "conversion": conversion, "artifacts": artifacts}
+    final_manifest = {
+        **canonical.manifest,
+        **({"source_unit": source_unit} if normalized_format == "stl" else {}),
+        "conversion": conversion,
+        "artifacts": artifacts,
+    }
     payloads = {
         source_relative: payload,
         artifacts["vertices_f64"]: canonical.vertices_f64,
@@ -164,3 +184,23 @@ async def admit_obj_geometry(
     session.add(row)
     await session.commit()
     return _result(row)
+
+
+async def admit_obj_geometry(
+    session: AsyncSession,
+    *,
+    data_root: Path,
+    payload: bytes,
+    filename: str,
+    angstrom_per_unit: float,
+) -> AdmittedGeometry:
+    """Compatibility wrapper that preserves the original OBJ conversion identity."""
+    return await admit_mesh_geometry(
+        session,
+        data_root=data_root,
+        payload=payload,
+        filename=filename,
+        source_format="obj",
+        source_unit="angstrom",
+        angstrom_per_unit=angstrom_per_unit,
+    )

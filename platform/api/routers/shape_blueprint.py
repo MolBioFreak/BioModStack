@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import hashlib
 import struct
+from typing import cast
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, status
@@ -18,9 +19,9 @@ from database import Job, ShapeDesignGeometry, ShapeDesignRequest, get_session
 from paths import get_data_root
 from routers import jobs as jobs_router
 from schemas import JobCreate
-from services.shape_geometry import MAX_OBJ_BYTES, ShapeGeometryError
+from services.shape_geometry import MAX_MESH_BYTES, ShapeGeometryError
 from services.shape_requests import ShapeRequestError, SubmittedShapeRequest, materialize_shape_request
-from services.shape_resources import AdmittedGeometry, admit_obj_geometry
+from services.shape_resources import AdmittedGeometry, admit_mesh_geometry
 
 
 router = APIRouter()
@@ -43,6 +44,14 @@ def _feature_enabled() -> bool:
 
 def _summary(row: ShapeDesignGeometry | AdmittedGeometry) -> dict[str, object]:
     manifest = dict(row.manifest)
+    bounds = [float(value) for value in cast(list[float], manifest["bounds_angstrom"])]
+    scale = float(str(manifest["angstrom_per_unit"]))
+    source_unit = str(
+        manifest.get(
+            "source_unit",
+            next((label for label, value in _UNIT_TO_ANGSTROM.items() if value == scale), "custom"),
+        )
+    )
     return {
         "geometry_id": row.geometry_id,
         "source_id": row.source_id,
@@ -55,7 +64,12 @@ def _summary(row: ShapeDesignGeometry | AdmittedGeometry) -> dict[str, object]:
         "vertex_count": int(manifest["vertex_count"]),
         "face_count": int(manifest["face_count"]),
         "point_count": int(manifest["point_count"]),
-        "bounds_angstrom": manifest["bounds_angstrom"],
+        "bounds_angstrom": bounds,
+        "dimensions_angstrom": [bounds[index + 3] - bounds[index] for index in range(3)],
+        "source_format": str(manifest.get("source_format", "obj")),
+        "source_parser": str(manifest.get("source_parser", "obj_strict_v1")),
+        "source_unit": source_unit,
+        "angstrom_per_unit": scale,
     }
 
 
@@ -65,20 +79,27 @@ async def upload_geometry(
     unit: str = Form("angstrom"),
     session: AsyncSession = Depends(get_session),
 ):
-    if Path(file.filename or "").suffix.lower() != ".obj":
-        raise HTTPException(status_code=422, detail={"code": "unsupported_format", "message": "V1 accepts OBJ only"})
+    suffix = Path(file.filename or "").suffix.lower()
+    source_format = {".obj": "obj", ".stl": "stl"}.get(suffix)
+    if source_format is None:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "unsupported_format", "message": "accepted mesh formats are OBJ and STL"},
+        )
     scale = _UNIT_TO_ANGSTROM.get(unit)
     if scale is None:
         raise HTTPException(status_code=422, detail={"code": "invalid_unit", "message": "unsupported source unit"})
-    payload = await file.read(MAX_OBJ_BYTES + 1)
-    if len(payload) > MAX_OBJ_BYTES:
-        raise HTTPException(status_code=413, detail="OBJ exceeds the 16 MiB limit")
+    payload = await file.read(MAX_MESH_BYTES + 1)
+    if len(payload) > MAX_MESH_BYTES:
+        raise HTTPException(status_code=413, detail="mesh exceeds the 16 MiB limit")
     try:
-        result = await admit_obj_geometry(
+        result = await admit_mesh_geometry(
             session,
             data_root=get_data_root(),
             payload=payload,
-            filename=file.filename or "source.obj",
+            filename=file.filename or f"source.{source_format}",
+            source_format=source_format,
+            source_unit=unit,
             angstrom_per_unit=scale,
         )
     except ShapeGeometryError as exc:

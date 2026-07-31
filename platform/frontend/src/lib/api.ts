@@ -491,6 +491,11 @@ export interface ShapeGeometrySummary {
     face_count: number;
     point_count: number;
     bounds_angstrom: [number, number, number, number, number, number];
+    dimensions_angstrom: [number, number, number];
+    source_format: 'obj' | 'stl';
+    source_parser: 'obj_strict_v1' | 'stl_ascii_v1' | 'stl_binary_v1';
+    source_unit: string;
+    angstrom_per_unit: number;
 }
 
 export interface ShapeLaunchRequest {
