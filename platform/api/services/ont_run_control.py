@@ -573,7 +573,13 @@ async def issue_position_protocol_catalog(position: str) -> dict[str, Any]:
         raise RuntimeError(f"host-agent returned non-object protocol options payload: {host_payload!r}")
     blockers = _catalog_blockers(host_payload)
     flow_cell_present = _flowcell_present(host_payload)
-    can_start = host_payload.get("can_start") is True and flow_cell_present and not blockers
+    basecalling_evidence_valid = isinstance(host_payload.get("basecalling_enabled"), bool)
+    can_start = (
+        host_payload.get("can_start") is True
+        and flow_cell_present
+        and basecalling_evidence_valid
+        and not blockers
+    )
     safe_response: dict[str, Any] = {
         "position": position,
         "can_start": can_start,
@@ -751,7 +757,11 @@ async def validate_armed_intent_start(run_id: str, payload: dict[str, Any]) -> d
                 invalid_reason = "protocol_capability_unavailable"
             elif str(fresh_catalog.get("device_type") or "").strip().lower() != "mk1d":
                 invalid_reason = "unsupported_device_type"
-            elif fresh_catalog.get("can_start") is not True or _catalog_blockers(fresh_catalog):
+            elif (
+                fresh_catalog.get("can_start") is not True
+                or not isinstance(fresh_catalog.get("basecalling_enabled"), bool)
+                or _catalog_blockers(fresh_catalog)
+            ):
                 invalid_reason = "protocol_capability_unavailable"
             else:
                 fresh_snapshot = _option_snapshot(record.position_id, fresh_catalog)

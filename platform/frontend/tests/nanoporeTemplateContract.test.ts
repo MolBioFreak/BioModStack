@@ -190,7 +190,8 @@ test('NGS instrument control uses only opaque intent handles and has no browser 
     const ontApi = api.slice(api.indexOf('// ONT INSTRUMENT CONTROL API'));
 
     assert.match(ngsToolkit, /type ToolkitView = 'launch' \| 'instrument' \| 'runs'/u);
-    assert.match(ngsToolkit, /Start instrument run/u);
+    assert.match(ngsToolkit, /Instrument intent/u);
+    assert.doesNotMatch(ngsToolkit, /Start instrument run/u);
     assert.match(ngsToolkit, /<OntInstrumentPanel/u);
     assert.match(api, /fetchOntDeviceStatus/u);
     assert.match(api, /createOntRunIntent/u);

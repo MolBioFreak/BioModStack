@@ -48,13 +48,14 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
     const [experimentGroup, setExperimentGroup] = useState('');
     const [lastRun, setLastRun] = useState<OntInstrumentRun | null>(null);
     const [message, setMessage] = useState('');
-    const { data, isLoading, refetch } = useQuery({
+    const deviceStatus = useQuery({
         queryKey: ['ont-device-status'],
         queryFn: async () => (await fetchOntDeviceStatus()).data,
         refetchInterval: (query) => jobPollingInterval(10000, query),
     });
+    const data = deviceStatus.isError ? undefined : deviceStatus.data;
     // The API/host already enforce Mk1D-only discovery; the UI never filters eligibility.
-    const devices = data?.live_devices ?? [];
+    const devices = useMemo(() => data?.live_devices ?? [], [data?.live_devices]);
     const selectedDevice = devices.find((device) => device.position === selectedPosition) ?? devices[0];
     const selectedPositionForQuery = selectedDevice?.position ?? '';
     const protocolOptions = useQuery({
@@ -63,7 +64,9 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
         enabled: Boolean(selectedPositionForQuery),
         refetchInterval: (query) => jobPollingInterval(10000, query),
     });
-    const selectedOption: OntProtocolOption | undefined = protocolOptions.data?.options[0];
+    const instrumentEvidenceError = deviceStatus.isError || protocolOptions.isError;
+    const effectiveProtocolOptions = instrumentEvidenceError ? undefined : protocolOptions.data;
+    const selectedOption: OntProtocolOption | undefined = effectiveProtocolOptions?.options[0];
 
     const startRun = useMutation({
         mutationFn: async () => {
@@ -97,13 +100,19 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
             setMessage(revalidated
                 ? `BMS run ${run.id} remains armed after fresh revalidation; physical MinKNOW start remains disabled.`
                 : 'Intent was freshly checked; physical MinKNOW start remains disabled.');
-            void refetch();
+            void deviceStatus.refetch();
         },
         onError: (error) => setMessage(error instanceof Error ? error.message : String(error)),
     });
 
-    const blockers = protocolOptions.data?.blockers ?? [];
-    const canStart = Boolean(selectedDevice?.available_for_run && selectedOption && protocolOptions.data?.can_start && !startRun.isPending);
+    const blockers = effectiveProtocolOptions?.blockers ?? [];
+    const canStart = Boolean(
+        !instrumentEvidenceError
+        && selectedDevice?.available_for_run
+        && selectedOption
+        && effectiveProtocolOptions?.can_start
+        && !startRun.isPending
+    );
     const availableCount = useMemo(() => devices.filter((device) => device.available_for_run).length, [devices]);
 
     return (
@@ -120,14 +129,16 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
             </div>
 
             <div className="grid gap-3 md:grid-cols-3">
-                <div className="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3"><div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Mk1D link</div><div className="mt-1 text-base font-semibold text-[var(--text-primary)]">{isLoading ? 'Checking…' : statusLabel(data?.implementation_status)}</div></div>
+                <div className="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3"><div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Mk1D link</div><div className="mt-1 text-base font-semibold text-[var(--text-primary)]">{deviceStatus.isLoading ? 'Checking…' : statusLabel(data?.implementation_status)}</div></div>
                 <div className="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3"><div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Positions</div><div className="mt-1 text-base font-semibold text-[var(--text-primary)]">{devices.length}</div></div>
                 <div className="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3"><div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Available</div><div className="mt-1 text-base font-semibold text-[var(--text-primary)]">{availableCount}</div></div>
             </div>
 
+            {instrumentEvidenceError ? <p role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">Current instrument evidence is unavailable after a refresh failure. Intent validation is disabled until a fresh device and protocol response succeeds.</p> : null}
+
             <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
                 <div className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4">
-                    <div className="flex items-center justify-between gap-3"><div><h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Instrument positions</h3><p className="text-xs text-[var(--text-secondary)]">Only host-approved Mk1D cards are returned.</p></div><button type="button" onClick={() => void refetch()} className="text-sm text-[var(--accent-secondary)]">Refresh</button></div>
+                    <div className="flex items-center justify-between gap-3"><div><h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Instrument positions</h3><p className="text-xs text-[var(--text-secondary)]">Only host-approved Mk1D cards are returned.</p></div><button type="button" onClick={() => void deviceStatus.refetch()} className="text-sm text-[var(--accent-secondary)]">Refresh</button></div>
                     {data?.message ? <p className="rounded-lg bg-slate-900/40 p-2 text-xs text-[var(--text-secondary)]">{data.message}</p> : null}
                     <div className="grid gap-3 md:grid-cols-2">
                         {devices.length === 0 ? <div className="rounded-lg border border-dashed border-[var(--border-primary)] bg-[var(--bg-secondary)] p-4 text-sm text-[var(--text-secondary)]">No live Mk1D positions reported by MinKNOW.</div> : devices.map((device) => <button key={device.position} type="button" onClick={() => setSelectedPosition(device.position)} className={`rounded-xl border p-4 text-left transition ${selectedDevice?.position === device.position ? 'border-cyan-400 bg-cyan-500/10' : 'border-[var(--border-primary)] bg-[var(--bg-secondary)] hover:border-cyan-500/50'}`}><div className="text-base font-semibold text-[var(--text-primary)]">{device.position}</div><div className="text-xs text-[var(--text-secondary)]">Mk1D · {deviceStateLabel(device)}</div><div className="mt-3 text-xs text-[var(--text-secondary)]">Flow cell: {device.flow_cell.present ? 'present' : 'absent'} · Running: {device.running ? 'yes' : 'no'}</div></button>)}

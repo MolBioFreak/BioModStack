@@ -3781,7 +3781,7 @@ export function NGSToolkit() {
                                 }`}
                             style={view === 'instrument' ? { backgroundColor: 'var(--accent-secondary)' } : undefined}
                         >
-                            Start instrument run
+                            Instrument intent
                         </button>
                         <button
                             onClick={() => setView('runs')}

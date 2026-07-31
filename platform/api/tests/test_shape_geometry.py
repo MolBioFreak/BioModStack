@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 from pathlib import Path
 import struct
 
@@ -82,6 +83,8 @@ def test_closed_obj_canonicalization_is_deterministic() -> None:
     assert first.face_count == 12
     assert first.point_count == 4096
     assert first.bounds_angstrom == [-10.0, -10.0, -10.0, 10.0, 10.0, 10.0]
+    assert first.manifest["source_format"] == "obj"
+    assert first.manifest["source_parser"] == "obj_triangle_v1"
     points = np.frombuffer(first.points_f32, dtype="<f4").reshape((-1, 3))
     assert np.all(points >= -10.0) and np.all(points <= 10.0)
 
@@ -145,7 +148,8 @@ def test_stl_and_obj_sources_have_distinct_source_bound_geometry_identity() -> N
     assert obj.vertices_f64 == stl.vertices_f64
     assert obj.faces_u32 == stl.faces_u32
     assert obj.geometry_sha256 != stl.geometry_sha256
-    assert "source_format" not in obj.manifest
+    assert obj.manifest["source_format"] == "obj"
+    assert obj.manifest["source_parser"] == "obj_triangle_v1"
     assert stl.manifest["source_format"] == "stl"
 
 
@@ -205,6 +209,7 @@ def test_unknown_mesh_format_is_rejected() -> None:
         (b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", "open_mesh"),
         (b"v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nf 1 2 3 4\n", "non_triangular_face"),
         (b"v nan 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", "non_finite_vertex"),
+        (CUBE_OBJ.replace(b"f 1 3 2", b"f 1/not-a-valid-obj-index 3 2", 1), "invalid_obj"),
         (CUBE_OBJ.replace(b"v 1 1 1", b"v 1 1 -3"), "self_intersection"),
         (CUBE_OBJ + CUBE_OBJ.replace(b"v ", b"v 20 "), "invalid_obj"),
     ],
@@ -396,6 +401,9 @@ async def test_shape_geometry_http_upload_list_and_preview(tmp_path: Path, monke
             assert uploaded.status_code == 201, uploaded.text
             body = uploaded.json()
             assert body["vertex_count"] == 8 and body["point_count"] == 4096
+            assert body["source_format"] == "obj"
+            assert body["source_parser"] == "obj_triangle_v1"
+            assert body["source_unit"] == "angstrom"
             assert len(body["preview_obj_sha256"]) == 64
             assert "principal" not in body and "owner" not in body
 
@@ -417,6 +425,17 @@ async def test_shape_geometry_http_upload_list_and_preview(tmp_path: Path, monke
             )
             assert corrupted.status_code == 409
             assert corrupted.json()["detail"] == "Shape preview artifact hash mismatch"
+
+            manifest_path = next(
+                (tmp_path / "data" / "shape_blueprint" / "geometries").glob("*/manifest.json")
+            )
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            assert manifest["source_format"] == "obj"
+            assert manifest["source_parser"] == "obj_triangle_v1"
+            assert manifest["source_unit"] == "angstrom"
+            assert manifest["conversion"]["source_format"] == "obj"
+            assert manifest["conversion"]["source_parser"] == "obj_triangle_v1"
+            assert manifest["conversion"]["source_unit"] == "angstrom"
     finally:
         await engine.dispose()
 

@@ -47,12 +47,7 @@ def _summary(row: ShapeDesignGeometry | AdmittedGeometry) -> dict[str, object]:
     manifest = dict(row.manifest)
     bounds = [float(value) for value in cast(list[float], manifest["bounds_angstrom"])]
     scale = float(str(manifest["angstrom_per_unit"]))
-    source_unit = str(
-        manifest.get(
-            "source_unit",
-            next((label for label, value in _UNIT_TO_ANGSTROM.items() if value == scale), "custom"),
-        )
-    )
+    source_unit = str(manifest["source_unit"])
     return {
         "geometry_id": row.geometry_id,
         "source_id": row.source_id,
@@ -68,8 +63,8 @@ def _summary(row: ShapeDesignGeometry | AdmittedGeometry) -> dict[str, object]:
         "point_count": int(manifest["point_count"]),
         "bounds_angstrom": bounds,
         "dimensions_angstrom": [bounds[index + 3] - bounds[index] for index in range(3)],
-        "source_format": str(manifest.get("source_format", "obj")),
-        "source_parser": str(manifest.get("source_parser", "obj_strict_v1")),
+        "source_format": str(manifest["source_format"]),
+        "source_parser": str(manifest["source_parser"]),
         "source_unit": source_unit,
         "angstrom_per_unit": scale,
     }

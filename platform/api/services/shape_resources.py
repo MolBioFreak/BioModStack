@@ -102,15 +102,10 @@ async def admit_mesh_geometry(
         "schema": "bms_shape_geometry_conversion_v1",
         "angstrom_per_unit": float(angstrom_per_unit),
         "center_mode": "volume_centroid_v1",
+        "source_format": normalized_format,
+        "source_parser": canonical.manifest["source_parser"],
+        "source_unit": source_unit,
     }
-    if normalized_format == "stl":
-        conversion.update(
-            {
-                "source_format": "stl",
-                "source_parser": canonical.manifest["source_parser"],
-                "source_unit": source_unit,
-            }
-        )
     conversion_sha256 = hashlib.sha256(_canonical_json(conversion)).hexdigest()
 
     existing = await session.scalar(
@@ -137,7 +132,7 @@ async def admit_mesh_geometry(
     }
     final_manifest = {
         **canonical.manifest,
-        **({"source_unit": source_unit} if normalized_format == "stl" else {}),
+        "source_unit": source_unit,
         "conversion": conversion,
         "artifacts": artifacts,
     }
