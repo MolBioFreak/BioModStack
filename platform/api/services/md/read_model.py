@@ -12,9 +12,9 @@ from services.md.artifacts import (
 )
 
 
-def _actions(phase: str, has_checkpoint: bool, retryable: bool) -> list[str]:
+def _actions(phase: str, has_checkpoint: bool, retryable: bool, *, pause_ready: bool = False) -> list[str]:
     actions: list[str] = []
-    if phase in {"replicas_queued", "replicas_running"}:
+    if phase == "replicas_running" and pause_ready:
         actions.append("pause")
     if phase == "paused" and has_checkpoint:
         actions.append("resume_dynamics")
@@ -72,6 +72,7 @@ async def md_queue_snapshot(session: AsyncSession, *, limit: int) -> dict:
     active_replica_counts: dict[str, int] = defaultdict(int)
     simulated_time_ps: dict[str, float] = {}
     retryable_jobs: set[str] = set()
+    pause_ready_jobs: set[str] = set()
     if job_ids:
         summary_rows = (await session.execute(
             select(MdReplicaRun.md_job_id, MdReplicaRun.state, func.count(MdReplicaRun.id))
@@ -102,6 +103,26 @@ async def md_queue_snapshot(session: AsyncSession, *, limit: int) -> dict:
         retryable_jobs = {
             item.md_job_id for item in retryable_rows
             if str((item.failure or {}).get("code") or "") in RETRYABLE_INFRASTRUCTURE_FAILURES
+        }
+
+        ready_rows = (await session.execute(
+            select(MdReplicaRun.md_job_id, func.count(MdReplicaRun.id))
+            .join(Job, Job.id == MdReplicaRun.child_job_id)
+            .where(
+                MdReplicaRun.md_job_id.in_(job_ids),
+                MdReplicaRun.active.is_(True),
+                MdReplicaRun.state == "running",
+                Job.nextflow_run_id.is_not(None),
+                Job.stage_work_dir.is_not(None),
+            )
+            .group_by(MdReplicaRun.md_job_id)
+        )).all()
+        ready_counts = {job_id: int(count) for job_id, count in ready_rows}
+        pause_ready_jobs = {
+            job_id for job_id in job_ids
+            if replica_summary[job_id].get("running", 0) > 0
+            and ready_counts.get(job_id, 0) == replica_summary[job_id].get("running", 0)
+            and set(replica_summary[job_id]).issubset({"running", "completed"})
         }
 
     queue_rows = []
@@ -139,7 +160,10 @@ async def md_queue_snapshot(session: AsyncSession, *, limit: int) -> dict:
             "simulated_time_ps": simulated_time_ps.get(run.job_id, 0.0),
             "requested_time_ps": _requested_time_ps(run.normalized_request),
             "checkpoint_available": has_checkpoint,
-            "allowed_actions": _actions(run.phase, has_checkpoint, run.job_id in retryable_jobs),
+            "allowed_actions": _actions(
+                run.phase, has_checkpoint, run.job_id in retryable_jobs,
+                pause_ready=run.job_id in pause_ready_jobs,
+            ),
             "chemistry": {
                 "profile_id": run.chemistry_profile_id,
                 "assurance": run.chemistry_assurance,
@@ -209,6 +233,16 @@ async def md_run_snapshot(session: AsyncSession, job_id: str) -> dict | None:
         and str((item.failure or {}).get("code") or "") in RETRYABLE_INFRASTRUCTURE_FAILURES
         for item in replicas
     )
+    running_replicas = [item for item in active_replicas if item.state == "running"]
+    pause_ready = bool(running_replicas) and all(
+        item.state in {"running", "completed"} for item in active_replicas
+    )
+    if pause_ready:
+        for replica in running_replicas:
+            child = await session.get(Job, replica.child_job_id) if replica.child_job_id else None
+            if child is None or not child.nextflow_run_id or not child.stage_work_dir:
+                pause_ready = False
+                break
     chemistry = run.normalized_request.get("chemistry", {})
     requested_ps = _requested_time_ps(run.normalized_request)
     completed_ps = max((float(item.end_time_ps or 0.0) for item in segments), default=0.0)
@@ -232,7 +266,9 @@ async def md_run_snapshot(session: AsyncSession, job_id: str) -> dict | None:
         "simulated_time_ps": completed_ps,
         "requested_time_ps": requested_ps,
         "checkpoint_available": checkpoint_available,
-        "allowed_actions": _actions(run.phase, checkpoint_available, retryable),
+        "allowed_actions": _actions(
+            run.phase, checkpoint_available, retryable, pause_ready=pause_ready,
+        ),
         "replicas": [{
             "id": item.id, "replica_index": item.replica_index, "attempt": item.attempt,
             "state": item.state, "active": item.active, "engine": item.engine,

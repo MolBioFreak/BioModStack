@@ -148,6 +148,43 @@ async def test_md_queue_route_enforces_server_limit_and_excludes_non_md_jobs(tmp
 
 
 @pytest.mark.asyncio
+async def test_pause_is_advertised_only_after_running_worker_identity_is_durable(tmp_path: Path) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'md-pause-ready.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        async with session_factory() as session:
+            await _seed_md_run(
+                session, "md-pause-ready", phase="replicas_running",
+                created_at=datetime(2026, 7, 29, 12, 0, 0),
+            )
+            replica = await session.scalar(select(MdReplicaRun).where(
+                MdReplicaRun.md_job_id == "md-pause-ready"
+            ))
+            assert replica is not None
+            before = await read_model.md_run_snapshot(session, "md-pause-ready")
+            assert before is not None and "pause" not in before["allowed_actions"]
+
+            child = Job(
+                id="md-pause-child", name="replica", status="running", queue_status="running",
+                model_id="molecular_dynamics", mode="replica", params={},
+                nextflow_run_id="adapter-run-1", stage_work_dir=str(tmp_path / "work"),
+                parent_job_id="md-pause-ready",
+            )
+            session.add(child)
+            replica.child_job_id = child.id
+            await session.flush()
+
+            detail = await read_model.md_run_snapshot(session, "md-pause-ready")
+            queue = await read_model.md_queue_snapshot(session, limit=25)
+            assert detail is not None and "pause" in detail["allowed_actions"]
+            assert "pause" in queue["runs"][0]["allowed_actions"]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_md_queue_does_not_advertise_unbound_accepted_checkpoint(tmp_path: Path) -> None:
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'md-queue-checkpoint.db'}")
     async with engine.begin() as connection:
