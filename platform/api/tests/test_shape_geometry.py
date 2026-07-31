@@ -259,6 +259,42 @@ def test_self_intersection_gate_rejects_crossing_faces_that_share_one_vertex() -
     assert exc.value.code == "self_intersection"
 
 
+def test_self_intersection_validation_is_translation_invariant() -> None:
+    geometry = _geometry()
+
+    def transformed_cube(offset: float) -> bytes:
+        lines: list[str] = []
+        for raw_line in CUBE_OBJ.decode("ascii").splitlines():
+            if raw_line.startswith("v "):
+                _, x, y, z = raw_line.split()
+                coordinates = [offset + 100.0 * float(value) for value in (x, y, z)]
+                lines.append("v " + " ".join(format(value, ".17g") for value in coordinates))
+            else:
+                lines.append(raw_line)
+        return ("\n".join(lines) + "\n").encode("ascii")
+
+    at_origin = geometry.canonicalize_obj(transformed_cube(0.0), angstrom_per_unit=1.0)
+    translated = geometry.canonicalize_obj(transformed_cube(1e16), angstrom_per_unit=1.0)
+
+    assert translated.vertices_f64 == at_origin.vertices_f64
+    assert translated.faces_u32 == at_origin.faces_u32
+
+
+def test_self_intersection_scan_limit_counts_axis_disjoint_active_faces(monkeypatch: pytest.MonkeyPatch) -> None:
+    geometry = _geometry()
+    monkeypatch.setattr(geometry, "MAX_SELF_INTERSECTION_SCANS", 2, raising=False)
+    vertices = np.asarray(
+        [[x, y, z] for y in (0.0, 10.0, 20.0, 30.0) for x, z in ((0.0, 0.0), (1.0, 0.0), (0.5, 1.0))],
+        dtype=np.float64,
+    )
+    faces = np.asarray([[3 * index, 3 * index + 1, 3 * index + 2] for index in range(4)], dtype=np.uint32)
+
+    with pytest.raises(geometry.ShapeGeometryError) as exc:
+        geometry._reject_self_intersections(vertices, faces)
+
+    assert exc.value.code == "mesh_too_complex"
+
+
 def test_conversion_bounds_are_enforced() -> None:
     geometry = _geometry()
 

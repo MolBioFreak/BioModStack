@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime
 import hashlib
@@ -89,7 +90,8 @@ async def admit_mesh_geometry(
     angstrom_per_unit: float,
 ) -> AdmittedGeometry:
     normalized_format = source_format.strip().lower()
-    canonical = canonicalize_mesh(
+    canonical = await asyncio.to_thread(
+        canonicalize_mesh,
         payload,
         source_format=normalized_format,
         angstrom_per_unit=angstrom_per_unit,

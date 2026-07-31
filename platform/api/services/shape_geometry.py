@@ -26,6 +26,9 @@ SDF_GRID_SIZE = 48
 POINT_BATCH = 8192
 MAX_POINT_DRAWS = 4_000_000
 MAX_ANGSTROM_PER_UNIT = 10_000_000_000.0
+MAX_SELF_INTERSECTION_SCANS = 2_000_000
+INTERSECTION_ANGULAR_TOLERANCE = 1e-12
+INTERSECTION_PARAMETER_TOLERANCE = 1e-10
 
 
 class ShapeGeometryError(ValueError):
@@ -266,8 +269,15 @@ def _validate_topology(vertices: np.ndarray, faces: np.ndarray) -> None:
 
 
 def _intersection_tolerance(first: np.ndarray, second: np.ndarray) -> float:
-    coordinate_scale = max(1.0, float(np.max(np.abs(np.concatenate((first, second), axis=0)))))
-    return float(np.finfo(np.float64).eps * 256.0 * coordinate_scale)
+    edges = np.concatenate(
+        (
+            first[[1, 2, 0]] - first,
+            second[[1, 2, 0]] - second,
+        ),
+        axis=0,
+    )
+    local_scale = max(1.0, float(np.max(np.linalg.norm(edges, axis=1))))
+    return float(np.finfo(np.float64).eps * 512.0 * local_scale)
 
 
 def _same_point(point: np.ndarray, candidates: list[np.ndarray], tolerance: float) -> bool:
@@ -282,7 +292,11 @@ def _segment_triangle_intersection(
 ) -> np.ndarray | None:
     normal = np.cross(triangle[1] - triangle[0], triangle[2] - triangle[0])
     normal_length = float(np.linalg.norm(normal))
-    if normal_length <= tolerance:
+    triangle_scale = max(
+        1.0,
+        float(np.max(np.linalg.norm(triangle[[1, 2, 0]] - triangle, axis=1))),
+    )
+    if normal_length <= np.finfo(np.float64).eps * 512.0 * triangle_scale * triangle_scale:
         return None
     normal /= normal_length
     start_distance = float(np.dot(start - triangle[0], normal))
@@ -295,7 +309,7 @@ def _segment_triangle_intersection(
     if abs(denominator) <= tolerance:
         return None
     fraction = start_distance / denominator
-    if fraction < -tolerance or fraction > 1.0 + tolerance:
+    if fraction < -INTERSECTION_PARAMETER_TOLERANCE or fraction > 1.0 + INTERSECTION_PARAMETER_TOLERANCE:
         return None
     point = start + fraction * (end - start)
 
@@ -308,11 +322,13 @@ def _segment_triangle_intersection(
     dot20 = float(np.dot(offset, edge0))
     dot21 = float(np.dot(offset, edge1))
     barycentric_denominator = dot00 * dot11 - dot01 * dot01
-    if abs(barycentric_denominator) <= tolerance * tolerance:
+    if abs(barycentric_denominator) <= (
+        np.finfo(np.float64).eps * 512.0 * triangle_scale * triangle_scale
+    ) ** 2:
         return None
     u = (dot11 * dot20 - dot01 * dot21) / barycentric_denominator
     v = (dot00 * dot21 - dot01 * dot20) / barycentric_denominator
-    barycentric_tolerance = 1e-10
+    barycentric_tolerance = INTERSECTION_PARAMETER_TOLERANCE
     if u < -barycentric_tolerance or v < -barycentric_tolerance or u + v > 1.0 + barycentric_tolerance:
         return None
     return point
@@ -344,7 +360,9 @@ def _coplanar_triangles_overlap(
     first_2d = np.delete(first, drop_axis, axis=1)
     second_2d = np.delete(second, drop_axis, axis=1)
     shared_2d = [np.delete(point, drop_axis) for point in shared_points]
-    area_tolerance = tolerance * max(1.0, float(np.max(np.abs(np.concatenate((first_2d, second_2d), axis=0)))))
+    projected = np.concatenate((first_2d, second_2d), axis=0)
+    projected_scale = max(1.0, float(np.max(np.ptp(projected, axis=0))))
+    area_tolerance = tolerance * projected_scale
 
     if any(_point_strictly_inside_triangle_2d(point, second_2d, area_tolerance) for point in first_2d):
         return True
@@ -394,7 +412,7 @@ def _triangles_intersect(
     first_unit = first_normal / first_length
     second_unit = second_normal / second_length
     coplanar = (
-        float(np.linalg.norm(np.cross(first_unit, second_unit))) <= tolerance
+        float(np.linalg.norm(np.cross(first_unit, second_unit))) <= INTERSECTION_ANGULAR_TOLERANCE
         and all(abs(float(np.dot(point - first[0], first_unit))) <= tolerance for point in second)
     )
     if coplanar:
@@ -416,12 +434,22 @@ def _reject_self_intersections(vertices: np.ndarray, faces: np.ndarray) -> None:
     upper = triangles.max(axis=1)
     order = np.argsort(lower[:, 0], kind="stable")
     active: list[int] = []
-    comparisons = 0
+    scans = 0
     for raw_index in order:
         index = int(raw_index)
-        active = [other for other in active if upper[other, 0] >= lower[index, 0] - 1e-12]
+        retained: list[int] = []
+        for other in active:
+            scans += 1
+            if scans > MAX_SELF_INTERSECTION_SCANS:
+                _fail("mesh_too_complex", "self-intersection broad phase exceeded its bounded work limit")
+            if upper[other, 0] >= lower[index, 0] - 1e-12:
+                retained.append(other)
+        active = retained
         face_vertices = set(faces[index].tolist())
         for other in active:
+            scans += 1
+            if scans > MAX_SELF_INTERSECTION_SCANS:
+                _fail("mesh_too_complex", "self-intersection broad phase exceeded its bounded work limit")
             shared_indices = sorted(face_vertices.intersection(faces[other].tolist()))
             if len(shared_indices) >= 2:
                 continue
@@ -432,9 +460,6 @@ def _reject_self_intersections(vertices: np.ndarray, faces: np.ndarray) -> None:
                 or upper[index, 2] < lower[other, 2] - 1e-12
             ):
                 continue
-            comparisons += 1
-            if comparisons > 2_000_000:
-                _fail("mesh_too_complex", "self-intersection broad phase exceeded its bounded work limit")
             shared_points = [vertices[vertex_index] for vertex_index in shared_indices]
             if _triangles_intersect(triangles[index], triangles[other], shared_points):
                 _fail("self_intersection", "mesh contains intersecting non-adjacent triangles")
@@ -572,6 +597,9 @@ def _canonicalize_parsed(
 ) -> CanonicalGeometry:
     source_sha256 = hashlib.sha256(payload).hexdigest()
     vertices = vertices * float(angstrom_per_unit)
+    anchor = vertices[0].copy()
+    vertices = vertices - anchor
+    vertices = vertices - vertices.mean(axis=0)
     _validate_topology(vertices, faces)
     faces, _ = _positive_oriented(vertices, faces)
     vertices = vertices - _volume_centroid(vertices, faces)
