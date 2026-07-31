@@ -319,6 +319,35 @@ def test_candidate_profile_qualification_lane_is_explicit_dev_only(
     assert error.value.code == "MD_CHEMISTRY_PROFILE_UNAVAILABLE"
 
 
+def test_lifecycle_control_profile_is_dev_qualification_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _catalog_module()
+    catalog = _stock_catalog("amber99sb-ildn.ff", "charmm27.ff", "oplsaa.ff")
+    profile = _profile(catalog, "gmx_amber99sb_ildn_tip3p_lifecycle_v1")
+    selection = {
+        "profile_id": profile["id"],
+        "profile_sha256": profile["profile_sha256"],
+        "force_field": "amber99sb-ildn",
+        "water_model": "tip3p",
+        "engine": "gromacs",
+        "requested_scope": "lifecycle_control_only",
+    }
+
+    assert profile["inventory_class"] == "candidate"
+    assert profile["states"]["selectable"] is False
+    monkeypatch.setenv("BMS_RUNTIME_MODE", "dev")
+    monkeypatch.setenv("BMS_MD_QUALIFICATION_PROFILE_IDS", profile["id"])
+    selected = catalog.validate_v1_profile_selection(**selection)
+    assert selected["id"] == profile["id"]
+    assert selected["states"]["selectable"] is False
+
+    monkeypatch.setenv("BMS_RUNTIME_MODE", "production")
+    with pytest.raises(module.ChemistryProfileSelectionError) as error:
+        catalog.validate_v1_profile_selection(**selection)
+    assert error.value.code == "MD_CHEMISTRY_PROFILE_UNAVAILABLE"
+
+
 def test_ff19sb_ol15_opc_profile_is_runtime_qualified_but_not_selectable_or_scientifically_validated() -> None:
     module = _catalog_module()
     preparation_probe = module.RuntimeProbeResult(
