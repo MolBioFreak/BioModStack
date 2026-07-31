@@ -262,6 +262,22 @@ export interface BioXpOperatorActionHistory {
     receipts: BioXpOperatorActionReceipt[];
 }
 
+export function bioXpOperatorGenerationPayload(
+    connectionGeneration: number,
+    ownershipGeneration: number,
+) {
+    if (!Number.isSafeInteger(connectionGeneration) || connectionGeneration <= 0) {
+        throw new Error('A positive safe BMS connection generation is required');
+    }
+    if (!Number.isSafeInteger(ownershipGeneration) || ownershipGeneration <= 0) {
+        throw new Error('A positive safe robot ownership generation is required');
+    }
+    return {
+        expected_connection_generation: connectionGeneration,
+        expected_ownership_generation: ownershipGeneration,
+    };
+}
+
 export type BioXpCommandName =
     | 'activate_usb_for_service'
     | 'collect_hardware_snapshot'
@@ -576,18 +592,22 @@ export const useBioXpOperatorDashboard = (enabled = true) => useQuery({
 
 export const useBioXpOperatorActionAdmission = (
     actionId: string | null,
-    generation: number,
+    connectionGeneration: number,
+    ownershipGeneration: number,
     inputs: Record<string, unknown> | null,
     enabled = true,
 ) => useQuery({
-    queryKey: ['bioxp', 'operator-controls', 'admission', actionId, generation, inputs],
+    queryKey: ['bioxp', 'operator-controls', 'admission', actionId, connectionGeneration, ownershipGeneration, inputs],
     queryFn: async () => (
         await api.post<BioXpOperatorAdmission>(
             `/api/bioxp/operator-controls/actions/${encodeURIComponent(actionId ?? '')}/admission`,
-            { expected_generation: generation, inputs: inputs ?? {} },
+            {
+                ...bioXpOperatorGenerationPayload(connectionGeneration, ownershipGeneration),
+                inputs: inputs ?? {},
+            },
         )
     ).data,
-    enabled: enabled && Boolean(actionId) && generation > 0 && inputs !== null,
+    enabled: enabled && Boolean(actionId) && connectionGeneration > 0 && ownershipGeneration > 0 && inputs !== null,
     refetchInterval: enabled ? 5_000 : false,
     retry: false,
 });
@@ -740,15 +760,16 @@ export const useBioXpCommand = () => useRefreshMutation(
 );
 
 export const useInvokeBioXpOperatorAction = () => useRefreshMutation(
-    async ({ actionId, generation, inputs }: {
+    async ({ actionId, connectionGeneration, ownershipGeneration, inputs }: {
         actionId: string;
-        generation: number;
+        connectionGeneration: number;
+        ownershipGeneration: number;
         inputs: Record<string, unknown>;
     }) => (
         await api.post<BioXpOperatorActionReceipt>(
             `/api/bioxp/operator-controls/actions/${encodeURIComponent(actionId)}`,
             {
-                expected_generation: generation,
+                ...bioXpOperatorGenerationPayload(connectionGeneration, ownershipGeneration),
                 idempotency_key: crypto.randomUUID(),
                 inputs,
             },
@@ -757,16 +778,17 @@ export const useInvokeBioXpOperatorAction = () => useRefreshMutation(
 );
 
 export const useAssessBioXpOperatorAction = () => useRefreshMutation(
-    async ({ commandId, generation, verdict, note }: {
+    async ({ commandId, connectionGeneration, ownershipGeneration, verdict, note }: {
         commandId: string;
-        generation: number;
+        connectionGeneration: number;
+        ownershipGeneration: number;
         verdict: 'pass' | 'fail';
         note: string;
     }) => (
         await api.post<BioXpOperatorActionReceipt>(
             `/api/bioxp/operator-controls/receipts/${encodeURIComponent(commandId)}/assessment`,
             {
-                expected_generation: generation,
+                ...bioXpOperatorGenerationPayload(connectionGeneration, ownershipGeneration),
                 idempotency_key: crypto.randomUUID(),
                 verdict,
                 note,

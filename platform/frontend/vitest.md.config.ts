@@ -10,6 +10,8 @@ export default defineConfig({
             './tests/vitest/stateLandscapeWorkspacePanel.test.tsx',
             './tests/vitest/bioxpCockpitMounted.test.tsx',
             './tests/vitest/bioxpCameraMounted.test.tsx',
+            './tests/vitest/bioxpOperatorGenerationPayload.test.ts',
+            './tests/vitest/bioxpOperatorCriticalControlsMounted.test.tsx',
         ],
     },
 });

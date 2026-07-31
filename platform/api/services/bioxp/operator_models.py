@@ -128,14 +128,16 @@ class OperatorControlCatalog(BaseModel):
 
 class OperatorActionInvokeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    expected_generation: StrictInt = Field(ge=1)
+    expected_connection_generation: StrictInt = Field(ge=1)
+    expected_ownership_generation: StrictInt = Field(ge=1)
     idempotency_key: str = Field(min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
     inputs: dict[str, Any] = Field(default_factory=dict, max_length=64)
 
 
 class OperatorAdmissionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    expected_generation: StrictInt = Field(ge=1)
+    expected_connection_generation: StrictInt = Field(ge=1)
+    expected_ownership_generation: StrictInt = Field(ge=1)
     inputs: dict[str, Any] = Field(default_factory=dict, max_length=64)
 
 
@@ -150,7 +152,8 @@ class OperatorAdmission(BaseModel):
 
 class OperatorAssessmentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    expected_generation: StrictInt = Field(ge=1)
+    expected_connection_generation: StrictInt = Field(ge=1)
+    expected_ownership_generation: StrictInt = Field(ge=1)
     idempotency_key: str = Field(min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
     verdict: Literal["pass", "fail"]
     note: str = Field(min_length=1, max_length=4000)
