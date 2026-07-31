@@ -74,6 +74,14 @@ vi.mock('../../src/components/BioXpCameraPanel', () => ({
     BioXpCameraPanel: () => <div data-testid="camera-panel">Camera</div>,
 }));
 
+vi.mock('../../src/components/BioXpQuickDashboard', () => ({
+    BioXpQuickDashboard: () => <div data-testid="quick-dashboard">Quick dashboard</div>,
+}));
+
+vi.mock('../../src/components/BioXpOperatorControlTabs', () => ({
+    BioXpOperatorControlTabs: () => <div data-testid="operator-control-tabs">Operator controls</div>,
+}));
+
 import { BioXpCockpit } from '../../src/components/BioXpCockpit';
 
 let container: HTMLDivElement;
@@ -102,6 +110,7 @@ afterEach(async () => {
     document.body.replaceChildren();
     state.status.isError = false;
     state.status.error = null;
+    state.status.data.connection.reachable = true;
     state.status.data.connection.ownership = { transport: 'owned', usb: 'service', router: 'running' };
     state.status.data.connection.maintenance_state = {
         motion_blocked: false,
@@ -165,6 +174,17 @@ describe('mounted BioXP cockpit wiring', () => {
         expect(receipt?.className).not.toContain('border-emerald-700');
     });
 
+    it('shows a disabled connected state and only offers reconnect after a link error', async () => {
+        await renderCockpit();
+
+        expect(button('BMS Link Connected')?.disabled).toBe(true);
+        expect(button('Reconnect BMS Link')).toBeUndefined();
+
+        state.status.data.connection.reachable = false;
+        await renderCockpit();
+        expect(button('Reconnect BMS Link')?.disabled).toBe(false);
+    });
+
     it('keeps Stop available during normal execution and blocks new normal work while Stop is pending', async () => {
         state.execute.isPending = true;
         state.execute.submittedAt = 10;
@@ -212,6 +232,51 @@ describe('mounted BioXP cockpit wiring', () => {
         expect(button('Claim USB Transport')?.disabled).toBe(false);
         expect(button('Non-homing Recovery')?.disabled).toBe(true);
         expect(button('Move +')?.disabled).toBe(true);
+    });
+
+    it('renders USB claim admission and request failures inside transport recovery', async () => {
+        state.status.data.available_commands = ['stop_axis_diagnostic'];
+        state.status.data.unavailable_commands = {
+            activate_usb_for_service: 'USB claim provider is unavailable',
+        };
+        await renderCockpit();
+
+        const controllerSection = Array.from(container.querySelectorAll('section'))
+            .find((section) => section.textContent?.includes('Controller Transport & Recovery'));
+        expect(controllerSection?.textContent).toContain('USB claim unavailable: USB claim provider is unavailable');
+
+        state.status.data.available_commands = ['activate_usb_for_service', 'stop_axis_diagnostic'];
+        state.status.data.unavailable_commands = {};
+        await renderCockpit();
+        await act(async () => button('Claim USB Transport')?.click());
+        expect(state.execute.mutate).toHaveBeenCalledWith(expect.objectContaining({ command: 'activate_usb_for_service' }));
+
+        state.execute.error = new Error('USB device is already owned by another process');
+        state.execute.submittedAt = 30;
+        await renderCockpit();
+        const updatedControllerSection = Array.from(container.querySelectorAll('section'))
+            .find((section) => section.textContent?.includes('Controller Transport & Recovery'));
+        expect(updatedControllerSection?.textContent).toContain('USB claim failed: USB device is already owned by another process');
+
+        state.execute.error = null;
+        state.execute.data = {
+            command_id: 'claim-ok',
+            command: 'activate_usb_for_service',
+            idempotency_key: 'claim-ok-key',
+            generation: 7,
+            status: 'acknowledged',
+            started_at: '2026-07-30T12:00:00Z',
+            finished_at: '2026-07-30T12:00:01Z',
+            remote_acknowledged: true,
+            physical_effect_verified: false,
+            detail: 'USB transport claimed by service',
+            handler_response: null,
+        };
+        state.execute.submittedAt = 40;
+        await renderCockpit();
+        const successfulControllerSection = Array.from(container.querySelectorAll('section'))
+            .find((section) => section.textContent?.includes('Controller Transport & Recovery'));
+        expect(successfulControllerSection?.textContent).toContain('USB claim result: USB transport claimed by service');
     });
 
     it('renders bounded recent command receipts with nested robot detail and effect truth', async () => {

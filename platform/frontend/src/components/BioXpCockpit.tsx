@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 
 import {
     type BioXpActiveCommandName,
@@ -98,10 +98,12 @@ export function BioXpCockpit() {
     const executeCommand = useBioXpCommand();
     const stopCommand = useBioXpCommand();
     const emergencyStop = useBioXpEmergencyStop();
+    const [controllerAction, setControllerAction] = useState<'claim' | 'recovery' | null>(null);
 
     const status = currentStatusData(statusQuery);
     const connection = status?.connection;
     const active = connection?.active === true;
+    const linkConnected = active && connection?.reachable !== false;
     const configured = connection?.configured === true;
     const generation = connection?.generation ?? 0;
     const available = useMemo(
@@ -127,6 +129,13 @@ export function BioXpCockpit() {
         stop: stopCommand,
         emergency: emergencyStop,
     });
+    const controllerReceipt = controllerAction === 'claim'
+        && executeCommand.data?.command === 'activate_usb_for_service'
+        ? executeCommand.data
+        : controllerAction === 'recovery'
+            && executeCommand.data?.command === 'recover_motion_non_homing'
+            ? executeCommand.data
+            : null;
     const busy = cockpitState.normalCommandBlocked;
     const connectedLabel = active
         ? connection?.reachable === false ? 'Connection error' : 'Connected'
@@ -134,25 +143,34 @@ export function BioXpCockpit() {
 
     const send = (payload: BioXpCommandPayload) => executeCommand.mutate(payload);
 
-    const claimTransport = () => send({
-        command: 'activate_usb_for_service',
-        expected_generation: generation,
-        idempotency_key: crypto.randomUUID(),
-    });
+    const claimTransport = () => {
+        setControllerAction('claim');
+        send({
+            command: 'activate_usb_for_service',
+            expected_generation: generation,
+            idempotency_key: crypto.randomUUID(),
+        });
+    };
 
-    const recoverMotion = () => send({
-        command: 'recover_motion_non_homing',
-        expected_generation: generation,
-        idempotency_key: crypto.randomUUID(),
-    });
+    const recoverMotion = () => {
+        setControllerAction('recovery');
+        send({
+            command: 'recover_motion_non_homing',
+            expected_generation: generation,
+            idempotency_key: crypto.randomUUID(),
+        });
+    };
 
-    const runControl = (axis: Axis, operation: Operation) => send({
-        command: 'run_axis_diagnostic',
-        expected_generation: generation,
-        idempotency_key: crypto.randomUUID(),
-        axis,
-        operation,
-    });
+    const runControl = (axis: Axis, operation: Operation) => {
+        setControllerAction(null);
+        send({
+            command: 'run_axis_diagnostic',
+            expected_generation: generation,
+            idempotency_key: crypto.randomUUID(),
+            axis,
+            operation,
+        });
+    };
 
     const stopAxis = (axis: Axis) => stopCommand.mutate({
         command: 'stop_axis_diagnostic',
@@ -186,10 +204,10 @@ export function BioXpCockpit() {
                     <div className="flex gap-2">
                         <button
                             type="button"
-                            disabled={!configured || connect.isPending || disconnect.isPending}
+                            disabled={!configured || linkConnected || connect.isPending || disconnect.isPending}
                             onClick={() => connect.mutate(undefined)}
                             className={actionClass}
-                        >{active ? 'Reconnect BMS Link' : 'Connect BMS Link'}</button>
+                        >{linkConnected ? 'BMS Link Connected' : active ? 'Reconnect BMS Link' : 'Connect BMS Link'}</button>
                         <button
                             type="button"
                             disabled={!active || connect.isPending || disconnect.isPending}
@@ -243,6 +261,23 @@ export function BioXpCockpit() {
                 </div>
                 {unavailable.recover_motion_non_homing && (
                     <p className="mt-2 break-words text-sm text-amber-200">Recovery unavailable: {unavailable.recover_motion_non_homing}</p>
+                )}
+                {unavailable.activate_usb_for_service && (
+                    <p className="mt-2 break-words text-sm text-amber-200">USB claim unavailable: {unavailable.activate_usb_for_service}</p>
+                )}
+                {controllerAction === 'claim' && executeCommand.isPending && (
+                    <p className="mt-2 text-sm text-amber-200">Claiming USB transport…</p>
+                )}
+                {controllerAction === 'claim' && executeCommand.error && (
+                    <p role="alert" className="mt-2 break-words text-sm text-red-300">USB claim failed: {bioXpErrorText(executeCommand.error)}</p>
+                )}
+                {controllerAction === 'recovery' && executeCommand.error && (
+                    <p role="alert" className="mt-2 break-words text-sm text-red-300">Non-homing recovery failed: {bioXpErrorText(executeCommand.error)}</p>
+                )}
+                {controllerReceipt && (
+                    <p className="mt-2 break-words text-sm text-cyan-200">
+                        {controllerAction === 'claim' ? 'USB claim result' : 'Non-homing recovery result'}: {bioXpCommandRecordText(controllerReceipt)}
+                    </p>
                 )}
             </section>
 
