@@ -14,6 +14,8 @@ export default defineConfig({
             './tests/vitest/bioxpCameraMounted.test.tsx',
             './tests/vitest/bioxpOperatorGenerationPayload.test.ts',
             './tests/vitest/bioxpOperatorCriticalControlsMounted.test.tsx',
+            './tests/vitest/ontInstrumentPanel.test.tsx',
+            './tests/vitest/conformationalMappingViewerBehavior.test.tsx',
         ],
     },
 });

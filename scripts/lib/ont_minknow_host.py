@@ -302,6 +302,7 @@ def build_protocol_options_preflight(
         blockers.append("output_directory_missing")
     return {
         "position": position.get("position"),
+        "device_type": position.get("device_type"),
         "kit": kit,
         "can_start": not blockers,
         "blockers": blockers,
@@ -325,6 +326,8 @@ def protocol_options(
     devices = status.get("live_devices") if isinstance(status, dict) else []
     for device in devices or []:
         if str(device.get("position") or "") == str(position):
+            if str(device.get("device_type") or "").strip().lower() != "mk1d":
+                return None
             output_dirs = device.get("output_directories") or ((status.get("minknow") or {}).get("output_directories") or {}) if isinstance(status, dict) else {}
             return build_protocol_options_preflight(
                 position=device,
@@ -350,57 +353,13 @@ def build_manager(config: MinknowHostConfig):
 
 
 def begin_hardware_check(position_name: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-    if not bool(payload.get("confirm_hardware_check")):
-        return 400, {
-            "detail": "confirm_hardware_check=true is required before starting a MinKNOW hardware check",
-            "position": position_name,
-            "fake_or_demo_devices": False,
-        }
-    status = discover_status()
-    if status.get("implementation_status") != MINKNOW_STATUS_CONFIGURED:
-        return 503, {
-            "detail": "MinKNOW is not configured/reachable from the BMS host-agent",
-            "implementation_status": status.get("implementation_status"),
-            "fake_or_demo_devices": False,
-        }
-    for device in status.get("live_devices") or []:
-        if str(device.get("position") or "") == str(position_name):
-            if device.get("current_protocol"):
-                return 409, {
-                    "detail": "A MinKNOW protocol is already running on this position; hardware check was not started.",
-                    "position": position_name,
-                    "current_protocol": device.get("current_protocol"),
-                    "fake_or_demo_devices": False,
-                }
-            try:
-                manager = build_manager(MinknowHostConfig.from_env())
-                target = next((p for p in manager.flow_cell_positions() if str(_safe_get(p, "name") or "") == str(position_name)), None)
-                if target is None:
-                    return 404, {"detail": f"unknown ONT position: {position_name}", "fake_or_demo_devices": False}
-                hardware_check_service = manager.hardware_check()
-                response = hardware_check_service.start_hardware_check(position_ids=[position_name])
-                hardware_check_id = _string_or_none(_safe_get(response, "hardware_check_id")) or _string_or_none(_safe_get(response, "run_id"))
-                return 202, {
-                    "action": "start_hardware_check",
-                    "detail": "Started the full MinKNOW hardware-check service through BMS host-agent. This is a diagnostic check, not a sequencing run.",
-                    "position": position_name,
-                    "hardware_check_id": hardware_check_id,
-                    "hardware_check_run_id": hardware_check_id,
-                    "result_source": "minknow.hardware_check.start_hardware_check",
-                    "fake_or_demo_devices": False,
-                }
-            except Exception as exc:  # noqa: BLE001 - MinKNOW/grpc exceptions vary by version
-                detail = str(exc)
-                status_code = 502
-                if "No flow cell present for hardware check" in detail:
-                    status_code = 409
-                    detail = "MinKNOW refused hardware check: no flow cell/test cell is currently reported as present on this position."
-                return status_code, {
-                    "detail": detail if status_code == 409 else f"MinKNOW hardware check failed to start: {detail}",
-                    "position": position_name,
-                    "fake_or_demo_devices": False,
-                }
-    return 404, {"detail": f"unknown ONT position: {position_name}", "fake_or_demo_devices": False}
+    """Tombstone physical diagnostic activation until supervised commissioning."""
+    del payload
+    return 501, {
+        "detail": "Mk1D hardware-check activation is disabled pending separately authorized supervised commissioning.",
+        "position": position_name,
+        "fake_or_demo_devices": False,
+    }
 
 def refresh_position(position_name: str) -> tuple[int, dict[str, Any]]:
     status = discover_status()
@@ -428,30 +387,6 @@ def restart_position(position_name: str, payload: dict[str, Any]) -> tuple[int, 
         "fake_or_demo_devices": False,
     }
 
-def start_protocol(position: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-    """Start a MinKNOW protocol for a position, or fail without fake run IDs.
-
-    Full MinKNOW protocol argument construction is intentionally conservative;
-    until protocol resolution is wired to a live Manager connection, this endpoint
-    returns an explicit non-implemented/error payload rather than fabricating a
-    run ID.
-    """
-    if not bool(payload.get("confirm_start")):
-        return 400, {"detail": "confirm_start=true is required before starting a MinKNOW run"}
-    status = discover_status()
-    if status.get("implementation_status") != MINKNOW_STATUS_CONFIGURED:
-        return 503, {
-            "detail": "MinKNOW is not configured/reachable from the BMS host-agent",
-            "implementation_status": status.get("implementation_status"),
-            "fake_or_demo_devices": False,
-        }
-    return 501, {
-        "detail": "MinKNOW protocol start is not implemented until protocol resolution is live-validated",
-        "position": position,
-        "fake_or_demo_devices": False,
-    }
-
-
 def stop_protocol(minknow_run_id: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     if not bool(payload.get("confirm_stop")):
         return 400, {"detail": "confirm_stop=true is required before stopping a MinKNOW run"}
@@ -473,7 +408,7 @@ def discover_status(
     try:
         manager = manager_factory(config)
         positions: Iterable[Any] = manager.flow_cell_positions()
-        live_devices = [normalize_position(position) for position in positions]
+        live_devices = [device for device in (normalize_position(position) for position in positions) if device.get("device_type") == "mk1d"]
         first_output_dirs = next((device.get("output_directories") for device in live_devices if device.get("output_directories")), {})
         return {
             "implementation_status": MINKNOW_STATUS_CONFIGURED,
@@ -508,3 +443,36 @@ def discover_status(
             "fake_or_demo_devices": False,
             "message": str(exc),
         }
+
+
+def observe_run(minknow_run_id: str) -> dict[str, Any]:
+    """Return a bounded, read-only status snapshot for one already-bound run.
+
+    This is discovery only: it never starts/stops a protocol and deliberately
+    does not enumerate host filesystem paths.  Terminal artifact paths, when
+    supported in a later host adapter, must be explicit safe outputs rather
+    than inferred from browser input or directory scans.
+    """
+    requested = str(minknow_run_id or "").strip()
+    status = discover_status()
+    if not requested or status.get("implementation_status") != MINKNOW_STATUS_CONFIGURED:
+        return {"status": "unknown", "minknow_run_id": requested, "output_files": {"fastq": [], "pod5": [], "bam": []}, "fake_or_demo_devices": False}
+    for device in status.get("live_devices") or []:
+        current = device.get("current_protocol") if isinstance(device.get("current_protocol"), dict) else {}
+        candidates = [current, *(device.get("protocol_runs") or []), *(device.get("acquisition_runs") or [])]
+        matching = next((run for run in candidates if isinstance(run, dict) and str(run.get("run_id") or "").strip() == requested), None)
+        if matching is None:
+            continue
+        raw_state = str(matching.get("state") or matching.get("status") or "").strip().lower()
+        if any(token in raw_state for token in ("fail", "error")):
+            observed = "failed"
+        elif any(token in raw_state for token in ("stop", "cancel", "abort")):
+            observed = "stopped"
+        elif any(token in raw_state for token in ("complete", "finish", "end")):
+            observed = "completed"
+        elif bool(device.get("running")) or matching is current:
+            observed = "active"
+        else:
+            observed = "unknown"
+        return {"status": observed, "minknow_run_id": requested, "output_files": {"fastq": [], "pod5": [], "bam": []}, "fake_or_demo_devices": False}
+    return {"status": "unknown", "minknow_run_id": requested, "output_files": {"fastq": [], "pod5": [], "bam": []}, "fake_or_demo_devices": False}

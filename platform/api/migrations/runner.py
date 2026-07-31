@@ -28,6 +28,13 @@ from migrations.add_state_landscape_analysis_page_order_index import (
 from migrations.add_molbio_ngs_receipts import migrate as migrate_molbio_ngs_receipts
 from migrations.add_approved_ngs_comparison_panels import migrate as migrate_approved_ngs_comparison_panels
 from migrations.add_md_lifecycle import migrate as migrate_md_lifecycle
+from migrations.add_ont_instrument_run_ledger import migrate as migrate_ont_instrument_run_ledger
+from migrations.add_ont_protocol_preflight import migrate as migrate_ont_protocol_preflight
+from migrations.add_ont_terminal_artifact_manifests import migrate as migrate_ont_terminal_artifact_manifests
+from migrations.enforce_ont_terminal_artifact_manifest_immutability import (
+    migrate as enforce_ont_terminal_artifact_manifest_immutability,
+)
+from migrations.sqlite_sha256 import register_sqlite_sha256
 from run_migration import migrate as migrate_stage_tracking
 
 
@@ -64,11 +71,16 @@ MIGRATIONS: List[Migration] = [
     Migration(15, "add_molbio_ngs_receipts", migrate_molbio_ngs_receipts),
     Migration(16, "add_approved_ngs_comparison_panels", migrate_approved_ngs_comparison_panels),
     Migration(17, "add_md_lifecycle", migrate_md_lifecycle),
+    Migration(18, "add_ont_instrument_run_ledger", migrate_ont_instrument_run_ledger),
+    Migration(19, "add_ont_protocol_preflight", migrate_ont_protocol_preflight),
+    Migration(20, "add_ont_terminal_artifact_manifests", migrate_ont_terminal_artifact_manifests),
+    Migration(21, "enforce_ont_terminal_artifact_manifest_immutability", enforce_ont_terminal_artifact_manifest_immutability),
 ]
 
 
 def _connect(db_path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path, timeout=30)
+    register_sqlite_sha256(conn)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=30000")
     return conn
@@ -85,6 +97,69 @@ def _ensure_migrations_table(conn: sqlite3.Connection) -> None:
         """
     )
     conn.commit()
+
+
+_LEGACY_ONT_TARGET_VERSIONS = {
+    "add_ont_instrument_run_ledger": 18,
+    "add_ont_protocol_preflight": 19,
+    "add_ont_terminal_artifact_manifests": 20,
+    "enforce_ont_terminal_artifact_manifest_immutability": 21,
+}
+
+
+def _reconcile_legacy_ont_migration_versions(conn: sqlite3.Connection) -> None:
+    """Move the unpublished ONT 17..20 ledger to 18..21 before MD owns version 17."""
+    rows = conn.execute("SELECT version, name FROM schema_migrations ORDER BY version").fetchall()
+    by_name: dict[str, int] = {}
+    by_version: dict[int, str] = {}
+    for raw_version, raw_name in rows:
+        version = int(raw_version)
+        name = str(raw_name)
+        if name in by_name:
+            raise RuntimeError(f"duplicate schema migration name: {name}")
+        by_name[name] = version
+        by_version[version] = name
+
+    moves: list[tuple[str, int, int]] = []
+    migrating_names = set(_LEGACY_ONT_TARGET_VERSIONS)
+    for name, target in _LEGACY_ONT_TARGET_VERSIONS.items():
+        current = by_name.get(name)
+        if current is None or current == target:
+            continue
+        if current != target - 1:
+            raise RuntimeError(
+                f"unexpected legacy migration version for {name}: {current}; expected {target - 1} or {target}"
+            )
+        occupant = by_version.get(target)
+        if occupant is not None and occupant not in migrating_names:
+            raise RuntimeError(
+                f"cannot remap {name} to migration version {target}; occupied by {occupant}"
+            )
+        moves.append((name, current, target))
+
+    if not moves:
+        return
+
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        for name, current, target in moves:
+            cursor = conn.execute(
+                "UPDATE schema_migrations SET version = ? WHERE version = ? AND name = ?",
+                (-target, current, name),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError(f"failed to reserve remapped migration version for {name}")
+        for name, _current, target in moves:
+            cursor = conn.execute(
+                "UPDATE schema_migrations SET version = ? WHERE version = ? AND name = ?",
+                (target, -target, name),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError(f"failed to publish remapped migration version for {name}")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def _get_applied_versions(conn: sqlite3.Connection) -> set[int]:
@@ -105,6 +180,7 @@ def run_all(db_path: str | None = None) -> None:
     conn = _connect(db_path)
     try:
         _ensure_migrations_table(conn)
+        _reconcile_legacy_ont_migration_versions(conn)
         applied = _get_applied_versions(conn)
 
         for mig in MIGRATIONS:

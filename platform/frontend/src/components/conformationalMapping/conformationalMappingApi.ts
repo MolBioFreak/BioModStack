@@ -322,6 +322,9 @@ export const registerCmSource = async (
     return (await api.post<CmSource>('/api/conformational-mapping/sources', body)).data;
 };
 
+export const registerCmRcsbMmcif = async (pdbId: string): Promise<CmSource> =>
+    (await api.post<CmSource>(`/api/conformational-mapping/sources/rcsb/${encodeURIComponent(pdbId.trim().toUpperCase())}`)).data;
+
 export const submitCmRequest = async (payload: CmSubmitRequest): Promise<CmSubmitReceipt> =>
     (await api.post<CmSubmitReceipt>('/api/conformational-mapping/requests', payload)).data;
 

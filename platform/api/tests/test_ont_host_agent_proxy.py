@@ -53,7 +53,15 @@ def test_device_status_delegates_to_host_agent_when_enabled(monkeypatch) -> None
     assert payload["owner"] == "bms_service_api"
     assert payload["analysis_owner"] == "nextflow_analysis"
     assert payload["implementation_status"] == "configured"
-    assert payload["live_devices"] == [{"position": "X1", "device_type": "mk1d"}]
+    assert payload["live_devices"] == [{
+        "position": "X1",
+        "device_type": "mk1d",
+        "state": None,
+        "running": False,
+        "available_for_run": False,
+        "flow_cell": {"present": False},
+        "fake_or_demo_device": False,
+    }]
     assert payload["fake_or_demo_devices"] is False
 
 
@@ -71,7 +79,25 @@ def test_device_status_reports_host_agent_unavailable_without_fake_devices(monke
     assert payload["implementation_status"] == "host_agent_unavailable"
     assert payload["live_devices"] == []
     assert payload["fake_or_demo_devices"] is False
-    assert "connection refused" in payload["message"]
+    assert payload["message"] == "Mk1D discovery is unavailable."
+    assert "connection refused" not in str(payload)
+
+
+def test_host_agent_ont_run_route_delegates_to_read_only_run_observation(monkeypatch) -> None:
+    import bms_host_agent  # noqa: PLC0415
+
+    monkeypatch.setattr(
+        bms_host_agent,
+        "observe_ont_run",
+        lambda run_id: {"status": "completed", "minknow_run_id": run_id, "output_files": {"fastq": [], "pod5": [], "bam": []}, "fake_or_demo_devices": False},
+    )
+
+    assert bms_host_agent.ont_route_payload("/ont/runs/MNK-123") == {
+        "status": "completed",
+        "minknow_run_id": "MNK-123",
+        "output_files": {"fastq": [], "pod5": [], "bam": []},
+        "fake_or_demo_devices": False,
+    }
 
 
 def test_host_agent_ont_routes_return_discovery_payload(monkeypatch) -> None:
@@ -82,23 +108,73 @@ def test_host_agent_ont_routes_return_discovery_payload(monkeypatch) -> None:
         "discover_ont_status",
         lambda: {
             "implementation_status": "configured",
-            "live_devices": [{"position": "X1"}, {"position": "X2"}],
+            "live_devices": [
+                {"position": "X1", "device_type": "mk1d"},
+                {"position": "X2", "device_type": "mk1d"},
+            ],
             "fake_or_demo_devices": False,
         },
     )
 
     assert bms_host_agent.ont_route_payload("/ont/status") == {
         "implementation_status": "configured",
-        "live_devices": [{"position": "X1"}, {"position": "X2"}],
+        "live_devices": [
+            {
+                "position": "X1",
+                "device_type": "mk1d",
+                "state": None,
+                "running": False,
+                "available_for_run": False,
+                "flow_cell": {"present": False},
+                "fake_or_demo_device": False,
+            },
+            {
+                "position": "X2",
+                "device_type": "mk1d",
+                "state": None,
+                "running": False,
+                "available_for_run": False,
+                "flow_cell": {"present": False},
+                "fake_or_demo_device": False,
+            },
+        ],
         "fake_or_demo_devices": False,
+        "message": "Mk1D discovery is available.",
     }
     assert bms_host_agent.ont_route_payload("/ont/positions") == {
-        "positions": [{"position": "X1"}, {"position": "X2"}],
+        "positions": [
+            {
+                "position": "X1",
+                "device_type": "mk1d",
+                "state": None,
+                "running": False,
+                "available_for_run": False,
+                "flow_cell": {"present": False},
+                "fake_or_demo_device": False,
+            },
+            {
+                "position": "X2",
+                "device_type": "mk1d",
+                "state": None,
+                "running": False,
+                "available_for_run": False,
+                "flow_cell": {"present": False},
+                "fake_or_demo_device": False,
+            },
+        ],
         "implementation_status": "configured",
         "fake_or_demo_devices": False,
     }
     assert bms_host_agent.ont_route_payload("/ont/positions/X2") == {
-        "position": {"position": "X2"},
+        "position": {
+            "position": "X2",
+            "device_type": "mk1d",
+            "state": None,
+            "running": False,
+            "available_for_run": False,
+            "flow_cell": {"present": False},
+            "fake_or_demo_device": False,
+        },
         "implementation_status": "configured",
         "fake_or_demo_devices": False,
     }
@@ -188,130 +264,56 @@ def test_host_agent_position_refresh_and_restart_routes_are_explicit(monkeypatch
     )
 
 
-
-def test_host_agent_hardware_check_route_is_guarded(monkeypatch) -> None:
+def test_host_agent_retired_raw_position_start_route_is_unreachable(monkeypatch) -> None:
     import bms_host_agent  # noqa: PLC0415
 
     monkeypatch.setattr(
         bms_host_agent,
-        "begin_ont_hardware_check",
-        lambda position, payload: (
-            202,
-            {
-                "action": "start_hardware_check",
-                "position": position,
-                "hardware_check_id": "HC-001",
-                "hardware_check_run_id": "HC-001",
-                "result_source": "minknow.hardware_check.start_hardware_check",
-                "fake_or_demo_devices": False,
-            },
-        ),
+        "start_ont_protocol",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("retired host route must not reach MinKNOW start")),
+        raising=False,
     )
 
-    assert bms_host_agent.ont_post_route_payload("/ont/positions/MD-105428/hardware-check", {"confirm_hardware_check": True}) == (
-        202,
-        {
-            "action": "start_hardware_check",
-            "position": "MD-105428",
-            "hardware_check_id": "HC-001",
-            "hardware_check_run_id": "HC-001",
-            "result_source": "minknow.hardware_check.start_hardware_check",
-            "fake_or_demo_devices": False,
-        },
+    assert bms_host_agent.ont_post_route_payload("/ont/positions/MD-105428/start", {"confirm_start": True}) is None
+
+
+
+def test_host_agent_hardware_check_route_fails_closed() -> None:
+    import bms_host_agent  # noqa: PLC0415
+
+    status, payload = bms_host_agent.ont_post_route_payload(
+        "/ont/positions/MD-105428/hardware-check",
+        {"confirm_hardware_check": True},
     )
 
+    assert status == 501
+    assert payload == {
+        "detail": "Mk1D hardware-check activation is disabled pending separately authorized supervised commissioning.",
+        "position": "MD-105428",
+        "fake_or_demo_devices": False,
+    }
 
 
-def test_begin_hardware_check_uses_full_hardware_check_service_not_short_ctc_protocol(monkeypatch) -> None:
+def test_begin_hardware_check_never_discovers_or_constructs_minknow_manager(monkeypatch) -> None:
     from lib import ont_minknow_host  # noqa: PLC0415
-
-    calls: list[tuple[str, object]] = []
-
-    class FakeHardwareCheck:
-        def start_hardware_check(self, **kwargs):
-            calls.append(("start_hardware_check", kwargs))
-            return {"hardware_check_id": "FULL-HC-001"}
-
-    class FakeProtocol:
-        def begin_hardware_check(self):
-            raise AssertionError("BMS must not use protocol.begin_hardware_check(); it starts the short CTC script")
-
-    class FakeConnection:
-        protocol = FakeProtocol()
-
-    class FakePosition:
-        name = "MD-105428"
-
-        def connect(self):
-            return FakeConnection()
-
-    class FakeManager:
-        def flow_cell_positions(self):
-            return [FakePosition()]
-
-        def hardware_check(self):
-            return FakeHardwareCheck()
 
     monkeypatch.setattr(
         ont_minknow_host,
         "discover_status",
-        lambda: {
-            "implementation_status": ont_minknow_host.MINKNOW_STATUS_CONFIGURED,
-            "live_devices": [{"position": "MD-105428", "current_protocol": None, "flow_cell": {"present": True}}],
-        },
+        lambda: (_ for _ in ()).throw(AssertionError("hardware-check tombstone must not discover live state")),
     )
-    monkeypatch.setattr(ont_minknow_host.MinknowHostConfig, "from_env", staticmethod(lambda: object()))
-    monkeypatch.setattr(ont_minknow_host, "build_manager", lambda config: FakeManager())
-
-    status_code, payload = ont_minknow_host.begin_hardware_check("MD-105428", {"confirm_hardware_check": True})
-
-    assert status_code == 202
-    assert payload["action"] == "start_hardware_check"
-    assert payload["hardware_check_id"] == "FULL-HC-001"
-    assert payload["hardware_check_run_id"] == "FULL-HC-001"
-    assert payload["result_source"] == "minknow.hardware_check.start_hardware_check"
-    assert calls == [("start_hardware_check", {"position_ids": ["MD-105428"]})]
-
-
-
-def test_begin_hardware_check_reports_no_flowcell_as_operator_conflict(monkeypatch) -> None:
-    from lib import ont_minknow_host  # noqa: PLC0415
-
-    class FakeHardwareCheck:
-        def start_hardware_check(self, **kwargs):
-            raise RuntimeError('FAILED_PRECONDITION:No flow cell present for hardware check.')
-
-    class FakeConnection:
-        pass
-
-    class FakePosition:
-        name = "MD-105428"
-
-        def connect(self):
-            return FakeConnection()
-
-    class FakeManager:
-        def flow_cell_positions(self):
-            return [FakePosition()]
-
-        def hardware_check(self):
-            return FakeHardwareCheck()
-
     monkeypatch.setattr(
         ont_minknow_host,
-        "discover_status",
-        lambda: {
-            "implementation_status": ont_minknow_host.MINKNOW_STATUS_CONFIGURED,
-            "live_devices": [{"position": "MD-105428", "current_protocol": None, "flow_cell": {"present": False}}],
-        },
+        "build_manager",
+        lambda _config: (_ for _ in ()).throw(AssertionError("hardware-check tombstone must not construct a manager")),
     )
-    monkeypatch.setattr(ont_minknow_host.MinknowHostConfig, "from_env", staticmethod(lambda: object()))
-    monkeypatch.setattr(ont_minknow_host, "build_manager", lambda config: FakeManager())
 
-    status_code, payload = ont_minknow_host.begin_hardware_check("MD-105428", {"confirm_hardware_check": True})
-
-    assert status_code == 409
-    assert payload["detail"] == "MinKNOW refused hardware check: no flow cell/test cell is currently reported as present on this position."
+    for payload in ({}, {"confirm_hardware_check": True}):
+        status, response = ont_minknow_host.begin_hardware_check("MD-105428", payload)
+        assert status == 501
+        assert response["position"] == "MD-105428"
+        assert response["fake_or_demo_devices"] is False
+        assert "supervised commissioning" in response["detail"]
 
 
 

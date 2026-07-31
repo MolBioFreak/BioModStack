@@ -42,11 +42,9 @@ def test_ont_device_control_capabilities_are_hardware_side_not_nextflow_side() -
     assert ONT_DEVICE_CONTROL_CAPABILITIES["controls"] == [
         "discover_devices",
         "inspect_flowcell",
-        "configure_run",
-        "start_run",
-        "stop_run",
+        "issue_opaque_run_intent",
         "monitor_run",
-        "handoff_outputs_to_analysis",
+        "handoff_verified_outputs_to_analysis",
     ]
 
 
@@ -121,5 +119,54 @@ def test_ont_device_status_can_delegate_to_minknow_adapter_when_enabled(monkeypa
     assert payload["owner"] == "bms_service_api"
     assert payload["analysis_owner"] == "nextflow_analysis"
     assert payload["implementation_status"] == "configured"
-    assert payload["live_devices"] == [{"position": "X1", "device_type": "mk1d", "available_for_run": True}]
+    assert payload["live_devices"] == [{
+        "position": "X1",
+        "device_type": "mk1d",
+        "state": None,
+        "running": False,
+        "available_for_run": True,
+        "flow_cell": {"present": False},
+        "fake_or_demo_device": False,
+    }]
     assert payload["fake_or_demo_devices"] is False
+
+
+def test_device_status_filters_non_mk1d_and_redacts_raw_minknow_details(monkeypatch) -> None:
+    monkeypatch.setenv("BMS_ONT_MINKNOW_ENABLED", "1")
+    monkeypatch.setattr(
+        ont_device_control,
+        "discover_minknow_devices",
+        lambda: {
+            "implementation_status": "configured",
+            "minknow": {"host": "PRIVATE-HOST", "output_directories": {"reads": "/private/output"}},
+            "live_devices": [
+                {
+                    "position": "Mk1D safe label",
+                    "device_type": "mk1d",
+                    "available_for_run": True,
+                    "flow_cell": {"present": True, "flow_cell_id": "PRIVATE-FLOWCELL", "product_code": "PRIVATE-PRODUCT"},
+                    "output_directories": {"reads": "/private/output"},
+                    "rpc_ports": {"secure": 9502},
+                    "current_protocol": {"protocol_id": "PRIVATE-PROTOCOL"},
+                    "protocol_runs": [{"raw": "PRIVATE-HISTORY"}],
+                },
+                {"position": "Mk1B must not escape", "device_type": "mk1b", "flow_cell": {"present": True}},
+            ],
+            "fake_or_demo_devices": False,
+        },
+    )
+
+    payload = get_device_control_status()
+
+    assert payload["live_devices"] == [{
+        "position": "Mk1D safe label",
+        "device_type": "mk1d",
+        "state": None,
+        "running": False,
+        "available_for_run": True,
+        "flow_cell": {"present": True},
+        "fake_or_demo_device": False,
+    }]
+    rendered = str(payload)
+    for secret in ("PRIVATE-HOST", "PRIVATE-FLOWCELL", "PRIVATE-PRODUCT", "/private/output", "PRIVATE-PROTOCOL", "PRIVATE-HISTORY", "Mk1B must not escape"):
+        assert secret not in rendered
