@@ -66,11 +66,22 @@ def _project_child(job: Job) -> str:
     status = str(job.status)
     if status in {"completed", "failed", "cancelled"}:
         return status
+    if str(job.queue_status) == "failed":
+        return "failed"
     if bool(job.paused) or job.queue_status == "paused":
         return "paused"
     if status == "running" or job.queue_status == "running":
         return "running"
     return "queued"
+
+
+def _failure_from_child(job: Job | None, projected: str) -> dict | None:
+    if job is None or projected not in {"failed", "orphaned"}:
+        return None
+    message = str(job.error_message or "worker ended without a failure receipt")[:2000]
+    if projected == "failed" and str(job.status) not in {"failed", "cancelled"} and str(job.queue_status) == "failed":
+        return {"code": "spawn_rejected", "message": message, "source": "scheduler_launch"}
+    return {"code": "execution_failed", "message": message, "source": "worker_terminal"}
 
 
 def _phase(run: MdRun, states: list[str]) -> str:
@@ -142,11 +153,17 @@ async def reconcile_md_state(
                 and segment is not None
                 and segment.state not in _TERMINAL_REPLICA_STATES
             )
-            if projected != replica.state or segment_stale:
+            projected_failure = (
+                _failure_from_child(child, projected) if replica.failure is None else None
+            )
+            if projected != replica.state or segment_stale or projected_failure is not None:
                 projections.append((replica, segment, projected))
             if projected != replica.state:
                 changes.append({"kind": "replica_state", "job_id": run.job_id,
                                 "replica_run_id": replica.id, "from": replica.state, "to": projected})
+            if projected_failure is not None:
+                changes.append({"kind": "replica_failure", "job_id": run.job_id,
+                                "replica_run_id": replica.id, "failure": projected_failure})
             if segment_stale and segment is not None:
                 changes.append({"kind": "segment_state", "job_id": run.job_id,
                                 "segment_id": segment.id, "from": segment.state, "to": projected})
@@ -164,6 +181,9 @@ async def reconcile_md_state(
         for replica, segment, state in projections:
             replica.state = state
             if state in _TERMINAL_REPLICA_STATES:
+                if replica.failure is None:
+                    child = await session.get(Job, replica.child_job_id) if replica.child_job_id else None
+                    replica.failure = _failure_from_child(child, state)
                 replica.active = False
                 replica.completed_at = datetime.utcnow()
                 if segment is not None and segment.state not in _TERMINAL_REPLICA_STATES:

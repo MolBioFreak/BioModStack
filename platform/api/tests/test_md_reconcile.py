@@ -129,3 +129,58 @@ async def test_reconciler_lease_has_one_winner_under_concurrent_acquisition(tmp_
     assert not any(isinstance(value, Exception) for value in results)
     assert sorted(results) == [False, True]
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_classifies_launch_rejection_without_retrying_execution_failure(tmp_path) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'failure-classification.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with maker() as session:
+        parent = Job(id="md-failure", name="MD", status="running", model_id="md", mode="molecular_dynamics", params={})
+        launch_child = Job(
+            id="md-launch-rejected", name="launch", status="queued", queue_status="failed",
+            model_id="md", mode="replica", params={}, parent_job_id=parent.id,
+            error_message="workflow adapter unavailable during launch",
+        )
+        execution_child = Job(
+            id="md-execution-failed", name="execution", status="failed", queue_status="failed",
+            model_id="md", mode="replica", params={}, parent_job_id=parent.id,
+            error_message="GROMACS chemistry validation failed",
+        )
+        session.add_all([parent, launch_child, execution_child]); await session.flush()
+        run = await create_md_run(session, job=parent, normalized_request=_request())
+        run.phase = "replicas_running"
+        launch_replica, _ = await create_replica_attempt(
+            session, job_id=parent.id, replica_index=0, attempt=0, engine="gromacs",
+            execution_plan_sha256="b" * 64, compatibility_key="c" * 64,
+            child_job_id=launch_child.id,
+        )
+        execution_replica, _ = await create_replica_attempt(
+            session, job_id=parent.id, replica_index=1, attempt=0, engine="gromacs",
+            execution_plan_sha256="d" * 64, compatibility_key="e" * 64,
+            child_job_id=execution_child.id,
+        )
+        launch_id, execution_id = launch_replica.id, execution_replica.id
+        await session.commit()
+
+    async with maker() as session:
+        await reconcile_md_state(session, owner_id="failure-owner", apply=True)
+        await session.commit()
+        launch = await session.get(type(launch_replica), launch_id)
+        execution = await session.get(type(execution_replica), execution_id)
+        assert launch is not None and launch.state == "failed" and launch.active is False
+        assert launch.failure == {
+            "code": "spawn_rejected",
+            "message": "workflow adapter unavailable during launch",
+            "source": "scheduler_launch",
+        }
+        assert execution is not None and execution.state == "failed" and execution.active is False
+        assert execution.failure == {
+            "code": "execution_failed",
+            "message": "GROMACS chemistry validation failed",
+            "source": "worker_terminal",
+        }
+
+    await engine.dispose()
