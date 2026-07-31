@@ -27,7 +27,7 @@ def test_de_novo_design_parent_does_not_claim_protein_hunter() -> None:
         (API_ROOT / "config/models/protein_modification_experimental.yaml").read_text(encoding="utf-8")
     )
     assert model["name"] == "De Novo Design"
-    assert [mode["id"] for mode in model["modes"]] == ["de_novo_design", "region_redesign"]
+    assert [mode["id"] for mode in model["modes"]] == ["de_novo_design", "shape_blueprint", "region_redesign"]
 
     source = (FRONTEND_ROOT / "src/components/ProteinModificationTemplate.tsx").read_text(encoding="utf-8")
     assert "De Novo Design" in source

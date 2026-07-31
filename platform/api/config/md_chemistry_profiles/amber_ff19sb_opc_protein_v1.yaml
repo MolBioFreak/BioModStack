@@ -7,8 +7,8 @@ assurance: curated_profile
 legacy: false
 automatic_preparation: true
 inventory_class: candidate
-installed: false
-runtime_validated: false
+installed: true
+runtime_validated: true
 operator_enabled: false
 supported_engines:
   - gromacs
@@ -16,8 +16,28 @@ supported_engines:
 v1_preparation:
   force_field: ff19SB
   water_model: opc
+launch_constraints:
+  input_mode: structure
+  structure_sha256: c75d7a689617248cdd92dc6633531d2506fb9bef1e6e21e26c8f579ae6955abb
+  replicas: 1
+  engine: gromacs
+  force_field: ff19SB
+  water_model: opc
+  timestep_fs: 2.0
+  temperature_k: 300.0
+  pressure_bar: 1.0
+  salt_molar: 0.15
+  padding_nm: 1.0
+  max_production_steps: 5000
+  max_minimization_steps: 50000
+  max_nvt_steps: 50000
+  max_npt_steps: 50000
 asset_probe:
   runtime_id: md-preparation-v1
+  required_runtime_identity:
+    runtime_id: md-preparation-v1
+    runtime_version: "1"
+    sif_sha256: 625d81608118af006295601b8275389e7681a1d98a6fb0622e6241c5d101df4b
   required_asset_ids:
     - amber/ff19SB
     - water/opc

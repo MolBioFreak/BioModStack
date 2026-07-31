@@ -45,7 +45,6 @@ function statusLabel(status?: string): string {
 }
 
 function deviceStateLabel(device: OntLiveDevice): string {
-    if (device.fake_or_demo_device) return 'test mode Mk1D';
     if (device.running) return 'position running';
     if (!device.flow_cell?.present) return 'flowcell absent';
     if (device.available_for_run) return 'available for run';
@@ -73,16 +72,16 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
         refetchInterval: (query) => jobPollingInterval(10000, query),
     });
     const liveDevices = data?.live_devices ?? [];
-    const devices = liveDevices.filter((device) => device.device_type === 'mk1d');
+    const devices = liveDevices.filter((device) => device.device_type === 'mk1d' && !device.fake_or_demo_device);
     const availableDevices = useMemo(
         () => devices.filter((device) => device.available_for_run && device.position),
         [devices],
     );
     const selectedDevice = devices.find((device) => device.position === selectedPosition) ?? availableDevices[0] ?? devices[0];
-    const selectedIsTestMode = Boolean(selectedDevice?.fake_or_demo_device);
+
     const minKnowStatus = isLoading ? 'checking' : statusLabel(data?.implementation_status);
     const visibleOutputLabels = OUTPUT_LABELS.filter(([key]) => outputs[key]).map(([, label]) => label);
-    const selectedPositionForQuery = selectedDevice?.fake_or_demo_device ? '' : selectedDevice?.position || '';
+    const selectedPositionForQuery = selectedDevice?.position || '';
     const protocolOptions = useQuery({
         queryKey: ['ont-protocol-options', selectedPositionForQuery, kit],
         queryFn: async () => (await fetchOntProtocolOptions(selectedPositionForQuery, kit)).data,
@@ -142,9 +141,6 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
         mutationFn: async () => {
             if (!lastRun?.id) {
                 throw new Error('No ONT instrument run selected');
-            }
-            if (lastRun.fake_or_demo_devices) {
-                return { ...lastRun, status: 'test_mode_stopped' } satisfies OntInstrumentRun;
             }
             const response = await stopOntInstrumentRun(lastRun.id, { confirm_stop: true });
             return response.data;
@@ -234,9 +230,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                                             <div className="text-base font-semibold text-[var(--text-primary)]">{device.position}</div>
                                             <div className="text-xs text-[var(--text-secondary)]">{device.device_type || 'unknown device'} · {deviceStateLabel(device)}</div>
                                         </div>
-                                        {device.fake_or_demo_device ? (
-                                            <span className="rounded-full border border-amber-500/50 bg-amber-500/10 px-2 py-1 text-[10px] font-bold text-amber-100">FAKE TEST CONNECTION</span>
-                                        ) : null}
+
                                     </div>
                                     <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-[var(--text-secondary)]">
                                         <div>Flow cell: {device.flow_cell?.present ? 'present' : 'absent'}</div>
@@ -258,7 +252,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                 <div className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4">
                     <div>
                         <h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Run setup</h3>
-                        <p className="text-xs text-[var(--text-secondary)]">These values are sent with real starts and mirrored by fake starts.</p>
+                        <p className="text-xs text-[var(--text-secondary)]">These values are sent only with real MinKNOW starts.</p>
                     </div>
                     {selectedDevice ? (
                         <div className="space-y-2 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs text-[var(--text-secondary)]">
@@ -343,7 +337,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                     </div>
                     <div className="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs text-[var(--text-secondary)]">
                         Start packet: {selectedDevice?.position ?? 'no position'} · {kit || 'kit missing'} · {visibleOutputLabels.length ? visibleOutputLabels.join(', ') : 'no outputs selected'}
-                        {!canStart && !selectedIsTestMode ? <div className="mt-2 text-amber-100">Real start disabled until MinKNOW reports a present sequencing flow cell, idle position, kit/model, and output directory.</div> : null}
+                        {!canStart ? <div className="mt-2 text-amber-100">Real start disabled until MinKNOW reports a present sequencing flow cell, idle position, kit/model, and output directory.</div> : null}
                     </div>
                     <div className="flex flex-wrap gap-2">
                         <button
@@ -352,7 +346,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                             onClick={() => startRun.mutate()}
                             className="rounded-lg bg-[var(--accent-secondary)] px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                            {selectedIsTestMode ? 'Start fake test run' : 'Start instrument run'}
+                            Start instrument run
                         </button>
                         <button
                             type="button"
@@ -373,7 +367,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                             <div className="font-semibold text-[var(--text-primary)]">Run {lastRun.id}</div>
                             <div>{lastRun.position} · {lastRun.status} · MinKNOW run {lastRun.minknow_run_id}</div>
                         </div>
-                        {lastRun.fake_or_demo_devices ? <span className="rounded-full bg-amber-500/10 px-2 py-1 text-xs font-semibold text-amber-100">fake/test run</span> : null}
+
                     </div>
                 </div>
             ) : null}

@@ -87,7 +87,6 @@ GENERATED_PARTS = frozenset(
 HISTORICAL_BANNER = "> **Historical / superseded:**"
 
 
-
 def _matches(text: str) -> bool:
     return any(pattern.search(text) for pattern in REMOVED_RULES)
 

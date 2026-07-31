@@ -144,6 +144,28 @@ def test_selectable_smoke_yaml_pins_the_live_deployed_sif_sha256() -> None:
     }
 
 
+def test_preparation_probe_reports_pinned_assets_and_exact_sif_identity(tmp_path: Path) -> None:
+    module = _catalog_module()
+    image = tmp_path / "md-preparation.sif"
+    image.write_bytes(b"preparation-image-bytes")
+    completed = module.probe_deployed_preparation_assets(
+        image_path=image,
+        runner=lambda *_args, **_kwargs: __import__("subprocess").CompletedProcess(
+            args=[], returncode=0,
+            stdout="amber/ff19SB\nwater/opc\nions/opc-monovalent-pinned\n",
+            stderr="",
+        ),
+    )
+
+    assert completed.available is True
+    assert completed.asset_ids == frozenset({"amber/ff19SB", "water/opc", "ions/opc-monovalent-pinned"})
+    assert completed.runtime_identity == module.RuntimeIdentity(
+        runtime_id="md-preparation-v1",
+        runtime_version="1",
+        sif_sha256=hashlib.sha256(image.read_bytes()).hexdigest(),
+    )
+
+
 def test_probe_reports_exact_sif_sha256_without_exposing_its_path(tmp_path: Path) -> None:
     module = _catalog_module()
     image = tmp_path / "private" / "gromacs.sif"
@@ -234,6 +256,140 @@ def test_runtime_identity_change_changes_digest_and_makes_smoke_profile_unavaila
     assert second.catalog_digest != first.catalog_digest
 
 
+def test_modern_profile_can_be_runtime_qualified_without_becoming_selectable() -> None:
+    module = _catalog_module()
+    preparation_probe = module.RuntimeProbeResult(
+        runtime_id="md-preparation-v1",
+        runtime_version="1",
+        available=True,
+        asset_ids=frozenset({"amber/ff19SB", "water/opc", "ions/opc-monovalent-pinned"}),
+        checked_at="2026-07-29T13:27:36Z",
+        sif_sha256="625d81608118af006295601b8275389e7681a1d98a6fb0622e6241c5d101df4b",
+    )
+    catalog = module.ChemistryCatalog(
+        config_dir=CATALOG_DIR,
+        probe=lambda: [_probe("amber99sb-ildn.ff"), preparation_probe],
+    )
+
+    modern = _profile(catalog, "amber_ff19sb_opc_protein_v1")
+
+    assert modern["states"]["installed"] is True
+    assert modern["states"]["runtime_validated"] is True
+    assert modern["states"]["scientifically_validated"] is False
+    assert modern["states"]["operator_enabled"] is False
+    assert modern["states"]["selectable"] is False
+    assert modern["runtime_identity"] == preparation_probe.runtime_identity.as_public_dict()
+
+
+def test_candidate_profile_qualification_lane_is_explicit_dev_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _catalog_module()
+    preparation_probe = module.RuntimeProbeResult(
+        runtime_id="md-preparation-v1",
+        runtime_version="1",
+        available=True,
+        asset_ids=frozenset({"amber/ff19SB", "water/opc", "ions/opc-monovalent-pinned"}),
+        checked_at="2026-07-30T16:00:00Z",
+        sif_sha256="625d81608118af006295601b8275389e7681a1d98a6fb0622e6241c5d101df4b",
+    )
+    catalog = module.ChemistryCatalog(
+        config_dir=CATALOG_DIR,
+        probe=lambda: [_probe("amber99sb-ildn.ff"), preparation_probe],
+    )
+    modern = _profile(catalog, "amber_ff19sb_opc_protein_v1")
+    selection = {
+        "profile_id": modern["id"],
+        "profile_sha256": modern["profile_sha256"],
+        "force_field": "ff19SB",
+        "water_model": "opc",
+        "engine": "gromacs",
+        "requested_scope": "modern_protein_candidate",
+    }
+
+    monkeypatch.setenv("BMS_RUNTIME_MODE", "dev")
+    monkeypatch.setenv("BMS_MD_QUALIFICATION_PROFILE_IDS", modern["id"])
+    selected = catalog.validate_v1_profile_selection(**selection)
+    assert selected["id"] == modern["id"]
+    assert selected["states"]["selectable"] is False
+
+    monkeypatch.setenv("BMS_RUNTIME_MODE", "production")
+    with pytest.raises(module.ChemistryProfileSelectionError) as error:
+        catalog.validate_v1_profile_selection(**selection)
+    assert error.value.code == "MD_CHEMISTRY_PROFILE_UNAVAILABLE"
+
+
+def test_lifecycle_control_profile_is_dev_qualification_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _catalog_module()
+    preparation_probe = module.RuntimeProbeResult(
+        runtime_id="md-preparation-v1",
+        runtime_version="1",
+        available=True,
+        asset_ids=frozenset({"amber/ff19SB", "water/opc", "ions/opc-monovalent-pinned"}),
+        checked_at="2026-07-30T19:00:00Z",
+        sif_sha256="625d81608118af006295601b8275389e7681a1d98a6fb0622e6241c5d101df4b",
+    )
+    catalog = module.ChemistryCatalog(
+        config_dir=CATALOG_DIR,
+        probe=lambda: [_probe("amber99sb-ildn.ff"), preparation_probe],
+    )
+    profile = _profile(catalog, "amber_ff19sb_opc_lifecycle_v1")
+    selection = {
+        "profile_id": profile["id"],
+        "profile_sha256": profile["profile_sha256"],
+        "force_field": "ff19SB",
+        "water_model": "opc",
+        "engine": "gromacs",
+        "requested_scope": "lifecycle_control_only",
+    }
+
+    assert profile["inventory_class"] == "candidate"
+    assert profile["states"]["selectable"] is False
+    monkeypatch.setenv("BMS_RUNTIME_MODE", "dev")
+    monkeypatch.setenv("BMS_MD_QUALIFICATION_PROFILE_IDS", profile["id"])
+    selected = catalog.validate_v1_profile_selection(**selection)
+    assert selected["id"] == profile["id"]
+    assert selected["states"]["selectable"] is False
+
+    monkeypatch.setenv("BMS_RUNTIME_MODE", "production")
+    with pytest.raises(module.ChemistryProfileSelectionError) as error:
+        catalog.validate_v1_profile_selection(**selection)
+    assert error.value.code == "MD_CHEMISTRY_PROFILE_UNAVAILABLE"
+
+
+def test_ff19sb_ol15_opc_profile_is_runtime_qualified_but_not_selectable_or_scientifically_validated() -> None:
+    module = _catalog_module()
+    preparation_probe = module.RuntimeProbeResult(
+        runtime_id="md-preparation-v1",
+        runtime_version="1",
+        available=True,
+        asset_ids=frozenset({
+            "amber/ff19SB", "amber/OL15", "water/opc", "ions/opc-monovalent-pinned",
+        }),
+        checked_at="2026-07-29T13:27:36Z",
+        sif_sha256="625d81608118af006295601b8275389e7681a1d98a6fb0622e6241c5d101df4b",
+    )
+    catalog = module.ChemistryCatalog(
+        config_dir=CATALOG_DIR,
+        probe=lambda: [_probe("amber99sb-ildn.ff"), preparation_probe],
+    )
+
+    profile = _profile(catalog, "amber_ff19sb_ol15_opc_protein_dna_v1")
+
+    assert profile["states"] == {
+        "installed": True,
+        "runtime_validated": True,
+        "scientifically_validated": False,
+        "operator_enabled": False,
+        "asset_probe_success": True,
+        "selectable": False,
+    }
+    assert profile["runtime_identity"] == preparation_probe.runtime_identity.as_public_dict()
+    assert profile["scientific_validation"]["scope"]["system_classes"] == ["protein_dna_complex"]
+
+
 def test_modern_profiles_remain_nonselectable_candidates_when_assets_are_absent() -> None:
     catalog = _stock_catalog("amber99sb-ildn.ff")
 
@@ -244,7 +400,9 @@ def test_modern_profiles_remain_nonselectable_candidates_when_assets_are_absent(
     assert modern["states"]["runtime_validated"] is False
     assert modern["states"]["scientifically_validated"] is False
     assert modern["states"]["selectable"] is False
-    assert modern["launch_constraints"] is None
+    assert modern["launch_constraints"]["structure_sha256"] == (
+        "c75d7a689617248cdd92dc6633531d2506fb9bef1e6e21e26c8f579ae6955abb"
+    )
     assert "candidate" in modern["availability_explanation"].lower()
 
 
@@ -760,7 +918,7 @@ def test_catalog_api_routes_are_registered_reachable_and_do_not_expose_host_path
     missing = client.get("/api/molecular-dynamics/chemistry-profiles/not_a_profile")
 
     assert capabilities.status_code == 200
-    assert capabilities.json()["contract_schemas"] == ["bms.md.job.v1"]
+    assert capabilities.json()["contract_schemas"] == ["bms.md.job.v2", "bms.md.job.v1"]
     assert inventory.status_code == 200
     assert inventory.json()["selectable_profile_ids"] == ["gmx_amber99sb_ildn_tip3p_smoke_v1"]
     assert detail.status_code == 200

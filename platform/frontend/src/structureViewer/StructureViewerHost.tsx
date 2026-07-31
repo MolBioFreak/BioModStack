@@ -349,8 +349,14 @@ export default function StructureViewerHost({
     }))), [registry]);
     const hasWorkbenchContent = Boolean(showM6Workbench || activeLayer || structureSummaryLayers.length > 0 || showMeasurements || (showComplexWorkbench && hasComplexAnalysis));
 
+    const hostHeight = typeof viewerProps.height === 'number' ? `${viewerProps.height}px` : viewerProps.height;
+
     return (
-        <div className="relative h-full w-full" data-bms-structure-viewer-host="direct-4.5.0">
+        <div
+            className={`relative w-full ${hostHeight ? '' : 'h-full'}`}
+            style={hostHeight ? { height: hostHeight } : undefined}
+            data-bms-structure-viewer-host="direct-4.5.0"
+        >
             <MolstarViewerImpl {...viewerProps} artifactJobId={artifactJobId} structureUrl={ownedStructureUrl ?? viewerProps.structureUrl} selections={selections} residueMetricLayer={residueMetricLayer} measurements={measurements} scenePresentation={scenePresentation} cameraResetToken={cameraResetToken} onResidueClick={handleResidueClick} onControllerReady={handleControllerReady} />
             {!showMetricWorkbench && hasWorkbenchContent && onMetricWorkbenchVisibilityChange && (
                 <button

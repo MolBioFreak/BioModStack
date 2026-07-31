@@ -37,13 +37,13 @@ const validForm = (): MolecularDynamicsForm => ({
 });
 
 const validProfile = (): MolecularDynamicsChemistryProfile => ({
-    id: 'gmx_amber99sb_ildn_tip3p_smoke_v1',
-    version: '1.0.0',
+    id: 'amber_ff19sb_opc_protein_v1',
+    version: '1.0.0-candidate',
     profile_sha256: 'a'.repeat(64),
-    display_name: 'AMBER99SB-ILDN + TIP3P infrastructure smoke',
+    display_name: 'AMBER ff19SB + OPC protein candidate',
     family: 'amber',
-    assurance: 'smoke_fixture',
-    legacy: true,
+    assurance: 'curated_profile',
+    legacy: false,
     automatic_preparation: true,
     inventory_class: 'selectable',
     availability_explanation: 'Selectable only for smoke_auto.',
@@ -83,10 +83,11 @@ const validProfile = (): MolecularDynamicsChemistryProfile => ({
 } as MolecularDynamicsChemistryProfile);
 
 describe('molecular dynamics launcher contract', () => {
-    it('builds an authoritative engine-neutral bms.md.job.v1 specification', () => {
-        const spec = buildMolecularDynamicsJobSpec(validForm(), validProfile());
+    it('builds an authoritative durable bms.md.job.v2 specification for profile-based GROMACS', () => {
+        const catalogDigest = 'd'.repeat(64);
+        const spec = buildMolecularDynamicsJobSpec(validForm(), validProfile(), catalogDigest);
 
-        assert.equal(spec.schema, 'bms.md.job.v1');
+        assert.equal(spec.schema, 'bms.md.job.v2');
         assert.equal(spec.engine, 'gromacs');
         assert.equal(spec.replicas, 1);
         assert.deepEqual(spec.input, { structure: '/data/1aki.pdb' });
@@ -97,6 +98,21 @@ describe('molecular dynamics launcher contract', () => {
         assert.equal(spec.stages.npt.steps, 50_000);
         assert.equal(spec.execution.gpu_id, '0');
         assert.equal(spec.execution.ntomp, 8);
+        assert.equal(spec.execution.gpu_offload, 'full_forces');
+        assert.deepEqual((spec as Extract<typeof spec, { schema: 'bms.md.job.v2' }>).chemistry, {
+            profile_id: validProfile().id,
+            profile_sha256: validProfile().profile_sha256,
+            catalog_digest: catalogDigest,
+            requested_scope: validProfile().scientific_validation.scope.launch_scope,
+        });
+        assert.equal('chemistry_assurance' in spec.preparation, false);
+    });
+
+    it('fails closed when a profile-based launch has no catalog generation digest', () => {
+        assert.throws(
+            () => buildMolecularDynamicsJobSpec(validForm(), validProfile()),
+            /catalog digest/i,
+        );
     });
 
     it('requires prepared coordinates and topology for the OpenMM alpha adapter', () => {

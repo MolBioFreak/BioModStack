@@ -142,6 +142,7 @@ describe('molecular dynamics chemistry catalog launcher', () => {
 
         const spec = catalogBuilder(validForm(), smokeProfile());
 
+        assert.equal(spec.schema, 'bms.md.job.v1');
         assert.equal(spec.preparation.force_field, 'amber99sb-ildn');
         assert.equal(spec.preparation.water_model, 'tip3p');
         assert.equal((spec.preparation as Record<string, unknown>).chemistry_profile_id, smokeProfile().id);

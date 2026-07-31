@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
+import copy
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,14 +11,55 @@ from typing import cast
 
 import pytest
 from jsonschema import Draft202012Validator
+from starlette.requests import Request
 
 import services.md.results as md_results_module
+from routers.md_results import _stream_verified_artifact
 
 from scripts.bms_md.analysis import write_analysis_report
 from scripts.bms_md.contract import write_atom_order_manifest
 from services.md.results import MDJobRecord, MDResultError, analysis_report, artifact_inventory, build_analysis_work_items, completion_barrier, resolve_artifact, summary
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_unsatisfiable_md_artifact_range_is_standards_bound_and_closes_handle() -> None:
+    handle = io.BytesIO(b"abcdef")
+    request = Request({
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "headers": [(b"range", b"bytes=6-9")],
+    })
+
+    response = _stream_verified_artifact(handle, name="trajectory.xtc", size=6, request=request)
+
+    assert response.status_code == 416
+    assert response.headers["accept-ranges"] == "bytes"
+    assert response.headers["content-range"] == "bytes */6"
+    assert response.headers["content-length"] == "0"
+    assert response.body == b""
+    assert handle.closed
+
+
+def test_v2_replica_protocol_comparison_allows_only_hash_bound_input_relocation() -> None:
+    requested = {
+        "schema": "bms.md.job.v2",
+        "input": {"structure": "/parent/inputs/structure.pdb", "structure_sha256": "a" * 64, "structure_bytes": 42},
+        "stages": {"production": {"steps": 5000}},
+    }
+    relocated = copy.deepcopy(requested)
+    relocated["input"]["structure"] = "/worker/.worker_inputs/structure.pdb"
+
+    assert md_results_module._replica_protocol_matches(requested, relocated) is True
+
+    hash_drift = copy.deepcopy(relocated)
+    hash_drift["input"]["structure_sha256"] = "b" * 64
+    assert md_results_module._replica_protocol_matches(requested, hash_drift) is False
+
+    protocol_drift = copy.deepcopy(relocated)
+    protocol_drift["stages"]["production"]["steps"] = 5001
+    assert md_results_module._replica_protocol_matches(requested, protocol_drift) is False
 
 
 def _record(path: Path, root: Path, **extra: str) -> dict:
@@ -448,8 +491,8 @@ def test_all_live_md_terminal_writers_route_through_the_md_completion_barrier() 
     nextflow = (REPO_ROOT / "platform/api/services/nextflow.py").read_text()
     orchestrator = (REPO_ROOT / "platform/api/services/gpu_orchestrator.py").read_text()
     completion = (REPO_ROOT / "platform/api/services/md/completion.py").read_text()
-    assert "validate_and_finalize_md_job(job)" in nextflow
-    assert "validate_and_finalize_md_job(job)" in orchestrator
+    assert "await validate_and_finalize_md_job(job, session)" in nextflow
+    assert "await validate_and_finalize_md_job(job, session)" in orchestrator
     assert "def validate_and_finalize_md_job" in completion
 
 

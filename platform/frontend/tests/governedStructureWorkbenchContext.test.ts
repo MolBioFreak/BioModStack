@@ -69,8 +69,8 @@ test('the generic Results structure surface passes all governed identities to St
     const pane = readFileSync(path.resolve(process.cwd(), 'src/components/StructureViewerPane.tsx'), 'utf8');
     const host = readFileSync(path.resolve(process.cwd(), 'src/structureViewer/StructureViewerHost.tsx'), 'utf8');
     assert.match(pane, /resolveGovernedStructureWorkbenchContext/);
-    assert.match(pane, /jobId=\{governedWorkbenchContext\?\.jobId \?\? activeJob\?\.id\}/);
-    assert.match(pane, /artifactJobId=\{governedWorkbenchContext\?\.artifactJobId \?\? activeJob\?\.id\}/);
+    assert.match(pane, /jobId=\{shapeMetrics \? undefined : governedWorkbenchContext\?\.jobId \?\? activeJob\?\.id\}/);
+    assert.match(pane, /artifactJobId=\{shapeMetrics \? undefined : governedWorkbenchContext\?\.artifactJobId \?\? activeJob\?\.id\}/);
     assert.match(pane, /structureDocumentId=\{governedWorkbenchContext\?\.structureDocumentId\}/);
     assert.match(host, /artifactJobId: requestedArtifactJobId/);
     assert.match(host, /const artifactJobId = requestedArtifactJobId \?\? jobId;/);

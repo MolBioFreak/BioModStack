@@ -27,9 +27,10 @@ def assert_single_cuda_device(
 
     config = normalize_job_config(job_config)
     execution = config["execution"]
-    if execution["gpu_offload"] != "full":
+    if execution["gpu_offload"] not in {"full", "full_forces"}:
         raise CudaContractError(
-            f"{CUDA_CONTRACT_ERROR}: dynamics replicas require execution.gpu_offload=full"
+            f"{CUDA_CONTRACT_ERROR}: dynamics replicas require execution.gpu_offload=full "
+            "or full_forces"
         )
     if execution["gpu_id"] != "0":
         raise CudaContractError(

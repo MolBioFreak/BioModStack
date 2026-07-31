@@ -14,7 +14,7 @@ from scripts.bms_md.contract import MD_JOB_SCHEMA, build_run_manifest, normalize
 from scripts.bms_md.cuda_contract import CudaContractError, assert_single_cuda_device
 from scripts.bms_md.engine_adapters import EngineAdapterError, run_md_replica
 from scripts.bms_md.gromacs import assert_cuda_enabled, build_mdrun_command
-from scripts.bms_md.gromacs_pipeline import run_gromacs_job
+from scripts.bms_md.gromacs_pipeline import _build_trajectory_frame_map, run_gromacs_job
 from scripts.bms_md.runner import (
     StageLedger,
     assert_minimization_converged,
@@ -24,6 +24,49 @@ from scripts.bms_md.runner import (
 )
 from services.md.chemistry_catalog import ChemistryCatalog, RuntimeProbeResult
 from services.md.launch_contract import materialize_md_job_spec
+
+
+def test_trajectory_frame_map_uses_exact_gromacs_receipt_and_timestep() -> None:
+    receipt = "\n".join([
+        "Reading frame       0 time    0.000   ",
+        "Reading frame       1 time    1.000   ",
+        "Reading frame       2 time    2.000   ",
+        "Last frame          2 time    2.000   ",
+    ])
+
+    payload = _build_trajectory_frame_map(
+        trajectory_report=receipt,
+        trajectory_sha256="a" * 64,
+        replica_index=3,
+        timestep_fs=2.0,
+    )
+
+    assert payload == {
+        "schema": "bms.md.trajectory-frame-map.v1",
+        "replica": 3,
+        "trajectory_sha256": "a" * 64,
+        "frames": [
+            {"display_frame": 0, "source_frame": 0, "time_ps": 0.0, "step": 0},
+            {"display_frame": 1, "source_frame": 1, "time_ps": 1.0, "step": 500},
+            {"display_frame": 2, "source_frame": 2, "time_ps": 2.0, "step": 1000},
+        ],
+    }
+
+
+@pytest.mark.parametrize("receipt", [
+    "",
+    "Reading frame 1 time 0.000",
+    "Reading frame 0 time 0.000\nReading frame 1 time 0.000",
+    "Reading frame 0 time 0.001",
+])
+def test_trajectory_frame_map_rejects_untrustworthy_receipts(receipt: str) -> None:
+    with pytest.raises(ValueError):
+        _build_trajectory_frame_map(
+            trajectory_report=receipt,
+            trajectory_sha256="b" * 64,
+            replica_index=0,
+            timestep_fs=2.0,
+        )
 
 
 API_ROOT = Path(__file__).resolve().parents[1]
@@ -439,8 +482,27 @@ def test_gromacs_command_uses_full_gpu_offload_and_restart_flags(tmp_path: Path)
     for flag in ("-nb", "-pme", "-bonded", "-update"):
         assert command[command.index(flag) + 1] == "gpu"
     assert command[command.index("-cpi") + 1] == str(checkpoint)
+    assert command[command.index("-cpo") + 1] == str(checkpoint)
     assert command[command.index("-cpt") + 1] == "15.0"
     assert "-append" in command
+
+
+def test_gromacs_command_supports_gpu_forces_with_cpu_update_for_virtual_sites(tmp_path: Path) -> None:
+    command = build_mdrun_command(
+        gmx="gmx",
+        deffnm="production",
+        gpu_id="0",
+        ntmpi=1,
+        ntomp=8,
+        gpu_offload="full_forces",
+        pin="on",
+        checkpoint=tmp_path / "missing.cpt",
+    )
+
+    assert command[command.index("-nb") + 1] == "gpu"
+    assert command[command.index("-pme") + 1] == "gpu"
+    assert command[command.index("-bonded") + 1] == "gpu"
+    assert command[command.index("-update") + 1] == "cpu"
 
 
 def test_gromacs_command_omits_restart_flags_without_checkpoint(tmp_path: Path) -> None:
@@ -531,6 +593,20 @@ def test_cuda_contract_requires_one_scheduler_device_remapped_to_zero(tmp_path: 
     for environ in ({}, {"CUDA_VISIBLE_DEVICES": "0,1"}):
         with pytest.raises(CudaContractError, match="exactly one"):
             assert_single_cuda_device(config, environ=environ)
+
+
+def test_cuda_contract_accepts_opc_full_forces_mode_with_cpu_update(tmp_path: Path) -> None:
+    _config_path, config = _materialized_gromacs(tmp_path)
+    config["execution"]["gpu_offload"] = "full_forces"
+
+    normalized = normalize_job_config(config)
+    allocation = assert_single_cuda_device(
+        normalized,
+        environ={"CUDA_VISIBLE_DEVICES": "GPU-opc-fixture"},
+    )
+
+    assert normalized["execution"]["gpu_offload"] == "full_forces"
+    assert allocation["container_device_index"] == "0"
 
 
 def test_adapter_dispatch_is_engine_exact(
@@ -650,7 +726,12 @@ elif subcommand == "mdrun":
     if prefix.name == "production":
         prefix.with_suffix(".xtc").write_text("trajectory\n", encoding="utf-8")
 elif subcommand == "check":
-    print("Checking file; Last frame 10 time 1.000")
+    if "-f" in args:
+        for frame in range(11):
+            print(f"Reading frame {frame:7d} time {frame * 0.1:8.3f}")
+        print("Last frame         10 time    1.000")
+    else:
+        print("Checking energy file; Last frame 10 time 1.000")
 else:
     raise SystemExit("unsupported fake gmx command: " + subcommand)
 '''
@@ -686,6 +767,14 @@ def test_fake_gromacs_full_run_verifies_outputs_and_resumes_safely(
     assert (output / "production" / "production.xtc").is_file()
     assert (output / "production" / "production.cpt").is_file()
     assert "Last frame 10" in (output / "analysis" / "gromacs_check.txt").read_text()
+    frame_map = json.loads((output / "analysis" / "trajectory-frame-map.json").read_text())
+    assert frame_map["trajectory_sha256"] == manifest["artifacts"]["trajectory"]["sha256"]
+    assert frame_map["frames"][-1] == {
+        "display_frame": 10, "source_frame": 10, "time_ps": 1.0, "step": 500,
+    }
+    assert manifest["artifacts"]["trajectory_frame_map"]["source_trajectory_sha256"] == frame_map["trajectory_sha256"]
+    assert manifest["artifacts"]["representative_structure"]["source_frame"] == 10
+    assert manifest["artifacts"]["representative_structure"]["time_ps"] == 1.0
     for record in manifest["artifacts"].values():
         artifact = output / record["path"]
         assert not Path(record["path"]).is_absolute()
@@ -734,3 +823,46 @@ def test_fake_gromacs_full_run_verifies_outputs_and_resumes_safely(
     assert "production/production.cpt" in retry_calls[2]
     assert "-cpi" in retry_calls[2]
     assert "-append" in retry_calls[2]
+
+
+def test_resume_accepts_only_hash_named_immutable_checkpoint_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "replica_0"
+    snapshot_bytes = b"immutable-checkpoint"
+    digest = hashlib.sha256(snapshot_bytes).hexdigest()
+    snapshot = output / ".bms-checkpoints" / "segment-1" / f"{digest}.cpt"
+    snapshot.parent.mkdir(parents=True)
+    snapshot.write_bytes(snapshot_bytes)
+    canonical = output / "production" / "production.cpt"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_bytes(b"stale-checkpoint")
+
+    def accepted(*_args: Any, **_kwargs: Any) -> str:
+        assert canonical.read_bytes() == snapshot_bytes
+        raise RuntimeError("resume checkpoint accepted")
+
+    monkeypatch.setattr("scripts.bms_md.gromacs_pipeline._run_command", accepted)
+    prepared = {
+        "schema": "bms.md.job.v2",
+        "engine": "gromacs",
+        "replicas": 1,
+        "execution": {"gpu_offload": "none"},
+    }
+    with pytest.raises(RuntimeError, match="resume checkpoint accepted"):
+        run_gromacs_job(
+            tmp_path / "unused.json",
+            output,
+            _prepared_config=prepared,
+            resume_checkpoint=snapshot,
+        )
+
+    arbitrary = output / "arbitrary.cpt"
+    arbitrary.write_bytes(snapshot_bytes)
+    with pytest.raises(ValueError, match="canonical stage checkpoint or immutable snapshot"):
+        run_gromacs_job(
+            tmp_path / "unused.json",
+            output,
+            _prepared_config=prepared,
+            resume_checkpoint=arbitrary,
+        )

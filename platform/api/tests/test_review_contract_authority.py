@@ -698,6 +698,22 @@ def test_job_params_cannot_impersonate_review_producer_authority() -> None:
     assert forged_stage_context["review_profile_id"] is None
     assert forged_stage_context["review_role_map"] is None
 
+    persisted_shape_job: Any = SimpleNamespace(
+        **{
+            **forged_job.__dict__,
+            "model_id": "protein_modification_experimental",
+            "mode": "shape_blueprint",
+            "params": {},
+            "stage_family": None,
+            "stage_mode": None,
+        }
+    )
+    persisted_shape_context = _job_stage_context(persisted_shape_job)
+    assert persisted_shape_context["stage_family"] == "shape_blueprint"
+    assert persisted_shape_context["stage_mode"] == "shape_blueprint"
+    assert persisted_shape_context["review_profile_id"] == "shape_blueprint"
+    assert persisted_shape_context["review_contract_source"] == "job_identity"
+
     from routers.jobs import _derive_job_stage_tags
 
     assert _derive_job_stage_tags(

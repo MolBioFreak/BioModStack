@@ -13,7 +13,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import async_session, Job
+from database import async_session, Job, MdRun
 from schemas import JobStatus
 from services.nextflow import cancel_nextflow_job
 
@@ -30,6 +30,37 @@ _TERMINAL_JOB_STATUSES = {
     JobStatus.FAILED.value,
     JobStatus.CANCELLED.value,
 }
+
+
+async def get_md_owned_job_ids(session: AsyncSession) -> set[str]:
+    roots = set((await session.scalars(select(MdRun.job_id))).all())
+    if not roots:
+        return set()
+    descendants = set((await session.scalars(select(Job.id).where(
+        (Job.parent_job_id.in_(roots)) | (Job.child_stage == "md_replica")
+    ))).all())
+    return roots | descendants
+
+
+async def reject_generic_md_lifecycle_control(job_id: str, session: AsyncSession) -> None:
+    """Prevent generic controls from bypassing durable MD lifecycle semantics."""
+    # FastAPI always injects a real AsyncSession.  A few internal/unit callers
+    # invoke route functions directly without dependency injection; those
+    # callers cannot resolve MD ownership and must not crash before the route's
+    # own fail-closed guards run.
+    if not callable(getattr(session, "get", None)):
+        return
+    job = await session.get(Job, job_id)
+    root_id = job.parent_job_id if job is not None and job.parent_job_id else job_id
+    if await session.get(MdRun, root_id) is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "MD_LIFECYCLE_CONTROL_REQUIRED",
+                "message": "Use the Molecular Dynamics lifecycle operation for this run",
+                "md_job_id": root_id,
+            },
+        )
 
 
 def _job_is_cancelable(job: Job) -> bool:

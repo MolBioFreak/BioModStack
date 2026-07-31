@@ -249,6 +249,43 @@ def _prepare_system(
     return coordinates, topology, required
 
 
+def _consume_preparation_bundle(
+    config: Mapping[str, Any], bundle: Path, output_dir: Path, ledger: StageLedger,
+) -> tuple[Path, Path, list[Path]]:
+    from .chemistry.prepare import verify_preparation_bundle
+
+    chemistry = config.get("chemistry") or {}
+    manifest = verify_preparation_bundle(
+        bundle,
+        expected_profile_id=chemistry.get("profile_id"),
+        expected_profile_sha256=chemistry.get("profile_sha256"),
+    )
+    system_dir = output_dir / "system"
+    system_dir.mkdir(parents=True, exist_ok=True)
+    coordinates = system_dir / "prepared.gro"
+    topology = system_dir / "topol.top"
+    restraint_names = sorted(
+        record["path"] for record in manifest["files"]
+        if isinstance(record, Mapping)
+        and isinstance(record.get("path"), str)
+        and record["path"].startswith("posre")
+        and record["path"].endswith(".itp")
+    )
+    position_restraints = [system_dir / name for name in restraint_names]
+    required = [coordinates, topology, *position_restraints]
+    if not ledger.is_complete("preparation", required):
+        ledger.mark_running("preparation", ["consume-immutable-bundle", manifest["bundle_sha256"]])
+        shutil.copy2(Path(bundle) / "system.gro", coordinates)
+        shutil.copy2(Path(bundle) / "system.top", topology)
+        for source_name, destination_path in zip(restraint_names, position_restraints, strict=True):
+            shutil.copy2(Path(bundle) / source_name, destination_path)
+        ledger.mark_completed(
+            "preparation", required,
+            performance={"bundle_sha256": manifest["bundle_sha256"]},
+        )
+    return coordinates, topology, required
+
+
 def _run_stage(
     stage_name: str,
     config: Mapping[str, Any],
@@ -375,6 +412,46 @@ def _validate_outputs(
     return report
 
 
+_TRAJECTORY_FRAME = re.compile(
+    r"^Reading frame\s+(?P<frame>\d+)\s+time\s+(?P<time>-?\d+(?:\.\d+)?)\s*$",
+    re.MULTILINE,
+)
+
+
+def _build_trajectory_frame_map(
+    *, trajectory_report: str, trajectory_sha256: str, replica_index: int,
+    timestep_fs: float,
+) -> dict[str, Any]:
+    if timestep_fs <= 0:
+        raise ValueError("production timestep_fs must be positive")
+    frames: list[dict[str, Any]] = []
+    previous_time = -1.0
+    for display_frame, match in enumerate(_TRAJECTORY_FRAME.finditer(trajectory_report)):
+        source_frame = int(match.group("frame"))
+        time_ps = float(match.group("time"))
+        if source_frame != display_frame or time_ps < 0 or (display_frame and time_ps <= previous_time):
+            raise ValueError("GROMACS trajectory frame receipt is noncontiguous or nonmonotonic")
+        raw_step = time_ps * 1000.0 / timestep_fs
+        step = round(raw_step)
+        if abs(raw_step - step) > 1e-6:
+            raise ValueError("GROMACS trajectory time does not map to an exact integration step")
+        frames.append({
+            "display_frame": display_frame,
+            "source_frame": source_frame,
+            "time_ps": time_ps,
+            "step": step,
+        })
+        previous_time = time_ps
+    if not frames:
+        raise ValueError("GROMACS trajectory frame receipt is empty")
+    return {
+        "schema": "bms.md.trajectory-frame-map.v1",
+        "replica": replica_index,
+        "trajectory_sha256": trajectory_sha256,
+        "frames": frames,
+    }
+
+
 def run_gromacs_job(
     config_path: Path,
     output_dir: Path,
@@ -382,10 +459,46 @@ def run_gromacs_job(
     replica_index: int = 0,
     gmx_binary: str = "gmx",
     _prepared_config: Mapping[str, Any] | None = None,
+    preparation_bundle: Path | None = None,
+    resume_checkpoint: Path | None = None,
 ) -> Path:
     config_path = Path(config_path).expanduser().resolve()
     output_dir = Path(output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    if resume_checkpoint is not None:
+        resume_checkpoint = Path(resume_checkpoint).expanduser().resolve(strict=True)
+        try:
+            resume_relative = resume_checkpoint.relative_to(output_dir)
+        except ValueError as exc:
+            raise ValueError("resume checkpoint must belong to the resumed replica output") from exc
+        allowed_stages = {"minimization", "nvt", "npt", "production"}
+        canonical_stage_checkpoint = (
+            len(resume_relative.parts) == 2
+            and resume_relative.parts[0] in allowed_stages
+            and resume_relative.name == f"{resume_relative.parts[0]}.cpt"
+        )
+        snapshot_bytes: bytes | None = None
+        immutable_snapshot = False
+        if (
+            len(resume_relative.parts) == 3
+            and resume_relative.parts[0] == ".bms-checkpoints"
+            and re.fullmatch(r"[0-9a-f]{64}\.cpt", resume_relative.name) is not None
+        ):
+            snapshot_bytes = resume_checkpoint.read_bytes()
+            immutable_snapshot = hashlib.sha256(snapshot_bytes).hexdigest() == resume_checkpoint.stem
+        if not canonical_stage_checkpoint and not immutable_snapshot:
+            raise ValueError(
+                "resume checkpoint path does not match a canonical stage checkpoint or immutable snapshot"
+            )
+        if immutable_snapshot:
+            assert snapshot_bytes is not None
+            canonical_resume = output_dir / "production" / "production.cpt"
+            canonical_resume.parent.mkdir(parents=True, exist_ok=True)
+            previous_mode = canonical_resume.stat().st_mode & 0o777 if canonical_resume.exists() else 0o664
+            temporary_resume = canonical_resume.with_suffix(".cpt.resume.tmp")
+            temporary_resume.write_bytes(snapshot_bytes)
+            os.chmod(temporary_resume, previous_mode)
+            os.replace(temporary_resume, canonical_resume)
     config = dict(_prepared_config) if _prepared_config is not None else prepare_verified_worker_inputs(
         config_path,
         output_dir / ".worker_inputs",
@@ -405,13 +518,20 @@ def run_gromacs_job(
     _atomic_json(normalized_config, config)
     ledger = StageLedger(output_dir / "stage_state.json")
 
-    coordinates, topology, _ = _prepare_system(
-        config,
-        config_path=config_path,
-        output_dir=output_dir,
-        gmx_binary=gmx_binary,
-        ledger=ledger,
-    )
+    if config.get("schema") == "bms.md.job.v2":
+        if preparation_bundle is None:
+            raise ValueError("bms.md.job.v2 requires an immutable preparation bundle")
+        coordinates, topology, _ = _consume_preparation_bundle(
+            config, preparation_bundle, output_dir, ledger,
+        )
+    else:
+        coordinates, topology, _ = _prepare_system(
+            config,
+            config_path=config_path,
+            output_dir=output_dir,
+            gmx_binary=gmx_binary,
+            ledger=ledger,
+        )
     restraint_reference = coordinates
     previous_checkpoint: Path | None = None
     stage_artifacts: dict[str, list[Path]] = {}
@@ -442,6 +562,19 @@ def run_gromacs_job(
         gmx_binary=gmx_binary,
         ledger=ledger,
     )
+    trajectory_sha256 = hashlib.sha256(trajectory.read_bytes()).hexdigest()
+    production_config = config["stages"]["production"]
+    timestep_fs = float(production_config.get("timestep_fs", 2.0))
+    trajectory_frame_map = output_dir / "analysis" / "trajectory-frame-map.json"
+    frame_map_payload = _build_trajectory_frame_map(
+        trajectory_report=(output_dir / "analysis" / "trajectory_check.command.log").read_text(
+            encoding="utf-8", errors="replace",
+        ),
+        trajectory_sha256=trajectory_sha256,
+        replica_index=replica_index,
+        timestep_fs=timestep_fs,
+    )
+    _atomic_json(trajectory_frame_map, frame_map_payload)
     representative_structure = output_dir / "production" / "production-final.pdb"
     (output_dir / "analysis").mkdir(parents=True, exist_ok=True)
     representative_is_valid = False
@@ -476,6 +609,7 @@ def run_gromacs_job(
             "coordinates": coordinates,
             "run_input": production.with_suffix(".tpr"),
             "trajectory": trajectory,
+            "trajectory_frame_map": trajectory_frame_map,
             "atom_order_manifest": atom_order_manifest,
             "representative_structure": representative_structure,
             "checkpoint": checkpoint,
@@ -498,17 +632,19 @@ def run_gromacs_job(
     manifest["artifacts"]["trajectory"].update({
         "semantic_role": "analysis_trajectory", "atom_order_identity": atom_order_identity,
     })
+    manifest["artifacts"]["trajectory_frame_map"].update({
+        "semantic_role": "trajectory_frame_map",
+        "source_trajectory_sha256": trajectory_sha256,
+    })
     manifest["artifacts"]["atom_order_manifest"].update({
         "semantic_role": "atom_order_manifest", "atom_order_identity": atom_order_identity,
     })
-    production_config = config["stages"]["production"]
-    production_steps = int(production_config["steps"])
-    output_interval = int(production_config["trajectory_interval_steps"])
+    final_frame = frame_map_payload["frames"][-1]
     manifest["artifacts"]["representative_structure"].update({
         "semantic_role": "representative_structure",
         "selection_method": "completed_production_final_coordinates",
-        "source_frame": production_steps // output_interval - 1 if production_steps % output_interval == 0 else None,
-        "time_ps": production_steps * 0.002,
+        "source_frame": final_frame["source_frame"],
+        "time_ps": final_frame["time_ps"],
         "source_trajectory_sha256": manifest["artifacts"]["trajectory"]["sha256"],
     })
     manifest_path = output_dir / "manifest.json"

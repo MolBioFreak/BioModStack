@@ -199,24 +199,18 @@ test('NGS instrument mode is separated from file-analysis launch', () => {
     assert.match(panel, /Start instrument run/u);
 });
 
-test('NGS instrument panel exposes an explicit fake Mk1D test mode without claiming real MinKNOW connectivity', () => {
+test('NGS instrument panel exposes no fake or demo Mk1D mode', () => {
     const panel = readSource('src/components/ngs/OntInstrumentPanel.tsx');
     const api = readSource('src/lib/api.ts');
 
-    assert.match(panel, /TEST_MODE_MK1D_DEVICE/u);
-    assert.match(panel, /position: 'TEST-MK1D'/u);
-    assert.match(panel, /fake_or_demo_device: true/u);
-    assert.match(panel, /Test mode: fake Mk1D/u);
-    assert.match(panel, /FAKE TEST CONNECTION/u);
-    assert.match(panel, /does not prove MinKNOW connectivity or start a real instrument run/u);
-    assert.match(panel, /Start fake test run/u);
-    assert.match(panel, /fake_or_demo_devices: true/u);
+    assert.match(panel, /devices = liveDevices\.filter\(\(device\) => device\.device_type === 'mk1d' && !device\.fake_or_demo_device\)/u);
+    assert.doesNotMatch(panel, /TEST_MODE_MK1D_DEVICE|TEST-MK1D|FAKE TEST CONNECTION|Start fake test run|test mode Mk1D|mirrored by fake starts/u);
+    assert.doesNotMatch(api, /fake_or_demo_device\?: boolean/u);
     assert.match(panel, /Instrument positions/u);
     assert.match(panel, /Run setup/u);
     assert.match(panel, /Start packet/u);
     assert.match(panel, /POD5 raw signal/u);
     assert.match(panel, /Basecaller/u);
-    assert.match(api, /fake_or_demo_device\?: boolean/u);
 });
 
 
