@@ -220,6 +220,7 @@ async def test_cancel_actuator_commits_intent_then_stops_and_terminalizes_descen
     parent = Job(
         id="md-cancel-actuated", name="MD", status="running",
         model_id="md", mode="molecular_dynamics", params={},
+        nextflow_run_id="nextflow-cancel-parent",
     )
     session.add(parent)
     await session.flush()
@@ -269,11 +270,60 @@ async def test_cancel_actuator_commits_intent_then_stops_and_terminalizes_descen
     finally:
         event.remove(session.sync_session, "after_commit", committed)
 
-    assert cancelled_ids == ["nextflow-cancel-1"]
+    assert cancelled_ids == ["nextflow-cancel-parent", "nextflow-cancel-1"]
     assert terminal.phase == "cancelled"
     assert replica.active is False and replica.state == "cancelled"
     assert segment.state == "cancelled"
     assert child.status == "cancelled" and child.queue_status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_cancel_replay_after_restart_finalizes_already_terminal_descendants(session) -> None:
+    parent = Job(
+        id="md-cancel-restart", name="MD", status="running", queue_status="running",
+        model_id="md", mode="molecular_dynamics", params={}, nextflow_run_id="dead-parent-run",
+    )
+    child = Job(
+        id="md-cancel-restart-child", name="replica", status="running", queue_status="running",
+        model_id="md", mode="replica", params={}, parent_job_id=parent.id,
+        child_stage="md_replica", nextflow_run_id="dead-child-run",
+    )
+    session.add_all([parent, child])
+    await session.flush()
+    run = await create_md_run(session, job=parent, normalized_request=_request())
+    run.phase = "replicas_running"
+    replica, segment = await create_replica_attempt(
+        session, job_id=parent.id, replica_index=0, attempt=0, engine="gromacs",
+        execution_plan_sha256="b" * 64, compatibility_key="c" * 64,
+        child_job_id=child.id,
+    )
+    await request_cancel(
+        session, job_id=parent.id, expected_version=0, idempotency_key="cancel:restart",
+    )
+    parent.status = "failed"
+    parent.queue_status = "failed"
+    child.status = "failed"
+    child.queue_status = "failed"
+    replica.active = False
+    replica.state = "failed"
+    segment.state = "failed"
+    await session.commit()
+
+    async def unexpected_cancel(_nextflow_run_id: str) -> bool:
+        raise AssertionError("terminal workflow must not be cancelled again after restart")
+
+    terminal = await cancel_running_md_run(
+        session,
+        job_id=parent.id,
+        expected_version=0,
+        idempotency_key="cancel:restart",
+        cancel_worker=unexpected_cancel,
+    )
+    await session.commit()
+
+    assert terminal.phase == "cancelled"
+    assert terminal.state_version == 2
+    assert parent.status == "cancelled" and parent.queue_status == "completed"
 
 
 @pytest.mark.asyncio

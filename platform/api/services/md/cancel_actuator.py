@@ -38,7 +38,13 @@ async def cancel_running_md_run(
     )).all())
     children: list[Job] = []
     targets: list[str] = []
-    if parent.nextflow_run_id:
+    terminal_job_statuses = {"completed", "failed", "cancelled", "canceled"}
+    if parent.status not in terminal_job_statuses:
+        if not parent.nextflow_run_id:
+            raise MdStateError(
+                "MD_CANCEL_ACTUATION_FAILED",
+                "active parent workflow identity is incomplete",
+            )
         targets.append(str(parent.nextflow_run_id))
     for replica in replicas:
         if not replica.child_job_id:
