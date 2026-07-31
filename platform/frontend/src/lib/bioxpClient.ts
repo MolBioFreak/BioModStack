@@ -71,6 +71,7 @@ export interface BioXpStatusResponse {
     emergency_stop: {
         delivery_available: boolean;
         physical_effect_verifiable: false;
+        reason?: string;
     };
     startup_warnings: string[];
     connection_access?: {

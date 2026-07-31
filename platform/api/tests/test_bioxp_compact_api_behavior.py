@@ -117,7 +117,8 @@ def test_unregistered_commands_and_stop_without_active_target_fail_closed_regard
     assert authorized_command.status_code == 409
     assert "disabled" in authorized_command.json()["detail"].lower()
     assert authorized_stop.status_code == 409
-    assert "active target" in authorized_stop.json()["detail"]
+    assert "quarantined" in authorized_stop.json()["detail"].lower()
+    assert "physical aggregate abort" in authorized_stop.json()["detail"].lower()
 
 
 def test_malformed_persisted_profile_is_sanitized_without_auto_connect(

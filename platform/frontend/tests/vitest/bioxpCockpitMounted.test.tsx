@@ -209,7 +209,7 @@ describe('mounted BioXP cockpit wiring', () => {
         expect(button('Non-homing Recovery')?.disabled).toBe(true);
         expect(button('Move +')?.disabled).toBe(true);
         expect(buttons('Stop').every((entry) => entry.disabled)).toBe(true);
-        expect(button('Emergency Stop')?.disabled).toBe(true);
+        expect(button('Emergency Abort Unavailable')?.disabled).toBe(true);
         expect(container.textContent).toContain('BioXP status unavailable.');
     });
 

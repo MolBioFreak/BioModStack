@@ -19,7 +19,7 @@ test('BioXP cockpit is a compact OEM operator surface', () => {
         'Non-homing Recovery',
         'Manual Controls',
         'Camera',
-        'Emergency Stop',
+        'Physical Emergency Abort Unavailable',
         'Move −',
         'Move +',
         'Home',

@@ -16,11 +16,88 @@ from services.bioxp.operator_models import (
     OperatorControlCatalog,
     OperatorDashboard,
 )
+from services.bioxp.operator_semantic_quarantine import OPERATOR_SEMANTIC_QUARANTINE_BY_PATH
 from services.bioxp.runtime import BioXpRuntime
 
 from .dependencies import get_bioxp_runtime, require_bioxp_mutation_access
 
 router = APIRouter()
+
+
+def _quarantine_catalog_payload(payload: Any) -> Any:
+    if not isinstance(payload, dict) or not isinstance(payload.get("actions"), list):
+        return payload
+    transformed = dict(payload)
+    actions: list[Any] = []
+    for raw_row in payload["actions"]:
+        if not isinstance(raw_row, dict):
+            actions.append(raw_row)
+            continue
+        path = str(raw_row.get("informational_path") or "")
+        if path == "/oem/startup/status/{session_id}":
+            continue
+        row = dict(raw_row)
+        if path == "/oem/startup/door_event" and isinstance(row.get("inputs"), list):
+            row["inputs"] = [input_row for input_row in row["inputs"] if not isinstance(input_row, dict) or input_row.get("name") != "session_id"]
+        quarantine_reason = OPERATOR_SEMANTIC_QUARANTINE_BY_PATH.get(path)
+        if quarantine_reason is not None:
+            reason = quarantine_reason
+            row.update({
+                "provider_available": False,
+                "provider_unavailable_reason": reason,
+                "available": False,
+                "unavailable_reason": reason,
+                "enabled": False,
+                "disabled_reason": reason,
+            })
+        actions.append(row)
+    transformed["actions"] = actions
+    return transformed
+
+
+def _quarantined_admission(action_id: str, ownership_generation: int, reason: str) -> OperatorAdmission:
+    return _validate(OperatorAdmission, {
+        "action_id": action_id,
+        "ownership_generation": ownership_generation,
+        "enabled": False,
+        "disabled_reason": reason,
+        "dependencies": [{
+            "key": "source_grounded_semantics",
+            "label": "Source-grounded physical semantics",
+            "met": False,
+            "reason": reason,
+        }],
+    })
+
+
+async def _resolve_action_quarantine(
+    runtime: BioXpRuntime,
+    *,
+    action_id: str,
+    expected_connection_generation: int,
+    expected_ownership_generation: int,
+) -> str | None:
+    try:
+        payload = await runtime.connection.request_active(
+            "operator_control_catalog",
+            expected_generation=expected_connection_generation,
+            require_fresh=True,
+        )
+    except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
+        raise _translate_robot_error(exc) from exc
+    catalog = _validate(OperatorControlCatalog, payload)
+    if catalog.ownership_generation != expected_ownership_generation:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "BioXP robot ownership generation changed: "
+                f"expected {expected_ownership_generation}, current {catalog.ownership_generation}"
+            ),
+        )
+    for action in catalog.actions:
+        if action.action_id == action_id:
+            return OPERATOR_SEMANTIC_QUARANTINE_BY_PATH.get(action.informational_path)
+    return None
 
 
 def _translate_robot_error(exc: Exception) -> HTTPException:
@@ -52,7 +129,7 @@ async def operator_control_catalog(
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
-    return _validate(OperatorControlCatalog, payload)
+    return _validate(OperatorControlCatalog, _quarantine_catalog_payload(payload))
 
 
 @router.get("/operator-controls/dashboard", response_model=OperatorDashboard)
@@ -81,6 +158,18 @@ async def operator_action_admission(
     request: OperatorAdmissionRequest,
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> OperatorAdmission:
+    quarantine_reason = await _resolve_action_quarantine(
+        runtime,
+        action_id=action_id,
+        expected_connection_generation=request.expected_connection_generation,
+        expected_ownership_generation=request.expected_ownership_generation,
+    )
+    if quarantine_reason is not None:
+        return _quarantined_admission(
+            action_id,
+            request.expected_ownership_generation,
+            quarantine_reason,
+        )
     try:
         payload = await runtime.connection.request_active(
             "operator_action_admission",
@@ -107,6 +196,14 @@ async def invoke_operator_action(
     request: OperatorActionInvokeRequest,
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> OperatorActionReceipt:
+    quarantine_reason = await _resolve_action_quarantine(
+        runtime,
+        action_id=action_id,
+        expected_connection_generation=request.expected_connection_generation,
+        expected_ownership_generation=request.expected_ownership_generation,
+    )
+    if quarantine_reason is not None:
+        raise HTTPException(status_code=409, detail=quarantine_reason)
     try:
         payload = await runtime.connection.request_active(
             "invoke_operator_action",

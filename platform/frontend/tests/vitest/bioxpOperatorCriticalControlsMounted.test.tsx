@@ -122,6 +122,10 @@ describe('mounted BioXP operator critical and exhaustive controls', () => {
         const exhaustiveIds = [...grouped.querySelectorAll('[data-action-id]')].map((node) => node.getAttribute('data-action-id'));
         expect(exhaustiveIds).toHaveLength(140);
         expect(new Set(exhaustiveIds).size).toBe(140);
+        const subsystemDropdowns = [...grouped.querySelectorAll<HTMLDetailsElement>('details[data-subsystem]')];
+        expect(subsystemDropdowns.length).toBeGreaterThan(1);
+        expect(grouped.querySelectorAll('summary')).toHaveLength(subsystemDropdowns.length);
+        expect(subsystemDropdowns.filter((dropdown) => dropdown.open)).toHaveLength(1);
         expect(state.admissionArgs[1]).toBe(2637337272774657);
         expect(state.admissionArgs[2]).toBe(2);
 

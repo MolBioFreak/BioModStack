@@ -325,15 +325,16 @@ export function BioXpCockpit() {
             <section className="rounded-xl border border-red-800/70 bg-red-950/30 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
-                        <h2 className="text-lg font-semibold text-red-200">Emergency Stop</h2>
-                        <p className="text-sm text-red-200/70">Stop all motion.</p>
+                        <h2 className="text-lg font-semibold text-red-200">Physical Emergency Abort Unavailable</h2>
+                        <p className="max-w-3xl text-sm text-red-200/70">
+                            {status?.emergency_stop.reason ?? 'No source-grounded OEM physical aggregate abort is mounted.'}
+                        </p>
                     </div>
                     <button
                         type="button"
-                        disabled={!active || status?.emergency_stop.delivery_available !== true || emergencyStop.isPending}
-                        onClick={() => emergencyStop.mutate({ generation })}
-                        className="rounded bg-red-700 px-5 py-3 font-bold hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-35"
-                    >Emergency Stop</button>
+                        disabled
+                        className="rounded bg-red-700 px-5 py-3 font-bold disabled:cursor-not-allowed disabled:opacity-35"
+                    >Emergency Abort Unavailable</button>
                 </div>
             </section>
 

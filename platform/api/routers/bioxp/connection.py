@@ -13,6 +13,7 @@ from services.bioxp.command_policy import (
     required_lifecycle_state_reasons,
 )
 from services.bioxp.models import BioXpProfile
+from services.bioxp.operator_semantic_quarantine import EMERGENCY_STOP_QUARANTINE_REASON
 from services.bioxp.runtime import BioXpRuntime, bioxp_connection_enabled
 
 from .dependencies import (
@@ -122,16 +123,15 @@ async def get_status(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict
         else:
             unavailable[name] = reason
     available_controls: list[str] = []
-    if snapshot.active and mutations_enabled():
-        available_controls.append("emergency_stop")
     return {
         "connection": _public_snapshot(snapshot),
         "available_commands": available,
         "available_controls": available_controls,
         "unavailable_commands": unavailable,
         "emergency_stop": {
-            "delivery_available": "emergency_stop" in available_controls,
+            "delivery_available": False,
             "physical_effect_verifiable": False,
+            "reason": EMERGENCY_STOP_QUARANTINE_REASON,
         },
         "startup_warnings": list(runtime.startup_warnings),
         "connection_access": {

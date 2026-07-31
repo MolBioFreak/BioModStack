@@ -103,6 +103,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
     const [subsystemFilter, setSubsystemFilter] = useState<PrimitiveGroup>('all');
     const [actionSearch, setActionSearch] = useState('');
     const [selectedId, setSelectedId] = useState<string | null>(null);
+    const [expandedSubsystems, setExpandedSubsystems] = useState<Set<string>>(() => new Set());
     const [inputs, setInputs] = useState<Record<string, unknown>>({});
     const [localError, setLocalError] = useState<string | null>(null);
     const [assessmentNote, setAssessmentNote] = useState('');
@@ -164,6 +165,12 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
         if (selected && selected.action_id !== selectedId) setSelectedId(selected.action_id);
     }, [selected, selectedId]);
     useEffect(() => setInputs(initialInputs(selected)), [selected?.action_id]);
+    useEffect(() => {
+        const selectedGroup = groupedBrowseActions.find((group) => group.actions.some((action) => action.action_id === selected?.action_id));
+        const subsystem = groupedBrowseActions.length === 1 ? groupedBrowseActions[0]?.subsystem : selectedGroup?.subsystem;
+        if (!subsystem) return;
+        setExpandedSubsystems((current) => current.has(subsystem) ? current : new Set([...current, subsystem]));
+    }, [groupedBrowseActions, selected?.action_id]);
 
     const run = () => {
         if (!selected) return;
@@ -266,9 +273,25 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
                             </div>
                             <div className="mt-4 space-y-3" data-individual-control-groups>
                                 {groupedBrowseActions.map((group) => (
-                                    <section key={group.subsystem} className="rounded border border-slate-800 bg-slate-950/60 p-3" data-subsystem={group.subsystem}>
-                                        <h3 className="text-sm font-semibold text-slate-200">{group.subsystem} <span className="text-slate-500">({group.actions.length})</span></h3>
-                                        <div className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                                    <details
+                                        key={group.subsystem}
+                                        className="rounded border border-slate-800 bg-slate-950/60"
+                                        data-subsystem={group.subsystem}
+                                        open={expandedSubsystems.has(group.subsystem)}
+                                        onToggle={(event) => {
+                                            const isOpen = event.currentTarget.open;
+                                            setExpandedSubsystems((current) => {
+                                                const next = new Set(current);
+                                                if (isOpen) next.add(group.subsystem);
+                                                else next.delete(group.subsystem);
+                                                return next;
+                                            });
+                                        }}
+                                    >
+                                        <summary className="cursor-pointer select-none px-3 py-3 text-sm font-semibold text-slate-200 hover:bg-slate-900/70">
+                                            {group.subsystem} <span className="text-slate-500">({group.actions.length})</span>
+                                        </summary>
+                                        <div className="grid gap-2 border-t border-slate-800 p-3 sm:grid-cols-2 xl:grid-cols-3">
                                             {group.actions.map((action) => (
                                                 <button key={action.action_id} type="button" data-action-id={action.action_id} onClick={() => setSelectedId(action.action_id)} className={`rounded border px-3 py-2 text-left text-xs ${selected?.action_id === action.action_id ? 'border-cyan-500 bg-cyan-950/60' : 'border-slate-700 bg-slate-900'}`}>
                                                     <span className="block font-semibold">{action.label}</span>
@@ -276,7 +299,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
                                                 </button>
                                             ))}
                                         </div>
-                                    </section>
+                                    </details>
                                 ))}
                             </div>
                             {browseActions.length === 0 && <p className="mt-2 rounded border border-amber-800/60 bg-amber-950/30 p-3 text-sm text-amber-200">No authoritative controls match this group or search.</p>}

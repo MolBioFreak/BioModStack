@@ -7,7 +7,7 @@ const cockpit = readFileSync(resolve('src/components/BioXpCockpit.tsx'), 'utf8')
 const controls = readFileSync(resolve('src/components/BioXpOperatorControlTabs.tsx'), 'utf8');
 
 test('OEM operator surface retains connection, recovery, camera, stop, and mounts the route plane', () => {
-    for (const label of ['Connection', 'Claim USB Transport', 'Non-homing Recovery', 'Manual Controls', 'BioXpCameraPanel', 'Emergency Stop', 'Recent Commands', 'BioXpOperatorControlTabs']) {
+    for (const label of ['Connection', 'Claim USB Transport', 'Non-homing Recovery', 'Manual Controls', 'BioXpCameraPanel', 'Physical Emergency Abort Unavailable', 'Recent Commands', 'BioXpOperatorControlTabs']) {
         assert.match(cockpit, new RegExp(label));
     }
 });

@@ -7,6 +7,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from routers import bioxp
+from services.bioxp.errors import ConnectionStateError
+from services.bioxp.operator_semantic_quarantine import OPERATOR_SEMANTIC_QUARANTINE_BY_PATH
 from services.bioxp.robot_client import DEFAULT_ROBOT_ROUTES
 
 REGISTRY = "1" * 64
@@ -134,7 +136,10 @@ class FakeConnection:
         return self.value
 
     async def request_active(self, route_name, *, expected_generation, require_fresh=True, **kwargs):
-        assert expected_generation == self.value.generation
+        if expected_generation != self.value.generation:
+            raise ConnectionStateError(
+                f"BioXP connection generation changed: expected {expected_generation}, current {self.value.generation}"
+            )
         assert require_fresh is True
         return await self.client.request(route_name, **kwargs)
 
@@ -200,6 +205,7 @@ def test_dashboard_and_input_admission_are_robot_owned(monkeypatch):
     assert admission.json()["disabled_reason"] == "Motion is inactive. Activate motion before moving this motor."
     assert runtime.connection.client.calls == [
         ("operator_dashboard", {}),
+        ("operator_control_catalog", {}),
         ("operator_action_admission", {"path_params": {"action_id": "motion.home_xy"}, "json_data": {"expected_generation": 7, "inputs": {}}}),
     ]
 
@@ -214,8 +220,10 @@ def test_one_invocation_maps_to_one_action_id_not_a_browser_path(monkeypatch):
     })
     assert response.status_code == 200
     assert response.json()["physical_effect_verified"] is False
-    assert runtime.connection.client.calls == [(
-        "invoke_operator_action",
+    assert runtime.connection.client.calls == [
+        ("operator_control_catalog", {}),
+        (
+            "invoke_operator_action",
         {
             "path_params": {"action_id": "motion.home_xy"},
             "json_data": {
@@ -307,3 +315,155 @@ def test_history_and_operator_assessment_are_robot_authoritative(monkeypatch):
             },
         }),
     ]
+
+
+_FIXED_QUARANTINE_CASES = (
+    ("route.motion_power_enable", "/motion/power/enable"),
+    ("route.motion_power_diag", "/motion/power/diag"),
+    ("route.runtime_emergency_stop", "/oem/runtime/emergency_stop"),
+    ("alternate.valid.id.for.same.path", "/motion/power/enable"),
+)
+
+
+def test_semantically_unproven_operator_paths_are_visible_but_never_mutation_relayed(monkeypatch):
+    client, runtime = make_client(monkeypatch)
+    catalog_payload = runtime.connection.client.responses["operator_control_catalog"]
+    template = catalog_payload["actions"][0]
+    for action_id, path in _FIXED_QUARANTINE_CASES:
+        catalog_payload["actions"].append({
+            **template,
+            "action_id": action_id,
+            "label": action_id,
+            "kind": "primitive",
+            "informational_method": "POST",
+            "informational_path": path,
+            "provider_available": True,
+            "provider_unavailable_reason": None,
+            "available": True,
+            "unavailable_reason": None,
+            "enabled": True,
+            "disabled_reason": None,
+            "dependencies": [],
+            "inputs": [],
+            "stages": [],
+        })
+
+    catalog_response = client.get("/api/bioxp/operator-controls/catalog")
+    assert catalog_response.status_code == 200, catalog_response.text
+    by_id = {row["action_id"]: row for row in catalog_response.json()["actions"]}
+    for action_id, path in _FIXED_QUARANTINE_CASES:
+        reason = OPERATOR_SEMANTIC_QUARANTINE_BY_PATH[path]
+        row = by_id[action_id]
+        assert row["provider_available"] is False
+        assert row["available"] is False
+        assert row["enabled"] is False
+        assert row["provider_unavailable_reason"] == reason
+        assert row["disabled_reason"] == reason
+
+    runtime.connection.client.calls.clear()
+    for action_id, path in _FIXED_QUARANTINE_CASES:
+        reason = OPERATOR_SEMANTIC_QUARANTINE_BY_PATH[path]
+        admission = client.post(f"/api/bioxp/operator-controls/actions/{action_id}/admission", json={
+            "expected_connection_generation": 77,
+            "expected_ownership_generation": 7,
+            "inputs": {},
+        })
+        assert admission.status_code == 200, admission.text
+        assert admission.json()["enabled"] is False
+        assert admission.json()["disabled_reason"] == reason
+
+        invocation = client.post(f"/api/bioxp/operator-controls/actions/{action_id}", json={
+            "expected_connection_generation": 77,
+            "expected_ownership_generation": 7,
+            "idempotency_key": f"quarantine-{action_id[-12:]}",
+            "inputs": {},
+        })
+        assert invocation.status_code == 409
+        assert invocation.json()["detail"] == reason
+
+    assert runtime.connection.client.calls == [
+        ("operator_control_catalog", {})
+        for _ in range(len(_FIXED_QUARANTINE_CASES) * 2)
+    ]
+
+
+def test_quarantine_validates_both_generation_domains_before_responding(monkeypatch):
+    client, runtime = make_client(monkeypatch)
+    payload = runtime.connection.client.responses["operator_control_catalog"]
+    template = payload["actions"][0]
+    action_id, path = _FIXED_QUARANTINE_CASES[0]
+    payload["actions"].append({
+        **template,
+        "action_id": action_id,
+        "informational_method": "POST",
+        "informational_path": path,
+        "inputs": [],
+    })
+
+    stale_connection = client.post(f"/api/bioxp/operator-controls/actions/{action_id}/admission", json={
+        "expected_connection_generation": 999,
+        "expected_ownership_generation": 7,
+        "inputs": {},
+    })
+    assert stale_connection.status_code == 409
+    assert "connection generation changed" in stale_connection.json()["detail"].lower()
+    assert runtime.connection.client.calls == []
+
+    stale_ownership = client.post(f"/api/bioxp/operator-controls/actions/{action_id}/admission", json={
+        "expected_connection_generation": 77,
+        "expected_ownership_generation": 999,
+        "inputs": {},
+    })
+    assert stale_ownership.status_code == 409
+    assert "ownership generation changed" in stale_ownership.json()["detail"].lower()
+    assert runtime.connection.client.calls == [("operator_control_catalog", {})]
+
+
+def test_catalog_removes_non_oem_session_field_and_keeps_latest_startup_status(monkeypatch):
+    client, runtime = make_client(monkeypatch)
+    payload = runtime.connection.client.responses["operator_control_catalog"]
+    template = payload["actions"][0]
+    session_input = {
+        **template["inputs"][0],
+        "name": "session_id",
+        "wire_name": "session_id",
+        "label": "Session Id",
+        "value_type": "string",
+        "location": "path",
+        "required": True,
+        "default": None,
+    }
+    payload["actions"].extend([
+        {
+            **template,
+            "action_id": "route.startup_status_by_session",
+            "kind": "primitive",
+            "informational_method": "GET",
+            "informational_path": "/oem/startup/status/{session_id}",
+            "inputs": [session_input],
+        },
+        {
+            **template,
+            "action_id": "route.startup_status_latest",
+            "kind": "primitive",
+            "informational_method": "GET",
+            "informational_path": "/oem/startup/status/latest",
+            "inputs": [],
+        },
+        {
+            **template,
+            "action_id": "route.startup_door_event",
+            "kind": "primitive",
+            "informational_method": "POST",
+            "informational_path": "/oem/startup/door_event",
+            "inputs": [{**session_input, "location": "body", "required": False}],
+        },
+    ])
+
+    response = client.get("/api/bioxp/operator-controls/catalog")
+    assert response.status_code == 200, response.text
+    actions = response.json()["actions"]
+    paths = {row["informational_path"] for row in actions}
+    assert "/oem/startup/status/latest" in paths
+    assert "/oem/startup/status/{session_id}" not in paths
+    assert all(input_row["name"] != "session_id" for row in actions for input_row in row["inputs"])

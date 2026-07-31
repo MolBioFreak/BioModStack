@@ -1,133 +1,89 @@
 from __future__ import annotations
 
-import asyncio
+from types import SimpleNamespace
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from routers import bioxp
+from routers.bioxp.dependencies import get_bioxp_runtime, require_bioxp_mutation_access
+from services.bioxp.models import BioXpSnapshot
+from services.bioxp.operator_semantic_quarantine import EMERGENCY_STOP_QUARANTINE_REASON
 
 
-def _load():
-    from services.bioxp.command_coordinator import CommandCoordinator
-    from services.bioxp.command_registry import DEFAULT_COMMAND_REGISTRY
-    from services.bioxp.models import BioXpSnapshot
-
-    return CommandCoordinator, DEFAULT_COMMAND_REGISTRY, BioXpSnapshot
-
-
-class EmergencyClient:
+class FakeCommandCoordinator:
     def __init__(self) -> None:
-        self.calls: list[str] = []
+        self.calls: list[dict] = []
+        self.registry: dict = {}
 
-    async def request(self, route_name: str, *, json_data=None, **_: object):
-        self.calls.append(route_name)
-        return {"acknowledged": True, "physical_effect_verified": False}
+    async def execute(self, **kwargs):
+        self.calls.append(kwargs)
+        raise AssertionError("quarantined emergency stop must not reach the coordinator")
 
 
-class Connection:
-    def __init__(self, snapshot, client) -> None:
+class FakeConnectionManager:
+    def __init__(self, snapshot: BioXpSnapshot) -> None:
         self._snapshot = snapshot
-        self.active_client = client
 
-    def snapshot(self):
+    def snapshot(self) -> BioXpSnapshot:
         return self._snapshot
 
 
-def test_emergency_stop_attempts_with_stale_unknown_readiness_and_is_honest() -> None:
-    Coordinator, registry, Snapshot = _load()
-    snapshot = Snapshot(
+class FakeRuntime:
+    def __init__(self, snapshot: BioXpSnapshot) -> None:
+        self.connection = FakeConnectionManager(snapshot)
+        self.commands = FakeCommandCoordinator()
+        self.artifact_store = None
+        self.startup_warnings: list[str] = []
+        self.legacy_jobs = SimpleNamespace(model_dump=lambda: {})
+
+
+def active_snapshot(*, generation: int = 4) -> BioXpSnapshot:
+    return BioXpSnapshot(
         configured=True,
         active=True,
-        generation=9,
-        reachable=None,
-        runtime_ready=None,
-        hardware_ready=None,
-        freshness_budget_seconds=30,
-        observation_fresh=False,
-        observation_stale=True,
-    )
-    client = EmergencyClient()
-    coordinator = Coordinator(Connection(snapshot, client), registry)
-
-    result = asyncio.run(
-        coordinator.emergency_stop(
-            expected_generation=9,
-            idempotency_key="estop-9",
-            mutations_enabled=True,
-        )
+        display_name="lab",
+        masked_target="https://robot.tailnet.ts.net",
+        generation=generation,
+        freshness_budget_seconds=30.0,
     )
 
-    assert client.calls == ["emergency_stop"]
-    assert result.delivery_attempted is True
-    assert result.remote_acknowledged is True
-    assert result.physical_effect_verified is False
-    assert "not verified" in result.detail.lower()
+
+def mounted_app(runtime: FakeRuntime) -> FastAPI:
+    app = FastAPI()
+    app.include_router(bioxp.router, prefix="/api/bioxp")
+    app.dependency_overrides[get_bioxp_runtime] = lambda: runtime
+    app.dependency_overrides[require_bioxp_mutation_access] = lambda: None
+    return app
 
 
-def test_emergency_stop_generation_failure_never_reaches_transport() -> None:
-    from services.bioxp.command_coordinator import CommandDeniedError
-
-    Coordinator, registry, Snapshot = _load()
-    snapshot = Snapshot(
-        configured=True,
-        active=True,
-        generation=9,
-        freshness_budget_seconds=30,
-    )
-    client = EmergencyClient()
-    coordinator = Coordinator(Connection(snapshot, client), registry)
-
-    for generation in (8,):
-        try:
-            asyncio.run(
-                coordinator.emergency_stop(
-                    expected_generation=generation,
-                    idempotency_key=f"estop-{generation}",
-                    mutations_enabled=True,
-                )
-            )
-        except CommandDeniedError:
-            pass
-        else:
-            raise AssertionError("emergency stop should have been denied")
-    assert client.calls == []
-
-
-def test_concurrent_same_emergency_idempotency_key_delivers_once() -> None:
-    Coordinator, registry, Snapshot = _load()
-
-    class BlockingEmergencyClient(EmergencyClient):
-        def __init__(self) -> None:
-            super().__init__()
-            self.started = asyncio.Event()
-            self.release = asyncio.Event()
-
-        async def request(self, route_name: str, *, json_data=None, **_: object):
-            self.calls.append(route_name)
-            self.started.set()
-            await self.release.wait()
-            return {"acknowledged": "false", "ok": True}
-
-    async def scenario() -> None:
-        snapshot = Snapshot(configured=True, active=True, generation=9, freshness_budget_seconds=30)
-        client = BlockingEmergencyClient()
-        coordinator = Coordinator(Connection(snapshot, client), registry)
-        first = asyncio.create_task(
-            coordinator.emergency_stop(
-                expected_generation=9,
-                idempotency_key="same-emergency-key",
-                mutations_enabled=True,
-            )
+def test_emergency_stop_is_semantically_quarantined_without_coordinator_dispatch(monkeypatch):
+    runtime = FakeRuntime(active_snapshot())
+    app = mounted_app(runtime)
+    monkeypatch.setattr("routers.bioxp.connection.mutations_enabled", lambda: True)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/bioxp/emergency-stop",
+            json={"expected_generation": 4, "idempotency_key": "test-stop-0001"},
         )
-        await client.started.wait()
-        second = asyncio.create_task(
-            coordinator.emergency_stop(
-                expected_generation=9,
-                idempotency_key="same-emergency-key",
-                mutations_enabled=True,
-            )
-        )
-        await asyncio.sleep(0)
-        client.release.set()
-        first_result, second_result = await asyncio.gather(first, second)
-        assert first_result == second_result
-        assert first_result.remote_acknowledged is True
-        assert client.calls == ["emergency_stop"]
 
-    asyncio.run(scenario())
+    assert response.status_code == 409
+    assert response.json()["detail"] == EMERGENCY_STOP_QUARANTINE_REASON
+    assert runtime.commands.calls == []
+
+
+def test_connection_status_advertises_no_physical_emergency_delivery(monkeypatch):
+    runtime = FakeRuntime(active_snapshot())
+    app = mounted_app(runtime)
+    monkeypatch.setattr("routers.bioxp.connection.mutations_enabled", lambda: True)
+    with TestClient(app) as client:
+        response = client.get("/api/bioxp/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["available_controls"] == []
+    assert body["emergency_stop"] == {
+        "delivery_available": False,
+        "physical_effect_verifiable": False,
+        "reason": EMERGENCY_STOP_QUARANTINE_REASON,
+    }
