@@ -103,7 +103,19 @@ async def test_pause_running_md_run_stops_worker_and_persists_exact_checkpoint(s
     cancelled: list[str] = []
     concurrent_write_succeeded: list[bool] = []
 
+    async def publish_after_boundary() -> None:
+        boundary = work_dir / "replica_0" / ".bms-pause-boundary.json"
+        for _ in range(100):
+            if boundary.is_file():
+                receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+                return
+            await asyncio.sleep(0.01)
+        raise AssertionError("pause boundary was not published")
+
+    publisher = asyncio.create_task(publish_after_boundary())
+
     async def cancel(run_id: str) -> bool:
+        assert json.loads(receipt_path.read_text(encoding="utf-8")) == receipt
         cancelled.append(run_id)
         maker = async_sessionmaker(session.bind, expire_on_commit=False)
         async with maker() as concurrent:
@@ -113,11 +125,6 @@ async def test_pause_running_md_run_stops_worker_and_persists_exact_checkpoint(s
             await concurrent.commit()
             concurrent_write_succeeded.append(True)
 
-        async def publish_current_receipt() -> None:
-            await asyncio.sleep(0.05)
-            receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
-
-        asyncio.create_task(publish_current_receipt())
         return True
 
     paused = await pause_running_md_run(
@@ -125,6 +132,7 @@ async def test_pause_running_md_run_stops_worker_and_persists_exact_checkpoint(s
         idempotency_key="pause:one", cancel_worker=cancel,
     )
     await session.commit()
+    await publisher
 
     assert cancelled == ["4242"]
     assert concurrent_write_succeeded == [True]
@@ -201,6 +209,7 @@ async def test_pause_running_md_run_keeps_checkpointing_when_worker_does_not_sto
         await pause_running_md_run(
             session, job_id=parent.id, expected_version=0,
             idempotency_key="pause:failed", cancel_worker=cancel,
+            receipt_timeout_seconds=0.05,
         )
     await session.commit()
     await session.refresh(run)

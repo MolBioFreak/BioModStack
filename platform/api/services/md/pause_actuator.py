@@ -284,6 +284,7 @@ async def pause_running_md_run(
     expected_version: int,
     idempotency_key: str,
     cancel_worker: CancelWorker = _cancel_md_worker,
+    receipt_timeout_seconds: float = 125.0,
 ) -> MdRun:
     run = await session.get(MdRun, job_id)
     if run is None:
@@ -334,25 +335,26 @@ async def pause_running_md_run(
             idempotency_key=idempotency_key,
             reuse_existing=recovering_checkpointing,
         )
-        stopped = await cancel_worker(str(child.nextflow_run_id))
         receipt_exists = _receipt_exists(
             receipt_roots,
             minimum_mtime_ns=boundary_mtime_ns,
         )
-        if stopped and not receipt_exists:
+        if not receipt_exists:
             receipt_exists = await _wait_for_receipt(
                 receipt_roots,
                 minimum_mtime_ns=boundary_mtime_ns,
+                timeout_seconds=receipt_timeout_seconds,
             )
         if not receipt_exists:
-            detail = (
-                "replica worker stopped without a validated checkpoint receipt"
-                if stopped
-                else "replica worker did not stop and has no validated checkpoint receipt"
-            )
             raise MdStateError(
                 "MD_PAUSE_ACTUATION_FAILED",
-                f"MD_PAUSE_ACTUATION_FAILED: {detail}",
+                "MD_PAUSE_ACTUATION_FAILED: replica worker did not publish a post-boundary checkpoint receipt",
+            )
+        stopped = await cancel_worker(str(child.nextflow_run_id))
+        if not stopped:
+            raise MdStateError(
+                "MD_PAUSE_ACTUATION_FAILED",
+                "MD_PAUSE_ACTUATION_FAILED: checkpoint was published but the outer replica worker did not stop",
             )
         payload, checkpoint_path, relative_path = _checkpoint_receipt(
             receipt_roots,
