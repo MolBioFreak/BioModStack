@@ -38,9 +38,9 @@ const validForm = (): MolecularDynamicsForm => ({
 
 const validProfile = (): MolecularDynamicsChemistryProfile => ({
     id: 'amber_ff19sb_opc_protein_v1',
-    version: '1.0.0-candidate',
+    version: '1.0.0',
     profile_sha256: 'a'.repeat(64),
-    display_name: 'AMBER ff19SB + OPC protein candidate',
+    display_name: 'AMBER ff19SB + OPC protein',
     family: 'amber',
     assurance: 'curated_profile',
     legacy: false,

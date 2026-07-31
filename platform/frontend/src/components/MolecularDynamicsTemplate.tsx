@@ -217,7 +217,7 @@ export function MolecularDynamicsTemplate({ onBack, initialValues }: MolecularDy
                         <span className="rounded-full border border-orange-400/30 bg-orange-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-orange-300">Experimental alpha</span>
                     </div>
                     <p className="mt-2 max-w-3xl text-sm text-slate-400">
-                        Automatic preparation is exact 1AKI infrastructure smoke-only. It is not validated for production science.
+                        Automatic preparation has accepted 1AKI protein and 1LMB protein-DNA short-GPU lanes. It is not validated for long-timescale production science.
                     </p>
                 </div>
                 <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-4 py-3 text-xs text-cyan-100">

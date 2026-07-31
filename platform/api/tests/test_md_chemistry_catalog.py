@@ -256,14 +256,21 @@ def test_runtime_identity_change_changes_digest_and_makes_smoke_profile_unavaila
     assert second.catalog_digest != first.catalog_digest
 
 
-def test_modern_profile_can_be_runtime_qualified_without_becoming_selectable() -> None:
+def test_accepted_protein_and_protein_dna_profiles_are_selectable() -> None:
     module = _catalog_module()
     preparation_probe = module.RuntimeProbeResult(
         runtime_id="md-preparation-v1",
         runtime_version="1",
         available=True,
-        asset_ids=frozenset({"amber/ff19SB", "water/opc", "ions/opc-monovalent-pinned"}),
-        checked_at="2026-07-29T13:27:36Z",
+        asset_ids=frozenset(
+            {
+                "amber/ff19SB",
+                "amber/OL15",
+                "water/opc",
+                "ions/opc-monovalent-pinned",
+            }
+        ),
+        checked_at="2026-07-31T06:55:37Z",
         sif_sha256="625d81608118af006295601b8275389e7681a1d98a6fb0622e6241c5d101df4b",
     )
     catalog = module.ChemistryCatalog(
@@ -271,17 +278,27 @@ def test_modern_profile_can_be_runtime_qualified_without_becoming_selectable() -
         probe=lambda: [_probe("amber99sb-ildn.ff"), preparation_probe],
     )
 
-    modern = _profile(catalog, "amber_ff19sb_opc_protein_v1")
+    expected = {
+        "amber_ff19sb_opc_protein_v1": "gromacs_1aki_protein_v1",
+        "amber_ff19sb_ol15_opc_protein_dna_v1": "gromacs_1lmb_protein_dna_v1",
+    }
+    for profile_id, validation_lane in expected.items():
+        profile = _profile(catalog, profile_id)
+        assert profile["inventory_class"] == "selectable"
+        assert profile["states"] == {
+            "installed": True,
+            "runtime_validated": True,
+            "scientifically_validated": True,
+            "operator_enabled": True,
+            "asset_probe_success": True,
+            "selectable": True,
+        }
+        assert profile["scientific_validation"]["lane"] == validation_lane
+        assert profile["scientific_validation"]["version"] == "1.0.0"
+        assert profile["runtime_identity"] == preparation_probe.runtime_identity.as_public_dict()
 
-    assert modern["states"]["installed"] is True
-    assert modern["states"]["runtime_validated"] is True
-    assert modern["states"]["scientifically_validated"] is False
-    assert modern["states"]["operator_enabled"] is False
-    assert modern["states"]["selectable"] is False
-    assert modern["runtime_identity"] == preparation_probe.runtime_identity.as_public_dict()
 
-
-def test_candidate_profile_qualification_lane_is_explicit_dev_only(
+def test_accepted_protein_profile_does_not_require_dev_qualification_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = _catalog_module()
@@ -304,19 +321,14 @@ def test_candidate_profile_qualification_lane_is_explicit_dev_only(
         "force_field": "ff19SB",
         "water_model": "opc",
         "engine": "gromacs",
-        "requested_scope": "modern_protein_candidate",
+        "requested_scope": "modern_protein",
     }
 
-    monkeypatch.setenv("BMS_RUNTIME_MODE", "dev")
-    monkeypatch.setenv("BMS_MD_QUALIFICATION_PROFILE_IDS", modern["id"])
+    monkeypatch.setenv("BMS_RUNTIME_MODE", "production")
+    monkeypatch.delenv("BMS_MD_QUALIFICATION_PROFILE_IDS", raising=False)
     selected = catalog.validate_v1_profile_selection(**selection)
     assert selected["id"] == modern["id"]
-    assert selected["states"]["selectable"] is False
-
-    monkeypatch.setenv("BMS_RUNTIME_MODE", "production")
-    with pytest.raises(module.ChemistryProfileSelectionError) as error:
-        catalog.validate_v1_profile_selection(**selection)
-    assert error.value.code == "MD_CHEMISTRY_PROFILE_UNAVAILABLE"
+    assert selected["states"]["selectable"] is True
 
 
 def test_lifecycle_control_profile_is_dev_qualification_only(
@@ -359,7 +371,7 @@ def test_lifecycle_control_profile_is_dev_qualification_only(
     assert error.value.code == "MD_CHEMISTRY_PROFILE_UNAVAILABLE"
 
 
-def test_ff19sb_ol15_opc_profile_is_runtime_qualified_but_not_selectable_or_scientifically_validated() -> None:
+def test_ff19sb_ol15_opc_profile_is_runtime_and_scientifically_validated() -> None:
     module = _catalog_module()
     preparation_probe = module.RuntimeProbeResult(
         runtime_id="md-preparation-v1",
@@ -381,16 +393,16 @@ def test_ff19sb_ol15_opc_profile_is_runtime_qualified_but_not_selectable_or_scie
     assert profile["states"] == {
         "installed": True,
         "runtime_validated": True,
-        "scientifically_validated": False,
-        "operator_enabled": False,
+        "scientifically_validated": True,
+        "operator_enabled": True,
         "asset_probe_success": True,
-        "selectable": False,
+        "selectable": True,
     }
     assert profile["runtime_identity"] == preparation_probe.runtime_identity.as_public_dict()
     assert profile["scientific_validation"]["scope"]["system_classes"] == ["protein_dna_complex"]
 
 
-def test_modern_profiles_remain_nonselectable_candidates_when_assets_are_absent() -> None:
+def test_accepted_modern_profile_fails_closed_when_runtime_assets_are_absent() -> None:
     catalog = _stock_catalog("amber99sb-ildn.ff")
 
     modern = _profile(catalog, "amber_ff19sb_opc_protein_v1")
@@ -398,12 +410,14 @@ def test_modern_profiles_remain_nonselectable_candidates_when_assets_are_absent(
     assert modern["inventory_class"] == "candidate"
     assert modern["states"]["installed"] is False
     assert modern["states"]["runtime_validated"] is False
-    assert modern["states"]["scientifically_validated"] is False
+    assert modern["states"]["scientifically_validated"] is True
+    assert modern["states"]["operator_enabled"] is True
+    assert modern["states"]["asset_probe_success"] is False
     assert modern["states"]["selectable"] is False
     assert modern["launch_constraints"]["structure_sha256"] == (
         "c75d7a689617248cdd92dc6633531d2506fb9bef1e6e21e26c8f579ae6955abb"
     )
-    assert "candidate" in modern["availability_explanation"].lower()
+    assert "runtime" in modern["availability_explanation"].lower()
 
 
 @pytest.mark.parametrize(

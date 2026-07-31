@@ -1,15 +1,15 @@
 schema: bms.md.chemistry-profile.v1
 id: amber_ff19sb_opc_protein_v1
-version: 1.0.0-candidate
-display_name: AMBER ff19SB + OPC protein candidate
+version: 1.0.0
+display_name: AMBER ff19SB + OPC protein
 family: amber
 assurance: curated_profile
 legacy: false
 automatic_preparation: true
-inventory_class: candidate
+inventory_class: selectable
 installed: true
 runtime_validated: true
-operator_enabled: false
+operator_enabled: true
 supported_engines:
   - gromacs
   - openmm
@@ -43,19 +43,19 @@ asset_probe:
     - water/opc
     - ions/opc-monovalent-pinned
 scientific_validation:
-  validated: false
-  lane: null
-  version: null
+  validated: true
+  lane: gromacs_1aki_protein_v1
+  version: 1.0.0
   scope:
-    launch_scope: modern_protein_candidate
+    launch_scope: modern_protein
     system_classes:
       - soluble_folded_protein
     composition: protein with supported canonical residues and no ligand, nucleic acid, membrane, or catalytic metal
-    protocol: validation plan not yet executed
-    ionic_conditions: exact OPC-compatible monovalent ion release pending installation
+    protocol: governed 1AKI short-GPU preparation, 0-10 ps trajectory, lifecycle, artifact, provenance, and playback acceptance
+    ionic_conditions: pinned OPC-compatible monovalent-ion preparation and runtime accepted
     observables:
       - folded-state ensemble stability
       - replica-aware structural quality controls
 explicit_exclusions:
-  - automatic launch before asset, runtime, and scientific promotion gates pass
+  - long-timescale or production-science claims beyond the accepted short-GPU lane
   - nucleic acids, ligands, membranes, and catalytic metals
