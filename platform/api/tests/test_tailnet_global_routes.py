@@ -60,6 +60,42 @@ def test_global_tailnet_policy_adds_managed_routes_removes_exact_dead_routes_and
         assert installed.handlers[path] == {"Proxy": target}
 
 
+def test_global_tailnet_policy_migrates_exact_legacy_stats_embed_target(monkeypatch) -> None:
+    legacy_target = "http://127.0.0.1:18180"
+    expected_target = tailnet.GLOBAL_SERVE_HANDLERS["/stats/embed"]
+    handlers: dict[str, dict[str, str]] = {
+        "/": {"Proxy": "http://127.0.0.1:5173"},
+        "/stats/embed": {"Proxy": legacy_target},
+        **{
+            path: {"Proxy": target}
+            for path, target in tailnet.GLOBAL_SERVE_HANDLERS.items()
+            if path != "/stats/embed"
+        },
+    }
+
+    def snapshot() -> tailnet.ServeSnapshot:
+        return tailnet.ServeSnapshot(
+            origin="https://node.example.ts.net",
+            root_proxy=handlers["/"]["Proxy"],
+            handlers={path: dict(handler) for path, handler in handlers.items()},
+            raw={"handlers": {path: dict(handler) for path, handler in handlers.items()}},
+        )
+
+    set_calls: list[tuple[str, str]] = []
+
+    def set_path(path: str, target: str) -> None:
+        set_calls.append((path, target))
+        handlers[path] = {"Proxy": target}
+
+    monkeypatch.setattr(tailnet, "_read_serve_snapshot", snapshot)
+    monkeypatch.setattr(tailnet, "_set_serve_path", set_path)
+
+    installed = tailnet.ensure_global_tailnet_routes()
+
+    assert set_calls == [("/stats/embed", expected_target)]
+    assert installed.handlers["/stats/embed"] == {"Proxy": expected_target}
+
+
 def test_global_tailnet_policy_preserves_reassigned_deprecated_path(monkeypatch) -> None:
     handlers = {
         "/": {"Proxy": "http://127.0.0.1:5173"},

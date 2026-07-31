@@ -61,6 +61,12 @@ GLOBAL_SERVE_HANDLERS: Mapping[str, str] = {
     "/stats/embed/api/v1/capabilities": f"{STATS_TOOLKIT_TARGET}/api/v1/capabilities",
     "/stats/embed/api/v1/tools": f"{STATS_TOOLKIT_TARGET}/api/v1/tools",
 }
+LEGACY_GLOBAL_SERVE_HANDLERS: Mapping[str, frozenset[str]] = {
+    # The original embed mapping mounted the Stats server root. The governed
+    # application now lives at /stats; allow only this exact prior target to be
+    # migrated transactionally while continuing to reject foreign owners.
+    "/stats/embed": frozenset({STATS_TOOLKIT_TARGET}),
+}
 DEPRECATED_SERVE_HANDLERS: Mapping[str, str] = {
     "/am": "http://127.0.0.1:5174/am",
     "/vlm": "http://127.0.0.1:8010",
@@ -279,6 +285,8 @@ def _set_serve_path(path: str, target: str) -> None:
     allowed_targets[CONTROL_PATH] = CONTROL_TARGET
     if path == CONTROL_PATH and target == LEGACY_CONTROL_TARGET:
         pass
+    elif target in LEGACY_GLOBAL_SERVE_HANDLERS.get(path, frozenset()):
+        pass
     elif allowed_targets.get(path) != target:
         raise TailnetEnvironmentError("refusing an unexpected global Tailnet path mapping")
     parsed = urllib.parse.urlsplit(target)
@@ -374,6 +382,7 @@ def ensure_global_tailnet_routes() -> ServeSnapshot:
             allowed_existing = {target}
             if path == CONTROL_PATH:
                 allowed_existing.add(LEGACY_CONTROL_TARGET)
+            allowed_existing.update(LEGACY_GLOBAL_SERVE_HANDLERS.get(path, frozenset()))
             if existing_target not in allowed_existing:
                 raise TailnetEnvironmentError(
                     f"global Tailnet path {path} is already owned by an unexpected target: {existing}"
