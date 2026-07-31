@@ -566,7 +566,6 @@ async def _commit_reconciled_job_mutations(session: Any) -> int:
     """
     from sqlalchemy import inspect, update
     from database import Job, MdRun
-    from services.md.state import TERMINAL_PHASES
 
     pending: list[tuple[str, dict[str, Any]]] = []
     for candidate in list(session.dirty):
@@ -581,7 +580,11 @@ async def _commit_reconciled_job_mutations(session: Any) -> int:
             # may publish the matching terminal status onto Job.
             with session.no_autoflush:
                 md_run = await session.get(MdRun, str(candidate.id), populate_existing=True)
-            if md_run is not None and md_run.phase not in TERMINAL_PHASES:
+            lifecycle_owned_phases = {
+                "replicas_queued", "replicas_running", "checkpointing", "paused",
+                "cancelling", "reconciling", "finalizing",
+            }
+            if md_run is not None and str(md_run.phase) in lifecycle_owned_phases:
                 session.expunge(candidate)
                 continue
         state = inspect(candidate)
