@@ -162,9 +162,25 @@ def _reconcile_legacy_ont_migration_versions(conn: sqlite3.Connection) -> None:
         raise
 
 
-def _get_applied_versions(conn: sqlite3.Connection) -> set[int]:
-    rows = conn.execute("SELECT version FROM schema_migrations").fetchall()
-    return {row[0] for row in rows}
+def _get_applied_migrations(conn: sqlite3.Connection) -> dict[int, str]:
+    rows = conn.execute("SELECT version, name FROM schema_migrations").fetchall()
+    return {int(version): str(name) for version, name in rows}
+
+
+def _validate_applied_migration_identities(applied: dict[int, str]) -> None:
+    expected_by_version = {migration.version: migration.name for migration in MIGRATIONS}
+    expected_by_name = {migration.name: migration.version for migration in MIGRATIONS}
+    for version, name in applied.items():
+        expected_name = expected_by_version.get(version)
+        if expected_name is not None and name != expected_name:
+            raise RuntimeError(
+                f"schema migration version {version} is recorded as {name!r}; expected {expected_name!r}"
+            )
+        expected_version = expected_by_name.get(name)
+        if expected_version is not None and version != expected_version:
+            raise RuntimeError(
+                f"schema migration {name!r} is recorded at version {version}; expected version {expected_version}"
+            )
 
 
 def _run_migration(migration: Migration, db_path: str) -> None:
@@ -181,7 +197,8 @@ def run_all(db_path: str | None = None) -> None:
     try:
         _ensure_migrations_table(conn)
         _reconcile_legacy_ont_migration_versions(conn)
-        applied = _get_applied_versions(conn)
+        applied = _get_applied_migrations(conn)
+        _validate_applied_migration_identities(applied)
 
         for mig in MIGRATIONS:
             if mig.version in applied:

@@ -4,6 +4,8 @@ import sqlite3
 
 import pytest
 
+from migrations import runner
+
 from migrations.runner import (
     MIGRATIONS,
     _ensure_migrations_table,
@@ -81,3 +83,20 @@ def test_legacy_ont_remap_fails_closed_and_rolls_back_on_unrelated_collision() -
         (17, "add_ont_instrument_run_ledger"),
         (18, "unrelated_migration"),
     ]
+
+
+def test_runner_fails_closed_when_applied_version_has_wrong_name(tmp_path) -> None:
+    db_path = tmp_path / "wrong-migration-name.db"
+    connection = sqlite3.connect(db_path)
+    _ensure_migrations_table(connection)
+    _insert_rows(
+        connection,
+        tuple(
+            (migration.version, "unrelated_migration" if migration.version == 18 else migration.name)
+            for migration in MIGRATIONS
+        ),
+    )
+    connection.close()
+
+    with pytest.raises(RuntimeError, match="version 18.*unrelated_migration.*add_ont_instrument_run_ledger"):
+        runner.run_all(str(db_path))

@@ -114,7 +114,20 @@ def _option_snapshot(position: str, host_payload: dict[str, Any]) -> dict[str, A
 
 
 def _catalog_blockers(host_payload: dict[str, Any]) -> list[str]:
-    blockers = [str(item) for item in (host_payload.get("blockers") or [])]
+    public_reasons = {
+        "flowcell_absent",
+        "position_already_running",
+        "kit_missing",
+        "basecalling_model_missing",
+        "output_directory_missing",
+        "protocol_unavailable",
+    }
+    blockers: list[str] = []
+    for item in host_payload.get("blockers") or []:
+        reason = str(item)
+        public_reason = reason if reason in public_reasons else "host_preflight_unavailable"
+        if public_reason not in blockers:
+            blockers.append(public_reason)
     if not str(host_payload.get("protocol_id") or "").strip() and "protocol_unavailable" not in blockers:
         blockers.append("protocol_unavailable")
     return blockers
@@ -201,7 +214,7 @@ def refresh_position_state(position: str) -> dict[str, Any]:
 
 
 def restart_position(position: str, payload: dict[str, Any]) -> dict[str, Any]:
-    if not bool(payload.get("confirm_restart")):
+    if payload.get("confirm_restart") is not True:
         raise ValueError("confirm_restart=true is required before requesting an ONT instrument restart")
     host_payload = request_host_agent("POST", f"/ont/positions/{position}/restart", payload)
     if not isinstance(host_payload, dict):
@@ -680,7 +693,7 @@ async def validate_armed_intent_start(run_id: str, payload: dict[str, Any]) -> d
     """Freshly validate an intent but deliberately do not issue a MinKNOW start."""
     if not isinstance(payload, dict) or set(payload) - {"confirm_start", "intent_generation"}:
         raise ValueError("start accepts only confirm_start and the current intent_generation")
-    if not bool(payload.get("confirm_start")):
+    if payload.get("confirm_start") is not True:
         raise ValueError("confirm_start=true is required before validating a MinKNOW run intent")
     async with async_session() as session:
         record = await _load_run(session, run_id)
@@ -873,7 +886,7 @@ async def build_plasmid_qc_handoff(run_id: str, payload: dict[str, Any]) -> dict
 
 
 async def stop_instrument_run(run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    if not bool(payload.get("confirm_stop")):
+    if payload.get("confirm_stop") is not True:
         raise ValueError("confirm_stop=true is required before stopping a MinKNOW run")
     async with async_session() as session:
         record = await _load_run(session, run_id)

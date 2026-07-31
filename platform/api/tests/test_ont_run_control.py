@@ -229,12 +229,9 @@ def test_restart_position_requires_confirmation_but_remains_host_agent_contract(
 
     monkeypatch.setattr(ont_run_control, "request_host_agent", fake_request)
 
-    try:
-        ont_run_control.restart_position("MD-105428", {"confirm_restart": False})
-    except ValueError as exc:
-        assert "confirm_restart" in str(exc)
-    else:  # pragma: no cover - assertion guard
-        raise AssertionError("restart should require explicit confirmation")
+    for invalid_confirmation in (False, "false", 1, None):
+        with pytest.raises(ValueError, match="confirm_restart"):
+            ont_run_control.restart_position("MD-105428", {"confirm_restart": invalid_confirmation})
 
     payload = ont_run_control.restart_position("MD-105428", {"confirm_restart": True})
 
@@ -310,6 +307,46 @@ def test_protocol_catalog_issues_opaque_receipts_without_exposing_protocol_paths
     assert "output_directories" not in payload
     assert "/var/lib/minknow/data" not in response.text
     assert "dna_r10.4.1_e8.2_400bps_sup" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_intent_start_requires_literal_true_before_database_access() -> None:
+    for invalid_confirmation in (False, "false", 1, None):
+        with pytest.raises(ValueError, match="confirm_start"):
+            await ont_run_control.validate_armed_intent_start(
+                "not-loaded",
+                {"confirm_start": invalid_confirmation, "intent_generation": 1},
+            )
+
+
+def test_protocol_catalog_maps_arbitrary_host_blockers_to_finite_public_reason() -> None:
+    blockers = ont_run_control._catalog_blockers(
+        {
+            "protocol_id": "opaque-internal-protocol",
+            "blockers": ["flowcell_absent", "/secret/path: protocol internal-id failed"],
+        }
+    )
+
+    assert blockers == ["flowcell_absent", "host_preflight_unavailable"]
+    assert "/secret" not in " ".join(blockers)
+
+
+def test_browser_stop_endpoint_is_tombstoned_before_service_dispatch(monkeypatch) -> None:
+    app = FastAPI()
+    app.include_router(ont_runs.router, prefix="/api/ont")
+    client = TestClient(app)
+
+    async def forbidden_dispatch(*_args, **_kwargs):
+        raise AssertionError("browser stop route must not dispatch to the ONT service")
+
+    monkeypatch.setattr(ont_run_control, "stop_instrument_run", forbidden_dispatch)
+
+    response = client.post("/api/ont/runs/run-1/stop", json={"confirm_stop": True})
+
+    assert response.status_code == 410
+    assert response.json() == {
+        "detail": "Browser-initiated ONT physical stop is retired; use the separately supervised instrument-control lane."
+    }
 
 
 def test_protocol_catalog_returns_graceful_no_flowcell_blocker_without_option_receipt(monkeypatch) -> None:
@@ -624,8 +661,9 @@ async def test_stop_retained_server_operation_returns_only_safe_projection(monke
         return {"status": "stopped", "output_directories": {"reads": "/private/stop-output"}}
 
     monkeypatch.setattr(ont_run_control, "request_host_agent", fake_request)
-    with pytest.raises(ValueError, match="confirm_stop"):
-        await stop_instrument_run(run_id, {"confirm_stop": False})
+    for invalid_confirmation in (False, "false", 1, None):
+        with pytest.raises(ValueError, match="confirm_stop"):
+            await stop_instrument_run(run_id, {"confirm_stop": invalid_confirmation})
     stopped = await stop_instrument_run(run_id, {"confirm_stop": True})
 
     assert stopped["status"] == "stopped"

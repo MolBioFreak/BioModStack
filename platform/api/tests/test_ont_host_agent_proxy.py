@@ -336,3 +336,50 @@ def test_normalize_minknow_run_id_histories_and_current_hardware_check() -> None
     current = ont_minknow_host.normalize_current_protocol(Current())
     assert current["run_id"] == "hardware-run"
     assert current["hardware_check_like"] is True
+
+
+def test_observe_run_never_treats_pending_as_completed(monkeypatch) -> None:
+    from lib import ont_minknow_host  # noqa: PLC0415
+
+    monkeypatch.setattr(
+        ont_minknow_host,
+        "discover_status",
+        lambda: {
+            "implementation_status": ont_minknow_host.MINKNOW_STATUS_CONFIGURED,
+            "live_devices": [
+                {
+                    "running": False,
+                    "current_protocol": None,
+                    "protocol_runs": [{"run_id": "run-pending", "state": "pending"}],
+                    "acquisition_runs": [],
+                }
+            ],
+        },
+    )
+
+    assert ont_minknow_host.observe_run("run-pending")["status"] == "unknown"
+
+
+def test_protocol_run_state_uses_protobuf_enum_name() -> None:
+    from lib import ont_minknow_host  # noqa: PLC0415
+
+    class EnumValue:
+        name = "PROTOCOL_STATE_RUNNING"
+
+    class EnumType:
+        values_by_number = {2: EnumValue()}
+
+    class Field:
+        enum_type = EnumType()
+
+    class Descriptor:
+        fields_by_name = {"state": Field()}
+
+    class Run:
+        DESCRIPTOR = Descriptor()
+        run_id = "run-enum"
+        state = 2
+
+    normalized = ont_minknow_host.normalize_protocol_run(Run())
+
+    assert normalized["state"] == "PROTOCOL_STATE_RUNNING"

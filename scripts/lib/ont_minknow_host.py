@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+import re
 from typing import Any, Callable, Iterable
 
 DEFAULT_MINKNOW_HOST = "localhost"
@@ -132,7 +133,7 @@ def normalize_protocol_run(run: Any) -> dict[str, Any]:
     for key in ("run_id", "protocol_id", "identifier", "state", "phase", "sample_id", "experiment_group", "user_info"):
         value = _safe_get(run, key)
         if value is not None:
-            result[key] = _string_or_none(value) or value
+            result[key] = _enum_name(run, key, value) or _string_or_none(value) or value
     text = str(run)
     if "hardware" in text.lower() or "flowcell_check" in text.lower() or "platform_qc" in text.lower():
         result["hardware_check_like"] = True
@@ -152,7 +153,7 @@ def normalize_acquisition_run(run: Any) -> dict[str, Any]:
     for key in ("run_id", "state", "status", "start_time", "end_time"):
         value = _safe_get(run, key)
         if value is not None:
-            result[key] = _string_or_none(value) or value
+            result[key] = _enum_name(run, key, value) or _string_or_none(value) or value
     return result or {"raw": str(run)[:1200]}
 
 
@@ -170,7 +171,7 @@ def normalize_current_protocol(protocol_run: Any) -> dict[str, Any] | None:
     for key in ("run_id", "protocol_id", "phase", "state", "sample_id", "experiment_group"):
         value = _safe_get(protocol_run, key)
         if value is not None:
-            result[key] = _string_or_none(value) or value
+            result[key] = _enum_name(protocol_run, key, value) or _string_or_none(value) or value
     protocol_text = str(result.get("protocol_id") or "").lower()
     raw_text = str(protocol_run).lower()
     if "hardware_check" in protocol_text or "hardware_validation" in protocol_text or "hardwarecheck" in raw_text:
@@ -464,11 +465,12 @@ def observe_run(minknow_run_id: str) -> dict[str, Any]:
         if matching is None:
             continue
         raw_state = str(matching.get("state") or matching.get("status") or "").strip().lower()
-        if any(token in raw_state for token in ("fail", "error")):
+        state_tokens = frozenset(token for token in re.split(r"[^a-z0-9]+", raw_state) if token)
+        if state_tokens & {"failed", "failure", "error"}:
             observed = "failed"
-        elif any(token in raw_state for token in ("stop", "cancel", "abort")):
+        elif state_tokens & {"stop", "stopped", "cancel", "canceled", "cancelled", "abort", "aborted"}:
             observed = "stopped"
-        elif any(token in raw_state for token in ("complete", "finish", "end")):
+        elif state_tokens & {"complete", "completed", "finish", "finished", "end", "ended"}:
             observed = "completed"
         elif bool(device.get("running")) or matching is current:
             observed = "active"

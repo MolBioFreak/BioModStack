@@ -198,7 +198,7 @@ test('NGS instrument control uses only opaque intent handles and has no browser 
     assert.match(api, /option_id: string/u);
     assert.match(api, /option_receipt_id: string/u);
     assert.match(api, /intent_generation: number/u);
-    assert.doesNotMatch(api, /startOntInstrumentRun|beginOntHardwareCheck|refreshOntPosition|restartOntPosition/u);
+    assert.doesNotMatch(api, /startOntInstrumentRun|stopOntInstrumentRun|beginOntHardwareCheck|refreshOntPosition|restartOntPosition/u);
     assert.doesNotMatch(ontApi, /flow_cell_id|protocol_id|model_id|output_director(?:y|ies)|minknow_payload|output_files|hardware_check_run_id/u);
     assert.match(panel, /submit its opaque protocol intent/u);
     assert.match(panel, /Protocol and output policy are server-issued opaque handles/u);

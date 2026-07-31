@@ -3352,9 +3352,6 @@ export const startOntRunIntent = (runId: string, payload: { confirm_start: boole
 export const fetchOntInstrumentRun = (runId: string) =>
     api.get<OntInstrumentRun>(`/api/ont/runs/${encodeURIComponent(runId)}`);
 
-export const stopOntInstrumentRun = (runId: string, payload: { confirm_stop: boolean }) =>
-    api.post<OntInstrumentRun>(`/api/ont/runs/${encodeURIComponent(runId)}/stop`, payload);
-
 export interface ViewerVolumeInventoryV1 {
     readonly schema: 'bms.viewer.volume-list.v1';
     readonly jobId: string;

@@ -737,9 +737,8 @@ async def ont_submit_plasmid_qc_from_run(
 
 @router.post("/runs/{run_id}/stop")
 async def ont_stop_instrument_run(run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    try:
-        return await ont_run_control.stop_instrument_run(run_id, payload)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=f"unknown ONT instrument run: {run_id}") from exc
+    del run_id, payload
+    raise HTTPException(
+        status_code=410,
+        detail="Browser-initiated ONT physical stop is retired; use the separately supervised instrument-control lane.",
+    )
