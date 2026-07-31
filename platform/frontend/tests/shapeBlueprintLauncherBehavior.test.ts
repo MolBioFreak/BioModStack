@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
 import ShapeBlueprintTemplate from '../src/components/ShapeBlueprintTemplate.js';
+import CanonicalMeshPreview from '../src/components/CanonicalMeshPreview.js';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean; React: typeof React }).IS_REACT_ACT_ENVIRONMENT = true;
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
@@ -29,6 +30,56 @@ const numberInput = (root: ReactTestInstance, min: number, max: number) => {
     assert.ok(input, `number input ${min}..${max} was not rendered`);
     return input;
 };
+
+test('canonical surface canvas clears immediately when its URL changes', async () => {
+    const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: { devicePixelRatio: 1 } });
+    const originalFetch = globalThis.fetch;
+    const pending = new Map<string, (response: Response) => void>();
+    globalThis.fetch = ((input: RequestInfo | URL) => new Promise<Response>((resolve) => {
+        pending.set(String(input), resolve);
+    })) as typeof fetch;
+    let clearCount = 0;
+    const context = {
+        setTransform() {}, clearRect() { clearCount += 1; }, fillRect() {},
+        beginPath() {}, moveTo() {}, lineTo() {}, closePath() {}, fill() {}, stroke() {},
+        fillStyle: '', strokeStyle: '', lineWidth: 0,
+    } as unknown as CanvasRenderingContext2D;
+    const canvas = {
+        width: 0,
+        height: 0,
+        getBoundingClientRect: () => ({ width: 900 }),
+        getContext: () => context,
+    };
+    const obj = '# bms_shape_canonical_obj_v1\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n';
+    let renderer: ReactTestRenderer;
+
+    try {
+        await act(async () => {
+            renderer = create(
+                React.createElement(CanonicalMeshPreview, { url: '/geometry-a.obj', label: 'surface' }),
+                { createNodeMock: (element) => element.type === 'canvas' ? canvas : null },
+            );
+        });
+        await act(async () => {
+            pending.get('/geometry-a.obj')!({ ok: true, status: 200, text: async () => obj } as Response);
+            await Promise.resolve();
+            await Promise.resolve();
+        });
+        const afterFirstDraw = clearCount;
+        assert.ok(afterFirstDraw > 0);
+
+        await act(async () => {
+            renderer!.update(React.createElement(CanonicalMeshPreview, { url: '/geometry-b.obj', label: 'surface' }));
+        });
+        assert.ok(clearCount > afterFirstDraw, 'URL change must clear stale surface pixels before the next fetch resolves');
+        await act(async () => { renderer!.unmount(); });
+    } finally {
+        globalThis.fetch = originalFetch;
+        if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow);
+        else Reflect.deleteProperty(globalThis, 'window');
+    }
+});
 
 test('Shape Blueprint numeric state stays within the API integer contract', async () => {
     memory.clear();

@@ -259,7 +259,8 @@ def test_self_intersection_gate_rejects_crossing_faces_that_share_one_vertex() -
     assert exc.value.code == "self_intersection"
 
 
-def test_self_intersection_validation_is_translation_invariant() -> None:
+@pytest.mark.parametrize("angstrom_per_unit", [1.0, 10_000_000_000.0])
+def test_self_intersection_validation_is_translation_invariant(angstrom_per_unit: float) -> None:
     geometry = _geometry()
 
     def transformed_cube(offset: float) -> bytes:
@@ -273,8 +274,8 @@ def test_self_intersection_validation_is_translation_invariant() -> None:
                 lines.append(raw_line)
         return ("\n".join(lines) + "\n").encode("ascii")
 
-    at_origin = geometry.canonicalize_obj(transformed_cube(0.0), angstrom_per_unit=1.0)
-    translated = geometry.canonicalize_obj(transformed_cube(1e16), angstrom_per_unit=1.0)
+    at_origin = geometry.canonicalize_obj(transformed_cube(0.0), angstrom_per_unit=angstrom_per_unit)
+    translated = geometry.canonicalize_obj(transformed_cube(1e16), angstrom_per_unit=angstrom_per_unit)
 
     assert translated.vertices_f64 == at_origin.vertices_f64
     assert translated.faces_u32 == at_origin.faces_u32

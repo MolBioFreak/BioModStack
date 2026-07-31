@@ -596,10 +596,10 @@ def _canonicalize_parsed(
     source_manifest: dict[str, object] | None = None,
 ) -> CanonicalGeometry:
     source_sha256 = hashlib.sha256(payload).hexdigest()
-    vertices = vertices * float(angstrom_per_unit)
     anchor = vertices[0].copy()
     vertices = vertices - anchor
     vertices = vertices - vertices.mean(axis=0)
+    vertices = vertices * float(angstrom_per_unit)
     _validate_topology(vertices, faces)
     faces, _ = _positive_oriented(vertices, faces)
     vertices = vertices - _volume_centroid(vertices, faces)

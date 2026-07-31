@@ -70,7 +70,7 @@ export default function CanonicalMeshPreview({ url, label, height = 430 }: Canon
 
     useEffect(() => {
         const canvas = canvasRef.current;
-        if (!canvas || !mesh) return;
+        if (!canvas) return;
         const cssWidth = Math.max(320, Math.floor(canvas.getBoundingClientRect().width || 900));
         const ratio = Math.min(window.devicePixelRatio || 1, 2);
         canvas.width = Math.floor(cssWidth * ratio);
@@ -81,6 +81,7 @@ export default function CanonicalMeshPreview({ url, label, height = 430 }: Canon
         context.clearRect(0, 0, cssWidth, height);
         context.fillStyle = '#020617';
         context.fillRect(0, 0, cssWidth, height);
+        if (!mesh) return;
 
         const yawRadians = yaw * Math.PI / 180;
         const pitchRadians = pitch * Math.PI / 180;
