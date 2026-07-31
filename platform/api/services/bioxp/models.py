@@ -85,6 +85,7 @@ class BioXpSnapshot(BaseModel):
     command_active: bool = False
     startup_lifecycle: dict[str, Any] | None = None
     maintenance_state: dict[str, Any] | None = None
+    ownership: dict[str, Any] | None = None
 
 
 class RobotObservation(BaseModel):

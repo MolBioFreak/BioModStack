@@ -20,6 +20,7 @@ class CommandAdmissionContext:
     capabilities: frozenset[str]
     startup_lifecycle: dict[str, Any] | None = None
     maintenance_state: dict[str, Any] | None = None
+    ownership: dict[str, Any] | None = None
 
 
 def evaluate_command(
@@ -47,9 +48,37 @@ def evaluate_command(
     if definition.required_capability is not None and definition.required_capability not in context.capabilities:
         reasons.append(f"Required capability is unavailable: {definition.required_capability}")
     reasons.extend(maintenance_state_reasons(definition, context.maintenance_state))
+    reasons.extend(ownership_state_reasons(definition, context.ownership))
     reasons.extend(required_lifecycle_state_reasons(definition, context.startup_lifecycle))
     reasons.extend(lifecycle_stage_reasons(definition, context.startup_lifecycle))
     return ControlDecision(allowed=not reasons, reasons=tuple(reasons))
+
+
+def ownership_state_reasons(
+    definition: CommandDefinition,
+    ownership: dict[str, Any] | None,
+) -> tuple[str, ...]:
+    policy = definition.ownership_policy
+    if policy == "independent":
+        return ()
+    if not isinstance(ownership, dict):
+        return ("Robot transport ownership is unavailable",)
+    transport = ownership.get("transport")
+    usb = ownership.get("usb")
+    router = ownership.get("router")
+    if policy == "owned":
+        if transport == "owned" and usb == "service" and router == "running":
+            return ()
+        return (
+            f"Robot transport is not service-owned and running "
+            f"(transport={transport!r}, usb={usb!r}, router={router!r})",
+        )
+    if transport == "unbound" and usb == "unbound" and router == "unbound":
+        return ()
+    return (
+        f"Robot transport is already claimed or not explicitly fully unbound "
+        f"(transport={transport!r}, usb={usb!r}, router={router!r})",
+    )
 
 
 def maintenance_state_reasons(

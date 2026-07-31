@@ -525,6 +525,49 @@ export const submitJob = (jobData: Partial<Job>) => {
     return api.post('/api/jobs', jobData);
 };
 
+export interface ShapeGeometrySummary {
+    geometry_id: string;
+    source_id: string;
+    geometry_sha256: string;
+    source_sha256: string;
+    point_pool_sha256: string;
+    sdf_sha256: string;
+    sdf_sign: 'positive_inside';
+    sdf_grid_shape: [number, number, number];
+    vertex_count: number;
+    face_count: number;
+    point_count: number;
+    bounds_angstrom: [number, number, number, number, number, number];
+}
+
+export interface ShapeLaunchRequest {
+    client_request_id: string;
+    name: string;
+    geometry_id: string;
+    expected_geometry_sha256: string;
+    expected_point_pool_sha256: string;
+    target_length: number;
+    num_backbones: number;
+    sequences_per_backbone: number;
+    seed: number;
+}
+
+export const listShapeGeometries = () =>
+    api.get<{ geometries: ShapeGeometrySummary[] }>('/api/shape-blueprint/geometries');
+
+export const uploadShapeGeometry = (file: File, unit: string) => {
+    const body = new FormData();
+    body.append('file', file);
+    body.append('unit', unit);
+    return api.post<ShapeGeometrySummary>('/api/shape-blueprint/geometries', body);
+};
+
+export const submitShapeBlueprint = (request: ShapeLaunchRequest) =>
+    api.post<{ request_id: string; request_sha256: string; job_id: string; job_status: string; reused: boolean }>(
+        '/api/shape-blueprint/requests',
+        request,
+    );
+
 export interface BoltzApiStructureRequest {
     name: string;
     client_request_id: string;

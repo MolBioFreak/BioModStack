@@ -1,44 +1,48 @@
-# BioModStack Agent Guide
+# BioModStack Service Guide
 
-## Scope
+## Purpose
 
-BioModStack is a small-team scientific workbench. Keep the repository to code, configuration, tests, schemas, reproducible runtime definitions, and the intentionally tracked mobile APK. Do not add plans, status reports, explainers, generated build output, caches, credentials, or historical source copies.
+BioModStack is operated as a managed service. Keep the repository limited to code, configuration, schemas, tests, reproducible runtime definitions, and approved release assets. Do not commit generated output, caches, credentials, local databases, logs, temporary scripts, historical copies, or unused/deprecated implementation code.
 
-## Git policy
+## Branch model
 
-- `test` is the only development and integration branch.
-- `main` is the production/default branch. Never push or merge into it unless Christian explicitly requests a `test → main` promotion.
-- Before editing, fetch and record the remote `test` SHA. Rebase a candidate on the current remote tip before pushing.
-- Do not force-push, reset remote branches, or bulk-merge historical experimental branches.
-- Integrate only current, tested semantic slices; reject older code that weakens current contracts.
+- `test` is the sole development and integration branch.
+- `main` is the production/default branch.
+- Develop, test, and integrate on `test`; create a reviewed `test → main` promotion only when the release owner authorizes it.
+- Before any push, fetch the remote branch, rebase or otherwise reconcile with its current tip, run focused validation, and verify the remote SHA after the push.
+- Never force-push, reset shared branches, or bulk-merge historical experimental branches. Port only current, tested behavior.
 
-## Runtime ownership
+## Standard service operation
 
-- Operator frontend: `http://127.0.0.1:5173`
-- Managed API: `http://127.0.0.1:8000`
-- Managed database: `/mnt/BioModStack/biomodstack.db`
-- The frontend must not proxy an isolated API at port `18002`.
-- Prove the source owner, listener, API, and branch SHA before claiming a deployment is live.
+1. Install dependencies from the repository’s locked manifests. Do not substitute package managers or rewrite lockfiles unless dependency work is intentional.
+2. Configure service settings through the supported environment/config files; never hard-code host-specific paths, addresses, credentials, or port numbers into source.
+3. Start the managed API, frontend, worker/workflow services, and optional desktop shell through the repository’s supported service/launcher commands.
+4. Confirm service ownership using the actual process, listener, health/readiness, source revision, and database identity before treating a service as live.
+5. Stop or restart services only through their supported management path. Snapshot or preserve meaningful state before migration, restore, or destructive maintenance.
 
-## Validation
+## Development versus production
 
-- Python API tests: run from `platform/api` with:
+- **Development:** use `test`, development configuration, isolated development state, and local/managed development services. Validate behavior here first.
+- **Production:** use `main`, production configuration, managed persistent state, and the approved deployment path. Do not make direct source edits or ad-hoc service substitutions in production.
+- A service is not deployed merely because code was pushed. Prove the deployed revision and runtime ownership separately.
+
+## Tailnet / Tailscale Serve
+
+- Use Tailscale Serve only as the supported private ingress layer in front of an already healthy managed service.
+- Bind the application service according to its own configuration; configure Serve to forward to that supported local listener rather than adding a second application server or proxy implementation.
+- Keep the ingress configuration declarative and reviewable. Confirm the configured target, HTTPS/Tailnet origin, service health, and access policy after changes.
+- Do not expose administrative, maintenance, recovery, motion, or secret-bearing endpoints merely by publishing an ingress route. Preserve the application’s existing authorization and admission controls.
+
+## Orchestration and validation
+
+- Use the API/workflow registry and supported launch paths. Do not invoke detached scripts or retired Nextflow workflows as production orchestration.
+- Run focused tests from the owning subsystem. For the Python API, run from `platform/api`:
   ```bash
   uv run --frozen --group dev python -m pytest <focused tests>
   ```
-- Frontend: use the repository pnpm workspace/lockfile; do not replace it with npm or alter lockfiles unless dependency work is deliberate.
-- Run `git diff --check` before every commit.
-- Never stage virtual environments, `node_modules`, frontend build output, logs, generated job results, model weights, or local databases.
+- Run `git diff --check` before every commit. Do not stage virtual environments, dependency directories, build output, results, model weights, databases, or logs.
+- Treat a successful command as insufficient when subordinate readiness, cleanup, authorization, or artifact checks report failure or ambiguity.
 
-## Domain boundaries
+## Code-retirement rule
 
-- MolBio and NGS exchange immutable handoffs. Keep their code and state contracts separate.
-- Protect these independently owned Gibson files unless Christian explicitly directs otherwise:
-  - `platform/api/services/assembly/pydna_gibson.py`
-  - `platform/api/tests/test_pydna_gibson.py`
-- BioXP is a thin relay to robot-authoritative capabilities. Do not add host-side motion, homing, or maintenance authority. Unsupported command families must remain denied/fail-closed.
-- Molecular-dynamics work is a supported feature but do not add playback, frame/time mapping, WebM, or new representation-default work without explicit scope.
-
-## Documentation rule
-
-Keep this file as the sole human-facing repository guide for agents. Machine-consumed contracts must live as structured config/schema/test data, not prose under `docs/`. If a current runtime or test reads a document, migrate the consumed data to a code/config location and update the consumer before deleting the document.
+Deprecated source must be removed from `test` once an audit proves it is not required by current runtime entrypoints, dependency manifests, schemas, tests, supported workflows, or explicit migration/recovery needs. Do not retain dead code for archaeology; Git history is the archive. Remove associated stale tests, docs, package metadata, and UI references in the same change, then validate the surviving supported path.

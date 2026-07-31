@@ -553,7 +553,10 @@ def finalize_protenix(
         "command": list(runtime["command"]),
         "resume_key": resume_descriptor.resume_key,
         "resumable": True,
-        "resume_descriptor": resume_descriptor.model_dump(mode="json"),
+        # `resume_key` is an ensemble authority field; it is a computed
+        # descriptor property and must not be serialized into the strict
+        # descriptor schema itself.
+        "resume_descriptor": resume_descriptor.model_dump(mode="json", exclude_computed_fields=True),
     }
     validate_schema("cm_ensemble_v1", ensemble)
     output.parent.mkdir(parents=True, exist_ok=True)

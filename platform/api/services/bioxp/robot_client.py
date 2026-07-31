@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import re
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from hashlib import sha256
-from pathlib import Path
+
 from typing import Any
 from urllib.parse import quote
 
@@ -32,6 +31,7 @@ from .target_policy import ValidatedBioXpTarget
 
 DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
     "status": ("GET", "/status", 5.0),
+    "activate_usb_for_service": ("POST", "/reconnect", 30.0),
     "collect_hardware_snapshot": ("POST", "/hardware/snapshot/collect", 210.0),
     "oem_full_lifecycle_contract": ("GET", "/oem/runtime/movement-runs/contract", 10.0),
     "plan_oem_full_lifecycle": ("POST", "/oem/runtime/movement-runs", 30.0),
@@ -46,10 +46,17 @@ DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
     "camera_status": ("GET", "/camera/status", 5.0),
     "camera_latest": ("GET", "/camera/frame/latest", 5.0),
     "camera_snapshot": ("POST", "/camera/snapshot", 15.0),
+    "operator_control_catalog": ("GET", "/operator/control-catalog", 10.0),
+    "operator_dashboard": ("GET", "/operator/dashboard", 10.0),
+    "operator_action_admission": ("POST", "/operator/actions/{action_id}/admission", 10.0),
+    "invoke_operator_action": ("POST", "/operator/actions/{action_id}", 900.0),
+    "operator_action_history": ("GET", "/operator/actions/history", 10.0),
+    "operator_action_receipt": ("GET", "/operator/actions/receipts/{command_id}", 10.0),
+    "assess_operator_action": ("POST", "/operator/actions/receipts/{command_id}/assessment", 15.0),
 }
 
 _ROUTE_PARAMETER_RE = re.compile(r"\{([A-Za-z][A-Za-z0-9_]*)\}")
-_OEM_LIFECYCLE_MUTATION_ROUTES = frozenset({"plan_oem_full_lifecycle", "cancel_oem_full_lifecycle_run"})
+
 _AUTOMATIC_SNAPSHOT_TIMEOUT_SECONDS = 15.0
 MAX_CAMERA_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_CAMERA_STATUS_BYTES = 64 * 1024
@@ -105,21 +112,6 @@ class CameraImage:
     content_type: str
     etag: str
     sha256: str
-
-
-def _read_oem_lifecycle_token(path: Path | None) -> str:
-    if path is None:
-        raise RobotTransportError("BioXP OEM lifecycle mutation token file is not configured")
-    try:
-        mode = path.stat().st_mode
-        token = path.read_text(encoding="utf-8").strip()
-    except OSError as exc:
-        raise RobotTransportError("BioXP OEM lifecycle mutation token file is unavailable") from exc
-    if mode & 0o077:
-        raise RobotTransportError("BioXP OEM lifecycle mutation token file permissions are too broad")
-    if len(token) < 32:
-        raise RobotTransportError("BioXP OEM lifecycle mutation token is invalid")
-    return token
 
 
 def _render_route_path(template: str, path_params: dict[str, str] | None) -> str:
@@ -181,7 +173,6 @@ class BioXpRobotClient:
         *,
         routes: Mapping[str, tuple[str, str, float]] | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
-        oem_lifecycle_token_file: Path | None = None,
         monotonic_clock: Callable[[], float] | None = None,
         snapshot_retry_backoff_seconds: float = 30.0,
     ) -> None:
@@ -189,10 +180,6 @@ class BioXpRobotClient:
             raise ValueError("automatic snapshot retry backoff must be positive")
         self.target = target
         self.routes = dict(routes or DEFAULT_ROBOT_ROUTES)
-        configured_token_file = os.environ.get("BMS_BIOXP_OEM_RUNTIME_TOKEN_FILE", "").strip()
-        self._oem_lifecycle_token_file = oem_lifecycle_token_file or (
-            Path(configured_token_file) if configured_token_file else None
-        )
         self._monotonic_clock = monotonic_clock or time.monotonic
         self._snapshot_retry_backoff_seconds = snapshot_retry_backoff_seconds
         self._snapshot_retry_after = 0.0
@@ -398,9 +385,6 @@ class BioXpRobotClient:
         except KeyError as exc:
             raise RobotTransportError(f"Unknown BioXP robot route key: {route_name}") from exc
         path = _render_route_path(path_template, path_params)
-        headers = None
-        if route_name in _OEM_LIFECYCLE_MUTATION_ROUTES:
-            headers = {"X-BioXP-OEM-Token": _read_oem_lifecycle_token(self._oem_lifecycle_token_file)}
         attempts = 2 if retry_read_once and method == "GET" else 1
         for attempt in range(attempts):
             try:
@@ -409,7 +393,6 @@ class BioXpRobotClient:
                     path,
                     json=json_data,
                     params=params,
-                    headers=headers,
                     timeout=_bounded_timeout(timeout if timeout_override is None else timeout_override),
                 )
                 if 300 <= response.status_code < 400:

@@ -182,6 +182,7 @@ def test_status_motion_admission_follows_robot_capabilities_not_bms_maintenance_
                     "recovery_required": True,
                     "block_reason": "USB owner changed",
                 },
+                ownership={"transport": "owned", "usb": "service", "router": "running"},
             )
 
     runtime = SimpleNamespace(
@@ -193,7 +194,7 @@ def test_status_motion_admission_follows_robot_capabilities_not_bms_maintenance_
     status = asyncio.run(get_status(runtime))
 
     assert "recover_motion_non_homing" in status["available_commands"]
-    assert "run_axis_diagnostic" in status["available_commands"]
+    assert "run_axis_diagnostic" not in status["available_commands"]
     assert "run_oem_motor_stage" not in status["available_commands"]
-    assert "run_axis_diagnostic" not in status["unavailable_commands"]
+    assert "USB owner changed" in status["unavailable_commands"]["run_axis_diagnostic"]
     assert "stop_axis_diagnostic" in status["available_commands"]

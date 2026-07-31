@@ -50,7 +50,7 @@ const directCapability = (
 
 const adapterSource = 'platform/frontend/src/structureViewer/adapters/MolstarDirectAdapter.ts';
 const componentSource = 'platform/frontend/src/structureViewer/StructureViewerHost.tsx';
-const browserEvidence = 'docs/reviews/structure_visualization/evidence/m1_direct_molstar_runtime_probe_final_chrome150.json';
+
 
 const capabilities: Record<ViewerCapabilityId, ViewerCapability> = {
     'load-completion': directCapability(
@@ -66,7 +66,7 @@ const capabilities: Record<ViewerCapabilityId, ViewerCapability> = {
     'disconnect-disposal': directCapability(
         'supported', 'bms-engine-owner',
         'BMS unmounts its captured React root before plugin disposal and invalidates late generations idempotently.',
-        browserEvidence,
+        adapterSource,
     ),
     'label-chain-identity': directCapability(
         'supported', 'bms-direct-adapter',

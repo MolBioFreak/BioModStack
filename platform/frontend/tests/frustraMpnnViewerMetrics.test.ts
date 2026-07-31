@@ -185,7 +185,9 @@ test('canonical conformational viewer uses the shared metric workbench, not a gl
     const source = readFileSync(resolve(process.cwd(), 'src/components/conformationalMapping/ConformationalMappingViewer.tsx'), 'utf8');
     assert.doesNotMatch(source, /landscapeMutation|Landscape substitution/);
     assert.match(source, /collectCompleteFrustraMpnnLandscape/);
-    assert.match(source, /metricLayers=\{frustraMpnnMetrics\.layers\}/);
+    assert.match(source, /metricLayers=\{frustraMpnnMetrics\?\.layers\}/);
+    assert.match(source, /showMetricWorkbench=\{metricWorkbenchOpen\}/);
+    assert.match(source, /showSequenceTrack=\{metricWorkbenchOpen\}/);
     assert.match(source, /onMetricSelection=\{setFrustraMpnnSelection\}/);
     assert.match(source, /Exact-20 residue profile/);
 });

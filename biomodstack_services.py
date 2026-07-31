@@ -1045,8 +1045,13 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     dev_inputs_dir = str(resolved.get("dev_inputs_dir", Path(dev_data_root) / "inputs"))
     dev_db_path = str(resolved.get("dev_db_path", Path(dev_data_root) / "biomodstack.db"))
     dev_work_dir = str(resolved.get("dev_work_dir", Path(dev_data_root) / "work"))
-    dev_weights_root = str(resolved.get("dev_weights_root", Path(dev_data_root) / "weights"))
-    dev_colabfold_db = str(resolved.get("dev_colabfold_db", Path(dev_data_root) / "colabfold_db"))
+    # Model weights are immutable shared runtime assets, not lane-owned job
+    # state.  Native Development keeps its DB/work/results isolated while
+    # reusing the profile's canonical weights root (as container mode does).
+    dev_weights_root = str(resolved.get("weights_root", Path("/mnt/BioModStack") / "weights"))
+    # ColabFold's reference database is an immutable shared model asset.  Keep
+    # mutable MSA cache state lane-local, but do not require a duplicate DB.
+    dev_colabfold_db = str(resolved.get("colabfold_db", Path("/mnt/BioModStack") / "colabfold_db"))
     dev_msa_cache_dir = str(resolved.get("dev_msa_cache_dir", Path(dev_data_root) / "msa_cache"))
     dev_sabdab_cache_dir = str(resolved.get("dev_sabdab_cache_dir", Path(dev_data_root) / "sabdab_cache"))
     api_limits = render_systemd_resource_boundaries(API_SERVICE).replace("\n", "\n        ")
@@ -1064,7 +1069,11 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Type=oneshot
         Environment=BMS_HOME={root}
         ExecStart=/usr/bin/env python3 {tailnet_global_installer}
-        TimeoutStartSec=30
+        # The installer may legitimately wait up to 90 seconds for a restarted
+        # workflow adapter to prove its policy identity.  Keep systemd's bound
+        # above that inner convergence bound so it cannot terminate a valid
+        # installation mid-transaction.
+        TimeoutStartSec=120
 
         [Install]
         WantedBy={DEV_TARGET_UNIT}

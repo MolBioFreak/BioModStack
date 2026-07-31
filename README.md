@@ -1,174 +1,167 @@
 # BioModStack
 
-BioModStack (BMS) is a workstation-first platform for biomolecular design,
-validation, sequencing, molecular biology, results analysis, and lab-adjacent
-operations.
+BioModStack (BMS) is a workstation-first platform for governed biomolecular
+workflows, results review, molecular biology, Nanopore/NGS, and selected
+lab-adjacent operations. It combines a browser workbench with a managed API,
+host-native scientific execution, and optional desktop/mobile launch surfaces.
 
-The live stack combines:
+BMS is designed around a simple separation of responsibilities:
 
-- Nextflow workflows for heavy compute, staged pipelines, and experimental runs
-- a FastAPI control plane for orchestration, metadata, artifact serving, and
-  system/runtime APIs
-- a React frontend for launch, review, analytics, mol bio, NGS, infra, and
-  BioXP control
-- optional local shells around the hosted `/bms/` UI, including browser,
-  Electron, GTK panel/tray, and an additive Android thin-shell/update path
+- **managed control plane** — API, web application, authorization, job records,
+  results, and artifact access;
+- **workflow adapter** — host-native execution of supported scientific workflows
+  and their verified runtime dependencies;
+- **operator surfaces** — browser, optional Electron shell, and optional Android
+  thin shell; these are clients of the managed service, never replacement backend
+  owners;
+- **governed integrations** — workflow launch, scientific artifacts, sequencing,
+  and instrument-facing capabilities use explicit contracts rather than ad-hoc
+  scripts or direct UI-to-host control.
 
-## Runtime and launch surface
+## What is in this repository
 
-The current workstation/runtime model is:
+The tracked repository is intentionally limited to the source required to build,
+operate, test, and support current BMS behavior:
 
-- containerized core runtime for the API and web UI via
-  `compose.core-runtime.yml`
-- host-native workflow execution through `biomodstack-workflow-adapter.service`
-  and `BMS_WORKFLOW_ADAPTER_URL`
-- service ownership through `systemd --user`, not through the browser, GTK, or
-  Electron shells
-- optional Electron shell in `platform/desktop-electron` as an additive launch
-  surface, not a separate backend owner
-- optional Android compatibility/update surface through the hosted `/bms/` UI,
-  the frontend Cordova-ready hook, and `/api/mobile-ui/*` bundle endpoints
+- FastAPI control-plane source, schemas, migrations, and focused tests;
+- React workbench and its browser/component tests;
+- Nextflow workflow definitions, modules, and configuration;
+- container and Apptainer definitions, locked dependency manifests, and
+  reproducible runtime scaffolding;
+- supported desktop/mobile wrapper source and approved release assets;
+- concise operational guidance in [`AGENTS.md`](AGENTS.md).
 
-If runtime is omitted, BioModStack resolves it as:
+Generated output, model weights, caches, databases, results, local logs,
+credentials, installation-specific configuration, and historical planning
+material do not belong in the repository.
 
-1. explicit `--runtime ...`
-2. `BMS_RUNTIME_MODE`
-3. `container`
+## Supported product areas
 
-Current robustness snapshot:
+Current BMS surfaces include:
 
-- container mode has a dedicated Compose stack, generated env file, health checks,
-  and a longer startup-readiness budget for first builds/recreates
-- workflow execution is intentionally not owned by the API/web container; launches,
-  cancels, and running-job inspection cross the host workflow-adapter boundary
-- guarded core-runtime mode should keep the dashboard/API alive even when workflow
-  assets, GPUs, BioXP linkage, or adapter-side capabilities are missing
-- full workflow capability still depends on host-native Nextflow, Apptainer,
-  NVIDIA/GPU visibility, model weights, reference databases, and workflow caches
+- structure prediction, validation, and governed structure review;
+- de novo/binder-design and protein-redesign workflows;
+- conformational mapping and molecular-dynamics orchestration/review;
+- molecular-biology design, construct, and verification workflows;
+- Nanopore/NGS launch, quality-control, and result review;
+- scientific result artifacts and the Structure Workbench;
+- compact BioXP operator integration, where robot-local capability and safety
+  contracts remain authoritative;
+- managed service, workflow, and deployment status for operators.
 
-## Workflow surface
+Availability is capability- and installation-dependent. A workflow is only
+launchable when its configured runtime, dependencies, authorization, and
+preflight checks all succeed.
 
-BMS is not just a protein-design launcher. The live repo covers:
+## Architecture
 
-- antibody de novo and staged refinement workflows
-- generic structure prediction and validation with AlphaFold2, RF3, Boltz-2,
-  and Protenix
-- generic binder generation and redesign with RFdiffusion, retired binder workflow,
-  BoltzGen, and local redesign workflows
-- experimental workflow families including La-Proteina/DISCO protein CAD,
-  Protein Hunter Experimental, Caliby Experimental, and Fold-CP Experimental
-- docking via DiffDock, Uni-Dock, and shared docking surfaces
-- nanopore/NGS launch and review
-- a molecular biology toolkit for DNA/RNA libraries and construct operations
-- a BioXP cockpit plus workstation infra/runtime controls
-
-The BioXP surface is a compact, status-first control plane, not a generic robot
-proxy. It exposes bounded profile, connection, readiness, offline protocol, local
-job, typed command, and emergency-delivery contracts. Retired motion, liquid,
-thermal, camera, vision, arbitrary proxy, host-lifecycle, and remote-log routes
-are absent. The robot-local OEM-compatible runtime remains authoritative for
-hardware behavior; normal BMS commands stay disabled until their exact live
-contracts are independently verified.
-
-For the full live model inventory, see
-[docs/ai_guidance/Model_Integrations.md](docs/ai_guidance/Model_Integrations.md).
-
-## Quick start
-
-From the repo root:
-
-```bash
-./start_ui.sh start
-./start_ui.sh status
+```text
+Operator surface
+  └─ Browser / Electron / optional Android thin shell
+       └─ Managed BMS API and web service
+            ├─ governed data, artifact, and job contracts
+            ├─ supported workflow adapter
+            │    └─ Nextflow + approved scientific runtimes
+            └─ optional instrument or external-provider integrations
 ```
 
-That uses the default runtime resolution above, which means container mode unless
-`BMS_RUNTIME_MODE` overrides it.
+The API/web service owns interactive application state and service-facing
+contracts. Scientific execution is deliberately separated from the web
+container so that workflow dependencies, accelerators, reference data, and
+host-native execution can be managed explicitly. A push to Git does not deploy
+a service; deployed revision, service owner, health, and data identity must be
+verified separately.
 
-Explicit dev/runtime commands:
+## Getting started
+
+Use a clean checkout and the repository's locked dependency manifests. Configure
+your installation through the supported install profile and environment files;
+do not put host paths, service addresses, or credentials in source-controlled
+files.
+
+The standard launcher supports managed development and container runtime modes:
 
 ```bash
 ./start_ui.sh start --runtime dev
+./start_ui.sh status --runtime dev
+./start_ui.sh stop --runtime dev
+```
+
+For the managed container runtime, substitute `container` for `dev`:
+
+```bash
 ./start_ui.sh start --runtime container
+./start_ui.sh status --runtime container
 ./start_ui.sh stop --runtime container
 ```
 
-Important local URLs:
+The service manager also supports targeted and API-only actions:
 
-- Stable hosted UI: `http://127.0.0.1:18080/bms/`
-- Dev browser UI: `http://127.0.0.1:5173/`
-- API: `http://127.0.0.1:8000`
-- API docs: `http://127.0.0.1:8000/docs`
-- workflow adapter health: `http://127.0.0.1:8001/api/workflow-adapter/health`
-
-## Optional local shells
-
-Browser launch:
-
-```bash
-python3 scripts/launch_biomodstack_ui.py --surface browser --runtime container
+```text
+./start_ui.sh {start|start-api|start-target|stop|stop-api|status|restart|restart-api}
 ```
 
-Electron shell:
+Confirm readiness using the supported service status and health surfaces before
+launching work. Do not start detached API, frontend, or workflow processes as a
+substitute for the managed service path.
 
-```bash
-pnpm --dir platform/desktop-electron install
-./start_ui_electron.sh --runtime container
-```
+## Development and promotion
 
-The Electron shell wraps the same hosted `/bms/` UI, keeps its own persistent
-storage partition, and calls the shared desktop-service control plane rather
-than supervising API/frontend processes directly.
+- `test` is the sole development and integration branch.
+- `main` is the default production/promotion branch.
+- Develop and validate on `test`.
+- Promotion from `test` to `main` is a reviewed, owner-authorized action.
+- Never force-push shared branches, bulk-replay experimental history, or treat
+  a Git push as a deployment.
 
-The Android path is intentionally additive. BMS remains hosted on the
-workstation/server; the mobile shell is expected to consume the existing web UI
-and the `/api/mobile-ui/*` update endpoints rather than move runtime ownership
-onto the phone.
-
-## Runtime/profile files
-
-Key local config/state files:
-
-- `~/.config/biomodstack/install_profile.json`
-  persisted runtime/data-path profile
-- `~/.config/biomodstack/core-runtime.env`
-  generated env file for the containerized core runtime
-- `~/.config/biomodstack/launch_preferences.json`
-  default launch surface and browser auto-open preferences
-- `~/.biomodstack/env.sh`
-  compatibility env exports and local overrides for shell-driven workflows
-
-## Documentation map
-
-Start here:
-
-- [docs/README.md](docs/README.md)
-- [Platform Overview](docs/Platform_Overview.md)
-- [Workstation Setup and Runtime](docs/Workstation%20Set%20Up%20and%20Install%20Guide.md)
-- [Desktop Runtime and Shell Architecture](docs/Desktop_Runtime_and_Shell_Architecture.md)
-- [Structure Design and Refinement](docs/Structure_Design_and_Refinement.md)
-- [Lab Automation, Mol Bio, and Sequencing](docs/Lab_Automation_MolBio_and_Sequencing.md)
-- [Results and Analysis](docs/Results_and_Analysis.md)
-
-Focused workflow/runtime references:
-
-- [Experimental Protein CAD Workflow](docs/Experimental_Protein_CAD_Workflow.md)
-- [Caliby Experimental Workflow](docs/Caliby_Experimental_Workflow.md)
-- [Protein Hunter Experimental Workflow](docs/Protein_Hunter_Experimental_Workflow.md)
-- [Active Plans](docs/plans/README.md)
-
-Subsystem references:
-
-- [API README](platform/api/README.md)
-- [Frontend README](platform/frontend/README.md)
-- [Electron shell README](platform/desktop-electron/README.md)
+Before pushing, fetch the current remote tip, make focused changes, run relevant
+validation, check the diff, and verify the pushed commit. See
+[`AGENTS.md`](AGENTS.md) for the complete operating, Tailscale Serve, validation,
+and retirement rules.
 
 ## Repository entry points
 
-- workflow entrypoint: [main.nf](main.nf)
-- API entrypoint: [platform/api/main.py](platform/api/main.py)
-- frontend entrypoint: [platform/frontend/src/App.tsx](platform/frontend/src/App.tsx)
-- service manager: [start_ui.sh](start_ui.sh)
-- Electron launcher: [start_ui_electron.sh](start_ui_electron.sh)
-- runtime/service layer: [biomodstack_services.py](biomodstack_services.py)
-- install-profile/path resolution: [biomodstack_runtime_profile.py](biomodstack_runtime_profile.py)
+| Surface | Entry point |
+| --- | --- |
+| Managed service launcher | [`start_ui.sh`](start_ui.sh) |
+| Service/runtime management | [`biomodstack_services.py`](biomodstack_services.py) |
+| Runtime/install-profile resolution | [`biomodstack_runtime_profile.py`](biomodstack_runtime_profile.py) |
+| Workflow entrypoint | [`main.nf`](main.nf) |
+| API | [`platform/api/main.py`](platform/api/main.py) |
+| Frontend | [`platform/frontend/src/App.tsx`](platform/frontend/src/App.tsx) |
+| Electron launcher | [`start_ui_electron.sh`](start_ui_electron.sh) |
+| Runtime composition | [`compose.core-runtime.yml`](compose.core-runtime.yml) |
+
+## Validation
+
+Run the smallest relevant validation for the changed owner surface. For API
+work, use the locked development environment:
+
+```bash
+cd platform/api
+uv run --frozen --group dev python -m pytest <focused tests>
+```
+
+Always run:
+
+```bash
+git diff --check
+```
+
+before committing. Do not stage generated build output, virtual environments,
+dependency directories, local runtime state, databases, workflow results, or
+logs.
+
+## Security and operational boundaries
+
+- Configure service settings through supported installation/configuration paths.
+  Keep credentials and machine-specific topology out of Git.
+- Use the API/workflow registry and supported launch paths; do not treat
+  historical scripts or disconnected Nextflow files as production interfaces.
+- Private ingress is an explicit managed boundary. Preserve authorization and
+  fail-closed admission checks when publishing a service.
+- BioXP and other instrument integrations are capability-gated. The external or
+  instrument-local authoritative runtime remains responsible for hardware safety.
+- Retire unsupported code once reachability and dependency review proves it is
+  not needed. Git history is the archive; do not keep inactive source or docs for
+  archaeology.

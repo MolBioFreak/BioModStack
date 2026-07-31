@@ -5098,11 +5098,19 @@ def _build_msa_batch_child_params(
     }
 
 
+def _standard_job_output_dir(name: str, timestamp: str, preallocated_job_id: str | None) -> Path:
+    if preallocated_job_id is not None:
+        return get_results_dir() / preallocated_job_id
+    return get_results_dir() / f"{name}_{timestamp}"
+
+
 @router.post("", response_model=JobResponse, status_code=201)
 async def create_job(
     job_data: JobCreate,
     background_tasks: BackgroundTasks,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    _preallocated_job_id: Any = Depends(lambda: None),
+    _commit: Any = Depends(lambda: True),
 ):
     """Create and queue a new pipeline job."""
     require_molecular_dynamics_feature(job_data.model_id)
@@ -5383,7 +5391,17 @@ async def create_job(
                 detail="msa_provider=colabfold_api currently requires num_parallel_jobs=1.",
             )
     
-    # Create output directory (base for all jobs in batch)
+    preallocated_job_id = _preallocated_job_id if isinstance(_preallocated_job_id, str) else None
+    if preallocated_job_id is not None:
+        if num_jobs != 1 or not re.fullmatch(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+            preallocated_job_id,
+        ):
+            raise HTTPException(status_code=500, detail="Invalid internal preallocated Job identity")
+
+    # Create output directory (base for all jobs in batch). Internal typed
+    # launchers use the deterministic Job ID so concurrent idempotent callers
+    # cannot leave timestamp-split loser directories outside the DB transaction.
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     is_md_launch = job_data.model_id == "molecular_dynamics" and job_data.mode == "simulate"
     md_output_dir_created = False
@@ -5394,7 +5412,11 @@ async def create_job(
             _raise_md_launch_http_error(exc)
         base_output_dir = str(md_output_path)
     else:
-        base_output_dir = str(get_results_dir() / f"{job_data.name}_{timestamp}")
+        # Presentation-only names must not split one deterministic Job's
+        # filesystem ownership across concurrent equivalent requests.
+        base_output_dir = str(
+            _standard_job_output_dir(job_data.name, timestamp, preallocated_job_id)
+        )
         os.makedirs(base_output_dir, exist_ok=True)
     
     # Extract sequence length for VRAM estimation (same for all jobs in batch)
@@ -5528,7 +5550,7 @@ async def create_job(
     first_job = None
     
     for i in range(num_jobs):
-        job_id = str(uuid.uuid4())
+        job_id = preallocated_job_id or str(uuid.uuid4())
         
         # For multiple jobs: use sim_1, sim_2, etc. subdirectories (or variant names for mutagenesis)
         if mutagenesis_variants and i < len(mutagenesis_variants):
@@ -5822,7 +5844,10 @@ async def create_job(
         if first_job is None:
             first_job = job
     
-    await session.commit()
+    if _commit is False:
+        await session.flush()
+    else:
+        await session.commit()
     
     # Refresh first job for response
     await session.refresh(first_job)

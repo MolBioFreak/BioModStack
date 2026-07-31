@@ -159,6 +159,54 @@ class Job(Base):
     designs = relationship("Design", back_populates="job", cascade="all, delete-orphan")
 
 
+class ShapeCadSource(Base):
+    """Shared immutable CAD source bytes for the internal Shape workflow."""
+
+    __tablename__ = "shape_cad_sources"
+
+    source_id = Column(String(40), primary_key=True)
+    source_sha256 = Column(String(64), nullable=False, unique=True, index=True)
+    size_bytes = Column(Integer, nullable=False)
+    original_filename = Column(String(255), nullable=False)
+    relative_path = Column(String(500), nullable=False)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
+class ShapeDesignGeometry(Base):
+    """Deterministic canonical geometry derived from one CAD source."""
+
+    __tablename__ = "shape_design_geometries"
+    __table_args__ = (
+        UniqueConstraint("source_id", "conversion_sha256", name="uq_shape_geometry_conversion"),
+    )
+
+    geometry_id = Column(String(41), primary_key=True)
+    source_id = Column(String(40), ForeignKey("shape_cad_sources.source_id"), nullable=False, index=True)
+    geometry_sha256 = Column(String(64), nullable=False, unique=True, index=True)
+    conversion_sha256 = Column(String(64), nullable=False)
+    angstrom_per_unit = Column(Float, nullable=False)
+    vertex_count = Column(Integer, nullable=False)
+    face_count = Column(Integer, nullable=False)
+    point_count = Column(Integer, nullable=False)
+    manifest = Column(JSON, nullable=False)
+    artifacts = Column(JSON, nullable=False)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
+class ShapeDesignRequest(Base):
+    """Immutable Shape scientific intent linked to the existing Job lifecycle."""
+
+    __tablename__ = "shape_design_requests"
+
+    request_id = Column(String(42), primary_key=True)
+    geometry_id = Column(String(41), ForeignKey("shape_design_geometries.geometry_id"), nullable=False, index=True)
+    request_sha256 = Column(String(64), nullable=False, unique=True, index=True)
+    request_spec = Column(JSON, nullable=False)
+    stage_relative_path = Column(String(500), nullable=False)
+    job_id = Column(String(36), ForeignKey("jobs.id"), nullable=True, unique=True, index=True)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
 class MolBioNgsReceipt(Base):
     """One-time server-issued binding from an immutable MolBio revision to ONT input."""
 

@@ -9,7 +9,6 @@ import pytest
 
 
 RETIRED_COMMANDS = (
-    "activate_usb_for_service",
     "initialize_oem_environment",
     "run_oem_motor_stage",
     "record_oem_motor_stage_observation",
@@ -21,11 +20,6 @@ ROBOT_CONTRACT_UNAVAILABLE = (
 
 def _payloads() -> tuple[dict[str, object], ...]:
     return (
-        {
-            "command": "activate_usb_for_service",
-            "expected_generation": 17,
-            "idempotency_key": "retired-activate",
-        },
         {
             "command": "initialize_oem_environment",
             "expected_generation": 17,
@@ -118,6 +112,7 @@ def test_status_never_advertises_retired_commands_even_if_robot_claims_them(
         freshness_budget_seconds=30.0,
         observation_fresh=True,
         maintenance_state={"motion_blocked": False, "recovery_required": False},
+        ownership={"transport": "owned", "usb": "service", "router": "running"},
     )
     runtime = SimpleNamespace(
         connection=SimpleNamespace(snapshot=lambda: snapshot),

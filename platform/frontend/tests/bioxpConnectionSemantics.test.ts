@@ -16,7 +16,7 @@ test('connection state is connected, connection error, or disconnected without a
 test('saved connection is explicitly reconnectable and disconnectable', () => {
     assert.match(client, /\/api\/bioxp\/connection\/connect/);
     assert.match(client, /\/api\/bioxp\/connection\/disconnect/);
-    assert.match(cockpit, /active \? 'Reconnect' : 'Connect'/);
+    assert.match(cockpit, /active \? 'Reconnect BMS Link' : 'Connect BMS Link'/);
     assert.match(cockpit, /onClick=\{\(\) => disconnect\.mutate\(undefined\)\}/);
 });
 

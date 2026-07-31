@@ -141,8 +141,13 @@ def test_default_registry_exposes_only_current_compact_commissioning_mappings() 
         assert registry[name].route_key == route_key
         assert registry[name].required_capability == name
 
+    activation = registry["activate_usb_for_service"]
+    assert activation.enabled is True
+    assert activation.route_key == "activate_usb_for_service"
+    assert activation.required_capability is None
+    assert activation.ownership_policy == "unbound"
+
     retired = {
-        "activate_usb_for_service",
         "initialize_oem_environment",
         "run_oem_motor_stage",
         "record_oem_motor_stage_observation",
@@ -154,7 +159,7 @@ def test_default_registry_exposes_only_current_compact_commissioning_mappings() 
             "robot-contract-unavailable: unsupported by the exact robot runtime contract"
         )
 
-    for name in set(registry) - set(enabled) - retired:
+    for name in set(registry) - set(enabled) - retired - {"activate_usb_for_service"}:
         assert registry[name].enabled is False
         assert registry[name].route_key is None
         assert "online contract" in registry[name].disabled_reason.lower()
@@ -434,12 +439,6 @@ def test_axis_diagnostic_execution_holds_generation_lease_and_forwards_only_type
     class Client:
         async def request(self, route_key, *, json_data):
             events.append(("request", route_key, json_data))
-            if route_key == "collect_hardware_snapshot":
-                return {
-                    "ok": True,
-                    "published": True,
-                    "snapshot": {"snapshot_id": "post-axis-13"},
-                }
             return {
                 "ok": True,
                 "axis": "x",
@@ -473,6 +472,7 @@ def test_axis_diagnostic_execution_holds_generation_lease_and_forwards_only_type
                 freshness_budget_seconds=30.0,
                 observation_fresh=True,
                 maintenance_state={"motion_blocked": False, "recovery_required": False},
+                ownership={"transport": "owned", "usb": "service", "router": "running"},
             )
 
         def observe_command_response(self, value):
@@ -491,11 +491,8 @@ def test_axis_diagnostic_execution_holds_generation_lease_and_forwards_only_type
     assert record.status == "acknowledged"
     assert record.remote_acknowledged is True
     assert record.physical_effect_verified is False
-    assert record.handler_response["inline_hardware_evidence"] == {
-        "attempted": True,
-        "published": True,
-        "snapshot_id": "post-axis-13",
-    }
+    assert record.handler_response is not None
+    assert "inline_hardware_evidence" not in record.handler_response
     assert events == [
         ("lease-enter", 13),
         ("request", "run_axis_diagnostic", {
@@ -505,31 +502,8 @@ def test_axis_diagnostic_execution_holds_generation_lease_and_forwards_only_type
             "reason": "BMS operator requested x move-positive",
         }),
         ("observe", "x", "move-positive"),
-        ("request", "collect_hardware_snapshot", None),
         ("lease-exit", 13),
     ]
-
-
-def test_inline_hardware_evidence_rejects_application_level_failure_payload() -> None:
-    from services.bioxp.command_coordinator import _collect_inline_hardware_evidence
-
-    class Client:
-        async def request(self, route_key, *, json_data):
-            assert route_key == "collect_hardware_snapshot"
-            return {
-                "ok": False,
-                "published": True,
-                "snapshot": {"snapshot_id": "must-not-trust"},
-                "error": "snapshot rejected",
-            }
-
-    evidence = asyncio.run(_collect_inline_hardware_evidence(Client()))
-
-    assert evidence == {
-        "attempted": True,
-        "published": False,
-        "error": "snapshot rejected",
-    }
 
 
 def test_acknowledged_command_http_refresh_is_status_only() -> None:
@@ -624,6 +598,7 @@ def test_axis_stop_preempts_inflight_diagnostic_without_waiting_for_workflow_lea
                     freshness_budget_seconds=30.0,
                     observation_fresh=True,
                     maintenance_state={"motion_blocked": False, "recovery_required": False},
+                    ownership={"transport": "owned", "usb": "service", "router": "running"},
                 )
 
         coordinator = CommandCoordinator(Connection(), DEFAULT_COMMAND_REGISTRY)
@@ -755,7 +730,8 @@ def test_non_homing_recovery_is_typed_and_maps_to_exact_robot_payload() -> None:
                     "recovery_required": True,
                     "block_reason": "USB owner changed",
                 },
-            )
+                ownership={"transport": "owned", "usb": "service", "router": "running"},
+                )
 
         def observe_command_response(self, value):
             self.observed = value

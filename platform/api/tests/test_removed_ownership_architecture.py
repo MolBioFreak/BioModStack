@@ -85,13 +85,6 @@ GENERATED_PARTS = frozenset(
     }
 )
 HISTORICAL_BANNER = "> **Historical / superseded:**"
-FROZEN_STATIC_EVIDENCE_PATHS = frozenset(
-    {
-        "docs/audits/bioxp-phase0-baseline-2026-07-17.json",
-        "docs/audits/ngs-discrepancy-closure-2026-07-19.md",
-        "docs/audits/ngs-phase0-3-acceptance-ledger-2026-07-17.md",
-    }
-)
 
 
 def _matches(text: str) -> bool:
@@ -140,13 +133,6 @@ def _is_historical(path: Path) -> bool:
     return "archive" in relative.parts or relative.parts[:2] == ("docs", "reports")
 
 
-def _is_static_evidence(path: Path) -> bool:
-    relative = path.relative_to(REPO_ROOT)
-    return (
-        relative.parts[:2] == ("docs", "evidence")
-        or relative.as_posix() in FROZEN_STATIC_EVIDENCE_PATHS
-    )
-
 
 def _is_frozen_lock(path: Path) -> bool:
     name = path.name.casefold()
@@ -164,7 +150,7 @@ def _active_text_files() -> list[Path]:
         if path.is_file()
         and not _is_generated(path)
         and not _is_historical(path)
-        and not _is_static_evidence(path)
+
         and not _is_frozen_lock(path)
         and _read_utf8(path) is not None
     ]

@@ -10,7 +10,7 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const frontendRoot = path.resolve(scriptDir, '..');
 const repoRoot = path.resolve(frontendRoot, '../..');
 const outputPath = path.resolve(
-    process.argv[2] ?? path.join(repoRoot, 'docs/reviews/structure_visualization/evidence/m1_direct_molstar_runtime_probe_chrome150.json'),
+    process.argv[2] ?? process.env.BMS_BROWSER_EVIDENCE_PATH ?? path.join(os.tmpdir(), 'bms-molstar-runtime-probe.json'),
 );
 const requestedCycles = Number.parseInt(process.env.BMS_M1_CYCLES ?? process.env.BMS_M0_CYCLES ?? '55', 10);
 const chromeBinary = process.env.CHROME_BIN ?? '/usr/bin/google-chrome';

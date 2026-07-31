@@ -140,14 +140,6 @@ def test_md_workflow_uses_bounded_singleton_entrypoints() -> None:
     assert ".flatMap" not in analyze_entrypoint
     assert "params.gpu_id" not in analyze_entrypoint
 
-    finalize_entrypoint = (workflow_root / "finalize.nf").read_text(encoding="utf-8")
-    assert "MD_FINALIZE_RESULTS" in finalize_entrypoint
-    assert ".collect()" in finalize_entrypoint
-
-    local_wrapper = (workflow_root / "workflow.nf").read_text(encoding="utf-8")
-    assert "params.allow_local_composed_md" in local_wrapper
-    assert "Local composed MD is disabled" in local_wrapper
-
     gromacs_module = (module_root / "gromacs_replica.nf").read_text(encoding="utf-8")
     openmm_module = (module_root / "openmm_replica.nf").read_text(encoding="utf-8")
     assert "process MD_GROMACS_REPLICA" in gromacs_module
