@@ -1069,7 +1069,11 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Type=oneshot
         Environment=BMS_HOME={root}
         ExecStart=/usr/bin/env python3 {tailnet_global_installer}
-        TimeoutStartSec=30
+        # The installer may legitimately wait up to 90 seconds for a restarted
+        # workflow adapter to prove its policy identity.  Keep systemd's bound
+        # above that inner convergence bound so it cannot terminate a valid
+        # installation mid-transaction.
+        TimeoutStartSec=120
 
         [Install]
         WantedBy={DEV_TARGET_UNIT}
