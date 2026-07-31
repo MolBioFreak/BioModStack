@@ -14,6 +14,7 @@ import json
 import csv
 import yaml
 import shutil
+import uuid
 from pathlib import Path
 from datetime import datetime
 from typing import Deque, Dict, Any, Iterable, Iterator, Optional, List, Tuple, Set
@@ -255,6 +256,7 @@ from paths import (
     get_db_path,
     get_data_root,
     get_work_dir,
+    get_results_dir,
     get_weights_root,
     get_rfd_models_dir,
     get_colabfold_db,
@@ -3851,6 +3853,77 @@ def _pid_is_alive(pid: int) -> bool:
     return True
 
 
+def _managed_nextflow_identity(
+    *,
+    argv: list[str],
+    cwd: Path,
+    project_root: Path,
+    results_root: Path,
+    nextflow_bin: Path,
+) -> str | None:
+    """Return the job UUID only for an exact, root-contained native Nextflow process."""
+    try:
+        if cwd.resolve() != project_root.resolve():
+            return None
+        jar_index = argv.index("-jar")
+        if Path(argv[jar_index + 1]).expanduser().resolve() != nextflow_bin.resolve():
+            return None
+        if argv[jar_index + 2] != "run":
+            return None
+        job_index = argv.index("--job_id")
+        out_index = argv.index("--out_dir")
+        job_id = str(uuid.UUID(argv[job_index + 1]))
+        if job_id != argv[job_index + 1].lower():
+            return None
+        out_dir = Path(argv[out_index + 1]).expanduser().resolve()
+        root = results_root.expanduser().resolve()
+        if out_dir == root or root not in out_dir.parents:
+            return None
+        return job_id
+    except (ValueError, IndexError, OSError):
+        return None
+
+
+def _discover_managed_nextflow_processes() -> Dict[str, int]:
+    """Discover surviving adapter-owned Nextflow groups after an adapter restart."""
+    try:
+        nextflow_bin = Path(resolve_nextflow_executable())
+    except RuntimeError:
+        return {}
+    discovered: Dict[str, int] = {}
+    ambiguous: Set[str] = set()
+    for proc_dir in Path("/proc").iterdir():
+        if not proc_dir.name.isdigit():
+            continue
+        try:
+            pid = int(proc_dir.name)
+            argv = [
+                item.decode("utf-8", errors="strict")
+                for item in (proc_dir / "cmdline").read_bytes().split(b"\0")
+                if item
+            ]
+            cwd = (proc_dir / "cwd").resolve(strict=True)
+        except (OSError, UnicodeDecodeError):
+            continue
+        job_id = _managed_nextflow_identity(
+            argv=argv,
+            cwd=cwd,
+            project_root=PROJECT_ROOT,
+            results_root=get_results_dir(),
+            nextflow_bin=nextflow_bin,
+        )
+        if job_id is None:
+            continue
+        existing = discovered.get(job_id)
+        if existing is not None and existing != pid:
+            ambiguous.add(job_id)
+            continue
+        discovered[job_id] = pid
+    for job_id in ambiguous:
+        discovered.pop(job_id, None)
+    return discovered
+
+
 async def cancel_nextflow_job(nextflow_run_id: str, graceful_timeout_seconds: float = 5.0) -> bool:
     """Cancel a running Nextflow job, escalating to SIGKILL if it ignores SIGTERM."""
     if workflow_adapter_enabled():
@@ -3936,11 +4009,12 @@ def get_running_jobs() -> Dict[str, int]:
             running.setdefault(job_id, 0)
         return running
 
-    running = {
+    running = _discover_managed_nextflow_processes()
+    running.update({
         job_id: proc.pid 
         for job_id, proc in _running_processes.items() 
         if proc.returncode is None
-    }
+    })
     for job_id in _launching_jobs:
         running.setdefault(job_id, 0)
     return running
