@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import mimetypes
+import json
 import uuid
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,39 @@ async def _ingest_durable_artifacts(job: MDJobRecord, session: Any) -> None:
         ]))
     )).all()) if replicas else []
     existing = {(row.owner_job_id, row.attempt, row.logical_path): row for row in existing_rows}
+    frame_endpoints: dict[int, tuple[int, float, int, float]] = {}
+    for item in inventory:
+        if item.semantic_role != "trajectory_frame_map":
+            continue
+        try:
+            frame_map = json.loads(item.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise MDResultError("MD_ARTIFACT_PROVENANCE_INVALID", "MD frame-map artifact cannot be decoded", 409) from exc
+        frames = frame_map.get("frames") if isinstance(frame_map, dict) else None
+        if not isinstance(frames, list) or not frames:
+            raise MDResultError("MD_ARTIFACT_PROVENANCE_INVALID", "MD frame-map artifact has no governed frames", 409)
+        first, last = frames[0], frames[-1]
+        if not isinstance(first, dict) or not isinstance(last, dict):
+            raise MDResultError("MD_ARTIFACT_PROVENANCE_INVALID", "MD frame-map artifact has invalid endpoint records", 409)
+        try:
+            frame_endpoints[item.replica_index] = (
+                int(first["step"]), float(first["time_ps"]),
+                int(last["step"]), float(last["time_ps"]),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MDResultError("MD_ARTIFACT_PROVENANCE_INVALID", "MD frame-map artifact has invalid endpoint values", 409) from exc
+
+    for replica_index, endpoint in frame_endpoints.items():
+        replica = replicas_by_index.get(replica_index)
+        segment = latest_segment.get(replica.id) if replica is not None else None
+        if segment is None:
+            raise MDResultError("MD_ARTIFACT_PROVENANCE_INVALID", "MD frame-map endpoint has no durable segment owner", 409)
+        observed = (segment.start_step, segment.start_time_ps, segment.end_step, segment.end_time_ps)
+        expected = endpoint
+        if any(value is not None for value in observed) and observed != expected:
+            raise MDResultError("MD_ARTIFACT_PROVENANCE_INVALID", "MD frame-map endpoint conflicts with durable segment state", 409)
+        segment.start_step, segment.start_time_ps, segment.end_step, segment.end_time_ps = expected
+        segment.state = "completed"
 
     for item in inventory:
         replica = replicas_by_index.get(item.replica_index)
