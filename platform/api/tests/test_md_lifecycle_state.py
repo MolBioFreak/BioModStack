@@ -15,6 +15,7 @@ if str(API_ROOT) not in sys.path:
 
 from database import Base, Job, JobArtifact, MdReplicaRun, MdRun
 from services.job_control import reject_generic_md_lifecycle_control
+from services.md.cancel_actuator import cancel_running_md_run
 from services.md.read_model import md_run_snapshot
 from services.md.state import (
     MdStateError, accept_checkpoint, append_event_cas, create_md_run,
@@ -210,6 +211,69 @@ async def test_cas_idempotency_and_cancel_barrier(session) -> None:
     replica.state = "cancelled"; replica.active = False
     terminal = await finalize_cancel(session, job_id=job.id, expected_version=1, idempotency_key="cancel-done:1")
     assert terminal.phase == "cancelled" and job.status == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_cancel_actuator_commits_intent_then_stops_and_terminalizes_descendants(session) -> None:
+    from sqlalchemy import event
+
+    parent = Job(
+        id="md-cancel-actuated", name="MD", status="running",
+        model_id="md", mode="molecular_dynamics", params={},
+    )
+    session.add(parent)
+    await session.flush()
+    run = await create_md_run(session, job=parent, normalized_request=_request())
+    run.phase = "replicas_running"
+    child = Job(
+        id="md-cancel-actuated-child", name="replica", status="running",
+        queue_status="running", model_id="md", mode="replica", params={},
+        parent_job_id=parent.id, child_stage="md_replica",
+        nextflow_run_id="nextflow-cancel-1",
+    )
+    session.add(child)
+    await session.flush()
+    replica, segment = await create_replica_attempt(
+        session, job_id=parent.id, replica_index=0, attempt=0, engine="gromacs",
+        execution_plan_sha256="b" * 64, compatibility_key="c" * 64,
+        child_job_id=child.id,
+    )
+    child = await session.get(Job, replica.child_job_id)
+    assert child is not None
+    segment.state = "running"
+    await session.commit()
+
+    commit_count = 0
+
+    def committed(*_args) -> None:
+        nonlocal commit_count
+        commit_count += 1
+
+    event.listen(session.sync_session, "after_commit", committed)
+    cancelled_ids: list[str] = []
+
+    async def cancel_worker(nextflow_run_id: str) -> bool:
+        assert commit_count >= 1
+        cancelled_ids.append(nextflow_run_id)
+        return True
+
+    try:
+        terminal = await cancel_running_md_run(
+            session,
+            job_id=parent.id,
+            expected_version=0,
+            idempotency_key="cancel:actuated",
+            cancel_worker=cancel_worker,
+        )
+        await session.commit()
+    finally:
+        event.remove(session.sync_session, "after_commit", committed)
+
+    assert cancelled_ids == ["nextflow-cancel-1"]
+    assert terminal.phase == "cancelled"
+    assert replica.active is False and replica.state == "cancelled"
+    assert segment.state == "cancelled"
+    assert child.status == "cancelled" and child.queue_status == "completed"
 
 
 @pytest.mark.asyncio

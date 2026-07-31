@@ -8,13 +8,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_session
 
+from services.md.cancel_actuator import cancel_running_md_run
 from services.md.chemistry_catalog import ChemistryCatalogError, get_chemistry_catalog
 from services.md.feature_gate import molecular_dynamics_feature_enabled
 from services.md.launch_contract import MDLaunchError, approved_pack_inventory
 from services.md.pause_actuator import pause_running_md_run
 from services.md.read_model import md_queue_snapshot, md_run_snapshot
 from services.md.state import (
-    MdStateError, create_replica_attempt, request_cancel, resume_run,
+    MdStateError, create_replica_attempt, resume_run,
     retry_replica_attempt,
 )
 
@@ -182,11 +183,19 @@ async def resume_md_run(job_id: str, command: ResumeCommand,
 async def cancel_md_run(job_id: str, command: LifecycleCommand,
                         session: AsyncSession = Depends(get_session)) -> dict:
     try:
-        await request_cancel(session, job_id=job_id, expected_version=command.expected_state_version,
-                             idempotency_key=command.idempotency_key)
+        await cancel_running_md_run(
+            session,
+            job_id=job_id,
+            expected_version=command.expected_state_version,
+            idempotency_key=command.idempotency_key,
+        )
         await session.commit()
     except MdStateError as exc:
-        await session.rollback(); _state_http_error(exc)
+        if exc.code == "MD_CANCEL_ACTUATION_FAILED":
+            await session.commit()
+        else:
+            await session.rollback()
+        _state_http_error(exc)
     payload = await md_run_snapshot(session, job_id)
     if payload is None:
         raise HTTPException(status_code=404, detail={"code": "MD_RUN_NOT_FOUND", "message": "MD run was not found"})
