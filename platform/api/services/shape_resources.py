@@ -97,7 +97,6 @@ async def admit_mesh_geometry(
         angstrom_per_unit=angstrom_per_unit,
     )
     source_id = f"cad_{canonical.source_sha256[:32]}"
-    geometry_id = f"geom_{canonical.geometry_sha256[:32]}"
     conversion = {
         "schema": "bms_shape_geometry_conversion_v1",
         "angstrom_per_unit": float(angstrom_per_unit),
@@ -107,6 +106,14 @@ async def admit_mesh_geometry(
         "source_unit": source_unit,
     }
     conversion_sha256 = hashlib.sha256(_canonical_json(conversion)).hexdigest()
+    publication_identity = {
+        "schema": "bms_shape_geometry_publication_identity_v1",
+        "source_sha256": canonical.source_sha256,
+        "geometry_sha256": canonical.geometry_sha256,
+        "conversion_sha256": conversion_sha256,
+    }
+    publication_sha256 = hashlib.sha256(_canonical_json(publication_identity)).hexdigest()
+    geometry_id = f"geom_{publication_sha256[:32]}"
 
     existing = await session.scalar(
         select(ShapeDesignGeometry).where(
@@ -121,7 +128,7 @@ async def admit_mesh_geometry(
 
     root = (data_root / "shape_blueprint").resolve()
     source_relative = f"sources/{canonical.source_sha256}/source.{normalized_format}"
-    geometry_prefix = f"geometries/{canonical.geometry_sha256}"
+    geometry_prefix = f"geometries/{publication_sha256}"
     artifacts = {
         "vertices_f64": f"{geometry_prefix}/vertices.f64le",
         "faces_u32": f"{geometry_prefix}/faces.u32le",
@@ -130,12 +137,16 @@ async def admit_mesh_geometry(
         "preview_obj": f"{geometry_prefix}/preview.obj",
         "manifest": f"{geometry_prefix}/manifest.json",
     }
-    final_manifest = {
+    unhashed_manifest = {
         **canonical.manifest,
+        "conversion_sha256": conversion_sha256,
+        "publication_sha256": publication_sha256,
         "source_unit": source_unit,
         "conversion": conversion,
         "artifacts": artifacts,
     }
+    manifest_sha256 = hashlib.sha256(_canonical_json(unhashed_manifest)).hexdigest()
+    final_manifest = {**unhashed_manifest, "manifest_sha256": manifest_sha256}
     payloads = {
         source_relative: payload,
         artifacts["vertices_f64"]: canonical.vertices_f64,

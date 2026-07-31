@@ -276,7 +276,7 @@ class ShapeDesignGeometry(Base):
 
     geometry_id = Column(String(41), primary_key=True)
     source_id = Column(String(40), ForeignKey("shape_cad_sources.source_id"), nullable=False, index=True)
-    geometry_sha256 = Column(String(64), nullable=False, unique=True, index=True)
+    geometry_sha256 = Column(String(64), nullable=False, index=True)
     conversion_sha256 = Column(String(64), nullable=False)
     angstrom_per_unit = Column(Float, nullable=False)
     vertex_count = Column(Integer, nullable=False)

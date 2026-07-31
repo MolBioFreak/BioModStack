@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib
 import json
 from pathlib import Path
@@ -400,8 +401,7 @@ async def test_staged_bundle_validator_emits_hash_bound_receipt(tmp_path: Path) 
         stage = Path(staged.stage_dir)
         receipt = tmp_path / "shape_input_receipt.json"
         script = Path(__file__).parents[3] / "scripts" / "shape_blueprint" / "validate_bundle.py"
-        result = subprocess.run(
-            [
+        command = [
                 sys.executable,
                 str(script),
                 "--request", str(stage / "request.json"),
@@ -411,7 +411,9 @@ async def test_staged_bundle_validator_emits_hash_bound_receipt(tmp_path: Path) 
                 "--points", str(stage / "points.f32le"),
                 "--sdf", str(stage / "sdf.f32le"),
                 "--output", str(receipt),
-            ],
+            ]
+        result = subprocess.run(
+            command,
             text=True,
             capture_output=True,
         )
@@ -420,8 +422,24 @@ async def test_staged_bundle_validator_emits_hash_bound_receipt(tmp_path: Path) 
         assert payload["status"] == "validated"
         assert payload["request_sha256"] == staged.request_sha256
         assert payload["geometry_sha256"] == geometry.geometry_sha256
+        assert payload["geometry_manifest_sha256"] == geometry.manifest["manifest_sha256"]
         assert payload["point_pool_sha256"] == geometry.point_pool_sha256
         assert payload["sdf_sha256"] == geometry.manifest["sdf_sha256"]
         assert payload["sdf_grid_shape"] == geometry.manifest["sdf_grid_shape"]
+
+        manifest_path = stage / "geometry-manifest.json"
+        manifest_path.chmod(0o640)
+        tampered = json.loads(manifest_path.read_text(encoding="utf-8"))
+        tampered["source_unit"] = "millimeter"
+        tampered["conversion"]["source_unit"] = "millimeter"
+        unhashed = dict(tampered)
+        unhashed.pop("manifest_sha256")
+        tampered["manifest_sha256"] = hashlib.sha256(
+            json.dumps(unhashed, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        ).hexdigest()
+        manifest_path.write_text(json.dumps(tampered, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+        rejected = subprocess.run(command, text=True, capture_output=True)
+        assert rejected.returncode != 0
+        assert "request and geometry manifest hash disagree" in rejected.stderr
     finally:
         await engine.dispose()

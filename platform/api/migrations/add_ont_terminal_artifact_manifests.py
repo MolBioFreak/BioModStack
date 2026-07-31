@@ -162,7 +162,15 @@ def _create_manifest_triggers(connection: sqlite3.Connection) -> None:
               AND (
                 NEW.terminal_artifact_manifest_sha256 IS NOT sha256(NEW.terminal_artifact_manifest)
                 OR NEW.terminal_artifact_manifest != json_object(
-                    'artifacts', json(json_extract(NEW.terminal_artifact_manifest, '$.artifacts')),
+                    'artifacts', json((
+                        SELECT json_group_array(json_object(
+                            'bytes', json_extract(artifact.value, '$.bytes'),
+                            'kind', json_extract(artifact.value, '$.kind'),
+                            'path', json_extract(artifact.value, '$.path'),
+                            'sha256', json_extract(artifact.value, '$.sha256')
+                        ))
+                        FROM json_each(NEW.terminal_artifact_manifest, '$.artifacts') AS artifact
+                    )),
                     'minknow_run_id_sha256', json_extract(NEW.terminal_artifact_manifest, '$.minknow_run_id_sha256'),
                     'observed_generation', json_extract(NEW.terminal_artifact_manifest, '$.observed_generation'),
                     'run_id', json_extract(NEW.terminal_artifact_manifest, '$.run_id'),

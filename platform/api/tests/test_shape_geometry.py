@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 from pathlib import Path
@@ -358,12 +359,28 @@ async def test_geometry_admission_persists_shared_immutable_resource(tmp_path: P
                 filename="renamed-cube.obj",
                 angstrom_per_unit=10.0,
             )
+            distinct_unit = await resources.admit_mesh_geometry(
+                session,
+                data_root=tmp_path / "data",
+                payload=CUBE_OBJ,
+                filename="same-scale-distinct-unit.obj",
+                source_format="obj",
+                source_unit="explicit-same-scale-unit",
+                angstrom_per_unit=10.0,
+            )
             assert first.geometry_id == second.geometry_id
+            assert distinct_unit.geometry_id != first.geometry_id
+            assert distinct_unit.geometry_sha256 == first.geometry_sha256
             assert await session.scalar(select(func.count()).select_from(source_type)) == 1
-            assert await session.scalar(select(func.count()).select_from(geometry_type)) == 1
+            assert await session.scalar(select(func.count()).select_from(geometry_type)) == 2
             stored = await session.get(geometry_type, first.geometry_id)
             assert stored is not None
             assert stored.geometry_sha256 == first.geometry_sha256
+            unhashed_manifest = dict(stored.manifest)
+            manifest_sha256 = unhashed_manifest.pop("manifest_sha256")
+            assert manifest_sha256 == hashlib.sha256(
+                json.dumps(unhashed_manifest, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+            ).hexdigest()
             root = (tmp_path / "data" / "shape_blueprint").resolve()
             for relative in stored.artifacts.values():
                 path = (root / relative).resolve()
@@ -467,6 +484,13 @@ async def test_shape_geometry_http_accepts_binary_stl_with_reviewable_provenance
             )
             assert unsupported.status_code == 422
             assert unsupported.json()["detail"]["code"] == "unsupported_format"
+
+            omitted_unit = await client.post(
+                "/api/shape-blueprint/geometries",
+                files={"file": ("unitless.stl", payload, "model/stl")},
+            )
+            assert omitted_unit.status_code == 422
+            assert omitted_unit.json()["detail"]["code"] == "unit_required"
 
             uploaded = await client.post(
                 "/api/shape-blueprint/geometries",

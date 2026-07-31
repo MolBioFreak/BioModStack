@@ -52,6 +52,7 @@ def _summary(row: ShapeDesignGeometry | AdmittedGeometry) -> dict[str, object]:
         "geometry_id": row.geometry_id,
         "source_id": row.source_id,
         "geometry_sha256": row.geometry_sha256,
+        "manifest_sha256": str(manifest["manifest_sha256"]),
         "source_sha256": manifest["source_sha256"],
         "point_pool_sha256": manifest["point_pool_sha256"],
         "sdf_sha256": manifest["sdf_sha256"],
@@ -73,7 +74,7 @@ def _summary(row: ShapeDesignGeometry | AdmittedGeometry) -> dict[str, object]:
 @router.post("/geometries", status_code=status.HTTP_201_CREATED)
 async def upload_geometry(
     file: UploadFile = File(...),
-    unit: str = Form("angstrom"),
+    unit: str | None = Form(None),
     session: AsyncSession = Depends(get_session),
 ):
     suffix = Path(file.filename or "").suffix.lower()
@@ -83,7 +84,10 @@ async def upload_geometry(
             status_code=422,
             detail={"code": "unsupported_format", "message": "accepted mesh formats are OBJ and STL"},
         )
-    scale = _UNIT_TO_ANGSTROM.get(unit)
+    if source_format == "stl" and unit is None:
+        raise HTTPException(status_code=422, detail={"code": "unit_required", "message": "STL source unit must be explicit"})
+    normalized_unit = unit or "angstrom"
+    scale = _UNIT_TO_ANGSTROM.get(normalized_unit)
     if scale is None:
         raise HTTPException(status_code=422, detail={"code": "invalid_unit", "message": "unsupported source unit"})
     payload = await file.read(MAX_MESH_BYTES + 1)
@@ -96,7 +100,7 @@ async def upload_geometry(
             payload=payload,
             filename=file.filename or f"source.{source_format}",
             source_format=source_format,
-            source_unit=unit,
+            source_unit=normalized_unit,
             angstrom_per_unit=scale,
         )
     except ShapeGeometryError as exc:

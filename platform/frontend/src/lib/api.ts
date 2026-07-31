@@ -500,6 +500,7 @@ export interface ShapeGeometrySummary {
     geometry_id: string;
     source_id: string;
     geometry_sha256: string;
+    manifest_sha256: string;
     source_sha256: string;
     preview_obj_sha256: string | null;
     point_pool_sha256: string;
@@ -512,7 +513,7 @@ export interface ShapeGeometrySummary {
     bounds_angstrom: [number, number, number, number, number, number];
     dimensions_angstrom: [number, number, number];
     source_format: 'obj' | 'stl';
-    source_parser: 'obj_strict_v1' | 'stl_ascii_v1' | 'stl_binary_v1';
+    source_parser: 'obj_triangle_v1' | 'stl_ascii_v1' | 'stl_binary_v1';
     source_unit: string;
     angstrom_per_unit: number;
 }

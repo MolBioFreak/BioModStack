@@ -137,7 +137,8 @@ test('legacy Shape geometry without a surface digest defaults to hash-bound poin
         bounds_angstrom: [-1, -1, -1, 1, 1, 1],
         dimensions_angstrom: [2, 2, 2],
         source_format: 'obj',
-        source_parser: 'obj_strict_v1',
+        source_parser: 'obj_triangle_v1',
+        manifest_sha256: 'f'.repeat(64),
         source_unit: 'angstrom',
         angstrom_per_unit: 1,
     }]);

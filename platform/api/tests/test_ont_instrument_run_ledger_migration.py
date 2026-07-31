@@ -224,6 +224,24 @@ def test_terminal_artifact_manifest_database_guards_reject_fully_rehashed_mutant
                 digest=_manifest_digest(noncanonical),
             )
 
+        nested_noncanonical_payload = manifest_for("run-nested-noncanonical")
+        nested_noncanonical_payload["artifacts"] = [{
+                "sha256": "a" * 64,
+                "path": "/trusted/reads.fastq",
+                "kind": "fastq",
+                "bytes": 12,
+            }]
+        nested_noncanonical = json.dumps(nested_noncanonical_payload, separators=(",", ":"), ensure_ascii=True)
+        assert nested_noncanonical != json.dumps(nested_noncanonical_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        with pytest.raises(sqlite3.IntegrityError):
+            _insert_manifest_row(
+                connection,
+                run_id="run-nested-noncanonical",
+                minknow_run_id="MNK-ORIGINAL",
+                manifest=nested_noncanonical,
+                digest=_manifest_digest(nested_noncanonical),
+            )
+
         valid = _canonical_terminal_manifest("run-valid", minknow_run_id="MNK-ORIGINAL")
         _insert_manifest_row(
             connection,

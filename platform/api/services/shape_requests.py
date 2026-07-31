@@ -92,6 +92,11 @@ async def materialize_shape_request(
     point_pool_sha256 = str(geometry.manifest.get("point_pool_sha256") or "")
     if point_pool_sha256 != submitted.expected_point_pool_sha256:
         raise ShapeRequestError("point_pool_hash_mismatch", "Shape point pool hash does not match the request")
+    manifest_sha256 = str(geometry.manifest.get("manifest_sha256") or "")
+    unhashed_manifest = dict(geometry.manifest)
+    unhashed_manifest.pop("manifest_sha256", None)
+    if not _SHA256.fullmatch(manifest_sha256) or hashlib.sha256(_canonical_json(unhashed_manifest)).hexdigest() != manifest_sha256:
+        raise ShapeRequestError("geometry_manifest_hash_mismatch", "Shape geometry manifest is not hash-bound")
     sdf_sha256 = str(geometry.manifest.get("sdf_sha256") or "")
     sdf_sign = str(geometry.manifest.get("sdf_sign") or "")
     sdf_grid_shape = geometry.manifest.get("sdf_grid_shape")
@@ -107,6 +112,7 @@ async def materialize_shape_request(
         "geometry_id": geometry.geometry_id,
         "geometry_sha256": geometry.geometry_sha256,
         "point_pool_sha256": point_pool_sha256,
+        "geometry_manifest_sha256": manifest_sha256,
         "sdf_sha256": sdf_sha256,
         "sdf_sign": sdf_sign,
         "sdf_grid_shape": sdf_grid_shape,
