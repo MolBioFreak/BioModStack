@@ -115,10 +115,12 @@ def build_result(
         if not isinstance(name, str) or not SAFE_ID.fullmatch(name):
             raise ValueError(f"Shape candidate name is invalid: {candidate_id}")
         structure_descriptor = metadata.get("structure")
+        source_descriptor = metadata.get("source_backbone")
         metrics_descriptor = metadata.get("metrics")
-        if not isinstance(structure_descriptor, dict) or not isinstance(metrics_descriptor, dict):
+        if not isinstance(structure_descriptor, dict) or not isinstance(source_descriptor, dict) or not isinstance(metrics_descriptor, dict):
             raise ValueError(f"Shape candidate descriptors are absent: {candidate_id}")
         structure = _closed_file(bundle, structure_descriptor, f"{candidate_id} structure")
+        source_backbone = _closed_file(bundle, source_descriptor, f"{candidate_id} source backbone")
         metrics = _closed_file(bundle, metrics_descriptor, f"{candidate_id} metrics")
         parsed_metrics = _read_json(metrics, f"{candidate_id} metrics")
         if parsed_metrics.get("schema") != "bms_shape_candidate_metrics_v1":
@@ -127,15 +129,20 @@ def build_result(
             expected = candidate_id if key == "candidate_id" else request[key]
             if parsed_metrics.get(key) != expected:
                 raise ValueError(f"Shape candidate metrics {key} binding mismatch: {candidate_id}")
+        if parsed_metrics.get("source_backbone_sha256") != source_descriptor.get("sha256"):
+            raise ValueError(f"Shape candidate metrics source-backbone binding mismatch: {candidate_id}")
         destination_structure = candidate_root / f"{candidate_id}{structure.suffix}"
+        destination_source = candidate_root / f"{candidate_id}.source{source_backbone.suffix}"
         destination_metrics = candidate_root / f"{candidate_id}.metrics.json"
         shutil.copyfile(structure, destination_structure)
+        shutil.copyfile(source_backbone, destination_source)
         shutil.copyfile(metrics, destination_metrics)
         accepted.append(
             {
                 "candidate_id": candidate_id,
                 "name": name,
                 "structure": _artifact(destination_structure, output_dir, structure.suffix.lstrip(".")),
+                "source_backbone": _artifact(destination_source, output_dir, source_backbone.suffix.lstrip(".")),
                 "metrics": _artifact(destination_metrics, output_dir),
                 "provenance": metadata.get("provenance") or {},
             }

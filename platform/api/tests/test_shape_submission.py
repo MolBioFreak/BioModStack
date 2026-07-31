@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
 import json
 from pathlib import Path
@@ -10,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -138,6 +140,49 @@ async def test_shape_request_rejects_geometry_hash_mismatch_before_staging(tmp_p
         await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_shape_request_translates_immutable_publication_conflict(tmp_path: Path, monkeypatch) -> None:
+    _, engine, factory = await _database(tmp_path)
+    resources = importlib.import_module("services.shape_resources")
+    requests = importlib.import_module("services.shape_requests")
+    try:
+        async with factory() as session:
+            geometry = await resources.admit_obj_geometry(
+                session,
+                data_root=tmp_path / "data",
+                payload=CUBE_OBJ,
+                filename="cube.obj",
+                angstrom_per_unit=10.0,
+            )
+            submitted = requests.SubmittedShapeRequest(
+                client_request_id="54c602f8-a20a-4458-952d-ff54dd5bc832",
+                name="publication-conflict",
+                geometry_id=geometry.geometry_id,
+                expected_geometry_sha256=geometry.geometry_sha256,
+                expected_point_pool_sha256=geometry.point_pool_sha256,
+                target_length=100,
+                num_backbones=1,
+                sequences_per_backbone=1,
+                seed=0,
+            )
+            monkeypatch.setattr(
+                requests,
+                "_publish",
+                lambda path, payload: (_ for _ in ()).throw(
+                    RuntimeError(f"immutable Shape artifact conflict: {path.name}")
+                ),
+            )
+            with pytest.raises(requests.ShapeRequestError) as error:
+                await requests.materialize_shape_request(
+                    session,
+                    data_root=tmp_path / "data",
+                    submitted=submitted,
+                )
+            assert error.value.code == "request_id_conflict"
+    finally:
+        await engine.dispose()
+
+
 def test_shape_mode_routes_only_to_shape_workflow() -> None:
     nextflow = importlib.import_module("services.nextflow")
     command = nextflow.build_nextflow_command(
@@ -158,6 +203,15 @@ def test_shape_mode_routes_only_to_shape_workflow() -> None:
     assert "--shape_request_path /server/stage/request.json" in joined
 
 
+def test_preallocated_shape_job_output_path_ignores_presentation_name(tmp_path: Path, monkeypatch) -> None:
+    jobs = importlib.import_module("routers.jobs")
+    monkeypatch.setattr(jobs, "get_results_dir", lambda: tmp_path / "results")
+    job_id = "7eb4ccb6-4514-5fcb-a5c6-dcde3f7eb394"
+    first = jobs._standard_job_output_dir("first-name", "20260730_235959", job_id)
+    second = jobs._standard_job_output_dir("different-name", "20260731_000000", job_id)
+    assert first == second == tmp_path / "results" / job_id
+
+
 @pytest.mark.asyncio
 async def test_typed_shape_endpoint_uses_existing_job_lifecycle(tmp_path: Path, monkeypatch) -> None:
     database, engine, factory = await _database(tmp_path)
@@ -165,10 +219,18 @@ async def test_typed_shape_endpoint_uses_existing_job_lifecycle(tmp_path: Path, 
     router = importlib.import_module("routers.shape_blueprint")
     captured = {}
 
-    async def fake_create_job(job_data, background_tasks, session):
+    async def fake_create_job(
+        job_data,
+        background_tasks,
+        session,
+        _preallocated_job_id=None,
+        _commit=True,
+    ):
         captured["job_data"] = job_data
+        captured["preallocated_job_id"] = _preallocated_job_id
+        captured["commit"] = _commit
         job = database.Job(
-            id="58d0bdc0-1097-4d1d-ae24-49d84937e1ab",
+            id=_preallocated_job_id,
             name=job_data.name,
             model_id=job_data.model_id,
             mode=job_data.mode,
@@ -178,7 +240,7 @@ async def test_typed_shape_endpoint_uses_existing_job_lifecycle(tmp_path: Path, 
             output_dir=str(tmp_path / "results"),
         )
         session.add(job)
-        await session.commit()
+        await session.flush()
         return SimpleNamespace(id=job.id, status="queued", name=job.name)
 
     async def session_override():
@@ -215,7 +277,10 @@ async def test_typed_shape_endpoint_uses_existing_job_lifecycle(tmp_path: Path, 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post("/api/shape-blueprint/requests", json=payload)
         assert response.status_code == 201, response.text
-        assert response.json()["job_id"] == "58d0bdc0-1097-4d1d-ae24-49d84937e1ab"
+        expected_job_id = str(router.uuid.uuid5(router._SHAPE_JOB_NAMESPACE, "shape_efbfe67e-f4fe-43d8-a856-78705ca82937"))
+        assert response.json()["job_id"] == expected_job_id
+        assert captured["preallocated_job_id"] == expected_job_id
+        assert captured["commit"] is False
         job_data = captured["job_data"]
         assert job_data.model_id == "protein_modification_experimental"
         assert job_data.mode == "shape_blueprint"
@@ -223,7 +288,82 @@ async def test_typed_shape_endpoint_uses_existing_job_lifecycle(tmp_path: Path, 
         assert all("client" not in key for key in job_data.params)
         async with factory() as session:
             persisted = await session.get(database.ShapeDesignRequest, "shape_efbfe67e-f4fe-43d8-a856-78705ca82937")
-            assert persisted.job_id == "58d0bdc0-1097-4d1d-ae24-49d84937e1ab"
+            assert persisted.job_id == expected_job_id
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_duplicate_shape_submissions_create_one_job(tmp_path: Path, monkeypatch) -> None:
+    database, engine, factory = await _database(tmp_path)
+    resources = importlib.import_module("services.shape_resources")
+    router = importlib.import_module("routers.shape_blueprint")
+
+    async def fake_create_job(
+        job_data,
+        background_tasks,
+        session,
+        _preallocated_job_id=None,
+        _commit=True,
+    ):
+        job = database.Job(
+            id=_preallocated_job_id,
+            name=job_data.name,
+            model_id=job_data.model_id,
+            mode=job_data.mode,
+            params=job_data.params,
+            status="queued",
+            queue_status="queued",
+            output_dir=str(tmp_path / "results" / str(_preallocated_job_id)),
+        )
+        session.add(job)
+        await session.flush()
+        await asyncio.sleep(0.05)
+        return SimpleNamespace(id=job.id, status="queued", name=job.name)
+
+    async def session_override():
+        async with factory() as session:
+            yield session
+
+    monkeypatch.setattr(router, "get_data_root", lambda: tmp_path / "data")
+    monkeypatch.setattr(router.jobs_router, "create_job", fake_create_job)
+    monkeypatch.setenv("BMS_SHAPE_BLUEPRINT_ENABLED", "true")
+    async with factory() as session:
+        geometry = await resources.admit_obj_geometry(
+            session,
+            data_root=tmp_path / "data",
+            payload=CUBE_OBJ,
+            filename="cube.obj",
+            angstrom_per_unit=10.0,
+        )
+
+    app = FastAPI()
+    app.include_router(router.router, prefix="/api/shape-blueprint")
+    app.dependency_overrides[router.get_session] = session_override
+    payload = {
+        "client_request_id": "cf353e75-271e-46c9-b2fe-67a655c2571d",
+        "name": "shape-concurrent-owner-path",
+        "geometry_id": geometry.geometry_id,
+        "expected_geometry_sha256": geometry.geometry_sha256,
+        "expected_point_pool_sha256": geometry.point_pool_sha256,
+        "target_length": 120,
+        "num_backbones": 1,
+        "sequences_per_backbone": 1,
+        "seed": 42,
+    }
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            first, second = await asyncio.gather(
+                client.post("/api/shape-blueprint/requests", json=payload),
+                client.post("/api/shape-blueprint/requests", json=payload),
+            )
+        assert first.status_code == 201, first.text
+        assert second.status_code == 201, second.text
+        assert first.json()["job_id"] == second.json()["job_id"]
+        assert sorted((first.json()["reused"], second.json()["reused"])) == [False, True]
+        async with factory() as session:
+            jobs = (await session.execute(select(database.Job))).scalars().all()
+            assert len(jobs) == 1
     finally:
         await engine.dispose()
 

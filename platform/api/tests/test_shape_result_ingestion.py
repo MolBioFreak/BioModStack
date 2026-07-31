@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from database import Base, Design, Job, ShapeCadSource, ShapeDesignGeometry, ShapeDesignRequest
+from services.result_ingester import _ingest_shape_result_manifest
 from services.result_state_integrity import finalize_successful_job
 
 
@@ -133,14 +134,17 @@ async def test_shape_candidate_manifest_creates_hash_bound_design(tmp_path: Path
     candidate_dir = output / "results" / "shape_candidates"
     candidate_dir.mkdir(parents=True)
     structure = candidate_dir / "shape_candidate_0001.cif"
+    source = candidate_dir / "shape_candidate_0001.source.pdb"
     metrics = candidate_dir / "shape_candidate_0001.metrics.json"
     structure.write_bytes(b"data_shape\n")
+    source.write_bytes(b"ATOM source\n")
     metrics.write_text(json.dumps({
         "schema": "bms_shape_candidate_metrics_v1",
         "candidate_id": "shape_candidate_0001",
         "geometry_sha256": "3" * 64,
         "point_pool_sha256": "4" * 64,
         "sdf_sha256": "7" * 64,
+        "source_backbone_sha256": _sha(source.read_bytes()),
         "shape_total": 1.5,
     }))
     candidate = {
@@ -151,6 +155,12 @@ async def test_shape_candidate_manifest_creates_hash_bound_design(tmp_path: Path
             "format": "cif",
             "sha256": _sha(structure.read_bytes()),
             "bytes": structure.stat().st_size,
+        },
+        "source_backbone": {
+            "relative_path": "results/shape_candidates/shape_candidate_0001.source.pdb",
+            "format": "pdb",
+            "sha256": _sha(source.read_bytes()),
+            "bytes": source.stat().st_size,
         },
         "metrics": {
             "relative_path": "results/shape_candidates/shape_candidate_0001.metrics.json",
@@ -168,10 +178,21 @@ async def test_shape_candidate_manifest_creates_hash_bound_design(tmp_path: Path
         designs = (await session.execute(select(Design).where(Design.job_id == job.id))).scalars().all()
         assert len(designs) == 1
         assert designs[0].pdb_path == str(structure.resolve())
+        assert designs[0].source_pdb_path == str(source.resolve())
         assert designs[0].json_path == str(metrics.resolve())
         assert designs[0].stage_family == "shape_blueprint"
         assert designs[0].artifact_class == "shape_candidate"
         assert designs[0].provenance["geometry_sha256"] == "3" * 64
+        substituted_metrics = json.loads(metrics.read_text())
+        substituted_metrics["source_backbone_sha256"] = "9" * 64
+        metrics.write_text(json.dumps(substituted_metrics))
+        candidate["metrics"]["sha256"] = _sha(metrics.read_bytes())
+        candidate["metrics"]["bytes"] = metrics.stat().st_size
+        manifest_path.write_text(
+            json.dumps(_manifest("job-shape-candidates", outcome="candidates", candidates=[candidate]))
+        )
+        with pytest.raises(RuntimeError, match="source_backbone_sha256 binding mismatch"):
+            await _ingest_shape_result_manifest(job, output, session, commit=False)
     await engine.dispose()
 
 

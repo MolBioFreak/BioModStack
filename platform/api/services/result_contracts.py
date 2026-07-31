@@ -62,7 +62,7 @@ _RESULT_CONTRACT_DEFINITIONS: List[ResultContractDefinition] = [
             "shape_geometry_overlay", "shape_candidate_metrics", "content_addressed_download",
         ],
         required_fields=["artifact_class"],
-        required_artifacts=["structure", "metrics"],
+        required_artifacts=["structure", "source_backbone", "metrics"],
         notes="Canonical Shape-guided, sequence-designed, ESMFold2-refolded structural candidates.",
     ),
     ResultContractDefinition(
@@ -393,18 +393,25 @@ def build_review_artifact_manifest(design: Any) -> Dict[str, Any]:
         supplied = getattr(design, "review_artifact_manifest", None)
         supplied = supplied if isinstance(supplied, dict) else {}
         structure_raw = supplied.get("structure")
+        source_raw = supplied.get("source_backbone")
         metrics_raw = supplied.get("metrics")
         structure_descriptor: Dict[str, Any] = structure_raw if isinstance(structure_raw, dict) else {}
+        source_descriptor: Dict[str, Any] = source_raw if isinstance(source_raw, dict) else {}
         metrics_descriptor: Dict[str, Any] = metrics_raw if isinstance(metrics_raw, dict) else {}
         structure_artifact = artifact(getattr(design, "pdb_path", None), kind="structure")
+        source_artifact = artifact(getattr(design, "source_pdb_path", None), kind="source_backbone")
         metrics_artifact = artifact(getattr(design, "json_path", None), kind="shape_metrics")
-        for target, source in ((structure_artifact, structure_descriptor), (metrics_artifact, metrics_descriptor)):
+        for target, source in (
+            (structure_artifact, structure_descriptor),
+            (source_artifact, source_descriptor),
+            (metrics_artifact, metrics_descriptor),
+        ):
             for key in ("sha256", "bytes", "format", "relative_path"):
                 if key in source:
                     target[key] = source[key]
         return {
             "schema": REVIEW_ARTIFACT_SCHEMA,
-            "artifacts": {"structure": structure_artifact, "metrics": metrics_artifact},
+            "artifacts": {"structure": structure_artifact, "source_backbone": source_artifact, "metrics": metrics_artifact},
             "roles": {**role_map, "has_binder": False},
         }
 

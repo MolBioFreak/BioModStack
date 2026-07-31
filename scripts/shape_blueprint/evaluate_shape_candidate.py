@@ -157,7 +157,9 @@ def evaluate_candidate(
     ).hexdigest()[:16]
     candidate_id = f"{normalized[:72]}__{identity}"
     output_structure = output_dir / f"{candidate_id}.cif"
+    output_source = output_dir / f"{candidate_id}.source{source_backbone.suffix.lower()}"
     save_structure(str(output_structure), candidate)
+    shutil.copyfile(source_backbone, output_source)
     engine = "proteinmpnn" if "__proteinmpnn__" in sequence_name else "fampnn" if "__fampnn__" in sequence_name else "unknown"
     transform = {
         "convention": "aligned_candidate_row = candidate_row @ rotation_row + translation_row",
@@ -199,6 +201,7 @@ def evaluate_candidate(
         "candidate_id": candidate_id,
         "name": candidate_id,
         "structure": {"filename": output_structure.name, "sha256": _sha256(output_structure), "bytes": output_structure.stat().st_size},
+        "source_backbone": {"filename": output_source.name, "sha256": _sha256(output_source), "bytes": output_source.stat().st_size},
         "metrics": {"filename": output_metrics.name, "sha256": _sha256(output_metrics), "bytes": output_metrics.stat().st_size},
         "provenance": {
             "sequence_engine": engine,

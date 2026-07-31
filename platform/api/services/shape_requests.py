@@ -12,6 +12,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 
 from database import ShapeDesignGeometry, ShapeDesignRequest
 from services.shape_resources import _publish
@@ -156,7 +157,15 @@ async def materialize_shape_request(
         "sdf.f32le": sdf,
     }
     for filename, payload in staged_payloads.items():
-        _publish(stage / filename, payload)
+        try:
+            _publish(stage / filename, payload)
+        except RuntimeError as exc:
+            if "immutable Shape artifact conflict" not in str(exc):
+                raise
+            raise ShapeRequestError(
+                "request_id_conflict",
+                "client request ID is already bound to different staged bytes",
+            ) from exc
     os.chmod(stage, 0o550)
 
     row = ShapeDesignRequest(
@@ -168,7 +177,17 @@ async def materialize_shape_request(
         job_id=None,
     )
     session.add(row)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        existing = await session.get(ShapeDesignRequest, request_id)
+        if existing is None or existing.request_sha256 != request_sha256:
+            raise ShapeRequestError(
+                "request_id_conflict",
+                "client request ID was concurrently bound to different scientific intent",
+            )
+        return _staged(existing, data_root=data_root, name=submitted.name)
     return _staged(row, data_root=data_root, name=submitted.name)
 
 

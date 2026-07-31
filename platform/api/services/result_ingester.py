@@ -2748,6 +2748,7 @@ async def _ingest_shape_result_manifest(
         seen_ids.add(candidate_id)
         seen_names.add(name)
         structure = _shape_contained_artifact(output_root, item.get("structure") or {}, f"{candidate_id} structure")
+        source_backbone = _shape_contained_artifact(output_root, item.get("source_backbone") or {}, f"{candidate_id} source backbone")
         metrics_path = _shape_contained_artifact(output_root, item.get("metrics") or {}, f"{candidate_id} metrics")
         try:
             metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
@@ -2760,6 +2761,7 @@ async def _ingest_shape_result_manifest(
             "geometry_sha256": bindings["geometry_sha256"],
             "point_pool_sha256": bindings["point_pool_sha256"],
             "sdf_sha256": bindings["sdf_sha256"],
+            "source_backbone_sha256": item["source_backbone"]["sha256"],
         }
         for key, expected in metric_bindings.items():
             if metrics.get(key) != expected:
@@ -2768,7 +2770,17 @@ async def _ingest_shape_result_manifest(
             await session.execute(select(Design).where(Design.job_id == str(job.id), Design.name == name))
         ).scalar_one_or_none()
         if existing is not None:
-            if Path(existing.pdb_path).resolve() != structure or Path(existing.json_path or "").resolve() != metrics_path:
+            expected_manifest = {
+                "structure": dict(item["structure"]),
+                "source_backbone": dict(item["source_backbone"]),
+                "metrics": dict(item["metrics"]),
+            }
+            if (
+                Path(existing.pdb_path).resolve() != structure
+                or Path(existing.source_pdb_path or "").resolve() != source_backbone
+                or Path(existing.json_path or "").resolve() != metrics_path
+                or existing.review_artifact_manifest != expected_manifest
+            ):
                 raise RuntimeError(f"Shape candidate conflicts with an existing Design: {name}")
             continue
         producer_provenance = item.get("provenance") or {}
@@ -2779,6 +2791,7 @@ async def _ingest_shape_result_manifest(
             job_id=str(job.id),
             name=name,
             pdb_path=str(structure),
+            source_pdb_path=str(source_backbone),
             json_path=str(metrics_path),
             lineage_root_job_id=str(job.id),
             stage_family="shape_blueprint",
@@ -2792,8 +2805,9 @@ async def _ingest_shape_result_manifest(
             review_contract_version=1,
             review_contract_source="producer",
             review_artifact_manifest={
-                "structure": item["structure"],
-                "metrics": item["metrics"],
+                "structure": dict(item["structure"]),
+                "source_backbone": dict(item["source_backbone"]),
+                "metrics": dict(item["metrics"]),
             },
             review_role_map={"designed_structure": item["structure"]["relative_path"]},
             provenance={

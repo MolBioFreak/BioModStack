@@ -368,7 +368,11 @@ export default function StructureViewerPane({
     const governedVolumeInventoryQuery = useQuery({
         queryKey: ['viewer-volume-inventory', activeJob?.id],
         queryFn: () => fetchViewerVolumes(activeJob!.id).then((response) => response.data),
-        enabled: Boolean(activeJob?.id && activeJob.status === 'completed'),
+        enabled: Boolean(
+            activeJob?.id
+            && activeJob.status === 'completed'
+            && selectedDesign?.review_profile_id !== 'shape_blueprint'
+        ),
         retry: false,
         staleTime: 30_000,
     });
@@ -399,7 +403,15 @@ export default function StructureViewerPane({
         return getFampnnScalar(fampnnPayload, 'fampnn_max_residue_psce', 'max_residue_psce');
     }, [fampnnPayload, selectedDesign?.fampnn_max_residue_psce]);
     const sourceBackboneReference = useMemo<ReferenceStructure | null>(() => {
-        if (designLens !== 'ppiflow') return null;
+        const isShapeBlueprint = selectedDesign?.review_profile_id === 'shape_blueprint';
+        if (designLens !== 'ppiflow' && !isShapeBlueprint) return null;
+        if (isShapeBlueprint) {
+            return {
+                url: `/api/designs/${selectedDesign?.id}/source-pdb`,
+                format: 'pdb',
+                name: 'Generating RFD3 Backbone',
+            };
+        }
         const sourceName = typeof selectedDesignPpiflowRecord?.source_design_name === 'string' && selectedDesignPpiflowRecord.source_design_name.trim()
             ? selectedDesignPpiflowRecord.source_design_name.trim()
             : 'Source Backbone';
@@ -408,7 +420,7 @@ export default function StructureViewerPane({
             format: 'pdb',
             name: `Source Backbone • ${sourceName}`,
         };
-    }, [designLens, selectedDesign?.id, selectedDesignPpiflowRecord]);
+    }, [designLens, selectedDesign?.id, selectedDesign?.review_profile_id, selectedDesignPpiflowRecord]);
     const conforNetsConformerSet = useMemo(
         () => buildConforNetsConformerSet(designs, selectedDesignId),
         [designs, selectedDesignId],
@@ -582,7 +594,11 @@ export default function StructureViewerPane({
     // Per-residue confidence is already persisted on the design row, so fetching it
     // is cheap and does not kick off new analysis work.
     useEffect(() => {
-        if (!selectedDesignId) return;
+        if (!selectedDesignId || selectedDesign?.review_profile_id === 'shape_blueprint') {
+            setPlddtProfile([]);
+            setResidueMetricNumbers([]);
+            return;
+        }
 
         const fetchResidueMetrics = async () => {
             try {
@@ -603,7 +619,7 @@ export default function StructureViewerPane({
         };
 
         fetchResidueMetrics();
-    }, [selectedDesignId]);
+    }, [selectedDesign?.review_profile_id, selectedDesignId]);
 
     const chainBoundaries = useMemo(() => {
         const chainIds = Object.keys(chainMetrics).sort();
@@ -786,6 +802,20 @@ export default function StructureViewerPane({
             };
         });
     }, [conforNetsConformerSet, effectiveColorMode, resolvedConforNetsOverlayIds, viewerStructureFormat]);
+    const viewerOverlayStructures = useMemo(() => {
+        const overlays = [...conforNetsOverlayStructures];
+        const provenance = selectedDesign?.provenance;
+        const geometryId = provenance && typeof provenance.geometry_id === 'string' ? provenance.geometry_id : null;
+        if (selectedDesign?.review_profile_id === 'shape_blueprint' && geometryId && effectiveColorMode !== 'cdr') {
+            overlays.push({
+                id: `shape-geometry-${geometryId}`,
+                structureUrl: `/api/shape-blueprint/geometries/${geometryId}/points.cif`,
+                format: 'cif',
+                label: 'Canonical Shape Point Pool',
+            });
+        }
+        return overlays;
+    }, [conforNetsOverlayStructures, effectiveColorMode, selectedDesign?.provenance, selectedDesign?.review_profile_id]);
 
     useEffect(() => {
         if (selectedChain && !new Set([...Object.keys(chainMetrics), ...fampnnPsceChainIds]).has(selectedChain)) {
@@ -1479,7 +1509,7 @@ export default function StructureViewerPane({
         const handleFullscreenChange = () => {
             const fullscreen = !!document.fullscreenElement;
             setIsFullscreen(fullscreen);
-            if (!fullscreen) setMetricWorkbenchOpen(true);
+            setMetricWorkbenchOpen(!fullscreen);
         };
         document.addEventListener('fullscreenchange', handleFullscreenChange);
         return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
@@ -2846,6 +2876,14 @@ export default function StructureViewerPane({
         </div>
     );
 
+    const shapeMetrics = selectedDesign?.review_profile_id === 'shape_blueprint' && selectedDesign.confidence_metrics
+        ? selectedDesign.confidence_metrics as Record<string, unknown>
+        : null;
+    const shapeMetric = (key: string, digits = 3) => {
+        const value = shapeMetrics?.[key];
+        return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : '—';
+    };
+
     return (
         <div
             ref={containerRef}
@@ -2881,21 +2919,40 @@ export default function StructureViewerPane({
                                 format={viewerStructureFormat}
                                 alphafoldView={effectiveColorMode === 'plddt' && !plddtResidueColors}
                                 selections={effectiveColorMode === 'cdr' ? antibodySelections : undefined}
-                                overlayStructures={conforNetsOverlayStructures}
+                                overlayStructures={viewerOverlayStructures}
                                 residueMetricLayer={residueMetricLayer}
                                 metricLayers={allMetricLayers}
                                 showComplexWorkbench={false}
-                                jobId={governedWorkbenchContext?.jobId ?? activeJob?.id}
-                                artifactJobId={governedWorkbenchContext?.artifactJobId ?? activeJob?.id}
+                                showM6Workbench={!shapeMetrics}
+                                showMeasurements={!shapeMetrics}
+                                jobId={shapeMetrics ? undefined : governedWorkbenchContext?.jobId ?? activeJob?.id}
+                                artifactJobId={shapeMetrics ? undefined : governedWorkbenchContext?.artifactJobId ?? activeJob?.id}
                                 structureDocumentId={governedWorkbenchContext?.structureDocumentId}
                                 derivedComponents={derivedComponents}
                                 activeMetricId={overlayView === 'pae' ? 'pae' : residueMetricLayer?.descriptor.id}
-                                showMetricWorkbench={metricWorkbenchOpen}
-                                onMetricWorkbenchVisibilityChange={setMetricWorkbenchOpen}
-                                showSequenceTrack
+                                showMetricWorkbench={!shapeMetrics && !isFullscreen && metricWorkbenchOpen}
+                                onMetricWorkbenchVisibilityChange={shapeMetrics ? undefined : setMetricWorkbenchOpen}
+                                showSequenceTrack={!shapeMetrics}
                                 height="100%"
                                 backgroundColor={themeColors.bgPrimary}
                             />
+                        )}
+
+                        {shapeMetrics && (
+                            <div className="absolute right-3 top-3 z-20 max-w-[320px] rounded-xl border border-cyan-500/30 bg-slate-950/90 p-3 text-[11px] text-slate-200 shadow-xl backdrop-blur-sm">
+                                <div className="flex items-center justify-between gap-3">
+                                    <span className="font-semibold uppercase tracking-wider text-cyan-300">Shape Blueprint candidate</span>
+                                    <span className="rounded-full bg-slate-800 px-2 py-0.5 text-emerald-300">{String(selectedDesign?.provenance?.sequence_engine ?? 'unknown')}</span>
+                                </div>
+                                <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1">
+                                    <span>Shape total</span><span className="font-mono text-right">{shapeMetric('shape_total')}</span>
+                                    <span>Outside penalty</span><span className="font-mono text-right">{shapeMetric('shape_outside')}</span>
+                                    <span>Inside fraction</span><span className="font-mono text-right">{shapeMetric('sdf_positive_inside_fraction')}</span>
+                                    <span>Source RMSD Å</span><span className="font-mono text-right">{shapeMetric('alignment_transform.rmsd_angstrom') === '—' && typeof (shapeMetrics.alignment_transform as Record<string, unknown> | undefined)?.rmsd_angstrom === 'number' ? Number((shapeMetrics.alignment_transform as Record<string, unknown>).rmsd_angstrom).toFixed(3) : shapeMetric('alignment_transform.rmsd_angstrom')}</span>
+                                    <span>pLDDT</span><span className="font-mono text-right">{shapeMetric('plddt_overall', 1)}</span>
+                                </div>
+                                <div className="mt-2 border-t border-slate-800 pt-2 text-slate-400">Cyan overlay: exact canonical point pool. Use <span className="text-cyan-200">Source Backbone</span> for the generating RFD3 comparison.</div>
+                            </div>
                         )}
 
                         {showReferenceDock && (
@@ -2939,6 +2996,11 @@ export default function StructureViewerPane({
                                             structureUrl={selectedReference.url}
                                             format={selectedReference.format}
                                             alphafoldView={false}
+                                            showComplexWorkbench={false}
+                                            showM6Workbench={!shapeMetrics}
+                                            showMeasurements={!shapeMetrics}
+                                            showMetricWorkbench={!shapeMetrics}
+                                            showSequenceTrack={!shapeMetrics}
                                             height="100%"
                                             backgroundColor={themeColors.bgSecondary}
                                             label={selectedReference.name}
