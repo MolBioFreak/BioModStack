@@ -33,6 +33,11 @@ async def test_md_terminal_authority_closes_durable_run_state_in_the_callers_tra
 
     monkeypatch.setattr(completion_module, "apply_completion_barrier", lambda candidate: {"state": "completed"})
 
+    async def no_artifacts(_job, _session) -> None:
+        return None
+
+    monkeypatch.setattr(completion_module, "_ingest_durable_artifacts", no_artifacts)
+
     result = await completion_module.validate_and_finalize_md_job(job, Session())
 
     assert result == {"state": "completed"}

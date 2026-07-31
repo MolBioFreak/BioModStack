@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import sys
 from pathlib import Path
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 API_ROOT = Path(__file__).resolve().parents[1]
@@ -13,7 +15,9 @@ if str(API_ROOT) not in sys.path:
 
 from database import Base, Job, JobArtifact
 from services.md.artifacts import MdArtifactProvenanceError
+import services.md.completion as completion_module
 from services.md.read_model import md_run_snapshot
+from services.md.results import ResolvedMDArtifact
 from services.md.state import accept_checkpoint, create_md_run, create_replica_attempt
 
 
@@ -45,6 +49,72 @@ async def session(tmp_path: Path):
     async with maker() as value:
         yield value
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_completion_ingests_validated_playback_inventory_idempotently(
+    session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent = Job(
+        id="md-ingest-parent", name="MD", status="completed",
+        model_id="molecular_dynamics", mode="simulate", params={},
+    )
+    child = Job(
+        id="md-ingest-replica", name="MD replica 0", status="completed",
+        model_id="molecular_dynamics", mode="replica", params={},
+        parent_job_id=parent.id, child_stage="md_replica",
+    )
+    session.add_all([parent, child])
+    await session.flush()
+    run = await create_md_run(session, job=parent, normalized_request=_request())
+    replica, segment = await create_replica_attempt(
+        session, job_id=parent.id, replica_index=0, attempt=0, engine="gromacs",
+        execution_plan_sha256="b" * 64, compatibility_key="c" * 64,
+        child_job_id=child.id,
+    )
+    run.phase = "completed"
+    replica.state, replica.active = "completed", False
+    segment.state, segment.end_step, segment.end_time_ps = "completed", 10_000, 20.0
+    root = tmp_path / "results"
+    files = {
+        "replicas/replica_0/system/prepared.gro": b"topology-bytes",
+        "replicas/replica_0/production/production.xtc": b"trajectory-bytes",
+        "replicas/replica_0/analysis/trajectory-frame-map.json": b"frame-map-bytes",
+    }
+    roles = {
+        "replicas/replica_0/system/prepared.gro": "analysis_topology",
+        "replicas/replica_0/production/production.xtc": "analysis_trajectory",
+        "replicas/replica_0/analysis/trajectory-frame-map.json": "trajectory_frame_map",
+    }
+    inventory = []
+    trajectory_sha = hashlib.sha256(files["replicas/replica_0/production/production.xtc"]).hexdigest()
+    for index, (logical, content) in enumerate(files.items()):
+        path = root / logical
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+        inventory.append(ResolvedMDArtifact(
+            artifact_id=f"opaque-{index}", replica_index=0, name=path.stem, path=path,
+            bytes=len(content), sha256=hashlib.sha256(content).hexdigest(),
+            semantic_role=roles[logical], atom_order_identity="atom-order",
+            selection_method=None, source_frame=None, time_ps=None,
+            source_trajectory_sha256=(trajectory_sha if roles[logical] == "trajectory_frame_map" else None),
+        ))
+    monkeypatch.setattr(completion_module, "_load_inventory", lambda _job: (root, {}, inventory))
+
+    await completion_module._ingest_durable_artifacts(parent, session)
+    await completion_module._ingest_durable_artifacts(parent, session)
+    await session.flush()
+
+    rows = list((await session.scalars(select(JobArtifact))).all())
+    assert len(rows) == 3
+    snapshot = await md_run_snapshot(session, parent.id)
+    assert snapshot is not None
+    assert snapshot["artifact_provenance"]["status"] == "bound"
+    by_role = {item["semantic_role"]: item for item in snapshot["artifact_provenance"]["artifacts"]}
+    assert by_role["trajectory_frame_map"]["sources"] == [{
+        "artifact_id": by_role["analysis_trajectory"]["id"],
+        "sha256": by_role["analysis_trajectory"]["sha256"],
+    }]
 
 
 @pytest.mark.asyncio

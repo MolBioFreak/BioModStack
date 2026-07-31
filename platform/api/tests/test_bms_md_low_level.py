@@ -14,7 +14,7 @@ from scripts.bms_md.contract import MD_JOB_SCHEMA, build_run_manifest, normalize
 from scripts.bms_md.cuda_contract import CudaContractError, assert_single_cuda_device
 from scripts.bms_md.engine_adapters import EngineAdapterError, run_md_replica
 from scripts.bms_md.gromacs import assert_cuda_enabled, build_mdrun_command
-from scripts.bms_md.gromacs_pipeline import run_gromacs_job
+from scripts.bms_md.gromacs_pipeline import _build_trajectory_frame_map, run_gromacs_job
 from scripts.bms_md.runner import (
     StageLedger,
     assert_minimization_converged,
@@ -24,6 +24,49 @@ from scripts.bms_md.runner import (
 )
 from services.md.chemistry_catalog import ChemistryCatalog, RuntimeProbeResult
 from services.md.launch_contract import materialize_md_job_spec
+
+
+def test_trajectory_frame_map_uses_exact_gromacs_receipt_and_timestep() -> None:
+    receipt = "\n".join([
+        "Reading frame       0 time    0.000   ",
+        "Reading frame       1 time    1.000   ",
+        "Reading frame       2 time    2.000   ",
+        "Last frame          2 time    2.000   ",
+    ])
+
+    payload = _build_trajectory_frame_map(
+        trajectory_report=receipt,
+        trajectory_sha256="a" * 64,
+        replica_index=3,
+        timestep_fs=2.0,
+    )
+
+    assert payload == {
+        "schema": "bms.md.trajectory-frame-map.v1",
+        "replica": 3,
+        "trajectory_sha256": "a" * 64,
+        "frames": [
+            {"display_frame": 0, "source_frame": 0, "time_ps": 0.0, "step": 0},
+            {"display_frame": 1, "source_frame": 1, "time_ps": 1.0, "step": 500},
+            {"display_frame": 2, "source_frame": 2, "time_ps": 2.0, "step": 1000},
+        ],
+    }
+
+
+@pytest.mark.parametrize("receipt", [
+    "",
+    "Reading frame 1 time 0.000",
+    "Reading frame 0 time 0.000\nReading frame 1 time 0.000",
+    "Reading frame 0 time 0.001",
+])
+def test_trajectory_frame_map_rejects_untrustworthy_receipts(receipt: str) -> None:
+    with pytest.raises(ValueError):
+        _build_trajectory_frame_map(
+            trajectory_report=receipt,
+            trajectory_sha256="b" * 64,
+            replica_index=0,
+            timestep_fs=2.0,
+        )
 
 
 API_ROOT = Path(__file__).resolve().parents[1]
@@ -683,7 +726,12 @@ elif subcommand == "mdrun":
     if prefix.name == "production":
         prefix.with_suffix(".xtc").write_text("trajectory\n", encoding="utf-8")
 elif subcommand == "check":
-    print("Checking file; Last frame 10 time 1.000")
+    if "-f" in args:
+        for frame in range(11):
+            print(f"Reading frame {frame:7d} time {frame * 0.1:8.3f}")
+        print("Last frame         10 time    1.000")
+    else:
+        print("Checking energy file; Last frame 10 time 1.000")
 else:
     raise SystemExit("unsupported fake gmx command: " + subcommand)
 '''
@@ -719,6 +767,14 @@ def test_fake_gromacs_full_run_verifies_outputs_and_resumes_safely(
     assert (output / "production" / "production.xtc").is_file()
     assert (output / "production" / "production.cpt").is_file()
     assert "Last frame 10" in (output / "analysis" / "gromacs_check.txt").read_text()
+    frame_map = json.loads((output / "analysis" / "trajectory-frame-map.json").read_text())
+    assert frame_map["trajectory_sha256"] == manifest["artifacts"]["trajectory"]["sha256"]
+    assert frame_map["frames"][-1] == {
+        "display_frame": 10, "source_frame": 10, "time_ps": 1.0, "step": 500,
+    }
+    assert manifest["artifacts"]["trajectory_frame_map"]["source_trajectory_sha256"] == frame_map["trajectory_sha256"]
+    assert manifest["artifacts"]["representative_structure"]["source_frame"] == 10
+    assert manifest["artifacts"]["representative_structure"]["time_ps"] == 1.0
     for record in manifest["artifacts"].values():
         artifact = output / record["path"]
         assert not Path(record["path"]).is_absolute()
