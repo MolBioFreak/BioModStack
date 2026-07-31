@@ -7,15 +7,20 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Job, MdAttemptSegment, MdReplicaRun
-from services.nextflow import cancel_nextflow_job
+from services.nextflow import cancel_nextflow_job, get_running_jobs
 
 from .state import MdStateError, finalize_cancel, request_cancel
 
 CancelWorker = Callable[[str], Awaitable[bool]]
+WorkerIsRunning = Callable[[str], bool]
 
 
 async def _cancel_md_worker(nextflow_run_id: str) -> bool:
     return await cancel_nextflow_job(nextflow_run_id, graceful_timeout_seconds=120.0)
+
+
+def _md_worker_is_running(job_id: str) -> bool:
+    return str(job_id) in get_running_jobs()
 
 
 async def cancel_running_md_run(
@@ -25,6 +30,7 @@ async def cancel_running_md_run(
     expected_version: int,
     idempotency_key: str,
     cancel_worker: CancelWorker = _cancel_md_worker,
+    worker_is_running: WorkerIsRunning = _md_worker_is_running,
 ):
     parent = await session.get(Job, job_id)
     if parent is None:
@@ -38,14 +44,21 @@ async def cancel_running_md_run(
     )).all())
     children: list[Job] = []
     targets: list[str] = []
+    processless_pre_replica = False
     terminal_job_statuses = {"completed", "failed", "cancelled", "canceled"}
     if parent.status not in terminal_job_statuses:
         if not parent.nextflow_run_id:
-            raise MdStateError(
-                "MD_CANCEL_ACTUATION_FAILED",
-                "active parent workflow identity is incomplete",
-            )
-        targets.append(str(parent.nextflow_run_id))
+            if replicas:
+                raise MdStateError(
+                    "MD_CANCEL_ACTUATION_FAILED",
+                    "active parent workflow identity is incomplete",
+                )
+            if worker_is_running(job_id):
+                targets.append(str(job_id))
+            else:
+                processless_pre_replica = True
+        else:
+            targets.append(str(parent.nextflow_run_id))
     for replica in replicas:
         if not replica.child_job_id:
             raise MdStateError(
@@ -80,6 +93,15 @@ async def cancel_running_md_run(
             )
 
     now = datetime.utcnow()
+    if processless_pre_replica:
+        provenance = dict(parent.provenance or {})
+        provenance["md_cancel_receipt"] = {
+            "code": "processless_pre_replica",
+            "worker_created": False,
+            "replica_created": False,
+            "observed_at": now.isoformat() + "Z",
+        }
+        parent.provenance = provenance
     terminal_segment_states = {"completed", "failed", "cancelled", "paused", "orphaned"}
     for replica, child in zip(replicas, children, strict=True):
         replica.active = False

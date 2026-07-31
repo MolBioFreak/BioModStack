@@ -336,6 +336,37 @@ async def test_cancel_replay_after_restart_finalizes_already_terminal_descendant
 
 
 @pytest.mark.asyncio
+async def test_cancel_processless_validating_coordinator_without_workflow_identity(session) -> None:
+    parent = Job(
+        id="md-processless-coordinator", name="MD", status="running", queue_status="running",
+        model_id="md", mode="molecular_dynamics", params={}, nextflow_run_id=None,
+    )
+    session.add(parent)
+    await session.flush()
+    run = await create_md_run(session, job=parent, normalized_request=_request())
+    assert run.phase == "validating"
+    await session.commit()
+
+    async def unexpected_cancel(_worker_id: str) -> bool:
+        raise AssertionError("processless coordinator must not invoke adapter cancellation")
+
+    terminal = await cancel_running_md_run(
+        session,
+        job_id=parent.id,
+        expected_version=0,
+        idempotency_key="cancel:processless",
+        cancel_worker=unexpected_cancel,
+        worker_is_running=lambda _job_id: False,
+    )
+    await session.commit()
+
+    assert terminal.phase == "cancelled"
+    assert parent.status == "cancelled" and parent.queue_status == "completed"
+    assert parent.provenance["md_cancel_receipt"]["code"] == "processless_pre_replica"
+    assert parent.provenance["md_cancel_receipt"]["worker_created"] is False
+
+
+@pytest.mark.asyncio
 async def test_stale_state_version_fails_closed(session) -> None:
     job = Job(id="md-cas", name="MD", status="running", model_id="md", mode="molecular_dynamics", params={})
     session.add(job); await session.flush(); await create_md_run(session, job=job, normalized_request=_request())
