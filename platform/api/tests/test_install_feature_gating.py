@@ -40,7 +40,16 @@ def test_bioxp_api_routes_are_registered_when_feature_enabled(monkeypatch) -> No
     assert "/api/bioxp/status" in bioxp_paths
     assert "/api/bioxp/profile" in bioxp_paths
     assert "/api/bioxp/commands" in bioxp_paths
-    assert len(bioxp_paths) <= 15
+    assert {
+        "/api/bioxp/operator-controls/catalog",
+        "/api/bioxp/operator-controls/dashboard",
+        "/api/bioxp/operator-controls/actions/{action_id}/admission",
+        "/api/bioxp/operator-controls/actions/{action_id}",
+        "/api/bioxp/operator-controls/history",
+        "/api/bioxp/operator-controls/receipts/{command_id}",
+        "/api/bioxp/operator-controls/receipts/{command_id}/assessment",
+    } <= bioxp_paths
+    assert len(bioxp_paths) == 28
     assert not any("interlink" in path or "proxy" in path for path in bioxp_paths)
 
 

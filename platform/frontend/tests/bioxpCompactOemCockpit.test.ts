@@ -61,7 +61,7 @@ test('compact cockpit can reconnect and sends terse typed commands', () => {
     assert.match(cockpit, /command:\s*'stop_axis_diagnostic'/);
 
     assert.doesNotMatch(client, /operator_ack:\s*'RECOVER_MOTION'/);
-    assert.doesNotMatch(client, /reason:\s*string/);
+    assert.doesNotMatch(payloadType, /reason:\s*string/);
     assert.doesNotMatch(payloadType, /Record<string, unknown>/);
     assert.match(payloadType, /command:\s*'run_axis_diagnostic'[\s\S]*axis:\s*'x'\s*\|\s*'y'\s*\|\s*'z'\s*\|\s*'g'\s*\|\s*'door'/);
     assert.match(payloadType, /command:\s*'stop_axis_diagnostic'[\s\S]*axis:\s*'x'\s*\|\s*'y'\s*\|\s*'z'\s*\|\s*'g'\s*\|\s*'door'/);

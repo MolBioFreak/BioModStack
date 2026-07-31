@@ -14,6 +14,8 @@ import {
     useDisconnectBioXp,
 } from '../lib/bioxpClient';
 import { BioXpCameraPanel } from './BioXpCameraPanel';
+import { BioXpOperatorControlTabs } from './BioXpOperatorControlTabs';
+import { BioXpQuickDashboard } from './BioXpQuickDashboard';
 import { currentStatusData, deriveCockpitMutationState } from './bioxpCockpitState';
 
 type Axis = 'x' | 'y' | 'z' | 'g' | 'door';
@@ -215,6 +217,10 @@ export function BioXpCockpit() {
                     </div>
                 </dl>
             </section>
+
+            <BioXpQuickDashboard connected={active} />
+
+            <BioXpOperatorControlTabs generation={generation} connected={active} />
 
             <section className="rounded-xl border border-amber-700/60 bg-amber-950/20 p-4">
                 <h2 className="text-lg font-semibold">Controller Transport & Recovery</h2>
