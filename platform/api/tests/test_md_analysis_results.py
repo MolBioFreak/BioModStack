@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import copy
 import sys
@@ -10,14 +11,35 @@ from typing import cast
 
 import pytest
 from jsonschema import Draft202012Validator
+from starlette.requests import Request
 
 import services.md.results as md_results_module
+from routers.md_results import _stream_verified_artifact
 
 from scripts.bms_md.analysis import write_analysis_report
 from scripts.bms_md.contract import write_atom_order_manifest
 from services.md.results import MDJobRecord, MDResultError, analysis_report, artifact_inventory, build_analysis_work_items, completion_barrier, resolve_artifact, summary
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_unsatisfiable_md_artifact_range_is_standards_bound_and_closes_handle() -> None:
+    handle = io.BytesIO(b"abcdef")
+    request = Request({
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "headers": [(b"range", b"bytes=6-9")],
+    })
+
+    response = _stream_verified_artifact(handle, name="trajectory.xtc", size=6, request=request)
+
+    assert response.status_code == 416
+    assert response.headers["accept-ranges"] == "bytes"
+    assert response.headers["content-range"] == "bytes */6"
+    assert response.headers["content-length"] == "0"
+    assert response.body == b""
+    assert handle.closed
 
 
 def test_v2_replica_protocol_comparison_allows_only_hash_bound_input_relocation() -> None:

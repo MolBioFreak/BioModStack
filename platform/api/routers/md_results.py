@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, BinaryIO, Iterator
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -351,7 +351,7 @@ def _iter_verified_handle(handle: BinaryIO, start: int, end: int) -> Iterator[by
         handle.close()
 
 
-def _stream_verified_artifact(handle: BinaryIO, *, name: str, size: int, request: Request) -> StreamingResponse:
+def _stream_verified_artifact(handle: BinaryIO, *, name: str, size: int, request: Request) -> Response:
     range_header = request.headers.get("range")
     status_code = 200
     start, end = 0, size - 1
@@ -364,9 +364,12 @@ def _stream_verified_artifact(handle: BinaryIO, *, name: str, size: int, request
     if range_header:
         try:
             start, end = _parse_byte_range(range_header, size)
-        except ValueError as exc:
+        except ValueError:
             handle.close()
-            raise HTTPException(status_code=416, detail="Invalid or unsatisfiable byte range") from exc
+            return Response(
+                status_code=416,
+                headers={**headers, "Content-Range": f"bytes */{size}", "Content-Length": "0"},
+            )
         status_code = 206
         headers["Content-Range"] = f"bytes {start}-{end}/{size}"
     headers["Content-Length"] = str(end - start + 1)
