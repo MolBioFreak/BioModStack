@@ -212,6 +212,8 @@ async def test_cas_idempotency_and_cancel_barrier(session) -> None:
     assert cancelled.phase == "cancelling" and cancelled.state_version == 1
     replay = await request_cancel(session, job_id=job.id, expected_version=0, idempotency_key="cancel:1")
     assert replay.state_version == 1
+    resumed = await request_cancel(session, job_id=job.id, expected_version=1, idempotency_key="cancel:after-restart")
+    assert resumed.phase == "cancelling" and resumed.state_version == 1
     with pytest.raises(MdStateError) as incomplete:
         await finalize_cancel(session, job_id=job.id, expected_version=1, idempotency_key="cancel-done:1")
     assert incomplete.value.code == "MD_CANCEL_INCOMPLETE"
