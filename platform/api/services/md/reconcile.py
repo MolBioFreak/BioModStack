@@ -110,6 +110,12 @@ def _phase(run: MdRun, states: list[str]) -> str:
     return "reconciling"
 
 
+_ACTIVE_PARENT_PHASES = frozenset({
+    "validating", "preparing", "replicas_queued", "replicas_running",
+    "reconciling", "finalizing",
+})
+
+
 async def acquire_reconciler_lease(
     session: AsyncSession, *, owner_id: str, lease_seconds: int = 60,
 ) -> bool:
@@ -183,6 +189,14 @@ async def reconcile_md_state(
         if next_phase != run.phase:
             changes.append({"kind": "parent_phase", "job_id": run.job_id,
                             "from": run.phase, "to": next_phase})
+        if (
+            parent is not None
+            and next_phase in _ACTIVE_PARENT_PHASES
+            and (parent.status != "running" or parent.queue_status != "running")
+        ):
+            changes.append({"kind": "parent_job_projection", "job_id": run.job_id,
+                            "from": [parent.status, parent.queue_status],
+                            "to": ["running", "running"]})
         planned.append((run, parent, projections, next_phase))
     receipt = {"schema": "bms.md.reconciliation.v1", "dry_run": not apply,
                "owner_id": owner_id, "change_count": len(changes), "changes": changes}
@@ -190,6 +204,11 @@ async def reconcile_md_state(
     if not apply:
         return receipt
     for run, parent, projections, next_phase in planned:
+        if parent is not None and next_phase in _ACTIVE_PARENT_PHASES:
+            parent.status = "running"
+            parent.queue_status = "running"
+            parent.error_message = None
+            parent.completed_at = None
         for replica, segment, state in projections:
             replica.state = state
             if state in _TERMINAL_REPLICA_STATES:

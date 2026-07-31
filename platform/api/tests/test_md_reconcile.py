@@ -50,7 +50,7 @@ async def test_reconciliation_dry_run_then_apply_is_lease_owned_and_idempotent(t
 
     async with maker() as session:
         dry = await reconcile_md_state(session, owner_id="owner-a", apply=False)
-        assert dry["dry_run"] is True and dry["change_count"] == 3
+        assert dry["dry_run"] is True and dry["change_count"] == 4
         assert replica.state == "running"
     async with maker() as session:
         applied = await reconcile_md_state(session, owner_id="owner-a", apply=True)
@@ -187,5 +187,43 @@ async def test_reconciliation_classifies_launch_rejection_without_retrying_execu
             "message": "GROMACS chemistry validation failed",
             "source": "worker_terminal",
         }
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_self_heals_active_md_parent_scheduler_projection(tmp_path) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'parent-projection.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with maker() as session:
+        parent = Job(
+            id="md-active-parent", name="MD", status="failed", queue_status="failed",
+            error_message="stale coordinator failure", model_id="md",
+            mode="molecular_dynamics", params={},
+        )
+        child = Job(
+            id="md-active-child", name="replica", status="running", queue_status="running",
+            model_id="md", mode="replica", params={}, parent_job_id=parent.id,
+        )
+        session.add_all([parent, child]); await session.flush()
+        run = await create_md_run(session, job=parent, normalized_request=_request())
+        run.phase = "replicas_running"
+        replica, _ = await create_replica_attempt(
+            session, job_id=parent.id, replica_index=0, attempt=1, engine="gromacs",
+            execution_plan_sha256="b" * 64, compatibility_key="c" * 64,
+            child_job_id=child.id,
+        )
+        replica.state = "running"
+        await session.commit()
+
+    async with maker() as session:
+        receipt = await reconcile_md_state(session, owner_id="projection-owner", apply=True)
+        await session.commit()
+        assert any(change["kind"] == "parent_job_projection" for change in receipt["changes"])
+        parent = await session.get(Job, "md-active-parent")
+        assert parent is not None
+        assert (parent.status, parent.queue_status, parent.error_message) == ("running", "running", None)
 
     await engine.dispose()
