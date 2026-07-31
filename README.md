@@ -152,10 +152,6 @@ Start here:
 
 Focused workflow/runtime references:
 
-- [Experimental Protein CAD Workflow](docs/Experimental_Protein_CAD_Workflow.md)
-- [Caliby Experimental Workflow](docs/Caliby_Experimental_Workflow.md)
-- [Protein Hunter Experimental Workflow](docs/Protein_Hunter_Experimental_Workflow.md)
-- [Active Plans](docs/plans/README.md)
 
 Subsystem references:
 

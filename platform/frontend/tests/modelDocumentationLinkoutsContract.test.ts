@@ -78,7 +78,7 @@ test('model documentation linkout registry exposes compact shared DOI/GitHub/pre
     'https://github.com/RosettaCommons/RFantibody',
     'https://doi.org/10.1101/2024.03.14.585103',
     'https://github.com/HannesStark/boltzgen',
-    'https://github.com/MolBioFreak/BioModStack/blob/main/docs/plans/2026-04-24-fold-cp-dram-context-spill-additional-work-spec.md',
+
     'https://github.com/aqlaboratory/confornets',
     'https://arxiv.org/abs/2604.18559',
     'https://github.com/richardshuai/fampnn',

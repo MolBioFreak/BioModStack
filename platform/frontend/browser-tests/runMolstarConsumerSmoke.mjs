@@ -9,10 +9,9 @@ import { fileURLToPath } from 'node:url';
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const frontendRoot = path.resolve(scriptDir, '..');
 const repoRoot = path.resolve(frontendRoot, '../..');
-const outputPath = path.resolve(process.argv[2] ?? path.join(
-    repoRoot,
-    'docs/reviews/structure_visualization/evidence/m1_molstar_consumer_smoke_chrome150.json',
-));
+const outputPath = path.resolve(
+    process.argv[2] ?? process.env.BMS_BROWSER_EVIDENCE_PATH ?? path.join(os.tmpdir(), 'bms-molstar-consumer-smoke.json'),
+);
 const chromeBinary = process.env.CHROME_BIN ?? '/usr/bin/google-chrome';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
