@@ -76,6 +76,7 @@ from services.conformational_mapping.request_builder import (
     validate_request_params,
 )
 from services.job_control import cancel_job_lineage
+from services.frustrampnn import runtime as _frustrampnn_runtime
 
 
 router = APIRouter(prefix="/api/conformational-mapping", tags=["conformational-mapping"])
@@ -146,9 +147,6 @@ _CM_VRAM_ESTIMATE_MB = {
     "confornets": 16_000,
     "protenix_v2_ensemble": 24_000,
 }
-_FRUSTRAMPNN_IMAGE_SHA256 = "c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da"
-
-
 def _cm_job_admission(backend: str, request_payload: Mapping[str, Any]) -> dict[str, int]:
     sequence_length = 0
     for target in request_payload["targets"]:
@@ -229,13 +227,14 @@ def _server_confornets_identity() -> dict[str, str]:
 
 
 def _runtime_registry(backend: str) -> dict[str, Any]:
-    analysis_image = get_container_dir() / "frustrampnn.sif"
-    if not analysis_image.is_file() or analysis_image.is_symlink():
-        raise HTTPException(status_code=503, detail="registered FrustraMPNN runtime is unavailable")
-    analysis_runtime = {
-        "container_name": "frustrampnn.sif",
-        "container_sha256": _FRUSTRAMPNN_IMAGE_SHA256,
-    }
+    try:
+        analysis_runtime = _frustrampnn_runtime.cm_analysis_runtime_registry_v1(
+            get_container_dir()
+        )
+    except _frustrampnn_runtime.RuntimeValidationError as exc:
+        raise HTTPException(
+            status_code=503, detail="registered FrustraMPNN runtime is unavailable"
+        ) from exc
     if backend == "confornets":
         return {
             "schema_name": "cm_runtime_registry", "schema_version": 1,

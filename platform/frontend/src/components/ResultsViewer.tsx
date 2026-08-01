@@ -57,6 +57,8 @@ import { AnalyticsDashboard } from './AnalyticsDashboard';
 import StructureViewerPane from './StructureViewerPane';
 import MDResultsPane from './MDResultsPane';
 import { ConformationalMappingViewer } from './conformationalMapping/ConformationalMappingViewer';
+import FrustraMpnnAnalysisControls from './FrustraMpnnAnalysisControls';
+import FrustraMpnnResultsViewer from './FrustraMpnnResultsViewer';
 import {
     saveAntibodyRefinementLaunchState,
     type AntibodyRefinementLaunchState,
@@ -5001,9 +5003,20 @@ export function ResultsViewer() {
     const viewerShellClassName = showDataHubLanding
         ? 'mx-auto w-full max-w-[1180px]'
         : 'w-full';
+    const selectedFrustraMpnnDesigns = selectedDesignIds
+        .map((designId) => orderedDesigns.find((design) => design.id === designId))
+        .filter((design): design is Design => Boolean(design));
 
     if (activeJob?.model_id === 'conformational_mapping') {
         return <ConformationalMappingViewer requestId={activeJob.id} title={activeJob.name} />;
+    }
+    if (activeJob?.model_id === 'frustrampnn') {
+        return <FrustraMpnnResultsViewer
+            key={activeJob.id}
+            job={activeJob}
+            onBack={() => navigate('/results')}
+            onOpenJob={handleSelectJob}
+        />;
     }
 
     return (
@@ -5313,6 +5326,14 @@ export function ResultsViewer() {
                             <div role="alert" className="mb-4 rounded-lg border border-amber-500/50 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
                                 {clientDerivedResultsPolicy.message}
                             </div>
+                        )}
+
+                        {activeJob && selectedFrustraMpnnDesigns.length > 0 && (
+                            <FrustraMpnnAnalysisControls
+                                parentJobId={activeJob.id}
+                                selectedDesigns={selectedFrustraMpnnDesigns}
+                                onOpenJob={handleSelectJob}
+                            />
                         )}
 
                         {/* Tabs */}

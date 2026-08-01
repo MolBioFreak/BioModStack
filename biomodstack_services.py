@@ -1063,20 +1063,19 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Description=BioModStack global Tailnet launch-surface policy
         After=network-online.target
         Wants=network-online.target
-        Before={FRONTEND_SERVICE}
 
         [Service]
         Type=oneshot
         Environment=BMS_HOME={root}
         ExecStart=/usr/bin/env python3 {tailnet_global_installer}
+        # Tailnet is installed only after an explicit Development or Production
+        # selection has proved that environment live. It is never a prerequisite
+        # for starting either runtime.
         # The installer may legitimately wait up to 90 seconds for a restarted
         # workflow adapter to prove its policy identity.  Keep systemd's bound
         # above that inner convergence bound so it cannot terminate a valid
         # installation mid-transaction.
         TimeoutStartSec=120
-
-        [Install]
-        WantedBy={DEV_TARGET_UNIT}
         """
     )
 
@@ -1132,8 +1131,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         [Unit]
         Description=BioModStack frontend dev service
         PartOf={DEV_TARGET_UNIT}
-        Requires={TAILNET_GLOBAL_SERVICE}
-        After=network-online.target {TAILNET_GLOBAL_SERVICE}
+        After=network-online.target
         Wants=network-online.target
         StartLimitIntervalSec=300
         StartLimitBurst=3
@@ -1167,7 +1165,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         f"""\
         [Unit]
         Description=BioModStack development UI target
-        Wants={API_SERVICE} {FRONTEND_SERVICE} {TAILNET_GLOBAL_SERVICE}
+        Wants={API_SERVICE} {FRONTEND_SERVICE}
 
         [Install]
         WantedBy=default.target

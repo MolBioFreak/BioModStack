@@ -1136,6 +1136,31 @@ export interface RfaConfidenceScope {
     status?: string | null;
 }
 
+export interface DesignFrustraMPNNCanonicalProjection {
+    contract_version?: string | null;
+    status?: string | null;
+    source_sha256?: string | null;
+    manifest_relpath?: string | null;
+    landscape_relpath?: string | null;
+    summary_relpath?: string | null;
+    runtime_sha256?: string | null;
+    failure_class?: string | null;
+    failure_detail?: string | null;
+}
+
+export interface DesignFrustraMPNNLegacySummaryProjection {
+    high_count?: number | null;
+    min_count?: number | null;
+    pct_high?: number | null;
+    csv_relpath?: string | null;
+}
+
+export interface DesignFrustraMPNNProjection {
+    authority: 'canonical' | 'legacy_summary';
+    canonical?: DesignFrustraMPNNCanonicalProjection | null;
+    legacy_summary?: DesignFrustraMPNNLegacySummaryProjection | null;
+}
+
 export interface Design {
     id: string;
     job_id: string;
@@ -1301,6 +1326,7 @@ export interface Design {
     frustration_residues: Array<{ pos: number; chain: string; frust: number; frustClass: string }> | null;
     frustration_csv_path: string | null;
     frustration_csv_relpath?: string | null;
+    frustrampnn?: DesignFrustraMPNNProjection | null;
     // PPIFlow maturation metrics
     maturation_delta_interface: number | null;
     maturation_interface_score: number | null;

@@ -79,6 +79,8 @@ def main() -> int:
             start_runtime_target(target=target)
             if target == "dev":
                 select_tailnet_environment("development")
+            elif target == "prod":
+                select_tailnet_environment("production")
             if args.notify:
                 notify("✅ BioModStack requested runtime target is running")
             print(f"Started runtime target: {target}")

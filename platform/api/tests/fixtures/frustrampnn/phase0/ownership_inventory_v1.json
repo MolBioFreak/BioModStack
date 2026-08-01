@@ -1,0 +1,488 @@
+{
+  "api_routes": [
+    {
+      "anchors": [
+        "APIRouter(prefix=\"/api/frustrampnn\"",
+        "@router.post(\"/analyze\")",
+        "@router.get(\"/health\")"
+      ],
+      "path": "platform/api/routers/frustrampnn.py",
+      "role": "direct_router"
+    },
+    {
+      "anchors": [
+        "app.include_router(frustrampnn.router)"
+      ],
+      "path": "platform/api/main.py",
+      "role": "router_registration"
+    },
+    {
+      "anchors": [
+        "frustration_csv_relpath",
+        "frustration_high_count"
+      ],
+      "path": "platform/api/routers/designs.py",
+      "role": "legacy_design_projection"
+    }
+  ],
+  "base_head": "f8135c00ec160e4c40b321dd031615321e5aa352",
+  "branch": "feat/frustrampnn-universal-20260730",
+  "cm_compatibility_owners": [
+    {
+      "anchors": [
+        "def normalize_conformational_mapping_structure("
+      ],
+      "path": "platform/api/services/conformational_mapping/structure_normalizer.py",
+      "role": "cm_structure_identity"
+    },
+    {
+      "anchors": [
+        "def finalize_landscape("
+      ],
+      "path": "platform/api/services/conformational_mapping/frustration.py",
+      "role": "cm_landscape"
+    },
+    {
+      "anchors": [
+        "\"cm_structure_map_v1\"",
+        "\"cm_frustration_landscape_v1\""
+      ],
+      "path": "platform/api/services/conformational_mapping/contracts.py",
+      "role": "cm_schemas_and_canonical_hash"
+    },
+    {
+      "anchors": [
+        "\"cm_frustration_landscapes\""
+      ],
+      "path": "platform/api/services/conformational_mapping/persistence.py",
+      "role": "cm_persistence"
+    },
+    {
+      "anchors": [
+        "frustrampnn"
+      ],
+      "path": "platform/frontend/src/components/conformationalMapping/ConformationalMappingViewer.tsx",
+      "role": "cm_viewer"
+    }
+  ],
+  "db_fields": [
+    {
+      "field": "frustration_high_count",
+      "model_path": "platform/api/database.py",
+      "read_projection_path": "platform/api/routers/designs.py",
+      "writers": [
+        "platform/api/services/result_ingester.py",
+        "platform/api/services/nextflow.py",
+        "scripts/backfill_frustrampnn_metrics.py"
+      ]
+    },
+    {
+      "field": "frustration_min_count",
+      "model_path": "platform/api/database.py",
+      "read_projection_path": "platform/api/routers/designs.py",
+      "writers": [
+        "platform/api/services/result_ingester.py",
+        "platform/api/services/nextflow.py",
+        "scripts/backfill_frustrampnn_metrics.py"
+      ]
+    },
+    {
+      "field": "frustration_pct_high",
+      "model_path": "platform/api/database.py",
+      "read_projection_path": "platform/api/routers/designs.py",
+      "writers": [
+        "platform/api/services/result_ingester.py",
+        "platform/api/services/nextflow.py",
+        "scripts/backfill_frustrampnn_metrics.py"
+      ]
+    },
+    {
+      "field": "frustration_residues",
+      "model_path": "platform/api/database.py",
+      "read_projection_path": "platform/api/routers/designs.py",
+      "writers": [
+        "platform/api/services/result_ingester.py",
+        "platform/api/services/nextflow.py",
+        "scripts/backfill_frustrampnn_metrics.py"
+      ]
+    },
+    {
+      "field": "frustration_csv_path",
+      "model_path": "platform/api/database.py",
+      "read_projection_path": "platform/api/routers/designs.py",
+      "writers": [
+        "platform/api/services/result_ingester.py",
+        "platform/api/services/nextflow.py",
+        "scripts/backfill_frustrampnn_metrics.py"
+      ]
+    }
+  ],
+  "evidence_label": "static_contract_and_runtime_preflight_no_inference",
+  "execution_strings": [
+    {
+      "anchors": [
+        "frustrampnn predict --pdb ${meta.id}.pdb",
+        "--checkpoint /opt/frustrampnn_weights/megascale.ckpt",
+        "--output ${meta.id}_frustration.csv"
+      ],
+      "path": "modules/frustrampnn.nf",
+      "role": "legacy_nextflow_process"
+    },
+    {
+      "anchors": [
+        "def _frustrampnn_command(",
+        "apptainer, \"exec\", \"--nv\", \"--containall\", \"--writable-tmpfs\"",
+        "CUDA_VISIBLE_DEVICES={gpu_id}",
+        "tool, \"predict\", \"--pdb\""
+      ],
+      "path": "scripts/run_conformational_mapping_analysis_plane.py",
+      "role": "accepted_cm_hardened_runtime"
+    },
+    {
+      "anchors": [
+        "${params.api_python} ${params.code_root}/scripts/run_conformational_mapping_analysis_plane.py",
+        "--frustrampnn-container ${params.container_dir}/frustrampnn.sif",
+        "--gpu-id '${assigned_gpu}'"
+      ],
+      "path": "modules/conformational_mapping_frustrampnn.nf",
+      "role": "cm_nextflow_adapter"
+    },
+    {
+      "anchors": [
+        "\"apptainer\", \"run\", \"--nv\", str(CONTAINER)",
+        "\"predict\"",
+        "\"--checkpoint\", CHECKPOINT"
+      ],
+      "path": "platform/api/routers/frustrampnn.py",
+      "role": "direct_http_execution"
+    },
+    {
+      "anchors": [
+        "async def run_batch_frustrampnn(",
+        "\"apptainer\", \"run\", \"--nv\"",
+        "\"--checkpoint\", \"/opt/frustrampnn_weights/megascale.ckpt\""
+      ],
+      "path": "platform/api/services/nextflow.py",
+      "role": "unscheduled_background_execution"
+    }
+  ],
+  "module_includes": [
+    {
+      "anchors": [
+        "include { FrustrampnnQC ; AggregateFrustrationReports } from '../modules/frustrampnn.nf'"
+      ],
+      "path": "workflows/protein_design.nf",
+      "role": "legacy_parent"
+    },
+    {
+      "anchors": [
+        "include { FrustrampnnQC ; AggregateFrustrationReports } from '../modules/frustrampnn'"
+      ],
+      "path": "workflows/antibody_denovo.nf",
+      "role": "legacy_parent"
+    },
+    {
+      "anchors": [
+        "include { FrustrampnnQC ; AggregateFrustrationReports } from '../modules/frustrampnn.nf'"
+      ],
+      "path": "workflows/complex_prediction.nf",
+      "role": "legacy_parent"
+    },
+    {
+      "anchors": [
+        "include { FrustrampnnQC ; AggregateFrustrationReports } from '../modules/frustrampnn.nf'"
+      ],
+      "path": "workflows/structure_prediction.nf",
+      "role": "legacy_parent"
+    },
+    {
+      "anchors": [
+        "include { CONFORMATIONAL_MAPPING_ANALYSIS_PLANE as PROTENIX_ANALYSIS_PLANE } from '../modules/conformational_mapping_frustrampnn.nf'",
+        "include { CONFORMATIONAL_MAPPING_ANALYSIS_PLANE as CONFORNETS_ANALYSIS_PLANE } from '../modules/conformational_mapping_frustrampnn.nf'",
+        "include { CONFORMATIONAL_MAPPING_ANALYSIS_PLANE as IMPORT_ANALYSIS_PLANE } from '../modules/conformational_mapping_frustrampnn.nf'"
+      ],
+      "path": "workflows/conformational_mapping.nf",
+      "role": "cm_compatibility_parent"
+    }
+  ],
+  "parsers": [
+    {
+      "anchors": [
+        "def finalize_landscape(",
+        "reader = csv.DictReader(handle)"
+      ],
+      "path": "platform/api/services/conformational_mapping/frustration.py",
+      "role": "accepted_cm_exact_parser_join"
+    },
+    {
+      "anchors": [
+        "df = pd.read_csv('${meta.id}_frustration.csv')"
+      ],
+      "path": "modules/frustrampnn.nf",
+      "role": "legacy_inline_parser"
+    },
+    {
+      "anchors": [
+        "df = pd.read_csv(csv_path)"
+      ],
+      "path": "platform/api/routers/frustrampnn.py",
+      "role": "direct_router_parser"
+    },
+    {
+      "anchors": [
+        "def parse_frustration_csv(",
+        "design.frustration_high_count = frust_data['high_count']"
+      ],
+      "path": "platform/api/services/result_ingester.py",
+      "role": "legacy_loose_ingester"
+    },
+    {
+      "anchors": [
+        "from services.result_ingester import parse_frustration_csv"
+      ],
+      "path": "platform/api/services/nextflow.py",
+      "role": "background_parser_consumer"
+    },
+    {
+      "anchors": [
+        "parse_frustration_csv"
+      ],
+      "path": "scripts/backfill_frustrampnn_metrics.py",
+      "role": "historical_backfill_parser_consumer"
+    },
+    {
+      "anchors": [
+        "finalize_landscape("
+      ],
+      "path": "scripts/finalize_frustrampnn_landscape.py",
+      "role": "cm_finalizer_cli"
+    }
+  ],
+  "runtime_identity": {
+    "adapter_python": "/home/dalab/.biomodstack-dev/runtime/cm-api-python/current/venv/bin/python",
+    "adapter_python_realpath": "/home/dalab/.biomodstack-dev/runtime/cm-api-python/releases/runtime-zXbdo7/python-runtime/bin/python3.12",
+    "adapter_python_sha256": "9544d2a29138833e6177d45dbc57468d37710b5080c901fbb579d53f251cdd6f",
+    "adapter_runtime_python_version": "3.12",
+    "ambient_adapter_import_root": "/home/dalab/biomodstack/shape-blueprint-v1/platform/api",
+    "analysis_plane_help_exit": 0,
+    "analysis_plane_sha256": "84f30d0448079eec07beb26b0956d687abbad5a2b5037864ee2b5c32eba8a8a3",
+    "checkpoint_path": "/opt/frustrampnn_weights/megascale.ckpt",
+    "checkpoint_sha256": "eaee71adb7eec366fc672d2aadef87f2c51243042a4518cd897634784dc2da3b",
+    "executable_path": "/opt/venv/bin/frustrampnn",
+    "executable_sha256": "32089d959f619c08a550c0e7d0fc7b66b508d009ec3179d007f13773a170212f",
+    "image_version": "1.3",
+    "package_version": "1.0.0",
+    "python_version": "3.10.12",
+    "readiness_note": "snapshot evidence only, not runtime configuration; ambient adapter import root is outside the canonical worktree and remains a Phase 2 provenance gate",
+    "sif_bytes": 10201653248,
+    "sif_path": "/mnt/BioModStack/apptainer/frustrampnn.sif",
+    "sif_regular": true,
+    "sif_sha256": "c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da",
+    "sif_symlink": false,
+    "source_commit": "bbae1d03edf33dbe6f645d45c5604eb4464962ca",
+    "torch_version": "2.11.0.dev20260126+cu128"
+  },
+  "scan": {
+    "pre_phase0_test_reference_paths": [
+      "platform/api/tests/test_conformational_mapping_analysis.py",
+      "platform/api/tests/test_conformational_mapping_analysis_plane.py",
+      "platform/api/tests/test_conformational_mapping_frustrampnn.py",
+      "platform/api/tests/test_conformational_mapping_import_snapshot.py",
+      "platform/api/tests/test_conformational_mapping_ingester_state_compatibility.py",
+      "platform/api/tests/test_conformational_mapping_persistence.py",
+      "platform/api/tests/test_conformational_mapping_release.py",
+      "platform/api/tests/test_conformational_mapping_schemas.py",
+      "platform/api/tests/test_conformational_mapping_state_landscape_analysis.py",
+      "platform/api/tests/test_jobs_msa_batch_param_propagation.py",
+      "platform/api/tests/test_review_payload_and_fampnn_ingest.py",
+      "platform/api/tests/test_structure_prediction_batch.py",
+      "platform/frontend/tests/conformationalMappingLauncher.test.ts",
+      "platform/frontend/tests/frustraMpnnViewerMetrics.test.ts",
+      "platform/frontend/tests/structureViewerSemantics.test.ts"
+    ],
+    "production_reference_paths": [
+      "apptainer/frustrampnn.def",
+      "modules/conformational_mapping_frustrampnn.nf",
+      "modules/frustrampnn.nf",
+      "nextflow.config",
+      "platform/api/antibody_pipeline_contract.py",
+      "platform/api/config/templates/conformational_mapping.yaml",
+      "platform/api/database.py",
+      "platform/api/main.py",
+      "platform/api/pyproject.toml",
+      "platform/api/routers/__init__.py",
+      "platform/api/routers/conformational_mapping.py",
+      "platform/api/routers/designs.py",
+      "platform/api/routers/frustrampnn.py",
+      "platform/api/routers/gpu.py",
+      "platform/api/routers/jobs.py",
+      "platform/api/services/conformational_mapping/contracts.py",
+      "platform/api/services/conformational_mapping/frustration.py",
+      "platform/api/services/conformational_mapping/mutagenesis_handoff.py",
+      "platform/api/services/conformational_mapping/persistence.py",
+      "platform/api/services/conformational_mapping/state_landscape_analysis.py",
+      "platform/api/services/conformational_mapping/structure_normalizer.py",
+      "platform/api/services/gpu_orchestrator.py",
+      "platform/api/services/nextflow.py",
+      "platform/api/services/result_contracts.py",
+      "platform/api/services/result_ingester.py",
+      "platform/api/services/result_state_integrity.py",
+      "platform/frontend/src/components/AnalyticsDashboard.tsx",
+      "platform/frontend/src/components/AntibodyDenovoTemplate.tsx",
+      "platform/frontend/src/components/JobSubmission.tsx",
+      "platform/frontend/src/components/MutagenesisTemplate.tsx",
+      "platform/frontend/src/components/ResultsViewer.tsx",
+      "platform/frontend/src/components/StructureViewerPane.tsx",
+      "platform/frontend/src/components/conformationalMapping/ConformationalMappingLauncher.tsx",
+      "platform/frontend/src/components/conformationalMapping/ConformationalMappingViewer.tsx",
+      "platform/frontend/src/components/conformationalMapping/conformationalMappingSemantics.ts",
+      "platform/frontend/src/components/conformationalMapping/frustraMpnnViewerMetrics.ts",
+      "platform/frontend/src/components/designOutputSource.ts",
+      "platform/frontend/src/components/structureViewerSemantics.ts",
+      "platform/frontend/src/lib/api.ts",
+      "platform/frontend/src/lib/molstar-metrics.ts",
+      "schemas/conformational_mapping/cm_frustration_landscape_v1.schema.json",
+      "schemas/conformational_mapping/cm_state_landscape_analysis_v1.schema.json",
+      "scripts/backfill_frustrampnn_metrics.py",
+      "scripts/backfill_lineage_source_tracking.py",
+      "scripts/finalize_frustrampnn_landscape.py",
+      "scripts/probes/conformational_mapping/adjudicate_phase0_contracts.py",
+      "scripts/probes/conformational_mapping/capture_phase0_attempt.py",
+      "scripts/probes/conformational_mapping/probe_phase0_runtime.py",
+      "scripts/probes/conformational_mapping/produce_phase0_review.py",
+      "scripts/probes/conformational_mapping/validate_phase0_vectors.py",
+      "scripts/probes/conformational_mapping/verify_phase0_contract_report.py",
+      "scripts/run_conformational_mapping_analysis_plane.py",
+      "scripts/validate_environment.py",
+      "workflows/antibody_denovo.nf",
+      "workflows/complex_prediction.nf",
+      "workflows/conformational_mapping.nf",
+      "workflows/protein_design.nf",
+      "workflows/structure_prediction.nf"
+    ],
+    "production_reference_regex": "frustra.?mpnn|frustration",
+    "tracked_files": 1744
+  },
+  "schema_name": "frustrampnn_phase0_ownership_inventory",
+  "schema_version": 1,
+  "selectors": [
+    {
+      "anchors": [
+        "run_frustrampnn = false"
+      ],
+      "path": "nextflow.config",
+      "role": "global_default"
+    },
+    {
+      "anchors": [
+        "if (params.run_frustrampnn == true)"
+      ],
+      "path": "workflows/protein_design.nf",
+      "role": "parent_gate"
+    },
+    {
+      "anchors": [
+        "if (params.run_frustrampnn == true)"
+      ],
+      "path": "workflows/antibody_denovo.nf",
+      "role": "parent_gate"
+    },
+    {
+      "anchors": [
+        "if (params.run_frustrampnn == true)"
+      ],
+      "path": "workflows/complex_prediction.nf",
+      "role": "parent_gate"
+    },
+    {
+      "anchors": [
+        "if (params.run_frustrampnn == true)"
+      ],
+      "path": "workflows/structure_prediction.nf",
+      "role": "parent_gate"
+    },
+    {
+      "anchors": [
+        "run_frustrampnn_batch = msa_job.params.get(\"run_frustrampnn_batch\", False)",
+        "_frustrampnn_batch_triggered"
+      ],
+      "path": "platform/api/services/nextflow.py",
+      "role": "batch_gate"
+    },
+    {
+      "anchors": [
+        "'run_frustrampnn_batch': source_params.get('run_frustrampnn', False)",
+        "\"run_frustrampnn\": True"
+      ],
+      "path": "platform/api/routers/jobs.py",
+      "role": "job_and_iteration_selector"
+    },
+    {
+      "anchors": [
+        "run_frustrampnn: runFrustrampnnPost"
+      ],
+      "path": "platform/frontend/src/components/MutagenesisTemplate.tsx",
+      "role": "structure_submission_selector"
+    },
+    {
+      "anchors": [
+        "run_frustrampnn: predictorConfig.run_frustrampnn"
+      ],
+      "path": "platform/frontend/src/components/JobSubmission.tsx",
+      "role": "generic_submission_selector"
+    },
+    {
+      "anchors": [
+        "pipelineSteps.push('frustrampnn')",
+        "run_frustrampnn: effectiveRunFrustrampnn"
+      ],
+      "path": "platform/frontend/src/components/AntibodyDenovoTemplate.tsx",
+      "role": "antibody_selector"
+    },
+    {
+      "anchors": [
+        "run_frustrampnn: true"
+      ],
+      "path": "platform/frontend/src/components/ResultsViewer.tsx",
+      "role": "result_relaunch_selector"
+    }
+  ],
+  "spec_sha256": "9359c25994a99de00a738ea4658daeccc8adf5e2d730eafafc2220998b8e4305",
+  "ui_calls": [
+    {
+      "anchors": [
+        "fetch('/api/frustrampnn/analyze'"
+      ],
+      "path": "platform/frontend/src/components/MutagenesisTemplate.tsx",
+      "role": "direct_sync_analysis_call"
+    },
+    {
+      "anchors": [
+        "run_frustrampnn: runFrustrampnnPost"
+      ],
+      "path": "platform/frontend/src/components/MutagenesisTemplate.tsx",
+      "role": "parent_submission_call"
+    },
+    {
+      "anchors": [
+        "run_frustrampnn: predictorConfig.run_frustrampnn"
+      ],
+      "path": "platform/frontend/src/components/JobSubmission.tsx",
+      "role": "parent_submission_call"
+    },
+    {
+      "anchors": [
+        "run_frustrampnn: effectiveRunFrustrampnn"
+      ],
+      "path": "platform/frontend/src/components/AntibodyDenovoTemplate.tsx",
+      "role": "parent_submission_call"
+    },
+    {
+      "anchors": [
+        "run_frustrampnn: true"
+      ],
+      "path": "platform/frontend/src/components/ResultsViewer.tsx",
+      "role": "iteration_relaunch_call"
+    }
+  ]
+}

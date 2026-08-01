@@ -1,0 +1,200 @@
+{
+  "$id": "https://biomodstack.local/schemas/frustrampnn/frustrampnn_execution_receipt_v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "argv": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "assigned_physical_gpu_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "bind_policy": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "checkpoint_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "checkpoint_path": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "checkpoint_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "configured_sif_path": {
+      "pattern": "^/(?!proc/self/fd/).+",
+      "type": "string"
+    },
+    "duration_seconds": {
+      "minimum": 0,
+      "type": "number"
+    },
+    "ended_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "executable_path": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "executable_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "exit_code": {
+      "type": "integer"
+    },
+    "input_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "invocation_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "landscape_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "normalized_pdb_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "raw_csv_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "schema_name": {
+      "const": "frustrampnn_execution_receipt"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "sif_path": {
+      "pattern": "^/proc/self/fd/[0-9]+$",
+      "type": "string"
+    },
+    "sif_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "software_versions": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "finalizer": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "frustrampnn": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "normalizer": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "source_commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "type": "string"
+        },
+        "python": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "pytorch": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "image": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "frustrampnn",
+        "adapter",
+        "normalizer",
+        "finalizer",
+        "source_commit",
+        "python",
+        "pytorch",
+        "image"
+      ],
+      "type": "object"
+    },
+    "started_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "stderr_artifact": {
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*//)(?!\\./).+$",
+      "type": "string"
+    },
+    "stdout_artifact": {
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*//)(?!\\./).+$",
+      "type": "string"
+    },
+    "summary_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "task_visible_device_index": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "working_directory_policy": {
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_name",
+    "schema_version",
+    "invocation_id",
+    "argv",
+    "working_directory_policy",
+    "bind_policy",
+    "sif_path",
+    "configured_sif_path",
+    "sif_sha256",
+    "executable_path",
+    "executable_sha256",
+    "checkpoint_path",
+    "checkpoint_id",
+    "checkpoint_sha256",
+    "input_sha256",
+    "normalized_pdb_sha256",
+    "raw_csv_sha256",
+    "landscape_sha256",
+    "summary_sha256",
+    "assigned_physical_gpu_id",
+    "task_visible_device_index",
+    "exit_code",
+    "stdout_artifact",
+    "stderr_artifact",
+    "started_at",
+    "ended_at",
+    "duration_seconds",
+    "software_versions"
+  ],
+  "title": "frustrampnn_execution_receipt_v1",
+  "type": "object"
+}

@@ -56,3 +56,23 @@ def test_dev_start_target_refreshes_selected_development_environment(monkeypatch
 
     assert module.main() == 0
     assert actions == [("start", "dev"), ("select", "development")]
+
+
+def test_prod_start_target_refreshes_tailnet_only_after_production_is_live(monkeypatch) -> None:
+    module = load_module()
+    actions: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(sys, "argv", ["manage_desktop_services.py", "start-target", "--target", "prod"])
+    monkeypatch.setattr(
+        module,
+        "start_runtime_target",
+        lambda target=None: actions.append(("start", target or "missing")),
+    )
+    monkeypatch.setattr(
+        module,
+        "select_tailnet_environment",
+        lambda environment=None: actions.append(("select", environment or "missing")),
+    )
+
+    assert module.main() == 0
+    assert actions == [("start", "prod"), ("select", "production")]

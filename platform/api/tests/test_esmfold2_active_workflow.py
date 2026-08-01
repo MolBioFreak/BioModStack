@@ -71,10 +71,12 @@ def test_active_structure_prediction_dispatches_esmfold2_channel_process():
     assert "'esmfold2'" in workflow
     assert "--pred_method must be one of: boltz, rf3, protenix, esmfold2" in workflow
     assert "include { ESMFold2Predict } from './esmfold2_experimental.nf'" in module
-    assert "ESMFold2Predict(input_ch)" in module
+    assert "ESMFold2Predict(typed_inputs)" in module
+    assert "ESMFold2Predict.out.typed_cifs" in module
     assert "process ESMFold2Predict" in esmfold2_module
     assert "label 'ESMFold2'" in esmfold2_module
-    assert "tuple val(sequence), val(sequence_name)" in esmfold2_module
+    assert "tuple val(producer_meta), val(sequence), val(sequence_name)" in esmfold2_module
+    assert "tuple val(producer_meta), path('esmfold2_results/*.cif')" in esmfold2_module
     assert '${params.container_dir}/esmfold2.sif' in nextflow_config
     assert "${containerDir}" not in nextflow_config
     assert "${dataDir}" not in nextflow_config

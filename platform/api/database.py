@@ -593,8 +593,18 @@ class Design(Base):
     frustration_high_count = Column(Integer, nullable=True)    # Residues with frust <= -1.0
     frustration_min_count = Column(Integer, nullable=True)     # Residues with frust >= 0.58
     frustration_pct_high = Column(Float, nullable=True)        # Percent highly frustrated
-    frustration_residues = Column(JSON, nullable=True)         # Per-residue: [{pos, chain, frust, class}]
-    frustration_csv_path = Column(String(500), nullable=True)  # Path to full CSV
+    frustration_residues = Column(JSON, nullable=True)         # Historical read-only per-residue projection
+    frustration_csv_path = Column(String(500), nullable=True)  # Historical read-only CSV path
+    # Canonical manifest-first FrustraMPNN projection. New ingestion writes only these fields.
+    frustrampnn_contract_version = Column(String(32), nullable=True)
+    frustrampnn_status = Column(String(32), nullable=True)
+    frustrampnn_source_sha256 = Column(String(64), nullable=True)
+    frustrampnn_manifest_relpath = Column(String(1000), nullable=True)
+    frustrampnn_landscape_relpath = Column(String(1000), nullable=True)
+    frustrampnn_summary_relpath = Column(String(1000), nullable=True)
+    frustrampnn_runtime_sha256 = Column(String(64), nullable=True)
+    frustrampnn_failure_class = Column(String(64), nullable=True)
+    frustrampnn_failure_detail = Column(String(1000), nullable=True)
     
     # ═══════════════════════════════════════════════════════════════════════════
     # PPIFLOW MATURATION METRICS
@@ -674,6 +684,136 @@ class AnalysisRun(Base):
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
     last_accessed_at = Column(DateTime, nullable=True)
+
+
+class FrustraMPNNResult(Base):
+    """Immutable manifest-backed authority for one FrustraMPNN invocation."""
+
+    __tablename__ = "frustrampnn_results"
+    __table_args__ = (
+        UniqueConstraint(
+            "parent_job_id",
+            "invocation_id",
+            name="uq_frustrampnn_results_job_invocation",
+        ),
+        Index(
+            "ix_frustrampnn_results_job_candidate",
+            "parent_job_id",
+            "candidate_id",
+        ),
+    )
+
+    parent_job_id = Column(
+        String(36), ForeignKey("jobs.id"), primary_key=True, nullable=False, index=True
+    )
+    invocation_id = Column(String(128), primary_key=True)
+    parent_workflow_id = Column(String(128), nullable=False)
+    candidate_id = Column(String(128), nullable=False, index=True)
+    design_id = Column(
+        String(36), ForeignKey("designs.id"), nullable=True, index=True
+    )
+    requiredness = Column(String(16), nullable=False)
+    request_sha256 = Column(String(64), nullable=False)
+    source_artifact_id = Column(String(128), nullable=True)
+    source_artifact_sha256 = Column(String(64), nullable=False)
+    manifest_sha256 = Column(String(64), nullable=False)
+    manifest_json = Column(JSON, nullable=False)
+    summary_sha256 = Column(String(64), nullable=False)
+    summary_json = Column(JSON, nullable=False)
+    runtime_identity_json = Column(JSON, nullable=False)
+    assigned_gpu_json = Column(JSON, nullable=False)
+    terminal_result_json = Column(JSON, nullable=False)
+    parent_metadata_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class FrustraMPNNArtifact(Base):
+    """One exact manifest-governed artifact for a FrustraMPNN result."""
+
+    __tablename__ = "frustrampnn_artifacts"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["parent_job_id", "invocation_id"],
+            ["frustrampnn_results.parent_job_id", "frustrampnn_results.invocation_id"],
+            name="fk_frustrampnn_artifacts_result",
+        ),
+        UniqueConstraint(
+            "parent_job_id",
+            "invocation_id",
+            "relative_path",
+            name="uq_frustrampnn_artifacts_invocation_path",
+        ),
+    )
+
+    artifact_id = Column(String(96), primary_key=True)
+    parent_job_id = Column(String(36), nullable=False, index=True)
+    invocation_id = Column(String(128), nullable=False, index=True)
+    role = Column(String(64), nullable=False, index=True)
+    relative_path = Column(String(1000), nullable=False)
+    storage_path = Column(String(2000), nullable=False)
+    content_sha256 = Column(String(64), nullable=False, index=True)
+    size_bytes = Column(Integer, nullable=False)
+    media_type = Column(String(128), nullable=False)
+    metadata_json = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class FrustraMPNNLandscapeRow(Base):
+    """Exact residue/substitution row from one canonical landscape artifact."""
+
+    __tablename__ = "frustrampnn_landscape_rows"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["parent_job_id", "invocation_id"],
+            ["frustrampnn_results.parent_job_id", "frustrampnn_results.invocation_id"],
+            name="fk_frustrampnn_landscape_result",
+        ),
+        UniqueConstraint(
+            "parent_job_id",
+            "invocation_id",
+            "target_id",
+            "entity_instance_id",
+            "auth_asym_id",
+            "auth_seq_id",
+            "insertion_code",
+            "sequence_index",
+            "wt",
+            "mutation_aa",
+            name="uq_frustrampnn_landscape_slot",
+        ),
+        Index(
+            "ix_frustrampnn_landscape_page_order",
+            "parent_job_id",
+            "invocation_id",
+            "target_id",
+            "entity_instance_id",
+            "auth_asym_id",
+            "auth_seq_id",
+            "insertion_code",
+            "sequence_index",
+            "mutation_aa",
+            "id",
+        ),
+    )
+
+    id = Column(String(96), primary_key=True)
+    parent_job_id = Column(String(36), nullable=False, index=True)
+    invocation_id = Column(String(128), nullable=False, index=True)
+    target_id = Column(String(128), nullable=False, index=True)
+    entity_instance_id = Column(String(128), nullable=False, index=True)
+    auth_asym_id = Column(String(128), nullable=False)
+    auth_seq_id = Column(String(64), nullable=False)
+    insertion_code = Column(String(16), nullable=False, default="")
+    sequence_index = Column(Integer, nullable=False)
+    wt = Column(String(1), nullable=False)
+    mutation_aa = Column(String(1), nullable=False)
+    score = Column(Float, nullable=True)
+    score_class = Column(String(32), nullable=False)
+    scoreable = Column(Boolean, nullable=False)
+    status = Column(String(32), nullable=False, index=True)
+    reason = Column(Text, nullable=True)
+    row_json = Column(JSON, nullable=False)
+    provenance_json = Column(JSON, nullable=False)
 
 
 class ConformationalMappingRequest(Base):

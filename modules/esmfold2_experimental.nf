@@ -25,10 +25,10 @@ process ESMFold2Predict {
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: 'esmfold2_results/*.cif'
 
     input:
-    tuple val(sequence), val(sequence_name)
+    tuple val(producer_meta), val(sequence), val(sequence_name)
 
     output:
-    path 'esmfold2_results/*.cif', emit: cifs
+    tuple val(producer_meta), path('esmfold2_results/*.cif'), emit: typed_cifs
     path "esmfold2_results/*.metrics.json", emit: metrics
     tuple val(sequence_name), path('esmfold2_results/*.cif'), path('esmfold2_results/*.metrics.json'), emit: shape_result
     path "esmfold2_results/*.telemetry.json", emit: telemetry
