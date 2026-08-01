@@ -78,6 +78,17 @@ def _validate_sequence_engines(engines: tuple[str, ...]) -> None:
         )
 
 
+def _cleanup_new_stage(stage: Path, created: list[Path]) -> None:
+    if stage.exists() and not stage.is_symlink():
+        os.chmod(stage, 0o750)
+    for path in reversed(created):
+        path.unlink(missing_ok=True)
+    try:
+        stage.rmdir()
+    except OSError:
+        pass
+
+
 async def materialize_shape_request(
     session: AsyncSession,
     *,
@@ -168,18 +179,6 @@ async def materialize_shape_request(
         "points.f32le": points,
         "sdf.f32le": sdf,
     }
-    for filename, payload in staged_payloads.items():
-        try:
-            _publish(stage / filename, payload)
-        except RuntimeError as exc:
-            if "immutable Shape artifact conflict" not in str(exc):
-                raise
-            raise ShapeRequestError(
-                "request_id_conflict",
-                "client request ID is already bound to different staged bytes",
-            ) from exc
-    os.chmod(stage, 0o550)
-
     row = ShapeDesignRequest(
         request_id=request_id,
         geometry_id=geometry.geometry_id,
@@ -189,10 +188,26 @@ async def materialize_shape_request(
         job_id=None,
     )
     session.add(row)
+    created: list[Path] = []
     try:
+        await session.flush()
+        for filename, payload in staged_payloads.items():
+            try:
+                path = stage / filename
+                if _publish(path, payload):
+                    created.append(path)
+            except RuntimeError as exc:
+                if "immutable Shape artifact conflict" not in str(exc):
+                    raise
+                raise ShapeRequestError(
+                    "request_id_conflict",
+                    "client request ID is already bound to different staged bytes",
+                ) from exc
+        os.chmod(stage, 0o550)
         await session.commit()
     except IntegrityError:
         await session.rollback()
+        _cleanup_new_stage(stage, created)
         existing = await session.get(ShapeDesignRequest, request_id)
         if existing is None or existing.request_sha256 != request_sha256:
             raise ShapeRequestError(
@@ -200,6 +215,10 @@ async def materialize_shape_request(
                 "client request ID was concurrently bound to different scientific intent",
             )
         return _staged(existing, data_root=data_root, name=submitted.name)
+    except BaseException:
+        await session.rollback()
+        _cleanup_new_stage(stage, created)
+        raise
     return _staged(row, data_root=data_root, name=submitted.name)
 
 

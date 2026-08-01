@@ -199,6 +199,47 @@ async def test_shape_request_translates_immutable_publication_conflict(tmp_path:
         await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_shape_request_removes_new_stage_after_generic_commit_failure(tmp_path: Path, monkeypatch) -> None:
+    _database_module, engine, factory = await _database(tmp_path)
+    resources = importlib.import_module("services.shape_resources")
+    requests = importlib.import_module("services.shape_requests")
+    try:
+        async with factory() as session:
+            geometry = await resources.admit_obj_geometry(
+                session,
+                data_root=tmp_path / "data",
+                payload=CUBE_OBJ,
+                filename="cube.obj",
+                angstrom_per_unit=1.0,
+            )
+            submitted = requests.SubmittedShapeRequest(
+                client_request_id="aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+                name="commit failure",
+                geometry_id=geometry.geometry_id,
+                expected_geometry_sha256=geometry.geometry_sha256,
+                expected_geometry_manifest_sha256=geometry.manifest["manifest_sha256"],
+                expected_point_pool_sha256=geometry.point_pool_sha256,
+                target_length=80,
+            )
+
+            async def fail_commit() -> None:
+                raise RuntimeError("forced generic commit failure")
+
+            monkeypatch.setattr(session, "commit", fail_commit)
+            with pytest.raises(RuntimeError, match="forced generic commit failure"):
+                await requests.materialize_shape_request(
+                    session,
+                    data_root=tmp_path / "data",
+                    submitted=submitted,
+                )
+
+            stage = tmp_path / "data" / "shape_blueprint" / "requests" / f"shape_{submitted.client_request_id}"
+            assert not stage.exists()
+    finally:
+        await engine.dispose()
+
+
 def test_shape_mode_routes_only_to_shape_workflow() -> None:
     nextflow = importlib.import_module("services.nextflow")
     command = nextflow.build_nextflow_command(

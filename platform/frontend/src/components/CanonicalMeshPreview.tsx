@@ -44,6 +44,7 @@ const parseCanonicalObj = (text: string): Mesh => {
 
 export default function CanonicalMeshPreview({ url, label, height = 430 }: CanonicalMeshPreviewProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const loadGenerationRef = useRef(0);
     const [mesh, setMesh] = useState<Mesh | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [yaw, setYaw] = useState(-35);
@@ -51,6 +52,7 @@ export default function CanonicalMeshPreview({ url, label, height = 430 }: Canon
 
     useEffect(() => {
         const controller = new AbortController();
+        const generation = ++loadGenerationRef.current;
         setMesh(null);
         setError(null);
         fetch(url, { signal: controller.signal })
@@ -58,8 +60,12 @@ export default function CanonicalMeshPreview({ url, label, height = 430 }: Canon
                 if (!response.ok) throw new Error(`Canonical mesh preview request failed (${response.status}).`);
                 return response.text();
             })
-            .then((text) => setMesh(parseCanonicalObj(text)))
+            .then((text) => {
+                const parsed = parseCanonicalObj(text);
+                if (!controller.signal.aborted && loadGenerationRef.current === generation) setMesh(parsed);
+            })
             .catch((cause: unknown) => {
+                if (controller.signal.aborted || loadGenerationRef.current !== generation) return;
                 if (cause instanceof DOMException && cause.name === 'AbortError') return;
                 setError(cause instanceof Error ? cause.message : 'Canonical mesh preview failed.');
             });

@@ -224,20 +224,50 @@ def test_restart_position_requires_confirmation_but_remains_host_agent_contract(
         calls.append((method, path, payload))
         return {
             "detail": "BMS does not yet perform a MinKNOW/Mk1D instrument restart",
-            "position": "MD-105428",
-            "fake_or_demo_devices": False,
+            "position": {"position": "MD-105428", "device_type": "MINION"},
+            "host": "secret-host",
+            "output_directory": "/secret/path",
+            "protocol_id": "secret-protocol",
         }
 
     monkeypatch.setattr(ont_run_control, "request_host_agent", fake_request)
 
     for invalid_confirmation in (False, "false", 1, None):
         with pytest.raises(ValueError, match="confirm_restart"):
-            ont_run_control.restart_position("MD-105428", {"confirm_restart": invalid_confirmation})
+            ont_run_control.restart_position("MD-105428", confirm_restart=invalid_confirmation)
 
-    payload = ont_run_control.restart_position("MD-105428", {"confirm_restart": True})
+    payload = ont_run_control.restart_position("MD-105428", confirm_restart=True)
 
-    assert "does not yet perform" in payload["detail"]
+    assert payload == {
+        "action": "restart",
+        "detail": "BMS does not yet perform a MinKNOW/Mk1D instrument restart",
+        "position": "MD-105428",
+        "accepted": False,
+        "fake_or_demo_devices": False,
+    }
     assert calls == [("POST", "/ont/positions/MD-105428/restart", {"confirm_restart": True})]
+
+
+def test_restart_endpoint_rejects_browser_fields_outside_literal_confirmation(monkeypatch) -> None:
+    app = FastAPI()
+    app.include_router(ont_runs.router, prefix="/api/ont")
+    client = TestClient(app)
+    monkeypatch.setattr(
+        ont_run_control,
+        "request_host_agent",
+        lambda *_args, **_kwargs: {
+            "detail": "restart remains disabled",
+            "position": "MD-105428",
+            "host": "secret-host",
+        },
+    )
+
+    rejected = client.post(
+        "/api/ont/positions/MD-105428/restart",
+        json={"confirm_restart": True, "host": "browser-injected"},
+    )
+    assert rejected.status_code == 422
+
 
 def test_protocol_options_endpoint_uses_host_agent_payload(monkeypatch) -> None:
     app = FastAPI()

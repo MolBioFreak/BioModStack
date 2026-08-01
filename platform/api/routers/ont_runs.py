@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError
@@ -49,6 +49,12 @@ ONT_PRIMARY_INPUT_KEYS: dict[str, str] = {
 
 ONT_SERVER_CONTROLLED_PROVENANCE_PARAMS = ont_submission_trust.ONT_SERVER_CONTROLLED_PROVENANCE_PARAMS
 ONT_SERVER_CONTROLLED_RUNTIME_PARAMS = ont_submission_trust.ONT_SERVER_CONTROLLED_RUNTIME_PARAMS
+
+
+class OntRestartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirm_restart: Literal[True]
 
 # Browser-submitted handoff tuning is a separate, tiny allowlist below; primary
 # input, output/reference paths, and source provenance never enter it.
@@ -453,10 +459,10 @@ async def ont_refresh_position_state(position: str) -> dict[str, Any]:
 
 
 @router.post("/positions/{position}/restart")
-async def ont_restart_position(position: str, payload: dict[str, Any]) -> dict[str, Any]:
+async def ont_restart_position(position: str, payload: OntRestartRequest) -> dict[str, Any]:
     """Expose explicit restart contract; host-agent refuses until live semantics are validated."""
     try:
-        return ont_run_control.restart_position(position, payload)
+        return ont_run_control.restart_position(position, confirm_restart=payload.confirm_restart)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -103,6 +103,50 @@ test('canonical surface canvas clears immediately when its URL changes', async (
     }
 });
 
+test('canonical surface ignores a stale fetch that completes after the selected URL', async () => {
+    const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: { devicePixelRatio: 1 } });
+    const originalFetch = globalThis.fetch;
+    const pending = new Map<string, (response: Response) => void>();
+    globalThis.fetch = ((input: RequestInfo | URL) => new Promise<Response>((resolve) => {
+        pending.set(String(input), resolve);
+    })) as typeof fetch;
+    const context = {
+        setTransform() {}, clearRect() {}, fillRect() {}, beginPath() {}, moveTo() {}, lineTo() {},
+        closePath() {}, fill() {}, stroke() {}, fillStyle: '', strokeStyle: '', lineWidth: 0,
+    } as unknown as CanvasRenderingContext2D;
+    const canvas = { width: 0, height: 0, getBoundingClientRect: () => ({ width: 900 }), getContext: () => context };
+    const oldObj = '# bms_shape_canonical_obj_v1\nv 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 1\nf 1 2 3\nf 1 3 4\n';
+    const newObj = '# bms_shape_canonical_obj_v1\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n';
+    let renderer: ReactTestRenderer;
+    try {
+        await act(async () => {
+            renderer = create(React.createElement(CanonicalMeshPreview, { url: '/old.obj', label: 'surface' }), {
+                createNodeMock: (element) => element.type === 'canvas' ? canvas : null,
+            });
+        });
+        await act(async () => {
+            renderer!.update(React.createElement(CanonicalMeshPreview, { url: '/new.obj', label: 'surface' }));
+        });
+        assert.ok(pending.has('/new.obj'));
+        await act(async () => {
+            pending.get('/new.obj')!({ ok: true, status: 200, text: async () => newObj } as Response);
+            await Promise.resolve(); await Promise.resolve();
+        });
+        await act(async () => {
+            pending.get('/old.obj')!({ ok: true, status: 200, text: async () => oldObj } as Response);
+            await Promise.resolve(); await Promise.resolve();
+        });
+        assert.ok(renderer!.root.findAll((node) => node.children.join('') === '3 vertices · 1 faces').length);
+        assert.equal(renderer!.root.findByType('a').props.href, '/new.obj');
+        await act(async () => { renderer!.unmount(); });
+    } finally {
+        globalThis.fetch = originalFetch;
+        if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow);
+        else Reflect.deleteProperty(globalThis, 'window');
+    }
+});
+
 test('Shape Blueprint numeric state stays within the API integer contract', async () => {
     memory.clear();
     const client = new QueryClient({ defaultOptions: { queries: { enabled: false, retry: false } } });

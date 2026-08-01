@@ -213,13 +213,23 @@ def refresh_position_state(position: str) -> dict[str, Any]:
     }
 
 
-def restart_position(position: str, payload: dict[str, Any]) -> dict[str, Any]:
-    if payload.get("confirm_restart") is not True:
+def restart_position(position: str, *, confirm_restart: bool) -> dict[str, Any]:
+    if confirm_restart is not True:
         raise ValueError("confirm_restart=true is required before requesting an ONT instrument restart")
-    host_payload = request_host_agent("POST", f"/ont/positions/{position}/restart", payload)
+    host_payload = request_host_agent(
+        "POST",
+        f"/ont/positions/{position}/restart",
+        {"confirm_restart": True},
+    )
     if not isinstance(host_payload, dict):
         raise RuntimeError(f"host-agent returned non-object restart payload: {host_payload!r}")
-    return host_payload
+    return {
+        "action": "restart",
+        "detail": _sanitize_label(host_payload.get("detail"), "ONT restart request completed."),
+        "position": position,
+        "accepted": host_payload.get("accepted") is True,
+        "fake_or_demo_devices": False,
+    }
 
 
 def _normalized_state(value: Any, *, fallback: str | None = None) -> str:
