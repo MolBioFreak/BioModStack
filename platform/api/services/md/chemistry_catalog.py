@@ -9,7 +9,7 @@ import re
 import subprocess
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -26,6 +26,7 @@ MAX_PROFILES = 64
 MAX_PROFILE_BYTES = 128 * 1024
 MAX_PROBE_ASSETS = 128
 DEFAULT_GROMACS_IMAGE = "gromacs-md-2025.3.sif"
+DEFAULT_PREPARATION_IMAGE = "md-preparation-v1.sif"
 HASH_CHUNK_BYTES = 1024 * 1024
 
 
@@ -114,7 +115,7 @@ class _CatalogSnapshot:
     """
 
     view: CatalogView
-    probe_result: RuntimeProbeResult
+    probe_results: tuple[RuntimeProbeResult, ...]
     loaded_monotonic: float
 
 
@@ -146,6 +147,16 @@ def _runtime_image_path() -> Path | None:
     if data_root:
         candidates.append(Path(data_root) / "apptainer" / DEFAULT_GROMACS_IMAGE)
     candidates.append(Path("/mnt/BioModStack/apptainer") / DEFAULT_GROMACS_IMAGE)
+    return next((candidate for candidate in candidates if candidate.is_file()), None)
+
+
+def _preparation_image_path() -> Path | None:
+    direct = str(os.getenv("BMS_MD_PREPARATION_SIF") or "").strip()
+    candidates: list[Path] = [Path(direct)] if direct else []
+    data_root = str(os.getenv("BMS_DATA") or "").strip()
+    if data_root:
+        candidates.append(Path(data_root) / "apptainer" / DEFAULT_PREPARATION_IMAGE)
+    candidates.append(Path("/mnt/BioModStack/apptainer") / DEFAULT_PREPARATION_IMAGE)
     return next((candidate for candidate in candidates if candidate.is_file()), None)
 
 
@@ -284,6 +295,65 @@ exit 2
     )
 
 
+def probe_deployed_preparation_assets(
+    *,
+    image_path: Path | None = None,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> RuntimeProbeResult:
+    image = Path(image_path) if image_path is not None else _preparation_image_path()
+    unavailable = dict(
+        runtime_id="md-preparation-v1",
+        runtime_version=None,
+        available=False,
+        asset_ids=frozenset(),
+        checked_at=_utc_now(),
+    )
+    if image is None or not image.is_file():
+        return RuntimeProbeResult(**unavailable, error_code="runtime_image_missing")
+    try:
+        sif_sha256 = _memoized_sif_sha256(image)
+    except OSError:
+        return RuntimeProbeResult(**unavailable, error_code="runtime_identity_failed")
+    probe_script = """
+set -eu
+root=/opt/md-preparation/dat/leap
+[ -f "$root/cmd/leaprc.protein.ff19SB" ] && echo amber/ff19SB
+[ -f "$root/cmd/leaprc.DNA.OL15" ] && echo amber/OL15
+[ -f "$root/cmd/leaprc.DNA.OL21" ] && echo amber/OL21
+[ -f "$root/cmd/leaprc.DNA.bsc1" ] && echo amber/parmbsc1
+[ -f "$root/cmd/leaprc.water.opc" ] && echo water/opc
+[ -f "$root/parm/frcmod.ionslm_126_opc" ] && echo ions/opc-monovalent-pinned
+""".strip()
+    try:
+        completed = runner(
+            ["apptainer", "exec", str(image), "sh", "-c", probe_script],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return RuntimeProbeResult(**unavailable, error_code="runtime_probe_failed")
+    if completed.returncode != 0:
+        return RuntimeProbeResult(**unavailable, error_code="runtime_probe_failed")
+    assets = frozenset(
+        line.strip() for line in completed.stdout.splitlines()[:MAX_PROBE_ASSETS]
+        if re.fullmatch(r"[A-Za-z0-9_.+/-]{1,96}", line.strip())
+    )
+    return RuntimeProbeResult(
+        runtime_id="md-preparation-v1",
+        runtime_version="1",
+        available=True,
+        asset_ids=assets,
+        checked_at=_utc_now(),
+        sif_sha256=sif_sha256,
+    )
+
+
+def probe_deployed_md_assets() -> tuple[RuntimeProbeResult, ...]:
+    return (probe_deployed_gromacs_assets(), probe_deployed_preparation_assets())
+
+
 def _require_bool(record: Mapping[str, Any], field: str) -> bool:
     value = record.get(field)
     if not isinstance(value, bool):
@@ -356,7 +426,7 @@ class ChemistryCatalog:
         self,
         *,
         config_dir: Path,
-        probe: Callable[[], RuntimeProbeResult] = probe_deployed_gromacs_assets,
+        probe: Callable[[], RuntimeProbeResult | Sequence[RuntimeProbeResult]] = probe_deployed_md_assets,
         max_profiles: int = MAX_PROFILES,
         monotonic_clock: Callable[[], float] = time.monotonic,
         cache_ttl_seconds: float = 30.0,
@@ -463,18 +533,37 @@ class ChemistryCatalog:
 
     def _build_snapshot(self, *, generation: int) -> _CatalogSnapshot:
         try:
-            probe = self._probe()
+            raw_probe = self._probe()
         except ChemistryCatalogError:
             raise
         except Exception as exc:
             raise ChemistryCatalogError(
                 "The molecular-dynamics chemistry runtime probe is unavailable."
             ) from exc
-        if not isinstance(probe, RuntimeProbeResult):
+        if isinstance(raw_probe, RuntimeProbeResult):
+            probes = (raw_probe,)
+        elif isinstance(raw_probe, Sequence) and not isinstance(raw_probe, (str, bytes)):
+            probes = tuple(raw_probe)
+        else:
             raise ChemistryCatalogError("runtime probe returned an invalid result")
+        if not probes or not all(isinstance(item, RuntimeProbeResult) for item in probes):
+            raise ChemistryCatalogError("runtime probe returned an invalid result")
+        probe_by_id = {item.runtime_id: item for item in probes}
+        if len(probe_by_id) != len(probes):
+            raise ChemistryCatalogError("runtime probe returned duplicate runtime IDs")
+        primary_probe = probe_by_id.get("gromacs-2025.3", probes[0])
         resolved: list[dict[str, Any]] = []
-        runtime_identity = probe.runtime_identity.as_public_dict()
         for record in self._load_records():
+            runtime_id = record["asset_probe"]["runtime_id"]
+            probe = probe_by_id.get(runtime_id) or RuntimeProbeResult(
+                runtime_id=runtime_id,
+                runtime_version=None,
+                available=False,
+                asset_ids=frozenset(),
+                checked_at=primary_probe.checked_at,
+                error_code="runtime_probe_missing",
+            )
+            runtime_identity = probe.runtime_identity.as_public_dict()
             required_assets = set(record["asset_probe"]["required_asset_ids"])
             required_identity = record["asset_probe"].get("required_runtime_identity")
             correct_runtime = (
@@ -484,7 +573,7 @@ class ChemistryCatalog:
             )
             asset_probe_success = probe.available and correct_runtime and required_assets.issubset(probe.asset_ids)
             installed = bool(record["installed"] and asset_probe_success)
-            runtime_validated = bool(record["runtime_validated"])
+            runtime_validated = bool(record["runtime_validated"] and asset_probe_success)
             scientific_validation = copy.deepcopy(dict(record["scientific_validation"]))
             scientifically_validated = bool(scientific_validation["validated"])
             operator_enabled = bool(record["operator_enabled"])
@@ -547,16 +636,29 @@ class ChemistryCatalog:
             [{"id": profile["id"], "profile_sha256": profile["profile_sha256"]} for profile in resolved]
         )
         frozen_profiles = tuple(_freeze(profile) for profile in resolved)
+        primary_runtime_identity = primary_probe.runtime_identity.as_public_dict()
         probe_summary = _freeze(
             {
-                "runtime_id": probe.runtime_id,
-                "runtime_version": probe.runtime_version,
-                "available": probe.available,
-                "checked_at": probe.checked_at,
-                "discovered_asset_count": len(probe.asset_ids),
-                "error_code": probe.error_code,
+                "runtime_id": primary_probe.runtime_id,
+                "runtime_version": primary_probe.runtime_version,
+                "available": primary_probe.available,
+                "checked_at": primary_probe.checked_at,
+                "discovered_asset_count": len(primary_probe.asset_ids),
+                "error_code": primary_probe.error_code,
                 "cached": True,
-                "runtime_identity": runtime_identity,
+                "runtime_identity": primary_runtime_identity,
+                "runtimes": [
+                    {
+                        "runtime_id": item.runtime_id,
+                        "runtime_version": item.runtime_version,
+                        "available": item.available,
+                        "checked_at": item.checked_at,
+                        "discovered_asset_count": len(item.asset_ids),
+                        "error_code": item.error_code,
+                        "runtime_identity": item.runtime_identity.as_public_dict(),
+                    }
+                    for item in probes
+                ],
             }
         )
         view = CatalogView(
@@ -564,13 +666,13 @@ class ChemistryCatalog:
             profile_index=MappingProxyType({profile["id"]: profile for profile in frozen_profiles}),
             catalog_digest=catalog_digest,
             probe_summary=probe_summary,
-            runtime_identity=_freeze(runtime_identity),
+            runtime_identity=_freeze(primary_runtime_identity),
             generation=generation,
             loaded_at=_utc_now(),
         )
         return _CatalogSnapshot(
             view=view,
-            probe_result=probe,
+            probe_results=probes,
             loaded_monotonic=float(self._monotonic_clock()),
         )
 
@@ -656,17 +758,38 @@ class ChemistryCatalog:
             )
 
         states = profile["states"]
-        if not states["installed"] or not states["asset_probe_success"] or not states["operator_enabled"]:
+        qualification_ids = {
+            item.strip()
+            for item in os.environ.get("BMS_MD_QUALIFICATION_PROFILE_IDS", "").split(",")
+            if item.strip()
+        }
+        qualification_allowed = bool(
+            os.environ.get("BMS_RUNTIME_MODE", "").strip().lower() in {"dev", "development", "test"}
+            and len(qualification_ids) <= 8
+            and all(PROFILE_ID_PATTERN.fullmatch(item) for item in qualification_ids)
+            and profile["id"] in qualification_ids
+            and profile.get("inventory_class") == "candidate"
+            and profile.get("legacy") is False
+            and profile.get("automatic_preparation") is True
+            and states["installed"]
+            and states["asset_probe_success"]
+            and states["runtime_validated"]
+        )
+        if not qualification_allowed and (
+            not states["installed"] or not states["asset_probe_success"] or not states["operator_enabled"]
+        ):
             raise ChemistryProfileSelectionError(
                 "MD_CHEMISTRY_PROFILE_UNAVAILABLE",
                 f"Chemistry profile {profile['id']} is unavailable in the deployed runtime.",
             )
-        if not states["runtime_validated"] or not states["scientifically_validated"]:
+        if not qualification_allowed and (
+            not states["runtime_validated"] or not states["scientifically_validated"]
+        ):
             raise ChemistryProfileSelectionError(
                 "MD_CHEMISTRY_PROFILE_NOT_VALIDATED",
                 f"Chemistry profile {profile['id']} has not passed all scoped validation gates.",
             )
-        if not states["selectable"]:
+        if not qualification_allowed and not states["selectable"]:
             raise ChemistryProfileSelectionError(
                 "MD_CHEMISTRY_PROFILE_UNAVAILABLE",
                 f"Chemistry profile {profile['id']} is not selectable.",

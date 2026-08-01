@@ -27,6 +27,7 @@ from migrations.add_state_landscape_analysis_page_order_index import (
 )
 from migrations.add_molbio_ngs_receipts import migrate as migrate_molbio_ngs_receipts
 from migrations.add_approved_ngs_comparison_panels import migrate as migrate_approved_ngs_comparison_panels
+from migrations.add_md_lifecycle import migrate as migrate_md_lifecycle
 from run_migration import migrate as migrate_stage_tracking
 
 
@@ -62,6 +63,7 @@ MIGRATIONS: List[Migration] = [
     ),
     Migration(15, "add_molbio_ngs_receipts", migrate_molbio_ngs_receipts),
     Migration(16, "add_approved_ngs_comparison_panels", migrate_approved_ngs_comparison_panels),
+    Migration(17, "add_md_lifecycle", migrate_md_lifecycle),
 ]
 
 

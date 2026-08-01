@@ -159,7 +159,7 @@ test('BioXP handler cockpit uses terse operator copy, not explainer paragraphs',
         'Non-homing Recovery',
         'X Axis',
         'Camera',
-        'Emergency Stop',
+        'Physical Emergency Abort Unavailable',
     ]) {
         requireSnippet(source, snippet);
     }

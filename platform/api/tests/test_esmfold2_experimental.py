@@ -446,8 +446,10 @@ def test_esmfold2_internal_runtime_contract() -> None:
     assert "--workflow esmfold2" not in module_text
     assert "pdb_files" in module_text
     active_process_text = module_text.split("process ESMFold2Predict {", 1)[1]
-    assert "def modelVariant = params.esmf_model_variant ?: params.model_variant ?: 'fast'" in active_process_text
-    assert "def modelIdOrPath = params.esmf_model_id_or_path ?: params.model_id_or_path ?: ''" in active_process_text
+    assert "def shapeMode = params.modification_mode == 'shape_blueprint'" in active_process_text
+    assert "def modelVariant = shapeMode ? (params.get('shape_esmf_model_variant') ?: 'fast')" in active_process_text
+    assert "params.get('esmf_model_variant') ?: params.get('model_variant') ?: 'fast'" in active_process_text
+    assert "def modelIdOrPath = params.get('esmf_model_id_or_path') ?: params.get('model_id_or_path') ?: ''" in active_process_text
     assert "esmfold2_experimental {" not in nextflow_config
     assert "withLabel: ESMFold2" in nextflow_config
     assert "${params.container_dir}/esmfold2.sif" in nextflow_config
@@ -467,7 +469,7 @@ def test_esmfold2_internal_runtime_contract() -> None:
     assert "from_a3m" in runner_text
     assert "parse_pdb_polymer_components" in runner_text
     assert "--complex-components-json" in runner_text
-    assert "params.esmf_complex_components_file" in active_process_text
+    assert "params.get('esmf_complex_components_file')" in active_process_text
     assert "new File(complexComponentsFile.toString())" in active_process_text
     assert "parsedComplexComponents.components" in active_process_text
     assert "def hasComplexComponents" in active_process_text

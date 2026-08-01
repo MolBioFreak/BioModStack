@@ -26,6 +26,8 @@ class GromacsAdapter:
             request.output_dir,
             replica_index=request.replica_index,
             _prepared_config=config,
+            preparation_bundle=request.preparation_bundle,
+            resume_checkpoint=request.resume_checkpoint,
         )
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest["engine"]["allocation"] = allocation

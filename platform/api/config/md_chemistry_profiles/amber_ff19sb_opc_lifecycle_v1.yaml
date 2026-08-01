@@ -1,0 +1,65 @@
+schema: bms.md.chemistry-profile.v1
+id: amber_ff19sb_opc_lifecycle_v1
+version: 1.0.0
+display_name: AMBER ff19SB + OPC lifecycle control
+family: amber
+assurance: curated_profile
+legacy: false
+automatic_preparation: true
+inventory_class: candidate
+installed: true
+runtime_validated: true
+operator_enabled: false
+supported_engines:
+  - gromacs
+v1_preparation:
+  force_field: ff19SB
+  water_model: opc
+launch_constraints:
+  input_mode: structure
+  structure_sha256: c75d7a689617248cdd92dc6633531d2506fb9bef1e6e21e26c8f579ae6955abb
+  replicas: 1
+  engine: gromacs
+  force_field: ff19SB
+  water_model: opc
+  timestep_fs: 2.0
+  temperature_k: 300.0
+  pressure_bar: 1.0
+  salt_molar: 0.15
+  padding_nm: 1.0
+  max_production_steps: 50000000
+  max_minimization_steps: 50000
+  max_nvt_steps: 50000
+  max_npt_steps: 50000
+asset_probe:
+  runtime_id: md-preparation-v1
+  required_runtime_identity:
+    runtime_id: md-preparation-v1
+    runtime_version: "1"
+    sif_sha256: 625d81608118af006295601b8275389e7681a1d98a6fb0622e6241c5d101df4b
+  required_asset_ids:
+    - amber/ff19SB
+    - water/opc
+    - ions/opc-monovalent-pinned
+scientific_validation:
+  validated: false
+  lane: null
+  version: null
+  scope:
+    launch_scope: lifecycle_control_only
+    system_classes:
+      - infrastructure_lifecycle_fixture
+    composition: 1AKI single-chain fixture prepared with the qualified ff19SB and OPC runtime
+    protocol: long-enough runtime solely for checkpoint pause resume cancel retry and restart acceptance
+    ionic_conditions: pinned OPC-compatible monovalent ion release
+    observables:
+      - checkpoint receipt integrity
+      - exact checkpoint continuation
+      - worker and GPU release
+      - lifecycle state convergence
+explicit_exclusions:
+  - scientific production claims
+  - equilibrium or thermodynamic interpretation
+  - mutation thermodynamics
+  - protein-nucleic-acid complexes
+  - ligands, membranes, cofactors, and catalytic metals

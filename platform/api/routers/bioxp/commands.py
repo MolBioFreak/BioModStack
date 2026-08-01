@@ -12,6 +12,7 @@ from services.bioxp.command_coordinator import (
 )
 from services.bioxp.command_models import parse_command_request
 from services.bioxp.errors import ConnectionStateError, TargetPolicyError
+from services.bioxp.operator_semantic_quarantine import EMERGENCY_STOP_QUARANTINE_REASON
 from services.bioxp.runtime import BioXpRuntime
 
 from .dependencies import get_bioxp_runtime, require_bioxp_mutation_access
@@ -76,12 +77,5 @@ async def emergency_stop(
     request: EmergencyStopRequest,
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> dict[str, Any]:
-    try:
-        result = await runtime.commands.emergency_stop(
-            expected_generation=request.expected_generation,
-            idempotency_key=request.idempotency_key,
-            mutations_enabled=True,
-        )
-    except (CommandDeniedError, IdempotencyConflictError) as exc:
-        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
-    return result.model_dump(mode="json")
+    del request, runtime
+    raise HTTPException(status_code=409, detail=EMERGENCY_STOP_QUARANTINE_REASON)

@@ -50,12 +50,26 @@ test('template state round-trips canonical launcher values', () => {
     assert.match(submission, /bms\.conformational-mapping\.launcher\.v1/);
 });
 
-test('downloads use content-addressed API identities', () => {
+test('CM result shell uses the shared workbench with an explicit fullscreen canvas mode', () => {
+    const viewer = source('conformationalMapping/ConformationalMappingViewer.tsx');
+    assert.match(viewer, /from ['"]\.\.\/\.\.\/structureViewer\/StructureWorkbench['"]/);
+    assert.match(viewer, /<StructureWorkbench/);
+    assert.doesNotMatch(viewer, /<MolstarViewer/);
+    assert.doesNotMatch(viewer, /height=\{650\}/);
+    assert.match(viewer, /data-cm-viewer-fullscreen/);
+    assert.match(viewer, /requestFullscreen\(\)/);
+    assert.match(viewer, /height="100%"/);
+    assert.match(viewer, /showMetricWorkbench=\{metricWorkbenchOpen\}/);
+    assert.match(viewer, /showSequenceTrack=\{metricWorkbenchOpen\}/);
+});
+
+test('downloads use content-addressed CM request-scoped API identities', () => {
     const api = source('conformationalMapping/conformationalMappingApi.ts');
     const viewer = source('conformationalMapping/ConformationalMappingViewer.tsx');
     assert.match(api, /cmArtifactUrl/);
     assert.match(api, /encodeURIComponent\(artifactId\)/);
     assert.match(viewer, /cmArtifactUrl/);
+    assert.doesNotMatch(viewer, /artifactJobId=/);
 });
 
 test('launcher exposes state-conditioned FrustraMPNN comparison as an explicit typed payload option', () => {

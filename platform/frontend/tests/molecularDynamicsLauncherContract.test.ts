@@ -46,10 +46,10 @@ describe('first-class molecular dynamics launcher', () => {
         assert.doesNotMatch(launcher, /max=\{16\}|max=\{10000\}|max=\{500\}|max=\{100\}|max=\{5\}/u);
     });
 
-    it('clearly labels automatic preparation as exact 1AKI smoke-only and not production science', () => {
+    it('labels the accepted 1AKI and 1LMB short-GPU scopes without claiming long-timescale science', () => {
         const launcher = source('components/MolecularDynamicsTemplate.tsx');
-        assert.match(launcher, /exact 1AKI.*smoke-only/is);
-        assert.match(launcher, /not (?:validated for |intended for )?production science/is);
+        assert.match(launcher, /1AKI protein.*1LMB protein-DNA.*short-GPU/is);
+        assert.match(launcher, /not (?:validated for |intended for )?long-timescale production science/is);
     });
 
     it('does not offer prepared GROMACS and explains the OpenMM-only prepared lane', () => {

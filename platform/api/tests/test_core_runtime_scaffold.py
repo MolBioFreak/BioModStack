@@ -253,7 +253,8 @@ def test_frontend_router_uses_vite_base_url_for_subpath_deployments() -> None:
         encoding="utf-8"
     )
 
-    assert "getRouterBasename({ envBaseUrl: import.meta.env.BASE_URL })" in main_tsx
+    assert "resolveRouterBasenameForLocation(" in main_tsx
+    assert "{ envBaseUrl: import.meta.env.BASE_URL }" in main_tsx
     assert "basename={routerBasename}" in main_tsx
     assert (
         "isAppPath(window.location.pathname, '/designer', routerBasename)" in main_tsx
@@ -347,10 +348,9 @@ def test_api_dockerfile_uses_prebuilt_venv_at_runtime() -> None:
     assert "os.utime(path, (epoch, epoch), follow_symlinks=False)" in dockerfile
     assert "docker.io" in dockerfile
     assert "docker-compose" in dockerfile
-    assert (
-        'CMD ["/app/platform/api/.venv/bin/uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"]'
-        in dockerfile
-    )
+    assert "/app/platform/api/.venv/bin/python run_migrations.py" in dockerfile
+    assert "exec /app/platform/api/.venv/bin/uvicorn main:app" in dockerfile
+    assert "--host 127.0.0.1 --port 8000" in dockerfile
     assert 'CMD ["uv", "run", "uvicorn"' not in dockerfile
 
 
@@ -475,7 +475,8 @@ def test_workflow_adapter_script_runs_host_native_adapter_without_recursive_rout
         in adapter_script
     )
     assert (
-        'uv run uvicorn workflow_adapter_app:app --port 8001 --host "$BMS_WORKFLOW_ADAPTER_BIND_HOST"'
+        'uv run --no-sync uvicorn workflow_adapter_app:app --port 8001 '
+        '--host "$BMS_WORKFLOW_ADAPTER_BIND_HOST" --no-proxy-headers --no-access-log'
         in adapter_script
     )
 

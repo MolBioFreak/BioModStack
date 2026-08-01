@@ -565,12 +565,28 @@ async def _commit_reconciled_job_mutations(session: Any) -> int:
     a concurrent operator decision.
     """
     from sqlalchemy import inspect, update
-    from database import Job
+    from database import Job, MdRun
 
     pending: list[tuple[str, dict[str, Any]]] = []
     for candidate in list(session.dirty):
         if not isinstance(candidate, Job):
             continue
+        if (
+            candidate.model_id == "molecular_dynamics"
+            and candidate.mode == "molecular_dynamics"
+        ):
+            # The durable MD state machine owns top-level parent projection while
+            # active. Once its phase is terminal, generic scheduler reconciliation
+            # may publish the matching terminal status onto Job.
+            with session.no_autoflush:
+                md_run = await session.get(MdRun, str(candidate.id), populate_existing=True)
+            lifecycle_owned_phases = {
+                "replicas_queued", "replicas_running", "checkpointing", "paused",
+                "cancelling", "reconciling", "finalizing",
+            }
+            if md_run is not None and str(md_run.phase) in lifecycle_owned_phases:
+                session.expunge(candidate)
+                continue
         state = inspect(candidate)
         values = {
             attribute.key: attribute.value
@@ -2778,7 +2794,7 @@ class GPUOrchestrator:
                                     if job.model_id == "molecular_dynamics" and job.mode == "simulate":
                                         from services.md.completion import validate_and_finalize_md_job
 
-                                        validate_and_finalize_md_job(job)
+                                        await validate_and_finalize_md_job(job, session)
                                     else:
                                         from services.result_state_integrity import finalize_successful_job
 

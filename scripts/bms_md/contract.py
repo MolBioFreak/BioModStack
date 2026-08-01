@@ -13,6 +13,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
 MD_JOB_SCHEMA = "bms.md.job.v1"
+MD_JOB_SCHEMA_V2 = "bms.md.job.v2"
+SUPPORTED_MD_JOB_SCHEMAS = {MD_JOB_SCHEMA, MD_JOB_SCHEMA_V2}
 MD_RUN_SCHEMA = "bms.md.run.v1"
 SUPPORTED_ENGINES = {"gromacs", "openmm"}
 MAX_INPUT_SNAPSHOT_BYTES = 100 * 1024 * 1024
@@ -97,7 +99,7 @@ def _positive_int(value: Any, field: str) -> int:
 
 
 def normalize_job_config(raw: Mapping[str, Any]) -> dict[str, Any]:
-    """Return a validated, explicit v1 MD job configuration.
+    """Return a validated, explicit MD job configuration.
 
     The normalized form is deliberately JSON-compatible so the same contract can
     cross the API, Nextflow, container, and result-manifest boundaries without
@@ -106,10 +108,20 @@ def normalize_job_config(raw: Mapping[str, Any]) -> dict[str, Any]:
 
     if not isinstance(raw, Mapping):
         raise ValueError("MD job config must be an object")
-    config = _deep_merge(copy.deepcopy(_DEFAULT_CONFIG), raw)
+    requested_schema = str(raw.get("schema") or "").strip()
+    defaults = copy.deepcopy(_DEFAULT_CONFIG)
+    if requested_schema == MD_JOB_SCHEMA_V2:
+        defaults["schema"] = MD_JOB_SCHEMA_V2
+        defaults["preparation"] = {
+            "box_type": "dodecahedron",
+            "padding_nm": 1.0,
+            "salt_molar": 0.15,
+            "neutralize": True,
+        }
+    config = _deep_merge(defaults, raw)
 
-    if config.get("schema") != MD_JOB_SCHEMA:
-        raise ValueError(f"schema must be {MD_JOB_SCHEMA!r}")
+    if config.get("schema") not in SUPPORTED_MD_JOB_SCHEMAS:
+        raise ValueError(f"schema must be one of {sorted(SUPPORTED_MD_JOB_SCHEMAS)!r}")
     job_id = str(config.get("job_id") or "").strip()
     if not job_id:
         raise ValueError("job_id is required")
@@ -157,8 +169,8 @@ def normalize_job_config(raw: Mapping[str, Any]) -> dict[str, Any]:
         execution["scheduler_gpu_id"] = str(execution["scheduler_gpu_id"])
     execution["ntmpi"] = _positive_int(execution.get("ntmpi"), "execution.ntmpi")
     execution["ntomp"] = _positive_int(execution.get("ntomp"), "execution.ntomp")
-    if execution.get("gpu_offload") not in {"auto", "full", "none"}:
-        raise ValueError("execution.gpu_offload must be auto, full, or none")
+    if execution.get("gpu_offload") not in {"auto", "full", "full_forces", "none"}:
+        raise ValueError("execution.gpu_offload must be auto, full, full_forces, or none")
     if execution.get("pin") not in {"on", "off", "auto"}:
         raise ValueError("execution.pin must be on, off, or auto")
     config["execution"] = execution
@@ -525,7 +537,7 @@ def build_run_manifest(
         raise ValueError("replica_index is outside configured replica range")
     return {
         "schema": MD_RUN_SCHEMA,
-        "job_schema": MD_JOB_SCHEMA,
+        "job_schema": config["schema"],
         "created_at": datetime.now(timezone.utc).isoformat(),
         "job_id": config["job_id"],
         "replica_index": replica_index,

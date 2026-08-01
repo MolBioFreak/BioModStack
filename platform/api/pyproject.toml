@@ -31,6 +31,8 @@ dependencies = [
     "openpyxl>=3.1.5",
     "pillow>=12.1.0",  # Desktop tray icon rendering
     "rfc8785>=0.1.4,<1",
+    "trimesh>=4.12,<5",
+    "rtree>=1.4,<2",
 ]
 
 [tool.uv]

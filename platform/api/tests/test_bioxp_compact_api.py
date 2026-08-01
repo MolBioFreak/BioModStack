@@ -31,6 +31,13 @@ EXPECTED = {
     ("GET", "/oem-full-lifecycle/runs/{run_id}"),
     ("GET", "/oem-full-lifecycle/runs/{run_id}/ledger"),
     ("POST", "/oem-full-lifecycle/runs/{run_id}/cancel"),
+    ("GET", "/operator-controls/catalog"),
+    ("GET", "/operator-controls/dashboard"),
+    ("GET", "/operator-controls/history"),
+    ("GET", "/operator-controls/receipts/{command_id}"),
+    ("POST", "/operator-controls/actions/{action_id}/admission"),
+    ("POST", "/operator-controls/actions/{action_id}"),
+    ("POST", "/operator-controls/receipts/{command_id}/assessment"),
 }
 
 
@@ -56,7 +63,7 @@ def _inventory() -> set[tuple[str, str]]:
 
 def test_compact_api_inventory_is_exact_and_bounded() -> None:
     assert _inventory() == EXPECTED
-    assert len(_inventory()) <= 26
+    assert len(_inventory()) == 31
 
 
 def test_every_non_read_route_carries_the_global_containment_dependency() -> None:
@@ -75,6 +82,10 @@ def test_only_bounded_resource_identifiers_are_dynamic() -> None:
         "/oem-full-lifecycle/runs/{run_id}",
         "/oem-full-lifecycle/runs/{run_id}/ledger",
         "/oem-full-lifecycle/runs/{run_id}/cancel",
+        "/operator-controls/receipts/{command_id}",
+        "/operator-controls/actions/{action_id}",
+        "/operator-controls/actions/{action_id}/admission",
+        "/operator-controls/receipts/{command_id}/assessment",
     }
     assert all("{path" not in path and "{command_name" not in path for _, path in _inventory())
 

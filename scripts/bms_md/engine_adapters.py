@@ -28,7 +28,11 @@ def get_engine_adapter(engine: str) -> EngineAdapter:
         raise EngineUnavailableError(f"MD_ENGINE_UNAVAILABLE: no MD adapter registered for {name}") from exc
 
 
-def run_md_replica(config_path: Path, output_dir: Path, *, replica_index: int = 0) -> Path:
+def run_md_replica(
+    config_path: Path, output_dir: Path, *, replica_index: int = 0,
+    preparation_bundle: str | Path | None = None,
+    resume_checkpoint: str | Path | None = None,
+) -> Path:
     config_path = Path(config_path).expanduser().resolve()
     config = load_verified_job_config(config_path)
     adapter = get_engine_adapter(config["engine"])
@@ -37,6 +41,8 @@ def run_md_replica(config_path: Path, output_dir: Path, *, replica_index: int = 
             config_path=config_path,
             output_dir=Path(output_dir).expanduser().resolve(),
             replica_index=replica_index,
+            preparation_bundle=(Path(preparation_bundle).expanduser().resolve() if preparation_bundle else None),
+            resume_checkpoint=(Path(resume_checkpoint).expanduser().resolve() if resume_checkpoint else None),
         )
     )
 

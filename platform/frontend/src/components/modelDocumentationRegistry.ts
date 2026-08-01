@@ -46,17 +46,7 @@ export const MODEL_DOCUMENTATION_LINKS = {
         { label: 'FAMPNN GitHub', href: 'https://github.com/richardshuai/fampnn' },
         { label: 'FAMPNN preprint DOI', href: 'https://doi.org/10.1101/2025.02.13.637498' },
     ],
-    fold_cp: [
-        {
-            label: 'BMS Fold-CP spec',
-            href: 'https://github.com/MolBioFreak/BioModStack/blob/main/docs/plans/2026-04-24-fold-cp-dram-context-spill-additional-work-spec.md',
-        },
-        {
-            label: 'BMS true data-plane spec',
-            href: 'https://github.com/MolBioFreak/BioModStack/blob/main/docs/plans/2026-04-28-fold-cp-true-distributed-data-plane-spec.md',
-        },
-        { label: 'PyTorch DTensor', href: 'https://docs.pytorch.org/docs/stable/distributed.tensor.html' },
-    ],
+    fold_cp: [{ label: 'PyTorch DTensor', href: 'https://docs.pytorch.org/docs/stable/distributed.tensor.html' }],
     laproteina: [
         { label: 'La-Proteina GitHub', href: 'https://github.com/NVIDIA-Digital-Bio/la-proteina' },
         { label: 'La-Proteina arXiv', href: 'https://arxiv.org/abs/2507.09466' },

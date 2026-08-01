@@ -1,6 +1,6 @@
-"""Truthful ONT device-control boundary for BioModStack.
+"""Truthful ONT Mk1D/MinKNOW device-control boundary for BioModStack.
 
-Live MK1B/MK1D/MinKNOW operation is owned by the BMS service/API layer.
+Live Mk1D/MinKNOW operation is owned by the BMS service/API layer.
 Nextflow receives existing run outputs for reproducible analysis; it does not
 own live device handles.
 """
@@ -17,10 +17,7 @@ from services.ont_minknow_client import discover_minknow_devices
 
 DEVICE_CONTROL_STATUS_NOT_CONFIGURED = "not_configured"
 
-SUPPORTED_DEVICE_TYPES = (
-    {"id": "mk1b", "display_name": "ONT MinION Mk1B", "requires_minknow": True},
-    {"id": "mk1d", "display_name": "ONT MinION Mk1D", "requires_minknow": True},
-)
+SUPPORTED_DEVICE_TYPES = ({"id": "mk1d", "display_name": "ONT MinION Mk1D", "requires_minknow": True},)
 
 ONT_DEVICE_CONTROL_CAPABILITIES: dict[str, Any] = {
     "owner": DEVICE_CONTROL_OWNER,
@@ -73,7 +70,7 @@ def get_device_control_status() -> dict[str, Any]:
         "supported_device_types": list(SUPPORTED_DEVICE_TYPES),
         "live_devices": [],
         "fake_or_demo_devices": False,
-        "message": "MinKNOW/MK1B/MK1D live device control is a service/API boundary and is not configured in this runtime.",
+        "message": "MinKNOW/Mk1D live device control is a service/API boundary and is not configured in this runtime.",
     }
 
 

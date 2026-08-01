@@ -26,13 +26,13 @@ from services.ont_device_control import (  # noqa: E402
 from services.ont_ngs_contract import DEVICE_CONTROL_OWNER  # noqa: E402
 
 
-def test_ont_device_control_contract_supports_mk1b_mk1d_without_fake_devices() -> None:
+def test_ont_device_control_contract_supports_live_mk1d_without_fake_devices() -> None:
     status = get_device_control_status()
 
     assert status["owner"] == DEVICE_CONTROL_OWNER
     assert status["implementation_status"] == DEVICE_CONTROL_STATUS_NOT_CONFIGURED
     assert status["live_devices"] == []
-    assert {device["id"] for device in status["supported_device_types"]} == {"mk1b", "mk1d"}
+    assert {device["id"] for device in status["supported_device_types"]} == {"mk1d"}
     assert status["fake_or_demo_devices"] is False
 
 

@@ -50,13 +50,14 @@ from paths import (
 )
 from runtime_policy import workflow_launch_block_detail, workflow_launches_allowed
 from schemas import JobCreate, JobResponse, JobList, JobStatus
-from services.job_control import cancel_job_lineage
+from services.job_control import cancel_job_lineage, reject_generic_md_lifecycle_control
 from services import alignment_access, ont_submission_trust, stage_reporting, ont_ngs_contract
 from services.ont_barcode_units import load_barcode_units
 from services.md.chemistry_catalog import ChemistryCatalogError, ChemistryProfileSelectionError
 from services.md.feature_gate import require_molecular_dynamics_feature
 from services.md.launch_contract import MDLaunchError, materialize_md_job_spec, normalize_md_job_spec
 from services.md.results import expected_analysis_implementation_sha256
+from services.md.state import MdStateError, create_md_run, create_replica_attempt
 from services.proteinbase_importer import import_proteinbase_bundle
 
 from model_registry import get_registry
@@ -5097,11 +5098,19 @@ def _build_msa_batch_child_params(
     }
 
 
+def _standard_job_output_dir(name: str, timestamp: str, preallocated_job_id: str | None) -> Path:
+    if preallocated_job_id is not None:
+        return get_results_dir() / preallocated_job_id
+    return get_results_dir() / f"{name}_{timestamp}"
+
+
 @router.post("", response_model=JobResponse, status_code=201)
 async def create_job(
     job_data: JobCreate,
     background_tasks: BackgroundTasks,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    _preallocated_job_id: Any = Depends(lambda: None),
+    _commit: Any = Depends(lambda: True),
 ):
     """Create and queue a new pipeline job."""
     require_molecular_dynamics_feature(job_data.model_id)
@@ -5192,7 +5201,12 @@ async def create_job(
 
         if job_data.model_id == "molecular_dynamics" and job_data.mode == "simulate":
             try:
-                job_data.params["md_job_spec"] = normalize_md_job_spec(
+                # Validate the caller-owned request without replacing it with the
+                # server-resolved preview.  Materialization below performs the one
+                # authoritative resolution after the durable job id/output root
+                # exist.  Feeding the preview back into materialization would make
+                # our own resolved chemistry fields look forged by the caller.
+                normalize_md_job_spec(
                     params=job_data.params,
                     job_id="validation-preview",
                     resolve_runtime_path=_resolve_md_input_path_for_runtime,
@@ -5377,7 +5391,17 @@ async def create_job(
                 detail="msa_provider=colabfold_api currently requires num_parallel_jobs=1.",
             )
     
-    # Create output directory (base for all jobs in batch)
+    preallocated_job_id = _preallocated_job_id if isinstance(_preallocated_job_id, str) else None
+    if preallocated_job_id is not None:
+        if num_jobs != 1 or not re.fullmatch(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+            preallocated_job_id,
+        ):
+            raise HTTPException(status_code=500, detail="Invalid internal preallocated Job identity")
+
+    # Create output directory (base for all jobs in batch). Internal typed
+    # launchers use the deterministic Job ID so concurrent idempotent callers
+    # cannot leave timestamp-split loser directories outside the DB transaction.
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     is_md_launch = job_data.model_id == "molecular_dynamics" and job_data.mode == "simulate"
     md_output_dir_created = False
@@ -5388,7 +5412,11 @@ async def create_job(
             _raise_md_launch_http_error(exc)
         base_output_dir = str(md_output_path)
     else:
-        base_output_dir = str(get_results_dir() / f"{job_data.name}_{timestamp}")
+        # Presentation-only names must not split one deterministic Job's
+        # filesystem ownership across concurrent equivalent requests.
+        base_output_dir = str(
+            _standard_job_output_dir(job_data.name, timestamp, preallocated_job_id)
+        )
         os.makedirs(base_output_dir, exist_ok=True)
     
     # Extract sequence length for VRAM estimation (same for all jobs in batch)
@@ -5522,7 +5550,7 @@ async def create_job(
     first_job = None
     
     for i in range(num_jobs):
-        job_id = str(uuid.uuid4())
+        job_id = preallocated_job_id or str(uuid.uuid4())
         
         # For multiple jobs: use sim_1, sim_2, etc. subdirectories (or variant names for mutagenesis)
         if mutagenesis_variants and i < len(mutagenesis_variants):
@@ -5787,12 +5815,39 @@ async def create_job(
             job_phase='inference',
         )
         session.add(job)
+        if is_md_launch and job_params.get("md_job_spec", {}).get("schema") == "bms.md.job.v2":
+            await create_md_run(
+                session,
+                job=job,
+                normalized_request=job_params["md_job_spec"],
+            )
+        if job_data.model_id == "molecular_dynamics" and job_data.mode == "replica":
+            try:
+                await create_replica_attempt(
+                    session,
+                    job_id=str(effective_parent_id or ""),
+                    child_job_id=job.id,
+                    replica_index=int(job_params["md_replica_index"]),
+                    attempt=int(job_params.get("md_attempt", 0)),
+                    engine=str(job_params["md_engine"]),
+                    execution_plan_sha256=str(job_params["md_execution_plan_sha256"]),
+                    compatibility_key=str(job_params["md_compatibility_key"]),
+                )
+            except (KeyError, TypeError, ValueError, MdStateError) as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": getattr(exc, "code", "MD_REPLICA_REGISTRATION_INVALID"),
+                            "message": str(exc)},
+                ) from exc
         created_jobs.append(job)
         
         if first_job is None:
             first_job = job
     
-    await session.commit()
+    if _commit is False:
+        await session.flush()
+    else:
+        await session.commit()
     
     # Refresh first job for response
     await session.refresh(first_job)
@@ -6110,6 +6165,7 @@ async def cancel_job(
     session: AsyncSession = Depends(get_session)
 ):
     """Cancel a job and any active descendant jobs it spawned."""
+    await reject_generic_md_lifecycle_control(job_id, session)
     job, lineage = await cancel_job_lineage(job_id, session)
     return {
         "message": "Job cancelled",
@@ -6136,6 +6192,7 @@ async def delete_job_permanently(
     
     This is irreversible!
     """
+    await reject_generic_md_lifecycle_control(job_id, session)
     import shutil
     
     result = await session.execute(select(Job).where(Job.id == job_id))
@@ -6232,6 +6289,7 @@ async def resubmit_job(
     Creates a new job with a fresh ID but copies all settings from the original.
     """
     _raise_if_workflow_launches_disabled("resubmit workflow jobs")
+    await reject_generic_md_lifecycle_control(job_id, session)
     # Find original job
     result = await session.execute(select(Job).where(Job.id == job_id))
     original_job = result.scalar_one_or_none()
@@ -6700,6 +6758,7 @@ async def report_stage_complete(
     Report that a workflow stage has completed.
     Called by Nextflow workflows after each stage finishes.
     """
+    await reject_generic_md_lifecycle_control(job_id, session)
     result = await session.execute(select(Job).where(Job.id == job_id).with_for_update())
     job = result.scalar_one_or_none()
     
@@ -6788,6 +6847,7 @@ async def open_stage_gate(
     session: AsyncSession = Depends(get_session)
 ):
     """Mark a job as awaiting user input at a named workflow gate."""
+    await reject_generic_md_lifecycle_control(job_id, session)
     result = await session.execute(select(Job).where(Job.id == job_id))
     job = result.scalar_one_or_none()
 
@@ -7073,6 +7133,8 @@ async def mark_children_aggregated(
     """
     from sqlalchemy import or_
 
+    await reject_generic_md_lifecycle_control(parent_id, session)
+
     _, parent_ids, batch_aliases, _ = await _resolve_child_lineage_context(
         session,
         parent_id,
@@ -7123,6 +7185,7 @@ async def report_stage_start(
     Report that a workflow stage has started.
     Called by Nextflow workflows when entering a new stage.
     """
+    await reject_generic_md_lifecycle_control(job_id, session)
     result = await session.execute(select(Job).where(Job.id == job_id).with_for_update())
     job = result.scalar_one_or_none()
     
@@ -7312,6 +7375,7 @@ async def resume_job(
     resume behavior. The underlying Nextflow resume remains cache-driven.
     """
     _raise_if_workflow_launches_disabled("resume workflow jobs")
+    await reject_generic_md_lifecycle_control(job_id, session)
     result = await session.execute(select(Job).where(Job.id == job_id))
     job = result.scalar_one_or_none()
     

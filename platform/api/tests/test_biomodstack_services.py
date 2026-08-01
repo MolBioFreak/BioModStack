@@ -653,6 +653,8 @@ def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path, mo
     assert "Type=oneshot" in tailnet_unit
     assert f"Before={services.FRONTEND_SERVICE}" in tailnet_unit
     assert f"ExecStart=/usr/bin/env python3 {project_root}/scripts/install_tailnet_global_routes.py" in tailnet_unit
+    # The unit must exceed the adapter policy convergence bound (90s).
+    assert "TimeoutStartSec=120" in tailnet_unit
 
     target_unit = units[services.DEV_TARGET_UNIT]
     assert f"Wants={services.API_SERVICE} {services.FRONTEND_SERVICE} {services.TAILNET_GLOBAL_SERVICE}" in target_unit

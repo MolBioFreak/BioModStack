@@ -108,8 +108,9 @@ def test_md_workflow_uses_bounded_singleton_entrypoints() -> None:
 
     replica_entrypoint = (workflow_root / "replica.nf").read_text(encoding="utf-8")
     assert "params.md_replica_index" in replica_entrypoint
+    assert "params.md_preparation_bundle" in replica_entrypoint
     assert "params.gpu_id" in replica_entrypoint
-    assert "tuple(params.md_replica_index as int, config)" in replica_entrypoint
+    assert "tuple(params.md_replica_index as int, config, bundle)" in replica_entrypoint
     assert ".flatten" not in replica_entrypoint
 
     orchestrator = (workflow_root / "orchestrator.nf").read_text(encoding="utf-8")
@@ -152,7 +153,7 @@ def test_md_workflow_uses_bounded_singleton_entrypoints() -> None:
 def test_md_nextflow_profile_propagates_the_feature_gate_into_containers() -> None:
     config = (REPO_ROOT / "nextflow.config").read_text(encoding="utf-8")
     assert "def mdFeatureFlag = System.getenv('BMS_FEATURE_MOLECULAR_DYNAMICS') ?: '0'" in config
-    assert config.count("--env BMS_FEATURE_MOLECULAR_DYNAMICS=${mdFeatureFlag}") == 4
+    assert config.count("--env BMS_FEATURE_MOLECULAR_DYNAMICS=${mdFeatureFlag}") == 5
     assert "molecular_dynamics_experimental" in config
     assert "withLabel: MolecularDynamicsGromacs" in config
     assert "withLabel: MolecularDynamicsOpenMM" in config

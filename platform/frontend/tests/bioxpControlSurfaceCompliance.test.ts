@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 const source = readFileSync(resolve('src/components/BioXpCockpit.tsx'), 'utf8');
 test('operator surface is compact and server-command driven', () => {
-  for (const label of ['BioXP 3200', 'Connection', 'Controller Transport & Recovery', 'Claim USB Transport', 'Non-homing Recovery', 'Manual Controls', 'BioXpCameraPanel', 'Emergency Stop', 'Recent Commands']) assert.match(source, new RegExp(label));
+  for (const label of ['BioXP 3200', 'Connection', 'Controller Transport & Recovery', 'Claim USB Transport', 'Non-homing Recovery', 'Manual Controls', 'BioXpCameraPanel', 'Physical Emergency Abort Unavailable', 'Recent Commands']) assert.match(source, new RegExp(label));
   assert.match(source, /available_commands/);
 });
 test('operator surface excludes rejected planning and evidence UI', () => {

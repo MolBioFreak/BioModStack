@@ -156,6 +156,53 @@ export const fetchMDArtifacts = (jobId: string) => api.get<{ schema: string; job
 export const fetchMDAnalysis = (jobId: string) => api.get<MDAnalysisReportSet>(`/api/jobs/${jobId}/md/analysis`);
 export const retryMDAnalysis = (jobId: string) => api.post<{ schema: 'bms.md.analysis-retry.v1'; status: string; created_child_ids: string[] }>(`/api/jobs/${jobId}/md/analysis/retry`);
 
+export interface MDRunDetail {
+    schema: 'bms.md.run-detail.v1'; job_id: string; job_status: string; queue_status: string; phase: string; state_version: number;
+    chemistry: { profile_id: string; profile_sha256: string; assurance: string; verification_status: string; requested_scope?: string | null };
+    engine: 'gromacs' | 'openmm'; replica_count: number; replica_summary: Record<string, number>;
+    simulated_time_ps: number; requested_time_ps: number; checkpoint_available: boolean;
+    allowed_actions: Array<'pause' | 'resume_dynamics' | 'retry_dynamics' | 'cancel'>;
+    replicas: Array<{ id: string; replica_index: number; attempt: number; state: string; active: boolean; engine: string; failure: unknown; retry_eligible: boolean }>;
+    segments: Array<{ id: string; replica_run_id: string; segment_index: number; state: string; source_segment_id: string | null; source_checkpoint_id: string | null; start_step: number | null; end_step: number | null; start_time_ps: number | null; end_time_ps: number | null }>;
+    checkpoints: Array<{ id: string; segment_id: string; logical_role: string; relative_path: string; sha256: string; bytes: number; step: number; time_ps: number }>;
+    events: Array<{ id: string; event_type: string; state_version: number; payload: Record<string, unknown>; created_at: string }>;
+}
+
+export interface MDQueueRun {
+    job_id: string;
+    name: string;
+    job_status: string;
+    queue_status: string;
+    phase: string;
+    state_version: number;
+    engine: 'gromacs' | 'openmm';
+    replica_count: number;
+    replica_summary: Record<string, number>;
+    simulated_time_ps: number;
+    requested_time_ps: number;
+    checkpoint_available: boolean;
+    allowed_actions: MDRunDetail['allowed_actions'];
+    chemistry: { profile_id: string; assurance: string; verification_status: string; requested_scope: string | null };
+    created_at: string;
+    updated_at: string;
+}
+
+export interface MDQueueProjection {
+    schema: 'bms.md.queue.v1';
+    bounded: true;
+    limit: number;
+    count: number;
+    runs: MDQueueRun[];
+}
+
+export const fetchMDQueue = (limit: number = 25) =>
+    api.get<MDQueueProjection>('/api/molecular-dynamics/runs', { params: { limit } });
+export const fetchMDRun = (jobId: string) => api.get<MDRunDetail>(`/api/molecular-dynamics/runs/${jobId}`);
+export const pauseMDRun = (jobId: string, stateVersion: number, idempotencyKey: string) => api.post<MDRunDetail>(`/api/molecular-dynamics/runs/${jobId}/pause`, { expected_state_version: stateVersion, idempotency_key: idempotencyKey });
+export const cancelMDRun = (jobId: string, stateVersion: number, idempotencyKey: string) => api.post<MDRunDetail>(`/api/molecular-dynamics/runs/${jobId}/cancel`, { expected_state_version: stateVersion, idempotency_key: idempotencyKey });
+export const resumeMDRun = (jobId: string, stateVersion: number, idempotencyKey: string) => api.post(`/api/molecular-dynamics/runs/${jobId}/resume`, { expected_state_version: stateVersion, idempotency_key: idempotencyKey });
+export const retryMDDynamics = (jobId: string, replicaIndex: number, stateVersion: number, idempotencyKey: string) => api.post<{ schema: 'bms.md.retry-receipt.v1'; job_id: string; replica_run_id: string; child_job_id: string; replica_index: number; attempt: number }>(`/api/molecular-dynamics/runs/${jobId}/retry`, { replica_index: replicaIndex, expected_state_version: stateVersion, idempotency_key: idempotencyKey });
+
 // Log data for View Logs modal
 export interface JobLogs {
     job_id: string;
@@ -477,6 +524,55 @@ export const extractChain = async (
 export const submitJob = (jobData: Partial<Job>) => {
     return api.post('/api/jobs', jobData);
 };
+
+export interface ShapeGeometrySummary {
+    geometry_id: string;
+    source_id: string;
+    geometry_sha256: string;
+    source_sha256: string;
+    preview_obj_sha256: string | null;
+    point_pool_sha256: string;
+    sdf_sha256: string;
+    sdf_sign: 'positive_inside';
+    sdf_grid_shape: [number, number, number];
+    vertex_count: number;
+    face_count: number;
+    point_count: number;
+    bounds_angstrom: [number, number, number, number, number, number];
+    dimensions_angstrom: [number, number, number];
+    source_format: 'obj' | 'stl';
+    source_parser: 'obj_strict_v1' | 'stl_ascii_v1' | 'stl_binary_v1';
+    source_unit: string;
+    angstrom_per_unit: number;
+}
+
+export interface ShapeLaunchRequest {
+    client_request_id: string;
+    name: string;
+    geometry_id: string;
+    expected_geometry_sha256: string;
+    expected_point_pool_sha256: string;
+    target_length: number;
+    num_backbones: number;
+    sequences_per_backbone: number;
+    seed: number;
+}
+
+export const listShapeGeometries = () =>
+    api.get<{ geometries: ShapeGeometrySummary[] }>('/api/shape-blueprint/geometries');
+
+export const uploadShapeGeometry = (file: File, unit: string) => {
+    const body = new FormData();
+    body.append('file', file);
+    body.append('unit', unit);
+    return api.post<ShapeGeometrySummary>('/api/shape-blueprint/geometries', body);
+};
+
+export const submitShapeBlueprint = (request: ShapeLaunchRequest) =>
+    api.post<{ request_id: string; request_sha256: string; job_id: string; job_status: string; reused: boolean }>(
+        '/api/shape-blueprint/requests',
+        request,
+    );
 
 export interface BoltzApiStructureRequest {
     name: string;
@@ -3250,7 +3346,7 @@ export interface OntLiveDevice {
     acquisition_runs?: Array<Record<string, unknown>>;
     hardware_check_runs?: Array<Record<string, unknown>>;
     connection_error?: string | null;
-    fake_or_demo_device?: boolean;
+    fake_or_demo_device?: false;
 }
 
 export interface OntDeviceStatus {
@@ -3268,7 +3364,7 @@ export interface OntInstrumentRun {
     status: string;
     handoff_ready?: boolean;
     output_files?: Record<string, string[]>;
-    fake_or_demo_devices: boolean;
+    fake_or_demo_devices: false;
 }
 
 export interface OntProtocolOptions {

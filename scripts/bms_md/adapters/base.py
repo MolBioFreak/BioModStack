@@ -22,6 +22,8 @@ class ReplicaRequest:
     config_path: Path
     output_dir: Path
     replica_index: int
+    preparation_bundle: Path | None = None
+    resume_checkpoint: Path | None = None
 
 
 class EngineAdapter(Protocol):

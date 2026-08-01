@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router-dom';
 
-import MolstarViewer from '../MolstarViewer';
+import { StructureWorkbench } from '../../structureViewer/StructureWorkbench';
 import type { ResidueRef } from '../../structureViewer/contracts/structureIdentity';
 import type { MetricSelection } from '../../structureViewer/metrics/metricContracts';
 import {
@@ -104,6 +104,29 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
     const [stateAnalysisResidueSelections, setStateAnalysisResidueSelections] = useState<ResidueRef[]>([]);
     const [pendingStateResidue, setPendingStateResidue] = useState<{ candidateId: string; row: CmStateLandscapeRow } | null>(null);
     const [stateResidueSelectionReason, setStateResidueSelectionReason] = useState<string | null>(null);
+    const [metricWorkbenchOpen, setMetricWorkbenchOpen] = useState(false);
+    const [isViewerFullscreen, setIsViewerFullscreen] = useState(false);
+    const viewerShellRef = useRef<HTMLElement | null>(null);
+
+    useEffect(() => {
+        const syncFullscreen = () => {
+            setIsViewerFullscreen(document.fullscreenElement === viewerShellRef.current);
+            window.setTimeout(() => window.dispatchEvent(new Event('resize')), 0);
+        };
+        document.addEventListener('fullscreenchange', syncFullscreen);
+        return () => document.removeEventListener('fullscreenchange', syncFullscreen);
+    }, []);
+
+    const toggleViewerFullscreen = useCallback(async () => {
+        const shell = viewerShellRef.current;
+        if (!shell) return;
+        if (document.fullscreenElement === shell) {
+            await document.exitFullscreen();
+            return;
+        }
+        if (document.fullscreenElement) await document.exitFullscreen();
+        await shell.requestFullscreen();
+    }, []);
 
     const locationReceipt = (location.state as { cmSubmissionReceipt?: CmSubmitReceipt } | null)?.cmSubmissionReceipt;
     const receipt = locationReceipt?.request_id === requestId ? locationReceipt : null;
@@ -367,33 +390,41 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
                     <section className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
                         <aside className="max-h-[760px] overflow-auto rounded-2xl border border-slate-800 bg-slate-900/70 p-3" aria-label="Canonical candidates in API order"><div className="sticky top-0 z-10 mb-2 bg-slate-900 pb-2"><h2 className="text-sm font-semibold text-white">Candidates in API order</h2><p className="mt-1 text-[11px] text-slate-500">Identity and ordering come only from the canonical ensemble record.</p></div>{parsed.data.candidates.map((candidate, index) => <div key={candidate.candidate_id} className={`mb-2 rounded-lg border p-2 ${candidate.candidate_id === selected.candidate_id ? 'border-orange-400/60 bg-orange-500/10' : 'border-slate-800'}`}><button type="button" onClick={() => selectCandidateForStateAnalysis(candidate.candidate_id)} className="w-full text-left"><div className="text-xs font-medium text-white">Candidate {index + 1}</div><div className="mt-1 text-[11px] leading-4 text-slate-400">{candidateLabel(candidate)}</div><div className="mt-1 truncate font-mono text-[10px] text-slate-600">{candidate.candidate_id}</div></button><label className="mt-2 flex items-center gap-2 text-[11px] text-slate-400"><input type="checkbox" checked={overlayIds.includes(candidate.candidate_id)} disabled={candidate.candidate_id === selected.candidate_id || (!overlayIds.includes(candidate.candidate_id) && overlayIds.length >= 5)} onChange={(event) => setOverlayIds((current) => event.target.checked ? [...current, candidate.candidate_id] : current.filter((id) => id !== candidate.candidate_id))} />Overlay hypothesis</label></div>)}</aside>
                         <div className="space-y-3">
-                            <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70">
+                            <section
+                                ref={viewerShellRef}
+                                data-cm-viewer-fullscreen={isViewerFullscreen ? 'true' : 'false'}
+                                className={`overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70 ${isViewerFullscreen ? 'flex h-full min-h-0 flex-col rounded-none border-0 bg-slate-950 p-4 md:p-6' : 'min-h-[720px]'}`}
+                            >
                                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 p-3">
                                     <div>
                                         <span className="text-sm font-medium text-white">Candidate structure</span>
                                         <span className="ml-2 text-xs text-slate-500">{overlays.length} overlays</span>
                                     </div>
-                                    <span className="text-xs text-slate-400">
-                                        {frustraMpnnMetrics ? `${frustraMpnnMetrics.residueProfiles.length} exact mapped residue profiles` : completeLandscape.isLoading ? 'Loading complete FrustraMPNN landscape…' : 'FrustraMPNN visual layers unavailable'}
-                                    </span>
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-xs text-slate-400">{frustraMpnnMetrics ? `${frustraMpnnMetrics.residueProfiles.length} exact mapped residue profiles` : completeLandscape.isLoading ? 'Loading complete FrustraMPNN landscape…' : 'FrustraMPNN visual layers unavailable'}</span>
+                                        <button type="button" onClick={() => void toggleViewerFullscreen()} className="rounded border border-slate-700 px-3 py-1.5 text-xs text-slate-200 hover:border-orange-400" title={isViewerFullscreen ? 'Exit fullscreen' : 'Open fullscreen'}>{isViewerFullscreen ? 'Exit fullscreen' : 'Fullscreen'}</button>
+                                    </div>
                                 </div>
-                                {frustraMpnnMetrics ? (
-                                    <MolstarViewer
+                                <div className={`min-h-0 ${isViewerFullscreen ? 'flex-1' : 'h-[680px]'}`}>
+                                    <StructureWorkbench
+                                        mode="standard"
                                         structureUrl={cmArtifactUrl(requestId, selectedArtifact.artifact_id)}
                                         format="cif"
-                                        height={650}
+                                        height="100%"
                                         label={candidateLabel(selected)}
                                         overlayStructures={overlays}
-                                        metricLayers={frustraMpnnMetrics.layers}
-                                        activeMetricId="frustrampnn-native-index"
-                                        showMetricWorkbench
-                                        showSequenceTrack
+                                        metricLayers={frustraMpnnMetrics?.layers}
+                                        activeMetricId={frustraMpnnMetrics ? 'frustrampnn-native-index' : undefined}
+                                        showMetricWorkbench={metricWorkbenchOpen}
+                                        onMetricWorkbenchVisibilityChange={setMetricWorkbenchOpen}
+                                        showSequenceTrack={metricWorkbenchOpen}
+                                        showComplexWorkbench={false}
+                                        showM6Workbench={false}
+                                        showMeasurements={false}
                                         residueSelections={stateAnalysisResidueSelections}
                                         onMetricSelection={setFrustraMpnnSelection}
                                     />
-                                ) : (
-                                    <MolstarViewer structureUrl={cmArtifactUrl(requestId, selectedArtifact.artifact_id)} format="cif" height={650} label={candidateLabel(selected)} overlayStructures={overlays} residueSelections={stateAnalysisResidueSelections} />
-                                )}
+                                </div>
                             </section>
                             {(completeLandscape.isError || frustraMpnnMetricsResult.error) && (
                                 <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">

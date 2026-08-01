@@ -275,14 +275,19 @@ async def finalize_successful_job(
         count = await _design_count(session, job_id)
         partial = count > 0
         message = str(exc) or exc.__class__.__name__
+        integrity_state = str(getattr(exc, "integrity_state", "ingestion_failed"))
+        no_candidates = integrity_state == "no_candidates" and count == 0
+        details = {
+            "state": integrity_state if no_candidates else "ingestion_failed",
+            "partial": partial,
+            "design_count": count,
+            "error": message,
+        }
+        if no_candidates:
+            details["reason"] = getattr(exc, "reason", {"code": "no_candidates", "message": message})
         failure_provenance = _integrity_provenance(
             job,
-            {
-                "state": "ingestion_failed",
-                "partial": partial,
-                "design_count": count,
-                "error": message,
-            },
+            details,
         )
         failure = await session.execute(
             update(Job)
@@ -297,10 +302,10 @@ async def finalize_successful_job(
                 queue_status="failed",
                 paused=False,
                 assigned_gpu=None,
-                current_stage="Result Ingestion Failed",
+                current_stage="No Candidates" if no_candidates else "Result Ingestion Failed",
                 stage_progress=None,
                 completed_at=datetime.utcnow(),
-                error_message=f"Result ingestion failed: {message}",
+                error_message=(f"No candidates: {message}" if no_candidates else f"Result ingestion failed: {message}"),
                 provenance=failure_provenance,
             )
         )
@@ -311,7 +316,7 @@ async def finalize_successful_job(
             return FinalizationResult(False, count, state)
         await session.commit()
         await session.refresh(job)
-        return FinalizationResult(False, count, "ingestion_failed")
+        return FinalizationResult(False, count, "no_candidates" if no_candidates else "ingestion_failed")
 
     # Ingesters may commit internally.  Publish completion with a conditional DB
     # update: a cancellation or review gate committed after ingestion wins.

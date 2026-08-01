@@ -88,6 +88,7 @@ EXPECTED_MODEL_MODE_ENTRYPOINTS = {
     ("rfantibody_child", "antibody_backbone"): "workflows/rfantibody_backbone.nf",
     ("fampnn_child", "sequence_design"): "workflows/fampnn_child.nf",
     ("protein_modification_experimental", "de_novo_design"): "workflows/protein_cad_experimental.nf",
+    ("protein_modification_experimental", "shape_blueprint"): "workflows/shape_blueprint_design.nf",
     ("protein_modification_experimental", "region_redesign"): "workflows/protein_local_redesign.nf",
     ("molecular_dynamics", "simulate"): "workflows/experimental/molecular_dynamics/orchestrator.nf",
     ("molecular_dynamics", "replica"): "workflows/experimental/molecular_dynamics/replica.nf",

@@ -25,12 +25,12 @@ from services.stage_review import _is_protein_local_redesign_job  # noqa: E402
 CANONICAL_MODEL_ID = "protein_modification_experimental"
 
 
-def test_registry_exposes_one_protein_modification_product_with_two_truthful_modes() -> None:
+def test_registry_exposes_one_protein_modification_product_with_three_truthful_modes() -> None:
     model = ModelRegistry().get_model(CANONICAL_MODEL_ID)
 
     assert model is not None
     assert model.name == "De Novo Design"
-    assert {mode.id for mode in model.modes} == {"de_novo_design", "region_redesign"}
+    assert {mode.id for mode in model.modes} == {"de_novo_design", "shape_blueprint", "region_redesign"}
 
 
 def test_canonical_de_novo_mode_reuses_internal_protein_cad_entrypoint() -> None:

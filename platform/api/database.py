@@ -159,6 +159,54 @@ class Job(Base):
     designs = relationship("Design", back_populates="job", cascade="all, delete-orphan")
 
 
+class ShapeCadSource(Base):
+    """Shared immutable CAD source bytes for the internal Shape workflow."""
+
+    __tablename__ = "shape_cad_sources"
+
+    source_id = Column(String(40), primary_key=True)
+    source_sha256 = Column(String(64), nullable=False, unique=True, index=True)
+    size_bytes = Column(Integer, nullable=False)
+    original_filename = Column(String(255), nullable=False)
+    relative_path = Column(String(500), nullable=False)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
+class ShapeDesignGeometry(Base):
+    """Deterministic canonical geometry derived from one CAD source."""
+
+    __tablename__ = "shape_design_geometries"
+    __table_args__ = (
+        UniqueConstraint("source_id", "conversion_sha256", name="uq_shape_geometry_conversion"),
+    )
+
+    geometry_id = Column(String(41), primary_key=True)
+    source_id = Column(String(40), ForeignKey("shape_cad_sources.source_id"), nullable=False, index=True)
+    geometry_sha256 = Column(String(64), nullable=False, unique=True, index=True)
+    conversion_sha256 = Column(String(64), nullable=False)
+    angstrom_per_unit = Column(Float, nullable=False)
+    vertex_count = Column(Integer, nullable=False)
+    face_count = Column(Integer, nullable=False)
+    point_count = Column(Integer, nullable=False)
+    manifest = Column(JSON, nullable=False)
+    artifacts = Column(JSON, nullable=False)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
+class ShapeDesignRequest(Base):
+    """Immutable Shape scientific intent linked to the existing Job lifecycle."""
+
+    __tablename__ = "shape_design_requests"
+
+    request_id = Column(String(42), primary_key=True)
+    geometry_id = Column(String(41), ForeignKey("shape_design_geometries.geometry_id"), nullable=False, index=True)
+    request_sha256 = Column(String(64), nullable=False, unique=True, index=True)
+    request_spec = Column(JSON, nullable=False)
+    stage_relative_path = Column(String(500), nullable=False)
+    job_id = Column(String(36), ForeignKey("jobs.id"), nullable=True, unique=True, index=True)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
 class MolBioNgsReceipt(Base):
     """One-time server-issued binding from an immutable MolBio revision to ONT input."""
 
@@ -901,6 +949,115 @@ class Primer(Base):
     
     # Relationship
     target_sequence = relationship("NucleotideSequence", foreign_keys=[target_sequence_id])
+
+
+class MdRun(Base):
+    """Authoritative MD parent state; generic Job remains the scheduler projection."""
+    __tablename__ = "md_runs"
+    job_id = Column(String(36), ForeignKey("jobs.id", ondelete="CASCADE"), primary_key=True)
+    normalized_request = Column(JSON, nullable=False)
+    request_sha256 = Column(String(64), nullable=False, index=True)
+    phase = Column(String(32), nullable=False, default="validating", index=True)
+    state_version = Column(Integer, nullable=False, default=0)
+    chemistry_profile_id = Column(String(128), nullable=False, index=True)
+    chemistry_profile_sha256 = Column(String(64), nullable=False)
+    chemistry_assurance = Column(String(32), nullable=False)
+    verification_status = Column(String(32), nullable=False, default="not_run")
+    controls_blocked = Column(Boolean, nullable=False, default=False)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class MdReplicaRun(Base):
+    __tablename__ = "md_replica_runs"
+    __table_args__ = (
+        UniqueConstraint("md_job_id", "replica_index", "attempt", name="uq_md_replica_attempt"),
+        Index("uq_md_replica_active", "md_job_id", "replica_index", unique=True, sqlite_where=text("active = 1")),
+    )
+    id = Column(String(36), primary_key=True)
+    child_job_id = Column(String(36), ForeignKey("jobs.id", ondelete="CASCADE"), nullable=True, unique=True)
+    md_job_id = Column(String(36), ForeignKey("md_runs.job_id", ondelete="CASCADE"), nullable=False, index=True)
+    replica_index = Column(Integer, nullable=False)
+    attempt = Column(Integer, nullable=False)
+    state = Column(String(32), nullable=False, default="queued", index=True)
+    active = Column(Boolean, nullable=False, default=True)
+    engine = Column(String(32), nullable=False)
+    failure = Column(JSON, nullable=True)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+    completed_at = Column(LenientSQLiteDateTime, nullable=True)
+
+
+class MdAttemptSegment(Base):
+    __tablename__ = "md_attempt_segments"
+    __table_args__ = (UniqueConstraint("replica_run_id", "segment_index", name="uq_md_attempt_segment"),)
+    id = Column(String(36), primary_key=True)
+    replica_run_id = Column(String(36), ForeignKey("md_replica_runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    segment_index = Column(Integer, nullable=False)
+    state = Column(String(32), nullable=False, default="queued", index=True)
+    source_segment_id = Column(String(36), ForeignKey("md_attempt_segments.id"), nullable=True)
+    source_checkpoint_id = Column(String(36), ForeignKey("md_checkpoints.id"), nullable=True)
+    execution_plan_sha256 = Column(String(64), nullable=False)
+    compatibility_key = Column(String(64), nullable=False, index=True)
+    launch_identity = Column(JSON, nullable=True)
+    reservation_token = Column(String(128), nullable=True, unique=True)
+    start_step = Column(Integer, nullable=True)
+    end_step = Column(Integer, nullable=True)
+    start_time_ps = Column(Float, nullable=True)
+    end_time_ps = Column(Float, nullable=True)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+    completed_at = Column(LenientSQLiteDateTime, nullable=True)
+
+
+class MdCheckpoint(Base):
+    __tablename__ = "md_checkpoints"
+    __table_args__ = (UniqueConstraint("segment_id", "logical_role", "relative_path", name="uq_md_checkpoint_path"),)
+    id = Column(String(36), primary_key=True)
+    segment_id = Column(String(36), ForeignKey("md_attempt_segments.id", ondelete="CASCADE"), nullable=False, index=True)
+    logical_role = Column(String(32), nullable=False)
+    relative_path = Column(String(1000), nullable=False)
+    sha256 = Column(String(64), nullable=False)
+    bytes = Column(Integer, nullable=False)
+    step = Column(Integer, nullable=False)
+    time_ps = Column(Float, nullable=False)
+    compatibility_key = Column(String(64), nullable=False, index=True)
+    accepted = Column(Boolean, nullable=False, default=False)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
+class JobArtifact(Base):
+    __tablename__ = "job_artifacts"
+    __table_args__ = (UniqueConstraint("owner_job_id", "attempt", "logical_path", name="uq_job_artifact_logical"),)
+    id = Column(String(36), primary_key=True)
+    owner_job_id = Column(String(36), ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True)
+    attempt = Column(Integer, nullable=False, default=0)
+    logical_path = Column(String(1000), nullable=False)
+    storage_path = Column(String(1000), nullable=False)
+    sha256 = Column(String(64), nullable=False)
+    bytes = Column(Integer, nullable=False)
+    media_type = Column(String(128), nullable=False)
+    provenance = Column(JSON, nullable=False, default=dict)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
+class MdEvent(Base):
+    __tablename__ = "md_events"
+    __table_args__ = (UniqueConstraint("idempotency_key", name="uq_md_event_idempotency"),)
+    id = Column(String(36), primary_key=True)
+    md_job_id = Column(String(36), ForeignKey("md_runs.job_id", ondelete="CASCADE"), nullable=False, index=True)
+    idempotency_key = Column(String(128), nullable=False)
+    event_type = Column(String(64), nullable=False, index=True)
+    expected_state_version = Column(Integer, nullable=False)
+    resulting_state_version = Column(Integer, nullable=False)
+    payload = Column(JSON, nullable=False, default=dict)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
+class MdReconcilerLease(Base):
+    __tablename__ = "md_reconciler_leases"
+    name = Column(String(64), primary_key=True)
+    owner_id = Column(String(128), nullable=False)
+    expires_at = Column(LenientSQLiteDateTime, nullable=False)
+    updated_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
 
 
 # MSACache removed - now using file-based caching (see BMS_MSA_CACHE).

@@ -116,6 +116,9 @@ interface QuickViewerProps {
     onJobChange?: (jobId: string | null) => void;
 }
 
+const isMolecularDynamicsJob = (job: Job) =>
+    job.model_id === 'molecular_dynamics' || job.mode === 'molecular_dynamics' || job.mode === 'md';
+
 export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: QuickViewerProps) {
     // Use internal state if not externally controlled
     const [internalJobId, setInternalJobId] = useState<string | null>(null);
@@ -144,8 +147,12 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
     });
 
     // Get completed jobs with structures
-    const completedJobs = (jobsData?.data?.jobs || []).filter(
-        (job: Job) => job.status === 'completed'
+    const allJobs = jobsData?.data?.jobs || [];
+    const completedJobs = allJobs.filter(
+        (job: Job) => job.status === 'completed' && !isMolecularDynamicsJob(job)
+    );
+    const selectedJobIsMolecularDynamics = allJobs.some(
+        (job: Job) => job.id === selectedJobId && isMolecularDynamicsJob(job)
     );
 
     // Fetch structure files for selected job
@@ -156,7 +163,7 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
             if (!res.ok) throw new Error('Failed to fetch structure files');
             return res.json();
         },
-        enabled: !!selectedJobId,
+        enabled: !!selectedJobId && !selectedJobIsMolecularDynamics,
     });
 
     // Auto-select first structure when data loads

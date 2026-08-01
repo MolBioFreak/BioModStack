@@ -14,6 +14,7 @@ import json
 import csv
 import yaml
 import shutil
+import uuid
 from pathlib import Path
 from datetime import datetime
 from typing import Deque, Dict, Any, Iterable, Iterator, Optional, List, Tuple, Set
@@ -255,6 +256,7 @@ from paths import (
     get_db_path,
     get_data_root,
     get_work_dir,
+    get_results_dir,
     get_weights_root,
     get_rfd_models_dir,
     get_colabfold_db,
@@ -358,6 +360,7 @@ MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
     ("rfantibody_child", "antibody_backbone"): "workflows/rfantibody_backbone.nf",
     ("fampnn_child", "sequence_design"): "workflows/fampnn_child.nf",
     ("protein_modification_experimental", "de_novo_design"): "workflows/protein_cad_experimental.nf",
+    ("protein_modification_experimental", "shape_blueprint"): "workflows/shape_blueprint_design.nf",
     ("protein_modification_experimental", "region_redesign"): "workflows/protein_local_redesign.nf",
     ("molecular_dynamics", "simulate"): "workflows/experimental/molecular_dynamics/orchestrator.nf",
     ("molecular_dynamics", "replica"): "workflows/experimental/molecular_dynamics/replica.nf",
@@ -2535,7 +2538,7 @@ async def launch_nextflow_job(
                             if is_md_parent:
                                 from services.md.completion import validate_and_finalize_md_job
 
-                                validate_and_finalize_md_job(job)
+                                await validate_and_finalize_md_job(job, session)
                                 logger.info("Validated the immutable MD completion generation for job %s", job_id)
                             else:
                                 from services.result_state_integrity import finalize_successful_job
@@ -2686,6 +2689,18 @@ async def launch_nextflow_job(
                     job.status = JobStatus.FAILED.value
                     job.queue_status = 'failed'  # Update queue_status so job leaves the queue UI
                     job.error_message = str(e)
+                    if (
+                        job.model_id == "molecular_dynamics"
+                        and job.mode == "replica"
+                        and not job.nextflow_run_id
+                    ):
+                        provenance = dict(job.provenance or {})
+                        provenance["failure_receipt"] = {
+                            "code": "spawn_rejected",
+                            "message": str(e)[:2000],
+                            "source": "scheduler_launch",
+                        }
+                        job.provenance = provenance
                     job.completed_at = datetime.utcnow()
                     changes = {
                         attribute.key: attribute.value
@@ -2922,6 +2937,7 @@ def build_nextflow_command(
         ('protein_local_redesign', 'local_redesign'): 'protein_local_redesign',
         ('protein_cad_experimental', 'design'): 'protein_cad_experimental',
         ('protein_modification_experimental', 'de_novo_design'): 'protein_cad_experimental',
+        ('protein_modification_experimental', 'shape_blueprint'): 'shape_blueprint',
         ('protein_modification_experimental', 'region_redesign'): 'protein_local_redesign',
 
         ('boltz_cp_experimental', 'design'): 'boltz_cp_experimental',
@@ -3839,11 +3855,85 @@ def _pid_is_alive(pid: int) -> bool:
     return True
 
 
+def _managed_nextflow_identity(
+    *,
+    argv: list[str],
+    cwd: Path,
+    project_root: Path,
+    results_root: Path,
+    nextflow_bin: Path,
+) -> str | None:
+    """Return the job UUID only for an exact, root-contained native Nextflow process."""
+    try:
+        if cwd.resolve() != project_root.resolve():
+            return None
+        jar_index = argv.index("-jar")
+        if Path(argv[jar_index + 1]).expanduser().resolve() != nextflow_bin.resolve():
+            return None
+        if argv[jar_index + 2] != "run":
+            return None
+        job_index = argv.index("--job_id")
+        out_index = argv.index("--out_dir")
+        job_id = str(uuid.UUID(argv[job_index + 1]))
+        if job_id != argv[job_index + 1].lower():
+            return None
+        out_dir = Path(argv[out_index + 1]).expanduser().resolve()
+        root = results_root.expanduser().resolve()
+        if out_dir == root or root not in out_dir.parents:
+            return None
+        return job_id
+    except (ValueError, IndexError, OSError):
+        return None
+
+
+def _discover_managed_nextflow_processes() -> Dict[str, int]:
+    """Discover surviving adapter-owned Nextflow groups after an adapter restart."""
+    try:
+        nextflow_bin = Path(resolve_nextflow_executable())
+    except RuntimeError:
+        return {}
+    discovered: Dict[str, int] = {}
+    ambiguous: Set[str] = set()
+    for proc_dir in Path("/proc").iterdir():
+        if not proc_dir.name.isdigit():
+            continue
+        try:
+            pid = int(proc_dir.name)
+            argv = [
+                item.decode("utf-8", errors="strict")
+                for item in (proc_dir / "cmdline").read_bytes().split(b"\0")
+                if item
+            ]
+            cwd = (proc_dir / "cwd").resolve(strict=True)
+        except (OSError, UnicodeDecodeError):
+            continue
+        job_id = _managed_nextflow_identity(
+            argv=argv,
+            cwd=cwd,
+            project_root=PROJECT_ROOT,
+            results_root=get_results_dir(),
+            nextflow_bin=nextflow_bin,
+        )
+        if job_id is None:
+            continue
+        existing = discovered.get(job_id)
+        if existing is not None and existing != pid:
+            ambiguous.add(job_id)
+            continue
+        discovered[job_id] = pid
+    for job_id in ambiguous:
+        discovered.pop(job_id, None)
+    return discovered
+
+
 async def cancel_nextflow_job(nextflow_run_id: str, graceful_timeout_seconds: float = 5.0) -> bool:
     """Cancel a running Nextflow job, escalating to SIGKILL if it ignores SIGTERM."""
     if workflow_adapter_enabled():
         try:
-            return cancel_via_workflow_adapter(str(nextflow_run_id))
+            return cancel_via_workflow_adapter(
+                str(nextflow_run_id),
+                graceful_timeout_seconds=graceful_timeout_seconds,
+            )
         except Exception as exc:
             logger.warning("Workflow adapter cancellation failed for %r: %s", nextflow_run_id, exc)
             return False
@@ -3921,11 +4011,12 @@ def get_running_jobs() -> Dict[str, int]:
             running.setdefault(job_id, 0)
         return running
 
-    running = {
+    running = _discover_managed_nextflow_processes()
+    running.update({
         job_id: proc.pid 
         for job_id, proc in _running_processes.items() 
         if proc.returncode is None
-    }
+    })
     for job_id in _launching_jobs:
         running.setdefault(job_id, 0)
     return running

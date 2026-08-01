@@ -4,13 +4,14 @@ import { useNavigate } from 'react-router-dom';
 import { submitJob, type Job } from '../lib/api';
 import { ModelDocumentationLinks } from './ModelDocumentationLinks';
 import { ProteinLocalRedesignTemplate } from './ProteinLocalRedesignTemplate';
+import ShapeBlueprintTemplate from './ShapeBlueprintTemplate';
 
 interface ProteinModificationTemplateProps {
     onBack: () => void;
     initialValues?: Record<string, unknown>;
 }
 
-type ModificationMode = 'de_novo_design' | 'region_redesign';
+type ModificationMode = 'de_novo_design' | 'region_redesign' | 'shape_blueprint';
 type DeNovoBackend = 'disco' | 'laproteina';
 
 const fieldClass = 'w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100';
@@ -31,7 +32,7 @@ export function ProteinModificationTemplate({ onBack, initialValues }: ProteinMo
     const queryClient = useQueryClient();
     const initialMode = initialValues?.modification_mode;
     const [mode, setMode] = useState<ModificationMode | null>(
-        initialMode === 'de_novo_design' || initialMode === 'region_redesign' ? initialMode : null,
+        initialMode === 'de_novo_design' || initialMode === 'region_redesign' || initialMode === 'shape_blueprint' ? initialMode : null,
     );
     const [jobName, setJobName] = useState(initialString(initialValues, 'job_name', 'protein_modification'));
     const [backend, setBackend] = useState<DeNovoBackend>(
@@ -73,6 +74,15 @@ export function ProteinModificationTemplate({ onBack, initialValues }: ProteinMo
         );
     }
 
+    if (mode === 'shape_blueprint') {
+        return (
+            <div className="space-y-3">
+                <button onClick={() => setMode(null)} className="ml-4 mt-3 rounded-lg border border-slate-700 px-3 py-1.5 text-sm text-slate-300 sm:ml-6">Back to modification modes</button>
+                <ShapeBlueprintTemplate />
+            </div>
+        );
+    }
+
     if (mode === null) {
         return (
             <div className="space-y-6 text-slate-100">
@@ -86,7 +96,7 @@ export function ProteinModificationTemplate({ onBack, initialValues }: ProteinMo
                 <p className="max-w-3xl text-sm text-slate-400">
                     Choose whether to create a new protein candidate or modify selected regions of an existing structure. These modes share one product boundary but retain distinct scientific contracts.
                 </p>
-                <div className="grid gap-4 md:grid-cols-2">
+                <div className="grid gap-4 md:grid-cols-3">
                     <button
                         onClick={() => setMode('de_novo_design')}
                         className="rounded-xl border border-cyan-500/40 bg-cyan-500/10 p-5 text-left hover:border-cyan-300"
@@ -100,6 +110,13 @@ export function ProteinModificationTemplate({ onBack, initialValues }: ProteinMo
                     >
                         <div className="font-semibold text-emerald-100">Region Redesign</div>
                         <div className="mt-2 text-sm text-slate-400">Select and remodel regions while preserving structural context.</div>
+                    </button>
+                    <button
+                        onClick={() => setMode('shape_blueprint')}
+                        className="rounded-xl border border-violet-500/40 bg-violet-500/10 p-5 text-left hover:border-violet-300"
+                    >
+                        <div className="font-semibold text-violet-100">Shape Blueprint</div>
+                        <div className="mt-2 text-sm text-slate-400">Immutable geometry → Shape-guided RFD3 → ProteinMPNN/FAMPNN → mandatory ESMFold2.</div>
                     </button>
                 </div>
                 <ModelDocumentationLinks

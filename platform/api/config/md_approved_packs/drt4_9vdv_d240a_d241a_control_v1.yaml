@@ -1,0 +1,22 @@
+schema: bms.md.approved-pack.v1
+id: drt4_9vdv_d240a_d241a_control_v1
+version: 1.0.0-candidate
+display_name: DRT4 9VDV D240A/D241A control candidate
+system_class: drt4_catalytic_mutant_control
+source:
+  accession: 9VDV
+  format: mmcif
+  sha256: 37fc4d2dfc4dbbf99c9e1c451a024104f9e2a4f8cf074b24b4ba3796f5439114
+installed: false
+runtime_validated: false
+operator_enabled: false
+mutations:
+  - ASP:240>ALA
+  - ASP:241>ALA
+required_covalent_links: []
+scientific_validation:
+  validated: false
+  lane: null
+blockers:
+  - immutable whole-complex preparation is absent
+  - runtime and scientific validation have not run

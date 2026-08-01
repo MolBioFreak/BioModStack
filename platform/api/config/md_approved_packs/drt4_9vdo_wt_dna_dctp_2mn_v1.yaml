@@ -1,0 +1,32 @@
+schema: bms.md.approved-pack.v1
+id: drt4_9vdo_wt_dna_dctp_2mn_v1
+version: 1.0.0-candidate
+display_name: DRT4 9VDO WT DNA + dCTP + two-Mn candidate
+system_class: drt4_substrate_complex
+source:
+  accession: 9VDO
+  format: mmcif
+  sha256: 36ac63e20ac46359fa7e9a3c8bea65579a0de69142a48275b65031b522dc7e63
+installed: false
+runtime_validated: false
+operator_enabled: false
+dctp:
+  required: true
+  deposited_component_id: DCP
+  protonation: unresolved
+  net_charge: unresolved
+manganese:
+  element: Mn
+  oxidation_state: 2
+  count_per_active_site: 2
+  model: unresolved
+  donor_pair_semantics_validated: false
+required_covalent_links: []
+scientific_validation:
+  validated: false
+  lane: null
+blockers:
+  - dCTP protonation and net charge are unresolved
+  - two-Mn model and pair-specific donor semantics are unresolved
+  - immutable parameter files are absent
+  - runtime and scientific validation have not run

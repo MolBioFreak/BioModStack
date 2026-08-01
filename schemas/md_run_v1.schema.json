@@ -7,7 +7,7 @@
   "required": ["schema", "job_schema", "status", "created_at", "job_id", "replica_index", "replica_seed", "engine", "config", "stages", "artifacts"],
   "properties": {
     "schema": {"const": "bms.md.run.v1"},
-    "job_schema": {"const": "bms.md.job.v1"},
+    "job_schema": {"enum": ["bms.md.job.v1", "bms.md.job.v2"]},
     "status": {"enum": ["completed", "failed", "cancelled"]},
     "created_at": {"type": "string", "format": "date-time"},
     "job_id": {"type": "string", "minLength": 1},

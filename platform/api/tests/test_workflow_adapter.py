@@ -56,6 +56,42 @@ def test_workflow_adapter_enabled_when_base_url_is_set(monkeypatch: pytest.Monke
     assert workflow_adapter.workflow_adapter_enabled() is True
 
 
+def test_native_nextflow_process_identity_requires_exact_roots(tmp_path: Path) -> None:
+    project_root = tmp_path / "code"
+    results_root = tmp_path / "results"
+    out_dir = results_root / "job"
+    job_id = "12345678-1234-1234-1234-123456789abc"
+    nextflow_bin = tmp_path / "nextflow"
+    argv = [
+        "/usr/bin/java", "-jar", str(nextflow_bin), "run", "workflow.nf",
+        "--out_dir", str(out_dir), "--job_id", job_id,
+    ]
+
+    assert nextflow._managed_nextflow_identity(
+        argv=argv,
+        cwd=project_root,
+        project_root=project_root,
+        results_root=results_root,
+        nextflow_bin=nextflow_bin,
+    ) == job_id
+    assert nextflow._managed_nextflow_identity(
+        argv=argv,
+        cwd=tmp_path / "other-code",
+        project_root=project_root,
+        results_root=results_root,
+        nextflow_bin=nextflow_bin,
+    ) is None
+    escaped = list(argv)
+    escaped[escaped.index(str(out_dir))] = str(tmp_path / "escaped")
+    assert nextflow._managed_nextflow_identity(
+        argv=escaped,
+        cwd=project_root,
+        project_root=project_root,
+        results_root=results_root,
+        nextflow_bin=nextflow_bin,
+    ) is None
+
+
 
 def test_workflow_launch_mode_is_adapter_in_core_runtime_when_url_is_set(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BMS_CORE_RUNTIME_MODE", "1")
@@ -203,17 +239,25 @@ def test_cancel_request_posts_expected_payload_to_adapter(monkeypatch: pytest.Mo
     def fake_urlopen(request, timeout=0):
         captured["url"] = request.full_url
         captured["method"] = request.get_method()
+        captured["timeout"] = timeout
         captured["payload"] = json.loads(request.data.decode("utf-8"))
         return _FakeHTTPResponse({"cancelled": True})
 
     monkeypatch.setattr(workflow_adapter.urllib.request, "urlopen", fake_urlopen)
 
-    cancelled = workflow_adapter.cancel_via_workflow_adapter("run-123")
+    cancelled = workflow_adapter.cancel_via_workflow_adapter(
+        "run-123",
+        graceful_timeout_seconds=120.0,
+    )
 
     assert cancelled is True
     assert captured["url"] == "http://127.0.0.1:8001/api/workflow-adapter/cancel"
     assert captured["method"] == "POST"
-    assert captured["payload"] == {"nextflow_run_id": "run-123"}
+    assert captured["timeout"] == 125.0
+    assert captured["payload"] == {
+        "nextflow_run_id": "run-123",
+        "graceful_timeout_seconds": 120.0,
+    }
 
 
 
@@ -574,10 +618,14 @@ class _FakeRunningJobQueryModel:
 async def test_cancel_nextflow_job_uses_adapter_when_configured(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BMS_WORKFLOW_ADAPTER_URL", "http://host.docker.internal:8001")
 
-    adapter_calls: list[str] = []
+    adapter_calls: list[tuple[str, float]] = []
 
-    def fake_cancel_via_adapter(nextflow_run_id: str) -> bool:
-        adapter_calls.append(nextflow_run_id)
+    def fake_cancel_via_adapter(
+        nextflow_run_id: str,
+        *,
+        graceful_timeout_seconds: float,
+    ) -> bool:
+        adapter_calls.append((nextflow_run_id, graceful_timeout_seconds))
         return True
 
     monkeypatch.setattr(nextflow, "cancel_via_workflow_adapter", fake_cancel_via_adapter, raising=False)
@@ -590,7 +638,7 @@ async def test_cancel_nextflow_job_uses_adapter_when_configured(monkeypatch: pyt
     cancelled = await nextflow.cancel_nextflow_job("adapter-run-123")
 
     assert cancelled is True
-    assert adapter_calls == ["adapter-run-123"]
+    assert adapter_calls == [("adapter-run-123", 5.0)]
 
 
 def test_get_running_jobs_prefers_adapter_authoritative_state_when_configured(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -957,10 +1005,10 @@ def test_workflow_adapter_cancel_endpoint_resolves_job_handle_to_native_run_id(m
     monkeypatch.setattr(database, "Job", _FakeJobModel)
     monkeypatch.setattr(sqlalchemy, "select", lambda *_args, **_kwargs: _FakeSelect())
 
-    cancelled: list[str] = []
+    cancelled: list[tuple[str, float]] = []
 
-    async def fake_cancel(nextflow_run_id: str) -> bool:
-        cancelled.append(nextflow_run_id)
+    async def fake_cancel(nextflow_run_id: str, graceful_timeout_seconds: float = 5.0) -> bool:
+        cancelled.append((nextflow_run_id, graceful_timeout_seconds))
         return True
 
     monkeypatch.setattr(nextflow, "cancel_nextflow_job", fake_cancel)
@@ -969,12 +1017,12 @@ def test_workflow_adapter_cancel_endpoint_resolves_job_handle_to_native_run_id(m
     client = TestClient(workflow_adapter_app.app)
     response = client.post(
         "/api/workflow-adapter/cancel",
-        json={"nextflow_run_id": "job-123"},
+        json={"nextflow_run_id": "job-123", "graceful_timeout_seconds": 120.0},
     )
 
     assert response.status_code == 200
     assert response.json() == {"cancelled": True, "resolved_nextflow_run_id": "12345"}
-    assert cancelled == ["12345"]
+    assert cancelled == [("12345", 120.0)]
 
 
 def test_workflow_adapter_running_jobs_endpoint_reports_nextflow_registry(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -25,7 +25,7 @@ def test_every_non_get_route_carries_the_global_guard() -> None:
     routes = list(bioxp.router.routes)
     non_get = [route for route in routes if route.methods and route.methods != {"GET"}]
     assert non_get
-    assert len(routes) <= 24
+    assert len(routes) == 31
     for route in non_get:
         assert any(dependency.dependency is require_bioxp_mutation_access for dependency in route.dependencies), f"missing mutation dependency: {route.path}"
 
