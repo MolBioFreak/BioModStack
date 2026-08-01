@@ -19,9 +19,8 @@ minknow_stage='not_attempted'
 host_agent_recreate='not_attempted'
 host_agent_health='not_checked'
 
-# The socket request carries no command data. Never parse it.
-exec </dev/null
-
+# The socket request carries no command data. Never parse it; retain the
+# socket-backed standard streams so the bounded receipt reaches the caller.
 emit_receipt() {
     local status="$1"
     printf '{"schema":"bms.mk1d-reconnect-receipt.v1","receipt_id":"%s","status":"%s","minknow":"%s","host_agent_recreate":"%s","host_agent_health":"%s"}\n' \
