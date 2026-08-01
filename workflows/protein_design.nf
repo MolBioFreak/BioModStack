@@ -303,13 +303,27 @@ process PrepareProteinDesignFrustraMPNNCandidate {
 
 process ReportProteinDesignFrustraMPNNNotRequested {
     label 'CPU'
+    publishDir "${params.out_dir}/frustrampnn", mode: 'copy', pattern: 'protein_design_frustrampnn_terminal_manifest.json'
     input:
     val trigger
     output:
+    path 'protein_design_frustrampnn_terminal_manifest.json'
     path 'frustrampnn_not_requested.reported'
     script:
+    def payload = JsonOutput.toJson([
+        schema_name: 'protein_design_frustrampnn_terminal_manifest',
+        schema_version: 1,
+        parent_job_id: params.job_id.toString(),
+        parent_workflow_id: 'protein_design',
+        status: 'not_requested',
+        requiredness: 'not_requested',
+        candidate_count: 0,
+        candidates: [],
+        reported_outputs: [],
+    ])
     """
     set -euo pipefail
+    printf '%s\n' '${payload}' > protein_design_frustrampnn_terminal_manifest.json
     '${params.api_python}' '${params.code_root}/scripts/stage_reporter.py' \
       '${params.job_id}' frustrampnn not_requested
     : > frustrampnn_not_requested.reported

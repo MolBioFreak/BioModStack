@@ -358,6 +358,10 @@ def test_complex_prediction_reports_terminal_states_and_protein_only_scope() -> 
     assert "ReportComplexPredictionFrustraMPNNNotRequested" in workflow
     assert "ReportComplexPredictionFrustraMPNNComplete" in workflow
     assert "frustrampnn not_requested" in workflow
+    assert "complex_prediction_frustrampnn_terminal_manifest" in workflow
+    assert "status: 'not_requested'" in workflow
+    assert "requiredness: 'not_requested'" in workflow
+    assert "candidate_count: 0" in workflow
     assert "publish_frustrampnn_bundle.py" in workflow
     assert "frustrampnn complete" in workflow
     assert "def reportStage" not in workflow

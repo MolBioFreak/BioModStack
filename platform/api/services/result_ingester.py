@@ -3287,6 +3287,24 @@ async def _ingest_explicit_frustrampnn_results(
     if not discovered_stage:
         return None
 
+    provenance = (
+        current_job.provenance if isinstance(current_job.provenance, dict) else {}
+    )
+    terminal_states = provenance.get("stage_terminal_states")
+    frustrampnn_state = (
+        terminal_states.get("frustrampnn")
+        if isinstance(terminal_states, dict)
+        and isinstance(terminal_states.get("frustrampnn"), dict)
+        else None
+    )
+    if frustrampnn_state is not None and frustrampnn_state.get("status") == "not_requested":
+        reported_outputs = _explicit_stage_paths(frustrampnn_state.get("outputs", []))
+        if explicit or reported_outputs:
+            raise FrustraMPNNPersistenceError(
+                "FrustraMPNN not-requested terminal state cannot claim candidate outputs"
+            )
+        return 0
+
     paths = [_stage_path(path, output_path) for path in explicit]
     manifests = [path for path in paths if path.name == MANIFEST_PATH]
     terminal_paths = [

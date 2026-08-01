@@ -8,6 +8,8 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -65,11 +67,41 @@ def test_structure_prediction_has_one_canonical_manifest_first_cutover() -> None
     assert ".subscribe" not in workflow
     assert "frustrampnn" in workflow
     assert "frustrampnn not_requested" in workflow
+    assert "structure_prediction_frustrampnn_terminal_manifest" in workflow
+    assert "status: 'not_requested'" in workflow
+    assert "requiredness: 'not_requested'" in workflow
+    assert "candidate_count: 0" in workflow
     assert "errorStrategy 'terminate'" in CANONICAL_MODULE.read_text(encoding="utf-8")
     assert "predicted.getName()" not in prediction_module
     assert "MessageDigest.getInstance('SHA-256')" in prediction_module
     assert "canonicalProducerOutputs(BoltzFromSequence.out.cifs, 'boltz')" not in prediction_module
     assert "canonicalProducerOutputs(RF3FromSequence.out.cifs, 'rf3')" not in prediction_module
+
+
+@pytest.mark.asyncio
+async def test_not_requested_stage_with_no_candidate_outputs_is_a_valid_terminal_ingestion(
+    tmp_path: Path,
+) -> None:
+    from services.result_ingester import _ingest_explicit_frustrampnn_results
+
+    job = SimpleNamespace(
+        id="job-frustrampnn-disabled",
+        stage_outputs={"frustrampnn": []},
+        provenance={
+            "stage_terminal_states": {
+                "frustrampnn": {"status": "not_requested", "outputs": []}
+            }
+        },
+    )
+
+    created = await _ingest_explicit_frustrampnn_results(
+        cast(Any, job),
+        tmp_path,
+        cast(Any, SimpleNamespace()),
+        commit=True,
+    )
+
+    assert created == 0
 
 
 def test_canonical_scheduler_publishes_closed_candidate_bundles_without_legacy_gpu_flags() -> None:
