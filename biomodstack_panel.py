@@ -46,6 +46,7 @@ from biomodstack_services import (  # noqa: E402
     build_launch_ui_command,
     operator_frontend_url,
     operator_runtime_mode,
+    runtime_api_url,
     runtime_api_health_url,
     runtime_descriptor,
     runtime_port_settings,
@@ -314,7 +315,12 @@ def call_local_api_json(method: str, path: str, payload: Optional[dict] = None, 
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
         headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(f"{API_URL}{path}", data=data, headers=headers, method=method.upper())
+    selected_runtime = operator_runtime_mode(project_root=PROJECT_ROOT)
+    api_url = runtime_api_url(
+        selected_runtime,
+        project_root=PROJECT_ROOT,
+    ).rstrip("/")
+    req = urllib.request.Request(f"{api_url}{path}", data=data, headers=headers, method=method.upper())
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = resp.read().decode("utf-8")
