@@ -108,8 +108,9 @@ def request_mk1d_reconnect() -> dict[str, str]:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.settimeout(helper_timeout_seconds())
             client.connect(str(path))
-            client.sendall(b"RECONNECT\n")
-            client.shutdown(socket.SHUT_WR)
+            # Socket activation is the fixed admission signal; the helper ignores
+            # request bytes. Do not half-close this bidirectional stream before
+            # its bounded receipt has been written back.
             while True:
                 chunk = client.recv(min(4096, MAX_HELPER_RESPONSE_BYTES - received + 1))
                 if not chunk:

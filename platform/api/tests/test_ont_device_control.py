@@ -241,7 +241,8 @@ def test_reconnect_socket_uses_native_primary_group_permission_shape(monkeypatch
     def serve() -> None:
         connection, _ = listener.accept()
         with connection:
-            assert connection.recv(128) == b"RECONNECT\n"
+            # Connection admission selects the only fixed recovery transaction;
+            # request data is intentionally neither sent nor interpreted.
             connection.sendall(b'{"schema":"bms.mk1d-reconnect-receipt.v1","receipt_id":"test","status":"completed","minknow":"already_active","host_agent_recreate":"requested","host_agent_health":"verified"}')
 
     worker = threading.Thread(target=serve)
