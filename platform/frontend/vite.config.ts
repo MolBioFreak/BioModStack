@@ -208,6 +208,10 @@ export default defineConfig(({ mode }) => ({
       '/api/ont/devices/reconnect': {
         target: devApiTarget,
         changeOrigin: true,
+        // The fixed helper transaction may wait up to 120 seconds for MinKNOW.
+        // Keep the local proxy alive for that bounded response.
+        timeout: 130_000,
+        proxyTimeout: 130_000,
         ...(devMk1dReconnectProxySecret ? { headers: { 'X-BMS-MK1D-Reconnect-Proxy-Secret': devMk1dReconnectProxySecret } } : {}),
       },
       // Proxy other API requests to backend server
