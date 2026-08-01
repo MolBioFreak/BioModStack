@@ -14,37 +14,16 @@ const response = (data: unknown) => ({ data, status: 200, statusText: 'OK', head
 afterEach(() => document.body.replaceChildren());
 
 describe('MD queue integration in the dashboard job queue', () => {
-    it('shows the bounded MD projection and expands operational detail without mounting a viewer', async () => {
+    it('shows MD once in the global queue and routes domain controls to MD Operations', async () => {
         const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
         client.setQueryData(['queue'], response([{
-            id: 'md-replica-child', name: 'Generic duplicate MD child', model_id: 'molecular_dynamics',
-            mode: 'molecular_dynamics', queue_status: 'running', paused: false,
+            id: 'md-1', name: 'Membrane equilibration', model_id: 'molecular_dynamics',
+            mode: 'simulate', queue_status: 'running', paused: false,
+            priority: 0, vram_estimate_mb: 16000, assigned_gpu: 0, pinned_gpu: null,
+            display_gpu_ids: [0], scheduler_candidate_gpus: [0], scheduler_ready: true,
+            scheduler_blockers: [], created_at: '2026-07-29T11:00:00Z', started_at: '2026-07-29T12:00:00Z',
         }]));
         client.setQueryData(['system'], response({ gpus: [] }));
-        client.setQueryData(['md-queue', 25], response({
-            schema: 'bms.md.queue.v1', bounded: true, limit: 25, count: 1,
-            runs: [{
-                job_id: 'md-1', name: 'Membrane equilibration', job_status: 'running', queue_status: 'running',
-                phase: 'replicas_running', state_version: 4, engine: 'gromacs', replica_count: 2,
-                replica_summary: { running: 1, queued: 1 }, simulated_time_ps: 25, requested_time_ps: 100,
-                checkpoint_available: false, allowed_actions: ['pause', 'cancel'],
-                chemistry: { profile_id: 'amber_ff19sb_opc_protein_v1', assurance: 'curated_profile', verification_status: 'verified', requested_scope: 'protein' },
-                created_at: '2026-07-29T11:00:00Z', updated_at: '2026-07-29T12:00:00Z',
-            }],
-        }));
-        client.setQueryData(['md-run', 'md-1'], response({
-            schema: 'bms.md.run-detail.v1', job_id: 'md-1', job_status: 'running', queue_status: 'running',
-            phase: 'replicas_running', state_version: 4,
-            chemistry: { profile_id: 'amber_ff19sb_opc_protein_v1', profile_sha256: 'a'.repeat(64), assurance: 'curated_profile', verification_status: 'verified', requested_scope: 'protein' },
-            engine: 'gromacs', replica_count: 2, replica_summary: { running: 1, queued: 1 },
-            simulated_time_ps: 25, requested_time_ps: 100, checkpoint_available: false,
-            allowed_actions: ['pause', 'cancel'],
-            replicas: [
-                { id: 'replica-0', replica_index: 0, attempt: 0, state: 'running', active: true, engine: 'gromacs', failure: null },
-                { id: 'replica-1', replica_index: 1, attempt: 0, state: 'queued', active: true, engine: 'gromacs', failure: null },
-            ],
-            segments: [], checkpoints: [], events: [],
-        }));
 
         const container = document.createElement('div');
         document.body.appendChild(container);
@@ -60,24 +39,16 @@ describe('MD queue integration in the dashboard job queue', () => {
             await Promise.resolve();
         });
 
-        expect(container.textContent).toContain('Molecular Dynamics Queue');
+        expect(container.textContent).not.toContain('Molecular Dynamics Queue');
         expect(container.textContent).toContain('Membrane equilibration');
-        expect(container.textContent).toContain('replicas running');
-        expect(container.textContent).toContain('25.00 / 100.00 ps');
-        expect(container.textContent).toContain('amber_ff19sb_opc_protein_v1');
-        expect(container.textContent).not.toContain('Generic duplicate MD child');
+        expect(container.textContent).toContain('MD');
+        expect(container.textContent).toContain('MD Operations');
+        expect(container.querySelector<HTMLAnchorElement>('a[href="/designs/md-1"]')).toBeTruthy();
         const queueToggle = container.querySelector<HTMLButtonElement>('button[aria-controls="bms-gpu-queue-content"]');
         expect(queueToggle?.getAttribute('aria-expanded')).toBe('true');
-
-        const details = container.querySelector<HTMLButtonElement>('[data-bms-md-queue-details="md-1"]');
-        expect(details).toBeTruthy();
-        await act(async () => {
-            details!.click();
-            await Promise.resolve();
-        });
-
-        expect(container.textContent).toContain('Replica 0 · attempt 0 · running');
-        expect(container.textContent).toContain('State version 4');
+        expect(container.textContent).not.toContain('Pause');
+        expect(container.textContent).not.toContain('Force');
+        expect(client.getQueryState(['md-queue', 25])).toBeUndefined();
         expect(container.querySelectorAll('[data-bms-structure-viewer-host]')).toHaveLength(0);
         expect(container.querySelectorAll('canvas')).toHaveLength(0);
 

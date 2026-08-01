@@ -168,35 +168,6 @@ export interface MDRunDetail {
     events: Array<{ id: string; event_type: string; state_version: number; payload: Record<string, unknown>; created_at: string }>;
 }
 
-export interface MDQueueRun {
-    job_id: string;
-    name: string;
-    job_status: string;
-    queue_status: string;
-    phase: string;
-    state_version: number;
-    engine: 'gromacs' | 'openmm';
-    replica_count: number;
-    replica_summary: Record<string, number>;
-    simulated_time_ps: number;
-    requested_time_ps: number;
-    checkpoint_available: boolean;
-    allowed_actions: MDRunDetail['allowed_actions'];
-    chemistry: { profile_id: string; assurance: string; verification_status: string; requested_scope: string | null };
-    created_at: string;
-    updated_at: string;
-}
-
-export interface MDQueueProjection {
-    schema: 'bms.md.queue.v1';
-    bounded: true;
-    limit: number;
-    count: number;
-    runs: MDQueueRun[];
-}
-
-export const fetchMDQueue = (limit: number = 25) =>
-    api.get<MDQueueProjection>('/api/molecular-dynamics/runs', { params: { limit } });
 export const fetchMDRun = (jobId: string) => api.get<MDRunDetail>(`/api/molecular-dynamics/runs/${jobId}`);
 export const pauseMDRun = (jobId: string, stateVersion: number, idempotencyKey: string) => api.post<MDRunDetail>(`/api/molecular-dynamics/runs/${jobId}/pause`, { expected_state_version: stateVersion, idempotency_key: idempotencyKey });
 export const cancelMDRun = (jobId: string, stateVersion: number, idempotencyKey: string) => api.post<MDRunDetail>(`/api/molecular-dynamics/runs/${jobId}/cancel`, { expected_state_version: stateVersion, idempotency_key: idempotencyKey });

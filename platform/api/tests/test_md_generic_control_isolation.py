@@ -32,6 +32,7 @@ from routers.queue import (
     PriorityRequest,
     cancel_all_queued,
     force_launch_job,
+    get_queue_stats,
     list_cancelled_jobs,
     list_queue,
     pin_job_to_gpu,
@@ -134,7 +135,7 @@ async def test_clear_all_excludes_md_parent_and_descendant(session) -> None:
 
 
 @pytest.mark.asyncio
-async def test_generic_queue_does_not_repair_md_projection(session) -> None:
+async def test_global_queue_shows_md_without_repairing_md_projection(session) -> None:
     parent = Job(
         id="md-stale-projection", name="MD", status="completed", queue_status="running",
         paused=False, assigned_gpu=0, model_id="molecular_dynamics", mode="molecular_dynamics",
@@ -145,9 +146,30 @@ async def test_generic_queue_does_not_repair_md_projection(session) -> None:
 
     visible = await list_queue(session=session)
 
-    assert visible == []
+    assert [job.id for job in visible] == [parent.id]
     assert parent.queue_status == "running"
     assert parent.assigned_gpu == 0
+
+
+@pytest.mark.asyncio
+async def test_global_queue_stats_include_md_owned_jobs(session) -> None:
+    parent = Job(
+        id="md-global-count", name="MD", status="queued", queue_status="queued",
+        paused=False, model_id="molecular_dynamics", mode="molecular_dynamics",
+        params={}, vram_estimate_mb=100,
+    )
+    ordinary = Job(
+        id="ordinary-global-count", name="ordinary", status="running", queue_status="running",
+        paused=False, model_id="boltz", mode="predict", params={}, vram_estimate_mb=100,
+    )
+    session.add_all([parent, ordinary]); await session.flush()
+    await create_md_run(session, job=parent, normalized_request=_request())
+
+    stats = await get_queue_stats(session=session)
+
+    assert stats.queued == 1
+    assert stats.running == 1
+    assert stats.total == 2
 
 
 @pytest.mark.asyncio

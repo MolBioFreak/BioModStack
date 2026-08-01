@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import {
     fetchQueue,
     fetchSystemStatus,
@@ -19,7 +20,6 @@ import { jobPollingInterval } from '../lib/queryPolling';
 import { buildGpuCatalog, formatGpuLabel, listGpuCatalogEntries, type GpuCatalogEntry, type GpuCatalogLike } from './gpuCatalog';
 import { formatGpuList, resolveQueueGpuDisplay } from './jobQueueGpuDisplay';
 import { BMS_PANEL_OVERFLOW } from './ui/bmsStyle';
-import { MDQueueSection } from './MDQueueSection';
 
 // Model display names and icons
 // Model display names removed - using text badges instead
@@ -89,6 +89,7 @@ function getDisplayBatchName(batchName?: string | null): string | null {
 
 function getModelBadge(modelId: string): string {
     const key = modelId.toLowerCase();
+    if (key === 'md' || key === 'molecular_dynamics') return 'MD';
     if (key === 'msa_batch') return 'MSA';
     if (key.includes('nanopore')) return 'NGS';
     if (key.includes('boltzgen')) return 'BG';
@@ -450,9 +451,8 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
     const isPending = pauseMutation.isPending || resumeMutation.isPending ||
         cancelMutation.isPending || pinMutation.isPending || cancelAllMutation.isPending || killActiveMutation.isPending || forceLaunchMutation.isPending;
 
-    const genericQueue = queue.filter(j => !isMolecularDynamicsJob(j.model_id, j.mode));
     const genericCancelled = cancelledJobsRaw.filter(j => !isMolecularDynamicsJob(j.model_id, j.mode));
-    const visibleQueue = showNgsJobs ? genericQueue : genericQueue.filter(j => !isNgsJob(j.model_id, j.mode));
+    const visibleQueue = showNgsJobs ? queue : queue.filter(j => !isNgsJob(j.model_id, j.mode));
     const cancelledJobs = showNgsJobs ? genericCancelled : genericCancelled.filter(j => !isNgsJob(j.model_id, j.mode));
 
     // Separate running, paused, queued, and pending_msa jobs
@@ -466,7 +466,10 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
             0,
             queue.filter(j => j.queue_status === 'queued' && !j.paused).length - queuedJobs.length
         );
-    const clearableJobs = visibleQueue.filter(j => j.queue_status === 'queued' || j.queue_status === 'paused' || j.paused);
+    const clearableJobs = visibleQueue.filter(j =>
+        !isMolecularDynamicsJob(j.model_id, j.mode)
+        && (j.queue_status === 'queued' || j.queue_status === 'paused' || j.paused)
+    );
 
     const handleCancelAll = () => {
         if (clearableJobs.length === 0) return;
@@ -553,7 +556,6 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
 
             {expanded && (
                 <div id="bms-gpu-queue-content" className="p-3">
-                    <MDQueueSection />
                     {showCancelled ? (
                         /* Cancelled Jobs Tab */
                         <div>
@@ -750,6 +752,7 @@ function JobRow({
     const gpuOptions = liveGpuOptions.length > 0 ? liveGpuOptions : fallbackGpuEntriesForJob(job, gpuCatalog);
     const candidateGpuLabel = formatGpuList(job.scheduler_candidate_gpus, gpuCatalog);
     const launchGpuLabel = formatGpuList(job.display_gpu_ids, gpuCatalog);
+    const isMd = isMolecularDynamicsJob(job.model_id, job.mode);
 
     return (
         <div className="bg-slate-700/30 rounded-lg p-3 hover:bg-slate-700/50 transition-colors">
@@ -835,6 +838,16 @@ function JobRow({
 
                 {/* Right: Controls */}
                 <div className="flex items-center gap-1">
+                    {isMd ? (
+                        <Link
+                            to={`/designs/${job.id}`}
+                            className="rounded border border-cyan-400/40 bg-cyan-500/10 px-2 py-1 text-xs font-medium text-cyan-100 hover:bg-cyan-500/20"
+                            title="Open governed Molecular Dynamics lifecycle and results"
+                        >
+                            MD Operations
+                        </Link>
+                    ) : (
+                        <>
                     {/* Priority controls removed - was redundant */}
 
                     {/* Pin to GPU */}
@@ -931,6 +944,8 @@ function JobRow({
                     >
                         ✕
                     </button>
+                        </>
+                    )}
                 </div>
             </div>
         </div>
