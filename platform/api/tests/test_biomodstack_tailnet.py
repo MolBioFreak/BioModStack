@@ -361,6 +361,43 @@ def test_api_build_identity_requires_mobile_compatible_canonical_time() -> None:
         tailnet._api_build_identity(probe, source="local")
 
 
+def test_wait_for_healthy_api_retries_transient_degraded_http_200(monkeypatch) -> None:
+    attempts = 0
+    healthy = {
+        "status": 200,
+        "payload": {
+            "status": "healthy",
+            "liveness": {"alive": True},
+            "readiness": {"ready": True},
+            "build": {
+                "revision": "a" * 40,
+                "build_id": "test-build",
+                "build_time": "2026-07-27T01:00:00Z",
+            },
+        },
+    }
+
+    def probe(url, expect_json=False):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            degraded = dict(healthy)
+            degraded["payload"] = dict(healthy["payload"], status="degraded")
+            return degraded
+        return healthy
+
+    monkeypatch.setattr(tailnet, "_url_probe", probe)
+    monkeypatch.setattr(tailnet.time, "sleep", lambda _: None)
+
+    result = tailnet._wait_for_healthy_api(
+        "http://127.0.0.1:18002/api/health",
+        timeout_seconds=1,
+    )
+
+    assert result == healthy
+    assert attempts == 2
+
+
 def test_environment_spec_accepts_only_explicit_development_or_production(tmp_path: Path) -> None:
     development = tailnet.environment_spec("development", project_root=tmp_path)
     production = tailnet.environment_spec("production", project_root=tmp_path)

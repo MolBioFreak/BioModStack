@@ -539,6 +539,27 @@ def _api_build_identity(probe: Mapping[str, object], *, source: str) -> dict[str
     return identity
 
 
+def _wait_for_healthy_api(
+    url: str,
+    *,
+    timeout_seconds: float = 90.0,
+) -> dict[str, object]:
+    """Wait for HTTP and semantic API readiness after service startup."""
+    deadline = time.monotonic() + timeout_seconds
+    last_error: TailnetEnvironmentError | None = None
+    while time.monotonic() < deadline:
+        try:
+            probe = _url_probe(url, expect_json=True)
+            _api_build_identity(probe, source="local")
+            return probe
+        except TailnetEnvironmentError as exc:
+            last_error = exc
+            time.sleep(0.25)
+    if last_error is not None:
+        raise last_error
+    raise TailnetEnvironmentError(f"selected API did not become healthy at {url}")
+
+
 def _git_revision(root: Path) -> str:
     resolved_root = root.resolve()
     top_level = Path(
@@ -1030,8 +1051,7 @@ def _start_selected_environment(spec: EnvironmentSpec, root: Path) -> set[str]:
     # Both views use the existing managed API/DB. Selection must not rebuild or
     # restart it, nor start the unselected environment. Require the shared API
     # (and immutable production web, when selected) to be healthy first.
-    api_probe = _url_probe(spec.api_health_url, expect_json=True)
-    _api_build_identity(api_probe, source="local")
+    _wait_for_healthy_api(spec.api_health_url)
     # The authenticated Tailnet selector is an independently owned control lane.
     # Always keep it on canonical Development source, regardless of which runtime
     # is being selected or whether Development's API revision temporarily lags
