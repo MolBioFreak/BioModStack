@@ -188,7 +188,7 @@ def test_migration_is_idempotent_and_preserves_legacy_frustration_data(tmp_path:
 def test_runner_registers_frustrampnn_persistence_after_current_head() -> None:
     names = [migration.name for migration in runner.MIGRATIONS]
     assert names[-2:] == [
-        "add_approved_ngs_comparison_panels",
+        "relax_shape_geometry_hash_uniqueness",
         "add_frustrampnn_persistence",
     ]
     versions = [migration.version for migration in runner.MIGRATIONS]
