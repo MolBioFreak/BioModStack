@@ -3297,13 +3297,24 @@ async def _ingest_explicit_frustrampnn_results(
         and isinstance(terminal_states.get("frustrampnn"), dict)
         else None
     )
-    if frustrampnn_state is not None and frustrampnn_state.get("status") == "not_requested":
-        reported_outputs = _explicit_stage_paths(frustrampnn_state.get("outputs", []))
-        if explicit or reported_outputs:
+    if (
+        frustrampnn_state is not None
+        and frustrampnn_state.get("status") == "not_requested"
+    ):
+        if frustrampnn_state != {"status": "not_requested", "outputs": []}:
             raise FrustraMPNNPersistenceError(
-                "FrustraMPNN not-requested terminal state cannot claim candidate outputs"
+                "FrustraMPNN not-requested terminal state must be exact"
             )
-        return 0
+        if set(current_job.stage_outputs) & _FRUSTRAMPNN_TERMINAL_STAGES != {
+            "frustrampnn"
+        } or current_job.stage_outputs.get("frustrampnn") != []:
+            raise FrustraMPNNPersistenceError(
+                "FrustraMPNN not-requested persisted stage outputs must be exactly empty"
+            )
+        # This terminal component intentionally has no candidate bundle to ingest.
+        # Continue with ordinary parent-result ingestion rather than returning a
+        # canonical candidate count and bypassing the parent workflow's Designs.
+        return None
 
     paths = [_stage_path(path, output_path) for path in explicit]
     manifests = [path for path in paths if path.name == MANIFEST_PATH]
