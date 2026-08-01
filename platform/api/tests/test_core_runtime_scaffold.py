@@ -526,6 +526,16 @@ def test_workflow_adapter_script_runs_host_native_adapter_without_recursive_rout
         'BMS_WORKFLOW_ADAPTER_BIND_HOST="${BMS_WORKFLOW_ADAPTER_BIND_HOST:-127.0.0.1}"'
         in adapter_script
     )
+    for systemd_authority_key in (
+        "BMS_FEATURE_MOLECULAR_DYNAMICS",
+        "BMS_MD_ANALYSIS_ENABLED",
+        "BMS_MD_ANALYSIS_CONTAINER",
+        "BMS_MD_ANALYSIS_SIF_SHA256",
+        "BMS_MD_ANALYSIS_IMPLEMENTATION_SHA256",
+    ):
+        assert systemd_authority_key in adapter_script.split(
+            "SYSTEMD_AUTHORITY_KEYS=(", 1
+        )[1].split(")", 1)[0]
     assert (
         'uv run --no-sync uvicorn workflow_adapter_app:app --port 8001 '
         '--host "$BMS_WORKFLOW_ADAPTER_BIND_HOST" --no-proxy-headers --no-access-log'
