@@ -252,21 +252,46 @@ def test_restart_endpoint_rejects_browser_fields_outside_literal_confirmation(mo
     app = FastAPI()
     app.include_router(ont_runs.router, prefix="/api/ont")
     client = TestClient(app)
-    monkeypatch.setattr(
-        ont_run_control,
-        "request_host_agent",
-        lambda *_args, **_kwargs: {
+    calls: list[tuple[object, ...]] = []
+
+    def fake_request(*args, **kwargs):
+        calls.append((*args, kwargs))
+        return {
             "detail": "restart remains disabled",
             "position": "MD-105428",
             "host": "secret-host",
-        },
-    )
+        }
 
-    rejected = client.post(
-        "/api/ont/positions/MD-105428/restart",
-        json={"confirm_restart": True, "host": "browser-injected"},
+    monkeypatch.setattr(ont_run_control, "request_host_agent", fake_request)
+
+    invalid_bodies = (
+        {},
+        {"confirm_restart": False},
+        {"confirm_restart": None},
+        {"confirm_restart": "true"},
+        {"confirm_restart": "false"},
+        {"confirm_restart": 1},
+        {"confirm_restart": 0},
+        {"confirm_restart": []},
+        {"confirm_restart": {}},
+        {"confirm_restart": True, "host": "browser-injected"},
     )
-    assert rejected.status_code == 422
+    for body in invalid_bodies:
+        rejected = client.post("/api/ont/positions/MD-105428/restart", json=body)
+        assert rejected.status_code == 422, body
+    assert calls == []
+
+    accepted = client.post(
+        "/api/ont/positions/MD-105428/restart",
+        json={"confirm_restart": True},
+    )
+    assert accepted.status_code == 200
+    assert calls == [(
+        "POST",
+        "/ont/positions/MD-105428/restart",
+        {"confirm_restart": True},
+        {},
+    )]
 
 
 def test_protocol_options_endpoint_uses_host_agent_payload(monkeypatch) -> None:

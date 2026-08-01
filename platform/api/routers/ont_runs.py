@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -54,7 +54,14 @@ ONT_SERVER_CONTROLLED_RUNTIME_PARAMS = ont_submission_trust.ONT_SERVER_CONTROLLE
 class OntRestartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    confirm_restart: Literal[True]
+    confirm_restart: StrictBool
+
+    @field_validator("confirm_restart")
+    @classmethod
+    def require_literal_true(cls, value: bool) -> bool:
+        if value is not True:
+            raise ValueError("confirm_restart must be literal true")
+        return value
 
 # Browser-submitted handoff tuning is a separate, tiny allowlist below; primary
 # input, output/reference paths, and source provenance never enter it.

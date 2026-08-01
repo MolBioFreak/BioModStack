@@ -210,7 +210,7 @@ async def admit_mesh_geometry(
             if _publish(destination, content):
                 created.append(destination)
         await session.commit()
-    except Exception:
+    except BaseException:
         await session.rollback()
         _cleanup_publications(created, root=root)
         raise

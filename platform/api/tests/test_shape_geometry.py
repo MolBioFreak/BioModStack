@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import importlib
 import json
@@ -392,7 +393,16 @@ async def test_geometry_admission_persists_shared_immutable_resource(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_geometry_admission_removes_new_publication_after_commit_failure(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize(
+    "failure",
+    [RuntimeError("forced commit failure"), asyncio.CancelledError("forced commit cancellation")],
+    ids=["runtime-error", "cancelled-error"],
+)
+async def test_geometry_admission_removes_new_publication_after_commit_failure(
+    tmp_path: Path,
+    monkeypatch,
+    failure: BaseException,
+) -> None:
     database = importlib.import_module("database")
     resources = importlib.import_module("services.shape_resources")
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'shape-rollback.db'}")
@@ -409,9 +419,9 @@ async def test_geometry_admission_removes_new_publication_after_commit_failure(t
         before = {path.name for path in root.iterdir()}
         async with factory() as session:
             async def fail_commit() -> None:
-                raise RuntimeError("forced commit failure")
+                raise failure
             monkeypatch.setattr(session, "commit", fail_commit)
-            with pytest.raises(RuntimeError, match="forced commit failure"):
+            with pytest.raises(type(failure), match="forced commit"):
                 await resources.admit_mesh_geometry(
                     session, data_root=tmp_path / "data", payload=CUBE_OBJ,
                     filename="cube.obj", source_format="obj",
