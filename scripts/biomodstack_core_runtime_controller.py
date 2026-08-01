@@ -388,26 +388,25 @@ def recover_minknow_token_rotation(
     previous_marker: tuple[int, int] | None,
     current_marker: tuple[int, int] | None,
 ) -> bool:
-    """Recreate only the host-agent after MinKNOW atomically replaces its token."""
+    """Record token replacement without competing for the singleton host agent.
+
+    The root-owned Mk1D reconnect service is the sole authority allowed to
+    recreate ``bms-host-agent``.  The core supervisor only reports that a
+    bounded, explicit Reconnect Mk1D operation is required.
+    """
     if previous_marker is None or current_marker is None or previous_marker == current_marker:
         return False
-    service = "bms-host-agent"
-    reserve_recovery(service)
-    command = compose_command("up", "-d", "--no-deps", "--force-recreate", service)
-    result = run_command(command, check=False, timeout=120)
-    if result.returncode != 0:
-        combined = redact(f"{result.stdout}\n{result.stderr}".strip())
-        raise RuntimeBlockedError(
-            classify_failure(combined),
-            "MinKNOW token-rotation recovery failed for bms-host-agent",
-            context={"service": service, "output": combined},
-        )
     publish_state(
         "monitoring",
-        component=service,
-        last_recovery={"service": service, "failure": "minknow-local-auth-token-rotated", "at": utc_now()},
+        component="bms-host-agent",
+        last_recovery={
+            "service": "bms-host-agent",
+            "failure": "minknow-local-auth-token-rotated",
+            "action": "manual-mk1d-reconnect-required",
+            "at": utc_now(),
+        },
     )
-    return True
+    return False
 
 
 def _handle_signal(_signum: int, _frame: object) -> None:

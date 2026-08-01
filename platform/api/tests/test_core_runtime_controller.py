@@ -79,7 +79,7 @@ def test_minknow_token_marker_reads_only_stat_metadata(monkeypatch) -> None:
     assert token_path.stat_calls == 1
 
 
-def test_minknow_token_rotation_recreates_only_host_agent(monkeypatch, tmp_path: Path) -> None:
+def test_minknow_token_rotation_requires_governed_manual_reconnect(monkeypatch, tmp_path: Path) -> None:
     controller = load_controller()
     monkeypatch.setenv("BMS_RUNTIME_SUPERVISOR_STATE_DIR", str(tmp_path))
     commands: list[list[str]] = []
@@ -90,16 +90,8 @@ def test_minknow_token_rotation_recreates_only_host_agent(monkeypatch, tmp_path:
 
     monkeypatch.setattr(controller, "run_command", fake_run)
 
-    assert controller.recover_minknow_token_rotation((1, 101), (1, 202)) is True
-    assert commands == [
-        controller.compose_command(
-            "up",
-            "-d",
-            "--no-deps",
-            "--force-recreate",
-            "bms-host-agent",
-        )
-    ]
+    assert controller.recover_minknow_token_rotation((1, 101), (1, 202)) is False
+    assert commands == []
 
 
 def test_supervise_detects_token_rotation_during_initial_compose_launch(monkeypatch, tmp_path: Path) -> None:
@@ -132,10 +124,7 @@ def test_supervise_detects_token_rotation_during_initial_compose_launch(monkeypa
     setattr(controller, "_STOP_REQUESTED", False)
 
     assert controller.supervise() == 0
-    assert commands == [
-        controller.compose_command("up", "-d"),
-        controller.compose_command("up", "-d", "--no-deps", "--force-recreate", "bms-host-agent"),
-    ]
+    assert commands == [controller.compose_command("up", "-d")]
 
 
 def test_supervise_skips_token_probe_and_recreation_when_local_token_is_disabled(monkeypatch, tmp_path: Path) -> None:
@@ -173,7 +162,7 @@ def test_supervise_skips_token_probe_and_recreation_when_local_token_is_disabled
     assert commands == [controller.compose_command("up", "-d")]
 
 
-def test_minknow_token_rotation_blocks_when_recovery_budget_is_exhausted(monkeypatch, tmp_path: Path) -> None:
+def test_minknow_token_rotation_never_consumes_core_recovery_budget(monkeypatch, tmp_path: Path) -> None:
     controller = load_controller()
     monkeypatch.setenv("BMS_RUNTIME_SUPERVISOR_STATE_DIR", str(tmp_path))
     monkeypatch.setattr(controller, "MAX_RECOVERIES", 1)
@@ -185,14 +174,9 @@ def test_minknow_token_rotation_blocks_when_recovery_budget_is_exhausted(monkeyp
 
     monkeypatch.setattr(controller, "run_command", fake_run)
 
-    assert controller.recover_minknow_token_rotation((1, 101), (1, 202)) is True
-    with pytest.raises(controller.RuntimeBlockedError, match="Recovery budget exhausted") as raised:
-        controller.recover_minknow_token_rotation((1, 202), (1, 303))
-
-    assert raised.value.reason == "recovery-budget-exhausted"
-    assert commands == [
-        controller.compose_command("up", "-d", "--no-deps", "--force-recreate", "bms-host-agent")
-    ]
+    assert controller.recover_minknow_token_rotation((1, 101), (1, 202)) is False
+    assert controller.recover_minknow_token_rotation((1, 202), (1, 303)) is False
+    assert commands == []
 
 
 def test_reserve_recovery_persists_and_enforces_budget(monkeypatch, tmp_path: Path) -> None:
