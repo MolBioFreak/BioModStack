@@ -110,6 +110,7 @@ function molstarCommonJsBuildResolver(): Plugin {
 
 const devApiTarget = process.env.BMS_DEV_API_PROXY_TARGET || 'http://127.0.0.1:8002'
 const devApiProxySecret = process.env.BMS_DEV_API_PROXY_SECRET?.trim() || ''
+const devMk1dReconnectProxySecret = process.env.BMS_DEV_MK1D_RECONNECT_PROXY_SECRET?.trim() || ''
 const buildRevision = /^[0-9a-f]{40}$/.test(process.env.VITE_BMS_BUILD_SHA?.trim() || '')
   ? process.env.VITE_BMS_BUILD_SHA!.trim()
   : 'unknown'
@@ -202,7 +203,14 @@ export default defineConfig(({ mode }) => ({
       ]
     },
     proxy: {
-      // Proxy /api requests to backend server
+      // Reconnect is available only on this local development proxy. The
+      // Tailnet ingress has an explicit deny route and never receives this key.
+      '/api/ont/devices/reconnect': {
+        target: devApiTarget,
+        changeOrigin: true,
+        ...(devMk1dReconnectProxySecret ? { headers: { 'X-BMS-MK1D-Reconnect-Proxy-Secret': devMk1dReconnectProxySecret } } : {}),
+      },
+      // Proxy other API requests to backend server
       '/api': {
         target: devApiTarget,
         changeOrigin: true,
