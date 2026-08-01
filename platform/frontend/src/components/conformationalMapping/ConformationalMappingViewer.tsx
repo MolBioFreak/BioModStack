@@ -456,14 +456,20 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
                             )}
                             {selectedFrustraMpnnProfile && (
                                 <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-3" aria-label="Exact-20 residue profile">
-                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div className="flex flex-wrap items-start justify-between gap-3">
                                         <div>
-                                            <div className="text-sm font-medium text-white">Exact-20 residue profile</div>
+                                            <div className="text-sm font-medium text-white">20 amino-acid substitution profile</div>
                                             <div className="mt-1 font-mono text-xs text-slate-400">
-                                                {selectedFrustraMpnnProfile.auth_asym_id}:{selectedFrustraMpnnProfile.auth_seq_id}{selectedFrustraMpnnProfile.insertion_code} · sequence {selectedFrustraMpnnProfile.sequence_index} · WT {selectedFrustraMpnnProfile.wt}
+                                                {selectedFrustraMpnnProfile.auth_asym_id}:{selectedFrustraMpnnProfile.auth_seq_id}{selectedFrustraMpnnProfile.insertion_code} · sequence {selectedFrustraMpnnProfile.sequence_index} · native {selectedFrustraMpnnProfile.wt}
                                             </div>
                                         </div>
-                                        <span className="text-[11px] text-slate-500">Selected from Mol* or linked sequence</span>
+                                        <span className="text-[11px] text-slate-500">Pick a residue in Mol* or the sequence track</span>
+                                    </div>
+                                    <div className="mt-3 flex flex-wrap gap-2 text-[11px]" aria-label="FrustraMPNN score category legend">
+                                        <span className="rounded border border-sky-500/40 bg-sky-500/10 px-2 py-1 text-sky-200">Blue · minimally frustrated</span>
+                                        <span className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-amber-100">Amber · neutral</span>
+                                        <span className="rounded border border-red-500/40 bg-red-500/10 px-2 py-1 text-red-200">Red · high frustration</span>
+                                        <span className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-slate-400">Gray · unavailable</span>
                                     </div>
                                     <div className="mt-3 grid grid-cols-5 gap-1 sm:grid-cols-10 xl:grid-cols-20">
                                         {selectedFrustraMpnnProfile.slots.map((slot) => (
