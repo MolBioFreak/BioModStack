@@ -38,12 +38,12 @@ def _safe_filename(filename: str) -> str:
     return label[:255] or "source.obj"
 
 
-def _publish(path: Path, payload: bytes) -> None:
+def _publish(path: Path, payload: bytes) -> bool:
     path.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
     if path.exists():
         if path.is_symlink() or path.stat().st_nlink != 1 or path.read_bytes() != payload:
             raise RuntimeError(f"immutable Shape artifact conflict: {path.name}")
-        return
+        return False
     descriptor, temporary_name = tempfile.mkstemp(prefix=".shape-", dir=path.parent)
     temporary = Path(temporary_name)
     try:
@@ -57,7 +57,7 @@ def _publish(path: Path, payload: bytes) -> None:
         except FileExistsError:
             if path.is_symlink() or path.stat().st_nlink != 1 or path.read_bytes() != payload:
                 raise RuntimeError(f"immutable Shape artifact conflict: {path.name}")
-            return
+            return False
         directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
         try:
             os.fsync(directory)
@@ -65,6 +65,19 @@ def _publish(path: Path, payload: bytes) -> None:
             os.close(directory)
     finally:
         temporary.unlink(missing_ok=True)
+    return True
+
+
+def _cleanup_publications(paths: list[Path], *, root: Path) -> None:
+    for path in reversed(paths):
+        path.unlink(missing_ok=True)
+        parent = path.parent
+        while parent != root and parent.is_relative_to(root):
+            try:
+                parent.rmdir()
+            except OSError:
+                break
+            parent = parent.parent
 
 
 def _result(row: ShapeDesignGeometry) -> AdmittedGeometry:
@@ -156,12 +169,6 @@ async def admit_mesh_geometry(
         artifacts["preview_obj"]: canonical.preview_obj,
         artifacts["manifest"]: _canonical_json(final_manifest),
     }
-    for relative, content in payloads.items():
-        destination = (root / relative).resolve()
-        if not destination.is_relative_to(root):
-            raise RuntimeError("Shape publication escaped the data root")
-        _publish(destination, content)
-
     source = await session.get(ShapeCadSource, source_id)
     if source is None:
         source = ShapeCadSource(
@@ -190,7 +197,23 @@ async def admit_mesh_geometry(
         created_at=datetime.utcnow(),
     )
     session.add(row)
-    await session.commit()
+    # Reserve database identities before publication. SQLite then holds the
+    # writer transaction until commit, so rollback cleanup cannot race another
+    # admission that has adopted these deterministic publication paths.
+    created: list[Path] = []
+    try:
+        await session.flush()
+        for relative, content in payloads.items():
+            destination = (root / relative).resolve()
+            if not destination.is_relative_to(root):
+                raise RuntimeError("Shape publication escaped the data root")
+            if _publish(destination, content):
+                created.append(destination)
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        _cleanup_publications(created, root=root)
+        raise
     return _result(row)
 
 

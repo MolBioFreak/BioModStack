@@ -31,15 +31,29 @@ function deviceStateLabel(device: OntLiveDevice): string {
     return device.available_for_run ? 'available for run' : (device.state || 'not available');
 }
 
+function responseDetail(error: unknown): string | undefined {
+    if (!error || typeof error !== 'object') return undefined;
+    const response = (error as { response?: unknown }).response;
+    if (!response || typeof response !== 'object') return undefined;
+    const data = (response as { data?: unknown }).data;
+    if (!data || typeof data !== 'object') return undefined;
+    const detail = (data as { detail?: unknown }).detail;
+    if (typeof detail === 'string') return detail;
+    if (detail && typeof detail === 'object') {
+        const message = (detail as { message?: unknown }).message;
+        if (typeof message === 'string') return message;
+    }
+    return undefined;
+}
+
 function isPhysicalStartDisabledAfterRevalidation(error: unknown): boolean {
     if (!error || typeof error !== 'object') return false;
     const response = (error as { response?: unknown }).response;
     if (!response || typeof response !== 'object') return false;
     const status = (response as { status?: unknown }).status;
-    const data = (response as { data?: unknown }).data;
+    const detail = responseDetail(error)?.replace(/[.]+$/, '');
     return status === 501
-        && Boolean(data && typeof data === 'object'
-            && (data as { detail?: unknown }).detail === 'MinKNOW protocol start remains disabled pending separately authorized supervised commissioning');
+        && detail === 'MinKNOW protocol start remains disabled pending separately authorized supervised commissioning';
 }
 
 export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanelProps) {
@@ -102,7 +116,9 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                 : 'Intent was freshly checked; physical MinKNOW start remains disabled.');
             void deviceStatus.refetch();
         },
-        onError: (error) => setMessage(error instanceof Error ? error.message : String(error)),
+        onError: (error) => setMessage(
+            responseDetail(error) ?? (error instanceof Error ? error.message : 'ONT intent validation failed')
+        ),
     });
 
     const blockers = effectiveProtocolOptions?.blockers ?? [];

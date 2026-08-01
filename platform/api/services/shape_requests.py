@@ -34,6 +34,7 @@ class SubmittedShapeRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120, pattern=r"^[A-Za-z0-9][A-Za-z0-9 ._-]*$")
     geometry_id: str = Field(pattern=r"^geom_[0-9a-f]{32}$")
     expected_geometry_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    expected_geometry_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     expected_point_pool_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     target_length: int = Field(ge=40, le=600)
     num_backbones: int = Field(default=4, ge=1, le=32)
@@ -93,6 +94,11 @@ async def materialize_shape_request(
     if point_pool_sha256 != submitted.expected_point_pool_sha256:
         raise ShapeRequestError("point_pool_hash_mismatch", "Shape point pool hash does not match the request")
     manifest_sha256 = str(geometry.manifest.get("manifest_sha256") or "")
+    if manifest_sha256 != submitted.expected_geometry_manifest_sha256:
+        raise ShapeRequestError(
+            "geometry_manifest_hash_mismatch",
+            "Shape geometry manifest hash does not match the reviewed request",
+        )
     unhashed_manifest = dict(geometry.manifest)
     unhashed_manifest.pop("manifest_sha256", None)
     if not _SHA256.fullmatch(manifest_sha256) or hashlib.sha256(_canonical_json(unhashed_manifest)).hexdigest() != manifest_sha256:

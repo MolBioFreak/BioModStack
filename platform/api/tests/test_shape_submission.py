@@ -71,6 +71,7 @@ async def test_shape_request_materializes_closed_hash_bound_bundle(tmp_path: Pat
                 name="small-shape-run",
                 geometry_id=geometry.geometry_id,
                 expected_geometry_sha256=geometry.geometry_sha256,
+                expected_geometry_manifest_sha256=geometry.manifest["manifest_sha256"],
                 expected_point_pool_sha256=geometry.point_pool_sha256,
                 target_length=120,
                 num_backbones=2,
@@ -123,6 +124,7 @@ async def test_shape_request_rejects_geometry_hash_mismatch_before_staging(tmp_p
                 name="hash-mismatch",
                 geometry_id=geometry.geometry_id,
                 expected_geometry_sha256="0" * 64,
+                expected_geometry_manifest_sha256=geometry.manifest["manifest_sha256"],
                 expected_point_pool_sha256=geometry.point_pool_sha256,
                 target_length=100,
                 num_backbones=1,
@@ -136,6 +138,18 @@ async def test_shape_request_rejects_geometry_hash_mismatch_before_staging(tmp_p
                     submitted=submitted,
                 )
             assert error.value.code == "geometry_hash_mismatch"
+            assert not (tmp_path / "data" / "shape_blueprint" / "requests").exists()
+            manifest_mismatch = submitted.model_copy(update={
+                "expected_geometry_sha256": geometry.geometry_sha256,
+                "expected_geometry_manifest_sha256": "0" * 64,
+            })
+            with pytest.raises(requests.ShapeRequestError) as manifest_error:
+                await requests.materialize_shape_request(
+                    session,
+                    data_root=tmp_path / "data",
+                    submitted=manifest_mismatch,
+                )
+            assert manifest_error.value.code == "geometry_manifest_hash_mismatch"
             assert not (tmp_path / "data" / "shape_blueprint" / "requests").exists()
     finally:
         await engine.dispose()
@@ -160,6 +174,7 @@ async def test_shape_request_translates_immutable_publication_conflict(tmp_path:
                 name="publication-conflict",
                 geometry_id=geometry.geometry_id,
                 expected_geometry_sha256=geometry.geometry_sha256,
+                expected_geometry_manifest_sha256=geometry.manifest["manifest_sha256"],
                 expected_point_pool_sha256=geometry.point_pool_sha256,
                 target_length=100,
                 num_backbones=1,
@@ -268,6 +283,7 @@ async def test_typed_shape_endpoint_uses_existing_job_lifecycle(tmp_path: Path, 
         "name": "shape-owner-path",
         "geometry_id": geometry.geometry_id,
         "expected_geometry_sha256": geometry.geometry_sha256,
+        "expected_geometry_manifest_sha256": geometry.manifest["manifest_sha256"],
         "expected_point_pool_sha256": geometry.point_pool_sha256,
         "target_length": 120,
         "num_backbones": 2,
@@ -346,6 +362,7 @@ async def test_concurrent_duplicate_shape_submissions_create_one_job(tmp_path: P
         "name": "shape-concurrent-owner-path",
         "geometry_id": geometry.geometry_id,
         "expected_geometry_sha256": geometry.geometry_sha256,
+        "expected_geometry_manifest_sha256": geometry.manifest["manifest_sha256"],
         "expected_point_pool_sha256": geometry.point_pool_sha256,
         "target_length": 120,
         "num_backbones": 1,
@@ -391,6 +408,7 @@ async def test_staged_bundle_validator_emits_hash_bound_receipt(tmp_path: Path) 
                     name="validator-proof",
                     geometry_id=geometry.geometry_id,
                     expected_geometry_sha256=geometry.geometry_sha256,
+                    expected_geometry_manifest_sha256=geometry.manifest["manifest_sha256"],
                     expected_point_pool_sha256=geometry.point_pool_sha256,
                     target_length=100,
                     num_backbones=1,

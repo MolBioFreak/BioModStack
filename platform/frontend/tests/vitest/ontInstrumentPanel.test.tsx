@@ -137,7 +137,7 @@ describe('OntInstrumentPanel opaque intent lifecycle', () => {
             rejectStart({
                 response: {
                     status: 501,
-                    data: { detail: 'MinKNOW protocol start remains disabled pending separately authorized supervised commissioning' },
+                    data: { detail: 'MinKNOW protocol start remains disabled pending separately authorized supervised commissioning.' },
                 },
             });
             await Promise.resolve();

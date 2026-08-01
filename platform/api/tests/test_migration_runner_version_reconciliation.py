@@ -37,6 +37,7 @@ def test_migration_versions_are_unique_with_md_before_ont() -> None:
         (19, "add_ont_protocol_preflight"),
         (20, "add_ont_terminal_artifact_manifests"),
         (21, "enforce_ont_terminal_artifact_manifest_immutability"),
+        (22, "relax_shape_geometry_hash_uniqueness"),
     ]
     assert len({migration.version for migration in MIGRATIONS}) == len(MIGRATIONS)
 
@@ -143,10 +144,78 @@ def test_runner_fails_closed_when_applied_version_has_wrong_name(tmp_path) -> No
 @pytest.mark.parametrize(
     "applied",
     [
-        {22: "unrelated_migration"},
+        {23: "unrelated_migration"},
         {21: "enforce_ont_terminal_artifact_manifest_immutability"},
     ],
 )
 def test_migration_ledger_must_be_an_exact_contiguous_known_prefix(applied: dict[int, str]) -> None:
     with pytest.raises(RuntimeError, match="contiguous exact prefix"):
         runner._validate_applied_migration_identities(applied)
+
+
+def test_v21_shape_schema_is_rebuilt_for_provenance_distinct_canonical_geometry(tmp_path) -> None:
+    db_path = tmp_path / "shape-v21.db"
+    connection = sqlite3.connect(db_path)
+    _ensure_migrations_table(connection)
+    _insert_rows(connection, tuple((migration.version, migration.name) for migration in MIGRATIONS[:-1]))
+    connection.executescript(
+        """
+        PRAGMA foreign_keys = ON;
+        CREATE TABLE shape_cad_sources (
+            source_id VARCHAR(40) PRIMARY KEY,
+            source_sha256 VARCHAR(64) NOT NULL UNIQUE,
+            size_bytes INTEGER NOT NULL,
+            original_filename VARCHAR(255) NOT NULL,
+            relative_path VARCHAR(500) NOT NULL,
+            created_at DATETIME NOT NULL
+        );
+        CREATE TABLE shape_design_geometries (
+            geometry_id VARCHAR(41) PRIMARY KEY,
+            source_id VARCHAR(40) NOT NULL REFERENCES shape_cad_sources(source_id),
+            geometry_sha256 VARCHAR(64) NOT NULL UNIQUE,
+            conversion_sha256 VARCHAR(64) NOT NULL,
+            angstrom_per_unit FLOAT NOT NULL,
+            vertex_count INTEGER NOT NULL,
+            face_count INTEGER NOT NULL,
+            point_count INTEGER NOT NULL,
+            manifest JSON NOT NULL,
+            artifacts JSON NOT NULL,
+            created_at DATETIME NOT NULL,
+            CONSTRAINT uq_shape_geometry_conversion UNIQUE (source_id, conversion_sha256)
+        );
+        CREATE TABLE shape_design_requests (
+            request_id VARCHAR(42) PRIMARY KEY,
+            geometry_id VARCHAR(41) NOT NULL REFERENCES shape_design_geometries(geometry_id),
+            request_sha256 VARCHAR(64) NOT NULL UNIQUE,
+            request_spec JSON NOT NULL,
+            stage_relative_path VARCHAR(500) NOT NULL,
+            job_id VARCHAR(36),
+            created_at DATETIME NOT NULL
+        );
+        CREATE INDEX ix_shape_design_geometries_source_id ON shape_design_geometries (source_id);
+        CREATE UNIQUE INDEX ix_shape_design_geometries_geometry_sha256 ON shape_design_geometries (geometry_sha256);
+        CREATE INDEX ix_shape_design_requests_geometry_id ON shape_design_requests (geometry_id);
+        CREATE UNIQUE INDEX ix_shape_design_requests_request_sha256 ON shape_design_requests (request_sha256);
+        CREATE UNIQUE INDEX ix_shape_design_requests_job_id ON shape_design_requests (job_id);
+        INSERT INTO shape_cad_sources VALUES ('cad_a', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 1, 'a.obj', 'sources/a', '2026-01-01');
+        INSERT INTO shape_design_geometries VALUES ('geom_a', 'cad_a', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', 1.0, 4, 4, 16, '{}', '{}', '2026-01-01');
+        INSERT INTO shape_design_requests VALUES ('shape_a', 'geom_a', 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd', '{}', 'requests/a', NULL, '2026-01-01');
+        """
+    )
+    connection.commit()
+    connection.close()
+
+    runner.run_all(str(db_path))
+
+    connection = sqlite3.connect(db_path)
+    connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute(
+        "INSERT INTO shape_design_geometries VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ('geom_b', 'cad_a', 'b' * 64, 'e' * 64, 1.0, 4, 4, 16, '{}', '{}', '2026-01-02'),
+    )
+    assert connection.execute("SELECT geometry_id FROM shape_design_requests").fetchall() == [('geom_a',)]
+    assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+    assert connection.execute(
+        "SELECT version, name FROM schema_migrations ORDER BY version DESC LIMIT 1"
+    ).fetchone() == (22, "relax_shape_geometry_hash_uniqueness")
+    connection.close()

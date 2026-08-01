@@ -392,6 +392,37 @@ async def test_geometry_admission_persists_shared_immutable_resource(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_geometry_admission_removes_new_publication_after_commit_failure(tmp_path: Path, monkeypatch) -> None:
+    database = importlib.import_module("database")
+    resources = importlib.import_module("services.shape_resources")
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'shape-rollback.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(database.Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    root = tmp_path / "data" / "shape_blueprint" / "geometries"
+    try:
+        async with factory() as session:
+            await resources.admit_obj_geometry(
+                session, data_root=tmp_path / "data", payload=CUBE_OBJ,
+                filename="cube.obj", angstrom_per_unit=10.0,
+            )
+        before = {path.name for path in root.iterdir()}
+        async with factory() as session:
+            async def fail_commit() -> None:
+                raise RuntimeError("forced commit failure")
+            monkeypatch.setattr(session, "commit", fail_commit)
+            with pytest.raises(RuntimeError, match="forced commit failure"):
+                await resources.admit_mesh_geometry(
+                    session, data_root=tmp_path / "data", payload=CUBE_OBJ,
+                    filename="cube.obj", source_format="obj",
+                    source_unit="explicit-same-scale-unit", angstrom_per_unit=10.0,
+                )
+        assert {path.name for path in root.iterdir()} == before
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_shape_geometry_http_upload_list_and_preview(tmp_path: Path, monkeypatch) -> None:
     database = importlib.import_module("database")
     router = importlib.import_module("routers.shape_blueprint")

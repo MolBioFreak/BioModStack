@@ -523,6 +523,7 @@ export interface ShapeLaunchRequest {
     name: string;
     geometry_id: string;
     expected_geometry_sha256: string;
+    expected_geometry_manifest_sha256: string;
     expected_point_pool_sha256: string;
     target_length: number;
     num_backbones: number;

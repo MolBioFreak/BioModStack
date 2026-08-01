@@ -7,6 +7,7 @@ import { MemoryRouter } from 'react-router-dom';
 
 import ShapeBlueprintTemplate from '../src/components/ShapeBlueprintTemplate.js';
 import CanonicalMeshPreview from '../src/components/CanonicalMeshPreview.js';
+import { buildShapeLaunchRequest } from '../src/lib/shapeBlueprintLaunch.js';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean; React: typeof React }).IS_REACT_ACT_ENVIRONMENT = true;
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
@@ -30,6 +31,27 @@ const numberInput = (root: ReactTestInstance, min: number, max: number) => {
     assert.ok(input, `number input ${min}..${max} was not rendered`);
     return input;
 };
+
+test('Shape launch binds the exact reviewed geometry manifest digest', () => {
+    const geometry = {
+        geometry_id: 'geom_reviewed', source_id: 'cad_reviewed',
+        geometry_sha256: '1'.repeat(64), manifest_sha256: '2'.repeat(64),
+        source_sha256: '3'.repeat(64), preview_obj_sha256: '4'.repeat(64),
+        point_pool_sha256: '5'.repeat(64), sdf_sha256: '6'.repeat(64),
+        sdf_sign: 'positive_inside' as const, sdf_grid_shape: [48, 48, 48] as [number, number, number],
+        vertex_count: 4, face_count: 4, point_count: 4096,
+        bounds_angstrom: [0, 0, 0, 1, 1, 1] as [number, number, number, number, number, number],
+        dimensions_angstrom: [1, 1, 1] as [number, number, number],
+        source_format: 'stl' as const, source_parser: 'stl_ascii_v1' as const,
+        source_unit: 'angstrom', angstrom_per_unit: 1,
+    };
+    const request = buildShapeLaunchRequest(geometry, {
+        client_request_id: 'review-1', name: 'reviewed', target_length: 100,
+        num_backbones: 1, sequences_per_backbone: 1, seed: 0,
+    });
+    assert.equal(request.expected_geometry_manifest_sha256, geometry.manifest_sha256);
+    assert.equal(request.geometry_id, geometry.geometry_id);
+});
 
 test('canonical surface canvas clears immediately when its URL changes', async () => {
     const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
@@ -161,6 +183,8 @@ test('legacy Shape geometry without a surface digest defaults to hash-bound poin
         .filter((value): value is string => typeof value === 'string')
         .join(' ');
     assert.match(renderedText, /legacy surface.*not hash-bound/i);
+    assert.match(renderedText, /Manifest/i);
+    assert.match(renderedText, /ffffffffffff/i);
 
     await act(async () => { renderer!.unmount(); });
     client.clear();

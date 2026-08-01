@@ -8,6 +8,7 @@ import {
     uploadShapeGeometry,
     type ShapeGeometrySummary,
 } from '../lib/api';
+import { buildShapeLaunchRequest } from '../lib/shapeBlueprintLaunch';
 import CanonicalMeshPreview from './CanonicalMeshPreview';
 import MolstarViewer from './MolstarViewer';
 
@@ -59,7 +60,7 @@ export default function ShapeBlueprintTemplate() {
         queryKey: ['shape-geometries'],
         queryFn: () => listShapeGeometries().then((response) => response.data.geometries),
     });
-    const geometries = geometriesQuery.data ?? [];
+    const geometries = useMemo(() => geometriesQuery.data ?? [], [geometriesQuery.data]);
     const selected = useMemo<ShapeGeometrySummary | undefined>(
         () => geometries.find((geometry) => geometry.geometry_id === selectedId) ?? geometries[0],
         [geometries, selectedId],
@@ -85,17 +86,14 @@ export default function ShapeBlueprintTemplate() {
     const launch = useMutation({
         mutationFn: () => {
             if (!selected) throw new Error('Select or upload canonical geometry first.');
-            return submitShapeBlueprint({
+            return submitShapeBlueprint(buildShapeLaunchRequest(selected, {
                 client_request_id: clientRequestId,
                 name: name.trim() || 'Shape Blueprint design',
-                geometry_id: selected.geometry_id,
-                expected_geometry_sha256: selected.geometry_sha256,
-                expected_point_pool_sha256: selected.point_pool_sha256,
                 target_length: targetLength,
                 num_backbones: numBackbones,
                 sequences_per_backbone: sequencesPerBackbone,
                 seed,
-            });
+            }));
         },
         onSuccess: (response) => {
             sessionStorage.removeItem(SHAPE_CLIENT_REQUEST_KEY);
@@ -171,6 +169,7 @@ export default function ShapeBlueprintTemplate() {
                         <div className="sm:col-span-2">Dimensions <span className="font-mono text-cyan-200">{selected.dimensions_angstrom.map(formatAngstrom).join(' × ')}</span></div>
                         <div>Source bytes <span className="font-mono text-cyan-200" title={selected.source_sha256}>{shortHash(selected.source_sha256)}</span></div>
                         <div>Geometry <span className="font-mono text-cyan-200" title={selected.geometry_sha256}>{shortHash(selected.geometry_sha256)}</span></div>
+                        <div>Manifest <span className="font-mono text-cyan-200" title={selected.manifest_sha256}>{shortHash(selected.manifest_sha256)}</span></div>
                         {selected.preview_obj_sha256 && <div>Surface <span className="font-mono text-cyan-200" title={selected.preview_obj_sha256}>{shortHash(selected.preview_obj_sha256)}</span></div>}
                         <div>Points <span className="font-mono text-cyan-200" title={selected.point_pool_sha256}>{shortHash(selected.point_pool_sha256)}</span></div>
                         <div>SDF <span className="font-mono text-cyan-200" title={selected.sdf_sha256}>{shortHash(selected.sdf_sha256)}</span></div>
