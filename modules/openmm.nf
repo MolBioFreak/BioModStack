@@ -50,6 +50,7 @@ process OpenMMRelaxation {
     
     output:
     path "relaxed/*.pdb", emit: relaxed_pdbs, optional: true
+    tuple val(batch_id), path("relaxed/*.pdb"), emit: relaxed_with_batch, optional: true
     path "relaxed/*.json", emit: metrics_json, optional: true
     path "*.log", emit: logs
     path "openmm_metadata_${batch_id}.jsonl", emit: metadata, optional: true, topic: metadata_ch_openmm

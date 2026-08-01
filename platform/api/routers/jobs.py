@@ -5069,8 +5069,10 @@ async def import_proteinbase_bundle_job(
 def _build_msa_batch_child_params(
     source_params: Dict[str, Any],
     sequences_for_msa: List[Dict[str, Any]],
+    source_model_id: Any = None,
+    source_mode: Any = None,
 ) -> Dict[str, Any]:
-    return {
+    child_params = {
         'sequences': sequences_for_msa,
         'sequences_json': json.dumps(sequences_for_msa),
         'reference_sequence': source_params.get('msa_reference_sequence'),
@@ -5102,8 +5104,8 @@ def _build_msa_batch_child_params(
         'msa_target_shard_mode': source_params.get('msa_target_shard_mode'),
         'msa_target_shards': source_params.get('msa_target_shards'),
         'msa_target_shard_min_size_gb': source_params.get('msa_target_shard_min_size_gb'),
-        'run_frustrampnn_batch': source_params.get('run_frustrampnn', False),
     }
+    return child_params
 
 
 def _standard_job_output_dir(name: str, timestamp: str, preallocated_job_id: str | None) -> Path:
@@ -5142,6 +5144,11 @@ async def create_job(
     }
     normalized_model_id = str(job_data.model_id or "").strip().lower()
     normalized_mode = str(job_data.mode or "").strip().lower()
+    if normalized_model_id == "frustrampnn":
+        raise HTTPException(
+            status_code=422,
+            detail="FrustraMPNN jobs must use the typed server-owned analysis endpoints.",
+        )
     if normalized_model_id == "molecular_dynamics" and normalized_mode == "analyze" and _md_analysis_gpu_requested(job_data):
         raise _md_analysis_error(
             "MD_ANALYSIS_GPU_FORBIDDEN",
@@ -5548,6 +5555,8 @@ async def create_job(
             params=_build_msa_batch_child_params(
                 source_params=job_data.params,
                 sequences_for_msa=sequences_for_msa,
+                source_model_id=job_data.model_id,
+                source_mode=job_data.mode,
             ),
             output_dir=msa_output_dir,
             status=JobStatus.QUEUED.value,
@@ -5948,9 +5957,52 @@ async def launch_antibody_iteration_from_designs(
             detail=f"Some selected designs were not found: {', '.join(missing_designs[:10])}",
         )
 
-    ordered_designs = [design_by_id[design_id] for design_id in design_ids]
-    selection_dir = _materialize_antibody_selection(root_job, source_job, ordered_designs, request.action)
     action = request.action.strip().lower()
+    ordered_designs = [design_by_id[design_id] for design_id in design_ids]
+    if action == "frustrampnn":
+        if (
+            request.param_overrides
+            or request.cdr_indel_config is not None
+            or request.manual_mutagenesis_config is not None
+            or request.name_suffix is not None
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="FrustraMPNN runtime, path, GPU, and naming overrides are server-owned.",
+            )
+        from services.frustrampnn.jobs import (
+            FrustraMPNNChildError,
+            create_child_job as create_frustrampnn_child_job,
+            design_selections as resolve_frustrampnn_selections,
+        )
+
+        try:
+            selections = await resolve_frustrampnn_selections(
+                session,
+                source_parent=source_job,
+                design_ids=design_ids,
+            )
+            child = await create_frustrampnn_child_job(
+                session,
+                selections=selections,
+                source_parent=source_job,
+                trigger="antibody_iteration",
+            )
+        except FrustraMPNNChildError as exc:
+            await session.rollback()
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        launched_job = await get_job(str(child.id), session)
+        return AntibodyIterationLaunchResponse(
+            message=f"Queued FrustraMPNN analysis for {len(ordered_designs)} selected designs.",
+            action=action,
+            source_job_id=source_job.id,
+            root_job_id=root_job.id,
+            selection_dir=str(child.output_dir),
+            selected_design_count=len(ordered_designs),
+            launched_job=launched_job,
+        )
+
+    selection_dir = _materialize_antibody_selection(root_job, source_job, ordered_designs, request.action)
     variant_note = ""
     variant_count = len(ordered_designs)
     if action == "cdr_indel_round":
@@ -6842,6 +6894,16 @@ async def report_stage_complete(
     stage_outputs = job.stage_outputs or {}
     stage_outputs[stage] = outputs
     job.stage_outputs = stage_outputs
+
+    provenance = dict(job.provenance or {})
+    terminal_states = dict(provenance.get("stage_terminal_states") or {})
+    existing_terminal = terminal_states.get(stage)
+    complete_terminal = {"status": "complete", "outputs": list(outputs)}
+    if existing_terminal is not None and existing_terminal != complete_terminal:
+        raise HTTPException(status_code=409, detail="workflow stage terminal state is immutable")
+    terminal_states[stage] = complete_terminal
+    provenance["stage_terminal_states"] = terminal_states
+    job.provenance = provenance
     
     # Clear current stage (will be set when next stage starts)
     job.current_stage = None
@@ -6855,6 +6917,57 @@ async def report_stage_complete(
         "job_id": job_id,
         "completed_stages": completed,
         "outputs_count": len(outputs)
+    }
+
+
+@router.post("/{job_id}/stage-terminal")
+async def report_stage_terminal(
+    job_id: str,
+    request: Request,
+    stage: str,
+    status: str,
+    outputs: List[str] = [],
+    session: AsyncSession = Depends(get_session),
+):
+    """Persist a non-success terminal state for an optional or unrequested stage."""
+
+    if status not in {"failed", "not_requested"}:
+        raise HTTPException(status_code=422, detail="unsupported workflow stage terminal status")
+    result = await session.execute(select(Job).where(Job.id == job_id).with_for_update())
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    authorization = str(request.headers.get("authorization") or "")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not stage_reporting.token_is_authorized(job.provenance, token):
+        raise HTTPException(status_code=403, detail="invalid workflow stage credential")
+
+    completed = list(job.completed_stages or [])
+    if stage in completed:
+        raise HTTPException(status_code=409, detail="completed workflow stage cannot be reclassified")
+    terminal = {"status": status, "outputs": list(outputs)}
+    provenance = dict(job.provenance or {})
+    terminal_states = dict(provenance.get("stage_terminal_states") or {})
+    existing = terminal_states.get(stage)
+    if existing is not None and existing != terminal:
+        raise HTTPException(status_code=409, detail="workflow stage terminal state is immutable")
+    terminal_states[stage] = terminal
+    provenance["stage_terminal_states"] = terminal_states
+    job.provenance = provenance
+
+    stage_outputs = dict(job.stage_outputs or {})
+    stage_outputs[stage] = list(outputs)
+    job.stage_outputs = stage_outputs
+    if job.current_stage == stage:
+        job.current_stage = None
+    await session.commit()
+    logger.info("Job %s: Stage '%s' terminal state is %s", job_id, stage, status)
+    return {
+        "message": f"Stage '{stage}' marked {status}",
+        "job_id": job_id,
+        "stage": stage,
+        "status": status,
+        "outputs_count": len(outputs),
     }
 
 

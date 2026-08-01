@@ -1,0 +1,434 @@
+{
+  "canonical_sample": {
+    "a": [
+      3,
+      {
+        "a": null,
+        "b": true
+      }
+    ],
+    "f": 0.58,
+    "z": "\u03a9"
+  },
+  "canonical_sample_sha256": "3ec3486a2a46adec63a0284b7546c6b4a9cdc056f45fee8e4fc85491d1bbff5e",
+  "canonical_sample_utf8": "{\"a\":[3,{\"a\":null,\"b\":true}],\"f\":0.58,\"z\":\"\u03a9\"}",
+  "cm_compatibility_semantics": {
+    "duplicate_slot_status": "duplicate_row",
+    "excluded_neutral_product_keys": [
+      "candidate_rank",
+      "ranking",
+      "pass",
+      "decision",
+      "presentation"
+    ],
+    "landscape_schema_name": "cm_frustration_landscape",
+    "minimal_class_literal": "minimally_frustrated",
+    "missing_slot_status": "missing_row",
+    "nonfinite_slot_status": "nonfinite_score",
+    "threshold_policy_id": "frustrampnn_class_v1",
+    "wt_mismatch_slot_status": "mapping_failed"
+  },
+  "complex_snapshot": {
+    "admission": {
+      "atom_count": 1,
+      "conversion_omissions": [],
+      "token_count": 1,
+      "token_limit": 20000
+    },
+    "bonds": [],
+    "entities": [
+      {
+        "count": 1,
+        "entity_type": "protein",
+        "ordered_instance_ids": [
+          "authority-copy"
+        ],
+        "sequence": "A",
+        "source_entity_id": "7"
+      }
+    ],
+    "instance_mappings": [
+      {
+        "candidate_id": "candidate-phase0-characterization",
+        "output_auth_asym_id": "AUTH_NATIVE",
+        "output_entity_id": "7",
+        "output_entity_order": 0,
+        "output_label_asym_id": "CHAIN_NATIVE",
+        "runtime_entity_id": "runtime-7",
+        "runtime_instance_id": "runtime-authority-copy",
+        "runtime_order": 0,
+        "runtime_target_id": "target-phase0-characterization",
+        "source_entity_id": "7",
+        "source_instance_id": "authority-copy"
+      }
+    ],
+    "normalized_source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "original_source_path": "inputs/authority.cif",
+    "original_source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "schema_name": "cm_complex_snapshot",
+    "schema_version": 1,
+    "target_id": "target-phase0-characterization",
+    "target_order": 0,
+    "unsupported_fields": []
+  },
+  "expected_landscape": {
+    "candidate_id": "candidate-phase0-characterization",
+    "checkpoint_id": "megascale.ckpt",
+    "checkpoint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "container_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "input_issues": [],
+    "raw_csv_sha256": "e3e7b9a4fb0939adaf795013f5f60da2ab51f276ae27474fc9612f96b87b5b26",
+    "residues": [
+      {
+        "auth_asym_id": "AUTH_NATIVE",
+        "auth_seq_id": 42,
+        "entity_instance_id": "authority-copy",
+        "insertion_code": "",
+        "sequence_index": 1,
+        "slots": [
+          {
+            "class": "neutral",
+            "mutation_aa": "A",
+            "native": true,
+            "reason": null,
+            "score": 0.0,
+            "scoreable": true,
+            "status": "ok",
+            "wt": "A"
+          },
+          {
+            "class": "neutral",
+            "mutation_aa": "C",
+            "native": false,
+            "reason": null,
+            "score": 0.1,
+            "scoreable": true,
+            "status": "ok",
+            "wt": "A"
+          },
+          {
+            "class": "neutral",
+            "mutation_aa": "D",
+            "native": false,
+            "reason": null,
+            "score": 0.2,
+            "scoreable": true,
+            "status": "ok",
+            "wt": "A"
+          },
+          {
+            "class": "neutral",
+            "mutation_aa": "E",
+            "native": false,
+            "reason": null,
+            "score": 0.3,
+            "scoreable": true,
+            "status": "ok",
+            "wt": "A"
+          },
+          {
+            "class": "neutral",
+            "mutation_aa": "F",
+            "native": false,
+            "reason": null,
+            "score": 0.4,
+            "scoreable": true,
+            "status": "ok",
+            "wt": "A"
+          },
+          {
+            "class": "neutral",
+            "mutation_aa": "G",
+            "native": false,
+            "reason": null,
+            "score": 0.5,
+            "scoreable": true,
+            "status": "ok",
+            "wt": "A"
+          },
+          {
+            "class": "minimally_frustrated",
+            "mutation_aa": "H",
+            "native": false,
+            "reason": null,
+            "score": 0.6,
+            "scoreable": true,
+            "status": "ok",
+            "wt": "A"
+          },
+          {
+            "class": "minimally_frustrated",
+            "mutation_aa": "I",
+            "native": false,
+            "reason": null,
+            "score": 0.7,
+            "scoreable": true,
+            "status": "ok",
+            "wt": "A"
+          },
+          {
+            "class": "minimally_frustrated",
+            "mutation_aa": "K",
+            "native": false,
+            "reason": null,
+            "score": 0.8,
+            "scoreable": true,
+            "status": "ok",
+            "wt": "A"
+          },
+          {
+            "class": "minimally_frustrated",
+            "mutation_aa": "L",
+            "native": false,
+            "reason": null,
+            "score": 0.9,
+            "scoreable": true,
+            "status": "ok",
+            "wt": "A"
+          },
+          {
+            "class": "minimally_frustrated",
+            "mutation_aa": "M",
+            "native": false,
+            "reason": null,
+            "score": 1.0,
+            "scoreable": true,
+            "status": "ok",
+            "wt": "A"
+          },
+          {
+            "class": "minimally_frustrated",
+            "mutation_aa": "N",
+            "native": false,
+            "reason": null,
+            "score": 1.1,
+            "scoreable": true,
+            "status": "ok",
+            "wt": "A"
+          },
+          {
+            "class": "minimally_frustrated",
+            "mutation_aa": "P",
+            "native": false,
+            "reason": null,
+            "score": 1.2,
+            "scoreable": true,
+            "status": "ok",
+            "wt": "A"
+          },
+          {
+            "class": "minimally_frustrated",
+            "mutation_aa": "Q",
+            "native": false,
+            "reason": null,
+            "score": 1.3,
+            "scoreable": true,
+            "status": "ok",
+            "wt": "A"
+          },
+          {
+            "class": "minimally_frustrated",
+            "mutation_aa": "R",
+            "native": false,
+            "reason": null,
+            "score": 1.4,
+            "scoreable": true,
+            "status": "ok",
+            "wt": "A"
+          },
+          {
+            "class": "minimally_frustrated",
+            "mutation_aa": "S",
+            "native": false,
+            "reason": null,
+            "score": 1.5,
+            "scoreable": true,
+            "status": "ok",
+            "wt": "A"
+          },
+          {
+            "class": "minimally_frustrated",
+            "mutation_aa": "T",
+            "native": false,
+            "reason": null,
+            "score": 1.6,
+            "scoreable": true,
+            "status": "ok",
+            "wt": "A"
+          },
+          {
+            "class": "minimally_frustrated",
+            "mutation_aa": "V",
+            "native": false,
+            "reason": null,
+            "score": 1.7,
+            "scoreable": true,
+            "status": "ok",
+            "wt": "A"
+          },
+          {
+            "class": "minimally_frustrated",
+            "mutation_aa": "W",
+            "native": false,
+            "reason": null,
+            "score": 1.8,
+            "scoreable": true,
+            "status": "ok",
+            "wt": "A"
+          },
+          {
+            "class": "minimally_frustrated",
+            "mutation_aa": "Y",
+            "native": false,
+            "reason": null,
+            "score": 1.9,
+            "scoreable": true,
+            "status": "ok",
+            "wt": "A"
+          }
+        ],
+        "wt": "A"
+      }
+    ],
+    "schema_name": "cm_frustration_landscape",
+    "schema_version": 1,
+    "target_id": "target-phase0-characterization",
+    "threshold_policy_id": "frustrampnn_class_v1",
+    "threshold_policy_sha256": "8cd201610586182bedf0ac4fc5800c41ba0aa00258282630f55908fa55502056",
+    "tool_id": "frustrampnn",
+    "tool_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "expected_landscape_sha256": "76d1b440dd04691b31415988b9ca584a965088f1bd640a816b41aa815698277b",
+  "expected_normalized_pdb_sha256": "69d01d2b8dd5e9e2b552b32ba4cc47e275473f0f6af331dbf5cbbcc606aceb15",
+  "expected_policy_neutral_summary_contract": {
+    "candidate_id": "candidate-phase0-characterization",
+    "complete_landscape_counts": {
+      "high": 0,
+      "minimally_frustrated": 14,
+      "neutral": 6
+    },
+    "complete_landscape_fractions": {
+      "high": 0.0,
+      "minimally_frustrated": 0.7,
+      "neutral": 0.3
+    },
+    "landscape_sha256": "76d1b440dd04691b31415988b9ca584a965088f1bd640a816b41aa815698277b",
+    "missingness_by_reason": {},
+    "native_slot_counts": {
+      "high": 0,
+      "minimally_frustrated": 0,
+      "neutral": 1
+    },
+    "native_slot_fractions": {
+      "high": 0.0,
+      "minimally_frustrated": 0.0,
+      "neutral": 1.0
+    },
+    "residue_support": {
+      "ambiguous": 0,
+      "excluded": 0,
+      "expected": 1,
+      "mapped": 1,
+      "scoreable": 1
+    },
+    "schema_name": "frustrampnn_summary",
+    "schema_version": 1,
+    "slot_support": {
+      "expected": 20,
+      "observed": 20,
+      "scoreable": 20
+    },
+    "support_by_entity_chain": [
+      {
+        "auth_asym_id": "AUTH_NATIVE",
+        "entity_instance_id": "authority-copy",
+        "expected_residues": 1,
+        "expected_slots": 20,
+        "mapped_residues": 1,
+        "observed_slots": 20,
+        "scoreable_residues": 1,
+        "scoreable_slots": 20
+      }
+    ],
+    "target_id": "target-phase0-characterization",
+    "threshold_policy": {
+      "high_max": -1.0,
+      "id": "frustrampnn_class_v1",
+      "minimal_min": 0.58,
+      "sha256": "8cd201610586182bedf0ac4fc5800c41ba0aa00258282630f55908fa55502056"
+    }
+  },
+  "expected_structure_map": {
+    "altloc_policy": "blank_or_explicit:A",
+    "candidate_id": "candidate-phase0-characterization",
+    "normalized_pdb_sha256": "69d01d2b8dd5e9e2b552b32ba4cc47e275473f0f6af331dbf5cbbcc606aceb15",
+    "normalizer_version": "cm_structure_normalizer_v1",
+    "original_cif_sha256": "9a8678e96b385aa569060a25cce39acdb3515a9a8abaa139119523a604bb26b1",
+    "rows": [
+      {
+        "auth_asym_id": "AUTH_NATIVE",
+        "auth_seq_id": 42,
+        "backbone_atoms": {
+          "C": "103",
+          "CA": "102",
+          "N": "101",
+          "O": "104"
+        },
+        "entity_instance_id": "authority-copy",
+        "insertion_code": "",
+        "label_asym_id": "CHAIN_NATIVE",
+        "label_seq_id": 1,
+        "model_decision": "only_source_model:1",
+        "pdb_chain_id": "A",
+        "pdb_insertion_code": "",
+        "pdb_residue_id": 42,
+        "reason": null,
+        "residue_name": "ALA",
+        "selected_altloc": "",
+        "sequence_index": 1,
+        "source_entity_id": "7",
+        "source_model": 1,
+        "status": "mapped"
+      }
+    ],
+    "schema_name": "cm_structure_map",
+    "schema_version": 1,
+    "selected_source_model": 1,
+    "source_bytes": 1030,
+    "source_format": "mmcif",
+    "source_sha256": "9a8678e96b385aa569060a25cce39acdb3515a9a8abaa139119523a604bb26b1",
+    "target_id": "target-phase0-characterization"
+  },
+  "expected_structure_map_file_sha256": "afa7c6a16568497b01f143416687f898aec3daf2275a1bfe1642541a2455d09f",
+  "expected_structure_map_sha256": "109bdd4e059483406c35c9b54bb8e0947f121bbaeb279656d104e5bd849cd8ab",
+  "historical_cm_command_argv": [
+    "/usr/bin/apptainer",
+    "exec",
+    "--nv",
+    "--containall",
+    "--writable-tmpfs",
+    "--env",
+    "CUDA_DEVICE_ORDER=PCI_BUS_ID",
+    "--env",
+    "CUDA_VISIBLE_DEVICES=3",
+    "--bind",
+    "/phase0/output:/phase0/output",
+    "/proc/self/fd/9",
+    "/opt/venv/bin/frustrampnn",
+    "predict",
+    "--pdb",
+    "/phase0/output/normalized_input.pdb",
+    "--checkpoint",
+    "/opt/frustrampnn_weights/megascale.ckpt",
+    "--output",
+    "/phase0/output/frustrampnn.csv"
+  ],
+  "historical_cm_command_limitations": [
+    "missing_explicit_device_cuda",
+    "missing_explicit_gpu_id_argument"
+  ],
+  "raw_csv": "chain,position,insertion_code,wt,mutation,score\nA,0,,A,A,0.0\nA,0,,A,C,0.1\nA,0,,A,D,0.2\nA,0,,A,E,0.3\nA,0,,A,F,0.4\nA,0,,A,G,0.5\nA,0,,A,H,0.6\nA,0,,A,I,0.7\nA,0,,A,K,0.8\nA,0,,A,L,0.9\nA,0,,A,M,1.0\nA,0,,A,N,1.1\nA,0,,A,P,1.2\nA,0,,A,Q,1.3\nA,0,,A,R,1.4\nA,0,,A,S,1.5\nA,0,,A,T,1.6\nA,0,,A,V,1.7\nA,0,,A,W,1.8\nA,0,,A,Y,1.9\n",
+  "schema_name": "frustrampnn_cm_characterization",
+  "schema_version": 1,
+  "source_fixture": "platform/api/tests/fixtures/conformational_mapping/normalization/authority/input.cif"
+}

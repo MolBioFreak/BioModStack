@@ -249,6 +249,7 @@ async def finalize_successful_job(
             output_dir,
             session,
             epitope_residues=epitope_residues,
+            commit=False,
         )
         count = await _design_count(session, job_id)
         idempotent_prior_results = False

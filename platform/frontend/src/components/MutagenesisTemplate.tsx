@@ -7,13 +7,10 @@ import { LigandSelector, type LigandEntry } from './LigandSelector';
 import { TargetAntigenSelector } from './TargetAntigenSelector';
 import { parsePDBFile, type Chain } from '../utils/pdbUtils';
 import EpitopeMolstarViewer from './EpitopeMolstarViewer';
-import MolstarViewer from './MolstarViewer';
 import { PhysicsRefinementPanel, type PhysicsRefinementSettings } from './PhysicsRefinementPanel';
 import { DEFAULT_SETTINGS as PHYSICS_DEFAULTS } from './physicsRefinementSettings';
 import { createLatestAsyncResourceController } from '../lib/latestAsyncResource';
-import { createResidueMetricLayer } from '../lib/molstar-metrics';
 
-const FRUSTRATION_THRESHOLDS = { highly: -1.0, minimally: 0.58 } as const;
 
 interface MutagenesisTemplateProps {
     onBack: () => void;
@@ -24,60 +21,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
     // Top-level state
     const [jobNamePrefix, setJobNamePrefix] = useState('mutagenesis_lib');
     const [baseSequence, setBaseSequence] = useState('');
-    const [mode, setMode] = useState<'library' | 'manual' | 'affinityMaturation'>('library');
-
-    // Affinity Maturation State
-    // FrustraMPNN output: frustration index with thresholds <= -1.0 (highly), >= 0.58 (minimally)
-    const [frustrampnnResults, setFrustrampnnResults] = useState<Array<{
-        position: number;       // 1-indexed for display
-        aa: string;             // Wildtype residue
-        frustration: number;    // Frustration index (typically -3 to +3)
-        frustrationClass: 'highly' | 'neutral' | 'minimally';  // Classification
-        chain: string;
-        selected: boolean;
-    }>>([]);
-    const [frustrampnnLoading, setFrustrampnnLoading] = useState(false);
-    const [maturationAllowedAAs, setMaturationAllowedAAs] = useState('');
-    const [maturationGenMode, setMaturationGenMode] = useState<'singles' | 'combos' | 'sample'>('singles');
-    const [maturationSampleN, setMaturationSampleN] = useState(20);
-    const [ppiflowRotamer, setPpiflowRotamer] = useState(false);
-    const [ppiflowFlow, setPpiflowFlow] = useState(false);
-    const [ppiflowFinalBoltz, setPpiflowFinalBoltz] = useState(false);
-
-    // Clear FrustraMPNN results when sequence changes
-    useEffect(() => {
-        setFrustrampnnResults([]);
-    }, [baseSequence]);
-
-    // Helper: Convert frustration score to RGB color matching FrustraMPNN color scheme
-    const frustrationToColor = useCallback((frustration: number): { r: number; g: number; b: number } => {
-        // Official colors: red (highly) <= -1.0, gray (neutral), green (minimally) >= 0.58
-        if (frustration <= FRUSTRATION_THRESHOLDS.highly) {
-            return { r: 239, g: 68, b: 68 };    // Red: highly frustrated
-        } else if (frustration >= FRUSTRATION_THRESHOLDS.minimally) {
-            return { r: 34, g: 197, b: 94 };    // Green: minimally frustrated
-        }
-        return { r: 156, g: 163, b: 175 };      // Gray: neutral
-    }, []);
-
-    const frustrationMetricLayer = useMemo(() => createResidueMetricLayer({
-        descriptor: {
-            id: 'frustration-index',
-            label: 'Frustration index',
-            semanticType: 'energy',
-            units: 'dimensionless',
-            direction: 'higher_is_better',
-            source: 'FrustraMPNN affinity-maturation analysis',
-            provenance: { source: 'FrustraMPNN affinity-maturation analysis' },
-        },
-        points: frustrampnnResults
-            .filter((result) => Boolean(result.chain) && Number.isInteger(result.position))
-            .map((result) => ({
-                residue: { labelAsymId: result.chain, labelSeqId: result.position },
-                value: result.frustration,
-                color: frustrationToColor(result.frustration),
-            })),
-    }), [frustrampnnResults, frustrationToColor]);
+    const [mode, setMode] = useState<'library' | 'manual'>('library');
 
     // Library Generator State
     const [regionInput, setRegionInput] = useState('');
@@ -128,7 +72,6 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
         use_potentials: false,
         step_scale: 1.638
     });
-    const [runFrustrampnnPost, setRunFrustrampnnPost] = useState(false);
 
     // Complex Mode: Ligands & Ions
     const [ligands, setLigands] = useState<LigandEntry[]>([]);
@@ -336,8 +279,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
             ...predictorParams,
             // Reference sequence for logging (mutants regenerate MSAs)
             msa_reference_sequence: baseSequence,
-            // Optional post-run FrustraMPNN annotation
-            run_frustrampnn: runFrustrampnnPost,
+
             // Include ALL fields from ligand entries - sequence is required for DNA/RNA!
             ligands: ligands.map(l => ({
                 type: l.type,
@@ -378,21 +320,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                         <p className="text-slate-400 text-sm">Generate variant libraries for structure prediction</p>
                     </div>
                 </div>
-                {/* Top-level workflow tabs */}
-                <div className="flex bg-slate-800/50 p-1 rounded-lg">
-                    <button
-                        onClick={() => setMode('library')}
-                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${mode !== 'affinityMaturation' ? 'bg-accent text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
-                    >
-                        Standard Workflow
-                    </button>
-                    <button
-                        onClick={() => setMode('affinityMaturation')}
-                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${mode === 'affinityMaturation' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
-                    >
-                        Affinity Maturation
-                    </button>
-                </div>
+
             </header>
 
             <div className="space-y-8">
@@ -505,23 +433,21 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                     )}
                 </section>
 
-                {/* 2. Mode Toggle - Only show for Standard Workflow */}
-                {mode !== 'affinityMaturation' && (
-                    <div className="flex bg-slate-800/50 p-1 rounded-lg w-fit">
-                        <button
-                            onClick={() => setMode('library')}
-                            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mode === 'library' ? 'bg-accent text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
-                        >
-                            Library Generator
-                        </button>
-                        <button
-                            onClick={() => setMode('manual')}
-                            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mode === 'manual' ? 'bg-accent text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
-                        >
-                            Manual Editor
-                        </button>
-                    </div>
-                )}
+                {/* 2. Mode Toggle */}
+                <div className="flex bg-slate-800/50 p-1 rounded-lg w-fit">
+                    <button
+                        onClick={() => setMode('library')}
+                        className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mode === 'library' ? 'bg-accent text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
+                    >
+                        Library Generator
+                    </button>
+                    <button
+                        onClick={() => setMode('manual')}
+                        className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mode === 'manual' ? 'bg-accent text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
+                    >
+                        Manual Editor
+                    </button>
+                </div>
 
                 {/* 3. Library Generator UI */}
                 {mode === 'library' && (
@@ -878,243 +804,6 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                     </div>
                 )}
 
-                {/* 5. Affinity Maturation Mode */}
-                {mode === 'affinityMaturation' && (
-                    <div className="space-y-6 border-l-2 border-emerald-800 pl-4">
-                        <div className="flex justify-between items-start">
-                            <div>
-                                <h3 className="text-sm font-semibold text-slate-200 mb-1">FrustraMPNN-Guided Maturation</h3>
-                                <p className="text-xs text-slate-500">Identify frustrated CDR positions and generate optimized variants</p>
-                            </div>
-                        </div>
-
-                        {/* 3D Frustration Map Preview */}
-                        {pdbBlobUrl && (
-                            <div className="bg-slate-950/50 rounded-lg p-4 border border-slate-800">
-                                <h4 className="text-sm font-semibold text-slate-300 mb-3">3D Frustration Map</h4>
-                                <p className="text-xs text-slate-500 mb-3">
-                                    {frustrampnnResults.length > 0
-                                        ? `Colored by frustration: green (stable) → red (frustrated)`
-                                        : 'Run FrustraMPNN analysis to color by frustration'}
-                                </p>
-                                <MolstarViewer
-                                    structureUrl={pdbBlobUrl}
-                                    height={280}
-                                    hideControls={true}
-                                    alphafoldView={frustrampnnResults.length === 0} // pLDDT coloring if no frustration data
-                                    residueMetricLayer={frustrampnnResults.length > 0 ? frustrationMetricLayer : undefined}
-                                    label={frustrampnnResults.length > 0 ? 'Frustration Map' : undefined}
-                                />
-                            </div>
-                        )}
-
-                        {/* FrustraMPNN Analysis Section */}
-                        <div className="bg-slate-950/50 rounded-lg p-4 border border-slate-800">
-                            <div className="flex justify-between items-center mb-4">
-                                <h4 className="text-sm font-semibold text-slate-300">FrustraMPNN Analysis</h4>
-                                <button
-                                    onClick={async () => {
-                                        if (!pdbBlobUrl) {
-                                            console.error('No PDB loaded for FrustraMPNN analysis');
-                                            return;
-                                        }
-
-                                        setFrustrampnnLoading(true);
-
-                                        try {
-                                            // Fetch the PDB blob from the URL
-                                            const pdbResponse = await fetch(pdbBlobUrl);
-                                            const pdbBlob = await pdbResponse.blob();
-
-                                            // Call the FrustraMPNN API
-                                            const formData = new FormData();
-                                            formData.append('pdb_file', pdbBlob, 'structure.pdb');
-                                            if (selectedChainId) {
-                                                formData.append('chain', selectedChainId);
-                                            }
-
-                                            const response = await fetch('/api/frustrampnn/analyze', {
-                                                method: 'POST',
-                                                body: formData
-                                            });
-
-                                            if (!response.ok) {
-                                                const errorText = await response.text();
-                                                throw new Error(errorText);
-                                            }
-
-                                            const data = await response.json();
-
-                                            // Convert native profile to our display format
-                                            // Auto-select highly frustrated positions for mutation
-                                            const results = data.native_profile.map((d: UntypedApiValue) => ({
-                                                position: d.position + 1,  // Convert to 1-indexed
-                                                aa: d.wildtype,
-                                                frustration: d.frustration_pred,
-                                                frustrationClass: d.class as 'highly' | 'neutral' | 'minimally',
-                                                chain: d.chain,
-                                                selected: d.class === 'highly'  // Auto-select highly frustrated
-                                            }));
-
-                                            setFrustrampnnResults(results);
-                                            console.log('FrustraMPNN analysis complete:', data.summary);
-
-                                        } catch (err) {
-                                            console.error('FrustraMPNN analysis failed:', err);
-                                        } finally {
-                                            setFrustrampnnLoading(false);
-                                        }
-                                    }}
-                                    disabled={!baseSequence || frustrampnnLoading}
-                                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm rounded transition-colors flex items-center gap-2"
-                                >
-                                    {frustrampnnLoading ? (
-                                        <><span className="animate-spin">...</span> Analyzing...</>
-                                    ) : (
-                                        <>Run Analysis</>
-                                    )}
-                                </button>
-                            </div>
-
-                            {frustrampnnResults.length > 0 ? (
-                                <div className="overflow-x-auto">
-                                    <table className="w-full text-sm">
-                                        <thead>
-                                            <tr className="text-left text-slate-400 border-b border-slate-700">
-                                                <th className="py-2 px-2">Select</th>
-                                                <th className="py-2 px-2">Chain</th>
-                                                <th className="py-2 px-2">Position</th>
-                                                <th className="py-2 px-2">WT</th>
-                                                <th className="py-2 px-2">Frustration</th>
-                                                <th className="py-2 px-2">Class</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {frustrampnnResults.map((row, idx) => (
-                                                <tr key={`${row.chain}${row.position}`} className="border-b border-slate-800/50 hover:bg-slate-800/30">
-                                                    <td className="py-2 px-2">
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={row.selected}
-                                                            onChange={() => {
-                                                                setFrustrampnnResults(prev => {
-                                                                    const next = [...prev];
-                                                                    next[idx] = { ...next[idx], selected: !next[idx].selected };
-                                                                    return next;
-                                                                });
-                                                            }}
-                                                            className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-emerald-600"
-                                                        />
-                                                    </td>
-                                                    <td className="py-2 px-2 font-mono text-slate-500">{row.chain}</td>
-                                                    <td className="py-2 px-2 font-mono text-slate-300">{row.position}</td>
-                                                    <td className="py-2 px-2 font-mono font-bold text-accent">{row.aa}</td>
-                                                    <td className="py-2 px-2 font-mono">
-                                                        {row.frustration.toFixed(2)}
-                                                    </td>
-                                                    <td className="py-2 px-2">
-                                                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${row.frustrationClass === 'highly' ? 'bg-red-500/20 text-red-400' :
-                                                            row.frustrationClass === 'minimally' ? 'bg-green-500/20 text-green-400' :
-                                                                'bg-slate-500/20 text-slate-400'
-                                                            }`}>
-                                                            {row.frustrationClass}
-                                                        </span>
-                                                    </td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            ) : (
-                                <div className="text-center py-6 text-slate-600 text-sm italic">
-                                    {baseSequence ? 'Click "Run Analysis" to identify frustrated positions' : 'Load a sequence first, then run analysis'}
-                                </div>
-                            )}
-                        </div>
-
-                        {/* Mutation Generation Options */}
-                        {frustrampnnResults.filter(r => r.selected).length > 0 && (
-                            <div className="bg-slate-950/50 rounded-lg p-4 border border-slate-800">
-                                <h4 className="text-sm font-semibold text-slate-300 mb-3">Generation Options</h4>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="block text-xs text-slate-400 mb-2">Allowed AAs (override FrustraMPNN)</label>
-                                        <input
-                                            type="text"
-                                            value={maturationAllowedAAs}
-                                            onChange={(e) => setMaturationAllowedAAs(e.target.value.toUpperCase())}
-                                            placeholder="Leave empty to use FrustraMPNN suggestions"
-                                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-xs text-slate-400 mb-2">Generation Mode</label>
-                                        <select
-                                            value={maturationGenMode}
-                                            onChange={(e) => setMaturationGenMode(e.target.value as UntypedApiValue)}
-                                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm"
-                                        >
-                                            <option value="singles">Single Mutants Only</option>
-                                            <option value="combos">Top Combinations</option>
-                                            <option value="sample">Random Sample</option>
-                                        </select>
-                                    </div>
-                                    {maturationGenMode === 'sample' && (
-                                        <div>
-                                            <label className="block text-xs text-slate-400 mb-2">Sample N Variants</label>
-                                            <input
-                                                type="number"
-                                                value={maturationSampleN}
-                                                onChange={(e) => setMaturationSampleN(parseInt(e.target.value) || 20)}
-                                                min={1}
-                                                max={100}
-                                                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm"
-                                            />
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-                        )}
-
-                        {/* PPIFlow Refinement Options */}
-                        <div className="bg-slate-950/50 rounded-lg p-4 border border-slate-800">
-                            <h4 className="text-sm font-semibold text-slate-300 mb-3">Refinement Pipeline</h4>
-                            <p className="text-xs text-slate-500 mb-4">Order: Boltz-2 → [PPIFlow Rotamer] → [PPIFlow Flow] → [Final Boltz-2]</p>
-                            <div className="space-y-3">
-                                <label className="flex items-center gap-3 text-sm text-slate-300 cursor-pointer">
-                                    <input
-                                        type="checkbox"
-                                        checked={ppiflowRotamer}
-                                        onChange={(e) => setPpiflowRotamer(e.target.checked)}
-                                        className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-cyan-600"
-                                    />
-                                    <span>PPIFlow Rotamer Enrichment</span>
-                                    <span className="text-xs text-slate-500">(sidechain optimization)</span>
-                                </label>
-                                <label className="flex items-center gap-3 text-sm text-slate-300 cursor-pointer">
-                                    <input
-                                        type="checkbox"
-                                        checked={ppiflowFlow}
-                                        onChange={(e) => setPpiflowFlow(e.target.checked)}
-                                        className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-cyan-600"
-                                    />
-                                    <span>PPIFlow Flow Matching</span>
-                                    <span className="text-xs text-slate-500">(interface polish)</span>
-                                </label>
-                                <label className="flex items-center gap-3 text-sm text-slate-300 cursor-pointer">
-                                    <input
-                                        type="checkbox"
-                                        checked={ppiflowFinalBoltz}
-                                        onChange={(e) => setPpiflowFinalBoltz(e.target.checked)}
-                                        className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-blue-600"
-                                    />
-                                    <span>Final Boltz-2 Validation</span>
-                                    <span className="text-xs text-slate-500">(after PPIFlow)</span>
-                                </label>
-                            </div>
-                        </div>
-                    </div>
-                )}
 
                 {/* 6. Predictor Settings */}
                 <section className="pt-6 border-t border-slate-800">
@@ -1221,17 +910,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                             />
                             <label className="text-slate-300" title="Enable physics/FK steering potentials (Boltz-2x). Can improve geometry, but high sample counts multiply internal particles and need memory-safe batching.">Use Potentials (Boltz-2x)</label>
                         </div>
-                        <div className="flex items-center gap-2 pt-6">
-                            <input
-                                type="checkbox"
-                                checked={runFrustrampnnPost}
-                                onChange={(e) => setRunFrustrampnnPost(e.target.checked)}
-                                className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-amber-600"
-                            />
-                            <label className="text-slate-300" title="Run FrustraMPNN after Boltz-2 to annotate frustration per variant">
-                                FrustraMPNN QC (post-run)
-                            </label>
-                        </div>
+
                         <div>
                             <label className="text-slate-400 block mb-1" title="Step scale for diffusion (lower = more diverse, higher = more conserved). Default: 1.638">Step Scale</label>
                             <input
