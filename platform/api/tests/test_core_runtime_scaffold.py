@@ -102,7 +102,13 @@ def test_compose_core_runtime_contract() -> None:
     assert api["build"]["target"] == "api-runtime"
     assert api["container_name"] == "biomodstack-api"
     assert api["network_mode"] == "host"
-    assert "group_add" not in api
+    assert api["group_add"] == ["${BMS_MK1D_RECOVERY_GID:-65534}"]
+    assert api["volumes"][-1] == {
+        "type": "bind",
+        "source": "${BMS_MK1D_RECOVERY_SOCKET_DIR:-/run/biomodstack}",
+        "target": "/run/biomodstack",
+        "read_only": True,
+    }
     assert "ports" not in api
     assert "extra_hosts" not in api
     assert api["environment"]["BMS_HOME"] == "/app"
@@ -186,6 +192,20 @@ def test_compose_core_runtime_contract() -> None:
     assert not compose.get("volumes")
 
 
+
+def test_mk1d_reconnect_runtime_group_is_loaded_only_from_validated_root_config() -> None:
+    launcher = (REPO_ROOT / "scripts" / "run_biomodstack_core_runtime.sh").read_text(encoding="utf-8")
+    example = (REPO_ROOT / ".env.core-runtime.example").read_text(encoding="utf-8")
+
+    assert "load_root_owned_mk1d_recovery_gid" in launcher
+    assert "stat -c '%u:%g:%a'" in launcher
+    assert "0:0:644" in launcher
+    assert "BMS_MK1D_RECOVERY_GID" in launcher
+    assert "load_root_owned_mk1d_recovery_gid" in launcher.split("load_env_file_overrides", 1)[-1]
+    assert "BMS_MK1D_RECOVERY_GID=" not in example
+    assert "BMS_MK1D_RECONNECT_TIMEOUT_SECONDS=100" in example
+
+
 def test_nginx_contract_preserves_bms_and_api_routes() -> None:
     nginx_conf = (REPO_ROOT / "docker" / "web" / "nginx.conf").read_text(
         encoding="utf-8"
@@ -199,6 +219,29 @@ def test_nginx_contract_preserves_bms_and_api_routes() -> None:
     assert "try_files $uri $uri/ /bms/index.html;" in nginx_conf
     assert "location /api/ {" in nginx_conf
     assert "proxy_pass http://127.0.0.1:8000;" in nginx_conf
+
+
+def test_mk1d_reconnect_nginx_admission_preserves_identity_only_from_the_trusted_tailnet_proxy() -> None:
+    api_compose = yaml.safe_load((REPO_ROOT / "compose.core-runtime.yml").read_text(encoding="utf-8"))
+    tailnet_compose = yaml.safe_load((REPO_ROOT / "compose.tailnet-control.yml").read_text(encoding="utf-8"))
+    web_nginx = (REPO_ROOT / "docker" / "web" / "nginx.conf").read_text(encoding="utf-8")
+    tailnet_nginx = (REPO_ROOT / "docker" / "tailnet-production-proxy.conf").read_text(encoding="utf-8")
+    env_example = (REPO_ROOT / ".env.core-runtime.example").read_text(encoding="utf-8")
+
+    api_environment = api_compose["services"]["bms-api"]["environment"]
+    assert api_environment["BMS_MK1D_RECONNECT_TRUSTED_PROXY_HOSTS"] == "${BMS_MK1D_RECONNECT_TRUSTED_PROXY_HOSTS:-}"
+    assert api_environment["BMS_MK1D_RECONNECT_ALLOWED_TAILSCALE_USERS"] == "${BMS_MK1D_RECONNECT_ALLOWED_TAILSCALE_USERS:-}"
+    assert "BMS_MK1D_RECONNECT_TRUSTED_PROXY_HOSTS=" in env_example
+    assert "BMS_MK1D_RECONNECT_ALLOWED_TAILSCALE_USERS=" in env_example
+    assert "location = /api/ont/devices/reconnect {" in web_nginx
+    assert 'if ($http_x_bms_cm_proxy_secret != "${BMS_CM_TRUSTED_PROXY_SECRET}") { return 401; }' in web_nginx
+    assert "proxy_set_header Tailscale-User-Login $http_tailscale_user_login;" in web_nginx
+    assert 'proxy_set_header Tailscale-User-Login "";' in web_nginx
+    assert "proxy_set_header Tailscale-User-Login $http_tailscale_user_login;" in tailnet_nginx
+    assert 'proxy_set_header X-BMS-CM-Proxy-Secret "${BMS_CM_TRUSTED_PROXY_SECRET}";' in tailnet_nginx
+    tailnet_proxy = tailnet_compose["services"]["tailnet-production-proxy"]
+    assert tailnet_proxy["environment"]["BMS_CM_TRUSTED_PROXY_SECRET"] == "${BMS_CM_TRUSTED_PROXY_SECRET:-}"
+    assert tailnet_proxy["volumes"][0].endswith(":/etc/nginx/templates/default.conf.template:ro")
 
 
 def test_dockerignore_keeps_local_runtime_state_out_of_images() -> None:

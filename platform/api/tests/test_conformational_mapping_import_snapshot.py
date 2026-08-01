@@ -553,3 +553,15 @@ async def test_local_application_upload_and_submit_materializes_snapshot_and_job
         "container_sha256": "c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da",
     }
     await engine.dispose()
+
+
+def test_rcsb_mmcif_bridge_rejects_non_accession_before_network() -> None:
+    request = Request({
+        "type": "http", "method": "POST", "scheme": "http",
+        "path": "/api/conformational-mapping/sources/rcsb/not-valid", "query_string": b"",
+        "headers": [], "client": ("127.0.0.1", 42000), "server": ("127.0.0.1", 8000),
+    })
+    with pytest.raises(HTTPException, match="four letters or digits") as error:
+        import asyncio
+        asyncio.run(cm_router.register_rcsb_mmcif_source("not-valid", request, None))
+    assert error.value.status_code == 422

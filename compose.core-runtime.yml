@@ -23,6 +23,8 @@ services:
     mem_limit: ${BMS_API_MEMORY_LIMIT:-16g}
     pids_limit: ${BMS_API_PIDS_LIMIT:-4096}
     ulimits: *bms-default-ulimits
+    group_add:
+      - "${BMS_MK1D_RECOVERY_GID:-65534}"
     container_name: biomodstack-api
     restart: "no"
     logging: *bms-json-logging
@@ -65,6 +67,10 @@ services:
       BMS_WORKFLOW_ADAPTER_URL: ${BMS_WORKFLOW_ADAPTER_URL:-http://127.0.0.1:8001}
       BMS_HOST_AGENT_URL: ${BMS_HOST_AGENT_URL:-http://127.0.0.1:8798}
       BMS_HOST_AGENT_TIMEOUT_SECONDS: ${BMS_HOST_AGENT_TIMEOUT_SECONDS:-2.0}
+      BMS_MK1D_RECONNECT_SOCKET: ${BMS_MK1D_RECONNECT_SOCKET:-/run/biomodstack/mk1d-reconnect.sock}
+      BMS_MK1D_RECONNECT_TIMEOUT_SECONDS: ${BMS_MK1D_RECONNECT_TIMEOUT_SECONDS:-100}
+      BMS_MK1D_RECONNECT_TRUSTED_PROXY_HOSTS: ${BMS_MK1D_RECONNECT_TRUSTED_PROXY_HOSTS:-}
+      BMS_MK1D_RECONNECT_ALLOWED_TAILSCALE_USERS: ${BMS_MK1D_RECONNECT_ALLOWED_TAILSCALE_USERS:-}
       BMS_ONT_MINKNOW_ENABLED: ${BMS_ONT_MINKNOW_ENABLED:-1}
       BMS_CPU_POWER_COLLECTOR_URL: ${BMS_CPU_POWER_COLLECTOR_URL:-http://127.0.0.1:8797/power}
       BMS_STATS_TOOLKIT_URL: ${BMS_STATS_TOOLKIT_URL:-http://127.0.0.1:18181}
@@ -74,6 +80,10 @@ services:
       - type: bind
         source: ${BMS_STATE_DIR:-/mnt/BioModStack}
         target: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}
+      - type: bind
+        source: ${BMS_MK1D_RECOVERY_SOCKET_DIR:-/run/biomodstack}
+        target: /run/biomodstack
+        read_only: true
     healthcheck:
       test:
         [

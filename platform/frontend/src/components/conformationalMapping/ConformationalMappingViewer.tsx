@@ -225,6 +225,15 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
         setOverlayIds((current) => current.filter((id) => id !== selected?.candidate_id));
     }, [selected?.candidate_id]);
     useEffect(() => {
+        if (!parsed.data || !selected) return;
+        setOverlayIds((current) => {
+            const retained = current.filter((id) => id !== selected.candidate_id && parsed.data!.candidates.some((candidate) => candidate.candidate_id === id));
+            if (retained.length) return retained;
+            const firstAlternative = parsed.data!.candidates.find((candidate) => candidate.candidate_id !== selected.candidate_id);
+            return firstAlternative ? [firstAlternative.candidate_id] : retained;
+        });
+    }, [parsed.data, selected?.candidate_id]);
+    useEffect(() => {
         setSelectedPairId('');
         setSelectedStateRowKey(null);
         setStateAnalysisOffset(0);
@@ -388,7 +397,7 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
 
                 {!statusContractError && parsed.data && selected && selectedArtifact && <>
                     <section className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
-                        <aside className="max-h-[760px] overflow-auto rounded-2xl border border-slate-800 bg-slate-900/70 p-3" aria-label="Canonical candidates in API order"><div className="sticky top-0 z-10 mb-2 bg-slate-900 pb-2"><h2 className="text-sm font-semibold text-white">Candidates in API order</h2><p className="mt-1 text-[11px] text-slate-500">Identity and ordering come only from the canonical ensemble record.</p></div>{parsed.data.candidates.map((candidate, index) => <div key={candidate.candidate_id} className={`mb-2 rounded-lg border p-2 ${candidate.candidate_id === selected.candidate_id ? 'border-orange-400/60 bg-orange-500/10' : 'border-slate-800'}`}><button type="button" onClick={() => selectCandidateForStateAnalysis(candidate.candidate_id)} className="w-full text-left"><div className="text-xs font-medium text-white">Candidate {index + 1}</div><div className="mt-1 text-[11px] leading-4 text-slate-400">{candidateLabel(candidate)}</div><div className="mt-1 truncate font-mono text-[10px] text-slate-600">{candidate.candidate_id}</div></button><label className="mt-2 flex items-center gap-2 text-[11px] text-slate-400"><input type="checkbox" checked={overlayIds.includes(candidate.candidate_id)} disabled={candidate.candidate_id === selected.candidate_id || (!overlayIds.includes(candidate.candidate_id) && overlayIds.length >= 5)} onChange={(event) => setOverlayIds((current) => event.target.checked ? [...current, candidate.candidate_id] : current.filter((id) => id !== candidate.candidate_id))} />Overlay hypothesis</label></div>)}</aside>
+                        <aside className="max-h-[760px] overflow-auto rounded-2xl border border-slate-800 bg-slate-900/70 p-3" aria-label="Canonical structural hypotheses in API order"><div className="sticky top-0 z-10 mb-2 bg-slate-900 pb-2"><h2 className="text-sm font-semibold text-white">Structural hypotheses in API order</h2><p className="mt-1 text-[11px] text-slate-500">Choose the primary coordinate set, then compare immutable alternative candidate coordinates as overlays. These are predicted hypotheses, not time-resolved sampling or state populations.</p></div>{parsed.data.candidates.map((candidate, index) => <div key={candidate.candidate_id} className={`mb-2 rounded-lg border p-2 ${candidate.candidate_id === selected.candidate_id ? 'border-orange-400/60 bg-orange-500/10' : 'border-slate-800'}`}><button type="button" onClick={() => selectCandidateForStateAnalysis(candidate.candidate_id)} className="w-full text-left"><div className="text-xs font-medium text-white">{candidate.candidate_id === selected.candidate_id ? `Primary hypothesis · Candidate ${index + 1}` : `Candidate ${index + 1}`}</div><div className="mt-1 text-[11px] leading-4 text-slate-400">{candidateLabel(candidate)}</div><div className="mt-1 truncate font-mono text-[10px] text-slate-600">{candidate.candidate_id}</div></button><label className="mt-2 flex items-center gap-2 text-[11px] text-slate-400"><input type="checkbox" checked={overlayIds.includes(candidate.candidate_id)} disabled={candidate.candidate_id === selected.candidate_id || (!overlayIds.includes(candidate.candidate_id) && overlayIds.length >= 5)} onChange={(event) => setOverlayIds((current) => event.target.checked ? [...current, candidate.candidate_id] : current.filter((id) => id !== candidate.candidate_id))} />Compare as structural overlay</label></div>)}</aside>
                         <div className="space-y-3">
                             <section
                                 ref={viewerShellRef}
@@ -397,8 +406,9 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
                             >
                                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 p-3">
                                     <div>
-                                        <span className="text-sm font-medium text-white">Candidate structure</span>
-                                        <span className="ml-2 text-xs text-slate-500">{overlays.length} overlays</span>
+                                        <span className="text-sm font-medium text-white">Primary structural hypothesis</span>
+                                        <span className="ml-2 text-xs text-slate-500">{overlays.length ? `${overlays.length} immutable alternative coordinate overlay${overlays.length === 1 ? '' : 's'}` : 'no alternative selected'}</span>
+                                        <p className="mt-1 text-[11px] text-slate-500">Overlay visibility compares registered candidate coordinates only; it does not estimate conformer populations, kinetics, thermodynamics, or trajectories.</p>
                                     </div>
                                     <div className="flex items-center gap-2">
                                         <span className="text-xs text-slate-400">{frustraMpnnMetrics ? `${frustraMpnnMetrics.residueProfiles.length} exact mapped residue profiles` : completeLandscape.isLoading ? 'Loading complete FrustraMPNN landscape…' : 'FrustraMPNN visual layers unavailable'}</span>

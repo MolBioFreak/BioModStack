@@ -12,6 +12,11 @@ from pathlib import Path
 from typing import Any
 
 from services.host_agent_client import get_ont_status, host_agent_enabled
+from services.mk1d_reconnect import (
+    ReconnectHelperProtocolError,
+    ReconnectHelperUnavailable,
+    request_mk1d_reconnect,
+)
 from services.ont_ngs_contract import ANALYSIS_OWNER, DEVICE_CONTROL_OWNER, get_ont_workflow_spec
 from services.ont_minknow_client import discover_minknow_devices
 
@@ -71,6 +76,51 @@ def get_device_control_status() -> dict[str, Any]:
         "live_devices": [],
         "fake_or_demo_devices": False,
         "message": "MinKNOW/Mk1D live device control is a service/API boundary and is not configured in this runtime.",
+    }
+
+
+def _safe_post_action_observation(status: dict[str, Any]) -> dict[str, Any]:
+    """Project only read-only Mk1D evidence needed by the recovery receipt."""
+    implementation_status = str(status.get("implementation_status") or "unknown")
+    positions: list[dict[str, Any]] = []
+    for device in status.get("live_devices") or []:
+        if not isinstance(device, dict) or device.get("device_type") != "mk1d":
+            continue
+        connection_error = device.get("connection_error")
+        positions.append(
+            {
+                "position": str(device.get("position") or "unknown"),
+                "connection_error": connection_error if isinstance(connection_error, str) and connection_error else None,
+            }
+        )
+    safe_mk1d_observed = implementation_status == "configured" and any(
+        position["connection_error"] is None for position in positions
+    )
+    return {
+        "implementation_status": implementation_status,
+        "mk1d_positions": positions,
+        "safe_mk1d_observed": safe_mk1d_observed,
+    }
+
+
+def reconnect_mk1d() -> dict[str, Any]:
+    """Execute one admitted recovery transaction and then reread only status.
+
+    The receipt says whether recreation was requested and whether the helper
+    verified its read-only health/status probes. It is not a connection claim:
+    ``connected`` is true only after a separate safe Mk1D observation with no
+    connection error. This path never starts a protocol or hardware check.
+    """
+    receipt = request_mk1d_reconnect()
+    observation = _safe_post_action_observation(get_device_control_status())
+    device_status_observed = observation["safe_mk1d_observed"] is True
+    helper_verified = receipt["status"] == "completed" and receipt["host_agent_health"] == "verified"
+    return {
+        "action": "manual_mk1d_reconnect",
+        "receipt": receipt,
+        "post_action_device_status": observation,
+        "device_status_observed": device_status_observed,
+        "connected": helper_verified and device_status_observed,
     }
 
 

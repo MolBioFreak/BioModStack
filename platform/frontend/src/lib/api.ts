@@ -3347,8 +3347,35 @@ export interface OntProtocolOptions {
     fake_or_demo_devices: false;
 }
 
+export interface OntMk1dReconnectReceipt {
+    schema: 'bms.mk1d-reconnect-receipt.v1';
+    receipt_id: string;
+    status: 'completed' | 'failed' | 'blocked' | 'busy';
+    minknow: 'not_attempted' | 'already_active' | 'started' | 'failed' | 'blocked';
+    host_agent_recreate: 'not_attempted' | 'requested' | 'failed';
+    host_agent_health: 'not_checked' | 'verified' | 'failed';
+}
+
+export interface OntMk1dReconnectResponse {
+    action: 'manual_mk1d_reconnect';
+    receipt: OntMk1dReconnectReceipt;
+    post_action_device_status: {
+        implementation_status: string;
+        mk1d_positions: Array<{
+            position: string;
+            connection_error: string | null;
+        }>;
+        safe_mk1d_observed: boolean;
+    };
+    device_status_observed: boolean;
+    connected: boolean;
+}
+
 export const fetchOntDeviceStatus = () =>
     api.get<OntDeviceStatus>('/api/ont/devices/status');
+
+export const requestMk1dReconnect = () =>
+    api.post<OntMk1dReconnectResponse>('/api/ont/devices/reconnect', { confirm_reconnect: true });
 
 export const fetchOntProtocolOptions = (position: string, kit?: string) =>
     api.get<OntProtocolOptions>(`/api/ont/positions/${encodeURIComponent(position)}/protocol-options`, { params: { kit } });

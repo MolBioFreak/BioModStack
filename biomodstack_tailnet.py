@@ -1826,13 +1826,13 @@ def _validated_production_tailnet_proxy(root: Path) -> dict[str, object]:
         and isinstance(mounts[0], Mapping)
         and mounts[0].get("Type") == "bind"
         and Path(str(mounts[0].get("Source", ""))).resolve() == config
-        and mounts[0].get("Destination") == "/etc/nginx/conf.d/default.conf"
+        and mounts[0].get("Destination") == "/etc/nginx/templates/default.conf.template"
         and mounts[0].get("RW") is False
     )
     if labels.get(PRODUCTION_TAILNET_PROXY_SHA_LABEL) != config_sha or not expected_mount:
         raise TailnetEnvironmentError("production Tailnet proxy does not match the reviewed config")
     host_config = item.get("HostConfig", {})
-    expected_bind = f"{config}:/etc/nginx/conf.d/default.conf:ro"
+    expected_bind = f"{config}:/etc/nginx/templates/default.conf.template:ro"
     if (
         host_config.get("Binds") != [expected_bind]
         or host_config.get("Mounts") not in (None, [])

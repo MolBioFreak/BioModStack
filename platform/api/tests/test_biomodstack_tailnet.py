@@ -974,7 +974,7 @@ def test_production_tailnet_proxy_requires_exact_read_only_config(monkeypatch, t
             "Memory": 256 * 1024 * 1024, "PidsLimit": 128,
             "Ulimits": [{"Name": "nofile", "Hard": 4096, "Soft": 4096}],
             "LogConfig": {"Type": "json-file", "Config": {"max-file": "5", "max-size": "10m"}},
-            "Binds": [f"{config.resolve()}:/etc/nginx/conf.d/default.conf:ro"],
+            "Binds": [f"{config.resolve()}:/etc/nginx/templates/default.conf.template:ro"],
             "Tmpfs": {"/var/cache/nginx": "", "/var/run": ""},
         },
         "Config": {
@@ -991,7 +991,7 @@ def test_production_tailnet_proxy_requires_exact_read_only_config(monkeypatch, t
         "Mounts": [{
             "Type": "bind",
             "Source": str(config.resolve()),
-            "Destination": "/etc/nginx/conf.d/default.conf",
+            "Destination": "/etc/nginx/templates/default.conf.template",
             "RW": False,
         }],
     }]
@@ -1098,14 +1098,14 @@ def test_production_tailnet_proxy_requires_container_owned_listener(monkeypatch,
             "Memory": 256 * 1024 * 1024, "PidsLimit": 128,
             "Ulimits": [{"Name": "nofile", "Hard": 4096, "Soft": 4096}],
             "LogConfig": {"Type": "json-file", "Config": {"max-file": "5", "max-size": "10m"}},
-            "Binds": [f"{config.resolve()}:/etc/nginx/conf.d/default.conf:ro"], "Tmpfs": {"/var/cache/nginx": "", "/var/run": ""}},
+            "Binds": [f"{config.resolve()}:/etc/nginx/templates/default.conf.template:ro"], "Tmpfs": {"/var/cache/nginx": "", "/var/run": ""}},
         "Config": {"Image": tailnet.PRODUCTION_TAILNET_PROXY_IMAGE, "Entrypoint": ["/docker-entrypoint.sh"],
             "Cmd": ["nginx", "-g", "daemon off;"], "Labels": {
                 tailnet.PRODUCTION_TAILNET_PROXY_SHA_LABEL: config_sha,
                 "com.biomodstack.tailnet-proxy-owner": "compose.core-runtime",
                 "com.docker.compose.project": "biomodstack-tailnet-control",
                 "com.docker.compose.service": "tailnet-production-proxy"}},
-        "Mounts": [{"Type": "bind", "Source": str(config.resolve()), "Destination": "/etc/nginx/conf.d/default.conf", "RW": False}],
+        "Mounts": [{"Type": "bind", "Source": str(config.resolve()), "Destination": "/etc/nginx/templates/default.conf.template", "RW": False}],
     }]
     monkeypatch.setattr(tailnet, "_run", lambda command, **kwargs: tailnet.subprocess.CompletedProcess(command, 0, tailnet.json.dumps(inspected), ""))
     monkeypatch.setattr(tailnet, "_process_cgroup", lambda pid: "0::/system.slice/docker-" + ("b" * 64) + ".scope\n")
@@ -1127,14 +1127,14 @@ def test_production_tailnet_proxy_rejects_unrelated_host_listener(monkeypatch, t
             "Memory": 256 * 1024 * 1024, "PidsLimit": 128,
             "Ulimits": [{"Name": "nofile", "Hard": 4096, "Soft": 4096}],
             "LogConfig": {"Type": "json-file", "Config": {"max-file": "5", "max-size": "10m"}},
-            "Binds": [f"{config.resolve()}:/etc/nginx/conf.d/default.conf:ro"], "Tmpfs": {"/var/cache/nginx": "", "/var/run": ""}},
+            "Binds": [f"{config.resolve()}:/etc/nginx/templates/default.conf.template:ro"], "Tmpfs": {"/var/cache/nginx": "", "/var/run": ""}},
         "Config": {"Image": tailnet.PRODUCTION_TAILNET_PROXY_IMAGE, "Entrypoint": ["/docker-entrypoint.sh"],
             "Cmd": ["nginx", "-g", "daemon off;"], "Labels": {
                 tailnet.PRODUCTION_TAILNET_PROXY_SHA_LABEL: config_sha,
                 "com.biomodstack.tailnet-proxy-owner": "compose.core-runtime",
                 "com.docker.compose.project": "biomodstack-tailnet-control",
                 "com.docker.compose.service": "tailnet-production-proxy"}},
-        "Mounts": [{"Type": "bind", "Source": str(config.resolve()), "Destination": "/etc/nginx/conf.d/default.conf", "RW": False}],
+        "Mounts": [{"Type": "bind", "Source": str(config.resolve()), "Destination": "/etc/nginx/templates/default.conf.template", "RW": False}],
     }]
     monkeypatch.setattr(tailnet, "_run", lambda command, **kwargs: tailnet.subprocess.CompletedProcess(command, 0, tailnet.json.dumps(inspected), ""))
     monkeypatch.setattr(tailnet, "_container_listener_pids", lambda name, port: [1])

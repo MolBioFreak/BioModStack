@@ -61,6 +61,10 @@ test('CM result shell uses the shared workbench with an explicit fullscreen canv
     assert.match(viewer, /height="100%"/);
     assert.match(viewer, /showMetricWorkbench=\{metricWorkbenchOpen\}/);
     assert.match(viewer, /showSequenceTrack=\{metricWorkbenchOpen\}/);
+    assert.match(viewer, /Structural hypotheses in API order/);
+    assert.match(viewer, /Compare as structural overlay/);
+    assert.match(viewer, /firstAlternative/);
+    assert.match(viewer, /not time-resolved sampling or state populations/);
 });
 
 test('downloads use content-addressed CM request-scoped API identities', () => {
@@ -78,6 +82,21 @@ test('launcher exposes state-conditioned FrustraMPNN comparison as an explicit t
     assert.match(launcher, /State-conditioned FrustraMPNN comparison target/);
     assert.match(launcher, /payload\.state_landscape_comparison/);
     assert.match(api, /state_landscape_comparison\?:/);
+});
+
+test('launcher can register a pasted canonical protein sequence into the existing immutable source registry', () => {
+    const launcher = source('conformationalMapping/ConformationalMappingLauncher.tsx');
+    const api = source('conformationalMapping/conformationalMappingApi.ts');
+    assert.match(launcher, /Paste protein sequence/);
+    assert.match(launcher, /registerPastedSequence/);
+    assert.match(launcher, /new File\(\[canonicalSequence\], 'protein-sequence\.fasta'/);
+    assert.match(launcher, /source_kind === 'protein_sequence'/);
+    assert.match(launcher, /update\('sequenceId', source\.source_id\)/);
+    assert.match(launcher, /RCSB PDB tie-in/);
+    assert.match(launcher, /registerCmRcsbMmcif/);
+    assert.match(launcher, /Register raw mmCIF/);
+    assert.match(api, /registerCmRcsbMmcif/);
+    assert.match(api, /sources\/rcsb/);
 });
 
 test('normal external import is mmCIF-only with server-derived snapshot authority', () => {

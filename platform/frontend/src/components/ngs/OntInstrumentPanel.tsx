@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import {
     fetchOntDeviceStatus,
+    requestMk1dReconnect,
     fetchOntProtocolOptions,
     beginOntHardwareCheck,
     refreshOntPosition,
@@ -100,6 +101,11 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
         onSuccess: () => void refetch(),
     });
 
+    const reconnectMk1d = useMutation({
+        mutationFn: async () => (await requestMk1dReconnect()).data,
+        onSuccess: () => void refetch(),
+    });
+
     const beginHardwareCheck = useMutation({
         mutationFn: async () => {
             if (!selectedDevice?.position) {
@@ -175,6 +181,18 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                     >
                         Analyze existing data
                     </button>
+                    <button
+                        type="button"
+                        disabled={reconnectMk1d.isPending}
+                        onClick={() => {
+                            if (window.confirm('Reconnect Mk1D will only start an inactive MinKNOW service and recreate bms-host-agent. It will not start sequencing, a hardware check, alter a flow cell, or restart an active MinKNOW service. Continue?')) {
+                                reconnectMk1d.mutate();
+                            }
+                        }}
+                        className="rounded-lg border border-cyan-500/40 px-3 py-2 text-sm font-semibold text-cyan-100 hover:bg-cyan-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        {reconnectMk1d.isPending ? 'Reconnecting Mk1D…' : 'Reconnect Mk1D'}
+                    </button>
 
                 </div>
             </div>
@@ -197,6 +215,34 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                     <div className="mt-1 truncate text-base font-semibold text-[var(--text-primary)]">{selectedDevice?.position ?? 'none'}</div>
                 </div>
             </div>
+
+            {reconnectMk1d.isPending || reconnectMk1d.data || reconnectMk1d.isError ? (
+                <div className="rounded-xl border border-cyan-500/40 bg-cyan-500/10 p-4 text-sm text-cyan-50">
+                    <div className="font-semibold">Recovery receipt</div>
+                    {reconnectMk1d.isPending ? <p className="mt-1">Recovery request is in progress. Waiting for the bounded MinKNOW and host-agent stages.</p> : null}
+                    {reconnectMk1d.data ? (
+                        <div className="mt-2 space-y-1 text-xs">
+                            <div>Receipt: {reconnectMk1d.data.receipt.receipt_id} · {reconnectMk1d.data.receipt.status}</div>
+                            <div>MinKNOW stage: {reconnectMk1d.data.receipt.minknow}</div>
+                            <div>Host-agent recreate: {reconnectMk1d.data.receipt.host_agent_recreate} · read-only health/status verification: {reconnectMk1d.data.receipt.host_agent_health}</div>
+                            <div>Post-action status: {reconnectMk1d.data.post_action_device_status.implementation_status}</div>
+                            {reconnectMk1d.data.receipt.status === 'busy' ? (
+                                <div>No recovery transaction started because another reconnect is already in progress.</div>
+                            ) : reconnectMk1d.data.receipt.host_agent_health === 'verified' ? (
+                                <div>The helper requested recreation and verified only host-agent health plus read-only MinKNOW status.</div>
+                            ) : (
+                                <div>Host-agent recreation was requested but was not verified by the helper.</div>
+                            )}
+                            {reconnectMk1d.data.connected ? (
+                                <div>Connection is confirmed by a post-recovery Mk1D observation with no connection error.</div>
+                            ) : (
+                                <div>Mk1D is not confirmed connected until a post-recovery device status is observed with no connection error.</div>
+                            )}
+                        </div>
+                    ) : null}
+                    {reconnectMk1d.isError ? <p className="mt-1 text-amber-100">Reconnect request did not produce a safe receipt. Review the local API status and helper installation.</p> : null}
+                </div>
+            ) : null}
 
 
             <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">

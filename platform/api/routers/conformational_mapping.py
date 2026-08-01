@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import hashlib
+import httpx
+import io
 import json
 import os
+import re
 
 import shutil
 import uuid
 import copy
 import stat
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any, Literal, Mapping
 from urllib.parse import urlsplit
@@ -408,6 +411,46 @@ async def register_source(
         "format": _registered_source_format(destination.name),
         "sha256": content_sha256, "bytes": size, "metadata": metadata,
     }
+
+
+@router.post("/sources/rcsb/{pdb_id}")
+async def register_rcsb_mmcif_source(
+    pdb_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    """Fetch a public RCSB accession as raw mmCIF, then use normal immutable registration."""
+    accession = pdb_id.strip().upper()
+    if not re.fullmatch(r"[A-Z0-9]{4}", accession):
+        raise HTTPException(status_code=422, detail="RCSB accession must be exactly four letters or digits")
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0), follow_redirects=False) as client:
+            response = await client.get(f"https://files.rcsb.org/download/{accession}.cif")
+    except httpx.TimeoutException as exc:
+        raise HTTPException(status_code=504, detail="RCSB mmCIF download timed out") from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="RCSB mmCIF download failed") from exc
+    if response.status_code == 404:
+        raise HTTPException(status_code=404, detail="RCSB accession was not found")
+    if response.status_code != 200:
+        raise HTTPException(status_code=502, detail="RCSB mmCIF download returned an unexpected status")
+    payload = response.content
+    if not payload.lstrip().startswith(b"data_"):
+        raise HTTPException(status_code=502, detail="RCSB response is not raw mmCIF")
+    upload = UploadFile(filename=f"{accession}.cif", file=io.BytesIO(payload))
+    return await register_source(
+        request=request,
+        source_kind="structure_upload",
+        metadata_json=json.dumps({
+            "name": f"RCSB {accession}",
+            "rcsb_accession": accession,
+            "rcsb_mmcif_url": f"https://files.rcsb.org/download/{accession}.cif",
+            "retrieved_at": datetime.now(timezone.utc).isoformat(),
+            "source": "rcsb_raw_mmcif",
+        }),
+        file=upload,
+        session=session,
+    )
 
 
 def _principal(request: Request) -> str:
