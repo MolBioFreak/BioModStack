@@ -27,6 +27,12 @@ def spawn_replicas(
     replica_count = int(metadata["replicas"])
     engine = str(metadata["engine"])
     base_seed = int(config["random_seed"])
+    try:
+        scheduler_gpu_id = int(config["execution"]["gpu_id"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("MD replica execution.gpu_id must identify one physical scheduler GPU") from exc
+    if scheduler_gpu_id < 0:
+        raise ValueError("MD replica execution.gpu_id must identify one physical scheduler GPU")
     execution_plan_sha256 = _digest(config)
     compatibility_key = _digest({
         "engine": config.get("engine"),
@@ -62,6 +68,7 @@ def spawn_replicas(
             "batch_id": parent_job_id,
             "batch_name": parent_name,
             "child_stage": "md_replica",
+            "pinned_gpu": scheduler_gpu_id,
         }
         response = requests.post(f"{api_url.rstrip('/')}/api/jobs", json=payload, timeout=30)
         if not response.ok:
