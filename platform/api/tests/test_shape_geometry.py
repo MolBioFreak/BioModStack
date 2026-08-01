@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import importlib
+import json
 from pathlib import Path
 import struct
 
@@ -82,6 +85,8 @@ def test_closed_obj_canonicalization_is_deterministic() -> None:
     assert first.face_count == 12
     assert first.point_count == 4096
     assert first.bounds_angstrom == [-10.0, -10.0, -10.0, 10.0, 10.0, 10.0]
+    assert first.manifest["source_format"] == "obj"
+    assert first.manifest["source_parser"] == "obj_triangle_v1"
     points = np.frombuffer(first.points_f32, dtype="<f4").reshape((-1, 3))
     assert np.all(points >= -10.0) and np.all(points <= 10.0)
 
@@ -145,7 +150,8 @@ def test_stl_and_obj_sources_have_distinct_source_bound_geometry_identity() -> N
     assert obj.vertices_f64 == stl.vertices_f64
     assert obj.faces_u32 == stl.faces_u32
     assert obj.geometry_sha256 != stl.geometry_sha256
-    assert "source_format" not in obj.manifest
+    assert obj.manifest["source_format"] == "obj"
+    assert obj.manifest["source_parser"] == "obj_triangle_v1"
     assert stl.manifest["source_format"] == "stl"
 
 
@@ -205,6 +211,7 @@ def test_unknown_mesh_format_is_rejected() -> None:
         (b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", "open_mesh"),
         (b"v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nf 1 2 3 4\n", "non_triangular_face"),
         (b"v nan 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", "non_finite_vertex"),
+        (CUBE_OBJ.replace(b"f 1 3 2", b"f 1/not-a-valid-obj-index 3 2", 1), "invalid_obj"),
         (CUBE_OBJ.replace(b"v 1 1 1", b"v 1 1 -3"), "self_intersection"),
         (CUBE_OBJ + CUBE_OBJ.replace(b"v ", b"v 20 "), "invalid_obj"),
     ],
@@ -353,18 +360,74 @@ async def test_geometry_admission_persists_shared_immutable_resource(tmp_path: P
                 filename="renamed-cube.obj",
                 angstrom_per_unit=10.0,
             )
+            distinct_unit = await resources.admit_mesh_geometry(
+                session,
+                data_root=tmp_path / "data",
+                payload=CUBE_OBJ,
+                filename="same-scale-distinct-unit.obj",
+                source_format="obj",
+                source_unit="explicit-same-scale-unit",
+                angstrom_per_unit=10.0,
+            )
             assert first.geometry_id == second.geometry_id
+            assert distinct_unit.geometry_id != first.geometry_id
+            assert distinct_unit.geometry_sha256 == first.geometry_sha256
             assert await session.scalar(select(func.count()).select_from(source_type)) == 1
-            assert await session.scalar(select(func.count()).select_from(geometry_type)) == 1
+            assert await session.scalar(select(func.count()).select_from(geometry_type)) == 2
             stored = await session.get(geometry_type, first.geometry_id)
             assert stored is not None
             assert stored.geometry_sha256 == first.geometry_sha256
+            unhashed_manifest = dict(stored.manifest)
+            manifest_sha256 = unhashed_manifest.pop("manifest_sha256")
+            assert manifest_sha256 == hashlib.sha256(
+                json.dumps(unhashed_manifest, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+            ).hexdigest()
             root = (tmp_path / "data" / "shape_blueprint").resolve()
             for relative in stored.artifacts.values():
                 path = (root / relative).resolve()
                 assert path.is_relative_to(root)
                 assert path.is_file()
                 assert path.stat().st_nlink == 1
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [RuntimeError("forced commit failure"), asyncio.CancelledError("forced commit cancellation")],
+    ids=["runtime-error", "cancelled-error"],
+)
+async def test_geometry_admission_removes_new_publication_after_commit_failure(
+    tmp_path: Path,
+    monkeypatch,
+    failure: BaseException,
+) -> None:
+    database = importlib.import_module("database")
+    resources = importlib.import_module("services.shape_resources")
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'shape-rollback.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(database.Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    root = tmp_path / "data" / "shape_blueprint" / "geometries"
+    try:
+        async with factory() as session:
+            await resources.admit_obj_geometry(
+                session, data_root=tmp_path / "data", payload=CUBE_OBJ,
+                filename="cube.obj", angstrom_per_unit=10.0,
+            )
+        before = {path.name for path in root.iterdir()}
+        async with factory() as session:
+            async def fail_commit() -> None:
+                raise failure
+            monkeypatch.setattr(session, "commit", fail_commit)
+            with pytest.raises(type(failure), match="forced commit"):
+                await resources.admit_mesh_geometry(
+                    session, data_root=tmp_path / "data", payload=CUBE_OBJ,
+                    filename="cube.obj", source_format="obj",
+                    source_unit="explicit-same-scale-unit", angstrom_per_unit=10.0,
+                )
+        assert {path.name for path in root.iterdir()} == before
     finally:
         await engine.dispose()
 
@@ -396,6 +459,9 @@ async def test_shape_geometry_http_upload_list_and_preview(tmp_path: Path, monke
             assert uploaded.status_code == 201, uploaded.text
             body = uploaded.json()
             assert body["vertex_count"] == 8 and body["point_count"] == 4096
+            assert body["source_format"] == "obj"
+            assert body["source_parser"] == "obj_triangle_v1"
+            assert body["source_unit"] == "angstrom"
             assert len(body["preview_obj_sha256"]) == 64
             assert "principal" not in body and "owner" not in body
 
@@ -417,6 +483,17 @@ async def test_shape_geometry_http_upload_list_and_preview(tmp_path: Path, monke
             )
             assert corrupted.status_code == 409
             assert corrupted.json()["detail"] == "Shape preview artifact hash mismatch"
+
+            manifest_path = next(
+                (tmp_path / "data" / "shape_blueprint" / "geometries").glob("*/manifest.json")
+            )
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            assert manifest["source_format"] == "obj"
+            assert manifest["source_parser"] == "obj_triangle_v1"
+            assert manifest["source_unit"] == "angstrom"
+            assert manifest["conversion"]["source_format"] == "obj"
+            assert manifest["conversion"]["source_parser"] == "obj_triangle_v1"
+            assert manifest["conversion"]["source_unit"] == "angstrom"
     finally:
         await engine.dispose()
 
@@ -448,6 +525,13 @@ async def test_shape_geometry_http_accepts_binary_stl_with_reviewable_provenance
             )
             assert unsupported.status_code == 422
             assert unsupported.json()["detail"]["code"] == "unsupported_format"
+
+            omitted_unit = await client.post(
+                "/api/shape-blueprint/geometries",
+                files={"file": ("unitless.stl", payload, "model/stl")},
+            )
+            assert omitted_unit.status_code == 422
+            assert omitted_unit.json()["detail"]["code"] == "unit_required"
 
             uploaded = await client.post(
                 "/api/shape-blueprint/geometries",

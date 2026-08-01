@@ -57,24 +57,20 @@ def test_infer_ont_device_type_only_classifies_explicit_mk_tokens() -> None:
     assert infer_ont_device_type(position_name="X1", product_code="MIN-106D") is None
 
 
-def test_normalize_position_maps_minknow_position_and_flowcell_without_raw_client_objects() -> None:
+def test_normalize_position_emits_only_browser_safe_mk1d_discovery_fields() -> None:
     normalized = normalize_position(FakePosition())
 
-    assert normalized["position"] == "X1"
-    assert normalized["device_type"] == "mk1d"
-    assert normalized["state"] == "STATE_RUNNING"
-    assert normalized["running"] is False
-    assert normalized["available_for_run"] is True
-    assert normalized["flow_cell"] == {
-        "present": True,
-        "flow_cell_id": "FAK12345",
-        "user_specified_flow_cell_id": None,
-        "product_code": "MIN-106D",
-        "user_specified_product_code": "Mk1D",
-        "sample_rate": 5000,
+    assert normalized == {
+        "position": "X1",
+        "device_type": "mk1d",
+        "state": "STATE_RUNNING",
+        "running": False,
+        "available_for_run": True,
+        "flow_cell": {"present": True},
     }
-    assert normalized["rpc_ports"] == {"secure": 9503}
-    assert normalized["connection_error"] is None
+    rendered = str(normalized)
+    for secret in ("FAK12345", "MIN-106D", "Mk1D", "9503", "rpc_ports", "connection_error"):
+        assert secret not in rendered
 
 
 def test_discover_minknow_devices_returns_configured_status_from_manager_positions() -> None:
@@ -86,7 +82,7 @@ def test_discover_minknow_devices_returns_configured_status_from_manager_positio
     )
 
     assert payload["implementation_status"] == "configured"
-    assert payload["minknow"] == {"host": "127.0.0.1", "manager_port": 9502}
+    assert "minknow" not in payload
     assert payload["fake_or_demo_devices"] is False
     assert len(payload["live_devices"]) == 1
     assert payload["live_devices"][0]["position"] == "X1"
@@ -105,4 +101,6 @@ def test_discover_minknow_devices_reports_unreachable_without_fake_devices() -> 
     assert payload["implementation_status"] == "unreachable"
     assert payload["live_devices"] == []
     assert payload["fake_or_demo_devices"] is False
-    assert "connection refused" in payload["message"]
+    assert payload["message"] == "MinKNOW discovery is unavailable."
+    assert "localhost" not in str(payload)
+    assert "connection refused" not in str(payload)

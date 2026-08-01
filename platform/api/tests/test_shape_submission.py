@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib
 import json
 from pathlib import Path
@@ -70,6 +71,7 @@ async def test_shape_request_materializes_closed_hash_bound_bundle(tmp_path: Pat
                 name="small-shape-run",
                 geometry_id=geometry.geometry_id,
                 expected_geometry_sha256=geometry.geometry_sha256,
+                expected_geometry_manifest_sha256=geometry.manifest["manifest_sha256"],
                 expected_point_pool_sha256=geometry.point_pool_sha256,
                 target_length=120,
                 num_backbones=2,
@@ -122,6 +124,7 @@ async def test_shape_request_rejects_geometry_hash_mismatch_before_staging(tmp_p
                 name="hash-mismatch",
                 geometry_id=geometry.geometry_id,
                 expected_geometry_sha256="0" * 64,
+                expected_geometry_manifest_sha256=geometry.manifest["manifest_sha256"],
                 expected_point_pool_sha256=geometry.point_pool_sha256,
                 target_length=100,
                 num_backbones=1,
@@ -135,6 +138,18 @@ async def test_shape_request_rejects_geometry_hash_mismatch_before_staging(tmp_p
                     submitted=submitted,
                 )
             assert error.value.code == "geometry_hash_mismatch"
+            assert not (tmp_path / "data" / "shape_blueprint" / "requests").exists()
+            manifest_mismatch = submitted.model_copy(update={
+                "expected_geometry_sha256": geometry.geometry_sha256,
+                "expected_geometry_manifest_sha256": "0" * 64,
+            })
+            with pytest.raises(requests.ShapeRequestError) as manifest_error:
+                await requests.materialize_shape_request(
+                    session,
+                    data_root=tmp_path / "data",
+                    submitted=manifest_mismatch,
+                )
+            assert manifest_error.value.code == "geometry_manifest_hash_mismatch"
             assert not (tmp_path / "data" / "shape_blueprint" / "requests").exists()
     finally:
         await engine.dispose()
@@ -159,6 +174,7 @@ async def test_shape_request_translates_immutable_publication_conflict(tmp_path:
                 name="publication-conflict",
                 geometry_id=geometry.geometry_id,
                 expected_geometry_sha256=geometry.geometry_sha256,
+                expected_geometry_manifest_sha256=geometry.manifest["manifest_sha256"],
                 expected_point_pool_sha256=geometry.point_pool_sha256,
                 target_length=100,
                 num_backbones=1,
@@ -179,6 +195,47 @@ async def test_shape_request_translates_immutable_publication_conflict(tmp_path:
                     submitted=submitted,
                 )
             assert error.value.code == "request_id_conflict"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_shape_request_removes_new_stage_after_generic_commit_failure(tmp_path: Path, monkeypatch) -> None:
+    _database_module, engine, factory = await _database(tmp_path)
+    resources = importlib.import_module("services.shape_resources")
+    requests = importlib.import_module("services.shape_requests")
+    try:
+        async with factory() as session:
+            geometry = await resources.admit_obj_geometry(
+                session,
+                data_root=tmp_path / "data",
+                payload=CUBE_OBJ,
+                filename="cube.obj",
+                angstrom_per_unit=1.0,
+            )
+            submitted = requests.SubmittedShapeRequest(
+                client_request_id="aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+                name="commit failure",
+                geometry_id=geometry.geometry_id,
+                expected_geometry_sha256=geometry.geometry_sha256,
+                expected_geometry_manifest_sha256=geometry.manifest["manifest_sha256"],
+                expected_point_pool_sha256=geometry.point_pool_sha256,
+                target_length=80,
+            )
+
+            async def fail_commit() -> None:
+                raise RuntimeError("forced generic commit failure")
+
+            monkeypatch.setattr(session, "commit", fail_commit)
+            with pytest.raises(RuntimeError, match="forced generic commit failure"):
+                await requests.materialize_shape_request(
+                    session,
+                    data_root=tmp_path / "data",
+                    submitted=submitted,
+                )
+
+            stage = tmp_path / "data" / "shape_blueprint" / "requests" / f"shape_{submitted.client_request_id}"
+            assert not stage.exists()
     finally:
         await engine.dispose()
 
@@ -267,6 +324,7 @@ async def test_typed_shape_endpoint_uses_existing_job_lifecycle(tmp_path: Path, 
         "name": "shape-owner-path",
         "geometry_id": geometry.geometry_id,
         "expected_geometry_sha256": geometry.geometry_sha256,
+        "expected_geometry_manifest_sha256": geometry.manifest["manifest_sha256"],
         "expected_point_pool_sha256": geometry.point_pool_sha256,
         "target_length": 120,
         "num_backbones": 2,
@@ -345,6 +403,7 @@ async def test_concurrent_duplicate_shape_submissions_create_one_job(tmp_path: P
         "name": "shape-concurrent-owner-path",
         "geometry_id": geometry.geometry_id,
         "expected_geometry_sha256": geometry.geometry_sha256,
+        "expected_geometry_manifest_sha256": geometry.manifest["manifest_sha256"],
         "expected_point_pool_sha256": geometry.point_pool_sha256,
         "target_length": 120,
         "num_backbones": 1,
@@ -390,6 +449,7 @@ async def test_staged_bundle_validator_emits_hash_bound_receipt(tmp_path: Path) 
                     name="validator-proof",
                     geometry_id=geometry.geometry_id,
                     expected_geometry_sha256=geometry.geometry_sha256,
+                    expected_geometry_manifest_sha256=geometry.manifest["manifest_sha256"],
                     expected_point_pool_sha256=geometry.point_pool_sha256,
                     target_length=100,
                     num_backbones=1,
@@ -400,8 +460,7 @@ async def test_staged_bundle_validator_emits_hash_bound_receipt(tmp_path: Path) 
         stage = Path(staged.stage_dir)
         receipt = tmp_path / "shape_input_receipt.json"
         script = Path(__file__).parents[3] / "scripts" / "shape_blueprint" / "validate_bundle.py"
-        result = subprocess.run(
-            [
+        command = [
                 sys.executable,
                 str(script),
                 "--request", str(stage / "request.json"),
@@ -411,7 +470,9 @@ async def test_staged_bundle_validator_emits_hash_bound_receipt(tmp_path: Path) 
                 "--points", str(stage / "points.f32le"),
                 "--sdf", str(stage / "sdf.f32le"),
                 "--output", str(receipt),
-            ],
+            ]
+        result = subprocess.run(
+            command,
             text=True,
             capture_output=True,
         )
@@ -420,8 +481,24 @@ async def test_staged_bundle_validator_emits_hash_bound_receipt(tmp_path: Path) 
         assert payload["status"] == "validated"
         assert payload["request_sha256"] == staged.request_sha256
         assert payload["geometry_sha256"] == geometry.geometry_sha256
+        assert payload["geometry_manifest_sha256"] == geometry.manifest["manifest_sha256"]
         assert payload["point_pool_sha256"] == geometry.point_pool_sha256
         assert payload["sdf_sha256"] == geometry.manifest["sdf_sha256"]
         assert payload["sdf_grid_shape"] == geometry.manifest["sdf_grid_shape"]
+
+        manifest_path = stage / "geometry-manifest.json"
+        manifest_path.chmod(0o640)
+        tampered = json.loads(manifest_path.read_text(encoding="utf-8"))
+        tampered["source_unit"] = "millimeter"
+        tampered["conversion"]["source_unit"] = "millimeter"
+        unhashed = dict(tampered)
+        unhashed.pop("manifest_sha256")
+        tampered["manifest_sha256"] = hashlib.sha256(
+            json.dumps(unhashed, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        ).hexdigest()
+        manifest_path.write_text(json.dumps(tampered, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+        rejected = subprocess.run(command, text=True, capture_output=True)
+        assert rejected.returncode != 0
+        assert "request and geometry manifest hash disagree" in rejected.stderr
     finally:
         await engine.dispose()

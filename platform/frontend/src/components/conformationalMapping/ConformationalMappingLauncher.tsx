@@ -24,6 +24,7 @@ interface Props {
     initialValues?: Record<string, unknown>;
     services?: {
         listSources?: typeof listCmSources;
+        registerSource?: typeof registerCmSource;
         submitRequest?: typeof submitCmRequest;
     };
 }
@@ -315,7 +316,7 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
     }, [expectedCount, form, seedValues, stepValues, structureSources]);
 
     const register = useMutation({
-        mutationFn: async ({ file, kind }: { file: File; kind: CmSourceKind }) => registerCmSource(kind, file, {
+        mutationFn: async ({ file, kind }: { file: File; kind: CmSourceKind }) => (services?.registerSource || registerCmSource)(kind, file, {
             name: file.name,
             ...(sourceTargetId.trim() ? { target_id: sourceTargetId.trim() } : {}),
             ...(kind === 'structure_upload' || kind === 'structure_artifact' ? { state: sourceState.trim() || 'reference' } : {}),

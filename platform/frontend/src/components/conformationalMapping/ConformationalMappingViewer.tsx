@@ -58,7 +58,19 @@ import {
     resolveFrustraMpnnResidueProfile,
 } from './frustraMpnnViewerMetrics';
 
-interface Props { requestId: string; title?: string }
+interface Props {
+    requestId: string;
+    title?: string;
+    services?: {
+        getStatus?: typeof getCmStatus;
+        getProgress?: typeof getCmProgress;
+        getFailureReceipts?: typeof getCmFailureReceipts;
+        getResults?: typeof getCmResults;
+        getLandscape?: typeof getCmLandscape;
+        artifactUrl?: typeof cmArtifactUrl;
+    };
+    Workbench?: typeof StructureWorkbench;
+}
 type DetailTab = StateLandscapeWorkspaceTab;
 type LifecycleTab = 'progress' | 'logs' | 'failures';
 
@@ -82,7 +94,7 @@ const analysisIdentity = (row: CmAnalysisResult): string => {
     return `${String(identity.target_id)} · ${String(identity.auth_asym_id)}:${String(identity.auth_seq_id)}${String(identity.insertion_code || '')} · ${String(identity.validated_wt)}→${String(identity.substitution)}`;
 };
 
-export function ConformationalMappingViewer({ requestId, title = 'Conformational Mapping' }: Props) {
+export function ConformationalMappingViewer({ requestId, title = 'Conformational Mapping', services, Workbench = StructureWorkbench }: Props) {
     const navigate = useNavigate();
     const location = useLocation();
     const queryClient = useQueryClient();
@@ -131,12 +143,12 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
     const locationReceipt = (location.state as { cmSubmissionReceipt?: CmSubmitReceipt } | null)?.cmSubmissionReceipt;
     const receipt = locationReceipt?.request_id === requestId ? locationReceipt : null;
     const status = useQuery({
-        queryKey: ['cm-status', requestId], queryFn: () => getCmStatus(requestId),
+        queryKey: ['cm-status', requestId], queryFn: () => (services?.getStatus || getCmStatus)(requestId),
         refetchInterval: (query) => TERMINAL.has(query.state.data?.status || '') ? false : 2000,
         retry: false,
     });
     const progress = useQuery({
-        queryKey: ['cm-progress', requestId], queryFn: () => getCmProgress(requestId),
+        queryKey: ['cm-progress', requestId], queryFn: () => (services?.getProgress || getCmProgress)(requestId),
         enabled: Boolean(status.data),
         refetchInterval: TERMINAL.has(status.data?.status || '') ? false : 2000,
         retry: false,
@@ -147,11 +159,11 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
         retry: false,
     });
     const failures = useQuery({
-        queryKey: ['cm-failure-receipts', requestId], queryFn: () => getCmFailureReceipts(requestId),
+        queryKey: ['cm-failure-receipts', requestId], queryFn: () => (services?.getFailureReceipts || getCmFailureReceipts)(requestId),
         enabled: Boolean(status.data), retry: false,
     });
     const results = useQuery({
-        queryKey: ['cm-results', requestId], queryFn: () => getCmResults(requestId),
+        queryKey: ['cm-results', requestId], queryFn: () => (services?.getResults || getCmResults)(requestId),
         enabled: status.data?.status === 'completed' && APPROVED_CM_CONTRACTS.has(status.data.result_contract_id), retry: false,
     });
 
@@ -286,13 +298,13 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
             const candidate = parsed.data!.candidates.find((item) => item.candidate_id === id);
             if (!candidate) throw new Error('Overlay candidate is absent from API candidate order');
             const artifact = candidateStructureArtifact(candidate, parsed.data!.value.artifacts);
-            return { id, structureUrl: cmArtifactUrl(requestId, artifact.artifact_id), format: 'cif' as const, label: candidateLabel(candidate) };
+            return { id, structureUrl: (services?.artifactUrl || cmArtifactUrl)(requestId, artifact.artifact_id), format: 'cif' as const, label: candidateLabel(candidate) };
         });
     }, [overlayIds, parsed.data, requestId, selected]);
 
     const landscape = useQuery({
         queryKey: ['cm-landscape', requestId, selected?.candidate_id, landscapeOffset],
-        queryFn: () => getCmLandscape(requestId, selected!.candidate_id, landscapeOffset, 1000),
+        queryFn: () => (services?.getLandscape || getCmLandscape)(requestId, selected!.candidate_id, landscapeOffset, 1000),
         enabled: Boolean(selected), retry: false,
     });
     const landscapeParsed = useMemo(() => {
@@ -306,7 +318,7 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
     const completeLandscape = useQuery({
         queryKey: ['cm-landscape-complete', requestId, selected?.candidate_id],
         queryFn: () => collectCompleteFrustraMpnnLandscape(
-            (offset, limit) => getCmLandscape(requestId, selected!.candidate_id, offset, limit),
+            (offset, limit) => (services?.getLandscape || getCmLandscape)(requestId, selected!.candidate_id, offset, limit),
         ),
         enabled: Boolean(selected && structureMap), retry: false,
     });
@@ -394,6 +406,7 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
 
                 {status.data?.status === 'completed' && !statusContractError && results.isLoading && <div className="rounded-xl border border-slate-800 p-5 text-sm text-slate-400">Loading and validating canonical Phase 11 records…</div>}
                 {(results.isError || parsed.error) && <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-red-200"><div className="font-semibold">Canonical result validation failed closed</div><p className="mt-1 text-sm">{parsed.error || cmApiError(results.error, 'Results could not be loaded through the approved contract.')}</p></div>}
+                {!statusContractError && parsed.data && parsed.data.candidates.length === 0 && <div role="alert" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-amber-100"><div className="font-semibold">No canonical structural candidates were published</div><p className="mt-1 text-sm">This completed request has no governed candidate structure to display or overlay.</p></div>}
 
                 {!statusContractError && parsed.data && selected && selectedArtifact && <>
                     <section className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
@@ -416,9 +429,9 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
                                     </div>
                                 </div>
                                 <div className={`min-h-0 ${isViewerFullscreen ? 'flex-1' : 'h-[680px]'}`}>
-                                    <StructureWorkbench
+                                    <Workbench
                                         mode="standard"
-                                        structureUrl={cmArtifactUrl(requestId, selectedArtifact.artifact_id)}
+                                        structureUrl={(services?.artifactUrl || cmArtifactUrl)(requestId, selectedArtifact.artifact_id)}
                                         format="cif"
                                         height="100%"
                                         label={candidateLabel(selected)}

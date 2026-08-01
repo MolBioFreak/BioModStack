@@ -1,15 +1,14 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import {
+    createOntRunIntent,
     fetchOntDeviceStatus,
-    requestMk1dReconnect,
     fetchOntProtocolOptions,
-    beginOntHardwareCheck,
-    refreshOntPosition,
-    startOntInstrumentRun,
-    stopOntInstrumentRun,
+    requestMk1dReconnect,
+    startOntRunIntent,
     type OntInstrumentRun,
     type OntLiveDevice,
+    type OntProtocolOption,
 } from '../../lib/api';
 import { jobPollingInterval } from '../../lib/queryPolling';
 
@@ -17,146 +16,126 @@ interface OntInstrumentPanelProps {
     onAnalyzeExistingData: () => void;
 }
 
-type OutputKey = 'pod5' | 'fastq' | 'bam';
-
-const DEFAULT_OUTPUTS: Record<OutputKey, boolean> = { pod5: true, fastq: true, bam: false };
-const OUTPUT_LABELS: Array<[OutputKey, string]> = [
-    ['pod5', 'POD5 raw signal'],
-    ['fastq', 'FASTQ reads'],
-    ['bam', 'BAM alignments'],
-];
-
 function statusLabel(status?: string): string {
     switch (status) {
-        case 'not_configured':
-            return 'MinKNOW not configured';
-        case 'client_missing':
-            return 'MinKNOW client missing';
-        case 'unreachable':
-            return 'MinKNOW unreachable';
-        case 'auth_error':
-            return 'MinKNOW auth error';
-        case 'host_agent_unavailable':
-            return 'BMS host-agent unavailable';
-        case 'configured':
-            return 'MinKNOW configured';
-        default:
-            return status || 'unknown';
+        case 'configured': return 'Mk1D discovery available';
+        case 'not_configured': return 'MinKNOW not configured';
+        case 'client_missing': return 'MinKNOW client missing';
+        case 'unreachable': return 'MinKNOW unreachable';
+        default: return status || 'unknown';
     }
 }
 
 function deviceStateLabel(device: OntLiveDevice): string {
     if (device.running) return 'position running';
-    if (!device.flow_cell?.present) return 'flowcell absent';
-    if (device.available_for_run) return 'available for run';
-    return device.state || 'not available';
+    if (!device.flow_cell.present) return 'flow cell absent';
+    return device.available_for_run ? 'available for run' : (device.state || 'not available');
 }
 
-function statusTone(status?: string): string {
-    if (status === 'configured') return 'border-emerald-500/40 bg-emerald-500/10 text-emerald-100';
-    if (status === 'client_missing' || status === 'not_configured') return 'border-slate-600 bg-slate-900/50 text-slate-200';
-    return 'border-amber-500/40 bg-amber-500/10 text-amber-100';
+function responseDetail(error: unknown): string | undefined {
+    if (!error || typeof error !== 'object') return undefined;
+    const response = (error as { response?: unknown }).response;
+    if (!response || typeof response !== 'object') return undefined;
+    const data = (response as { data?: unknown }).data;
+    if (!data || typeof data !== 'object') return undefined;
+    const detail = (data as { detail?: unknown }).detail;
+    if (typeof detail === 'string') return detail;
+    if (detail && typeof detail === 'object') {
+        const message = (detail as { message?: unknown }).message;
+        if (typeof message === 'string') return message;
+    }
+    return undefined;
+}
+
+function isPhysicalStartDisabledAfterRevalidation(error: unknown): boolean {
+    if (!error || typeof error !== 'object') return false;
+    const response = (error as { response?: unknown }).response;
+    if (!response || typeof response !== 'object') return false;
+    const status = (response as { status?: unknown }).status;
+    const detail = responseDetail(error)?.replace(/[.]+$/, '');
+    return status === 501
+        && detail === 'MinKNOW protocol start remains disabled pending separately authorized supervised commissioning';
 }
 
 export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanelProps) {
-    const [selectedPosition, setSelectedPosition] = useState<string>('');
+    const [selectedPosition, setSelectedPosition] = useState('');
+    const [sampleId, setSampleId] = useState('');
+    const [experimentGroup, setExperimentGroup] = useState('');
     const [lastRun, setLastRun] = useState<OntInstrumentRun | null>(null);
-    const [hardwareCheckMessage, setHardwareCheckMessage] = useState<string>('');
-    const [sampleId, setSampleId] = useState<string>('plasmid-qc-test');
-    const [experimentGroup, setExperimentGroup] = useState<string>('bms_plasmid_verification');
-    const [kit, setKit] = useState<string>('SQK-LSK114');
-    const [qualityMode, setQualityMode] = useState<string>('sup');
-    const [outputs, setOutputs] = useState<Record<OutputKey, boolean>>(DEFAULT_OUTPUTS);
-    const { data, isLoading, refetch } = useQuery({
+    const [message, setMessage] = useState('');
+    const deviceStatus = useQuery({
         queryKey: ['ont-device-status'],
         queryFn: async () => (await fetchOntDeviceStatus()).data,
         refetchInterval: (query) => jobPollingInterval(10000, query),
     });
-    const liveDevices = data?.live_devices ?? [];
-    const devices = liveDevices.filter((device) => device.device_type === 'mk1d' && !device.fake_or_demo_device);
-    const availableDevices = useMemo(
-        () => devices.filter((device) => device.available_for_run && device.position),
-        [devices],
-    );
-    const selectedDevice = devices.find((device) => device.position === selectedPosition) ?? availableDevices[0] ?? devices[0];
-
-    const minKnowStatus = isLoading ? 'checking' : statusLabel(data?.implementation_status);
-    const visibleOutputLabels = OUTPUT_LABELS.filter(([key]) => outputs[key]).map(([, label]) => label);
-    const selectedPositionForQuery = selectedDevice?.position || '';
+    const data = deviceStatus.isError ? undefined : deviceStatus.data;
+    // The API/host already enforce Mk1D-only discovery; the UI never filters eligibility.
+    const devices = useMemo(() => data?.live_devices ?? [], [data?.live_devices]);
+    const selectedDevice = devices.find((device) => device.position === selectedPosition) ?? devices[0];
+    const selectedPositionForQuery = selectedDevice?.position ?? '';
     const protocolOptions = useQuery({
-        queryKey: ['ont-protocol-options', selectedPositionForQuery, kit],
-        queryFn: async () => (await fetchOntProtocolOptions(selectedPositionForQuery, kit)).data,
+        queryKey: ['ont-protocol-options', selectedPositionForQuery],
+        queryFn: async () => (await fetchOntProtocolOptions(selectedPositionForQuery)).data,
         enabled: Boolean(selectedPositionForQuery),
         refetchInterval: (query) => jobPollingInterval(10000, query),
     });
+    const instrumentEvidenceError = deviceStatus.isError || protocolOptions.isError;
+    const effectiveProtocolOptions = instrumentEvidenceError ? undefined : protocolOptions.data;
+    const selectedOption: OntProtocolOption | undefined = effectiveProtocolOptions?.options[0];
 
-    const refreshPosition = useMutation({
+    const startRun = useMutation({
         mutationFn: async () => {
-            if (!selectedDevice?.position) {
-                throw new Error('No real ONT position selected for refresh');
+            if (!selectedDevice?.position || !selectedOption) throw new Error('No server-issued protocol option is available');
+            const intent = await createOntRunIntent(selectedDevice.position, {
+                option_id: selectedOption.option_id,
+                option_receipt_id: selectedOption.option_receipt_id,
+                sample_id: sampleId.trim() || undefined,
+                experiment_group: experimentGroup.trim() || undefined,
+            });
+            // Persist and render the durable BMS intent before the separate
+            // revalidation request. A disabled physical start must not erase a
+            // successfully created intent from the operator surface.
+            setLastRun(intent.data);
+            setMessage(`BMS run ${intent.data.id} is armed; revalidating before physical start.`);
+            try {
+                const started = await startOntRunIntent(intent.data.id, {
+                    confirm_start: true,
+                    intent_generation: intent.data.observed_generation,
+                });
+                return { run: started.data, revalidated: false };
+            } catch (error) {
+                if (isPhysicalStartDisabledAfterRevalidation(error)) {
+                    return { run: intent.data, revalidated: true };
+                }
+                throw error;
             }
-            const response = await refreshOntPosition(selectedDevice.position);
-            return response.data;
         },
-        onSuccess: () => void refetch(),
+        onSuccess: ({ run, revalidated }) => {
+            setLastRun(run);
+            setMessage(revalidated
+                ? `BMS run ${run.id} remains armed after fresh revalidation; physical MinKNOW start remains disabled.`
+                : 'Intent was freshly checked; physical MinKNOW start remains disabled.');
+            void deviceStatus.refetch();
+        },
+        onError: (error) => setMessage(
+            responseDetail(error) ?? (error instanceof Error ? error.message : 'ONT intent validation failed')
+        ),
     });
 
     const reconnectMk1d = useMutation({
         mutationFn: async () => (await requestMk1dReconnect()).data,
-        onSuccess: () => void refetch(),
+        onSuccess: () => void deviceStatus.refetch(),
     });
 
-    const beginHardwareCheck = useMutation({
-        mutationFn: async () => {
-            if (!selectedDevice?.position) {
-                throw new Error('No real ONT position selected for hardware check');
-            }
-            const ok = window.confirm('Start a MinKNOW hardware check on this position? This is diagnostic, not sequencing, but it will start a MinKNOW check protocol.');
-            if (!ok) {
-                throw new Error('Hardware check cancelled');
-            }
-            const response = await beginOntHardwareCheck(selectedDevice.position);
-            return response.data;
-        },
-        onSuccess: (payload) => {
-            setHardwareCheckMessage(`${payload.detail}${payload.hardware_check_run_id ? ` · run ${payload.hardware_check_run_id}` : ''}`);
-            void refetch();
-        },
-        onError: (error) => setHardwareCheckMessage(error instanceof Error ? error.message : String(error)),
-    });
-
-    const startRun = useMutation({
-        mutationFn: async () => {
-            if (!selectedDevice?.position) {
-                throw new Error('No real available ONT position selected');
-            }
-            const response = await startOntInstrumentRun(selectedDevice.position, {
-                sample_id: sampleId.trim(),
-                kit: kit.trim(),
-                experiment_group: experimentGroup.trim(),
-                outputs,
-                basecalling: { enabled: true, quality_mode: qualityMode, modified_bases: 'none' },
-                confirm_start: true,
-            });
-            return response.data;
-        },
-        onSuccess: (run) => setLastRun(run),
-    });
-
-    const stopRun = useMutation({
-        mutationFn: async () => {
-            if (!lastRun?.id) {
-                throw new Error('No ONT instrument run selected');
-            }
-            const response = await stopOntInstrumentRun(lastRun.id, { confirm_stop: true });
-            return response.data;
-        },
-        onSuccess: (run) => setLastRun(run),
-    });
-
-    const canStart = Boolean(selectedDevice?.available_for_run && kit.trim() && sampleId.trim() && !startRun.isPending);
-    const blockers = protocolOptions.data?.blockers ?? [];
-    const selectedOutputDirs = selectedDevice?.output_directories ?? protocolOptions.data?.output_directories ?? {};
+    const blockers = effectiveProtocolOptions?.blockers ?? [];
+    const canStart = Boolean(
+        !instrumentEvidenceError
+        && selectedDevice?.available_for_run
+        && selectedOption
+        && effectiveProtocolOptions?.can_start
+        && !startRun.isPending
+    );
+    const availableCount = useMemo(() => devices.filter((device) => device.available_for_run).length, [devices]);
 
     return (
         <section className="space-y-5 rounded-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-5 shadow-lg shadow-black/10">
@@ -164,259 +143,45 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                 <div className="space-y-2">
                     <div className="flex flex-wrap items-center gap-2">
                         <h2 className="text-xl font-semibold text-[var(--text-primary)]">ONT instrument control</h2>
-                        <span className="rounded-full border border-cyan-500/40 bg-cyan-500/10 px-2 py-1 text-xs font-semibold uppercase tracking-wide text-cyan-100">
-                            Mk1D / MinKNOW
-                        </span>
-
+                        <span className="rounded-full border border-cyan-500/40 bg-cyan-500/10 px-2 py-1 text-xs font-semibold uppercase tracking-wide text-cyan-100">Mk1D / MinKNOW</span>
                     </div>
-                    <p className="max-w-2xl text-sm text-[var(--text-secondary)]">
-                        Select a MinKNOW position, confirm run metadata, then start acquisition. Real starts remain disabled until a real available position is present.
-                    </p>
+                    <p className="max-w-2xl text-sm text-[var(--text-secondary)]">Select a server-discovered Mk1D position and submit its opaque protocol intent. Real starts remain disabled until a separately authorized commissioning path exists.</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                    <button
-                        type="button"
-                        onClick={onAnalyzeExistingData}
-                        className="rounded-lg border border-[var(--border-primary)] px-3 py-2 text-sm text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]"
-                    >
-                        Analyze existing data
-                    </button>
-                    <button
-                        type="button"
-                        disabled={reconnectMk1d.isPending}
-                        onClick={() => {
-                            if (window.confirm('Reconnect Mk1D will only start an inactive MinKNOW service and recreate bms-host-agent. It will not start sequencing, a hardware check, alter a flow cell, or restart an active MinKNOW service. Continue?')) {
-                                reconnectMk1d.mutate();
-                            }
-                        }}
-                        className="rounded-lg border border-cyan-500/40 px-3 py-2 text-sm font-semibold text-cyan-100 hover:bg-cyan-500/10 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                        {reconnectMk1d.isPending ? 'Reconnecting Mk1D…' : 'Reconnect Mk1D'}
-                    </button>
-
+                    <button type="button" onClick={onAnalyzeExistingData} className="rounded-lg border border-[var(--border-primary)] px-3 py-2 text-sm text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]">Analyze existing data</button>
+                    <button type="button" disabled={reconnectMk1d.isPending} onClick={() => { if (window.confirm('Reconnect Mk1D only starts inactive MinKNOW and recreates bms-host-agent. It does not start sequencing, alter a flow cell, or restart active MinKNOW. Continue?')) reconnectMk1d.mutate(); }} className="rounded-lg border border-cyan-500/40 px-3 py-2 text-sm font-semibold text-cyan-100 hover:bg-cyan-500/10 disabled:cursor-not-allowed disabled:opacity-50">{reconnectMk1d.isPending ? 'Reconnecting Mk1D…' : 'Reconnect Mk1D'}</button>
                 </div>
             </div>
 
-            <div className="grid gap-3 md:grid-cols-4">
-                <div className={`rounded-xl border p-3 ${statusTone(data?.implementation_status)}`}>
-                    <div className="text-xs uppercase tracking-wide opacity-70">MinKNOW link</div>
-                    <div className="mt-1 text-base font-semibold">{isLoading ? 'Checking MinKNOW…' : minKnowStatus}</div>
-                </div>
-                <div className="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3">
-                    <div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Positions</div>
-                    <div className="mt-1 text-base font-semibold text-[var(--text-primary)]">{devices.length}</div>
-                </div>
-                <div className="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3">
-                    <div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Available</div>
-                    <div className="mt-1 text-base font-semibold text-[var(--text-primary)]">{availableDevices.length}</div>
-                </div>
-                <div className="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3">
-                    <div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Selected</div>
-                    <div className="mt-1 truncate text-base font-semibold text-[var(--text-primary)]">{selectedDevice?.position ?? 'none'}</div>
-                </div>
+            <div className="grid gap-3 md:grid-cols-3">
+                <div className="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3"><div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Mk1D link</div><div className="mt-1 text-base font-semibold text-[var(--text-primary)]">{deviceStatus.isLoading ? 'Checking…' : statusLabel(data?.implementation_status)}</div></div>
+                <div className="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3"><div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Positions</div><div className="mt-1 text-base font-semibold text-[var(--text-primary)]">{devices.length}</div></div>
+                <div className="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3"><div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Available</div><div className="mt-1 text-base font-semibold text-[var(--text-primary)]">{availableCount}</div></div>
             </div>
 
-            {reconnectMk1d.isPending || reconnectMk1d.data || reconnectMk1d.isError ? (
-                <div className="rounded-xl border border-cyan-500/40 bg-cyan-500/10 p-4 text-sm text-cyan-50">
-                    <div className="font-semibold">Recovery receipt</div>
-                    {reconnectMk1d.isPending ? <p className="mt-1">Recovery request is in progress. Waiting for the bounded MinKNOW and host-agent stages.</p> : null}
-                    {reconnectMk1d.data ? (
-                        <div className="mt-2 space-y-1 text-xs">
-                            <div>Receipt: {reconnectMk1d.data.receipt.receipt_id} · {reconnectMk1d.data.receipt.status}</div>
-                            <div>MinKNOW stage: {reconnectMk1d.data.receipt.minknow}</div>
-                            <div>Host-agent recreate: {reconnectMk1d.data.receipt.host_agent_recreate} · read-only health/status verification: {reconnectMk1d.data.receipt.host_agent_health}</div>
-                            <div>Post-action status: {reconnectMk1d.data.post_action_device_status.implementation_status}</div>
-                            {reconnectMk1d.data.receipt.status === 'busy' ? (
-                                <div>No recovery transaction started because another reconnect is already in progress.</div>
-                            ) : reconnectMk1d.data.receipt.host_agent_health === 'verified' ? (
-                                <div>The helper requested recreation and verified only host-agent health plus read-only MinKNOW status.</div>
-                            ) : (
-                                <div>Host-agent recreation was requested but was not verified by the helper.</div>
-                            )}
-                            {reconnectMk1d.data.connected ? (
-                                <div>Connection is confirmed by a post-recovery Mk1D observation with no connection error.</div>
-                            ) : (
-                                <div>Mk1D is not confirmed connected until a post-recovery device status is observed with no connection error.</div>
-                            )}
-                        </div>
-                    ) : null}
-                    {reconnectMk1d.isError ? <p className="mt-1 text-amber-100">Reconnect request did not produce a safe receipt. Review the local API status and helper installation.</p> : null}
-                </div>
-            ) : null}
-
+            {instrumentEvidenceError ? <p role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">Current instrument evidence is unavailable after a refresh failure. Intent validation is disabled until a fresh device and protocol response succeeds.</p> : null}
+            {reconnectMk1d.data ? <div className="rounded-xl border border-cyan-500/40 bg-cyan-500/10 p-3 text-xs text-cyan-50"><div className="font-semibold">Recovery receipt</div><div>Receipt: {reconnectMk1d.data.receipt.receipt_id} · {reconnectMk1d.data.receipt.status}</div><div>MinKNOW: {reconnectMk1d.data.receipt.minknow} · host agent: {reconnectMk1d.data.receipt.host_agent_recreate} / {reconnectMk1d.data.receipt.host_agent_health}</div><div>{reconnectMk1d.data.connected ? 'Connection is confirmed by post-recovery device observation.' : 'Mk1D is not confirmed connected until post-recovery device status is observed.'}</div></div> : null}
+            {reconnectMk1d.isError ? <p role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">Reconnect request did not produce a safe receipt.</p> : null}
 
             <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
                 <div className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4">
-                    <div className="flex items-center justify-between gap-3">
-                        <div>
-                            <h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Instrument positions</h3>
-                            <p className="text-xs text-[var(--text-secondary)]">Live Mk1D cards populate directly from MinKNOW.</p>
-                        </div>
-                        <button type="button" onClick={() => void refetch()} className="text-sm text-[var(--accent-secondary)]">
-                            Refresh
-                        </button>
-                    </div>
+                    <div className="flex items-center justify-between gap-3"><div><h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Instrument positions</h3><p className="text-xs text-[var(--text-secondary)]">Only host-approved Mk1D cards are returned.</p></div><button type="button" onClick={() => void deviceStatus.refetch()} className="text-sm text-[var(--accent-secondary)]">Refresh</button></div>
                     {data?.message ? <p className="rounded-lg bg-slate-900/40 p-2 text-xs text-[var(--text-secondary)]">{data.message}</p> : null}
                     <div className="grid gap-3 md:grid-cols-2">
-                        {devices.length === 0 ? (
-                            <div className="rounded-lg border border-dashed border-[var(--border-primary)] bg-[var(--bg-secondary)] p-4 text-sm text-[var(--text-secondary)]">
-                                No live Mk1D positions reported by MinKNOW.
-                            </div>
-                        ) : devices.map((device) => {
-                            const isSelected = selectedDevice?.position === device.position;
-                            return (
-                                <button
-                                    key={device.position}
-                                    type="button"
-                                    onClick={() => setSelectedPosition(device.position)}
-                                    className={`rounded-xl border p-4 text-left transition ${isSelected ? 'border-cyan-400 bg-cyan-500/10' : 'border-[var(--border-primary)] bg-[var(--bg-secondary)] hover:border-cyan-500/50'}`}
-                                >
-                                    <div className="flex items-start justify-between gap-3">
-                                        <div>
-                                            <div className="text-base font-semibold text-[var(--text-primary)]">{device.position}</div>
-                                            <div className="text-xs text-[var(--text-secondary)]">{device.device_type || 'unknown device'} · {deviceStateLabel(device)}</div>
-                                        </div>
-
-                                    </div>
-                                    <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-[var(--text-secondary)]">
-                                        <div>Flow cell: {device.flow_cell?.present ? 'present' : 'absent'}</div>
-                                        <div>Config cell: {device.flow_cell?.is_ctc ? 'yes' : 'no/unknown'}</div>
-                                        <div>Product: {device.flow_cell?.product_code || device.flow_cell?.user_specified_product_code || 'unknown'}</div>
-                                        <div>Sample rate: {device.flow_cell?.sample_rate ?? 'unknown'}</div>
-                                        <div>Channels: {device.flow_cell?.channel_count ?? device.device_info?.max_channel_count ?? 'unknown'}</div>
-                                        <div>Device state: {String(device.device_state?.device_state ?? device.state ?? 'unknown')}</div>
-                                        <div>Running: {device.running ? 'yes' : 'no'}</div>
-                                        <div>Connector: {String(device.device_state?.flow_cell_connector ?? 'unknown')}</div>
-                                    </div>
-                                    {device.connection_error ? <div className="mt-2 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-100">{device.connection_error}</div> : null}
-                                </button>
-                            );
-                        })}
+                        {devices.length === 0 ? <div className="rounded-lg border border-dashed border-[var(--border-primary)] bg-[var(--bg-secondary)] p-4 text-sm text-[var(--text-secondary)]">No live Mk1D positions reported by MinKNOW.</div> : devices.map((device) => <button key={device.position} type="button" onClick={() => setSelectedPosition(device.position)} className={`rounded-xl border p-4 text-left transition ${selectedDevice?.position === device.position ? 'border-cyan-400 bg-cyan-500/10' : 'border-[var(--border-primary)] bg-[var(--bg-secondary)] hover:border-cyan-500/50'}`}><div className="text-base font-semibold text-[var(--text-primary)]">{device.position}</div><div className="text-xs text-[var(--text-secondary)]">Mk1D · {deviceStateLabel(device)}</div><div className="mt-3 text-xs text-[var(--text-secondary)]">Flow cell: {device.flow_cell.present ? 'present' : 'absent'} · Running: {device.running ? 'yes' : 'no'}</div></button>)}
                     </div>
                 </div>
 
                 <div className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4">
-                    <div>
-                        <h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Run setup</h3>
-                        <p className="text-xs text-[var(--text-secondary)]">These values are sent only with real MinKNOW starts.</p>
-                    </div>
-                    {selectedDevice ? (
-                        <div className="space-y-2 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs text-[var(--text-secondary)]">
-                            <div className="font-semibold uppercase tracking-wide text-[var(--text-primary)]">Selected position truth</div>
-                            <div>Position: {selectedDevice.position}</div>
-                            <div>Flow-cell present: {selectedDevice.flow_cell?.present ? 'yes' : 'no'}</div>
-                            <div>Configuration test cell flag: {selectedDevice.flow_cell?.is_ctc ? 'yes' : 'no/unknown'}</div>
-                            <div>Acquisition: {String(selectedDevice.acquisition_status?.status ?? 'unknown')}</div>
-                            <div>Current protocol: {selectedDevice.current_protocol ? JSON.stringify(selectedDevice.current_protocol) : 'none reported'}</div>
-                            <div>Hardware checks in API history: {selectedDevice.hardware_check_runs?.length ?? 0}</div>
-                            <div>Protocol runs in API history: {selectedDevice.protocol_runs?.length ?? 0}</div>
-                            <div>Output reads dir: {selectedOutputDirs.reads || 'not reported'}</div>
-                            {hardwareCheckMessage ? <div className="text-cyan-100">Hardware check: {hardwareCheckMessage}</div> : null}
-                            {!selectedDevice.flow_cell?.present ? <div className="text-amber-100">Hardware check requires MinKNOW to report a present flow cell/test cell.</div> : null}
-                            {blockers.length ? <div className="text-amber-100">Preflight blockers: {blockers.join(', ')}</div> : null}
-                            <div className="flex flex-wrap gap-2 pt-1">
-                                <button
-                                    type="button"
-                                    disabled={!selectedPositionForQuery || !selectedDevice?.flow_cell?.present || beginHardwareCheck.isPending}
-                                    onClick={() => beginHardwareCheck.mutate()}
-                                    className="rounded border border-emerald-500/40 px-2 py-1 text-emerald-100 disabled:opacity-50"
-                                >
-                                    Run hardware check
-                                </button>
-                                <button
-                                    type="button"
-                                    disabled={!selectedPositionForQuery || refreshPosition.isPending}
-                                    onClick={() => refreshPosition.mutate()}
-                                    className="rounded border border-cyan-500/40 px-2 py-1 text-cyan-100 disabled:opacity-50"
-                                >
-                                    Refresh/reconnect position
-                                </button>
-                                <button
-                                    type="button"
-                                    disabled
-                                    title="True Mk1D restart/power-cycle is not enabled until MinKNOW restart semantics are live-validated."
-                                    className="rounded border border-[var(--border-primary)] px-2 py-1 opacity-50"
-                                >
-                                    Restart instrument unavailable
-                                </button>
-                            </div>
-                        </div>
-                    ) : null}
-                    <label className="block text-xs font-semibold text-[var(--text-secondary)]">
-                        Sample ID
-                        <input value={sampleId} onChange={(event) => setSampleId(event.target.value)} className="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)]" />
-                    </label>
-                    <label className="block text-xs font-semibold text-[var(--text-secondary)]">
-                        Experiment group
-                        <input value={experimentGroup} onChange={(event) => setExperimentGroup(event.target.value)} className="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)]" />
-                    </label>
-                    <div className="grid grid-cols-2 gap-3">
-                        <label className="block text-xs font-semibold text-[var(--text-secondary)]">
-                            Kit
-                            <select value={kit} onChange={(event) => setKit(event.target.value)} className="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)]">
-                                <option value="SQK-LSK114">SQK-LSK114</option>
-                                <option value="SQK-RBK114.24">SQK-RBK114.24</option>
-                                <option value="SQK-NBD114.24">SQK-NBD114.24</option>
-                            </select>
-                        </label>
-                        <label className="block text-xs font-semibold text-[var(--text-secondary)]">
-                            Basecaller
-                            <select value={qualityMode} onChange={(event) => setQualityMode(event.target.value)} className="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)]">
-                                <option value="sup">SUP</option>
-                                <option value="hac">HAC</option>
-                                <option value="fast">FAST</option>
-                            </select>
-                        </label>
-                    </div>
-                    <div className="space-y-2 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3">
-                        <div className="text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Outputs</div>
-                        {OUTPUT_LABELS.map(([key, label]) => (
-                            <label key={key} className="flex items-center justify-between gap-3 text-sm text-[var(--text-primary)]">
-                                <span>{label}</span>
-                                <input
-                                    type="checkbox"
-                                    checked={outputs[key]}
-                                    onChange={(event) => setOutputs((current) => ({ ...current, [key]: event.target.checked }))}
-                                />
-                            </label>
-                        ))}
-                    </div>
-                    <div className="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs text-[var(--text-secondary)]">
-                        Start packet: {selectedDevice?.position ?? 'no position'} · {kit || 'kit missing'} · {visibleOutputLabels.length ? visibleOutputLabels.join(', ') : 'no outputs selected'}
-                        {!canStart ? <div className="mt-2 text-amber-100">Real start disabled until MinKNOW reports a present sequencing flow cell, idle position, kit/model, and output directory.</div> : null}
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                        <button
-                            type="button"
-                            disabled={!canStart}
-                            onClick={() => startRun.mutate()}
-                            className="rounded-lg bg-[var(--accent-secondary)] px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                            Start instrument run
-                        </button>
-                        <button
-                            type="button"
-                            disabled={!lastRun || stopRun.isPending}
-                            onClick={() => stopRun.mutate()}
-                            className="rounded-lg border border-[var(--border-primary)] px-4 py-2 text-sm text-[var(--text-primary)] disabled:opacity-50"
-                        >
-                            Stop run
-                        </button>
-                    </div>
+                    <div><h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Run intent</h3><p className="text-xs text-[var(--text-secondary)]">Protocol and output policy are server-issued opaque handles.</p></div>
+                    <label className="block text-xs font-semibold text-[var(--text-secondary)]">Sample ID<input value={sampleId} onChange={(event) => setSampleId(event.target.value)} className="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)]" /></label>
+                    <label className="block text-xs font-semibold text-[var(--text-secondary)]">Experiment group<input value={experimentGroup} onChange={(event) => setExperimentGroup(event.target.value)} className="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)]" /></label>
+                    <div className="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs text-[var(--text-secondary)]">{selectedOption ? `${selectedOption.protocol_label} · ${selectedOption.output_policy_label}` : 'No protocol option is currently available.'}{blockers.length ? <div className="mt-2 text-amber-100">Preflight blockers: {blockers.join(', ')}</div> : null}</div>
+                    <button type="button" disabled={!canStart} onClick={() => startRun.mutate()} className="rounded-lg bg-[var(--accent-secondary)] px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">Validate run intent</button>
+                    {message ? <p className="text-xs text-[var(--text-secondary)]">{message}</p> : null}
+                    {lastRun ? <div className="rounded-lg border border-[var(--border-primary)] p-3 text-xs text-[var(--text-secondary)]">Intent {lastRun.id} · {lastRun.status}</div> : null}
                 </div>
             </div>
-
-            {lastRun ? (
-                <div className="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4 text-sm text-[var(--text-secondary)]">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                            <div className="font-semibold text-[var(--text-primary)]">Run {lastRun.id}</div>
-                            <div>{lastRun.position} · {lastRun.status} · MinKNOW run {lastRun.minknow_run_id}</div>
-                        </div>
-
-                    </div>
-                </div>
-            ) : null}
         </section>
     );
 }

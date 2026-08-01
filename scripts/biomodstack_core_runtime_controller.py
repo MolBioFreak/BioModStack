@@ -40,6 +40,7 @@ MAX_RECOVERIES = int(os.getenv("BMS_RUNTIME_MAX_RECOVERIES", "2"))
 RECOVERY_WINDOW_SECONDS = int(os.getenv("BMS_RUNTIME_RECOVERY_WINDOW_SECONDS", "300"))
 POLL_SECONDS = float(os.getenv("BMS_RUNTIME_SUPERVISOR_POLL_SECONDS", "10"))
 STARTUP_GRACE_SECONDS = float(os.getenv("BMS_RUNTIME_STARTUP_GRACE_SECONDS", "90"))
+MINKNOW_LOCAL_AUTH_TOKEN_PATH = Path("/tmp/minknow-auth-token.json")
 
 NON_TRANSIENT_PATTERNS: tuple[tuple[str, str], ...] = (
     ("container-name-conflict", r"container name .* already in use|conflict\. the container name"),
@@ -365,6 +366,50 @@ def recover(service: str, failure: str) -> None:
     publish_state("monitoring", component=service, last_recovery={"service": service, "failure": failure, "at": utc_now()})
 
 
+def minknow_local_auth_token_marker() -> tuple[int, int] | None:
+    """Return the mounted MinKNOW token file identity without reading its secret."""
+    try:
+        token_stat = MINKNOW_LOCAL_AUTH_TOKEN_PATH.stat()
+    except OSError:
+        return None
+    return token_stat.st_dev, token_stat.st_ino
+
+
+def minknow_local_auth_enabled() -> bool:
+    return str(os.getenv("MINKNOW_API_USE_LOCAL_TOKEN", "1")).strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def recover_minknow_token_rotation(
+    previous_marker: tuple[int, int] | None,
+    current_marker: tuple[int, int] | None,
+) -> bool:
+    """Recreate only the host-agent after MinKNOW atomically replaces its token."""
+    if previous_marker is None or current_marker is None or previous_marker == current_marker:
+        return False
+    service = "bms-host-agent"
+    reserve_recovery(service)
+    command = compose_command("up", "-d", "--no-deps", "--force-recreate", service)
+    result = run_command(command, check=False, timeout=120)
+    if result.returncode != 0:
+        combined = redact(f"{result.stdout}\n{result.stderr}".strip())
+        raise RuntimeBlockedError(
+            classify_failure(combined),
+            "MinKNOW token-rotation recovery failed for bms-host-agent",
+            context={"service": service, "output": combined},
+        )
+    publish_state(
+        "monitoring",
+        component=service,
+        last_recovery={"service": service, "failure": "minknow-local-auth-token-rotated", "at": utc_now()},
+    )
+    return True
+
+
 def _handle_signal(_signum: int, _frame: object) -> None:
     global _STOP_REQUESTED
     _STOP_REQUESTED = True
@@ -375,17 +420,44 @@ def supervise() -> int:
     signal.signal(signal.SIGINT, _handle_signal)
     try:
         preflight = run_preflight()
+        local_token_auth_enabled = minknow_local_auth_enabled()
+        # Capture identity before Compose starts so an atomic token rotation in the
+        # startup window cannot leave the host-agent with a stale bind mount.
+        token_marker = minknow_local_auth_token_marker() if local_token_auth_enabled else None
         result = run_command(compose_command("up", "-d"), check=False, timeout=300)
         if result.returncode != 0:
             combined = redact(f"{result.stdout}\n{result.stderr}".strip())
             raise RuntimeBlockedError(classify_failure(combined), "Initial Compose launch failed", context={"output": combined})
+        startup_token_recovered = False
+        if local_token_auth_enabled:
+            current_token_marker = minknow_local_auth_token_marker()
+            startup_token_recovered = recover_minknow_token_rotation(token_marker, current_token_marker)
+            if current_token_marker is not None:
+                token_marker = current_token_marker
         services = managed_services()
-        publish_state("starting", pid=os.getpid(), services=list(services), preflight=preflight, started_at=utc_now())
+        publish_state(
+            "starting",
+            pid=os.getpid(),
+            services=list(services),
+            preflight=preflight,
+            started_at=utc_now(),
+            startup_token_recovered=startup_token_recovered,
+        )
         grace_deadline = time.monotonic() + STARTUP_GRACE_SECONDS
         while not _STOP_REQUESTED:
+            token_recovered = False
+            if minknow_local_auth_enabled():
+                current_token_marker = minknow_local_auth_token_marker()
+                token_recovered = recover_minknow_token_rotation(token_marker, current_token_marker)
+                if current_token_marker is not None:
+                    token_marker = current_token_marker
             rows = compose_ps()
             failures = [(service, service_failure(service, rows.get(service))) for service in services]
-            failures = [(service, failure) for service, failure in failures if failure]
+            failures = [
+                (service, failure)
+                for service, failure in failures
+                if failure and not (token_recovered and service == "bms-host-agent")
+            ]
             if failures and time.monotonic() >= grace_deadline:
                 deferred: list[dict[str, object]] = []
                 recovered = False

@@ -8,6 +8,7 @@ own live device handles.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -31,14 +32,51 @@ ONT_DEVICE_CONTROL_CAPABILITIES: dict[str, Any] = {
     "controls": [
         "discover_devices",
         "inspect_flowcell",
-        "configure_run",
-        "start_run",
-        "stop_run",
+        "issue_opaque_run_intent",
         "monitor_run",
-        "handoff_outputs_to_analysis",
+        "handoff_verified_outputs_to_analysis",
     ],
     "analysis_handoff_inputs": ("pod5", "fastq", "bam"),
 }
+
+
+def _public_mk1d_device(device: Any) -> dict[str, Any] | None:
+    """Project one discovered device onto the browser-safe Mk1D contract."""
+    if not isinstance(device, dict) or str(device.get("device_type") or "").strip().lower() != "mk1d":
+        return None
+    raw_flow_cell = device.get("flow_cell")
+    flow_cell = raw_flow_cell if isinstance(raw_flow_cell, dict) else {}
+    raw_state = device.get("state")
+    state = str(raw_state).strip() if raw_state is not None else None
+    # A status enum is useful to the operator, but a malformed host string must
+    # not become a browser-visible path/payload echo.
+    if state and (len(state) > 64 or not re.fullmatch(r"[A-Za-z0-9_. -]+", state)):
+        state = None
+    return {
+        "position": str(device.get("position") or "").strip() or "Mk1D position",
+        "device_type": "mk1d",
+        "state": state,
+        "running": device.get("running") is True,
+        "available_for_run": device.get("available_for_run") is True,
+        "flow_cell": {"present": flow_cell.get("present") is True},
+        "fake_or_demo_device": False,
+    }
+
+
+def _public_device_status(discovered: dict[str, Any]) -> dict[str, Any]:
+    """Strip host, RPC, path, protocol, history, and raw flow-cell details."""
+    devices = [
+        projection
+        for projection in (_public_mk1d_device(device) for device in (discovered.get("live_devices") or []))
+        if projection is not None
+    ]
+    implementation_status = str(discovered.get("implementation_status") or "unknown")
+    return {
+        "implementation_status": implementation_status,
+        "live_devices": devices,
+        "fake_or_demo_devices": False,
+        "message": "Mk1D discovery is available." if implementation_status == "configured" else "Mk1D discovery is unavailable.",
+    }
 
 
 def get_device_control_status() -> dict[str, Any]:
@@ -65,7 +103,7 @@ def get_device_control_status() -> dict[str, Any]:
             "owner": DEVICE_CONTROL_OWNER,
             "analysis_owner": ANALYSIS_OWNER,
             "supported_device_types": list(SUPPORTED_DEVICE_TYPES),
-            **discovered,
+            **_public_device_status(discovered),
         }
 
     return {

@@ -5,10 +5,10 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,7 +18,6 @@ from services.ngs_comparison_panels import consume_comparison_panel_receipt, mat
 from paths import get_allowed_roots, resolve_allowed_path
 from schemas import JobCreate, JobResponse
 from services import alignment_access, ont_run_control, ont_submission_trust
-from services.host_agent_client import HostAgentRequestError
 from services.ont_barcode_units import load_barcode_unit, load_barcode_units
 from services.ont_ngs_contract import (
     get_ont_workflow_spec,
@@ -51,16 +50,30 @@ ONT_PRIMARY_INPUT_KEYS: dict[str, str] = {
 ONT_SERVER_CONTROLLED_PROVENANCE_PARAMS = ont_submission_trust.ONT_SERVER_CONTROLLED_PROVENANCE_PARAMS
 ONT_SERVER_CONTROLLED_RUNTIME_PARAMS = ont_submission_trust.ONT_SERVER_CONTROLLED_RUNTIME_PARAMS
 
-# Instrument handoff values are validated by ont_run_control and are authoritative.
-# Untrusted request extras may add analysis tuning knobs, but must never add or
-# replace primary inputs, output/reference paths, or source provenance.
-ONT_HANDOFF_CONTROLLED_PARAMS = frozenset(
+
+class OntRestartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirm_restart: StrictBool
+
+    @field_validator("confirm_restart")
+    @classmethod
+    def require_literal_true(cls, value: bool) -> bool:
+        if value is not True:
+            raise ValueError("confirm_restart must be literal true")
+        return value
+
+# Browser-submitted handoff tuning is a separate, tiny allowlist below; primary
+# input, output/reference paths, and source provenance never enter it.
+
+ONT_INSTRUMENT_HANDOFF_SAFE_TUNING_PARAMS = frozenset(
     {
-        *ONT_PRIMARY_INPUT_KEYS.values(),
-        "output_dir",
-        "reference_fasta",
-        "source_instrument_run_id",
-        *ONT_SERVER_CONTROLLED_PROVENANCE_PARAMS,
+        "igv_report_max_sites",
+        "enable_rotating_reference_frames",
+        "rotation_scan_step_bp",
+        "single_ref_split_min_mapq",
+        "single_ref_split_min_segment_bp",
+        "single_ref_split_max_query_gap_bp",
     }
 )
 
@@ -85,6 +98,38 @@ def _validate_comparison_panel_launch(workflow_id: str, expected_receipt_id: str
         raise ValueError("approved comparison panels are only available for generic plasmid QC, construct screening, or FASTQ QC")
 
 
+def _instrument_handoff_tuning_params(raw_params: Any) -> dict[str, Any]:
+    """Validate the tiny browser-facing tuning contract without pass-through keys."""
+    if raw_params is None:
+        return {}
+    if not isinstance(raw_params, dict):
+        raise ValueError("instrument handoff params must be an object")
+    if set(raw_params) - ONT_INSTRUMENT_HANDOFF_SAFE_TUNING_PARAMS:
+        raise ValueError("instrument handoff params contain unsupported fields")
+
+    normalized: dict[str, Any] = {}
+    integer_limits = {
+        "igv_report_max_sites": (1, 10_000),
+        "rotation_scan_step_bp": (1, 10_000),
+        "single_ref_split_min_mapq": (0, 60),
+        "single_ref_split_min_segment_bp": (1, 1_000_000),
+        "single_ref_split_max_query_gap_bp": (0, 1_000_000),
+    }
+    for key, (lower, upper) in integer_limits.items():
+        if key not in raw_params:
+            continue
+        value = raw_params[key]
+        if isinstance(value, bool) or not isinstance(value, int) or not lower <= value <= upper:
+            raise ValueError("instrument handoff tuning value is outside the allowed integer range")
+        normalized[key] = value
+    if "enable_rotating_reference_frames" in raw_params:
+        value = raw_params["enable_rotating_reference_frames"]
+        if not isinstance(value, bool):
+            raise ValueError("enable_rotating_reference_frames must be boolean")
+        normalized["enable_rotating_reference_frames"] = value
+    return normalized
+
+
 class OntNgsSubmitRequest(BaseModel):
     """Request body for submitting an ONT/NGS analysis workflow."""
 
@@ -94,10 +139,30 @@ class OntNgsSubmitRequest(BaseModel):
     source_instrument_run_id: str | None = Field(default=None)
 
 
+class OntRunIntentRequest(BaseModel):
+    """Bounded browser input: only server-issued option handles and metadata."""
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    option_id: str = Field(min_length=1, max_length=80)
+    option_receipt_id: str = Field(min_length=1, max_length=80)
+    sample_id: str | None = Field(default=None, max_length=255)
+    experiment_group: str | None = Field(default=None, max_length=255)
+
+
+class OntIntentStartRequest(BaseModel):
+    """Confirmation for a persisted intent; no protocol/path/model fields exist here."""
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    confirm_start: StrictBool
+    intent_generation: int = Field(ge=1)
+
+
 class OntBarcodeUnitSubmitRequest(BaseModel):
     """Exact per-barcode BAM resubmission; arbitrary parameter overrides are forbidden."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     target_workflow: str = Field(pattern="^(ont_plasmid_qc|ont_construct_screening)$")
     reference_fasta: str = Field(min_length=1)
@@ -346,28 +411,49 @@ async def _create_pipeline_job(
 
 
 @router.get("/positions/{position}/protocol-options")
-async def ont_position_protocol_options(
-    position: str,
-    kit: str | None = Query(default=None),
-    basecalling_enabled: bool = Query(default=True),
-) -> dict[str, Any]:
-    """Return truthful preflight/protocol options for a live ONT position."""
-    return ont_run_control.get_position_protocol_options(
-        position,
-        kit=kit,
-        basecalling_enabled=basecalling_enabled,
-    )
+async def ont_position_protocol_options(position: str) -> dict[str, Any]:
+    """Issue expiring opaque server-owned protocol options for one live position."""
+    return await ont_run_control.issue_position_protocol_catalog(position)
+
+
+@router.post("/positions/{position}/run-intents")
+async def ont_create_run_intent(position: str, payload: OntRunIntentRequest) -> dict[str, Any]:
+    try:
+        return await ont_run_control.create_run_intent(position, payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/runs/{run_id}/start")
+async def ont_validate_and_start_intent(run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Re-read the position before a future start; actual MinKNOW start remains disabled."""
+    try:
+        confirmed = OntIntentStartRequest.model_validate(payload)
+    except ValidationError as exc:
+        # Do not reflect rejected body values: callers may have supplied host
+        # protocol/path identifiers that are intentionally browser-opaque.
+        raise HTTPException(status_code=422, detail="invalid opaque intent confirmation") from exc
+    try:
+        return await ont_run_control.validate_armed_intent_start(run_id, confirmed.model_dump())
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"unknown ONT instrument run: {run_id}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except NotImplementedError as exc:
+        raise HTTPException(
+            status_code=501,
+            detail="MinKNOW protocol start remains disabled pending separately authorized supervised commissioning.",
+        ) from exc
 
 
 @router.post("/positions/{position}/hardware-check")
 async def ont_begin_position_hardware_check(position: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Start a guarded MinKNOW hardware diagnostic check for a position."""
-    try:
-        return ont_run_control.begin_position_hardware_check(position, payload)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except HostAgentRequestError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    """Retired physical diagnostic activation; commissioning requires separate supervision."""
+    del position, payload
+    raise HTTPException(
+        status_code=501,
+        detail="Mk1D hardware-check activation is disabled pending separately authorized supervised commissioning.",
+    )
 
 
 @router.post("/positions/{position}/refresh")
@@ -380,39 +466,59 @@ async def ont_refresh_position_state(position: str) -> dict[str, Any]:
 
 
 @router.post("/positions/{position}/restart")
-async def ont_restart_position(position: str, payload: dict[str, Any]) -> dict[str, Any]:
+async def ont_restart_position(position: str, payload: OntRestartRequest) -> dict[str, Any]:
     """Expose explicit restart contract; host-agent refuses until live semantics are validated."""
     try:
-        return ont_run_control.restart_position(position, payload)
+        return ont_run_control.restart_position(position, confirm_restart=payload.confirm_restart)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/positions/{position}/start")
 async def ont_start_instrument_run(position: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Start a real MinKNOW run through host-agent after explicit confirmation."""
-    try:
-        return ont_run_control.start_instrument_run(position, payload)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    """Retired raw start surface; starts must be bound to a persisted opaque intent."""
+    del position, payload
+    raise HTTPException(
+        status_code=410,
+        detail="raw ONT start is retired; create a run intent from an opaque protocol receipt and use /runs/{id}/start",
+    )
 
 
 @router.get("/runs/{run_id}")
 async def ont_get_instrument_run(run_id: str) -> dict[str, Any]:
+    """Read the durable BMS ledger without contacting MinKNOW or mutating it."""
+    record = await ont_run_control.get_instrument_run(run_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"unknown ONT instrument run: {run_id}")
+    return record
+
+
+@router.post("/runs/{run_id}/reconcile")
+async def ont_reconcile_instrument_run(run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Reconcile a durable run from the bounded host-agent status snapshot only."""
+    if payload:
+        raise HTTPException(status_code=422, detail="instrument reconciliation accepts no browser-controlled fields")
     try:
-        return ont_run_control.refresh_instrument_run_status(run_id)
+        return await ont_run_control.reconcile_instrument_run(run_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"unknown ONT instrument run: {run_id}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/runs/{run_id}/handoff/plasmid-qc")
 async def ont_handoff_plasmid_qc(run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    try:
-        return ont_run_control.build_plasmid_qc_handoff(run_id, payload)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=f"unknown ONT instrument run: {run_id}") from exc
+    """Retired because a handoff descriptor contains server-only file paths.
+
+    The submit endpoint below still builds this descriptor internally and passes
+    it directly to the job-creation boundary; it must never serialize it back to
+    the browser.
+    """
+    del run_id, payload
+    raise HTTPException(
+        status_code=410,
+        detail="raw ONT handoff descriptors are server-only; submit through /runs/{id}/handoff/plasmid-qc/submit",
+    )
 
 
 @router.post("/ngs/{workflow_id}/submit", response_model=JobResponse, status_code=201)
@@ -585,35 +691,38 @@ async def ont_submit_plasmid_qc_from_run(
     response: Response,
     session: AsyncSession = Depends(get_session),
 ) -> JobResponse:
-    """Build the instrument-run plasmid-QC handoff and submit the Nextflow job."""
+    """Submit generic plasmid QC from a durable artifact and a one-time MolBio receipt."""
+    allowed_fields = {"name", "params", "pinned_gpu", "molbio_ngs_receipt_id"}
+    if not isinstance(payload, dict) or set(payload) - allowed_fields:
+        raise HTTPException(status_code=422, detail="instrument handoff accepts only a name, tuning params, pinned_gpu, and molbio_ngs_receipt_id")
+    name = payload.get("name")
+    if name is not None and (not isinstance(name, str) or len(name.strip()) > 255):
+        raise HTTPException(status_code=422, detail="instrument handoff name must be a bounded string")
+    pinned_gpu = payload.get("pinned_gpu")
+    if pinned_gpu is not None and (isinstance(pinned_gpu, bool) or not isinstance(pinned_gpu, int) or pinned_gpu < 0):
+        raise HTTPException(status_code=422, detail="instrument handoff pinned_gpu must be a non-negative integer")
     try:
-        handoff = ont_run_control.build_plasmid_qc_handoff(run_id, payload)
+        extra_params = _instrument_handoff_tuning_params(payload.get("params"))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    receipt_id = str(payload.get("molbio_ngs_receipt_id") or "").strip()
+    if not receipt_id:
+        raise HTTPException(status_code=422, detail="instrument handoff requires a server-issued molbio_ngs_receipt_id")
+    try:
+        receipt = await consume_molbio_ngs_receipt(session, receipt_id=receipt_id)
+        handoff = await ont_run_control.build_plasmid_qc_handoff(
+            run_id,
+            {"reference_fasta": receipt.reference_snapshot_path},
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"unknown ONT instrument run: {run_id}") from exc
 
-    raw_extra_params = payload.get("params")
-    raw_reserved_params = sorted(
-        (ONT_SERVER_CONTROLLED_PROVENANCE_PARAMS | ONT_SERVER_CONTROLLED_RUNTIME_PARAMS).intersection(
-            raw_extra_params if isinstance(raw_extra_params, dict) else {}
-        )
-    )
-    if raw_reserved_params:
-        raise HTTPException(
-            status_code=422,
-            detail="server-controlled ONT provenance/runtime parameters cannot be supplied by instrument handoff: "
-            + ", ".join(raw_reserved_params),
-        )
-    extra_params = {
-        key: value
-        for key, value in raw_extra_params.items()
-        if key not in ONT_HANDOFF_CONTROLLED_PARAMS
-    } if isinstance(raw_extra_params, dict) else {}
     submit_request = OntNgsSubmitRequest(
-        name=str(payload.get("name") or "ONT plasmid QC").strip(),
+        name=(name or "ONT plasmid QC").strip(),
         params={**extra_params, **handoff["params"]},
-        pinned_gpu=payload.get("pinned_gpu"),
+        pinned_gpu=pinned_gpu,
         source_instrument_run_id=run_id,
     )
     try:
@@ -623,17 +732,26 @@ async def ont_submit_plasmid_qc_from_run(
             trusted_server_params=frozenset(handoff["params"]).intersection(
                 ONT_SERVER_CONTROLLED_PROVENANCE_PARAMS | ONT_SERVER_CONTROLLED_RUNTIME_PARAMS
             ),
+            trusted_result_paths=frozenset({"fastq_path"}),
         )
-        return await _create_pipeline_job(job, background_tasks, session, response, http_request)
+        receipt.consumed_at = datetime.utcnow()
+        await session.flush()
+        created = await _create_pipeline_job(job, background_tasks, session, response, http_request)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception:
+        receipt.consumed_at = None
+        await session.commit()
+        raise
+    receipt.consumed_job_id = created.id
+    await session.commit()
+    return created
 
 
 @router.post("/runs/{run_id}/stop")
 async def ont_stop_instrument_run(run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    try:
-        return ont_run_control.stop_instrument_run(run_id, payload)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=f"unknown ONT instrument run: {run_id}") from exc
+    del run_id, payload
+    raise HTTPException(
+        status_code=410,
+        detail="Browser-initiated ONT physical stop is retired; use the separately supervised instrument-control lane.",
+    )

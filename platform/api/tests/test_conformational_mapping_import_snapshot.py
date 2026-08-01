@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import httpx
 import io
 import json
 from pathlib import Path
@@ -565,3 +566,147 @@ def test_rcsb_mmcif_bridge_rejects_non_accession_before_network() -> None:
         import asyncio
         asyncio.run(cm_router.register_rcsb_mmcif_source("not-valid", request, None))
     assert error.value.status_code == 422
+
+
+def _rcsb_request(accession: str = "1ubq") -> Request:
+    request = Request({
+        "type": "http", "method": "POST", "scheme": "http",
+        "path": f"/api/conformational-mapping/sources/rcsb/{accession}", "query_string": b"",
+        "headers": [], "client": ("127.0.0.1", 42000), "server": ("127.0.0.1", 8000),
+    })
+    request.state.authenticated_principal = {"subject": "test-operator", "roles": ["operator"]}
+    return request
+
+
+def _mock_rcsb_client(handler):
+    return lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("handler", "status_code", "message"),
+    [
+        (lambda request: httpx.Response(404, request=request), 404, "not found"),
+        (lambda request: httpx.Response(503, request=request), 502, "unexpected status"),
+        (lambda request: httpx.Response(200, request=request, content=b"<html>not mmcif</html>"), 502, "not raw mmCIF"),
+    ],
+)
+async def test_rcsb_mmcif_bridge_fails_closed_for_remote_status_and_payload(
+    monkeypatch: pytest.MonkeyPatch,
+    handler,
+    status_code: int,
+    message: str,
+) -> None:
+    monkeypatch.setattr(cm_router, "_rcsb_http_client", _mock_rcsb_client(handler))
+    with pytest.raises(HTTPException, match=message) as error:
+        await cm_router.register_rcsb_mmcif_source("1ubq", _rcsb_request(), None)
+    assert error.value.status_code == status_code
+
+
+@pytest.mark.asyncio
+async def test_rcsb_mmcif_bridge_maps_timeout_without_registering(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def timeout(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    monkeypatch.setattr(cm_router, "_rcsb_http_client", _mock_rcsb_client(timeout))
+    with pytest.raises(HTTPException, match="timed out") as error:
+        await cm_router.register_rcsb_mmcif_source("1ubq", _rcsb_request(), None)
+    assert error.value.status_code == 504
+
+
+@pytest.mark.asyncio
+async def test_rcsb_mmcif_bridge_stops_at_streaming_source_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(cm_router._SOURCE_MAX_BYTES, "structure_upload", 8)
+    monkeypatch.setattr(
+        cm_router,
+        "_rcsb_http_client",
+        _mock_rcsb_client(lambda request: httpx.Response(200, request=request, content=b"data_x\n" + b"A" * 64)),
+    )
+    with pytest.raises(HTTPException, match="source limit") as error:
+        await cm_router.register_rcsb_mmcif_source("1ubq", _rcsb_request(), None)
+    assert error.value.status_code == 413
+
+
+@pytest.mark.asyncio
+async def test_rcsb_mmcif_bridge_streams_success_into_normal_registration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_register_source(**kwargs):
+        captured.update(kwargs)
+        captured["payload"] = await kwargs["file"].read()
+        return {"source_id": "cm_src_rcsb", "source_kind": "structure_upload"}
+
+    monkeypatch.setattr(
+        cm_router,
+        "_rcsb_http_client",
+        _mock_rcsb_client(lambda request: httpx.Response(200, request=request, content=b"  \n" + MMCIF)),
+    )
+    monkeypatch.setattr(cm_router, "register_source", fake_register_source)
+    receipt = await cm_router.register_rcsb_mmcif_source("1ubq", _rcsb_request(), object())
+    assert receipt["source_id"] == "cm_src_rcsb"
+    assert captured["payload"] == b"  \n" + MMCIF
+    assert captured["source_kind"] == "structure_upload"
+    metadata = json.loads(str(captured["metadata_json"]))
+    assert metadata["rcsb_accession"] == "1UBQ"
+    assert metadata["source"] == "rcsb_raw_mmcif"
+
+
+@pytest.mark.asyncio
+async def test_registered_source_deduplicates_and_commit_failure_removes_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'dedup.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(cm_router, "get_data_root", lambda: tmp_path / "data")
+    request = _rcsb_request()
+    async with factory() as session:
+        first = await cm_router.register_source(
+            request=request, source_kind="structure_upload", metadata_json="{}",
+            file=UploadFile(filename="1ubq.cif", file=io.BytesIO(MMCIF)), session=session,
+        )
+        second = await cm_router.register_source(
+            request=request, source_kind="structure_upload", metadata_json="{}",
+            file=UploadFile(filename="1ubq.cif", file=io.BytesIO(MMCIF)), session=session,
+        )
+        assert first["source_id"] == second["source_id"]
+        assert await session.scalar(select(func.count()).select_from(ConformationalMappingSource)) == 1
+    source_dirs = [path for path in (tmp_path / "data" / "conformational_mapping_sources").iterdir() if path.is_dir()]
+    assert len(source_dirs) == 1
+    await engine.dispose()
+
+    class FailingSession:
+        rolled_back = False
+        added = None
+
+        async def get(self, model, identity):
+            return None
+
+        def add(self, value):
+            self.added = value
+
+        async def commit(self):
+            raise RuntimeError("commit failed")
+
+        async def rollback(self):
+            self.rolled_back = True
+
+    failing = FailingSession()
+    with pytest.raises(RuntimeError, match="commit failed"):
+        await cm_router.register_source(
+            request=request, source_kind="structure_upload", metadata_json="{}",
+            file=UploadFile(filename="different.cif", file=io.BytesIO(MMCIF + b"# different\n")),
+            session=failing,
+        )
+    assert failing.rolled_back is True
+    assert failing.added is not None
+    failed_id = failing.added.source_id
+    assert not (tmp_path / "data" / "conformational_mapping_sources" / failed_id).exists()

@@ -34,6 +34,7 @@ class SubmittedShapeRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120, pattern=r"^[A-Za-z0-9][A-Za-z0-9 ._-]*$")
     geometry_id: str = Field(pattern=r"^geom_[0-9a-f]{32}$")
     expected_geometry_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    expected_geometry_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     expected_point_pool_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     target_length: int = Field(ge=40, le=600)
     num_backbones: int = Field(default=4, ge=1, le=32)
@@ -77,6 +78,17 @@ def _validate_sequence_engines(engines: tuple[str, ...]) -> None:
         )
 
 
+def _cleanup_new_stage(stage: Path, created: list[Path]) -> None:
+    if stage.exists() and not stage.is_symlink():
+        os.chmod(stage, 0o750)
+    for path in reversed(created):
+        path.unlink(missing_ok=True)
+    try:
+        stage.rmdir()
+    except OSError:
+        pass
+
+
 async def materialize_shape_request(
     session: AsyncSession,
     *,
@@ -92,6 +104,16 @@ async def materialize_shape_request(
     point_pool_sha256 = str(geometry.manifest.get("point_pool_sha256") or "")
     if point_pool_sha256 != submitted.expected_point_pool_sha256:
         raise ShapeRequestError("point_pool_hash_mismatch", "Shape point pool hash does not match the request")
+    manifest_sha256 = str(geometry.manifest.get("manifest_sha256") or "")
+    if manifest_sha256 != submitted.expected_geometry_manifest_sha256:
+        raise ShapeRequestError(
+            "geometry_manifest_hash_mismatch",
+            "Shape geometry manifest hash does not match the reviewed request",
+        )
+    unhashed_manifest = dict(geometry.manifest)
+    unhashed_manifest.pop("manifest_sha256", None)
+    if not _SHA256.fullmatch(manifest_sha256) or hashlib.sha256(_canonical_json(unhashed_manifest)).hexdigest() != manifest_sha256:
+        raise ShapeRequestError("geometry_manifest_hash_mismatch", "Shape geometry manifest is not hash-bound")
     sdf_sha256 = str(geometry.manifest.get("sdf_sha256") or "")
     sdf_sign = str(geometry.manifest.get("sdf_sign") or "")
     sdf_grid_shape = geometry.manifest.get("sdf_grid_shape")
@@ -107,6 +129,7 @@ async def materialize_shape_request(
         "geometry_id": geometry.geometry_id,
         "geometry_sha256": geometry.geometry_sha256,
         "point_pool_sha256": point_pool_sha256,
+        "geometry_manifest_sha256": manifest_sha256,
         "sdf_sha256": sdf_sha256,
         "sdf_sign": sdf_sign,
         "sdf_grid_shape": sdf_grid_shape,
@@ -156,18 +179,6 @@ async def materialize_shape_request(
         "points.f32le": points,
         "sdf.f32le": sdf,
     }
-    for filename, payload in staged_payloads.items():
-        try:
-            _publish(stage / filename, payload)
-        except RuntimeError as exc:
-            if "immutable Shape artifact conflict" not in str(exc):
-                raise
-            raise ShapeRequestError(
-                "request_id_conflict",
-                "client request ID is already bound to different staged bytes",
-            ) from exc
-    os.chmod(stage, 0o550)
-
     row = ShapeDesignRequest(
         request_id=request_id,
         geometry_id=geometry.geometry_id,
@@ -177,10 +188,26 @@ async def materialize_shape_request(
         job_id=None,
     )
     session.add(row)
+    created: list[Path] = []
     try:
+        await session.flush()
+        for filename, payload in staged_payloads.items():
+            try:
+                path = stage / filename
+                if _publish(path, payload):
+                    created.append(path)
+            except RuntimeError as exc:
+                if "immutable Shape artifact conflict" not in str(exc):
+                    raise
+                raise ShapeRequestError(
+                    "request_id_conflict",
+                    "client request ID is already bound to different staged bytes",
+                ) from exc
+        os.chmod(stage, 0o550)
         await session.commit()
     except IntegrityError:
         await session.rollback()
+        _cleanup_new_stage(stage, created)
         existing = await session.get(ShapeDesignRequest, request_id)
         if existing is None or existing.request_sha256 != request_sha256:
             raise ShapeRequestError(
@@ -188,6 +215,10 @@ async def materialize_shape_request(
                 "client request ID was concurrently bound to different scientific intent",
             )
         return _staged(existing, data_root=data_root, name=submitted.name)
+    except BaseException:
+        await session.rollback()
+        _cleanup_new_stage(stage, created)
+        raise
     return _staged(row, data_root=data_root, name=submitted.name)
 
 

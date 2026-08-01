@@ -4,7 +4,7 @@ Database models and initialization for BioModStack Control Platform.
 Uses SQLAlchemy with async SQLite.
 """
 
-from sqlalchemy import Column, String, Text, Integer, Float, Boolean, DateTime, Index, JSON, ForeignKey, ForeignKeyConstraint, UniqueConstraint, text, event
+from sqlalchemy import CheckConstraint, Column, String, Text, Integer, Float, Boolean, DateTime, Index, JSON, ForeignKey, ForeignKeyConstraint, UniqueConstraint, text, event
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.types import TypeDecorator
@@ -12,20 +12,30 @@ from datetime import datetime
 import json
 from types import SimpleNamespace
 from paths import get_db_path, get_db_url
+from migrations.sqlite_sha256 import register_sqlite_sha256
+
 
 # Database path - resolved via paths helper (supports env overrides)
 DEFAULT_DB_PATH = get_db_path()
 DATABASE_URL = get_db_url()
 
-engine_kwargs = {"echo": False}
+
+def _canonical_sqlite_json(value: object) -> str:
+    """Serialize JSON evidence exactly as the SHA-256 persistence contract requires."""
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+engine_kwargs: dict[str, object] = {"echo": False}
 if DATABASE_URL.startswith("sqlite"):
     engine_kwargs["connect_args"] = {"timeout": 30}
+    engine_kwargs["json_serializer"] = _canonical_sqlite_json
 engine = create_async_engine(DATABASE_URL, **engine_kwargs)
 
 if engine.dialect.name == "sqlite":
     @event.listens_for(engine.sync_engine, "connect")
     def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record):
-        """SQLite foreign-key constraints are disabled by default per DBAPI connection."""
+        """SQLite foreign-key constraints and deterministic manifest hashing per connection."""
+        register_sqlite_sha256(dbapi_connection)
         cursor = dbapi_connection.cursor()
         try:
             cursor.execute("PRAGMA foreign_keys=ON")
@@ -159,6 +169,90 @@ class Job(Base):
     designs = relationship("Design", back_populates="job", cascade="all, delete-orphan")
 
 
+class OntInstrumentRun(Base):
+    """Current BMS-owned projection of one Mk1D/MinKNOW acquisition run."""
+
+    __tablename__ = "ont_instrument_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "(terminal_artifact_manifest IS NULL) = (terminal_artifact_manifest_sha256 IS NULL)",
+            name="ck_ont_run_terminal_manifest_pair",
+        ),
+    )
+
+    id = Column(String(80), primary_key=True)
+    position_id = Column(String(255), nullable=False, index=True)
+    minknow_run_id = Column(String(255), nullable=True, unique=True, index=True)
+    state = Column(String(32), nullable=False)
+    observed_at = Column(LenientSQLiteDateTime, nullable=False)
+    observed_generation = Column(Integer, nullable=False)
+    sample_id = Column(String(255), nullable=True)
+    experiment_group = Column(String(255), nullable=True)
+    kit = Column(String(255), nullable=True)
+    output_directories = Column(JSON, nullable=False, default=dict)
+    output_files = Column(JSON, nullable=False, default=dict)
+    handoff_ready = Column(Boolean, nullable=False, default=False)
+    last_minknow_payload = Column(JSON, nullable=True)
+    terminal_artifact_manifest = Column(JSON, nullable=True)
+    terminal_artifact_manifest_sha256 = Column(String(64), nullable=True, index=True)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
+class OntInstrumentRunEvent(Base):
+    """Append-only observation history for a BMS-owned ONT instrument run."""
+
+    __tablename__ = "ont_instrument_run_events"
+    __table_args__ = (
+        UniqueConstraint("run_id", "observed_generation", name="uq_ont_run_event_generation"),
+        Index("ix_ont_run_events_run_generation", "run_id", "observed_generation"),
+    )
+
+    id = Column(String(96), primary_key=True)
+    run_id = Column(String(80), ForeignKey("ont_instrument_runs.id", ondelete="RESTRICT"), nullable=False, index=True)
+    event_type = Column(String(32), nullable=False)
+    state = Column(String(32), nullable=False)
+    observed_at = Column(LenientSQLiteDateTime, nullable=False)
+    observed_generation = Column(Integer, nullable=False)
+    minknow_payload = Column(JSON, nullable=True)
+    output_files = Column(JSON, nullable=False, default=dict)
+
+
+class OntProtocolOptionReceipt(Base):
+    """Expiring server-owned receipt for one normalized MinKNOW protocol option."""
+
+    __tablename__ = "ont_protocol_option_receipts"
+
+    id = Column(String(80), primary_key=True)
+    option_id = Column(String(80), nullable=False, unique=True)
+    position_id = Column(String(255), nullable=False, index=True)
+    flow_cell_identity_sha256 = Column(String(64), nullable=False)
+    source_digest = Column(String(64), nullable=False)
+    capability_digest = Column(String(64), nullable=False)
+    source_snapshot = Column(JSON, nullable=False)
+    expires_at = Column(LenientSQLiteDateTime, nullable=False, index=True)
+    consumed_at = Column(LenientSQLiteDateTime, nullable=True)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
+class OntInstrumentRunPreflight(Base):
+    """Immutable protocol/flow-cell preflight bound to one durable ONT ledger row."""
+
+    __tablename__ = "ont_instrument_run_preflights"
+
+    id = Column(String(80), primary_key=True)
+    run_id = Column(String(80), ForeignKey("ont_instrument_runs.id", ondelete="RESTRICT"), nullable=False, unique=True, index=True)
+    option_receipt_id = Column(String(80), ForeignKey("ont_protocol_option_receipts.id", ondelete="RESTRICT"), nullable=False, unique=True)
+    selected_option_id = Column(String(80), nullable=False)
+    flow_cell_identity_sha256 = Column(String(64), nullable=False)
+    source_digest = Column(String(64), nullable=False)
+    capability_digest = Column(String(64), nullable=False)
+    source_snapshot = Column(JSON, nullable=False)
+    expires_at = Column(LenientSQLiteDateTime, nullable=False)
+    invalidated_at = Column(LenientSQLiteDateTime, nullable=True)
+    invalidation_reason = Column(String(255), nullable=True)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
 class ShapeCadSource(Base):
     """Shared immutable CAD source bytes for the internal Shape workflow."""
 
@@ -182,7 +276,7 @@ class ShapeDesignGeometry(Base):
 
     geometry_id = Column(String(41), primary_key=True)
     source_id = Column(String(40), ForeignKey("shape_cad_sources.source_id"), nullable=False, index=True)
-    geometry_sha256 = Column(String(64), nullable=False, unique=True, index=True)
+    geometry_sha256 = Column(String(64), nullable=False, index=True)
     conversion_sha256 = Column(String(64), nullable=False)
     angstrom_per_unit = Column(Float, nullable=False)
     vertex_count = Column(Integer, nullable=False)

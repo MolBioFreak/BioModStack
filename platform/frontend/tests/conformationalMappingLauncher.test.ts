@@ -53,7 +53,8 @@ test('template state round-trips canonical launcher values', () => {
 test('CM result shell uses the shared workbench with an explicit fullscreen canvas mode', () => {
     const viewer = source('conformationalMapping/ConformationalMappingViewer.tsx');
     assert.match(viewer, /from ['"]\.\.\/\.\.\/structureViewer\/StructureWorkbench['"]/);
-    assert.match(viewer, /<StructureWorkbench/);
+    assert.match(viewer, /Workbench = StructureWorkbench/);
+    assert.match(viewer, /<Workbench/);
     assert.doesNotMatch(viewer, /<MolstarViewer/);
     assert.doesNotMatch(viewer, /height=\{650\}/);
     assert.match(viewer, /data-cm-viewer-fullscreen/);

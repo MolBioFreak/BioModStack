@@ -26,7 +26,15 @@ from schemas import JobResponse, JobStatus  # noqa: E402
 def _client_with_fake_create(monkeypatch, captured: dict[str, Any]) -> TestClient:
     app = FastAPI()
     app.include_router(ont_runs.router, prefix="/api/ont")
-    app.dependency_overrides[ont_runs.get_session] = lambda: object()
+
+    class FakeSession:
+        async def flush(self) -> None:
+            return None
+
+        async def commit(self) -> None:
+            return None
+
+    app.dependency_overrides[ont_runs.get_session] = FakeSession
 
     async def fake_create_pipeline_job(job_data, background_tasks, session, response, request):
         captured["job_data"] = job_data
@@ -124,10 +132,8 @@ def test_ont_run_plasmid_handoff_submit_builds_and_submits_job(monkeypatch) -> N
     captured: dict[str, Any] = {}
     client = _client_with_fake_create(monkeypatch, captured)
 
-    monkeypatch.setattr(
-        ont_runs.ont_run_control,
-        "build_plasmid_qc_handoff",
-        lambda run_id, payload: {
+    async def fake_build_plasmid_qc_handoff(run_id, payload):
+        return {
             "model_id": "nanopore",
             "mode": "plasmid_qc",
             "params": {
@@ -138,14 +144,21 @@ def test_ont_run_plasmid_handoff_submit_builds_and_submits_job(monkeypatch) -> N
                 "source_minknow_run_id": "MNK-001",
             },
             "fake_or_demo_devices": False,
-        },
-    )
+        }
+
+    monkeypatch.setattr(ont_runs.ont_run_control, "build_plasmid_qc_handoff", fake_build_plasmid_qc_handoff)
+
+    async def fake_consume_receipt(_session, *, receipt_id):
+        assert receipt_id == "receipt-1"
+        return SimpleNamespace(reference_snapshot_path="/data/refs/A12.fa", consumed_at=None, consumed_job_id=None)
+
+    monkeypatch.setattr(ont_runs, "consume_molbio_ngs_receipt", fake_consume_receipt)
 
     response = client.post(
         "/api/ont/runs/ont-run-1/handoff/plasmid-qc/submit",
         json={
             "name": "live run plasmid QC",
-            "reference_fasta": "/data/refs/A12.fa",
+            "molbio_ngs_receipt_id": "receipt-1",
             "params": {"igv_report_max_sites": 12},
         },
     )
@@ -159,6 +172,25 @@ def test_ont_run_plasmid_handoff_submit_builds_and_submits_job(monkeypatch) -> N
     assert job_data.params["source_instrument_run_id"] == "ont-run-1"
     assert job_data.params["source_minknow_run_id"] == "MNK-001"
     assert job_data.params["igv_report_max_sites"] == 12
+
+
+def test_instrument_handoff_submit_rejects_browser_reference_path_before_building_server_handoff(monkeypatch) -> None:
+    app = FastAPI()
+    app.include_router(ont_runs.router, prefix="/api/ont")
+    app.dependency_overrides[ont_runs.get_session] = lambda: object()
+    monkeypatch.setattr(
+        ont_runs.ont_run_control,
+        "build_plasmid_qc_handoff",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("browser reference paths must not reach handoff builder")),
+    )
+
+    response = TestClient(app).post(
+        "/api/ont/runs/ont-run-1/handoff/plasmid-qc/submit",
+        json={"reference_fasta": "/caller/chosen/reference.fasta"},
+    )
+
+    assert response.status_code == 422
+    assert "/caller/chosen/reference.fasta" not in response.text
 
 
 def test_created_ont_job_receives_opaque_alignment_capability(monkeypatch) -> None:

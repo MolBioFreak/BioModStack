@@ -93,9 +93,14 @@ def _parse_obj(payload: bytes) -> tuple[np.ndarray, np.ndarray]:
                 _fail("non_triangular_face", f"line {line_number}: only triangular faces are accepted")
             face: list[int] = []
             for field in fields[1:]:
-                token = field.split("/", 1)[0]
+                if (
+                    not field.isascii()
+                    or not field.isdecimal()
+                    or field.startswith("0")
+                ):
+                    _fail("invalid_obj", f"line {line_number}: face index must be a bare positive decimal integer")
                 try:
-                    index = int(token)
+                    index = int(field)
                 except ValueError as exc:
                     raise ShapeGeometryError("invalid_obj", f"line {line_number}: invalid face index") from exc
                 if index <= 0:
@@ -672,6 +677,7 @@ def canonicalize_obj(payload: bytes, *, angstrom_per_unit: float) -> CanonicalGe
         vertices=vertices,
         faces=faces,
         angstrom_per_unit=angstrom_per_unit,
+        source_manifest={"source_format": "obj", "source_parser": "obj_triangle_v1"},
     )
 
 
