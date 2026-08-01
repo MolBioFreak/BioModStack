@@ -1095,7 +1095,7 @@ def _start_selected_environment(spec: EnvironmentSpec, root: Path) -> set[str]:
         wait_for_http(spec.frontend_url)
         wait_for_http(spec.api_health_url)
         _url_probe(spec.frontend_url)
-        _url_probe(spec.api_health_url, expect_json=True)
+        _wait_for_healthy_api(spec.api_health_url)
         if spec.runtime_mode == DEV_RUNTIME_MODE and not _wait_for_development_frontend(spec, root):
             raise TailnetEnvironmentError(
                 f"development frontend listener is not owned by {root / 'platform' / 'frontend'}"
