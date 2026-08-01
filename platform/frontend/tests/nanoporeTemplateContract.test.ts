@@ -207,6 +207,10 @@ test('NGS instrument control uses only opaque intent handles and has no browser 
     assert.match(panel, /physical MinKNOW start remains disabled/u);
     assert.match(panel, /createOntRunIntent/u);
     assert.match(panel, /startOntRunIntent/u);
+    assert.match(api, /requestMk1dReconnect/u);
+    assert.match(api, /confirm_reconnect: true/u);
+    assert.match(panel, /Reconnect Mk1D \(local host\)/u);
+    assert.match(panel, /not available through Tailnet/u);
     assert.doesNotMatch(panel, /startOntInstrumentRun|Start fake test run|TEST-MK1D|Run hardware check|output_director(?:y|ies)|flow_cell_id|protocol_id|model_id/u);
     assert.doesNotMatch(panel, /\.filter\(\(device\) => device\.device_type === 'mk1d'\)/u);
 });

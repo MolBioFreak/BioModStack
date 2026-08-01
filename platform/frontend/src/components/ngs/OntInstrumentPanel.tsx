@@ -83,6 +83,11 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
     const effectiveProtocolOptions = instrumentEvidenceError ? undefined : protocolOptions.data;
     const selectedOption: OntProtocolOption | undefined = effectiveProtocolOptions?.options[0];
 
+    const reconnectMk1d = useMutation({
+        mutationFn: async () => (await requestMk1dReconnect()).data,
+        onSuccess: () => void deviceStatus.refetch(),
+    });
+
     const startRun = useMutation({
         mutationFn: async () => {
             if (!selectedDevice?.position || !selectedOption) throw new Error('No server-issued protocol option is available');
@@ -122,11 +127,6 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
         ),
     });
 
-    const reconnectMk1d = useMutation({
-        mutationFn: async () => (await requestMk1dReconnect()).data,
-        onSuccess: () => void deviceStatus.refetch(),
-    });
-
     const blockers = effectiveProtocolOptions?.blockers ?? [];
     const canStart = Boolean(
         !instrumentEvidenceError
@@ -145,11 +145,22 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                         <h2 className="text-xl font-semibold text-[var(--text-primary)]">ONT instrument control</h2>
                         <span className="rounded-full border border-cyan-500/40 bg-cyan-500/10 px-2 py-1 text-xs font-semibold uppercase tracking-wide text-cyan-100">Mk1D / MinKNOW</span>
                     </div>
-                    <p className="max-w-2xl text-sm text-[var(--text-secondary)]">Select a server-discovered Mk1D position and submit its opaque protocol intent. Real starts remain disabled until a separately authorized commissioning path exists.</p>
+                    <p className="max-w-2xl text-sm text-[var(--text-secondary)]">Select a server-discovered Mk1D position and submit its opaque protocol intent. Reconnect is a trusted local BMS-host recovery action; it is not available through Tailnet.</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                     <button type="button" onClick={onAnalyzeExistingData} className="rounded-lg border border-[var(--border-primary)] px-3 py-2 text-sm text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]">Analyze existing data</button>
-                    <button type="button" disabled={reconnectMk1d.isPending} onClick={() => { if (window.confirm('Reconnect Mk1D only starts inactive MinKNOW and recreates bms-host-agent. It does not start sequencing, alter a flow cell, or restart active MinKNOW. Continue?')) reconnectMk1d.mutate(); }} className="rounded-lg border border-cyan-500/40 px-3 py-2 text-sm font-semibold text-cyan-100 hover:bg-cyan-500/10 disabled:cursor-not-allowed disabled:opacity-50">{reconnectMk1d.isPending ? 'Reconnecting Mk1D…' : 'Reconnect Mk1D'}</button>
+                    <button
+                        type="button"
+                        disabled={reconnectMk1d.isPending}
+                        onClick={() => {
+                            if (window.confirm('Reconnect Mk1D is a fixed recovery action for this local BMS host only. It starts MinKNOW only when inactive and recreates bms-host-agent. It does not start sequencing, a hardware check, alter a flow cell, or restart active MinKNOW. Continue?')) {
+                                reconnectMk1d.mutate();
+                            }
+                        }}
+                        className="rounded-lg border border-cyan-500/40 px-3 py-2 text-sm font-semibold text-cyan-100 hover:bg-cyan-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        {reconnectMk1d.isPending ? 'Reconnecting Mk1D…' : 'Reconnect Mk1D (local host)'}
+                    </button>
                 </div>
             </div>
 
@@ -160,8 +171,25 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
             </div>
 
             {instrumentEvidenceError ? <p role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">Current instrument evidence is unavailable after a refresh failure. Intent validation is disabled until a fresh device and protocol response succeeds.</p> : null}
-            {reconnectMk1d.data ? <div className="rounded-xl border border-cyan-500/40 bg-cyan-500/10 p-3 text-xs text-cyan-50"><div className="font-semibold">Recovery receipt</div><div>Receipt: {reconnectMk1d.data.receipt.receipt_id} · {reconnectMk1d.data.receipt.status}</div><div>MinKNOW: {reconnectMk1d.data.receipt.minknow} · host agent: {reconnectMk1d.data.receipt.host_agent_recreate} / {reconnectMk1d.data.receipt.host_agent_health}</div><div>{reconnectMk1d.data.connected ? 'Connection is confirmed by post-recovery device observation.' : 'Mk1D is not confirmed connected until post-recovery device status is observed.'}</div></div> : null}
-            {reconnectMk1d.isError ? <p role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">Reconnect request did not produce a safe receipt.</p> : null}
+
+            {reconnectMk1d.isPending || reconnectMk1d.data || reconnectMk1d.isError ? (
+                <div className="rounded-xl border border-cyan-500/40 bg-cyan-500/10 p-4 text-sm text-cyan-50">
+                    <div className="font-semibold">Recovery receipt</div>
+                    {reconnectMk1d.isPending ? <p className="mt-1">Recovery request is in progress. Waiting for the bounded MinKNOW and host-agent stages.</p> : null}
+                    {reconnectMk1d.data ? (
+                        <div className="mt-2 space-y-1 text-xs">
+                            <div>Receipt: {reconnectMk1d.data.receipt.receipt_id} · {reconnectMk1d.data.receipt.status}</div>
+                            <div>MinKNOW stage: {reconnectMk1d.data.receipt.minknow}</div>
+                            <div>Host-agent recreate: {reconnectMk1d.data.receipt.host_agent_recreate} · read-only health/status verification: {reconnectMk1d.data.receipt.host_agent_health}</div>
+                            <div>Post-action device status observed: {reconnectMk1d.data.device_status_observed ? 'yes' : 'no'}</div>
+                            {reconnectMk1d.data.connected
+                                ? <div>Connection is confirmed by a post-recovery Mk1D observation with no connection error.</div>
+                                : <div>Mk1D is not confirmed connected until a post-recovery device status is observed with no connection error.</div>}
+                        </div>
+                    ) : null}
+                    {reconnectMk1d.isError ? <p className="mt-1 text-amber-100">Reconnect request did not produce a safe receipt. Review the local API status and helper installation.</p> : null}
+                </div>
+            ) : null}
 
             <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
                 <div className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4">

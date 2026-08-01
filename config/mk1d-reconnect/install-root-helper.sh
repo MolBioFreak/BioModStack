@@ -10,33 +10,38 @@ if (( EUID != 0 )); then
 fi
 
 repo_root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
-recovery_group='bms-mk1d-recovery'
+native_api_user="${BMS_NATIVE_API_USER:-${SUDO_USER:-dalab}}"
 minknow_service="${MINKNOW_SYSTEMD_SERVICE:-minknow.service}"
 compose_project="${BMS_DOCKER_COMPOSE_PROJECT:-biomodstack-core-runtime}"
 compose_file="$repo_root/compose.core-runtime.yml"
 recovery_dir='/etc/biomodstack'
 recovery_compose='/etc/biomodstack/mk1d-reconnect-compose.json'
 recovery_env='/etc/biomodstack/mk1d-reconnect.env'
-profile_env="${BMS_CORE_RUNTIME_ENV_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/biomodstack/core-runtime.env}"
 legacy_env="$repo_root/.env.core-runtime.local"
 
-if [[ ! "$minknow_service" =~ ^[A-Za-z0-9_.@-]+\.service$ ]] || [[ ! "$compose_project" =~ ^[A-Za-z0-9_.-]+$ ]] || [[ ! -f "$compose_file" ]]; then
+if [[ ! "$native_api_user" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || [[ ! "$minknow_service" =~ ^[A-Za-z0-9_.@-]+\.service$ ]] || [[ ! "$compose_project" =~ ^[A-Za-z0-9_.-]+$ ]] || [[ ! -f "$compose_file" ]]; then
     printf '%s\n' 'Invalid reviewed Mk1D recovery installation configuration.' >&2
     exit 2
 fi
+if ! native_api_uid="$(id -u "$native_api_user" 2>/dev/null)" || ! native_api_gid="$(id -g "$native_api_user" 2>/dev/null)" || ! native_api_group="$(id -gn "$native_api_user" 2>/dev/null)" || [[ "$native_api_uid" == 0 ]] || [[ ! "$native_api_gid" =~ ^[0-9]+$ ]] || [[ ! "$native_api_group" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+    printf '%s\n' 'Mk1D recovery requires a validated non-root native BMS API user and primary group.' >&2
+    exit 2
+fi
+native_api_home="$(getent passwd "$native_api_user" | awk -F: 'NF >= 6 {print $6}')"
+if [[ ! "$native_api_home" =~ ^/ ]] || [[ ! -d "$native_api_home" ]]; then
+    printf '%s\n' 'Unable to resolve the native BMS API user home directory.' >&2
+    exit 2
+fi
+profile_env="${BMS_CORE_RUNTIME_ENV_FILE:-${XDG_CONFIG_HOME:-$native_api_home/.config}/biomodstack/core-runtime.env}"
 if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
     printf '%s\n' 'Docker Compose plugin is required to render the recovery artifact.' >&2
     exit 2
 fi
 
-if ! getent group "$recovery_group" >/dev/null; then
-    groupadd --system "$recovery_group"
-fi
-recovery_gid="$(getent group "$recovery_group" | awk -F: '{print $3}')"
-if [[ ! "$recovery_gid" =~ ^[0-9]+$ ]]; then
-    printf '%s\n' 'Unable to resolve Mk1D recovery group ID.' >&2
-    exit 2
-fi
+# Use the primary group of the real native BMS API user. Creating a detached
+# recovery group leaves a root socket unusable by that native process.
+recovery_group="$native_api_group"
+recovery_gid="$native_api_gid"
 
 # Rendering is an installation-time action only. Explicit --env-file prevents
 # Compose from implicitly loading checkout .env; the supported runtime profile
@@ -148,5 +153,7 @@ install -D -o root -g root -m 0644 "$repo_root/config/mk1d-reconnect/bms-mk1d-re
 
 systemd-tmpfiles --create /etc/tmpfiles.d/bms-mk1d-reconnect.conf
 systemctl daemon-reload
-systemctl enable --now bms-reconnect-mk1d.socket
-printf 'Installed Mk1D reconnect helper and root-owned recovery artifact. Restart bms-api with scripts/run_biomodstack_core_runtime.sh so it imports the validated recovery GID.\n'
+systemctl enable bms-reconnect-mk1d.socket
+# Restart makes an already-bound socket adopt a corrected SocketGroup on rerun.
+systemctl restart bms-reconnect-mk1d.socket
+printf 'Installed Mk1D reconnect helper for native API user %s (primary GID %s) and root-owned recovery artifact. Restart bms-api with scripts/run_biomodstack_core_runtime.sh so it imports the validated recovery GID.\n' "$native_api_user" "$recovery_gid"

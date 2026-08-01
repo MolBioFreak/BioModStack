@@ -221,7 +221,7 @@ def test_nginx_contract_preserves_bms_and_api_routes() -> None:
     assert "proxy_pass http://127.0.0.1:8000;" in nginx_conf
 
 
-def test_mk1d_reconnect_nginx_admission_preserves_identity_only_from_the_trusted_tailnet_proxy() -> None:
+def test_mk1d_reconnect_is_a_local_bms_host_route_and_tailnet_cannot_forward_it() -> None:
     api_compose = yaml.safe_load((REPO_ROOT / "compose.core-runtime.yml").read_text(encoding="utf-8"))
     tailnet_compose = yaml.safe_load((REPO_ROOT / "compose.tailnet-control.yml").read_text(encoding="utf-8"))
     web_nginx = (REPO_ROOT / "docker" / "web" / "nginx.conf").read_text(encoding="utf-8")
@@ -229,19 +229,28 @@ def test_mk1d_reconnect_nginx_admission_preserves_identity_only_from_the_trusted
     env_example = (REPO_ROOT / ".env.core-runtime.example").read_text(encoding="utf-8")
 
     api_environment = api_compose["services"]["bms-api"]["environment"]
-    assert api_environment["BMS_MK1D_RECONNECT_TRUSTED_PROXY_HOSTS"] == "${BMS_MK1D_RECONNECT_TRUSTED_PROXY_HOSTS:-}"
-    assert api_environment["BMS_MK1D_RECONNECT_ALLOWED_TAILSCALE_USERS"] == "${BMS_MK1D_RECONNECT_ALLOWED_TAILSCALE_USERS:-}"
-    assert "BMS_MK1D_RECONNECT_TRUSTED_PROXY_HOSTS=" in env_example
-    assert "BMS_MK1D_RECONNECT_ALLOWED_TAILSCALE_USERS=" in env_example
-    assert "location = /api/ont/devices/reconnect {" in web_nginx
-    assert 'if ($http_x_bms_cm_proxy_secret != "${BMS_CM_TRUSTED_PROXY_SECRET}") { return 401; }' in web_nginx
-    assert "proxy_set_header Tailscale-User-Login $http_tailscale_user_login;" in web_nginx
-    assert 'proxy_set_header Tailscale-User-Login "";' in web_nginx
-    assert "proxy_set_header Tailscale-User-Login $http_tailscale_user_login;" in tailnet_nginx
-    assert 'proxy_set_header X-BMS-CM-Proxy-Secret "${BMS_CM_TRUSTED_PROXY_SECRET}";' in tailnet_nginx
-    tailnet_proxy = tailnet_compose["services"]["tailnet-production-proxy"]
-    assert tailnet_proxy["environment"]["BMS_CM_TRUSTED_PROXY_SECRET"] == "${BMS_CM_TRUSTED_PROXY_SECRET:-}"
-    assert tailnet_proxy["volumes"][0].endswith(":/etc/nginx/templates/default.conf.template:ro")
+    web_environment = api_compose["services"]["bms-web"]["environment"]
+    assert api_environment["BMS_MK1D_RECONNECT_LOCAL_PROXY_SECRET"] == "${BMS_MK1D_RECONNECT_LOCAL_PROXY_SECRET:-}"
+    assert web_environment["BMS_MK1D_RECONNECT_LOCAL_PROXY_SECRET"] == "${BMS_MK1D_RECONNECT_LOCAL_PROXY_SECRET:-}"
+    assert "BMS_MK1D_RECONNECT_TRUSTED_PROXY_HOSTS" not in api_environment
+    assert "BMS_MK1D_RECONNECT_ALLOWED_TAILSCALE_USERS" not in api_environment
+    assert "BMS_MK1D_RECONNECT_LOCAL_PROXY_SECRET=" in env_example
+    assert "BMS_MK1D_RECONNECT_ALLOWED_TAILSCALE_USERS" not in env_example
+
+    reconnect_location = web_nginx.split("location = /api/ont/devices/reconnect {", 1)[1].split("\n    }", 1)[0]
+    assert "allow 127.0.0.1;" in reconnect_location
+    assert "allow ::1;" in reconnect_location
+    assert "deny all;" in reconnect_location
+    assert 'proxy_set_header X-BMS-MK1D-Reconnect-Proxy-Secret "${BMS_MK1D_RECONNECT_LOCAL_PROXY_SECRET}";' in reconnect_location
+    assert 'proxy_set_header Tailscale-User-Login "";' in reconnect_location
+    assert "Tailscale-User-Login $http_" not in reconnect_location
+    assert "X-BMS-CM-Proxy-Secret" not in reconnect_location
+
+    tailnet_location = tailnet_nginx.split("location = /api/ont/devices/reconnect {", 1)[1].split("\n    }", 1)[0]
+    assert "return 403;" in tailnet_location
+    assert "proxy_pass" not in tailnet_location
+    assert "BMS_MK1D_RECONNECT_LOCAL_PROXY_SECRET" not in tailnet_compose["services"]["tailnet-production-proxy"].get("environment", {})
+    assert tailnet_compose["services"]["tailnet-production-proxy"]["volumes"][0].endswith(":/etc/nginx/conf.d/default.conf:ro")
 
 
 def test_dockerignore_keeps_local_runtime_state_out_of_images() -> None:

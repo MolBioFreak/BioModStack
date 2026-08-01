@@ -1,24 +1,21 @@
 # Mk1D reconnect helper (manual root installation)
 
-`POST /api/ont/devices/reconnect` is a deliberately narrow recovery admission:
+`POST /api/ont/devices/reconnect` is a deliberately narrow **local BMS host
+operator** recovery action:
 
 - it accepts only JSON `{"confirm_reconnect": true}` (unknown fields and every
   other value are rejected);
-- it is accepted only through the reviewed Tailnet ingress chain (`Tailscale
-  Serve → tailnet-production-proxy → bms-web → bms-api`): the API requires an
-  explicitly configured trusted proxy peer, the server-only
-  `BMS_CM_TRUSTED_PROXY_SECRET`, and an explicitly allowlisted
-  `Tailscale-User-Login`; and
-- it sends no service name, command, position, or operator text to the helper.
+- the Tailnet production proxy explicitly returns `403` for this exact route;
+  it never forwards it to bms-web or bms-api; and
+- bms-api accepts only its loopback bms-web proxy peer plus the separate,
+  server-only `BMS_MK1D_RECONNECT_LOCAL_PROXY_SECRET` injected by bms-web.
+  It ignores `Tailscale-User-Login` and all forwarded headers for this action.
 
-`BMS_MK1D_RECONNECT_TRUSTED_PROXY_HOSTS` and
-`BMS_MK1D_RECONNECT_ALLOWED_TAILSCALE_USERS` are required to enable the route.
-Missing either (or `BMS_CM_TRUSTED_PROXY_SECRET`) returns `503`; a direct
-loopback request, a forwarded identity from an untrusted proxy, a bad proxy
-secret, or a non-allowlisted identity is rejected. The generic bms-web API
-proxy clears `Tailscale-User-Login`; only the exact reconnect location accepts
-and forwards it after the reviewed Tailnet proxy supplies the server-only
-secret. Do not add a direct local/browser proxy path for this route.
+The secret is held only by bms-api and bms-web; it is not a browser header and
+must not be placed in Tailnet proxy configuration or policy. If it is missing,
+the endpoint returns `503`. Direct bms-api requests and requests with forged
+Tailnet/forwarded headers are denied. Use the local bms-web address on the BMS
+host (normally `http://127.0.0.1:18080/bms/`) to use the operator control.
 
 The root-owned, no-argument socket helper ignores input and runs one serialized
 transaction. It first takes a root-owned nonblocking lock. A simultaneous
@@ -63,13 +60,17 @@ trusted root installation; it is validated and baked into the resulting helper:
 sudo MINKNOW_SYSTEMD_SERVICE=custom-minknow.service ./config/mk1d-reconnect/install-root-helper.sh
 ```
 
-The installer creates a dedicated `bms-mk1d-recovery` group, root-owned helper
-and systemd socket/service units, root-owned recovery Compose/config files, and
-`/etc/biomodstack/mk1d-reconnect.env`. The latter contains one validated,
-atomic `BMS_MK1D_RECOVERY_GID` assignment. On the next normal managed runtime
-restart, `scripts/run_biomodstack_core_runtime.sh` imports it only when it is a
-root-owned regular `0644` file with exactly one numeric assignment; otherwise
-it fails closed. Do not manually copy this GID into a user/project `.env`.
+The installer uses the actual native BMS API service user—by default the
+validated invoking `SUDO_USER`, falling back to `dalab`—and renders the systemd
+socket with that user's **primary group**. It does not create a separate
+`bms-mk1d-recovery` group. The root-owned helper, socket/service units, and
+recovery Compose/config files remain root-owned. `/etc/biomodstack/mk1d-reconnect.env`
+contains one validated, atomic `BMS_MK1D_RECOVERY_GID` assignment. On the next
+normal managed runtime restart, `scripts/run_biomodstack_core_runtime.sh`
+imports it only when it is a root-owned regular `0644` file with exactly one
+numeric assignment; otherwise it fails closed. The container API receives that
+numeric group explicitly, while a native API process has access through its
+primary group. Do not manually copy this GID into a user/project `.env`.
 
 The API and web surfaces must already be running for an operator to press the
 button. If the core runtime is down after a reboot, recover it through its

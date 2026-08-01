@@ -10,10 +10,8 @@ services:
     tmpfs:
       - /var/cache/nginx
       - /var/run
-    environment:
-      BMS_CM_TRUSTED_PROXY_SECRET: ${BMS_CM_TRUSTED_PROXY_SECRET:-}
     volumes:
-      - ${BMS_TAILNET_PROXY_CONFIG:?set BMS_TAILNET_PROXY_CONFIG to the reviewed absolute config path}:/etc/nginx/templates/default.conf.template:ro
+      - ${BMS_TAILNET_PROXY_CONFIG:?set BMS_TAILNET_PROXY_CONFIG to the reviewed absolute config path}:/etc/nginx/conf.d/default.conf:ro
     labels:
       com.biomodstack.tailnet-proxy-owner: compose.core-runtime
       com.biomodstack.tailnet-proxy-config-sha: ${BMS_TAILNET_PROXY_CONFIG_SHA:?set BMS_TAILNET_PROXY_CONFIG_SHA to the reviewed config SHA-256}
