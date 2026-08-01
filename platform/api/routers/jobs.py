@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, B
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, update
 from sqlalchemy.exc import OperationalError
-from typing import Optional, List, Dict, Any, NoReturn
+from typing import Optional, List, Dict, Any, Callable, NoReturn, cast
 from types import SimpleNamespace
 from copy import deepcopy
 import asyncio
@@ -204,7 +204,7 @@ def _md_output_path_forbidden() -> MDLaunchError:
     )
 
 
-def _prepare_md_output_dir(job_name: str, timestamp: str) -> tuple[Path, bool]:
+def _prepare_md_output_dir(job_name: str, timestamp: str, preallocated_job_id: str | None = None) -> tuple[Path, bool]:
     """Create one contained MD output directory and report whether this call owns it."""
 
     safe_name = str(job_name or "").strip()
@@ -213,7 +213,9 @@ def _prepare_md_output_dir(job_name: str, timestamp: str) -> tuple[Path, bool]:
 
     try:
         results_root = get_results_dir().expanduser().resolve()
-        output_path = results_root / f"{safe_name}_{timestamp}"
+        # Typed internal replays have a deterministic identity.  Their result
+        # root must be a direct, canonical child of Development's results root.
+        output_path = results_root / (preallocated_job_id or f"{safe_name}_{timestamp}")
         resolved_output = output_path.resolve()
         if output_path.is_symlink() or not resolved_output.is_relative_to(results_root):
             raise _md_output_path_forbidden()
@@ -223,6 +225,12 @@ def _prepare_md_output_dir(job_name: str, timestamp: str) -> tuple[Path, bool]:
         except FileExistsError:
             if output_path.is_symlink() or not output_path.is_dir():
                 raise _md_output_path_forbidden()
+            if preallocated_job_id is not None:
+                raise MDLaunchError(
+                    "MD_OUTPUT_COLLISION",
+                    "The deterministic MD re-orchestration output root already exists without a durable replay receipt",
+                    status_code=409,
+                )
             created = False
         resolved_output = output_path.resolve()
         if not resolved_output.is_relative_to(results_root):
@@ -5111,10 +5119,17 @@ async def create_job(
     session: AsyncSession = Depends(get_session),
     _preallocated_job_id: Any = Depends(lambda: None),
     _commit: Any = Depends(lambda: True),
+    _md_output_creation: Any = Depends(lambda: None),
+    _md_input_resolver: Any = Depends(lambda: None),
 ):
     """Create and queue a new pipeline job."""
     require_molecular_dynamics_feature(job_data.model_id)
     _raise_if_workflow_launches_disabled("create new workflow jobs")
+    md_input_resolver: Callable[[str], str] = (
+        cast(Callable[[str], str], _md_input_resolver)
+        if callable(_md_input_resolver)
+        else _resolve_md_input_path_for_runtime
+    )
     retired_model_ids = {
         "antibody" + "_" + "denovo",
         "template_" + "antibody" + "_" + "denovo",
@@ -5209,7 +5224,7 @@ async def create_job(
                 normalize_md_job_spec(
                     params=job_data.params,
                     job_id="validation-preview",
-                    resolve_runtime_path=_resolve_md_input_path_for_runtime,
+                    resolve_runtime_path=md_input_resolver,
                 )
             except (
                 MDLaunchError,
@@ -5407,10 +5422,14 @@ async def create_job(
     md_output_dir_created = False
     if is_md_launch:
         try:
-            md_output_path, md_output_dir_created = _prepare_md_output_dir(job_data.name, timestamp)
+            md_output_path, md_output_dir_created = _prepare_md_output_dir(
+                job_data.name, timestamp, preallocated_job_id,
+            )
         except MDLaunchError as exc:
             _raise_md_launch_http_error(exc)
         base_output_dir = str(md_output_path)
+        if isinstance(_md_output_creation, dict):
+            _md_output_creation.update({"path": md_output_path, "created": md_output_dir_created})
     else:
         # Presentation-only names must not split one deterministic Job's
         # filesystem ownership across concurrent equivalent requests.
@@ -5629,7 +5648,7 @@ async def create_job(
                     params=job_params,
                     job_id=job_id,
                     output_dir=Path(output_dir),
-                    resolve_runtime_path=_resolve_md_input_path_for_runtime,
+                    resolve_runtime_path=md_input_resolver,
                 )
             except (
                 MDLaunchError,
@@ -7843,6 +7862,7 @@ async def get_job_logs(
         "nextflow_log": None,
         "exit_code": None,
         "parsed_error": None,
+        "nextflow_log_source": None,
     }
     
     # --- Step 1: Find the nextflow log for THIS job ---
@@ -7855,8 +7875,10 @@ async def get_job_logs(
             nf_log_candidates.append(output_path / "nextflow.log")
             nf_log_candidates.append(output_path / ".nextflow.log")
     
-    # Fallback: global .nextflow.log (may be from a different job)
-    nf_log_candidates.append(CODE_ROOT / ".nextflow.log")
+    # A global Nextflow log is only a legacy diagnostic for non-MD jobs.  It is
+    # not job-owned and can otherwise disclose another MD launch's failure.
+    if job.model_id != "molecular_dynamics":
+        nf_log_candidates.append(CODE_ROOT / ".nextflow.log")
     
     for nf_path in nf_log_candidates:
         if nf_path and nf_path.exists():
@@ -7865,6 +7887,7 @@ async def get_job_logs(
                     nf_log_content = f.read()
                     lines = nf_log_content.split('\n')
                     logs_data["nextflow_log"] = "\n".join(lines[-tail:])
+                    logs_data["nextflow_log_source"] = "job_output" if output_path and nf_path.parent == output_path else "legacy_global"
                 break
             except Exception:
                 continue

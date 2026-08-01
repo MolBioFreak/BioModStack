@@ -161,7 +161,8 @@ export interface MDRunDetail {
     chemistry: { profile_id: string; profile_sha256: string; assurance: string; verification_status: string; requested_scope?: string | null };
     engine: 'gromacs' | 'openmm'; replica_count: number; replica_summary: Record<string, number>;
     simulated_time_ps: number; requested_time_ps: number; checkpoint_available: boolean;
-    allowed_actions: Array<'pause' | 'resume_dynamics' | 'retry_dynamics' | 'cancel'>;
+    allowed_actions: Array<'pause' | 'resume_dynamics' | 'retry_dynamics' | 'cancel' | 'view_logs' | 'reorchestrate' | 'delete_failed_launch'>;
+    action_explanations?: Partial<Record<'resume_dynamics' | 'retry_dynamics', string>>;
     replicas: Array<{ id: string; replica_index: number; attempt: number; state: string; active: boolean; engine: string; failure: unknown; retry_eligible: boolean }>;
     segments: Array<{ id: string; replica_run_id: string; segment_index: number; state: string; source_segment_id: string | null; source_checkpoint_id: string | null; start_step: number | null; end_step: number | null; start_time_ps: number | null; end_time_ps: number | null }>;
     checkpoints: Array<{ id: string; segment_id: string; logical_role: string; relative_path: string; sha256: string; bytes: number; step: number; time_ps: number }>;
@@ -173,6 +174,8 @@ export const pauseMDRun = (jobId: string, stateVersion: number, idempotencyKey: 
 export const cancelMDRun = (jobId: string, stateVersion: number, idempotencyKey: string) => api.post<MDRunDetail>(`/api/molecular-dynamics/runs/${jobId}/cancel`, { expected_state_version: stateVersion, idempotency_key: idempotencyKey });
 export const resumeMDRun = (jobId: string, stateVersion: number, idempotencyKey: string) => api.post(`/api/molecular-dynamics/runs/${jobId}/resume`, { expected_state_version: stateVersion, idempotency_key: idempotencyKey });
 export const retryMDDynamics = (jobId: string, replicaIndex: number, stateVersion: number, idempotencyKey: string) => api.post<{ schema: 'bms.md.retry-receipt.v1'; job_id: string; replica_run_id: string; child_job_id: string; replica_index: number; attempt: number }>(`/api/molecular-dynamics/runs/${jobId}/retry`, { replica_index: replicaIndex, expected_state_version: stateVersion, idempotency_key: idempotencyKey });
+export const reorchestrateMDRun = (jobId: string, stateVersion: number, idempotencyKey: string) => api.post<{ new_job_id: string }>(`/api/molecular-dynamics/runs/${jobId}/reorchestrate`, { expected_state_version: stateVersion, idempotency_key: idempotencyKey });
+export const deleteFailedMDLaunch = (jobId: string, stateVersion: number) => api.delete(`/api/molecular-dynamics/runs/${jobId}/failed-launch`, { data: { expected_state_version: stateVersion } });
 
 // Log data for View Logs modal
 export interface JobLogs {
@@ -184,6 +187,7 @@ export interface JobLogs {
     nextflow_log: string | null;
     exit_code: number | null;
     parsed_error: string | null;
+    nextflow_log_source?: 'job_output' | 'legacy_global' | null;
 }
 
 export interface BoltzCpPhysicalGpuResolution {
