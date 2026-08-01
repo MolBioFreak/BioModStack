@@ -17,9 +17,9 @@ import pytest
 
 API_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = API_ROOT.parent.parent
-pytestmark = pytest.mark.xfail(
+_FUTURE_CONTRACT = pytest.mark.xfail(
     strict=True,
-    reason="Phase 0 migration obligation; remove this mark only when the full contract is green",
+    reason="Phase 0 migration obligation; remove this mark when this contract becomes green",
 )
 
 
@@ -39,6 +39,7 @@ def _production_python_files() -> list[Path]:
     )
 
 
+@_FUTURE_CONTRACT
 def test_red_neutral_frustrampnn_schemas_and_service_package_exist() -> None:
     required = [
         "schemas/workflow_components/workflow_component_request_v1.schema.json",
@@ -90,8 +91,10 @@ def test_red_neutral_frustrampnn_schemas_and_service_package_exist() -> None:
 def test_red_rewritten_module_exposes_only_canonical_frustrampnn_component() -> None:
     module = _text("modules/frustrampnn.nf")
     violations = []
-    if not re.search(r"(?m)^\s*process\s+CanonicalFrustraMPNN\s*\{", module):
-        violations.append("missing process CanonicalFrustraMPNN")
+    if not re.search(r"(?m)^\s*process\s+CanonicalFrustraMPNNTask\s*\{", module):
+        violations.append("missing scheduler task CanonicalFrustraMPNNTask")
+    if not re.search(r"(?m)^\s*workflow\s+CanonicalFrustraMPNN\s*\{", module):
+        violations.append("missing public workflow CanonicalFrustraMPNN")
     for forbidden in (
         "process FrustrampnnQC",
         "process AggregateFrustrationReports",
@@ -106,19 +109,37 @@ def test_red_rewritten_module_exposes_only_canonical_frustrampnn_component() -> 
     )
 
 
-def test_red_hardened_command_has_explicit_model_device_and_gpu_arguments() -> None:
-    analysis_plane = _text("scripts/run_conformational_mapping_analysis_plane.py")
-    missing = [
-        token
-        for token in ('"--device"', '"cuda"', '"--gpu_id"')
-        if token not in analysis_plane
-    ]
-    assert not missing, (
-        "shared FrustraMPNN command does not yet carry the model CLI's explicit "
-        f"device/GPU contract; missing={missing}"
+def test_hardened_command_has_explicit_scheduler_and_model_device_contract(
+    tmp_path: Path,
+) -> None:
+    from services.frustrampnn.runtime import build_frustrampnn_command
+
+    input_root = tmp_path / "input"
+    output_root = tmp_path / "output"
+    input_root.mkdir()
+    output_root.mkdir()
+    normalized = input_root / "normalized.pdb"
+    normalized.write_text("ATOM\n", encoding="utf-8")
+    invocation = build_frustrampnn_command(
+        apptainer="/usr/bin/apptainer",
+        container="/proc/self/fd/41",
+        normalized=normalized,
+        raw=output_root / "raw_frustrampnn.csv",
+        output_root=output_root,
+        physical_gpu_id=3,
     )
+    argv = list(invocation.argv)
+    assert ["--env", "CUDA_VISIBLE_DEVICES=3"] == argv[
+        argv.index("CUDA_VISIBLE_DEVICES=3") - 1 : argv.index("CUDA_VISIBLE_DEVICES=3") + 1
+    ]
+    assert argv[-2:] == ["--device", "cuda"]
+    model_argv = argv[argv.index("/opt/venv/bin/frustrampnn") :]
+    assert "--gpu_id" not in model_argv and "--gpu-id" not in model_argv
+    assert invocation.physical_gpu_id == 3
+    assert invocation.task_visible_gpu_id == 0
 
 
+@_FUTURE_CONTRACT
 def test_red_result_ingestion_is_manifest_first_not_loose_csv_discovery() -> None:
     ingester = _text("platform/api/services/result_ingester.py")
     violations = []
@@ -134,6 +155,7 @@ def test_red_result_ingestion_is_manifest_first_not_loose_csv_discovery() -> Non
     )
 
 
+@_FUTURE_CONTRACT
 def test_red_api_and_upload_actions_are_scheduler_backed() -> None:
     nextflow_service = _text("platform/api/services/nextflow.py")
     direct_router_path = REPO_ROOT / "platform/api/routers/frustrampnn.py"
@@ -157,6 +179,7 @@ def test_red_api_and_upload_actions_are_scheduler_backed() -> None:
     )
 
 
+@_FUTURE_CONTRACT
 def test_red_legacy_execution_and_writes_are_retired_but_historical_reads_remain() -> None:
     database = _text("platform/api/database.py")
     designs_router = _text("platform/api/routers/designs.py")

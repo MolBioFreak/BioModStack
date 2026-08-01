@@ -38,6 +38,7 @@ from migrations.relax_shape_geometry_hash_uniqueness import (
     migrate as relax_shape_geometry_hash_uniqueness,
 )
 from migrations.sqlite_sha256 import register_sqlite_sha256
+from migrations.add_frustrampnn_persistence import migrate as migrate_frustrampnn_persistence
 from run_migration import migrate as migrate_stage_tracking
 
 
@@ -79,6 +80,7 @@ MIGRATIONS: List[Migration] = [
     Migration(20, "add_ont_terminal_artifact_manifests", migrate_ont_terminal_artifact_manifests),
     Migration(21, "enforce_ont_terminal_artifact_manifest_immutability", enforce_ont_terminal_artifact_manifest_immutability),
     Migration(22, "relax_shape_geometry_hash_uniqueness", relax_shape_geometry_hash_uniqueness),
+    Migration(23, "add_frustrampnn_persistence", migrate_frustrampnn_persistence),
 ]
 
 

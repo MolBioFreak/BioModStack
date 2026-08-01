@@ -41,10 +41,10 @@ process ProtenixPredict {
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*full_data*.json", saveAs: { filename -> filename.split('/')[-1] }
 
     input:
-    tuple val(sequence), val(sequence_name)
+    tuple val(producer_meta), val(sequence), val(sequence_name)
 
     output:
-    path "predictions/**/*.cif", emit: cifs, optional: true
+    tuple val(producer_meta), path("predictions/**/*.cif"), emit: typed_cifs, optional: true
     path "predictions/**/*confidence*.json", emit: confidence, optional: true
     path "predictions/**/*full_data*.json", emit: full_confidence, optional: true
     path "msa_prepared/msa_report.json", emit: msa_report, optional: true
@@ -277,7 +277,7 @@ process PrepProtenixComplex {
     tuple val(name), path(complex_json), path(msa_file)
 
     output:
-    path "protenix_input.json", emit: protenix_json
+    tuple val(name), path("protenix_input.json"), emit: protenix_json
 
     script:
     def seeds = params.protenix_seeds ?: '42'
@@ -384,10 +384,10 @@ process ProtenixFromComplex {
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*full_data*.json", saveAs: { filename -> filename.split('/')[-1] }
 
     input:
-    path complex_json
+    tuple val(input_sample), path(complex_json)
 
     output:
-    path "predictions/**/*.cif", emit: structures, optional: true
+    tuple val(input_sample), path("producer_candidates.json"), path("predictions/**/*.cif"), emit: canonical_structures, optional: true
     path "predictions/**/*confidence*.json", emit: confidence, optional: true
     path "predictions/**/*full_data*.json", emit: full_confidence, optional: true
     path "msa_prepared/msa_report.json", emit: msa_report, optional: true
@@ -414,6 +414,7 @@ process ProtenixFromComplex {
     def msa_allow_cpu_fallback_flag = msa_allow_cpu_fallback ? '--allow-cpu-fallback' : ''
     def binderChainCsv = params.binder_chains ?: ''
     def epitopeResiduesCsv = params.epitope_residues ?: params.hotspot_residues ?: ''
+    def producerSampleBase64 = input_sample.toString().getBytes('UTF-8').encodeBase64().toString()
 
     def use_msa = (params.protenix_use_msa == true || params.protenix_use_msa == 'true' || params.protenix_use_msa == null)
     if (model_name != 'protenix-v2') {
@@ -677,5 +678,11 @@ PY
 
     echo "[PROTENIX-COMPLEX] Prediction complete. Listing outputs:"
     find predictions/ -type f \\( -name "*.cif" -o -name "*confidence*.json" \\) | head -20 || true
+    python3 '${params.code_root}/scripts/write_structure_producer_manifest.py' \
+      --predictions-root predictions \
+      --producer-method protenix \
+      --producer-sample-base64 '${producerSampleBase64}' \
+      --format mmcif \
+      --output producer_candidates.json
     """
 }

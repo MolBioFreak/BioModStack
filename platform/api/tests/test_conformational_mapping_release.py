@@ -125,16 +125,25 @@ def test_cm_scheduler_admission_and_nonzero_gpu_reach_contained_frustrampnn(
     )
     assert command[command.index("--gpu_id") + 1] == "3"
 
-    root = tmp_path.resolve()
+    input_root = tmp_path / "input"
+    output_root = tmp_path / "output"
+    input_root.mkdir()
+    output_root.mkdir()
+    normalized = input_root / "normalized.pdb"
+    normalized.write_text("ATOM\n", encoding="utf-8")
     argv = _frustrampnn_command(
-        apptainer="apptainer", container=root / "frustrampnn.sif",
-        tool="/opt/venv/bin/frustrampnn", normalized=root / "normalized.pdb",
+        apptainer="apptainer", container=tmp_path / "frustrampnn.sif",
+        tool="/opt/venv/bin/frustrampnn", normalized=normalized,
         checkpoint=Path("/opt/frustrampnn_weights/megascale.ckpt"),
-        raw=root / "raw.csv", output_root=root, gpu_id=3,
+        raw=output_root / "raw.csv", output_root=output_root, gpu_id=3,
     )
     assert argv[argv.index("CUDA_VISIBLE_DEVICES=3") - 1] == "--env"
     assert "--containall" in argv
-    assert argv[argv.index("--bind") + 1] == f"{root}:{root}"
+    assert f"{normalized.resolve()}:/bms/input/normalized.pdb:ro" in argv
+    assert f"{output_root.resolve()}:/bms/output:rw" in argv
+    assert argv[-2:] == ["--device", "cuda"]
+    assert "--gpu_id" not in argv
+    assert "--gpu-id" not in argv
 
 
 def test_cm_nextflow_module_emits_assigned_gpu_into_runner_and_apptainer(
@@ -193,13 +202,22 @@ def test_cm_nextflow_module_emits_assigned_gpu_into_runner_and_apptainer(
     assert emitted["cuda"] == "3"
     gpu_id = emitted["argv"][emitted["argv"].index("--gpu-id") + 1]
     assert gpu_id == "3"
+    input_root = tmp_path / "command-input"
+    output_root = tmp_path / "command-output"
+    input_root.mkdir()
+    output_root.mkdir()
+    normalized = input_root / "normalized.pdb"
+    normalized.write_text("ATOM\n", encoding="utf-8")
     argv = _frustrampnn_command(
         apptainer="apptainer", container=tmp_path / "frustrampnn.sif",
-        tool="/opt/venv/bin/frustrampnn", normalized=tmp_path / "normalized.pdb",
+        tool="/opt/venv/bin/frustrampnn", normalized=normalized,
         checkpoint=Path("/opt/frustrampnn_weights/megascale.ckpt"),
-        raw=tmp_path / "raw.csv", output_root=tmp_path, gpu_id=int(gpu_id),
+        raw=output_root / "raw.csv", output_root=output_root, gpu_id=int(gpu_id),
     )
     assert "CUDA_VISIBLE_DEVICES=3" in argv
+    assert argv[-2:] == ["--device", "cuda"]
+    assert "--gpu_id" not in argv
+    assert "--gpu-id" not in argv
 
     injection_marker = tmp_path / "gpu-injection-proof"
     malicious_gpu = f"3'; touch {injection_marker}; #"
@@ -257,7 +275,7 @@ def test_cm_frustrampnn_image_rejects_all_symlinks_and_pins_open_generation(
     parent_link = tmp_path / "linked-parent"
     parent_link.symlink_to(real_parent, target_is_directory=True)
     for linked in (leaf_link, parent_link / image.name):
-        with pytest.raises(RuntimeError, match="contain no symlinks"):
+        with pytest.raises(RuntimeError, match="symlink|without following"):
             _open_verified_container(linked, digest)
 
     fd, actual = _open_verified_container(image, digest)
@@ -267,13 +285,20 @@ def test_cm_frustrampnn_image_rejects_all_symlinks_and_pins_open_generation(
     try:
         assert _sha256_fd(fd) == digest
         assert _sha256_fd(fd) != hashlib.sha256(image.read_bytes()).hexdigest()
+        input_root = tmp_path / "descriptor-input"
+        output_root = tmp_path / "descriptor-output"
+        input_root.mkdir()
+        output_root.mkdir()
+        normalized = input_root / "normalized.pdb"
+        normalized.write_text("ATOM\n", encoding="utf-8")
         argv = _frustrampnn_command(
             apptainer="apptainer", container=Path(f"/proc/self/fd/{fd}"),
-            tool="/opt/venv/bin/frustrampnn", normalized=tmp_path / "normalized.pdb",
+            tool="/opt/venv/bin/frustrampnn", normalized=normalized,
             checkpoint=Path("/opt/frustrampnn_weights/megascale.ckpt"),
-            raw=tmp_path / "raw.csv", output_root=tmp_path, gpu_id=3,
+            raw=output_root / "raw.csv", output_root=output_root, gpu_id=3,
         )
         assert f"/proc/self/fd/{fd}" in argv
+        assert argv[-2:] == ["--device", "cuda"]
     finally:
         os.close(fd)
 

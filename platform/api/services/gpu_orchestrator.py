@@ -2695,12 +2695,8 @@ class GPUOrchestrator:
                                             f"for reconciled top-level job {job.name}"
                                         )
                                     from services.analysis_autorun import schedule_viewer_minimum_analyses_for_job
-                                    from services.nextflow import (
-                                        maybe_trigger_batch_frustrampnn,
-                                        maybe_trigger_mutation_seed_refinement,
-                                    )
+                                    from services.nextflow import maybe_trigger_mutation_seed_refinement
                                     schedule_viewer_minimum_analyses_for_job(str(job.id))
-                                    await maybe_trigger_batch_frustrampnn(job, session)
                                     await maybe_trigger_mutation_seed_refinement(job, session)
                                 except Exception as ingest_err:
                                     logger.warning(

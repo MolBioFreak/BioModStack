@@ -18,6 +18,7 @@ from typing import Annotated, Any, Literal, Mapping, Sequence
 
 from jsonschema import Draft202012Validator, FormatChecker
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, computed_field, model_validator
+from services.frustrampnn.analysis import score_class as canonical_frustrampnn_score_class
 
 
 AA_ORDER = "ACDEFGHIKLMNPQRSTVWY"
@@ -1244,10 +1245,9 @@ def validate_landscape_slots(wt: str, slots: Sequence[Mapping[str, Any]]) -> Non
         if status == "ok":
             if isinstance(score, bool) or not isinstance(score, (int, float)) or not math.isfinite(float(score)):
                 raise ContractValidationError("ok landscape slot requires a finite score")
+            canonical_class = canonical_frustrampnn_score_class(float(score))
             expected_class = (
-                "high" if score <= -1.0
-                else "minimally_frustrated" if score >= 0.58
-                else "neutral"
+                "minimally_frustrated" if canonical_class == "minimal" else canonical_class
             )
             if slot.get("class") != expected_class:
                 raise ContractValidationError("landscape class disagrees with threshold policy")
@@ -1489,7 +1489,11 @@ def _validate_phase0_vector_material(vector: Mapping[str, Any], case: Mapping[st
                     **slot,
                     "wt": wt,
                     "native": slot["mutation_aa"] == wt,
-                    "class": "high" if score <= -1.0 else "minimally_frustrated" if score >= 0.58 else "neutral",
+                    "class": (
+                        "minimally_frustrated"
+                        if canonical_frustrampnn_score_class(float(score)) == "minimal"
+                        else canonical_frustrampnn_score_class(float(score))
+                    ),
                     "scoreable": True,
                     "reason": None,
                 })

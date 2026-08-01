@@ -1,6 +1,9 @@
 #!/usr/bin/env nextflow
 nextflow.enable.dsl = 2
 
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+
 params.sequence_batch_json_path = params.sequence_batch_json_path ?: null
 params.complex_batch_dir = params.complex_batch_dir ?: null
 params.target_geometry_mode = params.target_geometry_mode ?: null
@@ -31,7 +34,330 @@ include { BoltzFromSequence } from '../modules/structure_prediction.nf'
 include { RF3FromSequence } from '../modules/structure_prediction.nf'
 include { structure_prediction_wf } from '../modules/structure_prediction.nf'
 include { OpenMMRelaxation ; OpenMMScore } from '../modules/openmm.nf'
-include { FrustrampnnQC ; AggregateFrustrationReports } from '../modules/frustrampnn.nf'
+include { CanonicalFrustraMPNN } from '../modules/frustrampnn.nf'
+
+def proteinDesignSha256(rawPath) {
+    def digest = java.security.MessageDigest.getInstance('SHA-256')
+    rawPath.toFile().withInputStream { stream ->
+        byte[] buffer = new byte[1024 * 1024]
+        int count
+        while ((count = stream.read(buffer)) != -1) digest.update(buffer, 0, count)
+    }
+    return digest.digest().encodeHex().toString()
+}
+
+def proteinDesignCandidateId(parentJobId, producerStage, producerCandidateKey) {
+    def domain = [
+        'bms.frustrampnn.parent-candidate.v1',
+        parentJobId?.toString()?.trim(),
+        'protein_design',
+        producerStage?.toString()?.trim(),
+        producerCandidateKey?.toString()?.trim(),
+    ]
+    if (domain.tail().any { !it || it.contains('\u0000') }) {
+        throw new IllegalArgumentException('protein_design candidate identity fields must be non-empty and NUL-free')
+    }
+    def digest = java.security.MessageDigest.getInstance('SHA-256')
+        .digest(domain.join('\u0000').getBytes('UTF-8')).encodeHex().toString()[0..<32]
+    return "${digest[0..<8]}-${digest[8..<12]}-${digest[12..<16]}-${digest[16..<20]}-${digest[20..<32]}"
+}
+
+def invalidSequenceBatchIdentity(message) {
+    throw new IllegalArgumentException("protein_design:invalid_sequence_batch_identity:${message}")
+}
+
+def sequenceSubmissionMetadata(submissionId, submissionName, sequence, fold = null, rank = null) {
+    def authority = submissionId?.toString()?.trim()
+    def displayName = submissionName?.toString()?.trim()
+    def sequenceValue = sequence?.toString()?.trim()
+    if (!(authority ==~ /[A-Za-z0-9][A-Za-z0-9._-]*/)) {
+        invalidSequenceBatchIdentity('entry ID must be non-empty and safe')
+    }
+    if (!displayName || !sequenceValue) {
+        invalidSequenceBatchIdentity('entry name and sequence must be non-empty')
+    }
+    if (rank != null && (!(rank instanceof Integer) || (rank as int) < 0)) {
+        invalidSequenceBatchIdentity('entry rank must be null or a non-negative integer')
+    }
+    if (fold != null && !(fold instanceof Integer) && !(fold instanceof CharSequence)) {
+        invalidSequenceBatchIdentity('entry fold must be null, an integer, or a string')
+    }
+    return [
+        producer_artifact_id: authority,
+        producer_artifact_key: authority,
+        producer_sample: authority,
+        producer_sequence: sequenceValue,
+        producer_fold: fold,
+        producer_rank: rank,
+        producer_submission_id: authority,
+        producer_submission_name: displayName,
+        original_submission_identity: [id: authority, name: displayName],
+    ]
+}
+
+def normalizeProteinDesignSequenceBatchEntries(rawEntries) {
+    if (!(rawEntries instanceof Collection) || rawEntries.isEmpty()) {
+        invalidSequenceBatchIdentity('batch must contain at least one entry')
+    }
+    def normalized = rawEntries.collect { rawEntry ->
+        if (!(rawEntry instanceof Map)) {
+            invalidSequenceBatchIdentity('every batch entry must be an object')
+        }
+        def explicitIdentityFields = ['producer_artifact_id', 'entry_id', 'id'].findAll {
+            rawEntry.containsKey(it)
+        }
+        def explicitValues = explicitIdentityFields.collect {
+            rawEntry[it] == null ? '' : rawEntry[it].toString().trim()
+        }
+        if (explicitIdentityFields && (explicitValues.any { !it } || explicitValues.toSet().size() != 1)) {
+            invalidSequenceBatchIdentity('explicit entry IDs must be non-empty and agree')
+        }
+        def legacyName = rawEntry.name == null ? '' : rawEntry.name.toString().trim()
+        def authority = explicitValues ? explicitValues[0] : legacyName
+        def sequence = rawEntry.sequence == null ? '' : rawEntry.sequence.toString().trim()
+        def displayName = legacyName ?: authority
+        def metadata = sequenceSubmissionMetadata(
+            authority,
+            displayName,
+            sequence,
+            rawEntry.containsKey('fold') ? rawEntry.fold : null,
+            rawEntry.containsKey('rank') ? rawEntry.rank : null,
+        )
+        tuple(metadata, sequence, authority)
+    }
+    def artifactIds = normalized.collect { it[0].producer_artifact_id }
+    def artifactKeys = normalized.collect { it[0].producer_artifact_key }
+    if (artifactIds.toSet().size() != artifactIds.size() || artifactKeys.toSet().size() != artifactKeys.size()) {
+        invalidSequenceBatchIdentity('entry IDs must be unique within the batch')
+    }
+    return normalized
+}
+
+def proteinDesignTerminalCandidate(rawPath, branch, method, producer = [:]) {
+    def branchAuthorities = [
+        early_sequence_prediction: [producer_branch: 'early_sequence_prediction'],
+        rfd3_only: [producer_branch: 'rfd3_only'],
+        af2_terminal: [producer_branch: 'af2_terminal'],
+        boltz_terminal: [producer_branch: 'boltz_terminal'],
+        rf3_terminal: [producer_branch: 'rf3_terminal'],
+        protenix_terminal: [producer_branch: 'protenix_terminal'],
+        boltzgen_direct: [producer_branch: 'boltzgen_direct'],
+        boltzgen_child: [producer_branch: 'boltzgen_child'],
+        skip_rfd: [producer_branch: 'skip_rfd'],
+        skip_rfd_seq: [producer_branch: 'skip_rfd_seq'],
+        analysis_import: [producer_branch: 'analysis_import'],
+    ]
+    if (!branchAuthorities.containsKey(branch)) {
+        throw new IllegalArgumentException("unknown protein_design terminal branch: ${branch}")
+    }
+    def artifactDigest = proteinDesignSha256(rawPath)
+    def outputKey = producer.producer_output_key?.toString() ?: "${branch}/${rawPath.getName()}"
+    def sample = producer.containsKey('producer_sample') ? producer.producer_sample : null
+    def rank = producer.containsKey('producer_rank') ? producer.producer_rank : null
+    def identityDomain = JsonOutput.toJson([
+        producer_method: method,
+        producer_output_key: outputKey.replaceFirst(/(?i)\.(?:pdb|cif|mmcif)$/, ''),
+        producer_rank: rank,
+        producer_sample: sample,
+    ])
+    def identityDigest = java.security.MessageDigest.getInstance('SHA-256')
+        .digest(identityDomain.getBytes('UTF-8')).encodeHex().toString()
+    def sourceFormat = rawPath.getName().toLowerCase().endsWith('.pdb') ? 'pdb' : 'mmcif'
+    def producerKey = "frustrampnn/sources/${method}/${identityDigest}/${artifactDigest}.normalized.pdb"
+    def producerStage = "protein_design:${branch}"
+    def parentJobId = params.job_id?.toString()
+    return tuple([
+        candidate_id: proteinDesignCandidateId(parentJobId, producerStage, producerKey),
+        parent_job_id: parentJobId,
+        parent_workflow_id: 'protein_design',
+        producer_stage: producerStage,
+        producer_branch: branchAuthorities[branch].producer_branch,
+        producer_candidate_key: producerKey,
+        producer_method: method,
+        producer_sample: sample,
+        producer_rank: rank,
+        producer_output_key: outputKey,
+        producer_identity_sha256: identityDigest,
+        producer_artifact_sha256: artifactDigest,
+        source_format: sourceFormat,
+        requiredness: 'required',
+        checkpoint_id: 'megascale.ckpt',
+        child_job_id: producer.child_job_id ?: null,
+    ], rawPath)
+}
+
+process BindProteinDesignTerminalMetadata {
+    label 'pyrosetta_tools'
+    tag "protein-design-metadata:${candidate_meta.candidate_id}"
+    stageInMode 'copy'
+
+    input:
+    tuple val(candidate_meta), path(terminal_structure)
+
+    output:
+    path "bound_${candidate_meta.candidate_id}.jsonl", topic: metadata_ch_fold_seq
+    path "terminal_${candidate_meta.candidate_id}.json", emit: manifest
+    path "analysis_${candidate_meta.candidate_id}.log", emit: log
+
+    script:
+    def terminalManifest = [
+        schema_name: 'protein_design_terminal_candidate',
+        schema_version: 1,
+        candidate_id: candidate_meta.candidate_id,
+        parent_job_id: candidate_meta.parent_job_id,
+        parent_workflow_id: candidate_meta.parent_workflow_id,
+        producer_stage: candidate_meta.producer_stage,
+        producer_candidate_key: candidate_meta.producer_candidate_key,
+        producer_method: candidate_meta.producer_method,
+        producer_sample: candidate_meta.producer_sample,
+        producer_rank: candidate_meta.producer_rank,
+        producer_output_key: candidate_meta.producer_output_key,
+        producer_identity_sha256: candidate_meta.producer_identity_sha256,
+        producer_artifact_sha256: candidate_meta.producer_artifact_sha256,
+        source_format: candidate_meta.source_format,
+    ]
+    def manifestBase64 = JsonOutput.toJson(terminalManifest).getBytes('UTF-8').encodeBase64().toString()
+    def candidateId = candidate_meta.candidate_id.toString()
+    """
+    set -euo pipefail
+    python3 -u /scripts/analyse_best_designs.py \
+      --pdb_dir ./ --output ordinary_${candidateId}.jsonl --verbose --num_processes 1 \
+      2>&1 | tee analysis_${candidateId}.log
+    '${params.api_python}' '${params.code_root}/scripts/project_protein_design_metadata.py' bind-jsonl \
+      --metadata-jsonl ordinary_${candidateId}.jsonl \
+      --manifest-metadata-base64 '${manifestBase64}' \
+      --output-jsonl bound_${candidateId}.jsonl \
+      --terminal-manifest terminal_${candidateId}.json
+    """
+}
+
+process ProjectProteinDesignMetadata {
+    label 'CPU'
+    stageInMode 'copy'
+
+    input:
+    path combined_metadata
+    path terminal_manifests
+
+    output:
+    path 'all_designs.csv', emit: csv
+
+    script:
+    def manifestArguments = terminal_manifests.collect { "--terminal-manifest '${it}'" }.join(' ')
+    """
+    set -euo pipefail
+    '${params.api_python}' '${params.code_root}/scripts/project_protein_design_metadata.py' project-csv \
+      --metadata-csv '${combined_metadata}' \
+      ${manifestArguments} \
+      --output all_designs.csv
+    """
+}
+
+process StageProteinDesignPublishStructure {
+    label 'CPU'
+    tag "protein-design-publish:${candidate_meta.candidate_id}"
+    stageInMode 'copy'
+
+    input:
+    tuple val(candidate_meta), path(terminal_structure)
+
+    output:
+    path "candidate_${candidate_meta.candidate_id}.*", emit: structure
+
+    script:
+    def extension = candidate_meta.source_format == 'mmcif' ? 'cif' : 'pdb'
+    def outputName = "candidate_${candidate_meta.candidate_id}.${extension}"
+    """
+    set -euo pipefail
+    cp -- '${terminal_structure}' '${outputName}'
+    """
+}
+
+process PrepareProteinDesignFrustraMPNNCandidate {
+    tag "frustrampnn-protein-design:${candidate_meta.producer_branch}:${candidate_meta.producer_identity_sha256}"
+    stageInMode 'copy'
+    publishDir { "${params.out_dir}/${new File(candidate_meta.producer_candidate_key.toString()).parent}" },
+        mode: 'copy', pattern: 'canonical_source.pdb', saveAs: { new File(candidate_meta.producer_candidate_key.toString()).name }
+
+    input:
+    tuple val(candidate_meta), path(terminal_structure)
+
+    output:
+    tuple path('workflow_component_request_v1.json'), path('canonical_source.pdb'), emit: prepared
+
+    script:
+    def requestMetadata = candidate_meta.subMap([
+        'parent_job_id', 'parent_workflow_id', 'producer_stage', 'producer_candidate_key',
+        'requiredness', 'checkpoint_id', 'producer_method', 'producer_sample',
+        'producer_rank', 'producer_output_key', 'producer_identity_sha256',
+        'producer_artifact_sha256', 'source_format', 'candidate_id'
+    ])
+    def metadataBase64 = JsonOutput.toJson(requestMetadata).getBytes('UTF-8').encodeBase64().toString()
+    """
+    set -euo pipefail
+    '${params.api_python}' '${params.code_root}/scripts/prepare_frustrampnn_candidate.py' \
+      --source '${terminal_structure}' --output-pdb canonical_source.pdb \
+      --request workflow_component_request_v1.json --metadata-base64 '${metadataBase64}'
+    """
+}
+
+process ReportProteinDesignFrustraMPNNNotRequested {
+    label 'CPU'
+    input:
+    val trigger
+    output:
+    path 'frustrampnn_not_requested.reported'
+    script:
+    """
+    set -euo pipefail
+    '${params.api_python}' '${params.code_root}/scripts/stage_reporter.py' \
+      '${params.job_id}' frustrampnn not_requested
+    : > frustrampnn_not_requested.reported
+    """
+}
+
+process PublishProteinDesignFrustraMPNNCandidate {
+    label 'CPU'
+    stageInMode 'copy'
+    input:
+    tuple val(result_meta), path(candidate_bundle), path(result_manifest)
+    output:
+    path 'published_*.json', emit: marker
+    script:
+    def candidateId = result_meta.candidate_id.toString()
+    """
+    set -euo pipefail
+    '${params.api_python}' '${params.code_root}/scripts/publish_frustrampnn_bundle.py' \
+      --source-bundle '${candidate_bundle}' --allowed-root '${params.out_dir}' \
+      --destination '${params.out_dir}/frustrampnn/results/${candidateId}' \
+      --marker 'published_${candidateId}.json'
+    """
+}
+
+process ReportProteinDesignFrustraMPNNComplete {
+    label 'CPU'
+    input:
+    path published_markers
+    output:
+    path 'frustrampnn_complete.reported'
+    script:
+    """
+    set -euo pipefail
+    mapfile -t outputs < <('${params.api_python}' - <<'PY'
+import json, pathlib
+for marker in sorted(pathlib.Path('.').glob('published_*.json')):
+    payload = json.loads(marker.read_text(encoding='utf-8'))
+    if set(payload) != {'manifest', 'result', 'source'}:
+        raise SystemExit('invalid FrustraMPNN publication marker')
+    print(payload['result']); print(payload['manifest']); print(payload['source'])
+PY
+    )
+    test \"\${#outputs[@]}\" -gt 0
+    '${params.api_python}' '${params.code_root}/scripts/stage_reporter.py' \
+      '${params.job_id}' frustrampnn complete \"\${outputs[@]}\"
+    : > frustrampnn_complete.reported
+    """
+}
 
 
 
@@ -120,44 +446,38 @@ workflow PROTEIN_DESIGN {
 
         if (params.sequence_batch_json_path) {
             def batchEntries = parseJsonFile(params.sequence_batch_json_path) as List
-            println("* Batch sequences: ${batchEntries.size()}")
-            parallel_jobs_ch = Channel
-                .from(batchEntries)
-                .map { entry ->
-                    tuple("${entry.sequence}", "${entry.name}")
-                }
+            def normalizedBatchEntries = normalizeProteinDesignSequenceBatchEntries(batchEntries)
+            println("* Batch sequences: ${normalizedBatchEntries.size()}")
+            parallel_jobs_ch = Channel.fromList(normalizedBatchEntries)
         } else {
             def job_indices = Channel.from(0..<numParallelJobs)
 
             parallel_jobs_ch = job_indices.map { idx ->
                 def jobName = numParallelJobs > 1 ? "${seq_name}_job${idx}" : seq_name
-                tuple(params.sequence_input, jobName)
+                def metadata = sequenceSubmissionMetadata(
+                    jobName,
+                    seq_name,
+                    params.sequence_input,
+                    numParallelJobs > 1 ? idx : null,
+                    null,
+                )
+                metadata.producer_submission_id = seq_name
+                metadata.original_submission_identity = [id: seq_name, name: seq_name]
+                tuple(metadata, params.sequence_input, jobName)
             }
         }
 
-        if (params.pred_method in ['boltz', 'rf3', 'both', 'protenix', 'all']) {
-            structure_prediction_wf(parallel_jobs_ch)
-
-            structure_prediction_wf.out.structures
-                .flatten()
-                .collect()
-                .set { final_pdbs }
-        }
-        else {
-            structure_prediction_wf(parallel_jobs_ch)
-            structure_prediction_wf.out.structures.flatten().collect().set { final_pdbs }
-        }
-
-        if (params.run_frustrampnn == true) {
-            def frustra_input = final_pdbs
-                .flatten()
-                .map { pdb -> tuple([id: pdb.baseName], pdb) }
-            FrustrampnnQC(frustra_input)
-            AggregateFrustrationReports(FrustrampnnQC.out.summary.map { meta, summary -> summary }.collect())
-        }
-
-        return null
+        structure_prediction_wf(parallel_jobs_ch)
+        terminal_designs = structure_prediction_wf.out.canonical_structures.map { producer_meta, predicted ->
+            def method = producer_meta.producer_method?.toString() ?: (params.pred_method ?: 'boltz').toString()
+            def producer = new LinkedHashMap(producer_meta as Map)
+            producer.producer_output_key = producer_meta.producer_output_key?.toString() ?:
+                producer_meta.producer_artifact_key?.toString()
+            proteinDesignTerminalCandidate(predicted, 'early_sequence_prediction', method, producer)
+        }.ifEmpty { error('protein_design:no_candidates') }
+        final_pdbs = terminal_designs.map { candidate_meta, structure -> structure }.collect()
     }
+    else {
 
 
     if (!params.skip_rfd & !params.skip_rfd_seq & !params.skip_rfd_seq_pred & params.diffusion_method != 'boltzgen') {
@@ -196,11 +516,15 @@ workflow PROTEIN_DESIGN {
             FilterRFD3(rfd_tuples)
 
             if (params.run_rfd_only) {
-                FilterRFD3.out.structures_metadata
-                    .flatten()
-                    .collect()
-                    .ifEmpty(file("${params.code_root}/lib/placeholder.pdb"))
-                    .set { final_pdbs }
+                terminal_designs = FilterRFD3.out.structures_metadata
+                    .flatMap { pdbs, sidecars ->
+                        def structures = pdbs instanceof Collection ? pdbs : [pdbs]
+                        structures.collect { pdb ->
+                            proteinDesignTerminalCandidate(pdb, 'rfd3_only', 'rfd3')
+                        }
+                    }
+                    .ifEmpty { error('protein_design:no_candidates') }
+                final_pdbs = terminal_designs.map { candidate_meta, structure -> structure }.collect()
             }
             else {
                 FilterRFD3.out.structures_metadata.set { filt_rfd_pdbs_jsons }
@@ -275,16 +599,10 @@ workflow PROTEIN_DESIGN {
                 CollectBoltzGenOutputs.out.manifest,
             )
 
-            CollectBoltzGenOutputs.out.pdbs
-                .flatten()
-                .collect()
-                .ifEmpty(file("${params.code_root}/lib/placeholder.pdb"))
-                .set { final_pdbs }
-
             rfd_tuples = Channel.empty()
             filt_rfd_pdbs_jsons = Channel.empty()
             filt_seq_pdbs = Channel.empty()
-            analysis_input_pdbs = Channel.empty()
+            analysis_input_pdbs = CollectBoltzGenOutputs.out.pdbs.flatten()
         }
         else {
             RunBoltzGen(PrepBoltzGenInput.out.yaml)
@@ -610,16 +928,46 @@ workflow PROTEIN_DESIGN {
     }
 
     if (!params.run_rfd_only) {
-        AnalyseBestDesigns(analysis_input_pdbs)
-        analysis_input_pdbs
+        def terminalBranch = (
+            params.diffusion_method == 'boltzgen'
+                ? (((params.containsKey('parallel_mode') && params.parallel_mode == 'full_orchestrator') || params.boltzgen_parallel_mode == true)
+                    ? 'boltzgen_child' : 'boltzgen_direct')
+                : (params.skip_rfd_seq_pred == true || params.skip_pred == true)
+                    ? 'analysis_import'
+                    : params.skip_rfd_seq == true
+                        ? 'skip_rfd_seq'
+                        : params.skip_rfd == true
+                            ? 'skip_rfd'
+                            : params.pred_method == 'af2'
+                                ? 'af2_terminal'
+                                : params.pred_method == 'boltz'
+                                    ? 'boltz_terminal'
+                                    : params.pred_method == 'rf3'
+                                        ? 'rf3_terminal'
+                                        : 'protenix_terminal'
+        )
+        def terminalMethod = params.diffusion_method == 'boltzgen'
+            ? 'boltzgen'
+            : (terminalBranch == 'analysis_import' ? 'import' : params.pred_method.toString())
+        terminal_designs = analysis_input_pdbs
             .flatten()
-            .collect()
-            .ifEmpty(file("${params.code_root}/lib/placeholder.pdb"))
-            .set { final_pdbs }
+            .map { pdb -> proteinDesignTerminalCandidate(pdb, terminalBranch, terminalMethod) }
+            .ifEmpty { error('protein_design:no_candidates') }
+        def projected_terminal_pdbs = terminal_designs.map { candidate_meta, structure -> structure }
+        final_pdbs = projected_terminal_pdbs.collect()
     }
     else {
         println("Skipping Analysis stage as run_rfd_only=true.")
     }
+    }
+
+    // Bind canonical identity to each candidate's ordinary metadata while the
+    // scheduler still owns the typed tuple. This projection is required even
+    // when FrustraMPNN itself is disabled so ordinary Design ingestion keeps
+    // the same deterministic identity contract.
+    BindProteinDesignTerminalMetadata(terminal_designs)
+    StageProteinDesignPublishStructure(terminal_designs)
+    StageProteinDesignPublishStructure.out.structure.collect().set { published_final_structures }
 
     channel.topic('metadata_ch_fold')
         .flatten()
@@ -632,9 +980,19 @@ workflow PROTEIN_DESIGN {
         .ifEmpty { file("${params.code_root}/lib/empty-meta-seq.jsonl") }
         .set { metadata_fold_seq }
 
-    CombineMetadata(metadata_fold, metadata_fold_seq).csv.collectFile(name: "all_designs.csv").set { all_designs_metadata }
+    CombineMetadata(metadata_fold, metadata_fold_seq).csv.set { all_designs_metadata }
+    BindProteinDesignTerminalMetadata.out.manifest.collect().set { terminal_candidate_manifests }
+    ProjectProteinDesignMetadata(all_designs_metadata, terminal_candidate_manifests)
+    projected_design_metadata = ProjectProteinDesignMetadata.out.csv
 
-    if (params.run_rfd_only) {
+    if (params.sequence_input || params.sequence_batch_json_path) {
+        rfd_count = 0
+        filter_rfd_count = 0
+        seq_count = 0
+        filter_seq_count = 0
+        countPdbFiles(final_pdbs).set { filter_pred_count }
+    }
+    else if (params.run_rfd_only) {
         countPdbFiles(rfd_tuples).set { rfd_count }
         countPdbFiles(final_pdbs).set { filter_rfd_count }
         seq_count = 0
@@ -671,14 +1029,32 @@ workflow PROTEIN_DESIGN {
     }
 
     PublishResults(
-        final_pdbs,
-        all_designs_metadata,
+        published_final_structures,
+        projected_design_metadata,
         rfd_count,
         filter_rfd_count,
         seq_count,
         filter_seq_count,
         filter_pred_count,
     )
+    final_structures = final_pdbs
+
+    def frustrampnnRequiredness = params.frustrampnn_requiredness ?: 'required'
+    if (frustrampnnRequiredness != 'required') {
+        error('frustrampnn_requiredness must be required')
+    }
+    if (params.run_frustrampnn == true) {
+        PrepareProteinDesignFrustraMPNNCandidate(terminal_designs)
+        CanonicalFrustraMPNN(PrepareProteinDesignFrustraMPNNCandidate.out.prepared)
+        frustrampnn_results = CanonicalFrustraMPNN.out.result
+        PublishProteinDesignFrustraMPNNCandidate(frustrampnn_results)
+        def published_frustrampnn_markers = PublishProteinDesignFrustraMPNNCandidate.out.marker.collect()
+        ReportProteinDesignFrustraMPNNComplete(published_frustrampnn_markers)
+    }
+    else {
+        ReportProteinDesignFrustraMPNNNotRequested(Channel.value('not_requested'))
+        frustrampnn_results = Channel.empty()
+    }
 
     workflow.onComplete {
         def logFile = file('.nextflow.log')
@@ -687,6 +1063,11 @@ workflow PROTEIN_DESIGN {
             logFile.copyTo(outputDir.resolve('nextflow.log'))
         }
     }
+
+    emit:
+    final_structures
+    terminal_designs
+    frustrampnn_results
 }
 
 def collectInputFiles(params) {
@@ -704,9 +1085,7 @@ def collectInputFiles(params) {
             inputs << file(params.rfd_input_pdb)
         }
     }
-    if (params.rfd_mode in ['monomer_denovo', 'monomer_foldcond']) {
-        inputs << file("${params.code_root}/lib/placeholder.pdb")
-    }
+
     if (params.rfd_mode in ['binder_foldcond', 'monomer_foldcond']) {
         if (params.rfd_scaffold_dir) {
             inputs << file(params.rfd_scaffold_dir)
