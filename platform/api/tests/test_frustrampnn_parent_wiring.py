@@ -112,6 +112,17 @@ async def test_not_requested_stage_continues_ordinary_parent_result_ingestion(
 @pytest.mark.parametrize(
     ("stage_outputs", "terminal_states"),
     [
+        (None, {"frustrampnn": {"status": "not_requested", "outputs": []}}),
+        ([], {"frustrampnn": {"status": "not_requested", "outputs": []}}),
+        ({}, {"frustrampnn": {"status": "not_requested", "outputs": []}}),
+        (
+            {"structure_prediction": ["final/design.pdb"]},
+            {"frustrampnn": {"status": "not_requested", "outputs": []}},
+        ),
+        (
+            {},
+            {"FrustraMPNN": {"status": "not_requested", "outputs": []}},
+        ),
         ({"frustrampnn": []}, {"frustrampnn": {"status": "not_requested"}}),
         (
             {"frustrampnn": []},
