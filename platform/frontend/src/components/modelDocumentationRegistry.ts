@@ -46,6 +46,9 @@ export const MODEL_DOCUMENTATION_LINKS = {
         { label: 'FAMPNN GitHub', href: 'https://github.com/richardshuai/fampnn' },
         { label: 'FAMPNN preprint DOI', href: 'https://doi.org/10.1101/2025.02.13.637498' },
     ],
+    frustrampnn: [
+        { label: 'FrustraMPNN GitHub', href: 'https://github.com/schoederlab/frustraMPNN' },
+    ],
     fold_cp: [{ label: 'PyTorch DTensor', href: 'https://docs.pytorch.org/docs/stable/distributed.tensor.html' }],
     laproteina: [
         { label: 'La-Proteina GitHub', href: 'https://github.com/NVIDIA-Digital-Bio/la-proteina' },

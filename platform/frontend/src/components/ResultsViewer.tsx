@@ -59,6 +59,7 @@ import MDResultsPane from './MDResultsPane';
 import { ConformationalMappingViewer } from './conformationalMapping/ConformationalMappingViewer';
 import FrustraMpnnAnalysisControls from './FrustraMpnnAnalysisControls';
 import FrustraMpnnResultsViewer from './FrustraMpnnResultsViewer';
+import { ModelIntegrationControl, useModelIntegrationConfig } from './ModelIntegrationControl';
 import {
     saveAntibodyRefinementLaunchState,
     type AntibodyRefinementLaunchState,
@@ -1674,6 +1675,7 @@ const buildBoltzgenClusters = (designs: Design[], mode: BoltzgenClusterMode): Bo
 export function ResultsViewer() {
     const { jobId } = useParams();
     const navigate = useNavigate();
+    const frustrampnnIntegrationQuery = useModelIntegrationConfig('frustrampnn');
     const queryClient = useQueryClient();
 
     // State
@@ -5770,7 +5772,7 @@ export function ResultsViewer() {
                                                     ['ppiflow_backbone_refine', 'PPIFlow Backbone'],
                                                     ['ppiflow_maturation', 'PPIFlow Maturation'],
                                                     ['fampnn_redesign', 'FAMPNN'],
-                                                    ['frustrampnn', 'FrustraMPNN'],
+                                                    ['frustrampnn', 'Frustration analysis'],
                                                 ] as Array<[AntibodyIterationAction, string]>).map(([action, label]) => (
                                                     <button
                                                         key={action}
@@ -5900,15 +5902,16 @@ export function ResultsViewer() {
                                                 Lock Framework
                                             </label>
 
-                                            <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-300 transition-colors hover:border-slate-600 cursor-pointer">
-                                                <input
-                                                    type="checkbox"
+                                            <div className="rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-300">
+                                                <ModelIntegrationControl
+                                                    modelId="frustrampnn"
+                                                    workflowId="antibody_design"
                                                     checked={pipelineOverrides.run_frustrampnn}
-                                                    onChange={(e) => setPipelineOverrides(prev => ({ ...prev, run_frustrampnn: e.target.checked }))}
-                                                    className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-slate-900"
+                                                    onChange={(checked) => setPipelineOverrides(prev => ({ ...prev, run_frustrampnn: checked }))}
+                                                    fallbackLabel="Frustration analysis"
+                                                    integration={frustrampnnIntegrationQuery.data}
                                                 />
-                                                FrustraMPNN
-                                            </label>
+                                            </div>
 
                                             <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-300 transition-colors hover:border-slate-600 cursor-pointer">
                                                 <input
@@ -7441,7 +7444,7 @@ export function ResultsViewer() {
 
                                                             <div className="rounded-xl border border-slate-700/50 bg-slate-800/50 p-4">
                                                                 <div className="flex items-center justify-between gap-3">
-                                                                    <h3 className="text-sm font-semibold text-white">FrustraMPNN Hotspots</h3>
+                                                                    <h3 className="text-sm font-semibold text-white">Frustration analysis hotspots</h3>
                                                                     {selectedDesign.frustration_csv_relpath && (
                                                                         <div className="flex items-center gap-2">
                                                                             <a

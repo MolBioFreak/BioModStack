@@ -20,13 +20,15 @@ async def list_models(
     List all available models.
     
     - **category**: Filter by category (backbone_generation, sequence_design, etc.)
-    - **include_experimental**: Include models marked as experimental/disabled
+    - **include_experimental**: Include enabled models marked as experimental
     """
     registry = get_registry()
     models = registry.list_models(
-        category=category, 
-        enabled_only=not include_experimental
+        category=category,
+        enabled_only=True,
     )
+    if not include_experimental:
+        models = [model for model in models if not model.experimental]
     
     return [
         {
@@ -134,6 +136,32 @@ async def get_model(model_id: str):
         "experimental": model.experimental,
         "ui_icon": model.ui_icon,
         "ui_color": model.ui_color,
+    }
+
+
+@router.get("/{model_id}/integration")
+async def get_model_integration(model_id: str):
+    """Return the shared, non-launchable workflow-integration contract for a model."""
+    registry = get_registry()
+    model = registry.get_internal_model_definition(model_id)
+    if not model or not model.enabled or model.integration is None:
+        raise HTTPException(status_code=404, detail=f"Model integration '{model_id}' not found")
+    return {
+        "model_id": model.id,
+        "model_name": model.name,
+        "model_version": model.version,
+        "stage_parameter": model.integration.stage_parameter,
+        "operator_label": model.integration.operator_label,
+        "checkpoint_label": model.integration.checkpoint_label,
+        "model_summary": model.integration.model_summary,
+        "semantic_roles": model.integration.semantic_roles,
+        "workflows": {
+            workflow_id: {
+                "default_enabled": workflow.default_enabled,
+                "enabled_summary": workflow.enabled_summary,
+            }
+            for workflow_id, workflow in model.integration.workflows.items()
+        },
     }
 
 

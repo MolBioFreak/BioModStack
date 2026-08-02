@@ -6,6 +6,7 @@ import {
     fetchFrustraMpnnReceipt,
     type FrustraMpnnChildReceipt,
 } from '../lib/frustraMpnnApi.js';
+import { useModelIntegrationConfig } from './ModelIntegrationControl';
 
 interface OwnedDesignSelection {
     id: string;
@@ -49,6 +50,8 @@ export default function FrustraMpnnAnalysisControls({
     selectedDesigns,
     onOpenJob,
 }: FrustraMpnnAnalysisControlsProps) {
+    const integrationQuery = useModelIntegrationConfig('frustrampnn');
+    const integration = integrationQuery.data;
     const [receipt, setReceipt] = useState<FrustraMpnnChildReceipt | null>(null);
     const selectionIsOwned = selectedDesigns.length > 0 && selectedDesigns.every((design) => Boolean(design.pdb_path));
     const orderedNames = useMemo(() => selectedDesigns.map((design) => design.name).join(' • '), [selectedDesigns]);
@@ -77,7 +80,14 @@ export default function FrustraMpnnAnalysisControls({
         <section className="mb-4 rounded-xl border border-cyan-500/25 bg-cyan-500/5 p-4" aria-labelledby="frustrampnn-analysis-heading">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                 <div className="min-w-0">
-                    <h2 id="frustrampnn-analysis-heading" className="text-sm font-semibold text-cyan-100">FrustraMPNN persisted analysis</h2>
+                    <h2 id="frustrampnn-analysis-heading" className="text-sm font-semibold text-cyan-100">
+                        {integration?.operator_label || 'Frustration analysis'}
+                    </h2>
+                    {integration && (
+                        <p className="mt-1 text-[11px] text-cyan-200/80">
+                            {integration.model_name}{integration.checkpoint_label ? ` · ${integration.checkpoint_label}` : ''}
+                        </p>
+                    )}
                     <p className="mt-1 text-xs text-slate-400">
                         Submit the selected BMS-owned Design structures to the scheduler. The browser receives a child receipt and never waits for inference.
                     </p>
