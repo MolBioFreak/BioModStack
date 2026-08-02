@@ -20,6 +20,25 @@ from services.shape_resources import _publish
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
+PAPER_LIKE_RFD3_PROFILE = {
+    "id": "paper_like_rfd3_v1",
+    "paper_doi": "10.64898/2026.07.22.740177",
+    "shape_ctrl_commit": "e1a518b61e216d3c597a46e5a151b9e24756e33e",
+    "source_shape_weight": 0.75,
+    "source_guide_scale": 2.0,
+    "source_sdf_weight": 1.0,
+    "source_chamfer_weight": 1.0,
+    "source_target_point_count": 800,
+    "target_sampling": "seeded_subset_of_immutable_uniform_interior_pool_v1",
+    "rfd3_transfer_coefficient": 0.13333333333333333,
+    "effective_step_size": 0.2,
+    "max_update_angstrom": 0.5,
+    "guidance_decay": "constant",
+    "gradient_scaling": "raw",
+    "outside_reduction": "sum",
+    "connectivity_weight": 0.0,
+}
+
 
 class ShapeRequestError(ValueError):
     def __init__(self, code: str, message: str):
@@ -43,6 +62,7 @@ class SubmittedShapeRequest(BaseModel):
     generator: Literal["rfd3"] = "rfd3"
     sequence_engines: tuple[Literal["proteinmpnn", "fampnn"], ...] = ("proteinmpnn", "fampnn")
     predictor: Literal["esmfold2"] = "esmfold2"
+    guidance_profile: Literal["paper_like_rfd3_v1"] = "paper_like_rfd3_v1"
 
 
 @dataclass(frozen=True)
@@ -140,6 +160,7 @@ async def materialize_shape_request(
         "generator": submitted.generator,
         "sequence_engines": list(submitted.sequence_engines),
         "predictor": submitted.predictor,
+        "guidance_profile": dict(PAPER_LIKE_RFD3_PROFILE),
     }
     request_sha256 = hashlib.sha256(_canonical_json(spec)).hexdigest()
     request_id = str(spec["request_id"])
@@ -244,6 +265,7 @@ def _staged(row: ShapeDesignRequest, *, data_root: Path, name: str) -> StagedSha
         "shape_generator": "rfd3",
         "shape_sequence_engines": "proteinmpnn,fampnn",
         "shape_predictor": "esmfold2",
+        "shape_guidance_profile": row.request_spec.get("guidance_profile", {}).get("id", "rfd3_transfer_v1"),
         "msa_provider": "local",
     }
     return StagedShapeRequest(

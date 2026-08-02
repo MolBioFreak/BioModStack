@@ -93,6 +93,7 @@ export default function ShapeBlueprintTemplate() {
                 num_backbones: numBackbones,
                 sequences_per_backbone: sequencesPerBackbone,
                 seed,
+                guidance_profile: 'paper_like_rfd3_v1',
             }));
         },
         onSuccess: (response) => {
@@ -138,6 +139,9 @@ export default function ShapeBlueprintTemplate() {
 
                     <div className="border-t border-slate-800 pt-4">
                         <h2 className="font-semibold text-white">2. Launch settings</h2>
+                        <div className="mt-3 rounded-lg border border-cyan-500/30 bg-cyan-500/10 p-3 text-xs leading-5 text-cyan-100">
+                            <strong>Guidance: paper-like RFD3 v1.</strong> Uses the released example's 0.75 shape weight, guide scale 2, constant schedule, and 800 active interior targets through the reviewed native RFD3 <code>delta_L</code> transfer. It is an RFD3 adaptation—not classic-RFdiffusion parity.
+                        </div>
                         <label className="mt-3 block text-xs text-slate-400">Job name<input value={name} onChange={(event) => setName(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white" /></label>
                         <div className="mt-3 grid grid-cols-2 gap-3">
                             <label className="text-xs text-slate-400">Target length<input type="number" min={40} max={600} value={targetLength} onChange={(event) => setTargetLength(boundedInteger(event.target.value, 120, 40, 600))} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white" /></label>

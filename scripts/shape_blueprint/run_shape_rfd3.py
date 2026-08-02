@@ -23,6 +23,42 @@ INSTALLED_SAMPLER = Path("/usr/local/lib/python3.12/dist-packages/rfd3/model/inf
 GUIDANCE_SOURCE = Path(__file__).with_name("shape_guidance.py")
 SAMPLER_SOURCE = Path(__file__).with_name("rfd3_shape_sampler.py")
 
+PAPER_LIKE_RFD3_PROFILE = {
+    "id": "paper_like_rfd3_v1",
+    "paper_doi": "10.64898/2026.07.22.740177",
+    "shape_ctrl_commit": SHAPE_CTRL_COMMIT,
+    "source_shape_weight": 0.75,
+    "source_guide_scale": 2.0,
+    "source_sdf_weight": 1.0,
+    "source_chamfer_weight": 1.0,
+    "source_target_point_count": 800,
+    "target_sampling": "seeded_subset_of_immutable_uniform_interior_pool_v1",
+    "rfd3_transfer_coefficient": 0.13333333333333333,
+    "effective_step_size": 0.2,
+    "max_update_angstrom": 0.5,
+    "guidance_decay": "constant",
+    "gradient_scaling": "raw",
+    "outside_reduction": "sum",
+    "connectivity_weight": 0.0,
+}
+
+LEGACY_RFD3_PROFILE = {
+    "id": "rfd3_transfer_v1",
+    "source_shape_weight": 1.0,
+    "source_guide_scale": 1.0,
+    "source_sdf_weight": 1.0,
+    "source_chamfer_weight": 1.0,
+    "source_target_point_count": 0,
+    "target_sampling": "complete_immutable_uniform_interior_pool_v1",
+    "rfd3_transfer_coefficient": 0.2,
+    "effective_step_size": 0.2,
+    "max_update_angstrom": 0.5,
+    "guidance_decay": "constant",
+    "gradient_scaling": "raw",
+    "outside_reduction": "sum",
+    "connectivity_weight": 0.0,
+}
+
 
 def _canonical(payload: object) -> bytes:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
@@ -70,7 +106,38 @@ def validate_request(request_path: Path, manifest_path: Path) -> tuple[dict, dic
         raise ValueError("Shape backbone count is outside [1, 32]")
     if not isinstance(seed, int) or not 0 <= seed <= 2_147_483_647:
         raise ValueError("Shape seed is outside [0, 2147483647]")
+    profile = request.get("guidance_profile")
+    if profile is not None and profile != PAPER_LIKE_RFD3_PROFILE:
+        raise ValueError("Shape guidance profile is not a recognized immutable profile")
     return request, manifest
+
+
+def _effective_profile(request: dict) -> dict:
+    return dict(PAPER_LIKE_RFD3_PROFILE if request.get("guidance_profile") is not None else LEGACY_RFD3_PROFILE)
+
+
+def _guidance_trace_summary(path: Path, *, expected_profile: dict, expected_active_count: int) -> dict:
+    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    if not rows:
+        raise RuntimeError("RFD3 emitted no Shape guidance step receipt")
+    for row in rows:
+        if row.get("schema") != "bms_rfd3_shape_guidance_step_v4":
+            raise RuntimeError("RFD3 Shape guidance receipt schema mismatch")
+        if row.get("guidance_profile") != expected_profile["id"]:
+            raise RuntimeError("RFD3 Shape guidance profile receipt mismatch")
+        if row.get("active_target_point_count") != expected_active_count:
+            raise RuntimeError("RFD3 Shape active target count mismatch")
+        digest = str(row.get("active_point_pool_sha256") or "")
+        if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+            raise RuntimeError("RFD3 Shape active point-pool digest is invalid")
+    digests = {row["active_point_pool_sha256"] for row in rows}
+    if len(digests) != 1:
+        raise RuntimeError("RFD3 Shape active point pool changed within one run")
+    return {
+        "guidance_trace_rows": len(rows),
+        "active_target_point_count": expected_active_count,
+        "active_point_pool_sha256": digests.pop(),
+    }
 
 
 def _verify_installed_sampler() -> str:
@@ -95,9 +162,13 @@ def run_shape_rfd3(
     checkpoint_path: Path = DEFAULT_CHECKPOINT,
     environment: Mapping[str, str] | None = None,
     num_timesteps: int = 200,
-    guidance_step_size: float = 0.2,
+    guidance_step_size: float | None = None,
 ) -> dict:
     request, manifest = validate_request(request_path, manifest_path)
+    profile = _effective_profile(request)
+    if guidance_step_size is not None and guidance_step_size != profile["effective_step_size"]:
+        raise ValueError("CLI guidance step size disagrees with immutable Shape guidance profile")
+    guidance_step_size = float(profile["effective_step_size"])
     if _sha256(points_path) != manifest.get("point_pool_sha256"):
         raise ValueError("staged point-pool hash mismatch")
     if _sha256(sdf_path) != manifest.get("sdf_sha256"):
@@ -131,7 +202,15 @@ def run_shape_rfd3(
         "inference_sampler.kind=shape",
         f"inference_sampler.num_timesteps={num_timesteps}",
         f"+inference_sampler.shape_step_size={guidance_step_size}",
-        "+inference_sampler.shape_max_update=0.5",
+        f"+inference_sampler.shape_max_update={profile['max_update_angstrom']}",
+        f"+inference_sampler.shape_target_point_count={profile['source_target_point_count']}",
+        f"+inference_sampler.shape_target_point_seed={request['seed']}",
+        f"+inference_sampler.shape_guidance_profile={profile['id']}",
+        f"+inference_sampler.shape_source_shape_weight={profile['source_shape_weight']}",
+        f"+inference_sampler.shape_source_guide_scale={profile['source_guide_scale']}",
+        f"+inference_sampler.shape_rfd3_transfer_coefficient={profile['rfd3_transfer_coefficient']}",
+        f"+inference_sampler.shape_sdf_weight={profile['source_sdf_weight']}",
+        f"+inference_sampler.shape_chamfer_weight={profile['source_chamfer_weight']}",
         f"+inference_sampler.shape_manifest_path={manifest_path.resolve()}",
         f"+inference_sampler.shape_points_path={points_path.resolve()}",
         f"+inference_sampler.shape_sdf_path={sdf_path.resolve()}",
@@ -163,6 +242,8 @@ def run_shape_rfd3(
             "seed": request["seed"],
             "num_timesteps": num_timesteps,
             "guidance_step_size": guidance_step_size,
+            "guidance_profile": profile,
+            "target_sampling": profile["target_sampling"],
             "guidance_decay": "constant",
             "gradient_scaling": "raw",
             "outside_reduction": "sum",
@@ -186,6 +267,12 @@ def run_shape_rfd3(
         )
     if not guidance_receipt.is_file() or guidance_receipt.stat().st_size == 0:
         raise RuntimeError("RFD3 emitted no Shape guidance step receipt")
+    expected_active_count = int(profile["source_target_point_count"] or manifest["point_count"])
+    trace_summary = _guidance_trace_summary(
+        guidance_receipt,
+        expected_profile=profile,
+        expected_active_count=expected_active_count,
+    )
     try:
         rfd3_version = metadata.version("rfd3")
     except metadata.PackageNotFoundError:
@@ -210,6 +297,9 @@ def run_shape_rfd3(
         "seed": request["seed"],
         "num_timesteps": num_timesteps,
         "guidance_step_size": guidance_step_size,
+        "guidance_profile": profile,
+        "target_sampling": profile["target_sampling"],
+        **trace_summary,
         "guidance_decay": "constant",
         "gradient_scaling": "raw",
         "outside_reduction": "sum",
@@ -241,7 +331,7 @@ def main() -> int:
     parser.add_argument("--executable", default="rfd3")
     parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT)
     parser.add_argument("--num-timesteps", type=int, default=200)
-    parser.add_argument("--guidance-step-size", type=float, default=0.2)
+    parser.add_argument("--guidance-step-size", type=float)
     args = parser.parse_args()
     run_shape_rfd3(
         request_path=args.request,

@@ -30,6 +30,12 @@ def _sequence_module():
     return module
 
 
+def test_paper_like_rfd3_profile_is_identical_at_request_and_runtime_boundaries() -> None:
+    from services.shape_requests import PAPER_LIKE_RFD3_PROFILE
+
+    assert _module().PAPER_LIKE_RFD3_PROFILE == PAPER_LIKE_RFD3_PROFILE
+
+
 def _write_backbone(path: Path) -> None:
     path.write_text(
         "ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00 20.00           C\n"
@@ -54,6 +60,24 @@ def test_shape_rfd3_wrapper_binds_request_and_guidance_paths(tmp_path: Path) -> 
         "num_backbones": 2,
         "seed": 9,
         "generator": "rfd3",
+        "guidance_profile": {
+            "id": "paper_like_rfd3_v1",
+            "paper_doi": "10.64898/2026.07.22.740177",
+            "shape_ctrl_commit": "e1a518b61e216d3c597a46e5a151b9e24756e33e",
+            "source_shape_weight": 0.75,
+            "source_guide_scale": 2.0,
+            "source_sdf_weight": 1.0,
+            "source_chamfer_weight": 1.0,
+            "source_target_point_count": 800,
+            "target_sampling": "seeded_subset_of_immutable_uniform_interior_pool_v1",
+            "rfd3_transfer_coefficient": 0.13333333333333333,
+            "effective_step_size": 0.2,
+            "max_update_angstrom": 0.5,
+            "guidance_decay": "constant",
+            "gradient_scaling": "raw",
+            "outside_reduction": "sum",
+            "connectivity_weight": 0.0,
+        },
     }
     manifest = {
         "schema": "bms_shape_canonical_geometry_v1",
@@ -91,7 +115,7 @@ def test_shape_rfd3_wrapper_binds_request_and_guidance_paths(tmp_path: Path) -> 
         "out=pathlib.Path(next(x.split('=',1)[1] for x in args if x.startswith('out_dir='))); out.mkdir(parents=True, exist_ok=True)\n"
         "n=int(next(x.split('=',1)[1] for x in args if x.startswith('n_batches=')))\n"
         "receipt=pathlib.Path(next(x.split('=',1)[1] for x in args if x.startswith('+inference_sampler.shape_receipt_path=')))\n"
-        "receipt.write_text('{\"schema\":\"bms_rfd3_shape_guidance_step_v3\"}\\n')\n"
+        "receipt.write_text('{\"schema\":\"bms_rfd3_shape_guidance_step_v4\",\"guidance_profile\":\"paper_like_rfd3_v1\",\"active_target_point_count\":800,\"active_point_pool_sha256\":\"' + 'a'*64 + '\"}\\n')\n"
         "[(out/f'design_{i}.cif.gz').write_bytes(b'cif') for i in range(n)]\n"
         "[(out/f'design_{i}.json').write_text('{}') for i in range(n)]\n"
     )
@@ -117,6 +141,14 @@ def test_shape_rfd3_wrapper_binds_request_and_guidance_paths(tmp_path: Path) -> 
     assert "inference_sampler.num_timesteps=200" in args
     assert "+inference_sampler.shape_step_size=0.2" in args
     assert "+inference_sampler.shape_max_update=0.5" in args
+    assert "+inference_sampler.shape_target_point_count=800" in args
+    assert "+inference_sampler.shape_target_point_seed=9" in args
+    assert "+inference_sampler.shape_guidance_profile=paper_like_rfd3_v1" in args
+    assert "+inference_sampler.shape_source_shape_weight=0.75" in args
+    assert "+inference_sampler.shape_source_guide_scale=2.0" in args
+    assert "+inference_sampler.shape_rfd3_transfer_coefficient=0.13333333333333333" in args
+    assert "+inference_sampler.shape_sdf_weight=1.0" in args
+    assert "+inference_sampler.shape_chamfer_weight=1.0" in args
     assert not any("shape_connectivity_weight" in arg for arg in args)
     assert not any("shape_terminal_scale" in arg for arg in args)
     assert f"+inference_sampler.shape_manifest_path={manifest_path.resolve()}" in args
@@ -127,6 +159,10 @@ def test_shape_rfd3_wrapper_binds_request_and_guidance_paths(tmp_path: Path) -> 
     assert runtime["output_backbone_count"] == 2
     assert runtime["num_timesteps"] == 200
     assert runtime["guidance_step_size"] == 0.2
+    assert runtime["guidance_profile"]["id"] == "paper_like_rfd3_v1"
+    assert runtime["active_target_point_count"] == 800
+    assert runtime["active_point_pool_sha256"] == "a" * 64
+    assert runtime["target_sampling"] == "seeded_subset_of_immutable_uniform_interior_pool_v1"
     assert runtime["guidance_decay"] == "constant"
     assert runtime["gradient_scaling"] == "raw"
     assert runtime["outside_reduction"] == "sum"

@@ -101,6 +101,26 @@ async def test_shape_request_materializes_closed_hash_bound_bundle(tmp_path: Pat
             assert persisted is not None
             assert persisted.request_sha256 == staged.request_sha256
             assert persisted.job_id is None
+            profile = persisted.request_spec["guidance_profile"]
+            assert profile == {
+                "id": "paper_like_rfd3_v1",
+                "paper_doi": "10.64898/2026.07.22.740177",
+                "shape_ctrl_commit": "e1a518b61e216d3c597a46e5a151b9e24756e33e",
+                "source_shape_weight": 0.75,
+                "source_guide_scale": 2.0,
+                "source_sdf_weight": 1.0,
+                "source_chamfer_weight": 1.0,
+                "source_target_point_count": 800,
+                "target_sampling": "seeded_subset_of_immutable_uniform_interior_pool_v1",
+                "rfd3_transfer_coefficient": 0.13333333333333333,
+                "effective_step_size": 0.2,
+                "max_update_angstrom": 0.5,
+                "guidance_decay": "constant",
+                "gradient_scaling": "raw",
+                "outside_reduction": "sum",
+                "connectivity_weight": 0.0,
+            }
+            assert staged.launch_params["shape_guidance_profile"] == "paper_like_rfd3_v1"
     finally:
         await engine.dispose()
 

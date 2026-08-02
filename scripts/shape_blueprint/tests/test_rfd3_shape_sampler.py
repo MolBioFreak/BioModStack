@@ -50,7 +50,7 @@ class RFD3ShapeSamplerTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
-    def sampler(self, *, step_size: float = 0.5) -> ShapeGuidedDiffusionSampler:
+    def sampler(self, *, step_size: float = 0.5, target_point_count: int = 0) -> ShapeGuidedDiffusionSampler:
         return ShapeGuidedDiffusionSampler(
             shape_manifest_path=str(self.manifest_path),
             shape_points_path=str(self.points_path),
@@ -60,6 +60,10 @@ class RFD3ShapeSamplerTests(unittest.TestCase):
             shape_receipt_path=str(self.receipt_path),
             shape_step_size=step_size,
             shape_max_update=0.2,
+            shape_target_point_count=target_point_count,
+            shape_target_point_seed=17,
+            shape_guidance_profile="paper_like_rfd3_v1",
+            shape_rfd3_transfer_coefficient=step_size,
         )
 
     @staticmethod
@@ -79,6 +83,20 @@ class RFD3ShapeSamplerTests(unittest.TestCase):
         sampler.shape_expected_point_pool_sha256 = "b" * 64
         with self.assertRaisesRegex(ValueError, "point-pool hash"):
             sampler.load_field(torch.device("cpu"))
+
+    def test_paper_like_profile_uses_reproducible_subset_of_canonical_interior_pool(self) -> None:
+        first = self.sampler(target_point_count=2)
+        second = self.sampler(target_point_count=2)
+        first_field = first.load_field(torch.device("cpu"))
+        second_field = second.load_field(torch.device("cpu"))
+        self.assertEqual(len(first_field.points), 2)
+        torch.testing.assert_close(first_field.points, second_field.points)
+        self.assertEqual(first._shape_active_point_pool_sha256, second._shape_active_point_pool_sha256)
+        self.assertEqual(len(first._shape_active_point_pool_sha256), 64)
+
+    def test_target_subset_larger_than_canonical_pool_fails_closed(self) -> None:
+        with self.assertRaisesRegex(ValueError, "target point count"):
+            self.sampler(target_point_count=5).load_field(torch.device("cpu"))
 
     def test_derivative_guidance_broadcasts_ca_update_and_preserves_fixed_and_nonprotein_atoms(self) -> None:
         sampler = self.sampler()
@@ -109,7 +127,10 @@ class RFD3ShapeSamplerTests(unittest.TestCase):
         self.assertEqual(receipt["step_index"], 50)
         self.assertEqual(receipt["geometry_sha256"], "a" * 64)
         self.assertEqual(receipt["guided_ca_count"], 1)
-        self.assertEqual(receipt["schema"], "bms_rfd3_shape_guidance_step_v3")
+        self.assertEqual(receipt["schema"], "bms_rfd3_shape_guidance_step_v4")
+        self.assertEqual(receipt["guidance_profile"], "paper_like_rfd3_v1")
+        self.assertEqual(receipt["active_target_point_count"], 4)
+        self.assertEqual(len(receipt["active_point_pool_sha256"]), 64)
         self.assertEqual(receipt["guidance_decay"], "constant")
         self.assertEqual(receipt["gradient_scaling"], "raw")
         self.assertEqual(receipt["outside_reduction"], "sum")

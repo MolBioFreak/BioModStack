@@ -533,6 +533,7 @@ export interface ShapeLaunchRequest {
     num_backbones: number;
     sequences_per_backbone: number;
     seed: number;
+    guidance_profile: 'paper_like_rfd3_v1';
 }
 
 export const listShapeGeometries = () =>

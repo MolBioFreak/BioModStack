@@ -48,8 +48,15 @@ class ShapeGuidedDiffusionSampler(SampleDiffusionWithMotif):
     shape_start_fraction: float = 0.2
     shape_end_fraction: float = 0.8
     shape_terminal_scale: float = 1.0
+    shape_target_point_count: int = 0
+    shape_target_point_seed: int = 0
+    shape_guidance_profile: str = "rfd3_transfer_v1"
+    shape_source_shape_weight: float = 1.0
+    shape_source_guide_scale: float = 1.0
+    shape_rfd3_transfer_coefficient: float = 0.5
     _shape_fields: dict[str, ShapeGuidanceField] = field(default_factory=dict, init=False, repr=False)
     _shape_manifest: dict[str, Any] | None = field(default=None, init=False, repr=False)
+    _shape_active_point_pool_sha256: str = field(default="", init=False, repr=False)
 
     def __post_init__(self) -> None:
         if not self.shape_manifest_path or not self.shape_points_path or not self.shape_sdf_path:
@@ -62,6 +69,19 @@ class ShapeGuidedDiffusionSampler(SampleDiffusionWithMotif):
             raise ValueError("at least one Shape guidance weight must be positive")
         if not 0.0 < self.shape_terminal_scale <= 1.0:
             raise ValueError("Shape terminal guidance scale must be in (0, 1]")
+        if self.shape_target_point_count < 0:
+            raise ValueError("Shape target point count must be non-negative")
+        if self.shape_target_point_seed < 0:
+            raise ValueError("Shape target point seed must be non-negative")
+        if not self.shape_guidance_profile:
+            raise ValueError("Shape guidance profile is required")
+        if self.shape_source_shape_weight <= 0 or self.shape_source_guide_scale <= 0:
+            raise ValueError("Shape source guidance factors must be positive")
+        if self.shape_rfd3_transfer_coefficient < 0:
+            raise ValueError("Shape RFD3 transfer coefficient must be non-negative")
+        effective = self.shape_source_shape_weight * self.shape_source_guide_scale * self.shape_rfd3_transfer_coefficient
+        if abs(effective - self.shape_step_size) > 1e-12:
+            raise ValueError("Shape source factors and RFD3 transfer coefficient disagree with step size")
 
     def load_field(self, device: torch.device) -> ShapeGuidanceField:
         cache_key = str(device)
@@ -87,7 +107,17 @@ class ShapeGuidedDiffusionSampler(SampleDiffusionWithMotif):
             raise ValueError("SDF grid shape is invalid")
         if len(sdf_bytes) != int(np.prod(sdf_shape)) * 4:
             raise ValueError("SDF byte length does not match its manifest")
-        points = torch.from_numpy(np.frombuffer(point_bytes, dtype="<f4").reshape((point_count, 3)).copy()).to(device)
+        point_array = np.frombuffer(point_bytes, dtype="<f4").reshape((point_count, 3)).copy()
+        active_count = self.shape_target_point_count or point_count
+        if active_count > point_count:
+            raise ValueError("Shape target point count exceeds the canonical point pool")
+        if active_count < point_count:
+            rng = np.random.Generator(np.random.PCG64(self.shape_target_point_seed))
+            indices = np.sort(rng.choice(point_count, size=active_count, replace=False))
+            point_array = np.asarray(point_array[indices], dtype="<f4")
+        active_point_bytes = point_array.tobytes(order="C")
+        self._shape_active_point_pool_sha256 = hashlib.sha256(active_point_bytes).hexdigest()
+        points = torch.from_numpy(point_array).to(device)
         sdf = torch.from_numpy(np.frombuffer(sdf_bytes, dtype="<f4").reshape(sdf_shape).copy()).to(device)
         shape_field = ShapeGuidanceField(
             points=points,
@@ -194,10 +224,18 @@ class ShapeGuidedDiffusionSampler(SampleDiffusionWithMotif):
 
         manifest = self._shape_manifest or {}
         step_receipt = {
-            "schema": "bms_rfd3_shape_guidance_step_v3",
+            "schema": "bms_rfd3_shape_guidance_step_v4",
             "base_sampler_sha256": RFD3_BASE_SAMPLER_SHA256,
             "geometry_sha256": manifest.get("geometry_sha256"),
             "point_pool_sha256": manifest.get("point_pool_sha256"),
+            "active_point_pool_sha256": self._shape_active_point_pool_sha256,
+            "active_target_point_count": int(len(shape_field.points)),
+            "target_sampling": "seeded_subset_of_immutable_uniform_interior_pool_v1" if self.shape_target_point_count else "complete_immutable_uniform_interior_pool_v1",
+            "target_point_seed": int(self.shape_target_point_seed),
+            "guidance_profile": self.shape_guidance_profile,
+            "source_shape_weight": float(self.shape_source_shape_weight),
+            "source_guide_scale": float(self.shape_source_guide_scale),
+            "rfd3_transfer_coefficient": float(self.shape_rfd3_transfer_coefficient),
             "sdf_sha256": manifest.get("sdf_sha256"),
             "step_index": int(step_i),
             "total_steps": int(total_steps),
