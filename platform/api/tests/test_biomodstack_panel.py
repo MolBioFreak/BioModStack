@@ -278,7 +278,7 @@ def test_panel_open_browser_uses_explicit_runtime_frontend_url(monkeypatch) -> N
         module,
         "runtime_port_settings",
         lambda project_root=None: {
-            "dev_url": "http://127.0.0.1:5173/",
+            "dev_url": "http://127.0.0.1:18082/",
             "prod_url": "http://127.0.0.1:18080/bms/",
         },
     )
@@ -287,7 +287,7 @@ def test_panel_open_browser_uses_explicit_runtime_frontend_url(monkeypatch) -> N
     module.BioModStackPanel._on_open_browser(panel, None, module.DEV_RUNTIME_MODE)
     module.BioModStackPanel._on_open_browser(panel, None, module.CONTAINER_RUNTIME_MODE)
 
-    assert captured == ["http://127.0.0.1:5173/", "http://127.0.0.1:18080/bms/"]
+    assert captured == ["http://127.0.0.1:18082/", "http://127.0.0.1:18080/bms/"]
 
 
 def test_panel_jobs_row_labels_raw_production_database_scope(monkeypatch) -> None:

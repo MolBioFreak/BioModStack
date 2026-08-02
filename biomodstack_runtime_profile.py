@@ -11,23 +11,57 @@ CORE_RUNTIME_ENV_FILENAME = "core-runtime.env"
 COMPAT_ENV_FILENAME = "env.sh"
 
 DEFAULT_CONTAINER_STATE_PATH = "/var/lib/biomodstack"
-DEFAULT_API_HOST_PORT = 8000
-DEFAULT_DEV_API_HOST_PORT = 8002
-DEFAULT_DEV_WEB_HOST_PORT = 5173
-DEFAULT_WEB_HOST_PORT = 18080
+BMS_PORT_REGISTRY: dict[str, int] = {
+    "production_api": 18000,
+    "workflow_adapter": 18001,
+    "development_api": 18002,
+    "production_web": 18080,
+    "production_tailnet_proxy": 18081,
+    "development_web": 18082,
+    "stats_web": 18180,
+    "stats_api": 18181,
+    "cpu_collector": 18797,
+    "mk1d_host_agent": 18798,
+}
+DEFAULT_API_HOST_PORT = BMS_PORT_REGISTRY["production_api"]
+DEFAULT_WORKFLOW_ADAPTER_PORT = BMS_PORT_REGISTRY["workflow_adapter"]
+DEFAULT_DEV_API_HOST_PORT = BMS_PORT_REGISTRY["development_api"]
+DEFAULT_WEB_HOST_PORT = BMS_PORT_REGISTRY["production_web"]
+DEFAULT_TAILNET_PROXY_PORT = BMS_PORT_REGISTRY["production_tailnet_proxy"]
+DEFAULT_DEV_WEB_HOST_PORT = BMS_PORT_REGISTRY["development_web"]
+DEFAULT_STATS_WEB_PORT = BMS_PORT_REGISTRY["stats_web"]
+DEFAULT_STATS_API_PORT = BMS_PORT_REGISTRY["stats_api"]
+DEFAULT_CPU_POWER_PORT = BMS_PORT_REGISTRY["cpu_collector"]
+DEFAULT_HOST_AGENT_PORT = BMS_PORT_REGISTRY["mk1d_host_agent"]
 DEFAULT_CORS_ORIGINS = [
     "http://127.0.0.1",
-    "http://127.0.0.1:5173",
+    f"http://127.0.0.1:{DEFAULT_DEV_WEB_HOST_PORT}",
     "http://127.0.0.1:18080",
     "http://localhost",
     "https://localhost",
-    "http://localhost:5173",
+    f"http://localhost:{DEFAULT_DEV_WEB_HOST_PORT}",
     "http://localhost:18080",
-    "https://localhost:5173",
+    f"https://localhost:{DEFAULT_DEV_WEB_HOST_PORT}",
     "https://127.0.0.1",
 ]
-DEFAULT_WORKFLOW_ADAPTER_URL = "http://127.0.0.1:8001"
+DEFAULT_WORKFLOW_ADAPTER_URL = f"http://127.0.0.1:{DEFAULT_WORKFLOW_ADAPTER_PORT}"
 DEFAULT_COMPOSE_PROJECT_NAME = "biomodstack-core-runtime"
+
+# Migrate only listener defaults that this repository historically owned. Do
+# not rewrite arbitrary ports (notably native ONT/MinKNOW listeners).
+_LEGACY_PORT_MIGRATIONS = {
+    "api_host_port": {8000: DEFAULT_API_HOST_PORT},
+    "dev_api_host_port": {8002: DEFAULT_DEV_API_HOST_PORT},
+    "dev_web_host_port": {5173: DEFAULT_DEV_WEB_HOST_PORT},
+}
+_LEGACY_CONFIG_MIGRATIONS = {
+    "workflow_adapter_url": {"http://127.0.0.1:8001": DEFAULT_WORKFLOW_ADAPTER_URL},
+}
+_LEGACY_CORS_ORIGIN_MIGRATIONS = {
+    "http://127.0.0.1:5173": "http://127.0.0.1:18082",
+    "http://localhost:5173": "http://localhost:18082",
+    "https://localhost:5173": "https://localhost:18082",
+}
 
 _PATH_FIELDS = (
     "data_root",
@@ -60,9 +94,12 @@ _IMAGE_ENV_FIELDS = {
 _INT_FIELDS = ("api_host_port", "dev_api_host_port", "dev_web_host_port", "web_host_port")
 # Host-side operational endpoints; application surfaces may never claim them.
 RESERVED_AUXILIARY_PORTS: dict[int, str] = {
-    8001: "workflow adapter",
-    8797: "CPU telemetry",
-    8798: "host telemetry",
+    DEFAULT_WORKFLOW_ADAPTER_PORT: "workflow adapter",
+    DEFAULT_TAILNET_PROXY_PORT: "Production Tailnet proxy",
+    DEFAULT_STATS_WEB_PORT: "Stats web",
+    DEFAULT_STATS_API_PORT: "Stats API",
+    DEFAULT_CPU_POWER_PORT: "CPU telemetry",
+    DEFAULT_HOST_AGENT_PORT: "Mk1D host agent",
 }
 _FEATURE_DEFAULTS = {
     "bioxp": True,
@@ -255,16 +292,20 @@ def normalize_install_profile(raw: Mapping[str, object] | None) -> dict[str, obj
     for key in _CONFIG_FIELDS:
         value = _normalize_optional_string(raw.get(key))
         if value is not None:
+            value = _LEGACY_CONFIG_MIGRATIONS.get(key, {}).get(value, value)
             normalized[key] = value
 
     for key in _INT_FIELDS:
         value = _normalize_optional_int(raw.get(key))
         if value is not None:
+            value = _LEGACY_PORT_MIGRATIONS.get(key, {}).get(value, value)
             normalized[key] = value
 
     cors_origins = _normalize_cors_origins(raw.get("cors_origins"))
     if cors_origins is not None:
-        normalized["cors_origins"] = cors_origins
+        normalized["cors_origins"] = [
+            _LEGACY_CORS_ORIGIN_MIGRATIONS.get(origin, origin) for origin in cors_origins
+        ]
 
     core_runtime_mode = _normalize_optional_bool(raw.get("core_runtime_mode"))
     if core_runtime_mode is not None:
@@ -294,7 +335,15 @@ def _coerce_env_int(name: str, default: int) -> int:
     value = os.getenv(name)
     if value is None or not str(value).strip():
         return default
-    return int(value)
+    port = int(value)
+    profile_key = {
+        "BMS_DEV_API_HOST_PORT": "dev_api_host_port",
+        "BMS_DEV_WEB_HOST_PORT": "dev_web_host_port",
+        "BMS_WEB_HOST_PORT": "web_host_port",
+    }.get(name)
+    if profile_key is not None:
+        port = _LEGACY_PORT_MIGRATIONS.get(profile_key, {}).get(port, port)
+    return port
 
 
 def _coerce_env_bool(name: str, default: bool) -> bool:
@@ -442,7 +491,7 @@ def resolve_runtime_paths(
         "container_state_path": container_state_path,
         "inputs_container_path": inputs_container_path,
         "db_container_path": db_container_path,
-        # The production API image is deliberately pinned to 8000.  Do not
+        # The production API image is deliberately pinned to the registry port. Do not
         # advertise a configurable host port that Docker cannot honor.
         "api_host_port": DEFAULT_API_HOST_PORT,
         "dev_api_host_port": _coerce_env_int(
@@ -486,6 +535,10 @@ def validate_runtime_port_contract(resolved: Mapping[str, object]) -> None:
             raise ValueError(f"{field} must be an integer TCP port") from exc
         if not 1 <= port <= 65535:
             raise ValueError(f"{field} must be between 1 and 65535")
+        if not 18000 <= port <= 18999:
+            raise ValueError(
+                f"{field} must use the governed BioModStack port neighborhood 18000-18999"
+            )
         if port in RESERVED_AUXILIARY_PORTS:
             raise ValueError(
                 f"{field} uses reserved BioModStack auxiliary port {port} ({RESERVED_AUXILIARY_PORTS[port]})"

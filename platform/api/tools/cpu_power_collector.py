@@ -219,7 +219,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     host = os.environ.get("BMS_CPU_POWER_BIND_HOST", "127.0.0.1")
-    port = int(os.environ.get("BMS_CPU_POWER_PORT", "8797"))
+    port = int(os.environ.get("BMS_CPU_POWER_PORT", "18797"))
     server = ThreadingHTTPServer((host, port), Handler)
     print(f"BioModStack CPU power collector listening on http://{host}:{port}", flush=True)
     server.serve_forever()

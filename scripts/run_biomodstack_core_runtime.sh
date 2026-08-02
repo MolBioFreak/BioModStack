@@ -86,7 +86,7 @@ if [ ! -d "$BMS_STATE_DIR" ]; then
     exit 78
 fi
 export BMS_CONTAINER_STATE_PATH="${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}"
-export BMS_API_HOST_PORT="${BMS_API_HOST_PORT:-8000}"
+export BMS_API_HOST_PORT="${BMS_API_HOST_PORT:-18000}"
 export BMS_WEB_HOST_PORT="${BMS_WEB_HOST_PORT:-18080}"
 
 if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then

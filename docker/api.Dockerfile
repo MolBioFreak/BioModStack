@@ -78,9 +78,9 @@ ENV BMS_HOME=/app \
     BMS_INPUTS=/var/lib/biomodstack/inputs \
     BMS_DB_PATH=/var/lib/biomodstack/biomodstack.db
 
-EXPOSE 8000
+EXPOSE 18000
 
-CMD ["/bin/sh", "-ec", "/app/platform/api/.venv/bin/python run_migrations.py && exec /app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000"]
+CMD ["/bin/sh", "-ec", "/app/platform/api/.venv/bin/python run_migrations.py && exec /app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 18000"]
 
 FROM api-base AS api-runtime-prepared
 
@@ -166,6 +166,6 @@ WORKDIR /app/platform/api
 
 USER 1000:1000
 
-EXPOSE 8000
+EXPOSE 18000
 
-CMD ["/bin/sh", "-ec", "/app/platform/api/.venv/bin/python run_migrations.py && exec /app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000"]
+CMD ["/bin/sh", "-ec", "/app/platform/api/.venv/bin/python run_migrations.py && exec /app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 18000"]

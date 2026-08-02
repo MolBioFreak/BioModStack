@@ -521,9 +521,9 @@ class BioModStackPanel(Adw.Application):
             return runtime_port_settings(project_root=PROJECT_ROOT)
         except Exception:
             return {
-                "dev_web_host_port": 5173,
+                "dev_web_host_port": 18082,
                 "prod_web_host_port": 18080,
-                "dev_url": "http://127.0.0.1:5173/",
+                "dev_url": "http://127.0.0.1:18082/",
                 "prod_url": "http://127.0.0.1:18080/bms/",
             }
 

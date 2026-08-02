@@ -404,7 +404,7 @@ def test_environment_spec_accepts_only_explicit_development_or_production(tmp_pa
 
     assert development.environment == "development"
     assert development.runtime_mode == "dev"
-    assert development.serve_target == "http://127.0.0.1:5173"
+    assert development.serve_target == "http://127.0.0.1:18082"
     assert development.api_health_url == "http://127.0.0.1:18002/api/health"
     assert development.api_port == 18002
     assert production.environment == "production"
@@ -524,7 +524,7 @@ def test_set_serve_path_allows_loopback_origin_without_trailing_slash(monkeypatc
 
 
 def test_control_route_refuses_unexpected_existing_target(monkeypatch) -> None:
-    assert tailnet.CONTROL_TARGET == "http://127.0.0.1:8001"
+    assert tailnet.CONTROL_TARGET == "http://127.0.0.1:18001"
     snapshot = tailnet.ServeSnapshot(
         origin="https://node.example.ts.net",
         root_proxy="http://127.0.0.1:5173",
@@ -544,28 +544,27 @@ def test_control_route_refuses_unexpected_existing_target(monkeypatch) -> None:
 
 
 def test_control_target_accepts_only_explicit_loopback_http_listener() -> None:
-    assert tailnet._configured_control_target({}) == "http://127.0.0.1:8001"
+    assert tailnet._configured_control_target({}) == "http://127.0.0.1:18001"
     assert tailnet._configured_control_target(
-        {"BMS_TAILNET_CONTROL_TARGET": "http://127.0.0.2:8001"}
-    ) == "http://127.0.0.2:8001"
+        {"BMS_TAILNET_CONTROL_TARGET": "http://127.0.0.2:18001"}
+    ) == "http://127.0.0.2:18001"
 
     for target in (
-        "https://127.0.0.2:8001",
-        "http://0.0.0.0:8001",
-        "http://192.168.1.5:8001",
+        "https://127.0.0.2:18001",
+        "http://0.0.0.0:18001",
+        "http://192.168.1.5:18001",
         "http://127.0.0.2:9000",
-        "http://127.0.0.2:8001/other",
+        "http://127.0.0.2:18001/other",
     ):
         with pytest.raises(tailnet.TailnetEnvironmentError, match="loopback HTTP target"):
             tailnet._configured_control_target({"BMS_TAILNET_CONTROL_TARGET": target})
 
 
 def test_control_route_migrates_exact_prior_loopback_target(monkeypatch) -> None:
-    monkeypatch.setattr(tailnet, "CONTROL_TARGET", "http://127.0.0.2:8001")
     snapshot = tailnet.ServeSnapshot(
         origin="https://node.example.ts.net",
         root_proxy="http://127.0.0.1:5173",
-        handlers={tailnet.CONTROL_PATH: {"Proxy": "http://127.0.0.1:8001"}},
+        handlers={tailnet.CONTROL_PATH: {"Proxy": "http://127.0.0.2:8001"}},
         raw={},
     )
     targets: list[str] = []
@@ -582,7 +581,7 @@ def test_control_route_migrates_exact_prior_loopback_target(monkeypatch) -> None
     )
 
     assert tailnet._ensure_control_route(snapshot) is True
-    assert targets == ["http://127.0.0.2:8001"]
+    assert targets == ["http://127.0.0.1:18001"]
 
 
 def test_control_route_migrates_sealed_legacy_path_target(monkeypatch) -> None:
@@ -718,7 +717,7 @@ def test_operator_development_frontend_is_pinned_to_isolated_dev_api(monkeypatch
     assert "BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:18002" in unit
     assert "BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:18002" in dropin
     assert "ExecStart=/usr/bin/node " in dropin
-    assert "/platform/frontend/node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173" in dropin
+    assert "/platform/frontend/node_modules/vite/bin/vite.js --host 127.0.0.1 --port 18082" in dropin
     assert f"WorkingDirectory={tmp_path}/platform/frontend" in dropin
     assert "http://127.0.0.1:8000" not in unit
     assert "http://127.0.0.1:8000" not in dropin
@@ -735,13 +734,13 @@ def test_development_frontend_requires_every_exclusive_loopback_vite_owner(monke
     reports = [{
         "pid": 101,
         "cwd": expected,
-        "cmdline": f"node {expected}/node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173",
+        "cmdline": f"node {expected}/node_modules/vite/bin/vite.js --host 127.0.0.1 --port 18082",
         "cgroup": f"0::/user.slice/user-1000.slice/user@1000.service/app.slice/{tailnet.FRONTEND_SERVICE}\n",
         "build_revision": revision,
         "argv": [
             "/usr/bin/node",
             f"{expected}/node_modules/vite/bin/vite.js",
-            "--host", "127.0.0.1", "--port", "5173",
+            "--host", "127.0.0.1", "--port", "18082",
         ],
         "executable": "/usr/bin/node",
     }]
@@ -767,7 +766,7 @@ def test_development_frontend_requires_every_exclusive_loopback_vite_owner(monke
     reports[0]["executable"] = "/usr/bin/node"
 
     original_argv = reports[0]["argv"]
-    reports[0]["argv"] = ["python", "-m", "http.server", "5173"]
+    reports[0]["argv"] = ["python", "-m", "http.server", "18082"]
     assert tailnet._dev_frontend_matches_root(spec, tmp_path) is False
     reports[0]["argv"] = original_argv
     reports[0]["cgroup"] = f"0::/user.slice/{tailnet.FRONTEND_SERVICE}-rogue.service\n"
@@ -922,7 +921,7 @@ def test_selected_development_uses_isolated_api_listener_not_container_runtime(m
     assert revisions == ["a" * 40]
     assert adapter_validations == [(control_root.resolve(), "c" * 40)]
     assert report["selector_revision"] == "c" * 40
-    assert report["frontend_target"] == "http://127.0.0.1:5173"
+    assert report["frontend_target"] == "http://127.0.0.1:18082"
     assert "development_api_listener" in report
     assert "managed_api_runtime" not in report
 
@@ -1206,7 +1205,7 @@ def test_development_runtime_inspects_only_shared_api_container(monkeypatch, tmp
         "Args": [
             "-ec",
             "/app/platform/api/.venv/bin/python run_migrations.py && exec "
-            "/app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000",
+            "/app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 18000",
         ],
         "State": {"Pid": 123},
         "HostConfig": {"ReadonlyRootfs": False},
@@ -1257,7 +1256,7 @@ def test_container_runtime_accepts_exact_source_owned_image_lineage(monkeypatch,
     revision = "a" * 40
     runtime_report = {
         "containers": [
-            {"name": "biomodstack-api", "container_id": "a" * 64, "image_id": tailnet.MANAGED_API_IMAGE_ID, "revision": revision, "compose_working_dir": str(tmp_path), "pid": 1, "cgroup": "0::/system.slice/docker-" + ("a" * 64) + ".scope\n", "cmdline": "/bin/sh -ec /app/platform/api/.venv/bin/python run_migrations.py && exec /app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000", "cwd": "/app/platform/api", "readonly_rootfs": False, "mounts": [{"type": "bind", "source": "/mnt/BioModStack", "destination": "/var/lib/biomodstack", "mode": "rw", "rw": True, "propagation": "rprivate"}]},
+            {"name": "biomodstack-api", "container_id": "a" * 64, "image_id": tailnet.MANAGED_API_IMAGE_ID, "revision": revision, "compose_working_dir": str(tmp_path), "pid": 1, "cgroup": "0::/system.slice/docker-" + ("a" * 64) + ".scope\n", "cmdline": "/bin/sh -ec /app/platform/api/.venv/bin/python run_migrations.py && exec /app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 18000", "cwd": "/app/platform/api", "readonly_rootfs": False, "mounts": [{"type": "bind", "source": "/mnt/BioModStack", "destination": "/var/lib/biomodstack", "mode": "rw", "rw": True, "propagation": "rprivate"}]},
             {"name": "biomodstack-web", "container_id": "b" * 64, "image_id": tailnet.MANAGED_WEB_IMAGE_ID, "revision": revision, "compose_working_dir": str(tmp_path), "pid": 2, "cgroup": "0::/system.slice/docker-" + ("b" * 64) + ".scope\n", "cmdline": "/docker-entrypoint.sh nginx -g daemon off;", "cwd": "/", "readonly_rootfs": False, "mounts": []},
         ]
     }

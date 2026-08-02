@@ -41,7 +41,7 @@ notify() {
 browser_url="http://localhost:${BMS_WEB_HOST_PORT:-18080}/bms/"
 case "${RUNTIME_MODE,,}" in
     dev)
-        browser_url="http://localhost:5173/"
+        browser_url="http://localhost:${BMS_DEV_WEB_HOST_PORT:-18082}/"
         ;;
     container)
         ;;

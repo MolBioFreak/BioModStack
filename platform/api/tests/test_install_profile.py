@@ -55,16 +55,33 @@ def clear_inherited_runtime_environment(monkeypatch) -> None:
 EXPECTED_CORS_ORIGINS = ",".join(
     [
         "http://127.0.0.1",
-        "http://127.0.0.1:5173",
+        "http://127.0.0.1:18082",
         "http://127.0.0.1:18080",
         "http://localhost",
         "https://localhost",
-        "http://localhost:5173",
+        "http://localhost:18082",
         "http://localhost:18080",
-        "https://localhost:5173",
+        "https://localhost:18082",
         "https://127.0.0.1",
     ]
 )
+
+
+def test_authoritative_port_registry_owns_the_approved_fixed_listener_neighborhood() -> None:
+    assert runtime_profile.BMS_PORT_REGISTRY == {
+        "production_api": 18000,
+        "workflow_adapter": 18001,
+        "development_api": 18002,
+        "production_web": 18080,
+        "production_tailnet_proxy": 18081,
+        "development_web": 18082,
+        "stats_web": 18180,
+        "stats_api": 18181,
+        "cpu_collector": 18797,
+        "mk1d_host_agent": 18798,
+    }
+    assert len(set(runtime_profile.BMS_PORT_REGISTRY.values())) == len(runtime_profile.BMS_PORT_REGISTRY)
+    assert all(18000 <= port <= 18999 for port in runtime_profile.BMS_PORT_REGISTRY.values())
 
 
 def test_save_install_profile_writes_compatibility_exports(tmp_path: Path, monkeypatch) -> None:
@@ -79,9 +96,9 @@ def test_save_install_profile_writes_compatibility_exports(tmp_path: Path, monke
         {
             "data_root": "~/BioModStackData",
             "container_state_path": "/var/lib/biomodstack-custom",
-            "dev_web_host_port": 5179,
-            "api_host_port": 8000,
-            "web_host_port": 5174,
+            "dev_web_host_port": 18882,
+            "api_host_port": 18000,
+            "web_host_port": 18880,
             "api_image": "biomodstack/api:release-deadbee",
             "web_image": "biomodstack/web:release-deadbee",
             "host_agent_image": "biomodstack/host-agent:release-deadbee",
@@ -96,11 +113,11 @@ def test_save_install_profile_writes_compatibility_exports(tmp_path: Path, monke
     env_text = env_sh.read_text(encoding="utf-8")
     assert f'export BMS_DATA="${{BMS_DATA:-{resolved_data_root}}}"' in env_text
     assert f'export BMS_STATE_DIR="${{BMS_STATE_DIR:-{resolved_data_root}}}"' in env_text
-    assert 'export BMS_DEV_WEB_HOST_PORT="${BMS_DEV_WEB_HOST_PORT:-5179}"' in env_text
-    assert 'export BMS_API_HOST_PORT="${BMS_API_HOST_PORT:-8000}"' in env_text
-    assert 'export BMS_WEB_HOST_PORT="${BMS_WEB_HOST_PORT:-5174}"' in env_text
+    assert 'export BMS_DEV_WEB_HOST_PORT="${BMS_DEV_WEB_HOST_PORT:-18882}"' in env_text
+    assert 'export BMS_API_HOST_PORT="${BMS_API_HOST_PORT:-18000}"' in env_text
+    assert 'export BMS_WEB_HOST_PORT="${BMS_WEB_HOST_PORT:-18880}"' in env_text
     assert f'export CORS_ORIGINS="${{CORS_ORIGINS:-{EXPECTED_CORS_ORIGINS}}}"' in env_text
-    assert 'export BMS_WORKFLOW_ADAPTER_URL="${BMS_WORKFLOW_ADAPTER_URL:-http://127.0.0.1:8001}"' in env_text
+    assert 'export BMS_WORKFLOW_ADAPTER_URL="${BMS_WORKFLOW_ADAPTER_URL:-http://127.0.0.1:18001}"' in env_text
 
     core_runtime_env = runtime_profile.get_core_runtime_env_path()
     core_runtime_text = core_runtime_env.read_text(encoding="utf-8")
@@ -117,9 +134,9 @@ def test_save_install_profile_writes_compatibility_exports(tmp_path: Path, monke
     assert "BMS_CONTAINER_STATE_PATH=/var/lib/biomodstack-custom" in core_runtime_text
     assert "BMS_INPUTS_CONTAINER_PATH=/var/lib/biomodstack-custom/inputs" in core_runtime_text
     assert "BMS_DB_CONTAINER_PATH=/var/lib/biomodstack-custom/biomodstack.db" in core_runtime_text
-    assert "BMS_DEV_WEB_HOST_PORT=5179" in core_runtime_text
+    assert "BMS_DEV_WEB_HOST_PORT=18882" in core_runtime_text
     assert f"CORS_ORIGINS={EXPECTED_CORS_ORIGINS}" in core_runtime_text
-    assert "BMS_WORKFLOW_ADAPTER_URL=http://127.0.0.1:8001" in core_runtime_text
+    assert "BMS_WORKFLOW_ADAPTER_URL=http://127.0.0.1:18001" in core_runtime_text
     assert "BMS_API_IMAGE=biomodstack/api:release-deadbee" in core_runtime_text
     assert "BMS_WEB_IMAGE=biomodstack/web:release-deadbee" in core_runtime_text
     assert "BMS_HOST_AGENT_IMAGE=biomodstack/host-agent:release-deadbee" in core_runtime_text
@@ -193,8 +210,11 @@ def test_resolve_runtime_paths_defaults_include_cordova_and_loopback_cors_origin
     resolved = runtime_profile.resolve_runtime_paths(project_root=project_root, profile={})
 
     assert resolved["cors_origins"] == EXPECTED_CORS_ORIGINS.split(",")
-    assert resolved["dev_web_host_port"] == 5173
+    assert resolved["api_host_port"] == 18000
+    assert resolved["dev_api_host_port"] == 18002
+    assert resolved["dev_web_host_port"] == 18082
     assert resolved["web_host_port"] == 18080
+    assert resolved["workflow_adapter_url"] == "http://127.0.0.1:18001"
     assert resolved["dev_data_root"] == str((home_dir / ".biomodstack-dev").resolve())
     assert resolved["dev_db_path"] == str((home_dir / ".biomodstack-dev" / "biomodstack.db").resolve())
 
@@ -208,10 +228,52 @@ def test_install_profile_rejects_runtime_port_collisions_before_writing(tmp_path
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
 
     with pytest.raises(ValueError, match="must be distinct"):
-        runtime_profile.save_install_profile({"api_host_port": 8000, "dev_api_host_port": 8000})
+        runtime_profile.save_install_profile({"api_host_port": 18000, "dev_api_host_port": 18000})
     with pytest.raises(ValueError, match="reserved BioModStack auxiliary port"):
-        runtime_profile.save_install_profile({"web_host_port": 8001})
+        runtime_profile.save_install_profile({"web_host_port": 18001})
     assert not runtime_profile.get_install_profile_path().exists()
+
+
+def test_install_profile_rejects_bms_listener_ports_outside_governed_neighborhood(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home_dir = tmp_path / "home"
+    config_home = home_dir / ".config"
+    home_dir.mkdir()
+    config_home.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+    with pytest.raises(ValueError, match="governed BioModStack port neighborhood"):
+        runtime_profile.save_install_profile({"dev_web_host_port": 19000})
+
+    assert not runtime_profile.get_install_profile_path().exists()
+
+
+def test_resolve_runtime_paths_migrates_only_exact_recognized_legacy_listener_defaults(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("BMS_DEV_API_HOST_PORT", raising=False)
+    monkeypatch.delenv("BMS_DEV_WEB_HOST_PORT", raising=False)
+    resolved = runtime_profile.resolve_runtime_paths(
+        project_root=tmp_path / "repo",
+        profile={
+            "api_host_port": 8000,
+            "dev_api_host_port": 8002,
+            "dev_web_host_port": 5173,
+            "workflow_adapter_url": "http://127.0.0.1:8001",
+            "cors_origins": ["http://127.0.0.1:5173", "https://localhost:5173"],
+        },
+    )
+
+    assert resolved["api_host_port"] == 18000
+    assert resolved["dev_api_host_port"] == 18002
+    assert resolved["dev_web_host_port"] == 18082
+    assert resolved["workflow_adapter_url"] == "http://127.0.0.1:18001"
+    assert resolved["cors_origins"] == ["http://127.0.0.1:18082", "https://localhost:18082"]
 
 
 def test_install_profile_rejects_mutable_container_api_port_before_writing(tmp_path: Path, monkeypatch) -> None:
@@ -222,7 +284,7 @@ def test_install_profile_rejects_mutable_container_api_port_before_writing(tmp_p
     monkeypatch.setenv("HOME", str(home_dir))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
 
-    with pytest.raises(ValueError, match="fixed.*8000"):
+    with pytest.raises(ValueError, match="fixed.*18000"):
         runtime_profile.save_install_profile({"api_host_port": 9000})
 
     assert not runtime_profile.get_install_profile_path().exists()

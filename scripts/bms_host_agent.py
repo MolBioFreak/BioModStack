@@ -462,7 +462,7 @@ class HostAgentHandler(BaseHTTPRequestHandler):
 def main() -> int:
     parser = argparse.ArgumentParser(description="BMS host-local control agent")
     parser.add_argument("--host", default=os.getenv("BMS_HOST_AGENT_BIND", "127.0.0.1"))
-    parser.add_argument("--port", type=int, default=int(os.getenv("BMS_HOST_AGENT_PORT", "8798")))
+    parser.add_argument("--port", type=int, default=int(os.getenv("BMS_HOST_AGENT_PORT", "18798")))
     args = parser.parse_args()
     server = ThreadingHTTPServer((args.host, args.port), HostAgentHandler)
     print(f"bms-host-agent listening on http://{args.host}:{args.port}", flush=True)

@@ -108,7 +108,7 @@ function molstarCommonJsBuildResolver(): Plugin {
   }
 }
 
-const devApiTarget = process.env.BMS_DEV_API_PROXY_TARGET || 'http://127.0.0.1:8002'
+const devApiTarget = process.env.BMS_DEV_API_PROXY_TARGET || 'http://127.0.0.1:18002'
 const devApiProxySecret = process.env.BMS_DEV_API_PROXY_SECRET?.trim() || ''
 const devMk1dReconnectProxySecret = process.env.BMS_DEV_MK1D_RECONNECT_PROXY_SECRET?.trim() || ''
 const buildRevision = /^[0-9a-f]{40}$/.test(process.env.VITE_BMS_BUILD_SHA?.trim() || '')
@@ -181,11 +181,11 @@ export default defineConfig(({ mode }) => ({
     },
   },
   server: {
-    // Browser development owns Vite's documented default port. Keep it strict
-    // so the stable hosted /bms/ surface cannot silently occupy the dev port.
+    // Browser development owns the governed BMS Development web port. Keep it
+    // strict so no unrelated listener can silently displace the live surface.
     host: '127.0.0.1',
-    port: 5173,
-    origin: 'http://127.0.0.1:5173',
+    port: 18082,
+    origin: 'http://127.0.0.1:18082',
     strictPort: true,
     allowedHosts: ['compute-node.taileb3a90.ts.net'],
     // Prevent watching pipeline directories that can have millions of files

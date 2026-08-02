@@ -26,6 +26,7 @@ SYSTEMD_AUTHORITY_KEYS=(
     BMS_TAILNET_CONTROL_ALLOWED_TAILSCALE_USERS
     BMS_TAILNET_CONTROL_TRUSTED_PROXY_HOSTS
     BMS_WORKFLOW_ADAPTER_BIND_HOST
+    BMS_WORKFLOW_ADAPTER_PORT
     BMS_FEATURE_MOLECULAR_DYNAMICS
     BMS_MD_ANALYSIS_ENABLED
     BMS_MD_ANALYSIS_CONTAINER
@@ -98,8 +99,9 @@ BMS_NEXTFLOW_HOME="${BMS_NEXTFLOW_HOME:-${BMS_DATA:-/mnt/BioModStack}/nextflow}"
 export BMS_NEXTFLOW_HOME
 export NXF_HOME="${NXF_HOME:-$BMS_NEXTFLOW_HOME}"
 mkdir -p "$NXF_HOME"
-export BMS_CPU_POWER_COLLECTOR_URL="${BMS_CPU_POWER_COLLECTOR_URL:-http://127.0.0.1:8797/power}"
+export BMS_CPU_POWER_COLLECTOR_URL="${BMS_CPU_POWER_COLLECTOR_URL:-http://127.0.0.1:18797/power}"
 BMS_WORKFLOW_ADAPTER_BIND_HOST="${BMS_WORKFLOW_ADAPTER_BIND_HOST:-127.0.0.1}"
+BMS_WORKFLOW_ADAPTER_PORT="${BMS_WORKFLOW_ADAPTER_PORT:-18001}"
 CM_API_RUNTIME_DIR="${BMS_CM_API_RUNTIME_DIR:-${BMS_DATA:-/mnt/BioModStack}/runtime/cm-api-python}"
 
 rewrite_cm_api_pyvenv_home() {
@@ -169,4 +171,4 @@ uv sync --locked
 provision_cm_api_runtime
 export BMS_CM_API_RUNTIME_DIR
 export BMS_API_PYTHON="$CM_API_RUNTIME_DIR/current/venv/bin/python"
-exec uv run --no-sync uvicorn workflow_adapter_app:app --port 8001 --host "$BMS_WORKFLOW_ADAPTER_BIND_HOST" --no-proxy-headers --no-access-log
+exec uv run --no-sync uvicorn workflow_adapter_app:app --port "$BMS_WORKFLOW_ADAPTER_PORT" --host "$BMS_WORKFLOW_ADAPTER_BIND_HOST" --no-proxy-headers --no-access-log

@@ -48,14 +48,17 @@ SUPPORTED_ENVIRONMENTS = ("development", "production")
 CANONICAL_DEVELOPMENT_ROOT = Path("/home/dalab/biomodstack/dev-test-canonical")
 CANONICAL_PRODUCTION_ROOT = Path("/home/dalab/biomodstack/prod-main-canonical")
 CONTROL_PATH = "/api/tailnet-environment"
-DEFAULT_CONTROL_TARGET = "http://127.0.0.1:8001"
+DEFAULT_CONTROL_TARGET = "http://127.0.0.1:18001"
 LEGACY_CONTROL_TARGET = "http://127.0.0.1:8001/api/workflow-adapter/tailnet-environment"
+PRIOR_LOOPBACK_CONTROL_TARGET = "http://127.0.0.2:8001"
 STATS_TOOLKIT_TARGET = "http://127.0.0.1:18180"
 LEGACY_GLOBAL_SERVE_HANDLERS: Mapping[str, frozenset[str]] = {
     # The original embed mapping mounted the Stats server root. The governed
     # application now lives at /stats; allow only this exact prior target to be
     # migrated transactionally while continuing to reject foreign owners.
     "/stats/embed": frozenset({STATS_TOOLKIT_TARGET}),
+    "/api/mobile-apk": frozenset({"http://127.0.0.1:8000/api/mobile-apk"}),
+    "/api/mobile-ui": frozenset({"http://127.0.0.1:8000/api/mobile-ui"}),
 }
 DEPRECATED_SERVE_HANDLERS: Mapping[str, str] = {
     "/am": "http://127.0.0.1:5174/am",
@@ -91,30 +94,34 @@ def _configured_control_target(environment: Mapping[str, str] | None = None) -> 
         port = parsed.port
     except ValueError as exc:
         raise TailnetEnvironmentError(
-            "BMS_TAILNET_CONTROL_TARGET must be the workflow adapter's loopback HTTP target on port 8001"
+            "BMS_TAILNET_CONTROL_TARGET must be the workflow adapter's loopback HTTP target on port 18001"
         ) from exc
     if (
         parsed.scheme != "http"
         or parsed.username is not None
         or parsed.password is not None
         or not address.is_loopback
-        or port != 8001
+        or port != 18001
         or parsed.path not in ("", "/")
         or parsed.query
         or parsed.fragment
     ):
         raise TailnetEnvironmentError(
-            "BMS_TAILNET_CONTROL_TARGET must be the workflow adapter's loopback HTTP target on port 8001"
+            "BMS_TAILNET_CONTROL_TARGET must be the workflow adapter's loopback HTTP target on port 18001"
         )
-    return f"http://{address.compressed}:8001"
+    return f"http://{address.compressed}:18001"
 
 
 CONTROL_TARGET = _configured_control_target()
-LEGACY_CONTROL_TARGETS = frozenset({LEGACY_CONTROL_TARGET, DEFAULT_CONTROL_TARGET})
+LEGACY_CONTROL_TARGETS = frozenset({
+    LEGACY_CONTROL_TARGET,
+    "http://127.0.0.1:8001",
+    PRIOR_LOOPBACK_CONTROL_TARGET,
+})
 GLOBAL_SERVE_HANDLERS: Mapping[str, str] = {
     CONTROL_PATH: CONTROL_TARGET,
-    "/api/mobile-apk": "http://127.0.0.1:8000/api/mobile-apk",
-    "/api/mobile-ui": "http://127.0.0.1:8000/api/mobile-ui",
+    "/api/mobile-apk": "http://127.0.0.1:18000/api/mobile-apk",
+    "/api/mobile-ui": "http://127.0.0.1:18000/api/mobile-ui",
     "/stats/embed": f"{STATS_TOOLKIT_TARGET}/stats",
     "/stats/assets": f"{STATS_TOOLKIT_TARGET}/stats/assets",
     "/stats/embed/health/live": f"{STATS_TOOLKIT_TARGET}/health/live",
@@ -868,7 +875,7 @@ def _install_operator_development_frontend(root: Path, mutation_ledger: set[str]
         f"ExecStartPre=/usr/bin/env python3 {root}/scripts/rotate_biomodstack_logs.py\n"
         "ExecStart=\n"
         f"ExecStart=/usr/bin/node {root}/platform/frontend/node_modules/vite/bin/vite.js "
-        "--host 127.0.0.1 --port 5173\n",
+        "--host 127.0.0.1 --port 18082\n",
     )
     daemon_reload(project_root=root)
 
@@ -2082,7 +2089,7 @@ def _validated_container_runtime(root: Path, *, require_web: bool) -> dict[str, 
     expected_process_identity = {
         "biomodstack-api": (
             "/bin/sh -ec /app/platform/api/.venv/bin/python run_migrations.py && exec "
-            "/app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000",
+            "/app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 18000",
             "/app/platform/api",
         ),
         "biomodstack-web": ("/docker-entrypoint.sh nginx -g daemon off;", "/"),
