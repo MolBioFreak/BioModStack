@@ -69,6 +69,17 @@ class BioXpRuntime:
                 f"Saved BioXP profile was not restored: {str(exc) or exc.__class__.__name__}"
             )
 
+    async def start(self) -> None:
+        """Restore the saved managed target without activating or moving hardware."""
+        try:
+            if self.connection.load_profile() is None:
+                return
+            await self.connection.connect()
+        except Exception as exc:
+            self.startup_warnings.append(
+                f"Saved BioXP profile was not restored: {str(exc) or exc.__class__.__name__}"
+            )
+
     async def close(self) -> None:
         restore_task = self._restore_task
         self._restore_task = None
