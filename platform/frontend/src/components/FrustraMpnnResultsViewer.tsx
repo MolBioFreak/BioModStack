@@ -26,6 +26,7 @@ import {
 import type { ResidueRef } from '../structureViewer/contracts/structureIdentity.js';
 import { getFrustraMpnnResultContext } from './frustraMpnnResultSurface.js';
 import FrustraMpnnLandscapeOverview from './FrustraMpnnLandscapeOverview.js';
+import FrustraMpnnPlotlyAnalytics from './FrustraMpnnPlotlyAnalytics.js';
 
 const PAGE_SIZE = 500;
 const terminalJob = new Set(['completed', 'failed', 'cancelled']);
@@ -310,6 +311,14 @@ export default function FrustraMpnnResultsViewer({
                                 <ClassSummary title="Full-landscape classes" counts={detail.data.summary.complete_landscape_counts} fractions={detail.data.summary.complete_landscape_fractions} />
                             </div>
                         </section>
+
+                        {allResidues.length > 0 && <FrustraMpnnPlotlyAnalytics
+                            residues={allResidues}
+                            highMax={detail.data.summary.threshold_policy.high_max}
+                            minimalMin={detail.data.summary.threshold_policy.minimal_min}
+                            thresholdPolicyId={detail.data.summary.threshold_policy.id}
+                            sourceSha256={detail.data.source_artifact_sha256}
+                        />}
 
                         <section className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">
                             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 p-3"><div><h2 className="font-semibold">Exact-authority structure coloring</h2><p className="mt-1 text-xs text-slate-500">Mol* colors only exact (auth_asym_id, auth_seq_id, insertion_code) identities validated against the persisted source and structure-map hashes.</p></div><div className="flex items-center gap-3"><span className="text-xs text-slate-400">{metricResult.bundle ? `${metricResult.bundle.residueProfiles.length} mapped residues` : 'coloring unavailable'}</span><a href="#frustrampnn-landscape" className="rounded-lg border border-cyan-500/50 bg-cyan-500/10 px-3 py-1.5 text-xs font-semibold text-cyan-100 hover:bg-cyan-500/20">Open residue data ↓</a></div></div>
