@@ -123,7 +123,7 @@ for marker in sorted(pathlib.Path('.').glob('published_*.json')):
 PY
     )
     test \"\${#outputs[@]}\" -gt 0
-    '${params.api_python}' '${params.code_root}/scripts/stage_reporter.py' \
+    '${params.api_python}' '${params.code_root}/scripts/stage_reporter.py' --job-root-relative \
       '${params.job_id}' frustrampnn complete \"\${outputs[@]}\"
     : > frustrampnn_complete.reported
     """

@@ -148,7 +148,7 @@ Path('frustrampnn_report_outputs.txt').write_text('\n'.join(outputs) + '\n', enc
 PY
     mapfile -t outputs < frustrampnn_report_outputs.txt
     test "\${#outputs[@]}" -gt 0
-    '${params.api_python}' '${params.code_root}/scripts/stage_reporter.py' \
+    '${params.api_python}' '${params.code_root}/scripts/stage_reporter.py' --job-root-relative \
       '${params.job_id}' frustrampnn complete "\${outputs[@]}"
     : > frustrampnn_complete.reported
     """
