@@ -72,6 +72,8 @@ def _parse_obj(payload: bytes) -> tuple[np.ndarray, np.ndarray]:
 
     vertices: list[tuple[float, float, float]] = []
     faces: list[tuple[int, int, int]] = []
+    normal_count = 0
+    referenced_normals: list[int] = []
     for line_number, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -93,14 +95,19 @@ def _parse_obj(payload: bytes) -> tuple[np.ndarray, np.ndarray]:
                 _fail("non_triangular_face", f"line {line_number}: only triangular faces are accepted")
             face: list[int] = []
             for field in fields[1:]:
-                if (
-                    not field.isascii()
-                    or not field.isdecimal()
-                    or field.startswith("0")
-                ):
-                    _fail("invalid_obj", f"line {line_number}: face index must be a bare positive decimal integer")
+                vertex_field = field
+                if "//" in field:
+                    parts = field.split("//")
+                    if len(parts) != 2:
+                        _fail("invalid_obj", f"line {line_number}: invalid vertex//normal face index")
+                    vertex_field, normal_field = parts
+                    if not normal_field.isascii() or not normal_field.isdecimal() or normal_field.startswith("0"):
+                        _fail("invalid_obj", f"line {line_number}: normal index must be a positive decimal integer")
+                    referenced_normals.append(int(normal_field) - 1)
+                if not vertex_field.isascii() or not vertex_field.isdecimal() or vertex_field.startswith("0"):
+                    _fail("invalid_obj", f"line {line_number}: vertex index must be a positive decimal integer or vertex//normal")
                 try:
-                    index = int(field)
+                    index = int(vertex_field)
                 except ValueError as exc:
                     raise ShapeGeometryError("invalid_obj", f"line {line_number}: invalid face index") from exc
                 if index <= 0:
@@ -109,6 +116,22 @@ def _parse_obj(payload: bytes) -> tuple[np.ndarray, np.ndarray]:
             if len(set(face)) != 3:
                 _fail("degenerate_face", f"line {line_number}: repeated face vertex")
             faces.append(tuple(face))  # type: ignore[arg-type]
+        elif record == "vn":
+            if len(fields) != 4:
+                _fail("invalid_obj", f"line {line_number}: vertex normal must have exactly three coordinates")
+            try:
+                normal = tuple(float(value) for value in fields[1:])
+            except ValueError as exc:
+                raise ShapeGeometryError("invalid_obj", f"line {line_number}: invalid vertex normal") from exc
+            if not all(math.isfinite(value) for value in normal):
+                _fail("invalid_obj", f"line {line_number}: vertex normal is not finite")
+            normal_count += 1
+        elif record in {"mtllib", "o", "usemtl"}:
+            if len(fields) < 2:
+                _fail("invalid_obj", f"line {line_number}: OBJ metadata record {record!r} is empty")
+        elif record == "s":
+            if len(fields) != 2 or not (fields[1] in {"0", "off"} or fields[1].isdecimal()):
+                _fail("invalid_obj", f"line {line_number}: invalid smoothing-group record")
         else:
             _fail("invalid_obj", f"line {line_number}: unsupported OBJ record {record!r}")
         if len(vertices) > MAX_VERTICES or len(faces) > MAX_FACES:
@@ -118,6 +141,8 @@ def _parse_obj(payload: bytes) -> tuple[np.ndarray, np.ndarray]:
         _fail("open_mesh", "mesh is too small to enclose a volume")
     if any(index >= len(vertices) for face in faces for index in face):
         _fail("invalid_obj", "face references a missing vertex")
+    if any(index < 0 or index >= normal_count for index in referenced_normals):
+        _fail("invalid_obj", "face references a missing vertex normal")
     if set(index for face in faces for index in face) != set(range(len(vertices))):
         _fail("invalid_obj", "every admitted vertex must be referenced")
     return np.asarray(vertices, dtype=np.float64), np.asarray(faces, dtype=np.int64)
@@ -677,7 +702,7 @@ def canonicalize_obj(payload: bytes, *, angstrom_per_unit: float) -> CanonicalGe
         vertices=vertices,
         faces=faces,
         angstrom_per_unit=angstrom_per_unit,
-        source_manifest={"source_format": "obj", "source_parser": "obj_triangle_v1"},
+        source_manifest={"source_format": "obj", "source_parser": "obj_triangle_v2"},
     )
 
 

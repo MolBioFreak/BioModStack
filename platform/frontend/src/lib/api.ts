@@ -517,7 +517,7 @@ export interface ShapeGeometrySummary {
     bounds_angstrom: [number, number, number, number, number, number];
     dimensions_angstrom: [number, number, number];
     source_format: 'obj' | 'stl';
-    source_parser: 'obj_triangle_v1' | 'stl_ascii_v1' | 'stl_binary_v1';
+    source_parser: 'obj_triangle_v1' | 'obj_triangle_v2' | 'stl_ascii_v1' | 'stl_binary_v1';
     source_unit: string;
     angstrom_per_unit: number;
 }
