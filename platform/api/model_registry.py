@@ -48,6 +48,22 @@ class NTPTemplate(BaseModel):
     description: str
 
 
+class WorkflowIntegration(BaseModel):
+    """Workflow-specific presentation and default for an optional model stage."""
+    default_enabled: bool = False
+    enabled_summary: str
+
+
+class ModelIntegration(BaseModel):
+    """Shared operator contract used when one model is embedded in many workflows."""
+    parameter: str
+    operator_label: str
+    checkpoint_label: Optional[str] = None
+    model_summary: str
+    semantic_roles: List[str] = Field(default_factory=list)
+    workflows: Dict[str, WorkflowIntegration] = Field(default_factory=dict)
+
+
 class ModelDefinition(BaseModel):
     """Complete definition of a model/tool."""
     id: str
@@ -59,6 +75,8 @@ class ModelDefinition(BaseModel):
     workflow: Optional[str] = None
     engine_containers: Dict[str, str] = Field(default_factory=dict)
     capabilities: Dict[str, Any] = Field(default_factory=dict)
+    public_launch: bool = True
+    integration: Optional[ModelIntegration] = None
     
     # Modes available for this model
     modes: List[ModelMode] = []
@@ -116,7 +134,10 @@ class ModelRegistry:
         """Get a publicly available model by ID."""
         if model_id == MD_MODEL_ID and not molecular_dynamics_feature_enabled():
             return None
-        return self._models.get(model_id)
+        model = self._models.get(model_id)
+        if model is not None and not model.public_launch:
+            return None
+        return model
 
     def get_internal_model_definition(self, model_id: str) -> Optional[ModelDefinition]:
         """Get a raw definition for trusted coordinators; never expose this via HTTP."""
@@ -128,6 +149,8 @@ class ModelRegistry:
         
         if enabled_only:
             models = [m for m in models if m.enabled]
+
+        models = [m for m in models if m.public_launch]
 
         if not molecular_dynamics_feature_enabled():
             models = [m for m in models if m.id != MD_MODEL_ID]

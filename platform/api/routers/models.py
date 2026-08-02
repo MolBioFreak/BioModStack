@@ -137,6 +137,21 @@ async def get_model(model_id: str):
     }
 
 
+@router.get("/{model_id}/integration")
+async def get_model_integration(model_id: str):
+    """Return the shared, non-launchable workflow-integration contract for a model."""
+    registry = get_registry()
+    model = registry.get_internal_model_definition(model_id)
+    if not model or not model.enabled or model.integration is None:
+        raise HTTPException(status_code=404, detail=f"Model integration '{model_id}' not found")
+    return {
+        "model_id": model.id,
+        "model_name": model.name,
+        "model_version": model.version,
+        **model.integration.model_dump(),
+    }
+
+
 @router.get("/{model_id}/modes")
 async def get_model_modes(model_id: str):
     """Get available modes for a model."""

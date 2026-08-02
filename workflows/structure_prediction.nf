@@ -202,7 +202,7 @@ workflow {
     println("* Name: ${name}")
     println("* Predictor: ${params.pred_method}")
     println("* Parallel jobs: ${numJobs}")
-    println("* FrustraMPNN QC: ${params.run_frustrampnn}")
+    println("* Frustration analysis (FrustraMPNN): ${params.run_frustrampnn}")
     println("=" * 60)
     
     // Create parallel job channels

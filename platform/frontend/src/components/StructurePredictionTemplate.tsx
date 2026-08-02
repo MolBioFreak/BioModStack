@@ -50,6 +50,7 @@ import { parsePDBFile, getModelByNumber, type Chain, type ParsedPDB } from '../u
 import { useLiveGpuCatalog } from './useLiveGpuCatalog';
 import { ModelDocumentationLinks, type ModelDocumentationTopic } from './ModelDocumentationLinks';
 import { resolveInitialGpuPinningState } from './gpuToggleState.js';
+import { ModelIntegrationControl, useModelIntegrationConfig } from './ModelIntegrationControl';
 
 
 interface StructurePredictionTemplateProps {
@@ -146,6 +147,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const { gpuOptions } = useLiveGpuCatalog();
+    const frustrampnnIntegrationQuery = useModelIntegrationConfig('frustrampnn');
     const normalizeProtenixModel = (_model?: string) => 'protenix-v2';
     const initialPrimaryProteinComponent = resolveInitialPrimaryProteinComponent(initialValues);
     const initialPrimarySequence = initialPrimaryProteinComponent?.sequence || initialValues?.sequence || '';
@@ -170,7 +172,18 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     // Core state
     const initialGpuPinningState = resolveInitialGpuPinningState(initialValues);
     const [jobName, setJobName] = useState(initialValues?.name || initialValues?.job_name || 'structure_prediction');
+    const frustrampnnSelectionTouchedRef = useRef(typeof initialValues?.run_frustrampnn === 'boolean');
     const [runFrustrampnn, setRunFrustrampnn] = useState(initialValues?.run_frustrampnn !== false);
+    useEffect(() => {
+        const configuredDefault = frustrampnnIntegrationQuery.data?.workflows?.structure_prediction?.default_enabled;
+        if (!frustrampnnSelectionTouchedRef.current && typeof configuredDefault === 'boolean') {
+            setRunFrustrampnn(configuredDefault);
+        }
+    }, [frustrampnnIntegrationQuery.data]);
+    const updateRunFrustrampnn = (checked: boolean) => {
+        frustrampnnSelectionTouchedRef.current = true;
+        setRunFrustrampnn(checked);
+    };
     const [pinnedGpus, setPinnedGpus] = useState(initialGpuPinningState.pinnedGpus);
     const [lockGpus, setLockGpus] = useState(initialGpuPinningState.lockGpus);
     const clearGpuPinning = () => {
@@ -2618,17 +2631,15 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                 {/* Submit */}
                 <div className={`flex ${isBoltzApi ? 'justify-end' : 'justify-between'} items-center pt-6 border-t border-slate-800`}>
                     {/* Left side: managed post-prediction analysis and retry policy */}
-                    {!isBoltzApi && <div className="flex flex-wrap items-center gap-5">
-                        <label className="flex items-center gap-2 cursor-pointer text-cyan-300 hover:text-cyan-200">
-                            <input
-                                type="checkbox"
-                                checked={runFrustrampnn}
-                                onChange={e => setRunFrustrampnn(e.target.checked)}
-                                className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-cyan-500 focus:ring-cyan-500"
-                            />
-                            <span className="text-sm">Run FrustraMPNN QC</span>
-                            <span className="text-xs text-slate-500">(scheduler-managed; fail closed)</span>
-                        </label>
+                    {!isBoltzApi && <div className="flex flex-wrap items-start gap-5">
+                        <ModelIntegrationControl
+                            modelId="frustrampnn"
+                            workflowId="structure_prediction"
+                            checked={runFrustrampnn}
+                            onChange={updateRunFrustrampnn}
+                            fallbackLabel="Frustration analysis"
+                            integration={frustrampnnIntegrationQuery.data}
+                        />
                         <label className="flex items-center gap-2 cursor-pointer text-slate-400 hover:text-slate-300">
                             <input
                                 type="checkbox"

@@ -2472,7 +2472,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     )}
                     {effectiveRunFrustrampnn && (
                         <span className="rounded-full border px-2.5 py-1" style={themedTagStyle('var(--error)')}>
-                            FrustraMPNN QC
+                            Frustration analysis
                         </span>
                     )}
                     {useManualMutagenesis && (
@@ -2644,7 +2644,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
                         <label className="rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-xs text-slate-300">
                             <div className="flex items-center justify-between gap-3">
-                                <span>FrustraMPNN QC</span>
+                                <span>Frustration analysis</span>
                                 <input
                                     type="checkbox"
                                     checked={runFrustrampnn}
@@ -4797,12 +4797,12 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     </div>
                     )}
 
-                    {/* FrustraMPNN QC */}
+                    {/* FrustraMPNN frustration analysis */}
                     {showQcPanels && (
                     <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4">
                         <div className="flex items-center justify-between">
                             <div>
-                                <h3 className="text-sm font-semibold text-slate-200">FrustraMPNN QC</h3>
+                                <h3 className="text-sm font-semibold text-slate-200">Frustration analysis</h3>
                                 <p className="text-xs text-slate-500 mt-1">
                                     Annotate final candidates with local frustration (post-pipeline, FIO only).
                                 </p>

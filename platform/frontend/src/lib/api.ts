@@ -1032,11 +1032,31 @@ export const continueProteinLocalReview = (
 };
 
 // Models API
+export interface ModelWorkflowIntegration {
+    default_enabled: boolean;
+    enabled_summary: string;
+}
+
+export interface ModelIntegrationConfig {
+    model_id: string;
+    model_name: string;
+    model_version: string;
+    parameter: string;
+    operator_label: string;
+    checkpoint_label: string | null;
+    model_summary: string;
+    semantic_roles: string[];
+    workflows: Record<string, ModelWorkflowIntegration>;
+}
+
 export const fetchModels = (category?: string) =>
     api.get<UntypedApiValue[]>('/api/models', { params: { category } });
 
 export const fetchModelById = (id: string) =>
     api.get<UntypedApiValue>(`/api/models/${id}`);
+
+export const fetchModelIntegration = (id: string) =>
+    api.get<ModelIntegrationConfig>(`/api/models/${id}/integration`);
 
 // Files API
 export const fetchFiles = (path: string = '/') =>

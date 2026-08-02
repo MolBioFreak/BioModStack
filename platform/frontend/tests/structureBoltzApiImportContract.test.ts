@@ -15,7 +15,7 @@ test('Structure Prediction exposes Boltz API as a real remote submission backend
     assert.match(structureSource, /BoltzApiNativeSettingsPanel/);
     assert.match(structureSource, /showParallelJobs && !isBoltzApi/);
     assert.match(structureSource, /showSequenceBatch && !isBoltzApi/);
-    assert.match(structureSource, /!isBoltzApi && <div[^>]+>[\s\S]*?Run FrustraMPNN QC[\s\S]*?Allow Retries[\s\S]*?<\/div>}/);
+    assert.match(structureSource, /!isBoltzApi && <div[^>]+>[\s\S]*?Frustration analysis[\s\S]*?Allow Retries[\s\S]*?<\/div>}/);
     assert.doesNotMatch(structureSource, /BoltzApiImportPanel|Import downloaded Boltz API result/);
 });
 
