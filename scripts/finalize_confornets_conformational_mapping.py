@@ -559,11 +559,18 @@ def _validate_single_chain(
         raise FinalizationError("native settings do not match canonical settings")
     if legacy_request.get("backend_identity") != settings["backend_identity"]:
         raise FinalizationError("native backend identity does not match canonical settings")
-    if legacy_request.get("canonical_binding") != {
+    expected_binding = {
         "request_sha256": request["request_sha256"],
         "coordinate_plan_sha256": plan["coordinate_plan_sha256"],
         "target_id": request["targets"][0]["target_id"],
-    }:
+    }
+    mapped_binding = {
+        **expected_binding,
+        "coordinate_mapping": {
+            "target_id": {"constant": request["targets"][0]["target_id"]},
+        },
+    }
+    if legacy_request.get("canonical_binding") not in (expected_binding, mapped_binding):
         raise FinalizationError("native request canonical binding mismatch")
     return legacy_request
 

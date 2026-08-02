@@ -70,9 +70,11 @@ def test_canonical_runtime_maps_native_target_to_registered_target() -> None:
     runner = (REPO_ROOT / "scripts" / "run_confornets_inference.py").read_text(
         encoding="utf-8"
     )
+    finalizer = FINALIZER.read_text(encoding="utf-8")
     assert '"coordinate_mapping": {' in prep
     assert '"target_id": {"constant": target["target_id"]}' in prep
     assert '"coordinate_mapping": canonical_binding["coordinate_mapping"]' in runner
+    assert "mapped_binding" in finalizer
 
 
 def _fixture_settings(**overrides: object) -> dict[str, object]:
