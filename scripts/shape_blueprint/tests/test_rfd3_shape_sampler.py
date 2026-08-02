@@ -103,11 +103,13 @@ class RFD3ShapeSamplerTests(unittest.TestCase):
             [[[0.5 if index % 2 == 0 else -0.5, 0.0, 0.0] for index in range(31)]],
             dtype=torch.float32,
         )
-        smoothed = ShapeGuidedDiffusionSampler._smooth_ca_delta(alternating)
+        with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+            smoothed = ShapeGuidedDiffusionSampler._smooth_ca_delta(alternating)
         raw_roughness = torch.linalg.vector_norm(torch.diff(alternating, dim=1), dim=-1).mean()
         smooth_roughness = torch.linalg.vector_norm(torch.diff(smoothed, dim=1), dim=-1).mean()
         self.assertLess(float(smooth_roughness), float(raw_roughness) * 0.2)
         self.assertLessEqual(float(torch.linalg.vector_norm(smoothed, dim=-1).max()), 0.5)
+        self.assertEqual(smoothed.dtype, alternating.dtype)
 
     def test_guidance_is_inactive_outside_registered_window(self) -> None:
         sampler = self.sampler()

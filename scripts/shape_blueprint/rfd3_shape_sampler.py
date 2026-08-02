@@ -107,7 +107,7 @@ class ShapeGuidedDiffusionSampler(SampleDiffusionWithMotif):
         padded = F.pad(channels, (2, 2), mode="replicate")
         kernel = delta.new_tensor([1.0, 4.0, 6.0, 4.0, 1.0]).div_(16.0)
         weight = kernel.view(1, 1, 5).expand(3, 1, 5)
-        return F.conv1d(padded, weight, groups=3).transpose(1, 2)
+        return F.conv1d(padded, weight, groups=3).transpose(1, 2).to(dtype=delta.dtype)
 
     @staticmethod
     def _atom_mask(value: torch.Tensor, atom_count: int) -> torch.Tensor:
