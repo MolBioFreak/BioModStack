@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import types
 import unittest
 
 import numpy as np
@@ -62,6 +63,10 @@ class RFD3ShapeSamplerTests(unittest.TestCase):
             shape_max_update=0.2,
         )
 
+    def test_source_parity_defaults_do_not_add_invented_connectivity_force(self) -> None:
+        sampler = self.sampler()
+        self.assertEqual(sampler.shape_connectivity_weight, 0.0)
+
     def test_hash_mismatch_fails_before_sampling(self) -> None:
         sampler = self.sampler()
         sampler.shape_expected_point_pool_sha256 = "b" * 64
@@ -97,23 +102,18 @@ class RFD3ShapeSamplerTests(unittest.TestCase):
         self.assertEqual(receipt["step_index"], 50)
         self.assertEqual(receipt["geometry_sha256"], "a" * 64)
         self.assertEqual(receipt["guided_ca_count"], 1)
+        self.assertEqual(receipt["schema"], "bms_rfd3_shape_guidance_step_v2")
+        self.assertEqual(receipt["guidance_decay"], "constant")
+        self.assertEqual(receipt["gradient_scaling"], "raw")
+        self.assertEqual(receipt["outside_reduction"], "sum")
+        self.assertEqual(receipt["coordinate_state"], "X_L")
+        self.assertEqual(receipt["connectivity_weight"], 0.0)
+        self.assertNotIn("smoothed_delta_adjacent_rms", receipt)
 
-    def test_sequence_smoothing_suppresses_neighboring_displacement_jumps(self) -> None:
-        alternating = torch.tensor(
-            [[[0.5 if index % 2 == 0 else -0.5, 0.0, 0.0] for index in range(31)]],
-            dtype=torch.float32,
-        )
-        with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
-            smoothed = ShapeGuidedDiffusionSampler._smooth_ca_delta(alternating)
-        raw_roughness = torch.linalg.vector_norm(torch.diff(alternating, dim=1), dim=-1).mean()
-        smooth_roughness = torch.linalg.vector_norm(torch.diff(smoothed, dim=1), dim=-1).mean()
-        self.assertLess(float(smooth_roughness), float(raw_roughness) * 0.2)
-        self.assertLessEqual(float(torch.linalg.vector_norm(smoothed, dim=-1).max()), 0.5)
-        self.assertEqual(smoothed.dtype, alternating.dtype)
 
-    def test_guidance_is_inactive_outside_registered_window(self) -> None:
+    def test_source_parity_constant_guidance_is_active_at_first_reverse_step(self) -> None:
         sampler = self.sampler()
-        coordinates = torch.randn((1, 2, 3))
+        coordinates = torch.tensor([[[1.50, 0.0, 0.0], [1.60, 0.0, 0.0]]])
         features = {
             "atom_to_token_map": torch.tensor([0, 0]),
             "is_central": torch.tensor([False, True]),
@@ -127,8 +127,63 @@ class RFD3ShapeSamplerTests(unittest.TestCase):
             total_steps=100,
             fixed_atom_mask=features["diffusion_mask"],
         )
-        torch.testing.assert_close(guided, coordinates)
-        self.assertFalse(self.receipt_path.exists())
+        self.assertGreater(float(torch.linalg.vector_norm(guided - coordinates)), 0.0)
+        self.assertTrue(self.receipt_path.exists())
+
+    def test_guided_X_L_is_consumed_by_the_next_rfd3_reverse_step(self) -> None:
+        sampler = self.sampler(step_size=0.01)
+        sampler.gamma_0 = 0.0
+        sampler.noise_scale = 0.0
+        sampler.step_scale = 1.0
+        sampler.allow_realignment = False
+        initial = torch.tensor([[[1.50, 0.0, 0.0], [1.60, 0.0, 0.0]]])
+        sampler._construct_inference_noise_schedule = types.MethodType(
+            lambda self, device, partial_t=None: torch.tensor([1.0, 0.5, 0.1], device=device),
+            sampler,
+        )
+        sampler._get_initial_structure = types.MethodType(
+            lambda self, **kwargs: initial.clone(),
+            sampler,
+        )
+        guided_states = []
+        original_post_step = sampler.post_step_coordinates
+
+        def recording_post_step(self, **kwargs):
+            guided = original_post_step(**kwargs)
+            guided_states.append(guided.clone())
+            return guided
+
+        sampler.post_step_coordinates = types.MethodType(recording_post_step, sampler)
+
+        class IdentityDenoiser:
+            def __init__(self):
+                self.inputs = []
+
+            def __call__(self, *, X_noisy_L, **kwargs):
+                self.inputs.append(X_noisy_L.clone())
+                return {"X_L": X_noisy_L.clone()}
+
+        denoiser = IdentityDenoiser()
+        features = {
+            "ref_element": torch.tensor([0]),
+            "is_motif_atom_with_fixed_coord": torch.tensor([False, False]),
+            "atom_to_token_map": torch.tensor([0, 0]),
+            "is_central": torch.tensor([False, True]),
+            "is_protein": torch.tensor([True]),
+        }
+        with torch.no_grad():
+            sampler.sample_diffusion_like_af3(
+                f=features,
+                diffusion_module=denoiser,
+                diffusion_batch_size=1,
+                coord_atom_lvl_to_be_noised=torch.zeros_like(initial),
+                initializer_outputs={},
+                ref_initializer_outputs=None,
+                f_ref=None,
+            )
+        self.assertEqual(len(denoiser.inputs), 2)
+        self.assertEqual(len(guided_states), 2)
+        torch.testing.assert_close(denoiser.inputs[1], guided_states[0])
 
     def test_zero_step_size_is_an_explicit_matched_control(self) -> None:
         sampler = self.sampler(step_size=0.0)

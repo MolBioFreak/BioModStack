@@ -14,6 +14,9 @@ from typing import Mapping
 
 
 BASE_SAMPLER_SHA256 = "e64fd42242422fa40ee0112a031911f462b13403b3f8d46ae49879d569b9314f"
+FOUNDRY_VERSION = "0.1.9"
+FOUNDRY_COMMIT = "a36d29c5c0d196a1c1c23349878683b6643da67d"
+SHAPE_CTRL_COMMIT = "e1a518b61e216d3c597a46e5a151b9e24756e33e"
 DEFAULT_CHECKPOINT = Path("/foundry/checkpoints/rfd3_latest.ckpt")
 GUIDANCE_SOURCE = Path(__file__).with_name("shape_guidance.py")
 SAMPLER_SOURCE = Path(__file__).with_name("rfd3_shape_sampler.py")
@@ -116,8 +119,6 @@ def run_shape_rfd3(
         f"inference_sampler.num_timesteps={num_timesteps}",
         f"+inference_sampler.shape_step_size={guidance_step_size}",
         "+inference_sampler.shape_max_update=0.5",
-        "+inference_sampler.shape_connectivity_weight=5.0",
-        "+inference_sampler.shape_terminal_scale=1.0",
         f"+inference_sampler.shape_manifest_path={manifest_path.resolve()}",
         f"+inference_sampler.shape_points_path={points_path.resolve()}",
         f"+inference_sampler.shape_sdf_path={sdf_path.resolve()}",
@@ -147,6 +148,13 @@ def run_shape_rfd3(
             "seed": request["seed"],
             "num_timesteps": num_timesteps,
             "guidance_step_size": guidance_step_size,
+            "guidance_decay": "constant",
+            "gradient_scaling": "raw",
+            "outside_reduction": "sum",
+            "connectivity_weight": 0.0,
+            "foundry_version_pin": FOUNDRY_VERSION,
+            "foundry_commit": FOUNDRY_COMMIT,
+            "shape_ctrl_commit": SHAPE_CTRL_COMMIT,
             "shape_guidance_sha256": _sha256(GUIDANCE_SOURCE),
             "shape_sampler_sha256": _sha256(SAMPLER_SOURCE),
         }
@@ -180,6 +188,13 @@ def run_shape_rfd3(
         "seed": request["seed"],
         "num_timesteps": num_timesteps,
         "guidance_step_size": guidance_step_size,
+        "guidance_decay": "constant",
+        "gradient_scaling": "raw",
+        "outside_reduction": "sum",
+        "connectivity_weight": 0.0,
+        "foundry_version_pin": FOUNDRY_VERSION,
+        "foundry_commit": FOUNDRY_COMMIT,
+        "shape_ctrl_commit": SHAPE_CTRL_COMMIT,
         "shape_guidance_sha256": _sha256(GUIDANCE_SOURCE),
         "shape_sampler_sha256": _sha256(SAMPLER_SOURCE),
         "output_backbones": [path.name for path in structures],

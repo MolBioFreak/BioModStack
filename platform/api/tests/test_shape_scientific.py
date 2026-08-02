@@ -111,8 +111,8 @@ def test_shape_rfd3_wrapper_binds_request_and_guidance_paths(tmp_path: Path) -> 
     assert "inference_sampler.num_timesteps=200" in args
     assert "+inference_sampler.shape_step_size=0.2" in args
     assert "+inference_sampler.shape_max_update=0.5" in args
-    assert "+inference_sampler.shape_connectivity_weight=5.0" in args
-    assert "+inference_sampler.shape_terminal_scale=1.0" in args
+    assert not any("shape_connectivity_weight" in arg for arg in args)
+    assert not any("shape_terminal_scale" in arg for arg in args)
     assert f"+inference_sampler.shape_manifest_path={manifest_path.resolve()}" in args
     assert f"+inference_sampler.shape_points_path={points_path.resolve()}" in args
     assert f"+inference_sampler.shape_sdf_path={sdf_path.resolve()}" in args
@@ -121,6 +121,13 @@ def test_shape_rfd3_wrapper_binds_request_and_guidance_paths(tmp_path: Path) -> 
     assert runtime["output_backbone_count"] == 2
     assert runtime["num_timesteps"] == 200
     assert runtime["guidance_step_size"] == 0.2
+    assert runtime["guidance_decay"] == "constant"
+    assert runtime["gradient_scaling"] == "raw"
+    assert runtime["outside_reduction"] == "sum"
+    assert runtime["connectivity_weight"] == 0.0
+    assert runtime["foundry_version_pin"] == "0.1.9"
+    assert runtime["foundry_commit"] == "a36d29c5c0d196a1c1c23349878683b6643da67d"
+    assert runtime["shape_ctrl_commit"] == "e1a518b61e216d3c597a46e5a151b9e24756e33e"
     assert len(runtime["shape_guidance_sha256"]) == 64
     assert len(runtime["shape_sampler_sha256"]) == 64
     assert runtime["checkpoint_sha256"] == hashlib.sha256(b"checkpoint").hexdigest()
