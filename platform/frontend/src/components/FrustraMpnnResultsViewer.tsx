@@ -24,6 +24,7 @@ import {
     groupExact20Landscape,
 } from './conformationalMapping/conformationalMappingSemantics.js';
 import type { ResidueRef } from '../structureViewer/contracts/structureIdentity.js';
+import { getFrustraMpnnResultContext } from './frustraMpnnResultSurface.js';
 
 const PAGE_SIZE = 500;
 const terminalJob = new Set(['completed', 'failed', 'cancelled']);
@@ -64,12 +65,15 @@ function ClassSummary({ title, counts, fractions }: { title: string; counts: Fru
 export default function FrustraMpnnResultsViewer({
     job,
     onBack,
+    backLabel = 'Jobs',
     onOpenJob,
 }: {
     job: Job;
     onBack: () => void;
+    backLabel?: string;
     onOpenJob: (jobId: string) => void;
 }) {
+    const resultContext = getFrustraMpnnResultContext(job)!;
     const [selectedInvocation, setSelectedInvocation] = useState<string | null>(null);
     const [offset, setOffset] = useState(0);
     const [chainFilter, setChainFilter] = useState('');
@@ -84,11 +88,12 @@ export default function FrustraMpnnResultsViewer({
             const status = query.state.data?.status ?? job.status;
             return status === 'queued' || status === 'running' ? 3000 : false;
         },
+        enabled: resultContext.usesChildReceipt,
     });
     const results = useQuery({
         queryKey: ['frustrampnn-results', job.id],
         queryFn: ({ signal }) => listFrustraMpnnResults(job.id, 200, 0, signal),
-        refetchInterval: () => terminalJob.has(receipt.data?.status ?? job.status) ? false : 3000,
+        refetchInterval: () => terminalJob.has(resultContext.usesChildReceipt ? (receipt.data?.status ?? job.status) : job.status) ? false : 3000,
     });
     useEffect(() => {
         const items = results.data?.items ?? [];
@@ -218,7 +223,7 @@ export default function FrustraMpnnResultsViewer({
             return status === 'queued' || status === 'running' ? 3000 : false;
         },
     });
-    const state = receipt.data?.status ?? job.status;
+    const state = resultContext.usesChildReceipt ? (receipt.data?.status ?? job.status) : job.status;
     const nextResultJobId = nextReceipt.data?.result_job_id ?? null;
     const explicitState = state === 'queued'
         ? 'queued'
@@ -239,33 +244,33 @@ export default function FrustraMpnnResultsViewer({
             <header className="border-b border-slate-800 bg-slate-900/80 px-6 py-4">
                 <div className="mx-auto flex max-w-[1800px] flex-wrap items-center justify-between gap-3">
                     <div className="flex items-center gap-4">
-                        <button type="button" onClick={onBack} className="rounded-lg border border-slate-700 px-3 py-2 text-sm hover:border-slate-500">← Jobs</button>
+                        <button type="button" onClick={onBack} className="rounded-lg border border-slate-700 px-3 py-2 text-sm hover:border-slate-500">← {backLabel}</button>
                         <div>
                             <h1 className="text-lg font-semibold">FrustraMPNN Results Viewer</h1>
-                            <p className="mt-1 text-xs text-slate-500">Persisted execution child <span className="font-mono">{job.id}</span></p>
+                            <p className="mt-1 text-xs text-slate-500">{resultContext.executionLabel} <span className="font-mono">{job.id}</span></p>
                         </div>
                     </div>
                     <div className="flex items-center gap-2">
                         <span role="status" aria-live="polite" className="rounded-full border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs">{explicitState}</span>
-                        <button type="button" disabled={state === 'queued' || state === 'running' || reanalysis.isPending} onClick={() => reanalysis.mutate()} className="rounded-lg border border-cyan-500/50 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-100 hover:bg-cyan-500/20 disabled:opacity-40">
+                        {resultContext.canReanalyzePersistedInputs && <button type="button" disabled={state === 'queued' || state === 'running' || reanalysis.isPending} onClick={() => reanalysis.mutate()} className="rounded-lg border border-cyan-500/50 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-100 hover:bg-cyan-500/20 disabled:opacity-40">
                             {reanalysis.isPending ? 'Queueing…' : 'Reanalyze persisted inputs'}
-                        </button>
+                        </button>}
                     </div>
                 </div>
             </header>
             <main className="mx-auto max-w-[1800px] space-y-4 p-6">
-                {(receipt.isError || results.isError) && <div role="alert" className="rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-100">{errorMessage(receipt.error || results.error, 'Persisted FrustraMPNN state is unavailable.')}</div>}
+                {((resultContext.usesChildReceipt && receipt.isError) || results.isError) && <div role="alert" className="rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-100">{errorMessage((resultContext.usesChildReceipt ? receipt.error : null) || results.error, 'Persisted FrustraMPNN state is unavailable.')}</div>}
                 {(detail.isError || artifacts.isError || structureMap.isError) && <div role="alert" className="rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-100">{errorMessage(detail.error || artifacts.error || structureMap.error, 'Governed FrustraMPNN result authority is unavailable.')}</div>}
-                {reanalysis.isError && <div role="alert" className="rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-100">{errorMessage(reanalysis.error, 'Reanalysis child could not be queued.')}</div>}
-                {nextReceipt.data && <div role="status" aria-live="polite" className="rounded-xl border border-cyan-500/30 bg-cyan-500/10 p-3 text-sm text-cyan-100">Reanalysis child {nextReceipt.data.status}.{nextResultJobId && <button type="button" onClick={() => onOpenJob(nextResultJobId)} className="ml-2 underline">Open child results</button>}</div>}
+                {resultContext.canReanalyzePersistedInputs && reanalysis.isError && <div role="alert" className="rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-100">{errorMessage(reanalysis.error, 'Reanalysis child could not be queued.')}</div>}
+                {resultContext.canReanalyzePersistedInputs && nextReceipt.data && <div role="status" aria-live="polite" className="rounded-xl border border-cyan-500/30 bg-cyan-500/10 p-3 text-sm text-cyan-100">Reanalysis child {nextReceipt.data.status}.{nextResultJobId && <button type="button" onClick={() => onOpenJob(nextResultJobId)} className="ml-2 underline">Open child results</button>}</div>}
 
                 <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-5" aria-label="Persisted execution state">
                     {[
                         ['Requested', receipt.data?.created_at ?? job.created_at],
                         ['Status', explicitState],
                         ['Runtime identity', detail.data ? shortHash(String(detail.data.runtime_identity.sif_sha256 ?? detail.data.request_sha256)) : 'pending'],
-                        ['Assigned GPU', receipt.data?.assigned_gpu == null ? 'unassigned' : `GPU ${receipt.data.assigned_gpu}`],
-                        ['Failure class', detail.data?.failure_class ?? (state === 'failed' ? 'scheduler_failure' : 'none')],
+                        ['Assigned GPU', (detail.data?.assigned_gpu ?? receipt.data?.assigned_gpu) == null ? 'unassigned' : `GPU ${detail.data?.assigned_gpu ?? receipt.data?.assigned_gpu}`],
+                        ['Failure class', detail.data?.failure_class ?? (canonicalSucceeded ? 'none' : state === 'failed' ? 'scheduler_failure' : 'none')],
                     ].map(([label, value]) => <div key={label} className="rounded-xl border border-slate-800 bg-slate-900/60 p-3"><div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{label}</div><div className="mt-1 break-words text-sm text-slate-200">{value}</div></div>)}
                 </section>
                 {(detail.data?.diagnostic || receipt.data?.error_message) && <div role="alert" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100"><span className="font-semibold">Diagnostic:</span> {detail.data?.diagnostic || receipt.data?.error_message}</div>}
@@ -296,13 +301,13 @@ export default function FrustraMpnnResultsViewer({
                         </section>
 
                         <section className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">
-                            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 p-3"><div><h2 className="font-semibold">Exact-authority structure coloring</h2><p className="mt-1 text-xs text-slate-500">Mol* colors only exact (auth_asym_id, auth_seq_id, insertion_code) identities validated against the persisted source and structure-map hashes.</p></div><span className="text-xs text-slate-400">{metricResult.bundle ? `${metricResult.bundle.residueProfiles.length} mapped residues` : 'coloring unavailable'}</span></div>
+                            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 p-3"><div><h2 className="font-semibold">Exact-authority structure coloring</h2><p className="mt-1 text-xs text-slate-500">Mol* colors only exact (auth_asym_id, auth_seq_id, insertion_code) identities validated against the persisted source and structure-map hashes.</p></div><div className="flex items-center gap-3"><span className="text-xs text-slate-400">{metricResult.bundle ? `${metricResult.bundle.residueProfiles.length} mapped residues` : 'coloring unavailable'}</span><a href="#frustrampnn-landscape" className="rounded-lg border border-cyan-500/50 bg-cyan-500/10 px-3 py-1.5 text-xs font-semibold text-cyan-100 hover:bg-cyan-500/20">Open residue data ↓</a></div></div>
                             {metricResult.error && <div role="alert" className="m-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">Typed mapping missingness: {metricResult.error}</div>}
                             {completeLandscape.isError && <div role="alert" className="m-3 rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-100">{errorMessage(completeLandscape.error, 'Complete bounded landscape could not be validated.')}</div>}
                             {structureArtifact && selectedInvocation ? <MolstarViewer
                                 structureUrl={frustraMpnnArtifactUrl(job.id, structureArtifact.artifact_id)}
                                 format="pdb"
-                                height={620}
+                                height={440}
                                 label={detail.data.candidate_id}
                                 metricLayers={metricResult.bundle?.layers}
                                 activeMetricId={metricResult.bundle ? 'frustrampnn-native-index' : undefined}
@@ -312,7 +317,7 @@ export default function FrustraMpnnResultsViewer({
                             /> : <div role="status" className="p-6 text-sm text-slate-500">Normalized structure artifact unavailable.</div>}
                         </section>
 
-                        <section className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">
+                        <section id="frustrampnn-landscape" className="scroll-mt-4 overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">
                             <div className="flex flex-wrap items-end justify-between gap-3 border-b border-slate-800 p-3">
                                 <div><h2 className="font-semibold">Persisted exact residue landscape</h2><p className="mt-1 text-xs text-slate-500">Bounded API page; legacy summary rows are never expanded into N×20 data.</p></div>
                                 <div className="flex flex-wrap gap-2 text-xs">
@@ -323,7 +328,7 @@ export default function FrustraMpnnResultsViewer({
                             </div>
                             {landscape.isError && <div role="alert" className="m-3 rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-100">{errorMessage(landscape.error, 'Landscape page unavailable.')}</div>}
                             {pageResidues.length > 0 ? (
-                                <div className="max-h-[650px] overflow-auto"><table className="min-w-[1500px] text-left text-[10px]"><thead className="sticky top-0 z-10 bg-slate-900 text-slate-400"><tr><th className="sticky left-0 z-20 bg-slate-900 p-2">Exact author residue</th>{CANONICAL_AMINO_ACIDS.map((aa) => <th key={aa} className="p-2 text-center">{aa}</th>)}</tr></thead><tbody>{pageResidues.map((residue) => <tr key={residue.key} className="border-t border-slate-800"><th className="sticky left-0 bg-slate-900 p-2"><button type="button" aria-label={`Select exact author residue ${residue.auth_asym_id} ${residue.auth_seq_id}${residue.insertion_code}, wild type ${residue.wt}`} className="text-left hover:text-cyan-300" onClick={() => { const profile = metricResult.bundle?.residueProfiles.find((item) => item.residue.key === residue.key); setSelectedResidue(profile?.identity ?? null); }}>{residue.auth_asym_id}:{residue.auth_seq_id}{residue.insertion_code} · WT {residue.wt}</button></th>{residue.slots.map((slot) => <td key={slot.mutation_aa} className="p-1"><div title={`${slot.status}${slot.reason ? ` · ${slot.reason}` : ''}`} className={`rounded border p-1.5 text-center ${classStyle(slot.class)}`}><div>{slot.mutation_aa}{slot.mutation_aa === residue.wt ? '*' : ''}</div><div>{fmt(slot.score)}</div></div></td>)}</tr>)}</tbody></table></div>
+                                <div className="max-h-[650px] overflow-auto"><table className="min-w-[1100px] text-left text-[10px]"><thead className="sticky top-0 z-10 bg-slate-900 text-slate-400"><tr><th className="sticky left-0 z-20 bg-slate-900 p-2">Exact author residue</th>{CANONICAL_AMINO_ACIDS.map((aa) => <th key={aa} className="p-2 text-center">{aa}</th>)}</tr></thead><tbody>{pageResidues.map((residue) => <tr key={residue.key} className="border-t border-slate-800"><th className="sticky left-0 bg-slate-900 p-2"><button type="button" aria-label={`Select exact author residue ${residue.auth_asym_id} ${residue.auth_seq_id}${residue.insertion_code}, wild type ${residue.wt}`} className="text-left hover:text-cyan-300" onClick={() => { const profile = metricResult.bundle?.residueProfiles.find((item) => item.residue.key === residue.key); setSelectedResidue(profile?.identity ?? null); }}>{residue.auth_asym_id}:{residue.auth_seq_id}{residue.insertion_code} · WT {residue.wt}</button></th>{residue.slots.map((slot) => <td key={slot.mutation_aa} className="p-1"><div title={`${slot.status}${slot.reason ? ` · ${slot.reason}` : ''}`} className={`rounded border p-1.5 text-center ${classStyle(slot.class)}`}><div>{slot.mutation_aa}{slot.mutation_aa === residue.wt ? '*' : ''}</div><div>{fmt(slot.score)}</div></div></td>)}</tr>)}</tbody></table></div>
                             ) : (
                                 <div className="max-h-[650px] overflow-auto"><table className="w-full min-w-[900px] text-left text-xs"><thead className="sticky top-0 bg-slate-900 text-slate-400"><tr><th className="p-2">Exact author residue</th><th className="p-2">WT→mutation</th><th className="p-2">Score</th><th className="p-2">Canonical class</th><th className="p-2">Support / reason</th></tr></thead><tbody>{landscape.data?.rows.map((row) => <tr key={`${row.entity_instance_id}:${row.sequence_index}:${row.mutation_aa}`} className="border-t border-slate-800"><td className="p-2">{row.auth_asym_id}:{row.auth_seq_id}{row.insertion_code}</td><td className="p-2">{row.wt}→{row.mutation_aa}</td><td className="p-2">{fmt(row.score)}</td><td className="p-2">{row.class ?? 'unavailable'}</td><td className="p-2">{row.status}{row.reason ? ` · ${row.reason}` : ''}</td></tr>)}</tbody></table></div>
                             )}

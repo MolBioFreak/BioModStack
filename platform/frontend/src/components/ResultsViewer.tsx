@@ -59,6 +59,7 @@ import MDResultsPane from './MDResultsPane';
 import { ConformationalMappingViewer } from './conformationalMapping/ConformationalMappingViewer';
 import FrustraMpnnAnalysisControls from './FrustraMpnnAnalysisControls';
 import FrustraMpnnResultsViewer from './FrustraMpnnResultsViewer';
+import { hasFrustraMpnnResultSurface } from './frustraMpnnResultSurface';
 import { ModelIntegrationControl, useModelIntegrationConfig } from './ModelIntegrationControl';
 import {
     saveAntibodyRefinementLaunchState,
@@ -1685,6 +1686,7 @@ export function ResultsViewer() {
     const [showOverviewAnalysisMenu, setShowOverviewAnalysisMenu] = useState(false);
     const [expandedLineageGroups, setExpandedLineageGroups] = useState<Set<string>>(new Set());
     const [activeTab, setActiveTab] = useState<TabId>('overview');
+    const [resultSurface, setResultSurface] = useState<'workflow' | 'frustrampnn'>('workflow');
     const [selectedDesignId, setSelectedDesignId] = useState<string>('');
     const [selectedDesignIds, setSelectedDesignIds] = useState<string[]>([]);
     const [iterationMessage, setIterationMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
@@ -1827,6 +1829,10 @@ export function ResultsViewer() {
         () => nonNgsJobs.find((j: Job) => j.id === selectedJobId),
         [nonNgsJobs, selectedJobId]
     );
+    const frustraMpnnSurfaceAvailable = hasFrustraMpnnResultSurface(activeJob);
+    useEffect(() => {
+        setResultSurface(frustraMpnnSurfaceAvailable ? 'frustrampnn' : 'workflow');
+    }, [activeJob?.id, frustraMpnnSurfaceAvailable]);
     const activeParentJob = useMemo(
         () => activeJob?.parent_job_id ? nonNgsJobs.find((j: Job) => j.id === activeJob.parent_job_id) : undefined,
         [nonNgsJobs, activeJob?.parent_job_id]
@@ -5012,11 +5018,14 @@ export function ResultsViewer() {
     if (activeJob?.model_id === 'conformational_mapping') {
         return <ConformationalMappingViewer requestId={activeJob.id} title={activeJob.name} />;
     }
-    if (activeJob?.model_id === 'frustrampnn') {
+    if (activeJob && frustraMpnnSurfaceAvailable && resultSurface === 'frustrampnn') {
         return <FrustraMpnnResultsViewer
             key={activeJob.id}
             job={activeJob}
-            onBack={() => navigate('/results')}
+            onBack={activeJob.model_id === 'frustrampnn'
+                ? () => navigate('/results')
+                : () => setResultSurface('workflow')}
+            backLabel={activeJob.model_id === 'frustrampnn' ? 'Jobs' : 'Workflow result'}
             onOpenJob={handleSelectJob}
         />;
     }
@@ -5039,6 +5048,15 @@ export function ResultsViewer() {
                         </p>
                         {activeJob && (
                             <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-slate-300">
+                                {frustraMpnnSurfaceAvailable && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setResultSurface('frustrampnn')}
+                                        className="rounded-lg border border-cyan-500/50 bg-cyan-500/10 px-2 py-1 font-semibold text-cyan-100 hover:bg-cyan-500/20"
+                                    >
+                                        Open Frustration analysis
+                                    </button>
+                                )}
                                 {formatLineagePathSummary(
                                     activeJob.stage_family,
                                     activeJob.stage_mode,
