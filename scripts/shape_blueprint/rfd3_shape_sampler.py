@@ -43,6 +43,7 @@ class ShapeGuidedDiffusionSampler(SampleDiffusionWithMotif):
     shape_max_update: float = 0.2
     shape_chamfer_weight: float = 1.0
     shape_outside_weight: float = 1.0
+    shape_connectivity_weight: float = 5.0
     shape_start_fraction: float = 0.2
     shape_end_fraction: float = 0.8
     _shape_fields: dict[str, ShapeGuidanceField] = field(default_factory=dict, init=False, repr=False)
@@ -53,7 +54,7 @@ class ShapeGuidedDiffusionSampler(SampleDiffusionWithMotif):
             raise ValueError("Shape sampler requires manifest, point-pool, and SDF paths")
         if self.shape_step_size < 0 or self.shape_max_update <= 0:
             raise ValueError("Shape guidance step size must be non-negative and max update positive")
-        if self.shape_chamfer_weight < 0 or self.shape_outside_weight < 0:
+        if self.shape_chamfer_weight < 0 or self.shape_outside_weight < 0 or self.shape_connectivity_weight < 0:
             raise ValueError("Shape guidance weights must be non-negative")
         if self.shape_chamfer_weight == 0 and self.shape_outside_weight == 0:
             raise ValueError("at least one Shape guidance weight must be positive")
@@ -150,6 +151,7 @@ class ShapeGuidedDiffusionSampler(SampleDiffusionWithMotif):
             max_update=self.shape_max_update * scale,
             chamfer_weight=self.shape_chamfer_weight,
             outside_weight=self.shape_outside_weight,
+            connectivity_weight=self.shape_connectivity_weight,
         )
         ca_delta = projected_ca - ca_coordinates
         token_count = int(token_map.max().item()) + 1

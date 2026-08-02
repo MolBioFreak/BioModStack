@@ -91,6 +91,7 @@ class ShapeGuidanceField:
         *,
         chamfer_weight: float = 1.0,
         outside_weight: float = 1.0,
+        connectivity_weight: float = 0.0,
     ) -> dict[str, torch.Tensor]:
         if coordinates.ndim == 2:
             coordinates = coordinates.unsqueeze(0)
@@ -102,8 +103,14 @@ class ShapeGuidanceField:
         chamfer = distances.amin(dim=-1).mean() + distances.amin(dim=-2).mean()
         signed = self.signed_distance(coordinates)
         outside = torch.relu(-signed).square().mean()
-        total = chamfer * float(chamfer_weight) + outside * float(outside_weight)
-        return {"total": total, "chamfer": chamfer, "outside": outside}
+        adjacent = torch.linalg.vector_norm(coordinates[:, 1:, :] - coordinates[:, :-1, :], dim=-1)
+        connectivity = (adjacent - 3.8).square().mean() if coordinates.shape[1] > 1 else coordinates.sum() * 0.0
+        total = (
+            chamfer * float(chamfer_weight)
+            + outside * float(outside_weight)
+            + connectivity * float(connectivity_weight)
+        )
+        return {"total": total, "chamfer": chamfer, "outside": outside, "connectivity": connectivity}
 
     def project(
         self,
@@ -113,6 +120,7 @@ class ShapeGuidanceField:
         max_update: float,
         chamfer_weight: float = 1.0,
         outside_weight: float = 1.0,
+        connectivity_weight: float = 0.0,
     ) -> tuple[torch.Tensor, dict[str, float]]:
         if step_size <= 0 or max_update <= 0:
             raise ValueError("step_size and max_update must be positive")
@@ -122,6 +130,7 @@ class ShapeGuidanceField:
                 working,
                 chamfer_weight=chamfer_weight,
                 outside_weight=outside_weight,
+                connectivity_weight=connectivity_weight,
             )
             gradient = torch.autograd.grad(
                 losses["total"], working, create_graph=False
@@ -141,6 +150,7 @@ class ShapeGuidanceField:
             "loss": float(losses["total"].detach().cpu()),
             "chamfer": float(losses["chamfer"].detach().cpu()),
             "outside": float(losses["outside"].detach().cpu()),
+            "connectivity": float(losses["connectivity"].detach().cpu()),
             "gradient_norm": float(torch.linalg.vector_norm(gradient).detach().cpu()),
             "applied_update_norm": float(torch.linalg.vector_norm(delta).detach().cpu()),
             "rms_atom_update": float(

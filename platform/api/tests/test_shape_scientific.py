@@ -111,6 +111,7 @@ def test_shape_rfd3_wrapper_binds_request_and_guidance_paths(tmp_path: Path) -> 
     assert "inference_sampler.num_timesteps=200" in args
     assert "+inference_sampler.shape_step_size=0.2" in args
     assert "+inference_sampler.shape_max_update=0.5" in args
+    assert "+inference_sampler.shape_connectivity_weight=5.0" in args
     assert f"+inference_sampler.shape_manifest_path={manifest_path.resolve()}" in args
     assert f"+inference_sampler.shape_points_path={points_path.resolve()}" in args
     assert f"+inference_sampler.shape_sdf_path={sdf_path.resolve()}" in args

@@ -123,6 +123,8 @@ def evaluate_candidate(
     candidate = load_structure(str(structure_path), model=1)
     source_ca = _ca_coordinates(source, expected_length, "source backbone")
     candidate_ca = _ca_coordinates(candidate, expected_length, "ESMFold2 structure")
+    source_ca_distances = np.linalg.norm(np.diff(source_ca, axis=0), axis=1)
+    source_ordinary_backbone = bool(np.all((source_ca_distances >= 2.8) & (source_ca_distances <= 4.5)))
     rotation_row, translation_row, alignment_rmsd = _rigid_transform(candidate_ca, source_ca)
     aligned_coordinates = np.asarray(candidate.coord, dtype=np.float64) @ rotation_row + translation_row
     if not np.isfinite(aligned_coordinates).all():
@@ -175,6 +177,11 @@ def evaluate_candidate(
         "target_length": expected_length,
         "finite_coordinates": True,
         "ordinary_backbone": ordinary_backbone,
+        "source_ordinary_backbone": source_ordinary_backbone,
+        "source_ca_distance_min": float(source_ca_distances.min()),
+        "source_ca_distance_max": float(source_ca_distances.max()),
+        "source_ca_distance_mean": float(source_ca_distances.mean()),
+        "source_ca_distance_valid_fraction_2_8_to_4_5": float(np.mean((source_ca_distances >= 2.8) & (source_ca_distances <= 4.5))),
         "ca_distance_min": float(ca_distances.min()),
         "ca_distance_max": float(ca_distances.max()),
         "ca_distance_mean": float(ca_distances.mean()),
@@ -194,7 +201,13 @@ def evaluate_candidate(
     }
     output_metrics = output_dir / f"{candidate_id}.metrics.json"
     _atomic_json(output_metrics, metrics)
-    status = "accepted" if ordinary_backbone else "rejected"
+    status = "accepted" if ordinary_backbone and source_ordinary_backbone else "rejected"
+    if not source_ordinary_backbone:
+        rejection = {"code": "invalid_source_backbone_geometry", "message": "generating RFD3 CA distances failed ordinary backbone bounds"}
+    elif not ordinary_backbone:
+        rejection = {"code": "invalid_backbone_geometry", "message": "refolded CA distances failed ordinary backbone bounds"}
+    else:
+        rejection = None
     bundle = {
         "schema": "bms_shape_candidate_bundle_v1",
         "status": status,
@@ -211,7 +224,7 @@ def evaluate_candidate(
             "esmfold2_metrics_sha256": _sha256(esm_metrics_path),
             "alignment_transform": transform,
         },
-        "reason": None if status == "accepted" else {"code": "invalid_backbone_geometry", "message": "refolded CA distances failed ordinary backbone bounds"},
+        "reason": rejection,
     }
     _atomic_json(output_dir / "candidate_bundle.json", bundle)
     return bundle

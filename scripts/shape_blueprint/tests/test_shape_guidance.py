@@ -73,6 +73,22 @@ class ShapeGuidanceTests(unittest.TestCase):
         self.assertLessEqual(float(update_norm.max()), 0.500001)
         self.assertGreater(receipt["rms_atom_update"], 0.19)
 
+    def test_connectivity_guidance_repairs_broken_ca_spacing(self) -> None:
+        field = self.field()
+        coordinates = torch.tensor([[[0.0, 0.0, 0.0], [12.0, 0.0, 0.0], [24.0, 0.0, 0.0]]])
+        before = field.loss(coordinates, connectivity_weight=5.0)["connectivity"]
+        projected, receipt = field.project(
+            coordinates,
+            step_size=0.2,
+            max_update=0.5,
+            chamfer_weight=0.0,
+            outside_weight=0.0,
+            connectivity_weight=5.0,
+        )
+        after = field.loss(projected, connectivity_weight=5.0)["connectivity"]
+        self.assertLess(float(after), float(before))
+        self.assertGreater(receipt["connectivity"], 0.0)
+
     def test_guidance_ramps_then_holds_through_terminal_step(self) -> None:
         self.assertEqual(guidance_scale(step=0, total_steps=100), 0.0)
         self.assertEqual(guidance_scale(step=19, total_steps=100), 0.0)
