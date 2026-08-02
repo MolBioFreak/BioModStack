@@ -3291,6 +3291,15 @@ async def _ingest_explicit_frustrampnn_results(
         current_job.provenance if isinstance(current_job.provenance, dict) else {}
     )
     terminal_states = provenance.get("stage_terminal_states")
+    frustrampnn_terminal_entries = (
+        [
+            (stage, state)
+            for stage, state in terminal_states.items()
+            if str(stage).strip().lower() in _FRUSTRAMPNN_TERMINAL_STAGES
+        ]
+        if isinstance(terminal_states, dict)
+        else []
+    )
     frustrampnn_state = (
         terminal_states.get("frustrampnn")
         if isinstance(terminal_states, dict)
@@ -3301,13 +3310,23 @@ async def _ingest_explicit_frustrampnn_results(
         frustrampnn_state is not None
         and frustrampnn_state.get("status") == "not_requested"
     ):
-        if frustrampnn_state != {"status": "not_requested", "outputs": []}:
+        if (
+            frustrampnn_state != {"status": "not_requested", "outputs": []}
+            or len(frustrampnn_terminal_entries) != 1
+            or frustrampnn_terminal_entries[0][0] != "frustrampnn"
+        ):
             raise FrustraMPNNPersistenceError(
                 "FrustraMPNN not-requested terminal state must be exact"
             )
-        if set(current_job.stage_outputs) & _FRUSTRAMPNN_TERMINAL_STAGES != {
-            "frustrampnn"
-        } or current_job.stage_outputs.get("frustrampnn") != []:
+        frustrampnn_output_entries = [
+            (stage, outputs)
+            for stage, outputs in current_job.stage_outputs.items()
+            if str(stage).strip().lower() in _FRUSTRAMPNN_TERMINAL_STAGES
+        ]
+        if (
+            len(frustrampnn_output_entries) != 1
+            or frustrampnn_output_entries[0] != ("frustrampnn", [])
+        ):
             raise FrustraMPNNPersistenceError(
                 "FrustraMPNN not-requested persisted stage outputs must be exactly empty"
             )

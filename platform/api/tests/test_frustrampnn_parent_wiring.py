@@ -86,9 +86,13 @@ async def test_not_requested_stage_continues_ordinary_parent_result_ingestion(
 
     job = SimpleNamespace(
         id="job-frustrampnn-disabled",
-        stage_outputs={"frustrampnn": []},
+        stage_outputs={"structure_prediction": ["final/design.pdb"], "frustrampnn": []},
         provenance={
             "stage_terminal_states": {
+                "structure_prediction": {
+                    "status": "complete",
+                    "outputs": ["final/design.pdb"],
+                },
                 "frustrampnn": {"status": "not_requested", "outputs": []}
             }
         },
@@ -106,22 +110,56 @@ async def test_not_requested_stage_continues_ordinary_parent_result_ingestion(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("stage_outputs", "terminal_state"),
+    ("stage_outputs", "terminal_states"),
     [
-        ({"frustrampnn": []}, {"status": "not_requested"}),
-        ({"frustrampnn": []}, {"status": "not_requested", "outputs": None}),
-        ({"frustrampnn": None}, {"status": "not_requested", "outputs": []}),
-        ({"frustrampnn": {}}, {"status": "not_requested", "outputs": []}),
+        ({"frustrampnn": []}, {"frustrampnn": {"status": "not_requested"}}),
+        (
+            {"frustrampnn": []},
+            {"frustrampnn": {"status": "not_requested", "outputs": None}},
+        ),
+        (
+            {"frustrampnn": None},
+            {"frustrampnn": {"status": "not_requested", "outputs": []}},
+        ),
+        (
+            {"frustrampnn": {}},
+            {"frustrampnn": {"status": "not_requested", "outputs": []}},
+        ),
         (
             {"canonical_frustrampnn": []},
-            {"status": "not_requested", "outputs": []},
+            {"frustrampnn": {"status": "not_requested", "outputs": []}},
+        ),
+        (
+            {"frustrampnn": [], "FrustraMPNN": []},
+            {"frustrampnn": {"status": "not_requested", "outputs": []}},
+        ),
+        (
+            {"frustrampnn": [], " frustrampnn": []},
+            {"frustrampnn": {"status": "not_requested", "outputs": []}},
+        ),
+        (
+            {"frustrampnn": []},
+            {
+                "frustrampnn": {"status": "not_requested", "outputs": []},
+                "FrustraMPNN": {"status": "not_requested", "outputs": []},
+            },
+        ),
+        (
+            {"frustrampnn": []},
+            {
+                "frustrampnn": {"status": "not_requested", "outputs": []},
+                "canonical_frustrampnn": {
+                    "status": "not_requested",
+                    "outputs": [],
+                },
+            },
         ),
     ],
 )
 async def test_not_requested_stage_rejects_non_exact_persisted_state(
     tmp_path: Path,
     stage_outputs: object,
-    terminal_state: object,
+    terminal_states: object,
 ) -> None:
     from services.frustrampnn.persistence import FrustraMPNNPersistenceError
     from services.result_ingester import _ingest_explicit_frustrampnn_results
@@ -129,7 +167,7 @@ async def test_not_requested_stage_rejects_non_exact_persisted_state(
     job = SimpleNamespace(
         id="job-frustrampnn-disabled-malformed",
         stage_outputs=stage_outputs,
-        provenance={"stage_terminal_states": {"frustrampnn": terminal_state}},
+        provenance={"stage_terminal_states": terminal_states},
     )
 
     with pytest.raises(FrustraMPNNPersistenceError, match="not-requested"):
