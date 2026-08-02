@@ -19,6 +19,7 @@ FOUNDRY_VERSION = "0.1.9"
 FOUNDRY_COMMIT = "a36d29c5c0d196a1c1c23349878683b6643da67d"
 SHAPE_CTRL_COMMIT = "e1a518b61e216d3c597a46e5a151b9e24756e33e"
 DEFAULT_CHECKPOINT = Path("/foundry/checkpoints/rfd3_latest.ckpt")
+INSTALLED_SAMPLER = Path("/usr/local/lib/python3.12/dist-packages/rfd3/model/inference_sampler.py")
 GUIDANCE_SOURCE = Path(__file__).with_name("shape_guidance.py")
 SAMPLER_SOURCE = Path(__file__).with_name("rfd3_shape_sampler.py")
 
@@ -72,6 +73,16 @@ def validate_request(request_path: Path, manifest_path: Path) -> tuple[dict, dic
     return request, manifest
 
 
+def _verify_installed_sampler() -> str:
+    installed_sampler_sha256 = _sha256(INSTALLED_SAMPLER)
+    if installed_sampler_sha256 != PATCHED_SAMPLER_SHA256:
+        raise ValueError(
+            "installed RFD3 sampler hash mismatch: "
+            f"expected {PATCHED_SAMPLER_SHA256}, got {installed_sampler_sha256}"
+        )
+    return installed_sampler_sha256
+
+
 def run_shape_rfd3(
     *,
     request_path: Path,
@@ -93,6 +104,7 @@ def run_shape_rfd3(
         raise ValueError("staged SDF hash mismatch")
     if checkpoint_path.is_symlink() or not checkpoint_path.is_file():
         raise ValueError("RFD3 checkpoint is unavailable or indirect")
+    installed_sampler_sha256 = _verify_installed_sampler()
     if not 10 <= num_timesteps <= 500:
         raise ValueError("RFD3 timestep count is outside [10, 500]")
     if not 0.0 <= guidance_step_size <= 1.0:
@@ -144,7 +156,8 @@ def run_shape_rfd3(
             "point_pool_sha256": request.get("point_pool_sha256"),
             "sdf_sha256": manifest.get("sdf_sha256"),
             "base_sampler_sha256": BASE_SAMPLER_SHA256,
-            "patched_sampler_sha256": PATCHED_SAMPLER_SHA256,
+            "patched_sampler_sha256": installed_sampler_sha256,
+            "sampler_hash_verified": True,
             "checkpoint_path": str(checkpoint_path),
             "checkpoint_sha256": _sha256(checkpoint_path),
             "seed": request["seed"],
@@ -171,6 +184,8 @@ def run_shape_rfd3(
         raise RuntimeError(
             f"RFD3 emitted {len(structures)} backbones; expected {request['num_backbones']}"
         )
+    if not guidance_receipt.is_file() or guidance_receipt.stat().st_size == 0:
+        raise RuntimeError("RFD3 emitted no Shape guidance step receipt")
     try:
         rfd3_version = metadata.version("rfd3")
     except metadata.PackageNotFoundError:
@@ -184,7 +199,8 @@ def run_shape_rfd3(
         "point_pool_sha256": request.get("point_pool_sha256"),
         "sdf_sha256": manifest.get("sdf_sha256"),
         "base_sampler_sha256": BASE_SAMPLER_SHA256,
-        "patched_sampler_sha256": PATCHED_SAMPLER_SHA256,
+        "patched_sampler_sha256": installed_sampler_sha256,
+        "sampler_hash_verified": True,
         "rfd3_version": rfd3_version,
         "checkpoint_path": str(checkpoint_path),
         "checkpoint_sha256": _sha256(checkpoint_path),

@@ -79,6 +79,10 @@ def test_shape_rfd3_wrapper_binds_request_and_guidance_paths(tmp_path: Path) -> 
     points_path.write_bytes(point_data)
     sdf_path.write_bytes(sdf_data)
     checkpoint.write_bytes(b"checkpoint")
+    installed_sampler = tmp_path / "inference_sampler.py"
+    installed_sampler.write_bytes(b"verified native derivative sampler")
+    setattr(module, "INSTALLED_SAMPLER", installed_sampler)
+    setattr(module, "PATCHED_SAMPLER_SHA256", hashlib.sha256(installed_sampler.read_bytes()).hexdigest())
     fake = tmp_path / "fake-rfd3"
     fake.write_text(
         "#!/usr/bin/env python3\n"
@@ -86,6 +90,8 @@ def test_shape_rfd3_wrapper_binds_request_and_guidance_paths(tmp_path: Path) -> 
         "args=sys.argv[1:]; pathlib.Path(os.environ['CAPTURE']).write_text(json.dumps(args))\n"
         "out=pathlib.Path(next(x.split('=',1)[1] for x in args if x.startswith('out_dir='))); out.mkdir(parents=True, exist_ok=True)\n"
         "n=int(next(x.split('=',1)[1] for x in args if x.startswith('n_batches=')))\n"
+        "receipt=pathlib.Path(next(x.split('=',1)[1] for x in args if x.startswith('+inference_sampler.shape_receipt_path=')))\n"
+        "receipt.write_text('{\"schema\":\"bms_rfd3_shape_guidance_step_v3\"}\\n')\n"
         "[(out/f'design_{i}.cif.gz').write_bytes(b'cif') for i in range(n)]\n"
         "[(out/f'design_{i}.json').write_text('{}') for i in range(n)]\n"
     )
@@ -125,7 +131,8 @@ def test_shape_rfd3_wrapper_binds_request_and_guidance_paths(tmp_path: Path) -> 
     assert runtime["gradient_scaling"] == "raw"
     assert runtime["outside_reduction"] == "sum"
     assert runtime["connectivity_weight"] == 0.0
-    assert runtime["patched_sampler_sha256"] == "bea19f55bc545963dd8834b6d7b22d5f7b6fd3ad9425e4cd3900cd7aa040a5ab"
+    assert runtime["patched_sampler_sha256"] == hashlib.sha256(installed_sampler.read_bytes()).hexdigest()
+    assert runtime["sampler_hash_verified"] is True
     assert runtime["integration_state"] == "delta_L"
     assert runtime["guidance_reference"] == "X_denoised_L"
     assert runtime["native_update_equation"] == "X_next=X_noisy+step_scale*d_t*delta_L_guided"
@@ -137,6 +144,15 @@ def test_shape_rfd3_wrapper_binds_request_and_guidance_paths(tmp_path: Path) -> 
     assert runtime["checkpoint_sha256"] == hashlib.sha256(b"checkpoint").hexdigest()
     generated = json.loads((output.parent / "shape_rfd3_input.json").read_text())
     assert generated == {"shape_blueprint": {"dialect": 2, "length": "100-100"}}
+
+
+def test_shape_rfd3_wrapper_rejects_unpinned_installed_sampler(tmp_path: Path) -> None:
+    module = _module()
+    installed_sampler = tmp_path / "inference_sampler.py"
+    installed_sampler.write_bytes(b"wrong sampler")
+    setattr(module, "INSTALLED_SAMPLER", installed_sampler)
+    with __import__("pytest").raises(ValueError, match="installed RFD3 sampler hash mismatch"):
+        module._verify_installed_sampler()
 
 
 def test_shape_rfd3_wrapper_rejects_request_manifest_mismatch(tmp_path: Path) -> None:
