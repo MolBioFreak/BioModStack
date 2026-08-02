@@ -61,7 +61,7 @@ process MD_WAIT_FOR_REPLICAS {
       --parent_job_id "${parent_job_id}" \
       --stage md_replica \
       --poll_interval ${poll_seconds} \
-      --batch_name "${parent_name}" \
+      --expected_children ${spawn_result} \
       --api_url "${api_url}" \
       --output replica_child_outputs.json
     """
@@ -162,7 +162,7 @@ process MD_WAIT_FOR_ANALYSIS {
       --parent_job_id "${parent_job_id}" \
       --stage md_analysis \
       --poll_interval ${poll_seconds} \
-      --batch_name "${parent_name}" \
+      --expected_children ${spawn_result} \
       --api_url "${api_url}" \
       --output analysis_child_outputs.json
     """

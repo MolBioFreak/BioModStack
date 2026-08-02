@@ -118,6 +118,8 @@ def test_md_workflow_uses_bounded_singleton_entrypoints() -> None:
     orchestrator = (workflow_root / "orchestrator.nf").read_text(encoding="utf-8")
     assert "scripts.bms_md.spawn_replicas" in orchestrator
     assert "scripts/wait_for_children.py" in orchestrator
+    assert orchestrator.count("--expected_children ${spawn_result}") == 2
+    assert "--batch_name" not in orchestrator
     assert "scripts.bms_md.aggregate_children" in orchestrator
     assert "MD_ASSERT_REPLICA_OUTCOME" in orchestrator
     assert "MD_GROMACS_REPLICA" not in orchestrator

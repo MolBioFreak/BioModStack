@@ -16,13 +16,31 @@ DEFAULT_API_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
 from pathlib import Path
 
 
+def expected_child_ids_from_receipt(path: Path, parent_job_id: str) -> set[str]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload.get("parent_job_id") != parent_job_id:
+        raise ValueError("spawn receipt does not belong to the requested parent")
+    children = payload.get("children")
+    if not isinstance(children, list) or not children:
+        raise ValueError("spawn receipt must contain at least one child")
+    child_ids = {
+        str(child.get("id") or "").strip()
+        for child in children
+        if isinstance(child, dict)
+    }
+    if "" in child_ids or len(child_ids) != len(children):
+        raise ValueError("spawn receipt child identities are missing or duplicated")
+    return child_ids
+
+
 def wait_for_children(
     parent_job_id: str,
     stage: str,
     poll_interval: int = 10,
     timeout: int = 0,  # 0 = no timeout (disabled by default)
     api_url: str = DEFAULT_API_URL,
-    batch_name: str = None  # For resume: find children by batch_name
+    batch_name: str | None = None,  # For resume: find children by batch_name
+    expected_child_ids: set[str] | None = None,
 ):
     """
     Block until all children for this parent+stage complete.
@@ -66,6 +84,34 @@ def wait_for_children(
                 continue
             
             data = resp.json()
+
+            observed_child_ids = {
+                str(value).strip()
+                for value in data.get("child_ids", [])
+                if str(value).strip()
+            }
+            if expected_child_ids:
+                missing_child_ids = expected_child_ids - observed_child_ids
+                if missing_child_ids:
+                    print(
+                        "[WAIT] Spawned children are not visible yet: "
+                        + ", ".join(sorted(missing_child_ids))
+                    )
+                    time.sleep(poll_interval)
+                    continue
+                foreign_child_ids = observed_child_ids - expected_child_ids
+                if foreign_child_ids:
+                    print(
+                        "[WAIT] Foreign child lineage rejected: "
+                        + ", ".join(sorted(foreign_child_ids)),
+                        file=sys.stderr,
+                    )
+                    return {
+                        "status": "lineage_mismatch",
+                        "child_output_dirs": [],
+                        "child_ids": sorted(observed_child_ids),
+                        "elapsed_seconds": elapsed,
+                    }
             
             total = data.get("total", 0)
             completed = data.get("completed", 0)
@@ -139,17 +185,24 @@ def main():
     parser.add_argument("--timeout", type=int, default=0, help="Max wait time in seconds (0 = no timeout)")
     parser.add_argument("--api_url", default=DEFAULT_API_URL, help="API URL")
     parser.add_argument("--batch_name", default=None, help="Batch name for resume (find children by batch_name)")
+    parser.add_argument("--expected_children", type=Path, help="Spawn receipt binding the exact expected child IDs")
     parser.add_argument("--output", default="child_outputs.json", help="Output JSON file")
     
     args = parser.parse_args()
     
+    expected_child_ids = (
+        expected_child_ids_from_receipt(args.expected_children, args.parent_job_id)
+        if args.expected_children
+        else None
+    )
     result = wait_for_children(
         parent_job_id=args.parent_job_id,
         stage=args.stage,
         poll_interval=args.poll_interval,
         timeout=args.timeout,
         api_url=args.api_url,
-        batch_name=args.batch_name
+        batch_name=args.batch_name,
+        expected_child_ids=expected_child_ids,
     )
     
     # Write result to file for Nextflow to consume
@@ -160,7 +213,7 @@ def main():
     print(f"[WAIT] Result written to {output_path}")
     
     # Exit non-zero if all children failed
-    if result.get("status") == "timeout":
+    if result.get("status") in {"timeout", "lineage_mismatch"}:
         sys.exit(2)
     elif result.get("status") == "failed":
         sys.exit(1)
