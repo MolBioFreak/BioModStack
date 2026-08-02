@@ -139,7 +139,7 @@ ANTIBODY_ITERATION_ACTION_LABELS = {
     "ppiflow_backbone_refine": "PPIFlow backbone refinement",
     "ppiflow_maturation": "PPIFlow maturation",
     "fampnn_redesign": "FAMPNN redesign",
-    "frustrampnn": "FrustraMPNN redesign",
+    "frustrampnn": "Frustration analysis",
     "ui_refinement": "refinement launch",
 }
 

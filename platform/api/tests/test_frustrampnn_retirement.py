@@ -26,6 +26,12 @@ def test_active_production_paths_have_no_retired_frustrampnn_ownership() -> None
     assert not violations, "\n".join(item.render(REPO_ROOT) for item in violations)
 
 
+def test_operator_stage_label_describes_analysis_not_redesign() -> None:
+    jobs_router = (API_ROOT / "routers" / "jobs.py").read_text(encoding="utf-8")
+    assert '"frustrampnn": "Frustration analysis"' in jobs_router
+    assert "FrustraMPNN redesign" not in jobs_router
+
+
 def test_checker_reports_path_line_and_rule_for_each_forbidden_family(tmp_path: Path) -> None:
     checker = _load_checker()
     module = tmp_path / "modules" / "legacy.nf"
