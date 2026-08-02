@@ -25,6 +25,7 @@ import {
 } from './conformationalMapping/conformationalMappingSemantics.js';
 import type { ResidueRef } from '../structureViewer/contracts/structureIdentity.js';
 import { getFrustraMpnnResultContext } from './frustraMpnnResultSurface.js';
+import FrustraMpnnLandscapeOverview from './FrustraMpnnLandscapeOverview.js';
 
 const PAGE_SIZE = 500;
 const terminalJob = new Set(['completed', 'failed', 'cancelled']);
@@ -155,9 +156,14 @@ export default function FrustraMpnnResultsViewer({
         queryFn: ({ signal }) => collectCompleteFrustraMpnnLandscape(
             (pageOffset, limit) => fetchFrustraMpnnLandscape(job.id, selectedInvocation!, pageOffset, limit, {}, signal),
         ),
-        enabled: Boolean(selectedInvocation && canonicalSucceeded && structureMap.data && structureArtifact),
+        enabled: Boolean(selectedInvocation && canonicalSucceeded),
         staleTime: Infinity,
     });
+
+    const allResidues = useMemo(() => {
+        if (!completeLandscape.data) return [];
+        try { return groupExact20Landscape(completeLandscape.data); } catch { return []; }
+    }, [completeLandscape.data]);
 
     const metricResult = useMemo(() => {
         if (!canonicalSucceeded || !detail.data) return { bundle: null, error: null as string | null };
@@ -193,12 +199,11 @@ export default function FrustraMpnnResultsViewer({
             if (structureMap.data.parent_job_id !== job.id || structureMap.data.target_id !== detail.data.summary.target_id) {
                 throw new Error('structure_map_scope_conflict: structure-map job or target authority does not match the selected result.');
             }
-            const residues = groupExact20Landscape(completeLandscape.data);
             return {
                 bundle: createFrustraMpnnViewerMetrics({
                     requestId: job.id,
                     candidateId: detail.data.candidate_id,
-                    residues,
+                    residues: allResidues,
                     structureMap: structureMap.data,
                 }),
                 error: null,
@@ -206,7 +211,7 @@ export default function FrustraMpnnResultsViewer({
         } catch (error) {
             return { bundle: null, error: errorMessage(error, 'Exact FrustraMPNN residue mapping failed closed.') };
         }
-    }, [canonicalSucceeded, completeLandscape.data, detail.data, identityAuthorityArtifact, job.id, structureArtifact, structureMap.data, structureMapArtifact]);
+    }, [allResidues, canonicalSucceeded, completeLandscape.data, detail.data, identityAuthorityArtifact, job.id, structureArtifact, structureMap.data, structureMapArtifact]);
 
     const pageResidues = useMemo(() => {
         if (!landscape.data || slotStatus || mutationFilter) return [];
@@ -325,13 +330,20 @@ export default function FrustraMpnnResultsViewer({
 
                         <section id="frustrampnn-landscape" className="scroll-mt-4 overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">
                             <div className="flex flex-wrap items-end justify-between gap-3 border-b border-slate-800 p-3">
-                                <div><h2 className="font-semibold">Persisted exact residue landscape</h2><p className="mt-1 text-xs text-slate-500">Bounded API page; legacy summary rows are never expanded into N×20 data.</p></div>
+                                <div><h2 className="font-semibold">Persisted exact residue landscape</h2><p className="mt-1 text-xs text-slate-500">Complete all-residue overview with a bounded exact-slot drill-down; legacy summary rows are never expanded into N×20 data.</p></div>
                                 <div className="flex flex-wrap gap-2 text-xs">
                                     <label>Author chain <input aria-label="Filter by exact author chain" value={chainFilter} onChange={(event) => setChainFilter(event.target.value)} className="ml-1 w-20 rounded border border-slate-700 bg-slate-950 px-2 py-1.5" /></label>
                                     <label>Slot status <select aria-label="Filter by FrustraMPNN slot status" value={slotStatus} onChange={(event) => setSlotStatus(event.target.value as typeof slotStatus)} className="ml-1 rounded border border-slate-700 bg-slate-950 px-2 py-1.5"><option value="">all</option><option value="ok">scoreable</option><option value="missing">missing</option></select></label>
                                     <label>Mutation <select aria-label="Filter by mutation amino acid" value={mutationFilter} onChange={(event) => setMutationFilter(event.target.value)} className="ml-1 rounded border border-slate-700 bg-slate-950 px-2 py-1.5"><option value="">all 20</option>{CANONICAL_AMINO_ACIDS.map((aa) => <option key={aa} value={aa}>{aa}</option>)}</select></label>
                                 </div>
                             </div>
+                            {allResidues.length > 0 ? <FrustraMpnnLandscapeOverview
+                                residues={allResidues}
+                                onSelectResidue={(residue) => {
+                                    const profile = metricResult.bundle?.residueProfiles.find((item) => item.residue.key === residue.key);
+                                    setSelectedResidue(profile?.identity ?? null);
+                                }}
+                            /> : completeLandscape.isLoading ? <div role="status" className="border-b border-slate-800 p-4 text-sm text-slate-400">Loading the complete persisted landscape…</div> : null}
                             {landscape.isError && <div role="alert" className="m-3 rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-100">{errorMessage(landscape.error, 'Landscape page unavailable.')}</div>}
                             {pageResidues.length > 0 ? (
                                 <div className="max-h-[650px] overflow-auto"><table className="min-w-[1100px] text-left text-[10px]"><thead className="sticky top-0 z-10 bg-slate-900 text-slate-400"><tr><th className="sticky left-0 z-20 bg-slate-900 p-2">Exact author residue</th>{CANONICAL_AMINO_ACIDS.map((aa) => <th key={aa} className="p-2 text-center">{aa}</th>)}</tr></thead><tbody>{pageResidues.map((residue) => <tr key={residue.key} className="border-t border-slate-800"><th className="sticky left-0 bg-slate-900 p-2"><button type="button" aria-label={`Select exact author residue ${residue.auth_asym_id} ${residue.auth_seq_id}${residue.insertion_code}, wild type ${residue.wt}`} className="text-left hover:text-cyan-300" onClick={() => { const profile = metricResult.bundle?.residueProfiles.find((item) => item.residue.key === residue.key); setSelectedResidue(profile?.identity ?? null); }}>{residue.auth_asym_id}:{residue.auth_seq_id}{residue.insertion_code} · WT {residue.wt}</button></th>{residue.slots.map((slot) => <td key={slot.mutation_aa} className="p-1"><div title={`${slot.status}${slot.reason ? ` · ${slot.reason}` : ''}`} className={`rounded border p-1.5 text-center ${classStyle(slot.class)}`}><div>{slot.mutation_aa}{slot.mutation_aa === residue.wt ? '*' : ''}</div><div>{fmt(slot.score)}</div></div></td>)}</tr>)}</tbody></table></div>
