@@ -107,6 +107,9 @@ def test_shape_rfd3_wrapper_binds_request_and_guidance_paths(tmp_path: Path) -> 
     installed_sampler.write_bytes(b"verified native derivative sampler")
     setattr(module, "INSTALLED_SAMPLER", installed_sampler)
     setattr(module, "PATCHED_SAMPLER_SHA256", hashlib.sha256(installed_sampler.read_bytes()).hexdigest())
+    installed_shape_sampler = tmp_path / "bms_shape_sampler.py"
+    installed_shape_sampler.write_bytes(module.SAMPLER_SOURCE.read_bytes())
+    setattr(module, "INSTALLED_SHAPE_SAMPLER", installed_shape_sampler)
     fake = tmp_path / "fake-rfd3"
     fake.write_text(
         "#!/usr/bin/env python3\n"
@@ -169,6 +172,8 @@ def test_shape_rfd3_wrapper_binds_request_and_guidance_paths(tmp_path: Path) -> 
     assert runtime["connectivity_weight"] == 0.0
     assert runtime["patched_sampler_sha256"] == hashlib.sha256(installed_sampler.read_bytes()).hexdigest()
     assert runtime["sampler_hash_verified"] is True
+    assert runtime["shape_sampler_hash_verified"] is True
+    assert runtime["installed_shape_sampler_sha256"] == runtime["shape_sampler_sha256"]
     assert runtime["integration_state"] == "delta_L"
     assert runtime["guidance_reference"] == "X_denoised_L"
     assert runtime["native_update_equation"] == "X_next=X_noisy+step_scale*d_t*delta_L_guided"
@@ -189,6 +194,15 @@ def test_shape_rfd3_wrapper_rejects_unpinned_installed_sampler(tmp_path: Path) -
     setattr(module, "INSTALLED_SAMPLER", installed_sampler)
     with __import__("pytest").raises(ValueError, match="installed RFD3 sampler hash mismatch"):
         module._verify_installed_sampler()
+
+
+def test_shape_rfd3_wrapper_rejects_stale_installed_shape_sampler(tmp_path: Path) -> None:
+    module = _module()
+    installed_shape_sampler = tmp_path / "bms_shape_sampler.py"
+    installed_shape_sampler.write_bytes(b"stale Shape sampler")
+    setattr(module, "INSTALLED_SHAPE_SAMPLER", installed_shape_sampler)
+    with __import__("pytest").raises(ValueError, match="installed Shape sampler hash mismatch"):
+        module._verify_installed_shape_sampler()
 
 
 def test_shape_rfd3_wrapper_rejects_request_manifest_mismatch(tmp_path: Path) -> None:

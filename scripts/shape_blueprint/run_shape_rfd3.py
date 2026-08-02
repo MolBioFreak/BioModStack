@@ -20,6 +20,7 @@ FOUNDRY_COMMIT = "a36d29c5c0d196a1c1c23349878683b6643da67d"
 SHAPE_CTRL_COMMIT = "e1a518b61e216d3c597a46e5a151b9e24756e33e"
 DEFAULT_CHECKPOINT = Path("/foundry/checkpoints/rfd3_latest.ckpt")
 INSTALLED_SAMPLER = Path("/usr/local/lib/python3.12/dist-packages/rfd3/model/inference_sampler.py")
+INSTALLED_SHAPE_SAMPLER = Path("/usr/local/lib/python3.12/dist-packages/bms_shape_sampler.py")
 GUIDANCE_SOURCE = Path(__file__).with_name("shape_guidance.py")
 SAMPLER_SOURCE = Path(__file__).with_name("rfd3_shape_sampler.py")
 
@@ -150,6 +151,16 @@ def _verify_installed_sampler() -> str:
     return installed_sampler_sha256
 
 
+def _verify_installed_shape_sampler() -> str:
+    if not INSTALLED_SHAPE_SAMPLER.is_file():
+        raise ValueError(f"installed Shape sampler is unavailable: {INSTALLED_SHAPE_SAMPLER}")
+    actual = _sha256(INSTALLED_SHAPE_SAMPLER)
+    expected = _sha256(SAMPLER_SOURCE)
+    if actual != expected:
+        raise ValueError(f"installed Shape sampler hash mismatch: expected {expected}, got {actual}")
+    return actual
+
+
 def run_shape_rfd3(
     *,
     request_path: Path,
@@ -176,6 +187,7 @@ def run_shape_rfd3(
     if checkpoint_path.is_symlink() or not checkpoint_path.is_file():
         raise ValueError("RFD3 checkpoint is unavailable or indirect")
     installed_sampler_sha256 = _verify_installed_sampler()
+    installed_shape_sampler_sha256 = _verify_installed_shape_sampler()
     if not 10 <= num_timesteps <= 500:
         raise ValueError("RFD3 timestep count is outside [10, 500]")
     if not 0.0 <= guidance_step_size <= 1.0:
@@ -237,6 +249,8 @@ def run_shape_rfd3(
             "base_sampler_sha256": BASE_SAMPLER_SHA256,
             "patched_sampler_sha256": installed_sampler_sha256,
             "sampler_hash_verified": True,
+            "installed_shape_sampler_sha256": installed_shape_sampler_sha256,
+            "shape_sampler_hash_verified": True,
             "checkpoint_path": str(checkpoint_path),
             "checkpoint_sha256": _sha256(checkpoint_path),
             "seed": request["seed"],
@@ -288,6 +302,8 @@ def run_shape_rfd3(
         "base_sampler_sha256": BASE_SAMPLER_SHA256,
         "patched_sampler_sha256": installed_sampler_sha256,
         "sampler_hash_verified": True,
+        "installed_shape_sampler_sha256": installed_shape_sampler_sha256,
+        "shape_sampler_hash_verified": True,
         "rfd3_version": rfd3_version,
         "checkpoint_path": str(checkpoint_path),
         "checkpoint_sha256": _sha256(checkpoint_path),
