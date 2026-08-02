@@ -15,6 +15,25 @@ class LedgerError(ValueError):
     pass
 
 
+_UPSTREAM_LEDGER_FIELDS = {
+    "coordinates", "runtime_coordinates", "source_relative_path", "bytes", "sha256",
+    "request_sha256", "coordinate_plan_sha256", "runtime_identity",
+    "container_digest", "checkpoint_sha256",
+}
+_RUNTIME_COORDINATE_FIELDS = {
+    "target_id", "task", "test_case_id", "reference_id", "run_index",
+    "confornet_index", "saved_step", "sample_index",
+}
+
+
+def _validate_upstream_entry_shape(entry: object) -> None:
+    if not isinstance(entry, dict) or set(entry) != _UPSTREAM_LEDGER_FIELDS:
+        raise LedgerError("upstream coordinate ledger row is malformed")
+    runtime_coordinates = entry.get("runtime_coordinates")
+    if not isinstance(runtime_coordinates, dict) or set(runtime_coordinates) != _RUNTIME_COORDINATE_FIELDS:
+        raise LedgerError("upstream runtime coordinates are malformed")
+
+
 def _canonical_bytes(value: Any) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
 
@@ -106,12 +125,7 @@ def bind(request_path: Path, plan_path: Path, native_root: Path, output: Path) -
 
     by_source: dict[str, dict[str, Any]] = {}
     for entry in upstream_entries:
-        if not isinstance(entry, dict) or set(entry) != {
-            "coordinates", "source_relative_path", "bytes", "sha256",
-            "request_sha256", "coordinate_plan_sha256", "runtime_identity",
-            "container_digest", "checkpoint_sha256",
-        }:
-            raise LedgerError("upstream coordinate ledger row is malformed")
+        _validate_upstream_entry_shape(entry)
         if entry.get("request_sha256") != request["request_sha256"]:
             raise LedgerError("upstream ledger request binding mismatch")
         if entry.get("coordinate_plan_sha256") != plan["coordinate_plan_sha256"]:

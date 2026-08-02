@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
@@ -17,6 +18,7 @@ FIXTURE_ROOT = (
     API_ROOT / "tests" / "fixtures" / "conformational_mapping" / "confornets" / "complete"
 )
 FINALIZER = REPO_ROOT / "scripts" / "finalize_confornets_conformational_mapping.py"
+BINDER = REPO_ROOT / "scripts" / "bind_confornets_output_ledger.py"
 
 if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
@@ -35,6 +37,42 @@ from services.conformational_mapping.structure_normalizer import (  # noqa: E402
     StructureMapError,
     validate_coordinate_mmcif,
 )
+
+
+def test_upstream_ledger_accepts_instrumented_runtime_coordinates() -> None:
+    spec = importlib.util.spec_from_file_location("bind_confornets_output_ledger", BINDER)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    entry = {
+        "coordinates": {"backend": "confornets", "target_id": "target"},
+        "runtime_coordinates": {
+            "target_id": "case", "task": "mse", "test_case_id": "case",
+            "reference_id": "reference", "run_index": 0, "confornet_index": 0,
+            "saved_step": 1, "sample_index": 0,
+        },
+        "source_relative_path": "case/run_0/sample_0.cif", "bytes": 1,
+        "sha256": "a" * 64, "request_sha256": "b" * 64,
+        "coordinate_plan_sha256": "c" * 64,
+        "runtime_identity": "runtime", "container_digest": "sha256:" + "d" * 64,
+        "checkpoint_sha256": "e" * 64,
+    }
+    module._validate_upstream_entry_shape(entry)
+    entry.pop("runtime_coordinates")
+    with pytest.raises(module.LedgerError, match="row is malformed"):
+        module._validate_upstream_entry_shape(entry)
+
+
+def test_canonical_runtime_maps_native_target_to_registered_target() -> None:
+    prep = (REPO_ROOT / "scripts" / "prep_canonical_confornets_request.py").read_text(
+        encoding="utf-8"
+    )
+    runner = (REPO_ROOT / "scripts" / "run_confornets_inference.py").read_text(
+        encoding="utf-8"
+    )
+    assert '"coordinate_mapping": {' in prep
+    assert '"target_id": {"constant": target["target_id"]}' in prep
+    assert '"coordinate_mapping": canonical_binding["coordinate_mapping"]' in runner
 
 
 def _fixture_settings(**overrides: object) -> dict[str, object]:

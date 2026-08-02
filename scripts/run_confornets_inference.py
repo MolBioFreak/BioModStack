@@ -662,6 +662,7 @@ def main() -> None:
             "request_sha256": canonical_binding["request_sha256"],
             "coordinate_plan_sha256": canonical_binding["coordinate_plan_sha256"],
             "target_id": canonical_binding["target_id"],
+            "coordinate_mapping": canonical_binding["coordinate_mapping"],
             "native_root": str(raw_dir),
             "runtime_identity": identity["runtime_identity"],
             "container_digest": identity["container_digest"],

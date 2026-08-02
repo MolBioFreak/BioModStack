@@ -338,6 +338,9 @@ def prepare(request_path: Path, plan_path: Path, assets_dir: Path, output: Path)
             "request_sha256": request["request_sha256"],
             "coordinate_plan_sha256": plan["coordinate_plan_sha256"],
             "target_id": target["target_id"],
+            "coordinate_mapping": {
+                "target_id": {"constant": target["target_id"]},
+            },
         },
     }
     output.parent.mkdir(parents=True, exist_ok=True)
