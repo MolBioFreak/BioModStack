@@ -25,6 +25,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="record the scheduler-owned physical device for provenance",
     )
     validate.add_argument(
+        "--gpu-offload",
+        choices=("auto", "full", "full_forces", "none"),
+        help="override execution.gpu_offload with the qualified runtime policy",
+    )
+    validate.add_argument(
         "--base-dir",
         type=Path,
         help="resolve relative input structure/topology paths against this directory",
@@ -80,11 +85,14 @@ def main() -> None:
                 if not candidate.is_absolute():
                     input_config[field] = str((base_dir / candidate).resolve())
             config["input"] = input_config
-        if args.gpu_id is not None:
+        if args.gpu_id is not None or args.gpu_offload is not None:
             execution = dict(config.get("execution") or {})
-            execution["gpu_id"] = str(args.gpu_id)
-            if args.scheduler_gpu_id is not None:
-                execution["scheduler_gpu_id"] = str(args.scheduler_gpu_id)
+            if args.gpu_id is not None:
+                execution["gpu_id"] = str(args.gpu_id)
+                if args.scheduler_gpu_id is not None:
+                    execution["scheduler_gpu_id"] = str(args.scheduler_gpu_id)
+            if args.gpu_offload is not None:
+                execution["gpu_offload"] = args.gpu_offload
             config["execution"] = execution
         normalized = json.dumps(normalize_job_config(config), indent=2, sort_keys=True) + "\n"
         if args.output:

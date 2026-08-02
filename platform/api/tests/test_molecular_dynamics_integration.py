@@ -155,6 +155,9 @@ def test_md_workflow_uses_bounded_singleton_entrypoints() -> None:
         assert "--gpu-id 0" in replica_module
         assert '--scheduler-gpu-id "${params.gpu_id}"' in replica_module
         assert "--config runtime_config.json" in replica_module
+    assert "preparation_manifest.json" in gromacs_module
+    assert '["preparation"]["gromacs_gpu_offload"]' in gromacs_module
+    assert '--gpu-offload "\\${runtime_gpu_offload}"' in gromacs_module
 
 
 def test_md_replica_spawn_pins_the_scheduler_to_the_requested_physical_gpu(
