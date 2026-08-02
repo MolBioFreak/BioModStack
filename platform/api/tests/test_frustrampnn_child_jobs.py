@@ -68,6 +68,9 @@ async def test_child_creation_commits_immutable_authority_and_builds_scheduler_h
         persisted = await session.get(Job, child_id)
         assert persisted is not None
         assert persisted.status == persisted.queue_status == "queued"
+        assert persisted.sequence_length == 1
+        assert persisted.vram_estimate_mb is not None
+        assert persisted.vram_estimate_mb > 0
         assert persisted.output_dir == persisted.child_output_dir
         root = Path(persisted.output_dir)
         assert root.parent == results

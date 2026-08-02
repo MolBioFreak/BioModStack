@@ -577,7 +577,7 @@ def _parse_mmcif(
     required = {
         "group_PDB", "id", "type_symbol", "label_atom_id", "label_alt_id",
         "label_comp_id", "label_asym_id", "label_entity_id", "label_seq_id",
-        "pdbx_PDB_ins_code", "Cartn_x", "Cartn_y", "Cartn_z", "occupancy",
+        "pdbx_PDB_ins_code", "Cartn_x", "Cartn_y", "Cartn_z",
         "B_iso_or_equiv", "auth_seq_id", "auth_comp_id", "auth_asym_id",
         "auth_atom_id", "pdbx_PDB_model_num",
     }
@@ -624,7 +624,16 @@ def _parse_mmcif(
         residue = _required(get("label_comp_id"), "label_comp_id").upper()
         if residue != _required(get("auth_comp_id"), "auth_comp_id").upper():
             raise StructureNormalizationError("mmCIF label/auth residue identity disagrees")
-        occupancy = _finite(_required(get("occupancy"), "occupancy"), "mmCIF occupancy")
+        # Some structure predictors (including ESMFold2) omit atom_site.occupancy
+        # entirely for deterministic single-conformer outputs. In that producer
+        # form every emitted atom is fully occupied, so normalize the absent
+        # column to 1.0. If the producer does emit occupancy, keep validating it
+        # strictly rather than masking blank or malformed values.
+        occupancy = (
+            _finite(_required(get("occupancy"), "occupancy"), "mmCIF occupancy")
+            if "occupancy" in positions
+            else 1.0
+        )
         if not 0 <= occupancy <= 1:
             raise StructureNormalizationError("mmCIF occupancy is outside [0, 1]")
         models.add(model)

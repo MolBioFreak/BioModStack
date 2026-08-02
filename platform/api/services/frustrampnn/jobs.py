@@ -244,6 +244,7 @@ async def create_child_job(
         lineage: list[dict[str, Any]] = []
         batch_records: list[dict[str, Any]] = []
         stage_outputs: list[str] = []
+        max_sequence_length = 0
         for ordinal, selection in enumerate(selections):
             candidate_id = _candidate_id(selection, ordinal)
             if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", candidate_id) is None:
@@ -266,7 +267,7 @@ async def create_child_job(
                     "authority_artifact_sha256": selection.source_sha256,
                 }
             )
-            normalize_structure_bytes(
+            structure_map = normalize_structure_bytes(
                 source_bytes=selection.source_bytes,
                 input_path=f"source{original_suffix}",
                 output_pdb_path=temporary_pdb,
@@ -278,6 +279,10 @@ async def create_child_job(
                 protein_selection={"mode": "all_protein_entities"},
                 selected_model=1,
                 altloc_policy="blank_or_explicit:<blank>",
+            )
+            max_sequence_length = max(
+                max_sequence_length,
+                len(str(structure_map["model_ready_sequence"])),
             )
             normalized_payload = temporary_pdb.read_bytes()
             temporary_pdb.unlink()
@@ -380,6 +385,13 @@ async def create_child_job(
             "prior_invocation_ids": list(prior.get("component_invocation_ids") or []),
             "result_persistence_identity": "(child_job_id, invocation_id)",
         }
+        # The global GPU orchestrator admits only jobs carrying an explicit VRAM
+        # estimate. Standalone FrustraMPNN children are scheduler-owned jobs, so
+        # persist the normal model-profile estimate from the largest normalized
+        # candidate rather than leaving an invisible queued row.
+        from services.gpu_orchestrator import estimate_vram
+
+        vram_estimate_mb = estimate_vram(MODEL_ID, max_sequence_length)
         job = Job(
             id=job_id,
             name=f"FrustraMPNN analysis {job_id[:8]}",
@@ -409,6 +421,8 @@ async def create_child_job(
             lineage_root_job_id=(source_parent.lineage_root_job_id or source_parent.id) if source_parent else job_id,
             stage_outputs={"canonical_frustrampnn": stage_outputs},
             current_stage="frustrampnn",
+            sequence_length=max_sequence_length,
+            vram_estimate_mb=vram_estimate_mb,
             max_retries=2,
             retry_count=0,
             paused=False,
