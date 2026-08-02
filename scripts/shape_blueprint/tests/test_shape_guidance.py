@@ -89,13 +89,13 @@ class ShapeGuidanceTests(unittest.TestCase):
         self.assertLess(float(after), float(before))
         self.assertGreater(receipt["connectivity"], 0.0)
 
-    def test_guidance_ramps_then_holds_through_terminal_step(self) -> None:
+    def test_guidance_ramps_then_tapers_to_nonzero_terminal_floor(self) -> None:
         self.assertEqual(guidance_scale(step=0, total_steps=100), 0.0)
         self.assertEqual(guidance_scale(step=19, total_steps=100), 0.0)
         self.assertGreater(guidance_scale(step=20, total_steps=100), 0.0)
         self.assertGreater(guidance_scale(step=50, total_steps=100), 0.0)
         self.assertEqual(guidance_scale(step=80, total_steps=100), 1.0)
-        self.assertEqual(guidance_scale(step=99, total_steps=100), 1.0)
+        self.assertAlmostEqual(guidance_scale(step=99, total_steps=100), 0.1)
 
 
 if __name__ == "__main__":

@@ -46,6 +46,7 @@ class ShapeGuidedDiffusionSampler(SampleDiffusionWithMotif):
     shape_connectivity_weight: float = 5.0
     shape_start_fraction: float = 0.2
     shape_end_fraction: float = 0.8
+    shape_terminal_scale: float = 0.1
     _shape_fields: dict[str, ShapeGuidanceField] = field(default_factory=dict, init=False, repr=False)
     _shape_manifest: dict[str, Any] | None = field(default=None, init=False, repr=False)
 
@@ -58,6 +59,8 @@ class ShapeGuidedDiffusionSampler(SampleDiffusionWithMotif):
             raise ValueError("Shape guidance weights must be non-negative")
         if self.shape_chamfer_weight == 0 and self.shape_outside_weight == 0:
             raise ValueError("at least one Shape guidance weight must be positive")
+        if not 0.0 < self.shape_terminal_scale <= 1.0:
+            raise ValueError("Shape terminal guidance scale must be in (0, 1]")
 
     def load_field(self, device: torch.device) -> ShapeGuidanceField:
         cache_key = str(device)
@@ -120,6 +123,7 @@ class ShapeGuidedDiffusionSampler(SampleDiffusionWithMotif):
             total_steps=total_steps,
             start_fraction=self.shape_start_fraction,
             end_fraction=self.shape_end_fraction,
+            terminal_scale=self.shape_terminal_scale,
         )
         if scale == 0.0:
             return X_L

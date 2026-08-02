@@ -14,19 +14,23 @@ def guidance_scale(
     total_steps: int,
     start_fraction: float = 0.2,
     end_fraction: float = 0.8,
+    terminal_scale: float = 0.1,
 ) -> float:
-    """Ramp Shape guidance to full strength, then hold through the terminal step."""
+    """Ramp Shape guidance to full strength, then taper to a nonzero terminal floor."""
     if total_steps <= 1:
         raise ValueError("total_steps must be greater than one")
     if not (0.0 <= start_fraction < end_fraction <= 1.0):
         raise ValueError("guidance fractions must satisfy 0 <= start < end <= 1")
+    if not (0.0 < terminal_scale <= 1.0):
+        raise ValueError("terminal_scale must satisfy 0 < terminal_scale <= 1")
     start = int(math.ceil(total_steps * start_fraction))
     end = int(math.floor(total_steps * end_fraction))
     if step < start:
         return 0.0
-    if step >= end:
-        return 1.0
-    return float(step - start + 1) / float(end - start + 1)
+    if step <= end:
+        return float(step - start + 1) / float(max(1, end - start + 1))
+    tail_fraction = float(step - end) / float(max(1, total_steps - 1 - end))
+    return 1.0 + (float(terminal_scale) - 1.0) * min(1.0, tail_fraction)
 
 
 @dataclass(frozen=True)

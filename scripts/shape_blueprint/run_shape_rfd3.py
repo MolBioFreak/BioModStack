@@ -117,6 +117,7 @@ def run_shape_rfd3(
         f"+inference_sampler.shape_step_size={guidance_step_size}",
         "+inference_sampler.shape_max_update=0.5",
         "+inference_sampler.shape_connectivity_weight=5.0",
+        "+inference_sampler.shape_terminal_scale=0.1",
         f"+inference_sampler.shape_manifest_path={manifest_path.resolve()}",
         f"+inference_sampler.shape_points_path={points_path.resolve()}",
         f"+inference_sampler.shape_sdf_path={sdf_path.resolve()}",
