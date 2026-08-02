@@ -133,6 +133,48 @@ async def test_retry_never_downgrades_completed_request_from_stale_failed_job(mo
 
 
 @pytest.mark.asyncio
+async def test_retry_uses_authoritative_nextflow_work_dir_for_resume(monkeypatch, tmp_path) -> None:
+    record = SimpleNamespace(status="failed", job_id="job-1")
+    job = SimpleNamespace(
+        id="job-1", status="failed", queue_status="failed", error_message="failed",
+        started_at=datetime.utcnow(), completed_at=datetime.utcnow(), nextflow_run_id="123",
+        retry_count=1, params={"cm_request_path": "/results/request.json"},
+    )
+
+    async def authorized(*_args, **_kwargs):
+        return record
+
+    async def transition(_session, target, *, status, progress, **_kwargs):
+        target.status = status
+        target.progress_json = progress
+
+    class Session:
+        async def get(self, *_args, **_kwargs):
+            return job
+
+        async def commit(self):
+            return None
+
+    work_dir = tmp_path / "work"
+    monkeypatch.setattr(cm_router, "_authorized_record", authorized)
+    monkeypatch.setattr(cm_router, "transition_request", transition)
+    monkeypatch.setattr(cm_router, "get_work_dir", lambda: work_dir)
+
+    result = await retry_request(
+        "request-1", _http_request(client_host="127.0.0.1"), Session()
+    )
+
+    assert result == {
+        "request_id": "request-1", "job_id": "job-1", "status": "queued", "retry_count": 2,
+    }
+    assert job.params == {
+        "cm_request_path": "/results/request.json", "resume_work_dir": str(work_dir),
+    }
+    assert job.nextflow_run_id is None
+    assert record.status == "queued"
+
+
+@pytest.mark.asyncio
 async def test_completed_request_does_not_project_historical_failure_as_current(monkeypatch) -> None:
     record = SimpleNamespace(
         request_id="request-1", job_id="job-1", backend="confornets",

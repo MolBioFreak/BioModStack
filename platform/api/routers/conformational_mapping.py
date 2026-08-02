@@ -35,6 +35,7 @@ from paths import (
     get_results_dir,
     get_container_dir,
     get_weights_root,
+    get_work_dir,
 )
 from services.conformational_mapping.contracts import candidate_id, canonical_sha256, validate_schema
 from services.conformational_mapping.import_stager import (
@@ -1188,6 +1189,9 @@ async def retry_request(
     job.completed_at = None
     job.nextflow_run_id = None
     job.retry_count = int(job.retry_count or 0) + 1
+    retry_params = dict(job.params or {})
+    retry_params["resume_work_dir"] = str(get_work_dir())
+    job.params = retry_params
     await transition_request(
         session, record, status="queued",
         progress={"phase": "queued", "completed_coordinates": 0},
