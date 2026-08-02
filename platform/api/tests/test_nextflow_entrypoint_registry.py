@@ -251,6 +251,42 @@ def test_standalone_structure_prediction_routes_direct_without_hijacking_complex
     assert "--complex_json_path" in complex_cmd or "--complex_batch_dir" in complex_cmd
 
 
+def test_conformational_mapping_resume_uses_only_authoritative_work_dir() -> None:
+    fresh_cmd = build_nextflow_command(
+        "conformational_mapping",
+        "map",
+        {"cm_request_path": "/tmp/cm-request.json"},
+        "/tmp/out",
+        job_id="job-cm-fresh",
+    )
+    authoritative_work_dir = fresh_cmd[fresh_cmd.index("-w") + 1]
+    resume_cmd = build_nextflow_command(
+        "conformational_mapping",
+        "map",
+        {
+            "cm_request_path": "/tmp/cm-request.json",
+            "resume_work_dir": authoritative_work_dir,
+        },
+        "/tmp/out",
+        job_id="job-cm-resume",
+    )
+    assert "-resume" not in fresh_cmd
+    assert "-resume" in resume_cmd
+    assert resume_cmd[resume_cmd.index("-w") + 1] == authoritative_work_dir
+
+    with pytest.raises(ValueError, match="authoritative work directory"):
+        build_nextflow_command(
+            "conformational_mapping",
+            "map",
+            {
+                "cm_request_path": "/tmp/cm-request.json",
+                "resume_work_dir": "/tmp/not-the-authoritative-work-dir",
+            },
+            "/tmp/out",
+            job_id="job-cm-rejected",
+        )
+
+
 def test_remaining_parent_and_child_workflows_route_direct_for_fresh_and_resume() -> None:
     cases = [
         ("ppiflow", "generator_backbone_refine", {"ppiflow_seed_complex_path": "/tmp/seed.pdb"}, "workflows/ppiflow_generator_design.nf"),
