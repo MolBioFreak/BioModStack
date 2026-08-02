@@ -1,0 +1,56 @@
+{
+  "$id": "https://biomodstack.local/schemas/frustrampnn/frustrampnn_comparison_v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "schema_name": {"const": "frustrampnn_comparison"},
+    "schema_version": {"const": 1},
+    "comparison_id": {"type": ["string", "null"]},
+    "comparison_sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+    "configuration_id": {"type": ["string", "null"]},
+    "configuration_sha256": {"pattern": "^[0-9a-f]{64}$", "type": ["string", "null"]},
+    "reference_landscape_sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+    "target_landscape_sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+    "comparability": {
+      "additionalProperties": false,
+      "properties": {
+        "status": {"enum": ["comparable", "incompatible"], "type": "string"},
+        "reasons": {"items": {"type": "string"}, "type": "array"},
+        "reference_configuration_id": {"type": ["string", "null"]},
+        "target_configuration_id": {"type": ["string", "null"]},
+        "reference_configuration_sha256": {"type": ["string", "null"]},
+        "target_configuration_sha256": {"type": ["string", "null"]}
+      },
+      "required": ["status", "reasons"],
+      "type": "object"
+    },
+    "summary": {"additionalProperties": {"type": "integer"}, "type": "object"},
+    "rows": {
+      "items": {
+        "additionalProperties": true,
+        "properties": {
+          "mapping_state": {"enum": ["mapped", "unmapped"], "type": "string"},
+          "missingness_state": {"type": "string"},
+          "biological_status": {"type": "string"},
+          "mutation_aa": {"pattern": "^[ACDEFGHIKLMNPQRSTVWY]$", "type": "string"}
+        },
+        "required": ["mapping_state", "missingness_state", "biological_status", "mutation_aa"],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_name",
+    "schema_version",
+    "comparison_id",
+    "comparison_sha256",
+    "reference_landscape_sha256",
+    "target_landscape_sha256",
+    "comparability",
+    "summary",
+    "rows"
+  ],
+  "title": "frustrampnn_comparison_v1",
+  "type": "object"
+}

@@ -22,12 +22,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import (
     FrustraMPNNArtifact,
+    FrustraMPNNComparison,
+    FrustraMPNNComparisonRow,
+    FrustraMPNNGuidancePlan,
     FrustraMPNNLandscapeRow,
     FrustraMPNNResult,
     Job,
     get_session,
 )
 from services.frustrampnn.analytics import multidimensional_points, parse_dataset_ids
+from services.frustrampnn.comparison import ComparisonValidationError, compare_landscapes
+from services.frustrampnn.derived import (
+    DerivedPersistenceError,
+    load_persisted_landscape,
+    persist_comparison,
+    persist_guidance_plan,
+)
+from services.frustrampnn.guidance import GuidanceValidationError, build_guidance_plan
+from services.frustrampnn.contracts import canonical_sha256
 from services.frustrampnn.jobs import (
     FrustraMPNNChildError,
     child_receipt,
@@ -55,6 +67,28 @@ class AnalyzeDesignsRequest(BaseModel):
 
 class ReanalyzeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class ComparisonCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reference_job_id: str = Field(min_length=1)
+    reference_invocation_id: str = Field(min_length=1)
+    target_job_id: str = Field(min_length=1)
+    target_invocation_id: str = Field(min_length=1)
+
+
+class GuidanceCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_job_id: str = Field(min_length=1)
+    source_invocation_id: str = Field(min_length=1)
+    region: dict[str, Any]
+    objective: dict[str, Any]
+    constraints: dict[str, Any] = Field(default_factory=dict)
+    ranking: dict[str, Any] = Field(default_factory=dict)
+    rationale: str = Field(min_length=1)
+    guidance_id: str | None = Field(default=None, min_length=1)
 
 
 async def _child_job_receipt(session: AsyncSession, child: Job) -> dict[str, Any]:
@@ -294,6 +328,137 @@ async def analytics_points(
         limit=limit,
         offset=offset,
     )
+
+
+def _comparison_payload(model: FrustraMPNNComparison) -> dict[str, Any]:
+    payload = dict(model.payload_json)
+    payload["comparison_id"] = model.comparison_id
+    payload["persisted"] = True
+    payload["created_at"] = model.created_at
+    payload["reference"] = {
+        "parent_job_id": model.reference_parent_job_id,
+        "invocation_id": model.reference_invocation_id,
+    }
+    payload["target"] = {
+        "parent_job_id": model.target_parent_job_id,
+        "invocation_id": model.target_invocation_id,
+    }
+    return payload
+
+
+def _guidance_payload(model: FrustraMPNNGuidancePlan) -> dict[str, Any]:
+    payload = dict(model.payload_json)
+    payload["guidance_id"] = model.guidance_id
+    payload["persisted"] = True
+    payload["created_at"] = model.created_at
+    return payload
+
+
+@router.post("/comparisons", status_code=status.HTTP_201_CREATED)
+async def create_comparison(
+    body: ComparisonCreateRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        reference_result = await _scoped_result(body.reference_invocation_id, body.reference_job_id, session)
+        target_result = await _scoped_result(body.target_invocation_id, body.target_job_id, session)
+        reference_landscape = await load_persisted_landscape(session, reference_result)
+        target_landscape = await load_persisted_landscape(session, target_result)
+        comparison_id = "cmp-" + canonical_sha256([
+            reference_landscape["landscape_sha256"], target_landscape["landscape_sha256"],
+        ])[:32]
+        payload = compare_landscapes(reference_landscape, target_landscape, comparison_id=comparison_id)
+        stored = await persist_comparison(
+            session, payload, reference_result=reference_result, target_result=target_result,
+        )
+        await session.commit()
+        return _comparison_payload(stored)
+    except (ComparisonValidationError, DerivedPersistenceError) as exc:
+        await session.rollback()
+        code = 409 if "conflict" in str(exc).lower() else 422
+        raise HTTPException(code, str(exc)) from exc
+
+
+@router.get("/comparisons/{comparison_id}")
+async def get_comparison(comparison_id: str, session: AsyncSession = Depends(get_session)):
+    model = await session.get(FrustraMPNNComparison, comparison_id)
+    if model is None:
+        raise HTTPException(404, "FrustraMPNN comparison not found")
+    return _comparison_payload(model)
+
+
+@router.get("/comparisons/{comparison_id}/rows")
+async def comparison_rows(
+    comparison_id: str,
+    limit: int = Query(200, ge=1, le=5000),
+    offset: int = Query(0, ge=0),
+    session: AsyncSession = Depends(get_session),
+):
+    model = await session.get(FrustraMPNNComparison, comparison_id)
+    if model is None:
+        raise HTTPException(404, "FrustraMPNN comparison not found")
+    total = int((await session.execute(
+        select(func.count()).select_from(FrustraMPNNComparisonRow).where(
+            FrustraMPNNComparisonRow.comparison_id == comparison_id,
+        )
+    )).scalar_one())
+    rows = (await session.execute(
+        select(FrustraMPNNComparisonRow)
+        .where(FrustraMPNNComparisonRow.comparison_id == comparison_id)
+        .order_by(FrustraMPNNComparisonRow.row_index.asc())
+        .offset(offset)
+        .limit(limit)
+    )).scalars().all()
+    return {
+        "comparison_id": comparison_id,
+        "items": [dict(row.row_json) for row in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "next_offset": offset + len(rows) if offset + len(rows) < total else None,
+    }
+
+
+@router.post("/guidance", status_code=status.HTTP_201_CREATED)
+async def create_guidance(
+    body: GuidanceCreateRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        source_result = await _scoped_result(body.source_invocation_id, body.source_job_id, session)
+        landscape = await load_persisted_landscape(session, source_result)
+        guidance_id = body.guidance_id or "gdp-" + canonical_sha256({
+            "source_landscape_sha256": landscape["landscape_sha256"],
+            "region": body.region,
+            "objective": body.objective,
+            "constraints": body.constraints,
+            "ranking": body.ranking,
+            "rationale": body.rationale,
+        })[:32]
+        payload = build_guidance_plan(
+            landscape=landscape,
+            region=body.region,
+            objective=body.objective,
+            constraints=body.constraints,
+            ranking=body.ranking,
+            rationale=body.rationale,
+            guidance_id=guidance_id,
+        )
+        stored = await persist_guidance_plan(session, payload, source_result=source_result)
+        await session.commit()
+        return _guidance_payload(stored)
+    except (GuidanceValidationError, DerivedPersistenceError) as exc:
+        await session.rollback()
+        code = 409 if "conflict" in str(exc).lower() else 422
+        raise HTTPException(code, str(exc)) from exc
+
+
+@router.get("/guidance/{guidance_id}")
+async def get_guidance(guidance_id: str, session: AsyncSession = Depends(get_session)):
+    model = await session.get(FrustraMPNNGuidancePlan, guidance_id)
+    if model is None:
+        raise HTTPException(404, "FrustraMPNN guidance plan not found")
+    return _guidance_payload(model)
 
 
 @router.get("/results/{invocation_id}")

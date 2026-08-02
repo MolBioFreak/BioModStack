@@ -821,6 +821,86 @@ class FrustraMPNNLandscapeRow(Base):
     provenance_json = Column(JSON, nullable=False)
 
 
+class FrustraMPNNComparison(Base):
+    """Immutable residue-aligned comparison derived from two persisted landscapes."""
+
+    __tablename__ = "frustrampnn_comparisons"
+    __table_args__ = (
+        UniqueConstraint("comparison_sha256", name="uq_frustrampnn_comparison_sha256"),
+        Index("ix_frustrampnn_comparison_sources", "reference_parent_job_id", "target_parent_job_id"),
+    )
+
+    comparison_id = Column(String(96), primary_key=True)
+    reference_parent_job_id = Column(String(36), nullable=False, index=True)
+    reference_invocation_id = Column(String(128), nullable=False)
+    target_parent_job_id = Column(String(36), nullable=False, index=True)
+    target_invocation_id = Column(String(128), nullable=False)
+    reference_landscape_sha256 = Column(String(64), nullable=False, index=True)
+    target_landscape_sha256 = Column(String(64), nullable=False, index=True)
+    configuration_id = Column(String(128), nullable=True)
+    configuration_sha256 = Column(String(64), nullable=True)
+    status = Column(String(32), nullable=False, index=True)
+    comparison_sha256 = Column(String(64), nullable=False)
+    payload_json = Column(JSON, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class FrustraMPNNComparisonRow(Base):
+    """Immutable row-level evidence for one comparison."""
+
+    __tablename__ = "frustrampnn_comparison_rows"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["comparison_id"], ["frustrampnn_comparisons.comparison_id"],
+            name="fk_frustrampnn_comparison_rows_comparison",
+        ),
+        UniqueConstraint("comparison_id", "row_index", name="uq_frustrampnn_comparison_row_index"),
+        Index("ix_frustrampnn_comparison_row_identity", "comparison_id", "auth_asym_id", "auth_seq_id", "mutation_aa"),
+    )
+
+    id = Column(String(96), primary_key=True)
+    comparison_id = Column(String(96), nullable=False, index=True)
+    row_index = Column(Integer, nullable=False)
+    entity_instance_id = Column(String(128), nullable=False)
+    auth_asym_id = Column(String(128), nullable=False)
+    auth_seq_id = Column(String(64), nullable=False)
+    insertion_code = Column(String(16), nullable=False, default="")
+    sequence_index = Column(Integer, nullable=True)
+    mutation_aa = Column(String(1), nullable=False)
+    mapping_state = Column(String(32), nullable=False, index=True)
+    missingness_state = Column(String(32), nullable=False, index=True)
+    biological_status = Column(String(32), nullable=False, index=True)
+    reference_score = Column(Float, nullable=True)
+    target_score = Column(Float, nullable=True)
+    raw_score_delta = Column(Float, nullable=True)
+    reference_class = Column(String(32), nullable=True)
+    target_class = Column(String(32), nullable=True)
+    classification_transition = Column(String(64), nullable=True)
+    row_json = Column(JSON, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class FrustraMPNNGuidancePlan(Base):
+    """Immutable decision-support guidance derived from a landscape/comparison."""
+
+    __tablename__ = "frustrampnn_guidance_plans"
+    __table_args__ = (
+        UniqueConstraint("guidance_sha256", name="uq_frustrampnn_guidance_sha256"),
+        Index("ix_frustrampnn_guidance_source", "source_landscape_sha256"),
+    )
+
+    guidance_id = Column(String(96), primary_key=True)
+    source_landscape_sha256 = Column(String(64), nullable=False, index=True)
+    source_comparison_id = Column(String(96), nullable=True, index=True)
+    source_parent_job_id = Column(String(36), nullable=True, index=True)
+    source_invocation_id = Column(String(128), nullable=True)
+    configuration_id = Column(String(128), nullable=True)
+    configuration_sha256 = Column(String(64), nullable=True)
+    guidance_sha256 = Column(String(64), nullable=False)
+    payload_json = Column(JSON, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class ConformationalMappingRequest(Base):
     """Durable canonical request and lifecycle authority."""
 
