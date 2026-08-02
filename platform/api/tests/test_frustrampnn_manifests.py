@@ -284,7 +284,13 @@ def test_atomic_publisher_replays_exact_bundle_and_rejects_contradiction(tmp_pat
         source_bundle=source, allowed_root=allowed, destination=destination, marker=marker,
     )
     assert canonical_json_loads(marker.read_bytes()) == first
-    assert Path(first["source"]).read_bytes() == (source / "normalized_input.pdb").read_bytes()
+    assert first == {
+        "result": "frustrampnn/results/candidate-1/workflow_component_result_v1.json",
+        "manifest": "frustrampnn/results/candidate-1/frustrampnn_result_manifest_v1.json",
+        "source": "inputs/candidate.pdb",
+    }
+    assert all(not Path(value).is_absolute() for value in first.values())
+    assert (allowed / first["source"]).read_bytes() == (source / "normalized_input.pdb").read_bytes()
     publisher.publish(
         source_bundle=source, allowed_root=allowed, destination=destination, marker=marker,
     )
