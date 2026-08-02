@@ -13,6 +13,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "platform" / "api"))
 
+from services.frustrampnn.configuration import request_parameters  # noqa: E402
 from services.frustrampnn.contracts import canonical_json_bytes, validate_schema  # noqa: E402
 from services.frustrampnn.identity import deterministic_candidate_id  # noqa: E402
 from services.frustrampnn.structure import (  # noqa: E402
@@ -220,6 +221,10 @@ def prepare_candidate(
     map_path.unlink()
     pdb_sha = hashlib.sha256(output_pdb.read_bytes()).hexdigest()
     candidate_id = str(metadata["candidate_id"])
+    canonical_parameters = request_parameters()
+    metadata_checkpoint = metadata.get("checkpoint_id")
+    if metadata_checkpoint is not None and str(metadata_checkpoint) != canonical_parameters["checkpoint_id"]:
+        raise ValueError("producer checkpoint_id disagrees with global FrustraMPNN configuration")
     request = {
         "schema_name": "workflow_component_request",
         "schema_version": 1,
@@ -239,12 +244,7 @@ def prepare_candidate(
         "requiredness": str(metadata["requiredness"]),
         "identity_authority": "pdb_coordinates",
         "protein_selection": {"mode": "all_protein_entities"},
-        "parameters": {
-            "checkpoint_id": str(metadata["checkpoint_id"]),
-            "threshold_policy_id": "frustrampnn_class_v1",
-            "selected_model_number": 1,
-            "altloc_policy": "blank_or_explicit:<blank>",
-        },
+        "parameters": canonical_parameters,
         "requested_outputs": [
             "structure_map",
             "raw_csv",

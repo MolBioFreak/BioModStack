@@ -31,7 +31,7 @@ export interface FrustraMpnnLineageEnvelope {
     execution_owner_job_id: string;
     source_parent_job_id: string | null;
     source_batch_id: string | null;
-    trigger: 'upload_analyze' | 'design_analyze' | 'antibody_iteration' | 'batch_completion' | 'reanalyze';
+    trigger: 'upload_analyze' | 'design_analyze' | 'antibody_iteration' | 'batch_completion' | 'reanalyze' | 'external_candidate_handoff';
     selection: Array<{
         selection_ordinal: number;
         design_id: string | null;
@@ -48,7 +48,7 @@ export interface FrustraMpnnLineageEnvelope {
         component_request_sha256: string;
         normalized_source_relative_path: string;
         normalized_source_sha256: string;
-        producer_coordinates: Record<string, string | number | null>;
+        producer_coordinates: Record<string, unknown>;
     }>;
     component_invocation_ids: string[];
     batch_manifest_relative_path: string;
@@ -193,7 +193,7 @@ export interface FrustraMpnnSummary {
         observed_slots: number;
         scoreable_slots: number;
     }>;
-    threshold_policy: { id: 'frustrampnn_threshold_v1'; high_max: -1; minimal_min: 0.58 };
+    threshold_policy: { id: 'frustrampnn_class_v1'; high_max: -1; minimal_min: 0.58 };
     threshold_policy_sha256: string;
 }
 
@@ -246,6 +246,62 @@ export interface FrustraMpnnArtifact {
 export interface FrustraMpnnArtifactList {
     items: FrustraMpnnArtifact[];
     total: number;
+}
+
+export interface FrustraMpnnComparisonRow {
+    residue_key: { entity_instance_id: string; auth_asym_id: string; auth_seq_id: number; insertion_code: string };
+    sequence_index: number | null;
+    mutation_aa: string;
+    wt: string | null;
+    mapping_state: 'mapped' | 'unmapped';
+    missingness_state: string;
+    biological_status: string;
+    reference: { sequence_index: number | null; auth_seq_id: number | null; score: number | null; class: FrustraMpnnClass | null; scoreable: boolean; status: string };
+    target: { sequence_index: number | null; auth_seq_id: number | null; score: number | null; class: FrustraMpnnClass | null; scoreable: boolean; status: string };
+    raw_score_delta: number | null;
+    classification_transition: string | null;
+}
+
+export interface FrustraMpnnComparison {
+    schema_name: 'frustrampnn_comparison';
+    schema_version: 1;
+    comparison_id: string;
+    comparison_sha256: string;
+    reference_landscape_sha256: string;
+    target_landscape_sha256: string;
+    configuration_id: string | null;
+    configuration_sha256: string | null;
+    comparability: { status: 'comparable' | 'incompatible'; reasons: string[] };
+    summary: Record<string, number>;
+    rows?: FrustraMpnnComparisonRow[];
+}
+
+export interface FrustraMpnnComparisonRowsPage {
+    comparison_id: string;
+    items: FrustraMpnnComparisonRow[];
+    total: number;
+    limit: number;
+    offset: number;
+    next_offset: number | null;
+}
+
+export interface FrustraMpnnGuidancePlan {
+    schema_name: 'frustrampnn_guidance';
+    schema_version: 1;
+    guidance_id: string;
+    guidance_sha256: string;
+    source_landscape_sha256: string;
+    configuration_id: string | null;
+    configuration_sha256: string | null;
+    region: { region_type: string; resolved_residues: Array<{ auth_asym_id: string; auth_seq_id: number; insertion_code: string }>; unresolved_residues: Array<Record<string, unknown>> };
+    objective: { objective_type: string; direction: string; aggregation: string; target_class?: string | null };
+    constraints: Record<string, unknown>;
+    ranking: Record<string, unknown>;
+    ranked_slots: Array<{ rank: number; sequence_index: number; auth_asym_id: string; auth_seq_id: number; wt: string; mutation_aa: string; score: number; class: FrustraMpnnClass | null }>;
+    rationale: string;
+    decision_support_only: true;
+    instrument_control: false;
+    observed_outcome: Record<string, unknown> | null;
 }
 
 interface FrustraMpnnLandscapeWireRow {
@@ -476,6 +532,83 @@ export const fetchFrustraMpnnStructureMap = async (
 ): Promise<FrustraMpnnStructureMap> => (
     await api.get<FrustraMpnnStructureMap>(frustraMpnnArtifactUrl(jobId, artifactId), { signal })
 ).data;
+
+export const fetchFrustraMpnnComparison = async (
+    referenceJobId: string,
+    referenceInvocationId: string,
+    targetJobId: string,
+    targetInvocationId: string,
+    signal?: AbortSignal,
+): Promise<FrustraMpnnComparison> => (
+    await api.post<FrustraMpnnComparison>('/api/frustrampnn/comparisons', {
+        reference_job_id: referenceJobId,
+        reference_invocation_id: referenceInvocationId,
+        target_job_id: targetJobId,
+        target_invocation_id: targetInvocationId,
+    }, { signal })
+).data;
+
+export const fetchFrustraMpnnComparisonRows = async (
+    comparisonId: string,
+    limit = 5000,
+    offset = 0,
+    signal?: AbortSignal,
+): Promise<FrustraMpnnComparisonRowsPage> => (
+    await api.get<FrustraMpnnComparisonRowsPage>(`/api/frustrampnn/comparisons/${encodeURIComponent(comparisonId)}/rows`, {
+        params: { limit, offset }, signal,
+    })
+).data;
+
+export interface FrustraMpnnGuidanceRequest {
+    source_job_id: string;
+    source_invocation_id: string;
+    region: { region_type: 'residue_set'; residues: Array<{ auth_asym_id: string; auth_seq_id: number; insertion_code: string }> };
+    objective: { objective_type: 'score_aggregate' | 'class_count' | 'class_transition'; direction: 'higher_is_better' | 'lower_is_better'; aggregation: 'mean' | 'median' | 'min' | 'max'; target_class?: string | null };
+    constraints: Record<string, unknown>;
+    ranking: Record<string, unknown>;
+    rationale: string;
+    guidance_id?: string;
+}
+
+export const createFrustraMpnnGuidance = async (
+    request: FrustraMpnnGuidanceRequest,
+    signal?: AbortSignal,
+): Promise<FrustraMpnnGuidancePlan> => (
+    await api.post<FrustraMpnnGuidancePlan>('/api/frustrampnn/guidance', request, { signal })
+).data;
+
+export const fetchFrustraMpnnGuidance = async (
+    guidanceId: string,
+    signal?: AbortSignal,
+): Promise<FrustraMpnnGuidancePlan> => (
+    await api.get<FrustraMpnnGuidancePlan>(`/api/frustrampnn/guidance/${encodeURIComponent(guidanceId)}`, { signal })
+).data;
+
+export interface FrustraMpnnCandidateHandoffRequest {
+    candidate_id: string;
+    producer_id: string;
+    parent_job_id: string;
+    parent_invocation_id: string;
+    parent_landscape_sha256: string;
+    guidance_id?: string;
+    nucleotide_edit_set?: Array<Record<string, unknown>>;
+    protein_sequence_sha256?: string;
+    expected_structure_sha256?: string;
+}
+
+export const handoffFrustraMpnnCandidate = async (
+    file: File,
+    request: FrustraMpnnCandidateHandoffRequest,
+    signal?: AbortSignal,
+): Promise<FrustraMpnnChildReceipt> => {
+    const form = new FormData();
+    form.append('structure_file', file);
+    for (const [key, value] of Object.entries(request)) {
+        if (value == null) continue;
+        form.append(key, typeof value === 'string' ? value : JSON.stringify(value));
+    }
+    return (await api.post<FrustraMpnnChildReceipt>('/api/frustrampnn/candidates/handoff', form, { signal })).data;
+};
 
 export const fetchFrustraMpnnMultidimensionalPoints = async (
     datasetIds: string[] = [],

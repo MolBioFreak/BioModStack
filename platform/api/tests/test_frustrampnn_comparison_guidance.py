@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, FrustraMPNNLandscapeRow, FrustraMPNNResult, Job, get_session
 from routers.frustrampnn import router
+import routers.frustrampnn as frustrampnn_router
 from services.frustrampnn.configuration import global_configuration
 
 
@@ -161,6 +162,74 @@ def test_guidance_rejects_ambiguous_optimize_frustration_objective():
             ranking={},
             rationale="",
         )
+
+
+def test_external_candidate_handoff_preserves_producer_and_parent_lineage():
+    from services.frustrampnn.jobs import handoff_selection
+
+    selection = handoff_selection(
+        candidate_id="variant-1",
+        producer_id="external-redesign",
+        payload=b"ATOM\n",
+        filename="variant-1.pdb",
+        parent_job_id="parent-job",
+        parent_invocation_id="parent-invocation",
+        parent_landscape_sha256="a" * 64,
+        guidance_id="guidance-1",
+        nucleotide_edit_set=[{"position": 17, "operation": "insert", "base": "A"}],
+        protein_sequence_sha256="b" * 64,
+    )
+    assert selection.design_id is None
+    assert selection.producer_coordinates["candidate_id"] == "variant-1"
+    assert selection.producer_coordinates["producer_id"] == "external-redesign"
+    assert selection.producer_coordinates["parent_landscape_sha256"] == "a" * 64
+    assert selection.producer_coordinates["guidance_id"] == "guidance-1"
+    assert selection.producer_coordinates["nucleotide_edit_set"][0]["operation"] == "insert"
+
+
+@pytest.mark.asyncio
+async def test_external_candidate_handoff_api_binds_parent_and_producer_metadata(derived_session, monkeypatch):
+    app = FastAPI()
+    app.include_router(router)
+    captured = {}
+
+    async def fake_create_child(session, *, selections, source_parent, trigger, **_kwargs):
+        captured["selection"] = selections[0]
+        captured["source_parent"] = source_parent.id
+        captured["trigger"] = trigger
+        return source_parent
+
+    async def fake_receipt(session, child):
+        return {"child_job_id": "child-handoff", "status": "queued"}
+
+    monkeypatch.setattr(frustrampnn_router, "create_child_job", fake_create_child)
+    monkeypatch.setattr(frustrampnn_router, "_child_job_receipt", fake_receipt)
+
+    async def override_session():
+        yield derived_session
+
+    app.dependency_overrides[get_session] = override_session
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/frustrampnn/candidates/handoff",
+            data={
+                "candidate_id": "variant-api",
+                "producer_id": "external-redesign",
+                "parent_job_id": "job-derived",
+                "parent_invocation_id": "invoke-derived",
+                "parent_landscape_sha256": "a" * 64,
+                "guidance_id": "guidance-api",
+                "nucleotide_edit_set": '[{"position":17,"operation":"insert","base":"A"}]',
+                "protein_sequence_sha256": "b" * 64,
+            },
+            files={"structure_file": ("variant-api.pdb", b"ATOM\n", "chemical/x-pdb")},
+        )
+    assert response.status_code == 202, response.text
+    assert captured["source_parent"] == "job-derived"
+    assert captured["trigger"] == "external_candidate_handoff"
+    assert captured["selection"].producer_coordinates["candidate_id"] == "variant-api"
+    assert captured["selection"].producer_coordinates["guidance_id"] == "guidance-api"
 
 
 @pytest_asyncio.fixture

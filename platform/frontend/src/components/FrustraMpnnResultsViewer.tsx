@@ -28,6 +28,8 @@ import { getFrustraMpnnResultContext } from './frustraMpnnResultSurface.js';
 import FrustraMpnnLandscapeOverview from './FrustraMpnnLandscapeOverview.js';
 import FrustraMpnnPlotlyAnalytics from './FrustraMpnnPlotlyAnalytics.js';
 import FrustraMpnnCrossDatasetExplorer from './FrustraMpnnCrossDatasetExplorer.js';
+import FrustraMpnnComparisonSurface from './FrustraMpnnComparisonSurface.js';
+import FrustraMpnnCandidateHandoffPanel from './FrustraMpnnCandidateHandoffPanel.js';
 import { buildFrustraMpnnCoverageReadiness } from './frustraMpnnCoverageModel.js';
 
 const PAGE_SIZE = 500;
@@ -84,6 +86,8 @@ export default function FrustraMpnnResultsViewer({
     const [slotStatus, setSlotStatus] = useState<'' | 'ok' | 'missing'>('');
     const [mutationFilter, setMutationFilter] = useState('');
     const [selectedResidue, setSelectedResidue] = useState<ResidueRef | null>(null);
+    const [comparisonTargetJobId, setComparisonTargetJobId] = useState(job.id);
+    const [comparisonTargetInvocationId, setComparisonTargetInvocationId] = useState('');
 
     const receipt = useQuery({
         queryKey: ['frustrampnn-receipt', job.id],
@@ -325,6 +329,25 @@ export default function FrustraMpnnResultsViewer({
                         </section>
 
                         <FrustraMpnnCrossDatasetExplorer currentDatasetId={job.id} />
+
+                        <section className="rounded-xl border border-indigo-500/30 bg-indigo-950/5 p-4">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                                <div><h2 className="font-semibold">Compare this result with another persisted landscape</h2><p className="mt-1 text-xs text-slate-500">The selected invocation is the explicit reference. Enter a target job and invocation; numeric joins are suppressed if configuration, mapping, or threshold identity is incompatible.</p></div>
+                                <span className="rounded-full border border-indigo-400/30 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-indigo-200">Residue identity required</span>
+                            </div>
+                            <div className="mt-3 grid gap-3 md:grid-cols-3 text-xs">
+                                <label className="text-slate-400">Reference invocation<input value={`${job.id} · ${selectedInvocation ?? ''}`} readOnly className="mt-1 w-full rounded border border-slate-800 bg-slate-950 px-2 py-1.5 font-mono text-slate-500" /></label>
+                                <label className="text-slate-400">Target job ID<input value={comparisonTargetJobId} onChange={(event) => setComparisonTargetJobId(event.target.value)} className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1.5 font-mono text-slate-200" /></label>
+                                <label className="text-slate-400">Target invocation ID<input value={comparisonTargetInvocationId} onChange={(event) => setComparisonTargetInvocationId(event.target.value)} placeholder="frustrampnn:…" className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1.5 font-mono text-slate-200" /></label>
+                            </div>
+                            {selectedInvocation && comparisonTargetJobId.trim() && comparisonTargetInvocationId.trim() && <div className="mt-4"><FrustraMpnnComparisonSurface referenceJobId={job.id} referenceInvocationId={selectedInvocation} targetJobId={comparisonTargetJobId.trim()} targetInvocationId={comparisonTargetInvocationId.trim()} /></div>}
+                        </section>
+
+                        {selectedInvocation && <FrustraMpnnCandidateHandoffPanel
+                            parentJobId={job.id}
+                            parentInvocationId={selectedInvocation}
+                            parentLandscapeSha256={detail.data.summary.landscape_sha256}
+                        />}
 
                         {allResidues.length > 0 && <FrustraMpnnPlotlyAnalytics
                             residues={allResidues}

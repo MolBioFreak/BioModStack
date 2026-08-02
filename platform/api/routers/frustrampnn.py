@@ -46,6 +46,7 @@ from services.frustrampnn.jobs import (
     create_child_job,
     create_reanalysis_child,
     design_selections,
+    handoff_selection,
     upload_selection,
 )
 
@@ -122,6 +123,80 @@ async def analyze_uploaded_structure(
             trigger="upload_analyze",
         )
         return await _child_job_receipt(session, job)
+    except FrustraMPNNChildError as exc:
+        await session.rollback()
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.post("/candidates/handoff", status_code=status.HTTP_202_ACCEPTED)
+async def handoff_external_candidate(
+    request: Request,
+    structure_file: UploadFile = File(..., description="Externally produced PDB or mmCIF structure"),
+    session: AsyncSession = Depends(get_session),
+):
+    """Accept one producer-owned candidate and queue a fresh FrustraMPNN child."""
+    allowed = {
+        "structure_file", "candidate_id", "producer_id", "parent_job_id", "parent_invocation_id",
+        "parent_landscape_sha256", "guidance_id", "nucleotide_edit_set", "protein_sequence_sha256",
+        "expected_structure_sha256",
+    }
+    form = await request.form()
+    if set(form) - allowed or set(request.query_params):
+        raise HTTPException(422, "FrustraMPNN handoff overrides/unknown fields are forbidden")
+    def _form_value(name: str, *, required: bool = True) -> str | None:
+        value = form.get(name)
+        if value is None or not isinstance(value, str) or (required and not value):
+            if required:
+                raise HTTPException(422, f"handoff field {name} is required")
+            return None
+        return value
+    try:
+        parent_job_id = _form_value("parent_job_id")
+        parent_invocation_id = _form_value("parent_invocation_id")
+        parent_job = await session.get(Job, parent_job_id)
+        if parent_job is None:
+            raise HTTPException(404, "handoff parent Job not found")
+        parent_result = await _scoped_result(parent_invocation_id or "", parent_job_id or "", session)
+        edit_text = _form_value("nucleotide_edit_set", required=False) or "[]"
+        try:
+            edit_set = json.loads(edit_text)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(422, "nucleotide_edit_set must be JSON") from exc
+        if not isinstance(edit_set, list) or any(not isinstance(item, dict) for item in edit_set):
+            raise HTTPException(422, "nucleotide_edit_set must be a JSON list of objects")
+        payload = await structure_file.read()
+        expected = _form_value("expected_structure_sha256", required=False)
+        if expected is not None and hashlib.sha256(payload).hexdigest() != expected:
+            raise HTTPException(422, "uploaded handoff structure SHA-256 does not match expected_structure_sha256")
+        selection = handoff_selection(
+            candidate_id=_form_value("candidate_id") or "",
+            producer_id=_form_value("producer_id") or "",
+            payload=payload,
+            filename=structure_file.filename or "",
+            parent_job_id=parent_job_id or "",
+            parent_invocation_id=parent_invocation_id or "",
+            parent_landscape_sha256=_form_value("parent_landscape_sha256") or "",
+            guidance_id=_form_value("guidance_id", required=False),
+            nucleotide_edit_set=edit_set,
+            protein_sequence_sha256=_form_value("protein_sequence_sha256", required=False),
+        )
+        child = await create_child_job(
+            session,
+            selections=[selection],
+            source_parent=parent_job,
+            trigger="external_candidate_handoff",
+        )
+        receipt = await _child_job_receipt(session, child)
+        receipt["handoff"] = {
+            "parent_landscape_sha256": _form_value("parent_landscape_sha256") or "",
+            "parent_candidate_id": parent_result.candidate_id,
+            "guidance_id": _form_value("guidance_id", required=False),
+            "producer_id": _form_value("producer_id") or "",
+        }
+        return receipt
+    except HTTPException:
+        await session.rollback()
+        raise
     except FrustraMPNNChildError as exc:
         await session.rollback()
         raise HTTPException(422, str(exc)) from exc

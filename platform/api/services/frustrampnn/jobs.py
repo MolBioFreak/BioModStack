@@ -15,7 +15,7 @@ import stat
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -98,7 +98,7 @@ def _snapshot_root(job_id: str) -> Path:
 
 
 def _candidate_id(selection: SourceSelection, ordinal: int) -> str:
-    return selection.design_id or f"upload-{ordinal + 1}"
+    return str(selection.producer_coordinates.get("candidate_id") or selection.design_id or f"upload-{ordinal + 1}")
 
 
 def _new_invocation_id(job_id: str, ordinal: int) -> str:
@@ -199,6 +199,54 @@ def upload_selection(*, filename: str, payload: bytes, expected_sha256: str | No
         source_format=source_format,
         producer_stage="uploaded_structure",
         producer_coordinates={"selection_ordinal": 0, "original_filename": Path(filename).name},
+    )
+
+
+def handoff_selection(
+    *,
+    candidate_id: str,
+    producer_id: str,
+    payload: bytes,
+    filename: str,
+    parent_job_id: str,
+    parent_invocation_id: str,
+    parent_landscape_sha256: str,
+    guidance_id: str | None,
+    nucleotide_edit_set: Sequence[Mapping[str, Any]],
+    protein_sequence_sha256: str | None,
+) -> SourceSelection:
+    """Snapshot one externally produced candidate without creating fake Design authority."""
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", candidate_id or "") is None:
+        raise FrustraMPNNChildError("external candidate identity is not path-safe")
+    if not producer_id or not parent_job_id or not parent_invocation_id:
+        raise FrustraMPNNChildError("external handoff requires producer and parent identities")
+    if re.fullmatch(r"[0-9a-f]{64}", parent_landscape_sha256 or "") is None:
+        raise FrustraMPNNChildError("external handoff parent landscape SHA-256 is invalid")
+    if protein_sequence_sha256 is not None and re.fullmatch(r"[0-9a-f]{64}", protein_sequence_sha256) is None:
+        raise FrustraMPNNChildError("external handoff protein sequence SHA-256 is invalid")
+    base = upload_selection(filename=filename, payload=payload, expected_sha256=None)
+    coordinates = dict(base.producer_coordinates)
+    coordinates.update({
+        "candidate_id": candidate_id,
+        "producer_id": producer_id,
+        "producer_stage": "external_candidate_handoff",
+        "parent_job_id": parent_job_id,
+        "parent_invocation_id": parent_invocation_id,
+        "parent_landscape_sha256": parent_landscape_sha256,
+        "guidance_id": guidance_id,
+        "nucleotide_edit_set": [dict(edit) for edit in nucleotide_edit_set],
+        "protein_sequence_sha256": protein_sequence_sha256,
+    })
+    return SourceSelection(
+        design_id=None,
+        source_job_id=None,
+        source_path=None,
+        source_bytes=base.source_bytes,
+        source_sha256=base.source_sha256,
+        media_type=base.media_type,
+        source_format=base.source_format,
+        producer_stage="external_candidate_handoff",
+        producer_coordinates=coordinates,
     )
 
 
@@ -532,5 +580,5 @@ async def child_receipt(session: AsyncSession, *, child: Job) -> dict[str, Any]:
 
 __all__ = [
     "ENVELOPE_KEY", "FrustraMPNNChildError", "child_receipt", "create_child_job",
-    "create_reanalysis_child", "design_selections", "upload_selection",
+    "create_reanalysis_child", "design_selections", "handoff_selection", "upload_selection",
 ]
