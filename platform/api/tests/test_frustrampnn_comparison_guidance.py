@@ -150,6 +150,22 @@ def test_guidance_requires_explicit_direction_and_region_and_ranks_deterministic
         build_guidance_plan(landscape=landscape, region=region, objective=invalid, constraints={}, ranking={}, rationale="x")
 
 
+def test_guidance_rejects_legacy_landscapes_without_global_configuration():
+    from services.frustrampnn.guidance import GuidanceValidationError, build_guidance_plan
+
+    landscape = _landscape()
+    landscape.pop("configuration_id")
+    with pytest.raises(GuidanceValidationError, match="global configuration"):
+        build_guidance_plan(
+            landscape=landscape,
+            region={"region_type": "residue_set", "residues": [{"auth_asym_id": "A", "auth_seq_id": 1}]},
+            objective={"objective_type": "score_aggregate", "direction": "lower_is_better"},
+            constraints={},
+            ranking={"mode": "lexicographic"},
+            rationale="Legacy landscapes are comparison-only.",
+        )
+
+
 def test_guidance_rejects_ambiguous_optimize_frustration_objective():
     from services.frustrampnn.guidance import GuidanceValidationError, build_guidance_plan
 

@@ -165,6 +165,8 @@ def build_guidance_plan(
     guidance_id: str | None = None,
 ) -> dict[str, Any]:
     """Build a deterministic, immutable decision-support plan."""
+    if not landscape.get("configuration_id") or not landscape.get("configuration_sha256"):
+        raise GuidanceValidationError("global configuration identity is required for guidance")
     normalized_objective = _validate_objective(objective)
     if not isinstance(rationale, str) or not rationale.strip():
         raise GuidanceValidationError("guidance requires a scientific hypothesis/rationale")
