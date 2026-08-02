@@ -1041,7 +1041,7 @@ export interface ModelIntegrationConfig {
     model_id: string;
     model_name: string;
     model_version: string;
-    parameter: string;
+    stage_parameter: string;
     operator_label: string;
     checkpoint_label: string | null;
     model_summary: string;

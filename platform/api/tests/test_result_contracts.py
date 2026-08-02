@@ -44,6 +44,11 @@ def test_result_contract_registry_definitions_are_explicit_and_inspectable() -> 
     assert definitions["sequence_design_v1"].result_sets == ["sequence_designs"]
     assert "fampnn" in definitions["sequence_design_v1"].stage_families
     assert "proteinmpnn" in definitions["sequence_design_v1"].stage_families
+    assert "frustrampnn" not in definitions["sequence_design_v1"].model_ids
+    assert "frustrampnn" not in definitions["sequence_design_v1"].stage_families
+    assert definitions["frustration_analysis_v1"].model_ids == ["frustrampnn"]
+    assert definitions["frustration_analysis_v1"].supported_analyzers == ["frustration_landscape"]
+    assert "substitution_landscape" in definitions["frustration_analysis_v1"].viewer_capabilities
     assert definitions["ppiflow_maturation_v1"].result_sets == [
         "ppiflow_candidates",
         "ppiflow_passed",
@@ -102,6 +107,7 @@ def test_result_contract_registry_pins_known_streams_without_metric_name_guessin
         ("proteinmpnn", "sequence_design", "sequence_designed_complex", None, "sequence_design_v1"),
         ("antifold", "sequence_design", "sequence_designed_complex", None, "sequence_design_v1"),
         ("caliby", "sequence_design", "sequence_designed_complex", None, "sequence_design_v1"),
+        ("frustrampnn", "frustrampnn", None, None, "frustration_analysis_v1"),
         ("ppiflow", "maturation", "sequence_designed_complex", "ppiflow_candidates", "ppiflow_maturation_v1"),
         ("ppiflow", "maturation", "sequence_designed_complex", "ppiflow_passed", "ppiflow_maturation_v1"),
         ("ppiflow", "maturation", "sequence_designed_complex", "ppiflow_rejected", "ppiflow_maturation_v1"),

@@ -3,7 +3,7 @@
 id: frustrampnn
 name: FrustraMPNN
 version: "MegaScale"
-category: structure_analysis
+category: scientific_analysis
 description: >
   Structure-conditioned residue-frustration and substitution-landscape analysis
   for interpreting structures and guiding scientifically informed mutagenesis.
@@ -25,7 +25,7 @@ enabled: true
 experimental: false
 
 integration:
-  parameter: run_frustrampnn
+  stage_parameter: run_frustrampnn
   operator_label: Frustration analysis
   checkpoint_label: MegaScale-trained checkpoint
   model_summary: >

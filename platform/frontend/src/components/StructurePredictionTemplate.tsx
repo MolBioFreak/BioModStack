@@ -51,6 +51,11 @@ import { useLiveGpuCatalog } from './useLiveGpuCatalog';
 import { ModelDocumentationLinks, type ModelDocumentationTopic } from './ModelDocumentationLinks';
 import { resolveInitialGpuPinningState } from './gpuToggleState.js';
 import { ModelIntegrationControl, useModelIntegrationConfig } from './ModelIntegrationControl';
+import {
+    applyModelIntegrationChoice,
+    applyModelIntegrationDefault,
+    createModelIntegrationSelection,
+} from './modelIntegrationControlState';
 
 
 interface StructurePredictionTemplateProps {
@@ -172,17 +177,22 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     // Core state
     const initialGpuPinningState = resolveInitialGpuPinningState(initialValues);
     const [jobName, setJobName] = useState(initialValues?.name || initialValues?.job_name || 'structure_prediction');
-    const frustrampnnSelectionTouchedRef = useRef(typeof initialValues?.run_frustrampnn === 'boolean');
-    const [runFrustrampnn, setRunFrustrampnn] = useState(initialValues?.run_frustrampnn !== false);
+    const initialFrustrampnnSelection = createModelIntegrationSelection(initialValues?.run_frustrampnn, true);
+    const frustrampnnSelectionRef = useRef(initialFrustrampnnSelection);
+    const [runFrustrampnn, setRunFrustrampnn] = useState(initialFrustrampnnSelection.value);
+    const configuredFrustrampnnDefault = frustrampnnIntegrationQuery.data?.workflows?.structure_prediction?.default_enabled;
     useEffect(() => {
-        const configuredDefault = frustrampnnIntegrationQuery.data?.workflows?.structure_prediction?.default_enabled;
-        if (!frustrampnnSelectionTouchedRef.current && typeof configuredDefault === 'boolean') {
-            setRunFrustrampnn(configuredDefault);
+        const previous = frustrampnnSelectionRef.current;
+        const next = applyModelIntegrationDefault(previous, configuredFrustrampnnDefault);
+        frustrampnnSelectionRef.current = next;
+        if (next !== previous) {
+            setRunFrustrampnn(next.value);
         }
-    }, [frustrampnnIntegrationQuery.data]);
+    }, [configuredFrustrampnnDefault]);
     const updateRunFrustrampnn = (checked: boolean) => {
-        frustrampnnSelectionTouchedRef.current = true;
-        setRunFrustrampnn(checked);
+        const next = applyModelIntegrationChoice(frustrampnnSelectionRef.current, checked);
+        frustrampnnSelectionRef.current = next;
+        setRunFrustrampnn(next.value);
     };
     const [pinnedGpus, setPinnedGpus] = useState(initialGpuPinningState.pinnedGpus);
     const [lockGpus, setLockGpus] = useState(initialGpuPinningState.lockGpus);
