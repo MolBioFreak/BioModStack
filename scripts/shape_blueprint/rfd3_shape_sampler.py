@@ -109,17 +109,21 @@ class ShapeGuidedDiffusionSampler(SampleDiffusionWithMotif):
             raise ValueError("RFD3 Shape sampler received an invalid atom-level mask")
         return mask
 
-    def post_step_coordinates(
+    def guide_coordinate_derivative(
         self,
         *,
-        X_L: torch.Tensor,
+        X_noisy_L: torch.Tensor,
+        X_denoised_L: torch.Tensor,
+        delta_L: torch.Tensor,
+        t_hat: torch.Tensor,
         f: dict[str, Any],
         step_i: int,
         total_steps: int,
         fixed_atom_mask: torch.Tensor,
     ) -> torch.Tensor:
+        del X_noisy_L
         if self.shape_step_size == 0:
-            return X_L
+            return delta_L
         scale = guidance_scale(
             step=step_i,
             total_steps=total_steps,
@@ -128,10 +132,10 @@ class ShapeGuidedDiffusionSampler(SampleDiffusionWithMotif):
             terminal_scale=self.shape_terminal_scale,
         )
         if scale == 0.0:
-            return X_L
-        if X_L.ndim != 3 or X_L.shape[-1] != 3:
+            return delta_L
+        if X_denoised_L.ndim != 3 or X_denoised_L.shape[-1] != 3:
             raise ValueError("RFD3 Shape sampler expected coordinates with shape [D, L, 3]")
-        atom_count = X_L.shape[1]
+        atom_count = X_denoised_L.shape[1]
         token_map = f["atom_to_token_map"].long()
         if token_map.ndim > 1:
             token_map = token_map[0]
@@ -149,8 +153,8 @@ class ShapeGuidedDiffusionSampler(SampleDiffusionWithMotif):
         if not bool(guided_ca.any()):
             raise ValueError("RFD3 Shape guidance found no diffused protein central atoms")
 
-        shape_field = self.load_field(X_L.device)
-        ca_coordinates = X_L[:, guided_ca, :]
+        shape_field = self.load_field(X_denoised_L.device)
+        ca_coordinates = X_denoised_L[:, guided_ca, :]
         projected_ca, receipt = shape_field.project(
             ca_coordinates,
             step_size=self.shape_step_size * scale,
@@ -166,7 +170,9 @@ class ShapeGuidedDiffusionSampler(SampleDiffusionWithMotif):
         ca_delta = raw_ca_delta
         token_count = int(token_map.max().item()) + 1
         token_delta = torch.zeros(
-            (X_L.shape[0], token_count, 3), dtype=X_L.dtype, device=X_L.device
+            (X_denoised_L.shape[0], token_count, 3),
+            dtype=X_denoised_L.dtype,
+            device=X_denoised_L.device,
         )
         guided_tokens = token_map[guided_ca]
         if len(torch.unique(guided_tokens)) != len(guided_tokens):
@@ -174,15 +180,21 @@ class ShapeGuidedDiffusionSampler(SampleDiffusionWithMotif):
         token_delta[:, guided_tokens, :] = ca_delta
         eligible_atoms = protein_atoms & ~fixed
         atom_delta = token_delta[:, token_map, :] * eligible_atoms[None, :, None]
-        guided = X_L + atom_delta
-        if not bool(torch.equal(guided[:, fixed, :], X_L[:, fixed, :])):
-            raise RuntimeError("Shape guidance altered fixed coordinates")
-        if not bool(torch.isfinite(guided).all()):
-            raise RuntimeError("Shape guidance produced non-finite coordinates")
+        t_hat_tensor = torch.as_tensor(t_hat, dtype=delta_L.dtype, device=delta_L.device)
+        while t_hat_tensor.ndim < delta_L.ndim:
+            t_hat_tensor = t_hat_tensor.unsqueeze(-1)
+        if bool((t_hat_tensor <= 0).any()):
+            raise ValueError("RFD3 native Shape guidance requires positive t_hat")
+        derivative_adjustment = -atom_delta / t_hat_tensor
+        guided_delta_L = delta_L + derivative_adjustment
+        if not bool(torch.equal(guided_delta_L[:, fixed, :], delta_L[:, fixed, :])):
+            raise RuntimeError("Shape guidance altered fixed-coordinate derivatives")
+        if not bool(torch.isfinite(guided_delta_L).all()):
+            raise RuntimeError("Shape guidance produced non-finite coordinate derivatives")
 
         manifest = self._shape_manifest or {}
         step_receipt = {
-            "schema": "bms_rfd3_shape_guidance_step_v2",
+            "schema": "bms_rfd3_shape_guidance_step_v3",
             "base_sampler_sha256": RFD3_BASE_SAMPLER_SHA256,
             "geometry_sha256": manifest.get("geometry_sha256"),
             "point_pool_sha256": manifest.get("point_pool_sha256"),
@@ -193,11 +205,14 @@ class ShapeGuidedDiffusionSampler(SampleDiffusionWithMotif):
             "guidance_decay": "constant",
             "gradient_scaling": "raw",
             "outside_reduction": "sum",
-            "coordinate_state": "X_L",
+            "coordinate_state": "delta_L",
+            "guidance_reference": "X_denoised_L",
+            "edm_t_hat": float(t_hat_tensor.detach().cpu().reshape(-1)[0]),
             "connectivity_weight": float(self.shape_connectivity_weight),
             "guided_ca_count": int(guided_ca.sum().item()),
             "raw_delta_adjacent_rms": float(torch.sqrt(torch.diff(raw_ca_delta, dim=1).square().sum(dim=-1).mean()).cpu()) if raw_ca_delta.shape[1] > 1 else 0.0,
             "applied_delta_adjacent_rms": float(torch.sqrt(torch.diff(ca_delta, dim=1).square().sum(dim=-1).mean()).cpu()) if ca_delta.shape[1] > 1 else 0.0,
+            "derivative_adjustment_rms": float(torch.sqrt(derivative_adjustment.square().sum(dim=-1).mean()).detach().cpu()),
             **receipt,
         }
         receipt_path = Path(self.shape_receipt_path)
@@ -206,4 +221,4 @@ class ShapeGuidedDiffusionSampler(SampleDiffusionWithMotif):
             handle.write(_canonical(step_receipt) + b"\n")
             handle.flush()
             os.fsync(handle.fileno())
-        return guided
+        return guided_delta_L

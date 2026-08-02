@@ -14,6 +14,7 @@ from typing import Mapping
 
 
 BASE_SAMPLER_SHA256 = "e64fd42242422fa40ee0112a031911f462b13403b3f8d46ae49879d569b9314f"
+PATCHED_SAMPLER_SHA256 = "bea19f55bc545963dd8834b6d7b22d5f7b6fd3ad9425e4cd3900cd7aa040a5ab"
 FOUNDRY_VERSION = "0.1.9"
 FOUNDRY_COMMIT = "a36d29c5c0d196a1c1c23349878683b6643da67d"
 SHAPE_CTRL_COMMIT = "e1a518b61e216d3c597a46e5a151b9e24756e33e"
@@ -143,6 +144,7 @@ def run_shape_rfd3(
             "point_pool_sha256": request.get("point_pool_sha256"),
             "sdf_sha256": manifest.get("sdf_sha256"),
             "base_sampler_sha256": BASE_SAMPLER_SHA256,
+            "patched_sampler_sha256": PATCHED_SAMPLER_SHA256,
             "checkpoint_path": str(checkpoint_path),
             "checkpoint_sha256": _sha256(checkpoint_path),
             "seed": request["seed"],
@@ -152,6 +154,9 @@ def run_shape_rfd3(
             "gradient_scaling": "raw",
             "outside_reduction": "sum",
             "connectivity_weight": 0.0,
+            "integration_state": "delta_L",
+            "guidance_reference": "X_denoised_L",
+            "native_update_equation": "X_next=X_noisy+step_scale*d_t*delta_L_guided",
             "foundry_version_pin": FOUNDRY_VERSION,
             "foundry_commit": FOUNDRY_COMMIT,
             "shape_ctrl_commit": SHAPE_CTRL_COMMIT,
@@ -179,6 +184,7 @@ def run_shape_rfd3(
         "point_pool_sha256": request.get("point_pool_sha256"),
         "sdf_sha256": manifest.get("sdf_sha256"),
         "base_sampler_sha256": BASE_SAMPLER_SHA256,
+        "patched_sampler_sha256": PATCHED_SAMPLER_SHA256,
         "rfd3_version": rfd3_version,
         "checkpoint_path": str(checkpoint_path),
         "checkpoint_sha256": _sha256(checkpoint_path),
@@ -192,6 +198,9 @@ def run_shape_rfd3(
         "gradient_scaling": "raw",
         "outside_reduction": "sum",
         "connectivity_weight": 0.0,
+        "integration_state": "delta_L",
+        "guidance_reference": "X_denoised_L",
+        "native_update_equation": "X_next=X_noisy+step_scale*d_t*delta_L_guided",
         "foundry_version_pin": FOUNDRY_VERSION,
         "foundry_commit": FOUNDRY_COMMIT,
         "shape_ctrl_commit": SHAPE_CTRL_COMMIT,

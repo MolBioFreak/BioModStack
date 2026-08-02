@@ -125,6 +125,10 @@ def test_shape_rfd3_wrapper_binds_request_and_guidance_paths(tmp_path: Path) -> 
     assert runtime["gradient_scaling"] == "raw"
     assert runtime["outside_reduction"] == "sum"
     assert runtime["connectivity_weight"] == 0.0
+    assert runtime["patched_sampler_sha256"] == "bea19f55bc545963dd8834b6d7b22d5f7b6fd3ad9425e4cd3900cd7aa040a5ab"
+    assert runtime["integration_state"] == "delta_L"
+    assert runtime["guidance_reference"] == "X_denoised_L"
+    assert runtime["native_update_equation"] == "X_next=X_noisy+step_scale*d_t*delta_L_guided"
     assert runtime["foundry_version_pin"] == "0.1.9"
     assert runtime["foundry_commit"] == "a36d29c5c0d196a1c1c23349878683b6643da67d"
     assert runtime["shape_ctrl_commit"] == "e1a518b61e216d3c597a46e5a151b9e24756e33e"
