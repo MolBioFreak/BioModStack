@@ -216,8 +216,8 @@ def _server_confornets_identity() -> dict[str, str]:
         raise HTTPException(status_code=503, detail="canonical ConforNets image is not installed")
     digest = _sha256_path(image)
     return {
-        "backend_version": "canonical-cba896f",
-        "backend_commit": "cba896f556354c2e8ce8090312cc4649185f5612",
+        "backend_version": "canonical-4df561a",
+        "backend_commit": "4df561a1fbd0fd2b9c7a230fa62957a837d9f72d",
         "runtime_identity": "confornets-canonical-write-ledger-v1",
         "container_digest": f"sha256:{digest}",
         "model_id": "confornets-canonical-v1",

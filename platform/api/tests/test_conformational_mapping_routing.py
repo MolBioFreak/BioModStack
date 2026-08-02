@@ -50,6 +50,20 @@ from template_registry import TemplateRegistry  # noqa: E402
 BACKENDS = ("protenix_v2_ensemble", "confornets", "external_import")
 
 
+def test_server_confornets_identity_matches_the_executed_upstream_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image = tmp_path / "confornets-canonical.sif"
+    image.write_bytes(b"canonical-confornets")
+    monkeypatch.setattr(cm_router, "get_container_dir", lambda: tmp_path)
+
+    identity = cm_router._server_confornets_identity()
+
+    assert identity["backend_version"] == "canonical-4df561a"
+    assert identity["backend_commit"] == "4df561a1fbd0fd2b9c7a230fa62957a837d9f72d"
+    assert identity["container_digest"] == f"sha256:{hashlib.sha256(image.read_bytes()).hexdigest()}"
+
+
 def test_snapshot_reseal_rejects_invalid_existing_request_and_plan_authority(tmp_path: Path) -> None:
     request_materialized = materialize_trusted_internal_request(
         _request_params("external_import"),
