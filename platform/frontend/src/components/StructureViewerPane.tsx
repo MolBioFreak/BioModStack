@@ -2902,6 +2902,23 @@ export default function StructureViewerPane({
                         {renderViewerToolbar(isFullscreen || viewerLayout.isStacked)}
                     </div>
 
+                    {shapeMetrics && !isFullscreen && (
+                        <div className="mb-3 rounded-xl border border-cyan-500/30 bg-slate-950/70 p-3 text-[11px] text-slate-200">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                                <span className="font-semibold uppercase tracking-wider text-cyan-300">Shape Blueprint candidate</span>
+                                <span className="rounded-full bg-slate-800 px-2 py-0.5 text-emerald-300">{String(selectedDesign?.provenance?.sequence_engine ?? 'unknown')}</span>
+                            </div>
+                            <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-5">
+                                <span>Shape total <strong className="ml-1 font-mono text-white">{shapeMetric('shape_total')}</strong></span>
+                                <span>Outside penalty <strong className="ml-1 font-mono text-white">{shapeMetric('shape_outside')}</strong></span>
+                                <span>Inside fraction <strong className="ml-1 font-mono text-white">{shapeMetric('sdf_positive_inside_fraction')}</strong></span>
+                                <span>Source RMSD Å <strong className="ml-1 font-mono text-white">{shapeMetric('alignment_transform.rmsd_angstrom') === '—' && typeof (shapeMetrics.alignment_transform as Record<string, unknown> | undefined)?.rmsd_angstrom === 'number' ? Number((shapeMetrics.alignment_transform as Record<string, unknown>).rmsd_angstrom).toFixed(3) : shapeMetric('alignment_transform.rmsd_angstrom')}</strong></span>
+                                <span>pLDDT <strong className="ml-1 font-mono text-white">{shapeMetric('plddt_overall', 1)}</strong></span>
+                            </div>
+                            <div className="mt-2 border-t border-slate-800 pt-2 text-slate-400">Cyan overlay: exact canonical point pool. Use <span className="text-cyan-200">Source Backbone</span> for the generating RFD3 comparison.</div>
+                        </div>
+                    )}
+
                     {/* Main Viewer - ALWAYS at this exact tree position */}
                     <div
                         className={isFullscreen
@@ -2936,23 +2953,6 @@ export default function StructureViewerPane({
                                 height="100%"
                                 backgroundColor={themeColors.bgPrimary}
                             />
-                        )}
-
-                        {shapeMetrics && (
-                            <div className="absolute right-3 top-3 z-20 max-w-[320px] rounded-xl border border-cyan-500/30 bg-slate-950/90 p-3 text-[11px] text-slate-200 shadow-xl backdrop-blur-sm">
-                                <div className="flex items-center justify-between gap-3">
-                                    <span className="font-semibold uppercase tracking-wider text-cyan-300">Shape Blueprint candidate</span>
-                                    <span className="rounded-full bg-slate-800 px-2 py-0.5 text-emerald-300">{String(selectedDesign?.provenance?.sequence_engine ?? 'unknown')}</span>
-                                </div>
-                                <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1">
-                                    <span>Shape total</span><span className="font-mono text-right">{shapeMetric('shape_total')}</span>
-                                    <span>Outside penalty</span><span className="font-mono text-right">{shapeMetric('shape_outside')}</span>
-                                    <span>Inside fraction</span><span className="font-mono text-right">{shapeMetric('sdf_positive_inside_fraction')}</span>
-                                    <span>Source RMSD Å</span><span className="font-mono text-right">{shapeMetric('alignment_transform.rmsd_angstrom') === '—' && typeof (shapeMetrics.alignment_transform as Record<string, unknown> | undefined)?.rmsd_angstrom === 'number' ? Number((shapeMetrics.alignment_transform as Record<string, unknown>).rmsd_angstrom).toFixed(3) : shapeMetric('alignment_transform.rmsd_angstrom')}</span>
-                                    <span>pLDDT</span><span className="font-mono text-right">{shapeMetric('plddt_overall', 1)}</span>
-                                </div>
-                                <div className="mt-2 border-t border-slate-800 pt-2 text-slate-400">Cyan overlay: exact canonical point pool. Use <span className="text-cyan-200">Source Backbone</span> for the generating RFD3 comparison.</div>
-                            </div>
                         )}
 
                         {showReferenceDock && (
