@@ -48,21 +48,33 @@ export function StatsToolkitLauncher() {
     const payload = buildStatsThemePayload(theme, (name) => computed.getPropertyValue(name));
     frameWindow.postMessage(payload, resolveExactTargetOrigin(entryUrl, window.location.href));
   }, [entryUrl, theme]);
+  const themeFrameRequestRef = useRef<number | null>(null);
+  const scheduleTheme = useCallback(() => {
+    if (themeFrameRequestRef.current !== null) window.cancelAnimationFrame(themeFrameRequestRef.current);
+    themeFrameRequestRef.current = window.requestAnimationFrame(() => {
+      themeFrameRequestRef.current = null;
+      sendTheme();
+    });
+  }, [sendTheme]);
 
   useEffect(() => {
-    sendTheme();
-  }, [sendTheme]);
+    scheduleTheme();
+    return () => {
+      if (themeFrameRequestRef.current !== null) window.cancelAnimationFrame(themeFrameRequestRef.current);
+      themeFrameRequestRef.current = null;
+    };
+  }, [scheduleTheme]);
 
   useLayoutEffect(() => {
     if (!entryUrl) return undefined;
     const frameOrigin = resolveExactTargetOrigin(entryUrl, window.location.href);
     const listener = (event: MessageEvent<unknown>) => {
       if (event.source !== frameRef.current?.contentWindow || event.origin !== frameOrigin) return;
-      if (isStatsThemeReadyPayload(event.data)) sendTheme();
+      if (isStatsThemeReadyPayload(event.data)) scheduleTheme();
     };
     window.addEventListener('message', listener);
     return () => window.removeEventListener('message', listener);
-  }, [entryUrl, sendTheme]);
+  }, [entryUrl, scheduleTheme]);
 
   if (query.isLoading) {
     return <div className="flex min-h-[24rem] items-center justify-center text-sm text-[var(--text-secondary)]">Connecting to BioModStack Stats Toolkit…</div>;
@@ -90,7 +102,7 @@ export function StatsToolkitLauncher() {
         ref={frameRef}
         className="h-full w-full border-0"
         src={entryUrl ?? undefined}
-        onLoad={sendTheme}
+        onLoad={scheduleTheme}
         title="BioModStack Stats Toolkit workspace"
       />
     </div>
