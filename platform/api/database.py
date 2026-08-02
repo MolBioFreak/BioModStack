@@ -1330,8 +1330,46 @@ async def _ensure_schema(conn):
     await _ensure_table_columns(conn, "conformational_mapping_state_landscape_analysis_rows", ConformationalMappingStateLandscapeAnalysisRow.__table__.columns)
     await _ensure_table_columns(conn, "nucleotide_sequences", NucleotideSequence.__table__.columns)
     await _ensure_table_columns(conn, "primers", Primer.__table__.columns)
+    await _backfill_frustrampnn_summary_projections(conn)
     await _backfill_design_review_contracts(conn)
     await _ensure_sqlite_indexes(conn)
+
+
+async def _backfill_frustrampnn_summary_projections(conn):
+    """Repair shared Design analytics from validated immutable summaries."""
+    from services.frustrampnn.contracts import validate_schema
+
+    result = await conn.execute(text(
+        "SELECT d.id AS design_id, r.invocation_id, r.summary_json "
+        "FROM designs d JOIN frustrampnn_results r ON r.design_id = d.id "
+        "WHERE d.frustrampnn_status = 'succeeded' AND ("
+        "d.frustration_high_count IS NULL OR d.frustration_min_count IS NULL "
+        "OR d.frustration_pct_high IS NULL) "
+        "ORDER BY d.id, r.created_at DESC, r.invocation_id DESC"
+    ))
+    projected: set[str] = set()
+    for row in result.mappings().all():
+        design_id = str(row["design_id"])
+        if design_id in projected:
+            continue
+        summary = row["summary_json"]
+        if isinstance(summary, str):
+            summary = json.loads(summary)
+        validate_schema("frustrampnn_summary_v1", summary)
+        await conn.execute(
+            text(
+                "UPDATE designs SET frustration_high_count = :high_count, "
+                "frustration_min_count = :minimal_count, "
+                "frustration_pct_high = :high_percent WHERE id = :design_id"
+            ),
+            {
+                "design_id": design_id,
+                "high_count": int(summary["native_slot_counts"]["high"]),
+                "minimal_count": int(summary["native_slot_counts"]["minimal"]),
+                "high_percent": float(summary["native_slot_fractions"]["high"]) * 100.0,
+            },
+        )
+        projected.add(design_id)
 
 
 async def _backfill_design_review_contracts(conn):
