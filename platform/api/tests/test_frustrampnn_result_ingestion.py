@@ -788,6 +788,46 @@ async def test_parent_manifest_creates_deterministic_design_before_canonical_ing
 
 
 @pytest.mark.asyncio
+async def test_complex_parent_manifest_creates_exact_frustrampnn_source_design(
+    tmp_path: Path, db
+) -> None:
+    job_id = "job-complex-parent-identity"
+    job_root = tmp_path / "job-root"
+    candidate_key = "frustrampnn/sources/boltz/producer/source.normalized.pdb"
+    bundle = job_root / "frustrampnn" / "results" / "candidate"
+    candidate_id, invocation_id, source = _parent_bundle(
+        bundle,
+        job_root=job_root,
+        job_id=job_id,
+        parent_workflow_id="complex_prediction",
+        producer_stage="complex_prediction:boltz:protein_only",
+        producer_candidate_key=candidate_key,
+    )
+    await _seed_parent_job(
+        db,
+        job_id=job_id,
+        job_root=job_root,
+        manifests=[bundle / MANIFEST_PATH],
+    )
+
+    async with db() as session:
+        assert await ingest_job_results(job_id, str(job_root), session, commit=False) == 1
+        design = await session.get(Design, candidate_id)
+        assert design is not None
+        assert design.job_id == job_id
+        assert design.pdb_path == str(source)
+        assert design.artifact_class == "predicted_structure"
+        assert design.source_stage_family == "complex_prediction"
+        assert design.source_stage_mode == "complex_prediction:boltz:protein_only"
+        assert await session.get(FrustraMPNNResult, (job_id, invocation_id)) is not None
+        await session.rollback()
+
+    async with db() as verification:
+        assert await verification.get(Design, candidate_id) is None
+        assert await verification.get(FrustraMPNNResult, (job_id, invocation_id)) is None
+
+
+@pytest.mark.asyncio
 async def test_parent_candidate_set_rolls_back_designs_and_results_on_late_bundle_failure(
     tmp_path: Path, db, monkeypatch: pytest.MonkeyPatch
 ) -> None:

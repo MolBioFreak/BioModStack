@@ -3414,6 +3414,7 @@ async def _ingest_explicit_frustrampnn_results(
         if request["parent_workflow_id"] not in {
             "structure_prediction",
             "protein_design",
+            "complex_prediction",
         }:
             continue
         source_artifact = request["source_artifact"]
