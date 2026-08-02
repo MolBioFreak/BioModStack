@@ -12,10 +12,11 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Mapping
 
+from .configuration import global_configuration
 from .contracts import AA_ORDER, canonical_sha256, validate_schema
 
 THRESHOLD_POLICY = {
-    "id": "frustrampnn_threshold_v1",
+    "id": "frustrampnn_class_v1",
     "high_max": -1.0,
     "minimal_min": 0.58,
 }
@@ -208,6 +209,8 @@ def finalize_landscape(
     landscape = {
         "schema_name": "frustrampnn_landscape",
         "schema_version": 1,
+        "configuration_id": global_configuration()["configuration_id"],
+        "configuration_sha256": global_configuration()["configuration_sha256"],
         "target_id": structure_map["target_id"],
         "parent_job_id": structure_map["parent_job_id"],
         "candidate_id": structure_map["candidate_id"],
@@ -312,6 +315,8 @@ def summarize_landscape(
     summary = {
         "schema_name": "frustrampnn_summary",
         "schema_version": 1,
+        "configuration_id": landscape.get("configuration_id", global_configuration()["configuration_id"]),
+        "configuration_sha256": landscape.get("configuration_sha256", global_configuration()["configuration_sha256"]),
         "target_id": landscape["target_id"],
         "parent_job_id": landscape["parent_job_id"],
         "candidate_id": landscape["candidate_id"],

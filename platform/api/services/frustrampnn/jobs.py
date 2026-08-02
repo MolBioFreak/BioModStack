@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import Design, FrustraMPNNResult, Job
 from paths import get_results_dir
 
+from .configuration import request_parameters
 from .contracts import canonical_json_bytes, validate_schema
 from .structure import (
     StructureNormalizationError,
@@ -311,12 +312,7 @@ async def create_child_job(
                 "requiredness": "required",
                 "identity_authority": "pdb_coordinates",
                 "protein_selection": {"mode": "all_protein_entities"},
-                "parameters": {
-                    "checkpoint_id": CHECKPOINT_ID,
-                    "threshold_policy_id": "frustrampnn_threshold_v1",
-                    "selected_model_number": 1,
-                    "altloc_policy": "blank_or_explicit:<blank>",
-                },
+                "parameters": request_parameters(),
                 "requested_outputs": list(_REQUESTED_OUTPUTS),
             }
             validate_schema("workflow_component_request_v1", request)

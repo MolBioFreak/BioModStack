@@ -18,6 +18,7 @@ from services.frustrampnn.contracts import (
     canonical_sha256,
     request_sha256,
 )
+from services.frustrampnn.configuration import global_configuration, request_parameters
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -48,6 +49,7 @@ def _write_json(root: Path, name: str, value: dict) -> bytes:
 
 def _bundle(root: Path) -> None:
     source_hash = hashlib.sha256(_pdb()).hexdigest()
+    configuration = global_configuration()
     request = {
         "schema_name": "workflow_component_request", "schema_version": 1,
         "component_id": "frustrampnn", "component_contract_version": "1.0",
@@ -58,9 +60,7 @@ def _bundle(root: Path) -> None:
                             "artifact_id": None},
         "requiredness": "required", "identity_authority": "pdb_coordinates",
         "protein_selection": {"mode": "all_protein_entities"},
-        "parameters": {"checkpoint_id": "megascale.ckpt",
-                       "threshold_policy_id": "frustrampnn_threshold_v1",
-                       "selected_model_number": 1, "altloc_policy": "blank_or_explicit:A"},
+        "parameters": {**request_parameters(), "altloc_policy": "blank_or_explicit:A"},
         "requested_outputs": ["structure_map", "raw_csv", "landscape", "summary", "execution_receipt"],
     }
     _write_json(root, "workflow_component_request_v1.json", request)
@@ -111,9 +111,11 @@ def _bundle(root: Path) -> None:
                      if key not in {"selected_model", "selected_altloc", "backbone_complete",
                                     "backbone_atoms", "status", "reason"}}
     landscape_row["slots"] = slots
-    policy = {"id": "frustrampnn_threshold_v1", "high_max": -1.0, "minimal_min": 0.58}
+    policy = {"id": "frustrampnn_class_v1", "high_max": -1.0, "minimal_min": 0.58}
     landscape = {
         "schema_name": "frustrampnn_landscape", "schema_version": 1,
+        "configuration_id": configuration["configuration_id"],
+        "configuration_sha256": configuration["configuration_sha256"],
         "target_id": "target-1", "parent_job_id": "job-1", "candidate_id": "candidate-1",
         "structure_map_sha256": canonical_sha256(structure_map),
         "normalized_pdb_sha256": normalized_hash, "model_ready_sequence_sha256": sequence_hash,
@@ -124,6 +126,8 @@ def _bundle(root: Path) -> None:
 
     summary = {
         "schema_name": "frustrampnn_summary", "schema_version": 1,
+        "configuration_id": configuration["configuration_id"],
+        "configuration_sha256": configuration["configuration_sha256"],
         "target_id": "target-1", "parent_job_id": "job-1", "candidate_id": "candidate-1",
         "landscape_sha256": canonical_sha256(landscape),
         "residue_support": {"expected": 1, "mapped": 1, "scoreable": 1, "excluded": 0, "ambiguous": 0},

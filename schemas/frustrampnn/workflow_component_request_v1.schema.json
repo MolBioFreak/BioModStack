@@ -132,6 +132,13 @@
           "pattern": "^blank_or_explicit:(?:<blank>|[A-Za-z0-9])$",
           "type": "string"
         },
+        "configuration_id": {
+          "const": "frustrampnn_global_v1"
+        },
+        "configuration_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
         "checkpoint_id": {
           "minLength": 1,
           "type": "string"
@@ -141,7 +148,7 @@
           "type": "integer"
         },
         "threshold_policy_id": {
-          "const": "frustrampnn_threshold_v1"
+          "const": "frustrampnn_class_v1"
         }
       },
       "required": [

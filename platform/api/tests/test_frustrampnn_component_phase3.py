@@ -63,7 +63,7 @@ def _request(source: Path, **updates: object) -> dict[str, object]:
         "protein_selection": {"mode": "all_protein_entities"},
         "parameters": {
             "checkpoint_id": "stub.ckpt",
-            "threshold_policy_id": "frustrampnn_threshold_v1",
+            "threshold_policy_id": "frustrampnn_class_v1",
             "selected_model_number": 1,
             "altloc_policy": "blank_or_explicit:<blank>",
         },

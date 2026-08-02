@@ -57,7 +57,7 @@ def _request() -> dict:
         },
         "parameters": {
             "checkpoint_id": "megascale.ckpt",
-            "threshold_policy_id": "frustrampnn_threshold_v1",
+            "threshold_policy_id": "frustrampnn_class_v1",
             "selected_model_number": 1,
             "altloc_policy": "blank_or_explicit:A",
         },

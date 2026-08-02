@@ -3,6 +3,8 @@
 id: frustrampnn
 name: FrustraMPNN
 version: "MegaScale"
+configuration_id: frustrampnn_global_v1
+configuration_schema: frustrampnn_global_configuration_v1
 category: scientific_analysis
 description: >
   Structure-conditioned residue-frustration and substitution-landscape analysis
@@ -34,7 +36,8 @@ integration:
   semantic_roles:
     - structure_interpretation
     - mutagenesis_guidance
-    - workflow_specific_quality_control
+    - analysis_authority
+    - experimental_decision_support
   workflows:
     structure_prediction:
       default_enabled: true

@@ -241,7 +241,7 @@ def prepare_candidate(
         "protein_selection": {"mode": "all_protein_entities"},
         "parameters": {
             "checkpoint_id": str(metadata["checkpoint_id"]),
-            "threshold_policy_id": "frustrampnn_threshold_v1",
+            "threshold_policy_id": "frustrampnn_class_v1",
             "selected_model_number": 1,
             "altloc_policy": "blank_or_explicit:<blank>",
         },

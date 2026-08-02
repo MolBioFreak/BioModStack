@@ -40,7 +40,7 @@ async def analytics_api(tmp_path):
                 manifest_sha256=f"{index + 2:064x}",
                 manifest_json={"contract_version": "frustrampnn_manifest_v1"},
                 summary_sha256=f"{index + 3:064x}",
-                summary_json={"threshold_policy": {"policy_id": "frustrampnn_threshold_v1", "high_max": -1.0, "minimal_min": 0.58}},
+                summary_json={"threshold_policy": {"policy_id": "frustrampnn_class_v1", "high_max": -1.0, "minimal_min": 0.58}},
                 runtime_identity_json={"checkpoint_sha256": f"{index + 4:064x}"},
                 assigned_gpu_json={"physical_device_id": index % 4},
                 terminal_result_json={"status": "succeeded"},

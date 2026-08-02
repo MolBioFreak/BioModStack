@@ -7,6 +7,13 @@
       "minLength": 1,
       "type": "string"
     },
+    "configuration_id": {
+      "const": "frustrampnn_global_v1"
+    },
+    "configuration_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
     "complete_landscape_counts": {
       "additionalProperties": false,
       "properties": {
@@ -244,7 +251,7 @@
           "const": -1.0
         },
         "id": {
-          "const": "frustrampnn_threshold_v1"
+          "const": "frustrampnn_class_v1"
         },
         "minimal_min": {
           "const": 0.58

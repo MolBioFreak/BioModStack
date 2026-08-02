@@ -82,7 +82,7 @@ def test_complete_n_by_20_landscape_uses_exact_order_identity_and_threshold_boun
     assert all([slot["mutation_aa"] for slot in residue["slots"]] == list(AA_ORDER) for residue in landscape["residues"])
     assert sum(len(residue["slots"]) for residue in landscape["residues"]) == 40
     assert [landscape["residues"][0]["slots"][i]["class"] for i in range(3)] == ["high", "minimal", "neutral"]
-    assert landscape["threshold_policy"] == {"id": "frustrampnn_threshold_v1", "high_max": -1.0, "minimal_min": 0.58}
+    assert landscape["threshold_policy"] == {"id": "frustrampnn_class_v1", "high_max": -1.0, "minimal_min": 0.58}
     assert landscape["threshold_policy_sha256"] == module.canonical_sha256(landscape["threshold_policy"])
     assert landscape["residues"][0]["auth_seq_id"] == 10
     assert landscape["residues"][0]["model_position"] == 0
