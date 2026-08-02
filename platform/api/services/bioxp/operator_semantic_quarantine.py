@@ -7,10 +7,6 @@ EMERGENCY_STOP_QUARANTINE_REASON = (
 )
 
 OPERATOR_SEMANTIC_QUARANTINE_BY_PATH: dict[str, str] = {
-    "/motion/power/enable": (
-        "Quarantined: this route uses unacknowledged reverse-engineered relay writes "
-        "and is not proven equivalent to an OEM global 24 V On operation."
-    ),
     "/motion/power/diag": (
         "Quarantined: this diagnostic can enter the same unverified power-enable "
         "sequence and lacks truthful aggregate acknowledgment/readback."
