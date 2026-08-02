@@ -17,6 +17,8 @@ EXPECTED_SCHEMAS = {
     "frustrampnn_summary_v1.schema.json",
     "frustrampnn_execution_receipt_v1.schema.json",
     "frustrampnn_result_manifest_v1.schema.json",
+    "frustrampnn_comparison_v1.schema.json",
+    "frustrampnn_guidance_v1.schema.json",
 }
 
 
@@ -119,7 +121,7 @@ def _result() -> dict:
     }
 
 
-def test_exactly_seven_phase1_schemas_are_draft_2020_12_fail_closed() -> None:
+def test_all_frustrampnn_schemas_are_draft_2020_12_fail_closed() -> None:
     directory = REPO_ROOT / "schemas/frustrampnn"
     assert directory.is_dir(), "schemas/frustrampnn is missing"
     paths = {path.name for path in directory.glob("*.schema.json")}
