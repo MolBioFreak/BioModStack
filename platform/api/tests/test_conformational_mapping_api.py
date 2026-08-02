@@ -132,6 +132,31 @@ async def test_retry_never_downgrades_completed_request_from_stale_failed_job(mo
     assert record.status == "completed"
 
 
+@pytest.mark.asyncio
+async def test_completed_request_does_not_project_historical_failure_as_current(monkeypatch) -> None:
+    record = SimpleNamespace(
+        request_id="request-1", job_id="job-1", backend="confornets",
+        status="completed", progress_json={"phase": "completed"},
+        failure_receipt_json={"terminal_state": "failed", "message": "historical"},
+        result_contract_id="conformational_mapping_confornets_v1",
+    )
+    job = SimpleNamespace(status="completed")
+
+    async def authorized(*_args, **_kwargs):
+        return record
+
+    class ReadOnlySession:
+        async def get(self, *_args, **_kwargs):
+            return job
+
+    monkeypatch.setattr(cm_router, "_authorized_record", authorized)
+    result = await request_status(
+        "request-1", _http_request(client_host="127.0.0.1"), ReadOnlySession()
+    )
+    assert result["status"] == "completed"
+    assert result["failure_receipt"] is None
+
+
 def test_cm11_api_typed_submission_rejects_unknown_fields() -> None:
     SubmitRequest.model_validate(_body())
     with pytest.raises(ValidationError):
@@ -195,6 +220,9 @@ async def test_cm11_api_lifecycle_survives_session_restart(tmp_path: Path) -> No
         receipt = {"schema_name": "cm_failure_receipt", "schema_version": 1, "request_id": "r", "message": "bounded failure"}
         await transition_request(session, restored, status="failed", failure_receipt=receipt)
         await session.commit()
+        assert await session.scalar(select(ConformationalMappingRecord).where(ConformationalMappingRecord.record_type == "failure_receipt"))
+        await transition_request(session, restored, status="queued", progress={"phase": "queued"})
+        assert restored.failure_receipt_json is None
         assert await session.scalar(select(ConformationalMappingRecord).where(ConformationalMappingRecord.record_type == "failure_receipt"))
     await engine.dispose()
 

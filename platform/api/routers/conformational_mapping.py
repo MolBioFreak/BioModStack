@@ -880,7 +880,7 @@ async def request_status(
     job = await session.get(Job, record.job_id)
     status = record.status
     progress = record.progress_json
-    failure_receipt = record.failure_receipt_json
+    failure_receipt = record.failure_receipt_json if status == "failed" else None
     if job is not None and record.status not in {"completed", "failed", "cancelled"}:
         job_state = str(job.status or job.queue_status or "").lower()
         if job_state == "running" and record.status == "queued":

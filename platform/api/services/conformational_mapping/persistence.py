@@ -192,6 +192,9 @@ async def transition_request(
         record.terminal_at = datetime.now(timezone.utc).replace(tzinfo=None)
     elif status == "queued":
         record.terminal_at = None
+        # Failure receipts remain immutable audit records, but they are not the
+        # current terminal authority after an admitted retry.
+        record.failure_receipt_json = None
     if flush:
         await session.flush()
 
