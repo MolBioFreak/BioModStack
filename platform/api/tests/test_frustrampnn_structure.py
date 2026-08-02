@@ -45,7 +45,7 @@ def _pdb() -> bytes:
     return "".join(lines).encode("ascii")
 
 
-def _cif(sequence_second: str = "ALA") -> bytes:
+def _cif(sequence_second: str = "ALA", *, include_occupancy: bool = True) -> bytes:
     columns = [
         "group_PDB", "id", "type_symbol", "label_atom_id", "label_alt_id",
         "label_comp_id", "label_asym_id", "label_entity_id", "label_seq_id",
@@ -53,18 +53,62 @@ def _cif(sequence_second: str = "ALA") -> bytes:
         "B_iso_or_equiv", "auth_seq_id", "auth_comp_id", "auth_asym_id",
         "auth_atom_id", "pdbx_PDB_model_num",
     ]
+    if not include_occupancy:
+        columns.remove("occupancy")
     lines = ["data_fixture\n", "loop_\n", *[f"_atom_site.{name}\n" for name in columns]]
     atom_id = 1
     for label_seq, auth_seq, residue, insertion in ((1, 10, "GLY", "A"), (2, 12, sequence_second, "?")):
         for atom, element in (("N", "N"), ("CA", "C"), ("C", "C"), ("O", "O")):
-            row = ["ATOM", str(atom_id), element, atom, ".", residue, "AA", "1", str(label_seq), insertion,
-                   str(atom_id), str(atom_id + 1), str(atom_id + 2), "1.0", "20.0", str(auth_seq), residue, "X", atom, "1"]
+            row_by_column = {
+                "group_PDB": "ATOM", "id": str(atom_id), "type_symbol": element,
+                "label_atom_id": atom, "label_alt_id": ".", "label_comp_id": residue,
+                "label_asym_id": "AA", "label_entity_id": "1", "label_seq_id": str(label_seq),
+                "pdbx_PDB_ins_code": insertion, "Cartn_x": str(atom_id),
+                "Cartn_y": str(atom_id + 1), "Cartn_z": str(atom_id + 2),
+                "occupancy": "1.0", "B_iso_or_equiv": "20.0", "auth_seq_id": str(auth_seq),
+                "auth_comp_id": residue, "auth_asym_id": "X", "auth_atom_id": atom,
+                "pdbx_PDB_model_num": "1",
+            }
+            row = [row_by_column[column] for column in columns]
             lines.append(" ".join(row) + "\n")
             atom_id += 1
     # non-protein entity remains source-only and is excluded
-    row = ["HETATM", str(atom_id), "C", "C1", ".", "LIG", "L", "2", ".", "?", "1", "2", "3", "1", "20", "1", "LIG", "Z", "C1", "1"]
-    lines.append(" ".join(row) + "\n#\n")
+    nonprotein_by_column = {
+        "group_PDB": "HETATM", "id": str(atom_id), "type_symbol": "C",
+        "label_atom_id": "C1", "label_alt_id": ".", "label_comp_id": "LIG",
+        "label_asym_id": "L", "label_entity_id": "2", "label_seq_id": ".",
+        "pdbx_PDB_ins_code": "?", "Cartn_x": "1", "Cartn_y": "2", "Cartn_z": "3",
+        "occupancy": "1", "B_iso_or_equiv": "20", "auth_seq_id": "1",
+        "auth_comp_id": "LIG", "auth_asym_id": "Z", "auth_atom_id": "C1",
+        "pdbx_PDB_model_num": "1",
+    }
+    lines.append(" ".join(nonprotein_by_column[column] for column in columns) + "\n#\n")
     return "".join(lines).encode("utf-8")
+
+
+def test_mmcif_without_occupancy_normalizes_predicted_atoms_as_fully_occupied(
+    tmp_path: Path,
+) -> None:
+    module = _structure()
+    payload = _cif(include_occupancy=False)
+    source = tmp_path / "predicted.cif"
+    source.write_bytes(payload)
+    structure_map = module.normalize_structure(
+        input_path=source,
+        output_pdb_path=tmp_path / "normalized.pdb",
+        map_path=tmp_path / "map.json",
+        target_id="target-1",
+        parent_job_id="job-1",
+        candidate_id="candidate-1",
+        identity_authority=module.derive_mmcif_atom_site_authority(payload),
+        protein_selection={"mode": "all_protein_entities"},
+        selected_model=1,
+        altloc_policy="blank_or_explicit:A",
+    )
+    assert structure_map["model_ready_sequence"] == "GA"
+    atom_lines = (tmp_path / "normalized.pdb").read_text("ascii").splitlines()
+    assert atom_lines
+    assert all(line[54:60] == "  1.00" for line in atom_lines if line.startswith("ATOM"))
 
 
 def test_pdb_only_normalization_is_candidate_local_and_never_invents_mmcif_identity(tmp_path: Path) -> None:
