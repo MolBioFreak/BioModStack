@@ -1,4 +1,5 @@
 export const BMS_STATS_THEME_MESSAGE_TYPE = 'bms-theme-v1' as const;
+export const BMS_STATS_THEME_READY_MESSAGE_TYPE = 'bms-theme-ready-v1' as const;
 
 export const BMS_STATS_THEME_TOKEN_NAMES = [
   '--bg-primary',
@@ -48,4 +49,10 @@ export function buildStatsThemePayload(
 
 export function resolveExactTargetOrigin(entryUrl: string, baseUrl: string): string {
   return new URL(entryUrl, baseUrl).origin;
+}
+
+export function isStatsThemeReadyPayload(value: unknown): boolean {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return Object.keys(record).length === 1 && record.type === BMS_STATS_THEME_READY_MESSAGE_TYPE;
 }

@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { resolveStatsToolkitEntryUrl } from '../runtime/tailnetEnvironment';
 import { useTheme } from './themeContext';
 import {
   buildStatsThemePayload,
+  isStatsThemeReadyPayload,
   resolveExactTargetOrigin,
 } from '../runtime/statsToolkitThemeBridge';
 
@@ -51,6 +52,17 @@ export function StatsToolkitLauncher() {
   useEffect(() => {
     sendTheme();
   }, [sendTheme]);
+
+  useLayoutEffect(() => {
+    if (!entryUrl) return undefined;
+    const frameOrigin = resolveExactTargetOrigin(entryUrl, window.location.href);
+    const listener = (event: MessageEvent<unknown>) => {
+      if (event.source !== frameRef.current?.contentWindow || event.origin !== frameOrigin) return;
+      if (isStatsThemeReadyPayload(event.data)) sendTheme();
+    };
+    window.addEventListener('message', listener);
+    return () => window.removeEventListener('message', listener);
+  }, [entryUrl, sendTheme]);
 
   if (query.isLoading) {
     return <div className="flex min-h-[24rem] items-center justify-center text-sm text-[var(--text-secondary)]">Connecting to BioModStack Stats Toolkit…</div>;

@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   BMS_STATS_THEME_MESSAGE_TYPE,
+  BMS_STATS_THEME_READY_MESSAGE_TYPE,
   BMS_STATS_THEME_TOKEN_NAMES,
   buildStatsThemePayload,
+  isStatsThemeReadyPayload,
   resolveExactTargetOrigin,
 } from '../src/runtime/statsToolkitThemeBridge.js';
 
@@ -31,4 +33,11 @@ test('iframe messages target the exact discovered add-on origin', () => {
     resolveExactTargetOrigin('https://stats.internal.example/embed/', 'https://bms.example/'),
     'https://stats.internal.example',
   );
+});
+
+test('iframe readiness handshake accepts only the exact bounded protocol payload', () => {
+  assert.equal(isStatsThemeReadyPayload({ type: BMS_STATS_THEME_READY_MESSAGE_TYPE }), true);
+  assert.equal(isStatsThemeReadyPayload({ type: BMS_STATS_THEME_READY_MESSAGE_TYPE, extra: true }), false);
+  assert.equal(isStatsThemeReadyPayload({ type: BMS_STATS_THEME_MESSAGE_TYPE }), false);
+  assert.equal(isStatsThemeReadyPayload(null), false);
 });
