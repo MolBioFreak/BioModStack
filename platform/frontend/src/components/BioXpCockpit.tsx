@@ -1,24 +1,19 @@
 import { useMemo, useState } from 'react';
 
 import {
-    type BioXpActiveCommandName,
-    type BioXpCommandRecord,
-    type BioXpCommandPayload,
-    bioXpCommandRecordText,
     bioXpErrorText,
-    useBioXpCommand,
-    useBioXpCommandHistory,
-    useBioXpEmergencyStop,
     useBioXpStatus,
     useConnectBioXp,
     useDisconnectBioXp,
+    useBioXpOperatorActionHistory,
     useBioXpOperatorControlCatalog,
     useInvokeBioXpOperatorAction,
+    useRecoverBioXpMotion,
 } from '../lib/bioxpClient';
 import { BioXpCameraPanel } from './BioXpCameraPanel';
 import { BioXpOperatorControlTabs } from './BioXpOperatorControlTabs';
 import { BioXpQuickDashboard } from './BioXpQuickDashboard';
-import { currentStatusData, deriveCockpitMutationState } from './bioxpCockpitState';
+
 
 type Axis = 'x' | 'y' | 'z' | 'g' | 'door';
 type Operation =
@@ -96,14 +91,13 @@ const actionClass = 'rounded bg-cyan-700 px-3 py-2 text-sm font-semibold hover:b
 
 export function BioXpCockpit() {
     const statusQuery = useBioXpStatus(true);
-    const historyQuery = useBioXpCommandHistory(true);
+    const historyQuery = useBioXpOperatorActionHistory(true);
     const connect = useConnectBioXp();
     const disconnect = useDisconnectBioXp();
-    const executeCommand = useBioXpCommand();
-    const stopCommand = useBioXpCommand();
-    const emergencyStop = useBioXpEmergencyStop();
     const operatorCatalog = useBioXpOperatorControlCatalog(true);
     const invokeOperatorAction = useInvokeBioXpOperatorAction();
+    const emergencyAction = useInvokeBioXpOperatorAction();
+    const recoverMotion = useRecoverBioXpMotion();
     const [manualSteps, setManualSteps] = useState<Record<'x' | 'y' | 'z' | 'g', number>>({
         x: 10000,
         y: 10000,
@@ -117,20 +111,13 @@ export function BioXpCockpit() {
         g: 0,
     });
     const [zPseudoHome, setZPseudoHome] = useState<500 | 65000>(65000);
-    const [controllerAction, setControllerAction] = useState<'claim' | 'recovery' | null>(null);
-
-    const status = currentStatusData(statusQuery);
+    const status = statusQuery.data;
     const connection = status?.connection;
     const active = connection?.active === true;
     const linkConnected = active && connection?.reachable !== false;
     const configured = connection?.configured === true;
     const generation = connection?.generation ?? 0;
-    const available = useMemo(
-        () => new Set(status?.available_commands ?? []),
-        [status?.available_commands],
-    );
-    const isAvailable = (command: BioXpActiveCommandName) => active && available.has(command);
-    const unavailable = status?.unavailable_commands ?? {};
+
     const ownership = connection?.ownership;
     const maintenance = connection?.maintenance_state;
     const ownershipLabel = ownership
@@ -140,49 +127,39 @@ export function BioXpCockpit() {
         ? `Blocked${maintenance.block_reason ? ` — ${maintenance.block_reason}` : ''}`
         : maintenance?.motion_blocked === false ? 'Enabled' : 'Unavailable';
     const recentCommands = useMemo(
-        () => [...(historyQuery.data?.commands ?? [])].slice(-8).reverse(),
-        [historyQuery.data?.commands],
+        () => [...(historyQuery.data?.receipts ?? [])].slice(-8).reverse(),
+        [historyQuery.data?.receipts],
     );
-    const cockpitState = deriveCockpitMutationState<{ detail: string; remote_acknowledged: boolean; status?: string }>({
-        execute: executeCommand,
-        stop: stopCommand,
-        emergency: emergencyStop,
-    });
-    const controllerReceipt = controllerAction === 'claim'
-        && executeCommand.data?.command === 'activate_usb_for_service'
-        ? executeCommand.data
-        : controllerAction === 'recovery'
-            && executeCommand.data?.command === 'recover_motion_non_homing'
-            ? executeCommand.data
-            : null;
-    const busy = cockpitState.normalCommandBlocked;
+    const busy = invokeOperatorAction.isPending || recoverMotion.isPending;
     const connectedLabel = active
         ? connection?.reachable === false ? 'Connection error' : 'Connected'
         : 'Disconnected';
 
-    const send = (payload: BioXpCommandPayload) => executeCommand.mutate(payload);
-
-    const claimTransport = () => {
-        setControllerAction('claim');
-        send({
-            command: 'activate_usb_for_service',
-            expected_generation: generation,
-            idempotency_key: crypto.randomUUID(),
-        });
-    };
-
-    const recoverMotion = () => {
-        setControllerAction('recovery');
-        send({
-            command: 'recover_motion_non_homing',
-            expected_generation: generation,
-            idempotency_key: crypto.randomUUID(),
-        });
-    };
-
     const operatorActionForPath = (path: string) => (operatorCatalog.data?.actions ?? []).find(
         (action) => action.kind === 'primitive' && action.informational_path === path,
     );
+
+    const operatorActionById = (actionId: string) => (operatorCatalog.data?.actions ?? []).find(
+        (action) => action.action_id === actionId,
+    );
+
+    const invokeAction = (
+        actionId: string,
+        inputs: Record<string, unknown>,
+        mutation = invokeOperatorAction,
+    ) => mutation.mutate({
+        actionId,
+        connectionGeneration: generation,
+        ownershipGeneration: operatorCatalog.data?.ownership_generation ?? 0,
+        inputs,
+    });
+
+    const claimTransport = () => invokeAction('meta.activate_motion', {});
+
+    const recoverMotionNonHoming = () => recoverMotion.mutate({
+        generation,
+        reason: 'BMS operator requested exact non-homing recovery',
+    });
 
     const operatorPathForControl = (axis: Axis, operation: Operation): string | null => {
         if (operation === 'move-negative' || operation === 'move-positive') return '/motion/oem/manual/relative';
@@ -199,16 +176,10 @@ export function BioXpCockpit() {
     const invokeOperatorPath = (path: string, inputs: Record<string, unknown>) => {
         const action = operatorActionForPath(path);
         if (!action) return;
-        invokeOperatorAction.mutate({
-            actionId: action.action_id,
-            connectionGeneration: generation,
-            ownershipGeneration: operatorCatalog.data?.ownership_generation ?? 0,
-            inputs,
-        });
+        invokeAction(action.action_id, inputs);
     };
 
     const runControl = (axis: Axis, operation: Operation) => {
-        setControllerAction(null);
         if (operation === 'move-negative' || operation === 'move-positive') {
             if (axis === 'door') return;
             const magnitude = Math.abs(manualSteps[axis]);
@@ -239,11 +210,7 @@ export function BioXpCockpit() {
 
     const stopAxis = (axis: Axis) => invokeOperatorPath('/motion/diagnostics/stop', { axis });
 
-    const latestResult = cockpitState.latestResult;
-    const latestResultText = latestResult && 'command' in latestResult
-        ? bioXpCommandRecordText(latestResult as BioXpCommandRecord)
-        : latestResult?.detail;
-    const error = cockpitState.latestError ?? connect.error ?? disconnect.error;
+    const error = invokeOperatorAction.error ?? recoverMotion.error ?? emergencyAction.error ?? connect.error ?? disconnect.error;
 
     return (
         <div className="space-y-4 p-4 text-slate-100 md:p-6">
@@ -299,43 +266,29 @@ export function BioXpCockpit() {
             <BioXpQuickDashboard connected={active} />
 
             <section className="rounded-xl border border-amber-700/60 bg-amber-950/20 p-4">
-                <h2 className="text-lg font-semibold">Controller Transport & Recovery</h2>
-                <p className="mt-1 text-sm text-slate-400">Claim the robot USB transport first, then clear the non-homing motion latch.</p>
+                <h2 className="text-lg font-semibold">Controller Activation & Recovery</h2>
+                <p className="mt-1 text-sm text-slate-400">Robot-owned serial-206 activation and typed non-homing recovery. BMS does not maintain a second command registry or receipt ledger.</p>
                 <div className="mt-3 flex flex-wrap gap-3">
                     <button
                         type="button"
-                        disabled={!isAvailable('activate_usb_for_service') || busy}
-                        title={unavailable.activate_usb_for_service}
+                        disabled={!active || operatorActionById('meta.activate_motion')?.enabled !== true || busy}
+                        title={operatorActionById('meta.activate_motion')?.disabled_reason ?? 'Robot-owned OEM activation'}
                         onClick={claimTransport}
                         className="rounded bg-amber-700 px-4 py-2 font-semibold hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-35"
-                    >Claim USB Transport</button>
+                    >Activate 24 V / Prepare Motion</button>
                     <button
                         type="button"
-                        disabled={!isAvailable('recover_motion_non_homing') || busy}
-                        title={unavailable.recover_motion_non_homing}
-                        onClick={recoverMotion}
+                        disabled={!active || maintenance?.recovery_required !== true || busy}
+                        title={maintenance?.recovery_required === true ? 'Robot-authoritative non-homing recovery' : 'Recovery is not currently required'}
+                        onClick={recoverMotionNonHoming}
                         className="rounded bg-amber-700 px-4 py-2 font-semibold hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-35"
                     >Non-homing Recovery</button>
                 </div>
-                {unavailable.recover_motion_non_homing && (
-                    <p className="mt-2 break-words text-sm text-amber-200">Recovery unavailable: {unavailable.recover_motion_non_homing}</p>
+                {recoverMotion.error && (
+                    <p role="alert" className="mt-2 break-words text-sm text-red-300">Non-homing recovery failed: {bioXpErrorText(recoverMotion.error)}</p>
                 )}
-                {unavailable.activate_usb_for_service && (
-                    <p className="mt-2 break-words text-sm text-amber-200">USB claim unavailable: {unavailable.activate_usb_for_service}</p>
-                )}
-                {controllerAction === 'claim' && executeCommand.isPending && (
-                    <p className="mt-2 text-sm text-amber-200">Claiming USB transport…</p>
-                )}
-                {controllerAction === 'claim' && executeCommand.error && (
-                    <p role="alert" className="mt-2 break-words text-sm text-red-300">USB claim failed: {bioXpErrorText(executeCommand.error)}</p>
-                )}
-                {controllerAction === 'recovery' && executeCommand.error && (
-                    <p role="alert" className="mt-2 break-words text-sm text-red-300">Non-homing recovery failed: {bioXpErrorText(executeCommand.error)}</p>
-                )}
-                {controllerReceipt && (
-                    <p className="mt-2 break-words text-sm text-cyan-200">
-                        {controllerAction === 'claim' ? 'USB claim result' : 'Non-homing recovery result'}: {bioXpCommandRecordText(controllerReceipt)}
-                    </p>
+                {recoverMotion.data && (
+                    <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded border border-amber-800 p-2 text-xs text-cyan-200">{JSON.stringify(recoverMotion.data, null, 2)}</pre>
                 )}
             </section>
 
@@ -477,52 +430,52 @@ export function BioXpCockpit() {
             <section className="rounded-xl border border-red-800/70 bg-red-950/30 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
-                        <h2 className="text-lg font-semibold text-red-200">Physical Emergency Abort Unavailable</h2>
+                        <h2 className="text-lg font-semibold text-red-200">Physical Aggregate Emergency Stop</h2>
                         <p className="max-w-3xl text-sm text-red-200/70">
-                            {status?.emergency_stop.reason ?? 'No source-grounded OEM physical aggregate abort is mounted.'}
+                            Robot-owned ClassMotor stop across X, Y, Z, gripper, and thermal door with terminal speed readback.
                         </p>
                     </div>
                     <button
                         type="button"
-                        disabled
+                        disabled={!active || operatorActionById('meta.emergency_stop')?.enabled !== true || emergencyAction.isPending}
+                        title={operatorActionById('meta.emergency_stop')?.disabled_reason ?? 'Robot-owned aggregate emergency stop'}
+                        onClick={() => invokeAction('meta.emergency_stop', {}, emergencyAction)}
                         className="rounded bg-red-700 px-5 py-3 font-bold disabled:cursor-not-allowed disabled:opacity-35"
-                    >Emergency Abort Unavailable</button>
+                    >Emergency Stop</button>
                 </div>
+                {emergencyAction.data && (
+                    <pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap rounded border border-red-800 p-2 text-xs text-red-100">{JSON.stringify(emergencyAction.data, null, 2)}</pre>
+                )}
             </section>
 
             <section className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                    <h2 className="text-lg font-semibold">Recent Commands</h2>
-                    <span className="text-xs text-slate-500">Latest 8 BMS relay receipts</span>
+                    <h2 className="text-lg font-semibold">Recent Robot Actions</h2>
+                    <span className="text-xs text-slate-500">Latest 8 robot-owned receipts</span>
                 </div>
                 {recentCommands.length === 0 ? (
-                    <p className="mt-2 text-sm text-slate-400">No commands recorded in this API process.</p>
+                    <p className="mt-2 text-sm text-slate-400">No robot action receipts recorded.</p>
                 ) : (
                     <div className="mt-3 space-y-2">
                         {recentCommands.map((record) => (
                             <article key={record.command_id} className="rounded border border-slate-800 bg-slate-900/60 p-3 text-sm">
                                 <div className="flex flex-wrap items-center justify-between gap-2">
-                                    <strong className="font-mono text-slate-100">{record.command}</strong>
-                                    <span className={record.status === 'delivery_failed' ? 'text-red-300' : 'text-slate-300'}>
-                                        {record.status.replaceAll('_', ' ')} · {new Date(record.finished_at).toLocaleString()}
+                                    <strong className="font-mono text-slate-100">{record.action_id}</strong>
+                                    <span className={record.status === 'failed' || record.status === 'blocked' ? 'text-red-300' : 'text-slate-300'}>
+                                        {record.status.replaceAll('_', ' ')} · {record.finished_at ? new Date(record.finished_at).toLocaleString() : 'in progress'}
                                     </span>
                                 </div>
-                                <p className="mt-1 whitespace-pre-wrap break-words text-slate-200">{bioXpCommandRecordText(record)}</p>
+                                <p className="mt-1 whitespace-pre-wrap break-words text-slate-200">{record.error ?? record.machine_assessment}</p>
                                 <p className="mt-1 text-xs text-slate-400">
-                                    {record.remote_acknowledged ? 'Robot acknowledged' : 'Robot did not acknowledge'} · Effect not verified
+                                    {record.remote_acknowledged ? 'Robot acknowledged' : 'Robot did not acknowledge'} · Machine assessment: {record.machine_assessment}
                                 </p>
                             </article>
                         ))}
                     </div>
                 )}
-                {historyQuery.isError && <p role="alert" className="mt-2 text-sm text-red-300">Command history unavailable: {bioXpErrorText(historyQuery.error)}</p>}
+                {historyQuery.isError && <p role="alert" className="mt-2 text-sm text-red-300">Robot action history unavailable: {bioXpErrorText(historyQuery.error)}</p>}
             </section>
 
-            {latestResult && (
-                <p className={`whitespace-pre-wrap break-words rounded border p-3 text-sm ${latestResult.status === 'delivery_failed' ? 'border-red-800 text-red-300' : latestResult.remote_acknowledged ? 'border-emerald-700 text-emerald-200' : 'border-amber-700 text-amber-200'}`}>
-                    {latestResultText}
-                </p>
-            )}
             {error && <p role="alert" className="rounded border border-red-800 p-3 text-sm text-red-300">{bioXpErrorText(error)}</p>}
             {statusQuery.isError && <p role="alert" className="text-sm text-red-300">BioXP status unavailable.</p>}
         </div>

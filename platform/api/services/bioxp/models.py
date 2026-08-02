@@ -16,45 +16,6 @@ class BioXpProfile(BaseModel):
     api_url: str = Field(min_length=1, max_length=2048)
 
 
-class ControlDecision(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    allowed: bool
-    reasons: tuple[str, ...] = ()
-
-
-class CommandRecord(BaseModel):
-    """Bounded, non-authoritative local history for one normal command."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    command_id: str
-    command: str
-    idempotency_key: str
-    generation: int
-    status: Literal["queued", "acknowledged", "delivered_unacknowledged", "delivery_failed"]
-    started_at: datetime
-    finished_at: datetime
-    remote_acknowledged: bool
-    physical_effect_verified: Literal[False] = False
-    detail: str
-    handler_response: dict[str, Any] | None = None
-
-
-class EmergencyStopResult(BaseModel):
-    """Delivery evidence only; never represents verified physical stop state."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    idempotency_key: str
-    generation: int
-    attempted_at: datetime
-    delivery_attempted: bool
-    remote_acknowledged: bool
-    physical_effect_verified: Literal[False] = False
-    detail: str
-
-
 class BioXpSnapshot(BaseModel):
     """Orthogonal state; unknown facts are represented by ``None``."""
 
@@ -81,8 +42,6 @@ class BioXpSnapshot(BaseModel):
     last_observed_runtime_ready: bool | None = None
     last_observed_hardware_ready: bool | None = None
     last_error: str | None = None
-    controls: dict[str, ControlDecision] = Field(default_factory=dict)
-    command_active: bool = False
     startup_lifecycle: dict[str, Any] | None = None
     maintenance_state: dict[str, Any] | None = None
     ownership: dict[str, Any] | None = None

@@ -39,7 +39,7 @@ def test_bioxp_api_routes_are_registered_when_feature_enabled(monkeypatch) -> No
     bioxp_paths = {path for path in paths if path.startswith("/api/bioxp")}
     assert "/api/bioxp/status" in bioxp_paths
     assert "/api/bioxp/profile" in bioxp_paths
-    assert "/api/bioxp/commands" in bioxp_paths
+    assert "/api/bioxp/connection/recover-motion-non-homing" in bioxp_paths
     assert {
         "/api/bioxp/operator-controls/catalog",
         "/api/bioxp/operator-controls/dashboard",
@@ -49,7 +49,7 @@ def test_bioxp_api_routes_are_registered_when_feature_enabled(monkeypatch) -> No
         "/api/bioxp/operator-controls/receipts/{command_id}",
         "/api/bioxp/operator-controls/receipts/{command_id}/assessment",
     } <= bioxp_paths
-    assert len(bioxp_paths) == 28
+    assert len(bioxp_paths) == 26
     assert not any("interlink" in path or "proxy" in path for path in bioxp_paths)
 
 

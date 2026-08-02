@@ -3,26 +3,29 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, ConfigDict, Field
 
-from services.bioxp.errors import ConnectionStateError, ProfileStoreError, TargetPolicyError
-from services.bioxp.connection import mask_target_url
-from services.bioxp.command_policy import (
-    lifecycle_stage_reasons,
-    maintenance_state_reasons,
-    ownership_state_reasons,
-    required_lifecycle_state_reasons,
+from services.bioxp.errors import (
+    ConnectionStateError,
+    ProfileStoreError,
+    RobotResponseError,
+    RobotTransportError,
+    TargetPolicyError,
 )
+from services.bioxp.connection import mask_target_url
 from services.bioxp.models import BioXpProfile
-from services.bioxp.operator_semantic_quarantine import EMERGENCY_STOP_QUARANTINE_REASON
 from services.bioxp.runtime import BioXpRuntime, bioxp_connection_enabled
 
-from .dependencies import (
-    get_bioxp_runtime,
-    mutations_enabled,
-    require_bioxp_mutation_access,
-)
+from .dependencies import get_bioxp_runtime, mutations_enabled, require_bioxp_mutation_access
 
 router = APIRouter(dependencies=[Depends(require_bioxp_mutation_access)])
+
+
+class RecoverMotionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_generation: int = Field(ge=1)
+    operator_reason: str = Field(min_length=1, max_length=2000)
 
 
 def _public_snapshot(snapshot: Any) -> dict[str, Any]:
@@ -86,53 +89,8 @@ async def delete_profile(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> 
 @router.get("/status")
 async def get_status(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str, Any]:
     snapshot = runtime.connection.snapshot()
-    available: list[str] = []
-    unavailable: dict[str, str] = {}
-    for name, definition in runtime.commands.registry.items():
-        reason: str | None = None
-        if not definition.enabled or definition.route_key is None:
-            reason = definition.disabled_reason or "robot mapping is disabled"
-        elif not mutations_enabled():
-            reason = "mutations are disabled"
-        elif not snapshot.active:
-            reason = "connection is not active"
-        elif snapshot.command_active and name != "stop_axis_diagnostic":
-            reason = "another normal command is active"
-        elif maintenance_reasons := maintenance_state_reasons(definition, snapshot.maintenance_state):
-            reason = "; ".join(maintenance_reasons)
-        elif ownership_reasons := ownership_state_reasons(definition, snapshot.ownership):
-            reason = "; ".join(ownership_reasons)
-        elif required_reasons := required_lifecycle_state_reasons(
-            definition, snapshot.startup_lifecycle
-        ):
-            reason = "; ".join(required_reasons)
-        elif lifecycle_reasons := lifecycle_stage_reasons(definition, snapshot.startup_lifecycle):
-            reason = "; ".join(lifecycle_reasons)
-        elif definition.requires_fresh_observation and snapshot.observation_fresh is not True:
-            reason = "fresh readiness evidence is unavailable"
-        elif definition.requires_runtime_ready and snapshot.runtime_ready is not True:
-            reason = "runtime is not ready"
-        elif definition.requires_hardware_ready and snapshot.hardware_ready is not True:
-            reason = "hardware is not ready"
-        elif definition.requires_runtime_inactive and snapshot.runtime_ready is True:
-            reason = "USB runtime is already active for the managed service"
-        elif definition.required_capability is not None and definition.required_capability not in snapshot.capabilities:
-            reason = f"capability {definition.required_capability!r} is unavailable"
-        if reason is None:
-            available.append(name)
-        else:
-            unavailable[name] = reason
-    available_controls: list[str] = []
     return {
         "connection": _public_snapshot(snapshot),
-        "available_commands": available,
-        "available_controls": available_controls,
-        "unavailable_commands": unavailable,
-        "emergency_stop": {
-            "delivery_available": False,
-            "physical_effect_verifiable": False,
-            "reason": EMERGENCY_STOP_QUARANTINE_REASON,
-        },
         "startup_warnings": list(runtime.startup_warnings),
         "connection_access": {
             "enabled": bioxp_connection_enabled(),
@@ -171,10 +129,29 @@ async def probe(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str,
     return _public_snapshot(snapshot)
 
 
-@router.get("/logs")
-async def get_local_logs(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str, Any]:
-    return {
-        "scope": "bms-local-command-history",
-        "remote_logs_collected": False,
-        "entries": [entry.model_dump(mode="json") for entry in runtime.commands.history()],
-    }
+@router.post("/connection/recover-motion-non-homing")
+async def recover_motion_non_homing(
+    request: RecoverMotionRequest,
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+) -> dict[str, Any]:
+    """Typed thin relay; the robot remains the sole recovery authority."""
+    try:
+        result = await runtime.connection.request_active(
+            "recover_motion_non_homing",
+            expected_generation=request.expected_generation,
+            require_fresh=True,
+            json_data={
+                "run_homing": False,
+                "operator_ack": "RECOVER_MOTION",
+                "operator_reason": request.operator_reason,
+            },
+        )
+        await runtime.connection.probe_status_only()
+    except RobotResponseError as exc:
+        status = exc.status_code if 400 <= exc.status_code < 500 else 502
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    except ConnectionStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (RobotTransportError, TargetPolicyError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc) or exc.__class__.__name__) from exc
+    return result

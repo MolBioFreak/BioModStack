@@ -100,7 +100,6 @@ class BioXpConnectionService:
         self._maintenance_state: dict[str, Any] | None = None
         self._ownership: dict[str, Any] | None = None
         self._last_error: str | None = None
-        self._command_active = False
         self._active_probe_task: asyncio.Task[None] | None = None
 
     async def save_profile(self, profile: BioXpProfile) -> BioXpSnapshot:
@@ -390,7 +389,6 @@ class BioXpConnectionService:
             last_observed_runtime_ready=self._last_runtime_ready,
             last_observed_hardware_ready=self._last_hardware_ready,
             last_error=profile_error or self._last_error,
-            command_active=self._command_active,
             startup_lifecycle=copy.deepcopy(self._startup_lifecycle),
             maintenance_state=copy.deepcopy(self._maintenance_state),
             ownership=copy.deepcopy(self._ownership),
@@ -406,26 +404,6 @@ class BioXpConnectionService:
 
     def load_profile(self) -> BioXpProfile | None:
         return self.profile_store.load()
-
-    def set_command_active(self, active: bool) -> None:
-        self._command_active = active
-
-    def observe_command_response(self, response: object) -> None:
-        if not isinstance(response, dict):
-            return
-        envelope = response.get("detail")
-        payload = envelope if isinstance(envelope, dict) else response
-        lifecycle = payload.get("lifecycle")
-        startup = lifecycle.get("startup") if isinstance(lifecycle, dict) else payload.get("startup")
-        if isinstance(startup, dict):
-            self._startup_lifecycle = copy.deepcopy(startup)
-        found_maintenance, maintenance_state = _find_maintenance_state(payload)
-        if found_maintenance:
-            self._maintenance_state = maintenance_state
-        found_ownership, ownership = _find_named_mapping(payload, "ownership")
-        if found_ownership:
-            self._ownership = ownership
-
 
 def _find_maintenance_state(payload: Mapping[str, Any]) -> tuple[bool, dict[str, Any] | None]:
     """Find the first maintenance_state in bounded robot response envelopes."""
