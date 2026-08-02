@@ -12,7 +12,7 @@ const CLASS_COLORS: Readonly<Record<string, string>> = {
     minimal: '#0ea5e9',
 };
 const MAX_LANDSCAPE_ROWS = 200_000;
-const PAGE_SIZE = 1000;
+const PAGE_SIZE = 500;
 
 type ResidueMetric = Extract<MetricLayer, { descriptor: { dimension: 'residue-scalar' } }>;
 

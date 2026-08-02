@@ -224,6 +224,12 @@ export default function FrustraMpnnResultsViewer({
         },
     });
     const state = resultContext.usesChildReceipt ? (receipt.data?.status ?? job.status) : job.status;
+    const assignedGpu = detail.data?.assigned_gpu;
+    const assignedGpuLabel = assignedGpu
+        ? assignedGpu.physical_device_id == null
+            ? assignedGpu.task_visible_device_index == null ? 'unassigned' : `visible GPU ${assignedGpu.task_visible_device_index}`
+            : `GPU ${assignedGpu.physical_device_id}`
+        : receipt.data?.assigned_gpu == null ? 'unassigned' : `GPU ${receipt.data.assigned_gpu}`;
     const nextResultJobId = nextReceipt.data?.result_job_id ?? null;
     const explicitState = state === 'queued'
         ? 'queued'
@@ -269,7 +275,7 @@ export default function FrustraMpnnResultsViewer({
                         ['Requested', receipt.data?.created_at ?? job.created_at],
                         ['Status', explicitState],
                         ['Runtime identity', detail.data ? shortHash(String(detail.data.runtime_identity.sif_sha256 ?? detail.data.request_sha256)) : 'pending'],
-                        ['Assigned GPU', (detail.data?.assigned_gpu ?? receipt.data?.assigned_gpu) == null ? 'unassigned' : `GPU ${detail.data?.assigned_gpu ?? receipt.data?.assigned_gpu}`],
+                        ['Assigned GPU', assignedGpuLabel],
                         ['Failure class', detail.data?.failure_class ?? (canonicalSucceeded ? 'none' : state === 'failed' ? 'scheduler_failure' : 'none')],
                     ].map(([label, value]) => <div key={label} className="rounded-xl border border-slate-800 bg-slate-900/60 p-3"><div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{label}</div><div className="mt-1 break-words text-sm text-slate-200">{value}</div></div>)}
                 </section>
