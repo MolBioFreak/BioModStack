@@ -300,6 +300,7 @@ def test_confornets_nextflow_static_contract_is_wired_without_stub_outputs() -> 
     assert "RunConforNets" in module_text
     assert "FinalizeConforNetsOutputs" in module_text
     assert "process PrepConforNetsRequest {\n    label 'local_cpu'" in module_text
+    assert "process FinalizeConforNetsOutputs {\n    label 'local_cpu'" in module_text
     assert "python3 ${params.code_root}/scripts/prep_confornets_request.py" in module_text
     assert "prep_confornets_request.py" in module_text
     assert "run_confornets_inference.py" in module_text
