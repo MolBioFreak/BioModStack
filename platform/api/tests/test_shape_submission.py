@@ -502,3 +502,24 @@ async def test_staged_bundle_validator_emits_hash_bound_receipt(tmp_path: Path) 
         assert "request and geometry manifest hash disagree" in rejected.stderr
     finally:
         await engine.dispose()
+
+
+def test_shape_workflow_supplies_typed_esmfold2_input_tuple() -> None:
+    workflow = (Path(__file__).parents[3] / "workflows" / "shape_blueprint_design.nf").read_text(
+        encoding="utf-8"
+    )
+
+    assert (
+        "tuple([producer_method: engine, producer_artifact_id: name], sequence, name, source)"
+        in workflow
+    )
+    assert (
+        "ESMFold2Predict(shape_sequences.map { producer_meta, sequence, name, _source -> "
+        "tuple(producer_meta, sequence, name) })"
+        in workflow
+    )
+    assert (
+        "sequence_sources = shape_sequences.map { _producer_meta, _sequence, name, source -> "
+        "tuple(name, source) }"
+        in workflow
+    )

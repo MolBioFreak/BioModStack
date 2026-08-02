@@ -4,6 +4,18 @@ include { ValidateShapeBundle; RunShapeRFD3; RunShapeProteinMPNN; RunShapeFAMPNN
 include { FilterRFD3 } from '../modules/rfd3'
 include { ESMFold2Predict } from '../modules/esmfold2_experimental'
 
+
+def loadShapeSequenceRecords(bundle, engine) {
+    def payload = new groovy.json.JsonSlurper().parse(new File(bundle.toString(), 'sequence_records.json'))
+    payload.records.collect { record ->
+        def sequence = record.sequence as String
+        def name = record.sequence_name as String
+        def source = bundle.resolve(record.source_backbone as String)
+        tuple([producer_method: engine, producer_artifact_id: name], sequence, name, source)
+    }
+}
+
+
 workflow {
     if (!params.shape_request_path) {
         error "--shape_request_path is required"
@@ -45,16 +57,14 @@ workflow {
     )
 
     proteinmpnn_sequences = RunShapeProteinMPNN.out.bundle.flatMap { bundle ->
-        def payload = new groovy.json.JsonSlurper().parse(new File(bundle.toString(), 'sequence_records.json'))
-        payload.records.collect { record -> tuple(record.sequence as String, record.sequence_name as String, bundle.resolve(record.source_backbone as String)) }
+        loadShapeSequenceRecords(bundle, 'proteinmpnn')
     }
     fampnn_sequences = RunShapeFAMPNN.out.bundle.flatMap { bundle ->
-        def payload = new groovy.json.JsonSlurper().parse(new File(bundle.toString(), 'sequence_records.json'))
-        payload.records.collect { record -> tuple(record.sequence as String, record.sequence_name as String, bundle.resolve(record.source_backbone as String)) }
+        loadShapeSequenceRecords(bundle, 'fampnn')
     }
     shape_sequences = proteinmpnn_sequences.mix(fampnn_sequences)
-    ESMFold2Predict(shape_sequences.map { sequence, name, _source -> tuple(sequence, name) })
-    sequence_sources = shape_sequences.map { _sequence, name, source -> tuple(name, source) }
+    ESMFold2Predict(shape_sequences.map { producer_meta, sequence, name, _source -> tuple(producer_meta, sequence, name) })
+    sequence_sources = shape_sequences.map { _producer_meta, _sequence, name, source -> tuple(name, source) }
     evaluated_inputs = ESMFold2Predict.out.shape_result.join(sequence_sources)
     EvaluateShapeCandidate(
         evaluated_inputs,
