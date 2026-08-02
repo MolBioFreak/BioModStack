@@ -184,6 +184,18 @@ export function BioXpCockpit() {
         (action) => action.kind === 'primitive' && action.informational_path === path,
     );
 
+    const operatorPathForControl = (axis: Axis, operation: Operation): string | null => {
+        if (operation === 'move-negative' || operation === 'move-positive') return '/motion/oem/manual/relative';
+        if (operation === 'home' || operation === 'commission-home') return '/motion/oem/manual/home';
+        if (axis === 'g') {
+            return ({ open: '/motion/gripper/open', close: '/motion/gripper/close', 'open-wide': '/motion/gripper/open_wide' } as const)[operation as 'open' | 'close' | 'open-wide'] ?? null;
+        }
+        if (axis === 'door') {
+            return ({ open: '/motion/thermal_door/open', close: '/motion/thermal_door/close' } as const)[operation as 'open' | 'close'] ?? null;
+        }
+        return null;
+    };
+
     const invokeOperatorPath = (path: string, inputs: Record<string, unknown>) => {
         const action = operatorActionForPath(path);
         if (!action) return;
@@ -336,13 +348,13 @@ export function BioXpCockpit() {
                 <div className="mt-3 flex flex-wrap gap-2">
                     <button
                         type="button"
-                        disabled={!active || !operatorActionForPath('/motion/oem/machine_config') || invokeOperatorAction.isPending}
+                        disabled={!active || operatorActionForPath('/motion/oem/machine_config')?.enabled !== true || invokeOperatorAction.isPending}
                         onClick={() => invokeOperatorPath('/motion/oem/machine_config', {})}
                         className={actionClass}
                     >Show OEM axis/config tables</button>
                     <button
                         type="button"
-                        disabled={!active || !operatorActionForPath('/motion/oem/position_table') || invokeOperatorAction.isPending}
+                        disabled={!active || operatorActionForPath('/motion/oem/position_table')?.enabled !== true || invokeOperatorAction.isPending}
                         onClick={() => invokeOperatorPath('/motion/oem/position_table', {})}
                         className={actionClass}
                     >Show OEM position table</button>
@@ -354,7 +366,7 @@ export function BioXpCockpit() {
                                 <h3 className="font-semibold">{label}</h3>
                                 <button
                                     type="button"
-                                    disabled={!active || !operatorActionForPath('/motion/diagnostics/stop') || invokeOperatorAction.isPending}
+                                    disabled={!active || operatorActionForPath('/motion/diagnostics/stop')?.enabled !== true || invokeOperatorAction.isPending}
                                     title="Immediate OEM motor stop for this component"
                                     onClick={() => stopAxis(axis)}
                                     className="rounded bg-red-800 px-3 py-1.5 text-sm font-semibold hover:bg-red-700 disabled:opacity-35"
@@ -396,7 +408,7 @@ export function BioXpCockpit() {
                                             />
                                             <button
                                                 type="button"
-                                                disabled={!active || !operatorActionForPath('/motion/oem/manual/absolute') || invokeOperatorAction.isPending}
+                                                disabled={!active || operatorActionForPath('/motion/oem/manual/absolute')?.enabled !== true || invokeOperatorAction.isPending}
                                                 onClick={() => runAbsolute(axis)}
                                                 className={actionClass}
                                             >Go absolute</button>
@@ -418,16 +430,21 @@ export function BioXpCockpit() {
                                 </div>
                             )}
                             <div className="mt-3 flex flex-wrap gap-2">
-                                {controls.map(({ label: controlLabel, operation }) => (
-                                    <button
-                                        key={operation}
-                                        type="button"
-                                        disabled={!active || operatorCatalog.isLoading || invokeOperatorAction.isPending}
-                                        title="Robot-owned exact OEM action"
-                                        onClick={() => runControl(axis, operation)}
-                                        className={actionClass}
-                                    >{controlLabel}</button>
-                                ))}
+                                {controls.map(({ label: controlLabel, operation }) => {
+                                    const path = operatorPathForControl(axis, operation);
+                                    const action = path ? operatorActionForPath(path) : null;
+                                    const unavailableReason = action?.disabled_reason ?? action?.unavailable_reason ?? 'Robot action unavailable.';
+                                    return (
+                                        <button
+                                            key={operation}
+                                            type="button"
+                                            disabled={!active || operatorCatalog.isLoading || invokeOperatorAction.isPending || action?.enabled !== true}
+                                            title={action?.enabled === true ? 'Robot-owned exact OEM action' : unavailableReason}
+                                            onClick={() => runControl(axis, operation)}
+                                            className={actionClass}
+                                        >{controlLabel}</button>
+                                    );
+                                })}
                             </div>
                         </article>
                     ))}
