@@ -270,9 +270,9 @@ export const createFrustraMpnnViewerMetrics = (input: FrustraMpnnViewerMetricInp
                 formula: 'score(slot where mutation_aa = wild type)',
                 valueRange: [-3, 3],
                 categories: {
-                    high: { label: 'Highly frustrated (≥ 0.58)', color: CLASS_COLORS.high },
-                    neutral: { label: 'Neutral (-1.0 to 0.58)', color: CLASS_COLORS.neutral },
-                    minimal: { label: 'Minimally frustrated (≤ -1.0)', color: CLASS_COLORS.minimal },
+                    high: { label: 'Highly frustrated (canonical policy)', color: CLASS_COLORS.high },
+                    neutral: { label: 'Neutral (canonical policy)', color: CLASS_COLORS.neutral },
+                    minimal: { label: 'Minimally frustrated (canonical policy)', color: CLASS_COLORS.minimal },
                 },
                 palette: { colors: [CLASS_COLORS.high, CLASS_COLORS.neutral, CLASS_COLORS.minimal], domain: [-3, 3], missingColor: '#475569' },
             },

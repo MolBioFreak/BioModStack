@@ -104,7 +104,7 @@ test('derived FrustraMPNN layers state formulas and exclude the native slot', ()
     assert.equal(maximumDelta.descriptor.direction, 'neutral');
 });
 
-test('native FrustraMPNN workbench legend renders categorical threshold classes', () => {
+test('native FrustraMPNN workbench legend renders classes without duplicating threshold policy', () => {
     const bundle = createFrustraMpnnViewerMetrics({
         requestId: 'request-1', candidateId: 'candidate-1', residues: [residue()], structureMap: structureMap(),
     });
@@ -112,8 +112,8 @@ test('native FrustraMPNN workbench legend renders categorical threshold classes'
     assert.match(html, /Highly frustrated/);
     assert.match(html, /Neutral/);
     assert.match(html, /Minimally frustrated/);
-    assert.match(html, /≤ -1\.0/);
-    assert.match(html, /≥ 0\.58/);
+    assert.match(html, /canonical policy/);
+    assert.doesNotMatch(html, /(?:-1\.0|0\.58)/);
 });
 
 test('FrustraMPNN layers pass the real metric registry and Molstar projection seam', () => {
