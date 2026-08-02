@@ -31,7 +31,7 @@ from database import (
     get_session,
 )
 from services.frustrampnn.analytics import multidimensional_points, parse_dataset_ids
-from services.frustrampnn.comparison import ComparisonValidationError, compare_landscapes
+from services.frustrampnn.comparison import ComparisonValidationError, compare_landscape_set, compare_landscapes
 from services.frustrampnn.derived import (
     DerivedPersistenceError,
     load_persisted_landscape,
@@ -77,6 +77,14 @@ class ComparisonCreateRequest(BaseModel):
     reference_invocation_id: str = Field(min_length=1)
     target_job_id: str = Field(min_length=1)
     target_invocation_id: str = Field(min_length=1)
+
+
+class MultiComparisonCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reference_job_id: str = Field(min_length=1)
+    reference_invocation_id: str = Field(min_length=1)
+    targets: list[ComparisonCreateRequest] = Field(min_length=1)
 
 
 class GuidanceCreateRequest(BaseModel):
@@ -445,6 +453,35 @@ async def create_comparison(
         payload = compare_landscapes(reference_landscape, target_landscape, comparison_id=comparison_id)
         stored = await persist_comparison(
             session, payload, reference_result=reference_result, target_result=target_result,
+        )
+        await session.commit()
+        return _comparison_payload(stored)
+    except (ComparisonValidationError, DerivedPersistenceError) as exc:
+        await session.rollback()
+        code = 409 if "conflict" in str(exc).lower() else 422
+        raise HTTPException(code, str(exc)) from exc
+
+
+@router.post("/comparisons/multi", status_code=status.HTTP_201_CREATED)
+async def create_multi_comparison(
+    body: MultiComparisonCreateRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        reference_result = await _scoped_result(body.reference_invocation_id, body.reference_job_id, session)
+        target_results = [
+            await _scoped_result(item.target_invocation_id, item.target_job_id, session)
+            for item in body.targets
+        ]
+        reference_landscape = await load_persisted_landscape(session, reference_result)
+        target_landscapes = [await load_persisted_landscape(session, result) for result in target_results]
+        comparison_id = "cmp-" + canonical_sha256([
+            reference_landscape["landscape_sha256"],
+            *[landscape["landscape_sha256"] for landscape in target_landscapes],
+        ])[:32]
+        payload = compare_landscape_set(reference_landscape, target_landscapes, comparison_id=comparison_id)
+        stored = await persist_comparison(
+            session, payload, reference_result=reference_result, target_result=target_results[0],
         )
         await session.commit()
         return _comparison_payload(stored)

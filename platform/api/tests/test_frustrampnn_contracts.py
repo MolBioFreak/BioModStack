@@ -19,6 +19,7 @@ EXPECTED_SCHEMAS = {
     "frustrampnn_result_manifest_v1.schema.json",
     "frustrampnn_comparison_v1.schema.json",
     "frustrampnn_guidance_v1.schema.json",
+    "frustrampnn_multistate_comparison_v1.schema.json",
 }
 
 

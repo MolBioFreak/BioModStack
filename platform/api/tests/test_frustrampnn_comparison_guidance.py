@@ -166,6 +166,31 @@ def test_guidance_rejects_legacy_landscapes_without_global_configuration():
         )
 
 
+def test_multi_state_comparison_keeps_target_tracks_and_missingness_separate():
+    from services.frustrampnn.comparison import compare_landscape_set
+    from services.frustrampnn.contracts import validate_schema
+
+    reference = _landscape()
+    target_one = copy.deepcopy(reference)
+    target_one["landscape_id"] = "target-one"
+    target_one["residues"][0]["slots"][0]["score"] = -2.5
+    target_two = copy.deepcopy(reference)
+    target_two["landscape_id"] = "target-two"
+    target_two["residues"][1]["slots"][0]["score"] = None
+    target_two["residues"][1]["slots"][0]["scoreable"] = False
+    target_two["residues"][1]["slots"][0]["missingness_reason"] = "runtime_missing"
+
+    result = compare_landscape_set(reference, [target_one, target_two], comparison_id="cmp-multi")
+    validate_schema("frustrampnn_multistate_comparison_v1", result)
+
+    assert result["comparison_mode"] == "multi_state"
+    assert len(result["target_landscape_sha256s"]) == 2
+    assert len(result["rows"]) == 4
+    missing = [row for row in result["rows"] if "target_missing" in row["missingness_by_target"]]
+    assert len(missing) == 1
+    assert len(missing[0]["targets"]) == 2
+
+
 def test_guidance_rejects_ambiguous_optimize_frustration_objective():
     from services.frustrampnn.guidance import GuidanceValidationError, build_guidance_plan
 
@@ -345,6 +370,24 @@ async def test_comparison_and_guidance_api_is_persisted_and_retrievable(derived_
         comparison = comparison_response.json()
         assert comparison["persisted"] is True
         comparison_id = comparison["comparison_id"]
+        multi_response = await client.post(
+            "/api/frustrampnn/comparisons/multi",
+            json={
+                "reference_job_id": "job-derived",
+                "reference_invocation_id": "invoke-derived",
+                "targets": [
+                    {"reference_job_id": "job-derived", "reference_invocation_id": "invoke-derived", "target_job_id": "job-derived", "target_invocation_id": "invoke-derived"},
+                    {"reference_job_id": "job-derived", "reference_invocation_id": "invoke-derived", "target_job_id": "job-derived", "target_invocation_id": "invoke-derived"},
+                ],
+            },
+        )
+        assert multi_response.status_code == 201, multi_response.text
+        multi = multi_response.json()
+        assert multi["comparison_mode"] == "multi_state"
+        assert len(multi["target_landscape_sha256s"]) == 2
+        multi_rows = await client.get(f"/api/frustrampnn/comparisons/{multi['comparison_id']}/rows")
+        assert multi_rows.status_code == 200
+        assert multi_rows.json()["total"] == 4
         rows_response = await client.get(f"/api/frustrampnn/comparisons/{comparison_id}/rows", params={"limit": 2})
         assert rows_response.status_code == 200
         assert rows_response.json()["total"] == 4

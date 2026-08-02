@@ -46,6 +46,7 @@ SCHEMA_FILENAMES = {
     "frustrampnn_result_manifest_v1": "frustrampnn_result_manifest_v1.schema.json",
     "frustrampnn_comparison_v1": "frustrampnn_comparison_v1.schema.json",
     "frustrampnn_guidance_v1": "frustrampnn_guidance_v1.schema.json",
+    "frustrampnn_multistate_comparison_v1": "frustrampnn_multistate_comparison_v1.schema.json",
 }
 _SCHEMA_ROOT = Path(__file__).resolve().parents[4] / "schemas" / "frustrampnn"
 

@@ -159,6 +159,14 @@ async def persist_comparison(
         identity = dict(row.get("residue_key") or {})
         reference = dict(row.get("reference") or {})
         target = dict(row.get("target") or {})
+        if not target and isinstance(row.get("targets"), list) and row["targets"]:
+            target = dict(row["targets"][0] or {})
+        raw_score_delta = row.get("raw_score_delta")
+        if raw_score_delta is None and isinstance(row.get("raw_score_deltas"), list) and row["raw_score_deltas"]:
+            raw_score_delta = row["raw_score_deltas"][0]
+        classification_transition = row.get("classification_transition")
+        if classification_transition is None and isinstance(row.get("classification_transitions"), list) and row["classification_transitions"]:
+            classification_transition = row["classification_transitions"][0]
         session.add(FrustraMPNNComparisonRow(
             id=canonical_sha256(["frustrampnn-comparison-row-v1", comparison_id, index]),
             comparison_id=comparison_id,
@@ -174,10 +182,10 @@ async def persist_comparison(
             biological_status=str(row.get("biological_status")),
             reference_score=reference.get("score"),
             target_score=target.get("score"),
-            raw_score_delta=row.get("raw_score_delta"),
+            raw_score_delta=raw_score_delta,
             reference_class=reference.get("class"),
             target_class=target.get("class"),
-            classification_transition=row.get("classification_transition"),
+            classification_transition=classification_transition,
             row_json=dict(row),
         ))
     return model
