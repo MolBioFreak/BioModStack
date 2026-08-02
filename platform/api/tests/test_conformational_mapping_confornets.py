@@ -497,6 +497,32 @@ def test_cm4_006_missing_or_extra_coordinate_fails(tmp_path: Path) -> None:
     assert "basename collision" in result.stderr.lower()
 
 
+def test_native_tree_allows_distinct_run_scoped_artifacts_with_shared_basenames(
+    tmp_path: Path,
+) -> None:
+    spec = importlib.util.spec_from_file_location(
+        "finalize_confornets_conformational_mapping", FINALIZER
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    native = tmp_path / "native"
+    native.mkdir()
+    for required in module._LEGACY_REQUIRED:
+        (native / required).write_bytes(b"{}")
+    for run_index, payload in ((0, b"run-zero"), (1, b"run-one")):
+        run_dir = native / "raw" / f"run_{run_index}"
+        run_dir.mkdir(parents=True)
+        (run_dir / "sample_0.cif").write_bytes(payload)
+        (run_dir / "training_loss.csv").write_bytes(payload)
+
+    files = module._validate_native_tree(native)
+    assert "raw/run_0/sample_0.cif" in files
+    assert "raw/run_1/sample_0.cif" in files
+
+
+
 def test_cm4_007_placeholder_bfactor_not_confidence(tmp_path: Path) -> None:
     result, output = _run_finalizer(tmp_path)
     assert result.returncode == 0, result.stderr
