@@ -439,6 +439,8 @@ def test_axis_diagnostic_execution_holds_generation_lease_and_forwards_only_type
     class Client:
         async def request(self, route_key, *, json_data):
             events.append(("request", route_key, json_data))
+            if route_key == "collect_hardware_snapshot":
+                return {"ok": True, "published": True, "snapshot_id": "post-axis-13"}
             return {
                 "ok": True,
                 "axis": "x",
@@ -502,6 +504,7 @@ def test_axis_diagnostic_execution_holds_generation_lease_and_forwards_only_type
             "reason": "BMS operator requested x move-positive",
         }),
         ("observe", "x", "move-positive"),
+        ("request", "collect_hardware_snapshot", None),
         ("lease-exit", 13),
     ]
 
