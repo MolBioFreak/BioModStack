@@ -63,6 +63,51 @@ def test_upstream_ledger_accepts_instrumented_runtime_coordinates() -> None:
         module._validate_upstream_entry_shape(entry)
 
 
+def test_mse_multirun_job_ordinal_maps_to_single_requested_confornet_axis() -> None:
+    spec = importlib.util.spec_from_file_location("bind_confornets_output_ledger", BINDER)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    planned = {
+        "backend": "confornets", "target_id": "registered-target", "task": "mse",
+        "test_case_id": "case", "reference_id": "reference", "run_index": 1,
+        "confornet_index": 0, "saved_step": 300, "sample_index": 4,
+    }
+    observed = {**planned, "confornet_index": 1}
+    entry = {
+        "coordinates": observed,
+        "runtime_coordinates": {
+            key: value for key, value in observed.items() if key != "backend"
+        } | {"target_id": "native-target"},
+    }
+
+    assert module._canonicalize_mse_run_coordinate(entry, [planned]) == planned
+
+
+def test_mse_multirun_mapping_rejects_ambiguous_confornet_plan() -> None:
+    spec = importlib.util.spec_from_file_location("bind_confornets_output_ledger", BINDER)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    planned = {
+        "backend": "confornets", "target_id": "registered-target", "task": "mse",
+        "test_case_id": "case", "reference_id": "reference", "run_index": 1,
+        "confornet_index": 0, "saved_step": 300, "sample_index": 4,
+    }
+    observed = {**planned, "confornet_index": 1}
+    entry = {
+        "coordinates": observed,
+        "runtime_coordinates": {
+            key: value for key, value in observed.items() if key != "backend"
+        } | {"target_id": "native-target"},
+    }
+
+    with pytest.raises(module.LedgerError, match="does not map uniquely"):
+        module._canonicalize_mse_run_coordinate(
+            entry, [planned, {**planned, "confornet_index": 1}]
+        )
+
+
 def test_canonical_runtime_maps_native_target_to_registered_target() -> None:
     prep = (REPO_ROOT / "scripts" / "prep_canonical_confornets_request.py").read_text(
         encoding="utf-8"
