@@ -29,6 +29,27 @@ def test_sync_units_make_sixty_second_policy_obvious() -> None:
     assert f"ExecStart=/usr/bin/env python3 {MODULE_PATH} --once" in service
 
 
+def test_install_sync_units_uses_a_stable_libexec_copy(tmp_path: Path, monkeypatch) -> None:
+    sync = load_module()
+    calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(sync, "_run", lambda _cwd, *command, **kwargs: calls.append(command))
+
+    systemd_dir = tmp_path / "systemd"
+    libexec_dir = tmp_path / "libexec"
+    sync.install_sync_units(
+        REPO_ROOT,
+        systemd_dir,
+        state_dir=tmp_path / "state",
+        libexec_dir=libexec_dir,
+    )
+
+    installed_script = libexec_dir / "biomodstack_dev_sync.py"
+    assert installed_script.read_bytes() == MODULE_PATH.read_bytes()
+    service = (systemd_dir / "biomodstack-dev-sync.service").read_text(encoding="utf-8")
+    assert f"ExecStart=/usr/bin/env python3 {installed_script} --once" in service
+    assert ("systemctl", "--user", "enable", "--now", "biomodstack-dev-sync.timer") in calls
+
+
 def test_plan_sync_fast_forwards_when_remote_is_newer() -> None:
     sync = load_module()
 

@@ -54,9 +54,9 @@ def plan_sync(
     return "idle"
 
 
-def render_sync_units(project_root: Path) -> dict[str, str]:
+def render_sync_units(project_root: Path, executable_path: Path | None = None) -> dict[str, str]:
     root = project_root.resolve()
-    script = root / "scripts" / "biomodstack_dev_sync.py"
+    script = (executable_path or (root / "scripts" / "biomodstack_dev_sync.py")).resolve()
     service = dedent(
         f"""\
         [Unit]
@@ -201,14 +201,40 @@ def sync_once(root: Path, state_dir: Path) -> SyncDecision:
         return decision
 
 
-def install_units(root: Path, systemd_dir: Path) -> list[Path]:
+def _atomic_copy(source: Path, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=target.parent, prefix=f".{target.name}.", delete=False) as handle:
+        temp_path = Path(handle.name)
+        handle.write(source.read_bytes())
+        handle.flush()
+        os.fsync(handle.fileno())
+    temp_path.chmod(0o755)
+    os.replace(temp_path, target)
+
+
+def install_sync_units(
+    root: Path,
+    systemd_dir: Path,
+    *,
+    state_dir: Path = DEFAULT_STATE_DIR,
+    libexec_dir: Path | None = None,
+) -> list[Path]:
+    installed_script = (libexec_dir or (Path.home() / ".local" / "libexec" / "biomodstack")) / "biomodstack_dev_sync.py"
+    _atomic_copy(root / "scripts" / "biomodstack_dev_sync.py", installed_script)
     systemd_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
-    for name, content in render_sync_units(root).items():
+    for name, content in render_sync_units(root, installed_script).items():
         path = systemd_dir / name
         path.write_text(content, encoding="utf-8")
         written.append(path)
+    _run(root, "systemctl", "--user", "daemon-reload")
+    _run(root, "systemctl", "--user", "enable", "--now", SYNC_TIMER)
     return written
+
+
+def install_units(root: Path, systemd_dir: Path) -> list[Path]:
+    """Compatibility wrapper for older callers."""
+    return install_sync_units(root, systemd_dir)
 
 
 def main() -> int:
@@ -221,9 +247,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         if args.install:
-            install_units(args.root, args.systemd_dir)
-            subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
-            subprocess.run(["systemctl", "--user", "enable", "--now", SYNC_TIMER], check=True)
+            install_sync_units(args.root, args.systemd_dir, state_dir=args.state_dir)
             print(f"Installed {SYNC_TIMER}: origin/test is checked every {SYNC_INTERVAL_SECONDS} seconds")
             return 0
         if args.once:
