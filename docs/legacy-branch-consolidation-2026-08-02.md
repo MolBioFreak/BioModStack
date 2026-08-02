@@ -1,7 +1,8 @@
 # Legacy branch consolidation — 2026-08-02
 
 **Branch:** `legacy/combined-discrepancies-20260802`
-**Canonical base:** `test` at `41db41681e538a042e301fb0185411b1514a53aa`
+**Initial canonical ancestor:** `8218384b9ffe27241155a4387777a58945a9cfc0`  
+**Canonical test merged after consolidation:** `15a74e27de7e0d297958c805aaf48573bb2ace2b`
 
 This is an archival, non-deployment branch that consolidates the remaining divergent historical source branches into one recoverable working tree.
 
