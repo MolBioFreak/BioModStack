@@ -15,6 +15,8 @@ from typing import Mapping
 
 BASE_SAMPLER_SHA256 = "e64fd42242422fa40ee0112a031911f462b13403b3f8d46ae49879d569b9314f"
 DEFAULT_CHECKPOINT = Path("/foundry/checkpoints/rfd3_latest.ckpt")
+GUIDANCE_SOURCE = Path(__file__).with_name("shape_guidance.py")
+SAMPLER_SOURCE = Path(__file__).with_name("rfd3_shape_sampler.py")
 
 
 def _canonical(payload: object) -> bytes:
@@ -78,7 +80,7 @@ def run_shape_rfd3(
     checkpoint_path: Path = DEFAULT_CHECKPOINT,
     environment: Mapping[str, str] | None = None,
     num_timesteps: int = 200,
-    guidance_step_size: float = 0.1,
+    guidance_step_size: float = 0.2,
 ) -> dict:
     request, manifest = validate_request(request_path, manifest_path)
     if _sha256(points_path) != manifest.get("point_pool_sha256"):
@@ -113,6 +115,7 @@ def run_shape_rfd3(
         "inference_sampler.kind=shape",
         f"inference_sampler.num_timesteps={num_timesteps}",
         f"+inference_sampler.shape_step_size={guidance_step_size}",
+        "+inference_sampler.shape_max_update=0.5",
         f"+inference_sampler.shape_manifest_path={manifest_path.resolve()}",
         f"+inference_sampler.shape_points_path={points_path.resolve()}",
         f"+inference_sampler.shape_sdf_path={sdf_path.resolve()}",
@@ -142,6 +145,8 @@ def run_shape_rfd3(
             "seed": request["seed"],
             "num_timesteps": num_timesteps,
             "guidance_step_size": guidance_step_size,
+            "shape_guidance_sha256": _sha256(GUIDANCE_SOURCE),
+            "shape_sampler_sha256": _sha256(SAMPLER_SOURCE),
         }
         receipt_path.parent.mkdir(parents=True, exist_ok=True)
         receipt_path.write_bytes(_canonical(failure) + b"\n")
@@ -173,6 +178,8 @@ def run_shape_rfd3(
         "seed": request["seed"],
         "num_timesteps": num_timesteps,
         "guidance_step_size": guidance_step_size,
+        "shape_guidance_sha256": _sha256(GUIDANCE_SOURCE),
+        "shape_sampler_sha256": _sha256(SAMPLER_SOURCE),
         "output_backbones": [path.name for path in structures],
         "guidance_steps_receipt": guidance_receipt.name,
     }
@@ -192,7 +199,7 @@ def main() -> int:
     parser.add_argument("--executable", default="rfd3")
     parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT)
     parser.add_argument("--num-timesteps", type=int, default=200)
-    parser.add_argument("--guidance-step-size", type=float, default=0.1)
+    parser.add_argument("--guidance-step-size", type=float, default=0.2)
     args = parser.parse_args()
     run_shape_rfd3(
         request_path=args.request,
