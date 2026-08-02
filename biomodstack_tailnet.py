@@ -48,6 +48,8 @@ SUPPORTED_ENVIRONMENTS = ("development", "production")
 CANONICAL_DEVELOPMENT_ROOT = Path("/home/dalab/biomodstack/dev-test-canonical")
 CANONICAL_PRODUCTION_ROOT = Path("/home/dalab/biomodstack/prod-main-canonical")
 CONTROL_PATH = "/api/tailnet-environment"
+PRODUCTION_API_PORT = 18000
+WORKFLOW_ADAPTER_PORT = 18001
 DEFAULT_CONTROL_TARGET = "http://127.0.0.1:18001"
 LEGACY_CONTROL_TARGET = "http://127.0.0.1:8001/api/workflow-adapter/tailnet-environment"
 PRIOR_LOOPBACK_CONTROL_TARGET = "http://127.0.0.2:8001"
@@ -883,7 +885,7 @@ def _install_operator_development_frontend(root: Path, mutation_ledger: set[str]
 def _adapter_matches_root(root: Path) -> bool:
     expected = str((root / "platform" / "api").resolve())
     revision = _git_revision(root)
-    reports = _exclusive_listener_reports(8001)
+    reports = _exclusive_listener_reports(WORKFLOW_ADAPTER_PORT)
     if not reports:
         return False
     for report in reports:
@@ -965,7 +967,7 @@ def _adapter_identity_policy_matches(
     runtime_revision: str,
     reports: list[dict[str, object]] | None = None,
 ) -> bool:
-    addresses = _listener_bind_addresses(8001)
+    addresses = _listener_bind_addresses(WORKFLOW_ADAPTER_PORT)
     if addresses not in ({"127.0.0.1"}, {"::1"}, {"127.0.0.1", "::1"}):
         return False
     expected_cwd = str((root / "platform" / "api").resolve())
@@ -974,13 +976,13 @@ def _adapter_identity_policy_matches(
     expected_uvicorn = (root / "platform" / "api" / ".venv" / "bin" / "uvicorn").resolve()
     expected_args = [
         "workflow_adapter_app:app",
-        "--port", "8001",
+        "--port", str(WORKFLOW_ADAPTER_PORT),
         "--host", "127.0.0.1",
         "--no-proxy-headers",
         "--no-access-log",
     ]
     if reports is None:
-        reports = _exclusive_listener_reports(8001)
+        reports = _exclusive_listener_reports(WORKFLOW_ADAPTER_PORT)
     if not reports:
         return False
     for report in reports:
@@ -1009,9 +1011,9 @@ def _adapter_identity_policy_matches(
 
 
 def _adapter_control_policy_matches(login: str) -> bool:
-    if _listener_bind_addresses(8001) not in ({"127.0.0.1"}, {"::1"}, {"127.0.0.1", "::1"}):
+    if _listener_bind_addresses(WORKFLOW_ADAPTER_PORT) not in ({"127.0.0.1"}, {"::1"}, {"127.0.0.1", "::1"}):
         return False
-    reports = _exclusive_listener_reports(8001)
+    reports = _exclusive_listener_reports(WORKFLOW_ADAPTER_PORT)
     pids: list[int] = []
     for report in reports:
         pid = report.get("pid")
@@ -1368,7 +1370,7 @@ def _host_listener_closure(port: int) -> dict[str, object]:
 def _validated_workflow_adapter_listener(
     root: Path, runtime_revision: str
 ) -> dict[str, object]:
-    closure = _host_listener_closure(8001)
+    closure = _host_listener_closure(WORKFLOW_ADAPTER_PORT)
     reports = closure.get("listener_reports")
     if not isinstance(reports, list):
         raise TailnetEnvironmentError("listener ownership reports are unavailable")
@@ -1377,7 +1379,7 @@ def _validated_workflow_adapter_listener(
         root, login, runtime_revision=runtime_revision, reports=reports
     ):
         raise TailnetEnvironmentError("workflow adapter listener lost exact authenticated service ownership")
-    confirmed = _host_listener_closure(8001)
+    confirmed = _host_listener_closure(WORKFLOW_ADAPTER_PORT)
     confirmed_reports = confirmed.get("listener_reports")
     if (
         confirmed != closure
@@ -1664,7 +1666,7 @@ def _valid_container_process_roles(
                 and report.get("argv") == [
                     "/app/platform/api/.venv/bin/python",
                     "/app/platform/api/.venv/bin/uvicorn",
-                    "main:app", "--host", "127.0.0.1", "--port", "8000",
+                    "main:app", "--host", "127.0.0.1", "--port", str(PRODUCTION_API_PORT),
                 ]
                 and report.get("cwd") == "/app/platform/api"
                 and report.get("uid") == 1000

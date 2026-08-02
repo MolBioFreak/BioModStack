@@ -182,7 +182,7 @@ def test_adapter_identity_and_policy_must_match_one_listener(monkeypatch, tmp_pa
     expected_uvicorn = (tmp_path / "platform" / "api" / ".venv" / "bin" / "uvicorn").resolve()
     expected_argv = [
         str(expected_python), str(expected_uvicorn), "workflow_adapter_app:app",
-        "--port", "8001", "--host", "127.0.0.1", "--no-proxy-headers", "--no-access-log",
+        "--port", "18001", "--host", "127.0.0.1", "--no-proxy-headers", "--no-access-log",
     ]
     valid_cgroup = f"0::/user.slice/user-1000.slice/user@1000.service/app.slice/{tailnet.WORKFLOW_ADAPTER_SERVICE}"
     monkeypatch.setattr(tailnet, "_git_revision", lambda root: revision)
@@ -227,7 +227,7 @@ def test_adapter_identity_and_policy_must_match_one_listener(monkeypatch, tmp_pa
     assert tailnet._adapter_identity_policy_matches(tmp_path, "owner@example.com", runtime_revision=revision) is True
     missing_revision = [
         {**report, "build_revision": None}
-        for report in tailnet._pid_report(8001)
+        for report in tailnet._pid_report(18001)
     ]
     assert tailnet._adapter_identity_policy_matches(
         tmp_path, "owner@example.com", runtime_revision=revision, reports=missing_revision,
