@@ -94,6 +94,7 @@ class OperatorActionSpec(BaseModel):
     dependencies: list[OperatorDependency] = Field(default_factory=list, max_length=32)
     requires_confirmation: StrictBool = True
     timeout_seconds: StrictInt | StrictFloat = Field(ge=0.1, le=3600)
+    required_provider_capability: str | None = Field(default=None, min_length=1, max_length=120)
     inputs: list[OperatorInputSpec] = Field(default_factory=list, max_length=128)
     stages: list[str] = Field(default_factory=list, max_length=128)
 
