@@ -64,6 +64,20 @@ def _write_minimal_esmfold2_cif(path: Path) -> None:
     )
 
 
+def test_esmfold2_result_root_resolves_sequence_scoped_publish_dir(tmp_path: Path) -> None:
+    from services.result_ingester import _resolve_esmfold2_final_root
+
+    output_root = tmp_path / "structure-job"
+    final_root = output_root / "final" / "esmfold2" / "1UBQ" / "esmfold2_results"
+    final_root.mkdir(parents=True)
+    (final_root / "manifest.json").write_text(
+        json.dumps({"workflow": "esmfold2_experimental", "samples": []}),
+        encoding="utf-8",
+    )
+
+    assert _resolve_esmfold2_final_root(output_root) == final_root
+
+
 @pytest.mark.asyncio
 async def test_esmfold2_result_ingestion_uses_nested_active_publish_dir_without_fampnn_synthesis(tmp_path: Path) -> None:
     session_factory, engine = await _build_session_factory(tmp_path)

@@ -1661,9 +1661,21 @@ def _resolve_existing_child_path(root: Path, raw_path: Any) -> Optional[Path]:
 
 
 def _resolve_esmfold2_final_root(output_path: Path) -> Optional[Path]:
+    esmfold2_root = output_path / "final" / "esmfold2"
+    # The workflow publishes single-sequence jobs under
+    # final/esmfold2/<sequence_name>/esmfold2_results. Keep the older aggregate
+    # directory candidates for backward compatibility, but discover only the
+    # bounded one-level sequence namespace rather than recursively scanning the
+    # job root.
+    sequence_roots = (
+        sorted(esmfold2_root.glob("*/esmfold2_results"))
+        if esmfold2_root.is_dir()
+        else []
+    )
     candidates = [
-        output_path / "final" / "esmfold2" / "esmfold2_results",
-        output_path / "final" / "esmfold2",
+        esmfold2_root / "esmfold2_results",
+        *sequence_roots,
+        esmfold2_root,
         output_path / "esmfold2_results",
         output_path / "pdb_files" / "esmfold2_results",
         output_path,
