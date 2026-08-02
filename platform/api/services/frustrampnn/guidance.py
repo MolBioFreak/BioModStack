@@ -45,23 +45,70 @@ def _validate_objective(objective: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+_ALLOWED_REGION_TYPES = {
+    "residue_set",
+    "sequence_span",
+    "pocket",
+    "interface",
+    "contact_set",
+    "loop",
+    "domain",
+    "mapped_region",
+}
+_STRUCTURAL_REGION_TYPES = _ALLOWED_REGION_TYPES - {"residue_set", "sequence_span"}
+
+
 def _resolve_region(landscape: Mapping[str, Any], region: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(region, Mapping):
         raise GuidanceValidationError("region is required")
     region_type = str(region.get("region_type") or "")
-    if region_type != "residue_set":
-        raise GuidanceValidationError("v1 guidance requires an explicit residue_set region")
-    requested = region.get("residues")
-    if not isinstance(requested, list) or not requested:
-        raise GuidanceValidationError("region must contain at least one residue")
-    available = {_residue_key(residue): residue for residue in landscape.get("residues", [])}
+    if region_type not in _ALLOWED_REGION_TYPES:
+        raise GuidanceValidationError(f"unsupported region_type: {region_type or 'missing'}")
+
+    landscape_residues = list(landscape.get("residues", []))
+    if region_type == "sequence_span":
+        try:
+            start = int(region["start"])
+            end = int(region["end"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise GuidanceValidationError("sequence_span requires integer start and end") from exc
+        if start > end:
+            raise GuidanceValidationError("sequence_span start must not exceed end")
+        chain = str(region.get("auth_asym_id") or "")
+        requested = [
+            {
+                "entity_instance_id": residue.get("entity_instance_id"),
+                "auth_asym_id": residue.get("auth_asym_id"),
+                "auth_seq_id": residue.get("auth_seq_id"),
+                "insertion_code": residue.get("insertion_code", ""),
+            }
+            for residue in landscape_residues
+            if start <= int(residue.get("sequence_index", -1)) <= end
+            and (not chain or str(residue.get("auth_asym_id")) == chain)
+        ]
+        if not requested:
+            raise GuidanceValidationError("sequence_span does not resolve to the landscape")
+    else:
+        requested = region.get("residues")
+        if not isinstance(requested, list) or not requested:
+            raise GuidanceValidationError("region must contain at least one residue")
+        if region_type in _STRUCTURAL_REGION_TYPES:
+            mapping_method = str(region.get("mapping_method") or "")
+            source_hash = str(region.get("source_artifact_sha256") or region.get("mapping_artifact_sha256") or "")
+            if not mapping_method or len(source_hash) != 64:
+                raise GuidanceValidationError(
+                    f"{region_type} requires mapping_method and source/mapping provenance"
+                )
+
+    available = {_residue_key(residue): residue for residue in landscape_residues}
     resolved: list[dict[str, Any]] = []
     unresolved: list[dict[str, Any]] = []
     for item in requested:
         try:
+            auth_chain = str(item["auth_asym_id"])
             key = (
-                str(item["entity_instance_id"]) if "entity_instance_id" in item else "pdb:A",
-                str(item["auth_asym_id"]),
+                str(item.get("entity_instance_id") or f"pdb:{auth_chain}"),
+                auth_chain,
                 int(item["auth_seq_id"]),
                 str(item.get("insertion_code") or ""),
             )
@@ -78,13 +125,17 @@ def _resolve_region(landscape: Mapping[str, Any], region: Mapping[str, Any]) -> 
             unresolved.append(normalized)
     if not resolved:
         raise GuidanceValidationError("region does not resolve to the landscape")
-    return {
+    output = {
         "region_type": region_type,
         "requested_residues": [dict(item) for item in requested],
         "resolved_residues": sorted(resolved, key=lambda item: (item["auth_asym_id"], item["auth_seq_id"], item["insertion_code"])),
         "unresolved_residues": sorted(unresolved, key=lambda item: (item["auth_asym_id"], item["auth_seq_id"], item["insertion_code"])),
         "region_sha256": canonical_sha256({"region_type": region_type, "residues": resolved}),
     }
+    for key in ("mapping_method", "source_artifact_sha256", "mapping_artifact_sha256", "start", "end"):
+        if key in region:
+            output[key] = region[key]
+    return output
 
 
 def _prohibited(constraints: Mapping[str, Any]) -> set[tuple[str, str]]:
