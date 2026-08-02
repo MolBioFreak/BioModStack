@@ -185,6 +185,7 @@ def _main(active_pins: list[_frustrampnn_runtime.PinnedContainer]) -> None:
             candidate_id=candidate_id,
             source_bytes=source_bytes,
             source_suffix=structure.suffix,
+            source_relative_path=candidate["authoritative_structure_path"],
         )
         candidate_root = derived / candidate_id
         normalized = candidate_root / "normalized.pdb"

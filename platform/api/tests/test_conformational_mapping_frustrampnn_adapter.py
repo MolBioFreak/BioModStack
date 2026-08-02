@@ -69,16 +69,19 @@ def test_cm_candidate_binding_parses_the_exact_supplied_source_bytes() -> None:
 
     payload = _pdb()
     bound = bind_cm_candidate_snapshot_bytes(
-        _snapshot(hashlib.sha256(payload).hexdigest()),
+        _snapshot("0" * 64),
         candidate_id="c",
         source_bytes=payload,
         source_suffix=".pdb",
+        source_relative_path="native/candidate.pdb",
     )
     mapping = bound["instance_mappings"][0]
     assert mapping["candidate_id"] == "c"
     assert mapping["output_auth_asym_id"] == "X"
     assert mapping["output_label_asym_id"] == "X"
     assert mapping["output_entity_id"] == "source-protein"
+    assert bound["original_source_sha256"] == hashlib.sha256(payload).hexdigest()
+    assert bound["original_source_path"] == "native/candidate.pdb"
     assert bound["normalized_source_sha256"] == canonical_sha256({
         key: value for key, value in bound.items()
         if key != "normalized_source_sha256"
