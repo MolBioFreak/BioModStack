@@ -639,6 +639,10 @@ async def ingest_result_bundle(
 
         result = FrustraMPNNResult(**result_values)
         session.add(result)
+        # SQLite enforces the composite child foreign keys in production. Flush
+        # the immutable parent authority before adding artifacts and landscape
+        # rows; ORM add order alone does not establish that dependency here.
+        await session.flush()
         session.add_all(FrustraMPNNArtifact(**values) for values in artifact_values)
         session.add_all(
             FrustraMPNNLandscapeRow(**values) for values in landscape_values

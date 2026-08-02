@@ -118,6 +118,11 @@ def _retarget_bundle(
 async def db(tmp_path: Path):
     database_path = tmp_path / "persistence.db"
     engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _enable_foreign_keys(dbapi_connection, _connection_record) -> None:
+        dbapi_connection.execute("PRAGMA foreign_keys=ON")
+
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
