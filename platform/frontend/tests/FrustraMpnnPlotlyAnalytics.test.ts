@@ -40,6 +40,15 @@ test('Plotly model covers the full 540 by 20 landscape without sampling', () => 
     assert.equal(model.heatmapScores.reduce((total, row) => total + row.length, 0), 10_800);
     assert.equal(model.nativeScores.length, 540);
     assert.ok(CANONICAL_AMINO_ACIDS.every((aa) => model.substitutionScores[aa].length === 540));
+    assert.equal(model.bestAlternativeDeltas.length, 540);
+    assert.equal(model.worstAlternativeDeltas.length, 540);
+    assert.equal(model.medianAlternativeScores.length, 540);
+    assert.ok(Math.abs(model.bestAlternativeDeltas[0]! - 0.18) < 1e-12);
+    assert.ok(Math.abs(model.worstAlternativeDeltas[0]! - (-0.01)) < 1e-12);
+    assert.ok(Math.abs(model.medianAlternativeScores[0]! - 1.10) < 1e-12);
+    assert.ok(Math.abs(model.highAlternativeFractions[0]! - (7 / 19)) < 1e-12);
+    assert.ok(Math.abs(model.minimalAlternativeFractions[0]! - (6 / 19)) < 1e-12);
+    assert.deepEqual(model.substitutionClassFractions.A, { high: 1, neutral: 0, minimal: 0, missing: 0 });
 });
 
 test('Plotly hover authority preserves exact insertion identity, persisted class, and missingness', () => {

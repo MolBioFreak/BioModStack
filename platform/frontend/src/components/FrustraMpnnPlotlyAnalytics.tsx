@@ -78,6 +78,49 @@ export default function FrustraMpnnPlotlyAnalytics({
         marker: { size: 3 },
         hovertemplate: `${aa} substitution<br>Score %{y:.3f}<extra></extra>`,
     }));
+    const alternativeEnvelopeData: Data[] = [
+        {
+            type: 'scatter', mode: 'lines', name: 'Best alternative Δ', x: model.residueLabels, y: model.bestAlternativeDeltas,
+            line: { color: '#06b6d4', width: 1.5 }, hovertemplate: 'Residue %{x}<br>Best non-native Δ %{y:.3f}<extra></extra>',
+        },
+        {
+            type: 'scatter', mode: 'lines', name: 'Worst alternative Δ', x: model.residueLabels, y: model.worstAlternativeDeltas,
+            line: { color: '#ef4444', width: 1.5 }, hovertemplate: 'Residue %{x}<br>Worst non-native Δ %{y:.3f}<extra></extra>',
+        },
+    ];
+    const burdenData: Data[] = [
+        {
+            type: 'scatter', mode: 'lines', name: 'Highly frustrated alternatives', x: model.residueLabels, y: model.highAlternativeFractions,
+            line: { color: '#ef4444', width: 1.5 }, hovertemplate: 'Residue %{x}<br>Highly frustrated alternatives %{y:.1%}<extra></extra>',
+        },
+        {
+            type: 'scatter', mode: 'lines', name: 'Minimally frustrated alternatives', x: model.residueLabels, y: model.minimalAlternativeFractions,
+            line: { color: '#06b6d4', width: 1.5 }, hovertemplate: 'Residue %{x}<br>Minimally frustrated alternatives %{y:.1%}<extra></extra>',
+        },
+    ];
+    const nativeVsAlternativeData: Data[] = [{
+        type: 'scatter',
+        mode: 'markers',
+        x: model.nativeScores,
+        y: model.medianAlternativeScores,
+        customdata: model.residueLabels,
+        marker: { color: model.highAlternativeFractions, colorscale: 'YlOrRd', size: 7, opacity: 0.75, colorbar: { title: { text: 'High-alt fraction' } }, cmin: 0, cmax: 1 },
+        hovertemplate: 'Residue %{customdata}<br>Native %{x:.3f}<br>Median non-native %{y:.3f}<br>High-alt fraction %{marker.color:.1%}<extra></extra>',
+        name: 'Residues',
+    }];
+    const compositionData: Data[] = ([
+        ['high', 'Highly frustrated', '#ef4444'],
+        ['neutral', 'Neutral', '#f59e0b'],
+        ['minimal', 'Minimally frustrated', '#06b6d4'],
+        ['missing', 'Missing', '#475569'],
+    ] as const).map(([key, label, color]) => ({
+        type: 'bar',
+        name: label,
+        x: [...CANONICAL_AMINO_ACIDS],
+        y: CANONICAL_AMINO_ACIDS.map((aa) => model.substitutionClassFractions[aa][key]),
+        marker: { color },
+        hovertemplate: `${label}<br>Mutation %{x}<br>Fraction %{y:.1%}<extra></extra>`,
+    }));
 
     return (
         <section aria-label="FrustraMPNN Plotly visual analytics" className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">
@@ -101,6 +144,26 @@ export default function FrustraMpnnPlotlyAnalytics({
                     <h3 className="px-2 pt-2 text-sm font-medium">Substitution score distributions</h3>
                     <p className="px-2 text-xs text-slate-500">Question: which proposed amino acids systematically shift the landscape? Boxes show median and quartiles; whiskers/outliers preserve distribution shape.</p>
                     <Plot data={distributionData} layout={{ ...commonLayout, height: 390, title: { text: 'Score distribution by mutation amino acid' }, xaxis: { ...baseLayout.xaxis, title: { text: 'Mutation amino acid' } }, yaxis: { ...baseLayout.yaxis, title: { text: 'Persisted FrustraMPNN score' } }, showlegend: false }} config={PLOT_CONFIG} className="h-[390px] w-full" useResizeHandler />
+                </article>
+                <article className="rounded-lg border border-slate-800 bg-slate-950/40 p-2 xl:col-span-2">
+                    <h3 className="px-2 pt-2 text-sm font-medium">Alternative-score envelope along sequence</h3>
+                    <p className="px-2 text-xs text-slate-500">Question: at each residue, how far can the best and worst of the 19 non-native substitutions move the persisted score relative to the native slot? Δ = alternative score − native score; this is descriptive, not a redesign recommendation.</p>
+                    <Plot data={alternativeEnvelopeData} layout={{ ...commonLayout, height: 390, title: { text: 'Best and worst non-native score deltas' }, xaxis: { ...baseLayout.xaxis, title: { text: 'Exact author residue' }, nticks: 24 }, yaxis: { ...baseLayout.yaxis, title: { text: 'Alternative − native score' }, zeroline: true, zerolinecolor: colors.textMuted }, legend: { orientation: 'h', y: 1.12 } }} config={PLOT_CONFIG} className="h-[390px] w-full" useResizeHandler />
+                </article>
+                <article className="rounded-lg border border-slate-800 bg-slate-950/40 p-2">
+                    <h3 className="px-2 pt-2 text-sm font-medium">Alternative-class burden</h3>
+                    <p className="px-2 text-xs text-slate-500">Question: which positions are mutation-sensitive versus tolerant? Fractions use the 19 scoreable non-native substitutions and persisted canonical classes.</p>
+                    <Plot data={burdenData} layout={{ ...commonLayout, height: 390, title: { text: 'Canonical class fraction among non-native substitutions' }, xaxis: { ...baseLayout.xaxis, title: { text: 'Exact author residue' }, nticks: 16 }, yaxis: { ...baseLayout.yaxis, title: { text: 'Fraction of 19 alternatives' }, tickformat: '.0%', range: [0, 1] }, legend: { orientation: 'h', y: 1.14 } }} config={PLOT_CONFIG} className="h-[390px] w-full" useResizeHandler />
+                </article>
+                <article className="rounded-lg border border-slate-800 bg-slate-950/40 p-2">
+                    <h3 className="px-2 pt-2 text-sm font-medium">Native versus alternative profile</h3>
+                    <p className="px-2 text-xs text-slate-500">Question: does the native residue sit above or below the typical non-native profile? Each point is one exact residue; color is its highly-frustrated alternative fraction.</p>
+                    <Plot data={nativeVsAlternativeData} layout={{ ...commonLayout, height: 390, title: { text: 'Native score vs median non-native score' }, xaxis: { ...baseLayout.xaxis, title: { text: 'Native score' } }, yaxis: { ...baseLayout.yaxis, title: { text: 'Median score across 19 alternatives' } }, showlegend: false }} config={PLOT_CONFIG} className="h-[390px] w-full" useResizeHandler />
+                </article>
+                <article className="rounded-lg border border-slate-800 bg-slate-950/40 p-2 xl:col-span-2">
+                    <h3 className="px-2 pt-2 text-sm font-medium">Mutation-specific class composition</h3>
+                    <p className="px-2 text-xs text-slate-500">Question: which proposed amino acids disproportionately produce each backend-owned frustration class across all residues?</p>
+                    <Plot data={compositionData} layout={{ ...commonLayout, height: 390, title: { text: 'Canonical class composition by mutation amino acid' }, barmode: 'stack', xaxis: { ...baseLayout.xaxis, title: { text: 'Mutation amino acid' } }, yaxis: { ...baseLayout.yaxis, title: { text: 'Fraction of residues' }, tickformat: '.0%', range: [0, 1] }, legend: { orientation: 'h', y: 1.13 } }} config={PLOT_CONFIG} className="h-[390px] w-full" useResizeHandler />
                 </article>
             </div>
         </section>
