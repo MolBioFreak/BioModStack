@@ -185,8 +185,19 @@ async def reconcile_md_state(
             if segment_stale and segment is not None:
                 changes.append({"kind": "segment_state", "job_id": run.job_id,
                                 "segment_id": segment.id, "from": segment.state, "to": projected})
-        if not effective and str(parent.status) in {"failed", "cancelled"}:
-            next_phase = "failed" if str(parent.status) == "failed" else "cancelled"
+        parent_status = str(parent.status) if parent is not None else ""
+        all_replicas_terminal = all(state in _TERMINAL_REPLICA_STATES for state in effective)
+        if (
+            parent_status == "completed"
+            and bool(effective)
+            and all(state == "completed" for state in effective)
+        ):
+            next_phase = "completed"
+        elif (
+            parent_status in {"failed", "cancelled"}
+            and (not effective or all_replicas_terminal)
+        ):
+            next_phase = parent_status
         else:
             next_phase = _phase(run, effective)
         if next_phase != run.phase:

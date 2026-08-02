@@ -230,6 +230,65 @@ async def test_reconciliation_self_heals_active_md_parent_scheduler_projection(t
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_status", ["completed", "failed"])
+async def test_reconciliation_preserves_terminal_parent_after_all_replica_children_terminal(
+    tmp_path, terminal_status: str,
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / f'md-terminal-{terminal_status}.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with maker() as session:
+        parent = Job(
+            id=f"md-terminal-parent-{terminal_status}", name="MD", status="running",
+            queue_status="running", model_id="md", mode="molecular_dynamics", params={},
+        )
+        child = Job(
+            id=f"md-terminal-child-{terminal_status}", name="replica", status="completed",
+            queue_status="completed", model_id="md", mode="replica", params={},
+            parent_job_id=parent.id,
+        )
+        session.add_all([parent, child]); await session.flush()
+        run = await create_md_run(session, job=parent, normalized_request=_request())
+        run.phase = "finalizing"
+        replica, segment = await create_replica_attempt(
+            session, job_id=parent.id, replica_index=0, attempt=1, engine="gromacs",
+            execution_plan_sha256="b" * 64, compatibility_key="c" * 64,
+            child_job_id=child.id,
+        )
+        replica.state = "completed"
+        replica.active = False
+        segment.state = "completed"
+        await session.commit()
+
+    # A separate owner publishes authoritative terminal Nextflow/barrier state.
+    async with maker() as session:
+        parent = await session.get(Job, f"md-terminal-parent-{terminal_status}")
+        assert parent is not None
+        parent.status = terminal_status
+        parent.queue_status = terminal_status
+        parent.error_message = "terminal Nextflow history" if terminal_status == "failed" else None
+        await session.commit()
+
+    async with maker() as session:
+        receipt = await reconcile_md_state(session, owner_id="terminal-owner", apply=True)
+        await session.commit()
+        assert not any(change["kind"] == "parent_job_projection" for change in receipt["changes"])
+
+    async with maker() as session:
+        parent = await session.get(Job, f"md-terminal-parent-{terminal_status}")
+        run = await session.get(MdRun, parent.id)
+        assert parent is not None and run is not None
+        assert (parent.status, parent.queue_status) == (terminal_status, terminal_status)
+        assert run.phase == terminal_status
+        if terminal_status == "failed":
+            assert parent.error_message == "terminal Nextflow history"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_reconciliation_does_not_claim_validating_coordinator_before_scheduler(tmp_path) -> None:
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'md-validating.db'}")
     async with engine.begin() as conn:
