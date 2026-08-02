@@ -256,6 +256,86 @@ def test_managed_launcher_propagates_scheduler_gpu_to_canonical_component() -> N
         )
 
 
+def _load_stage_reporter():
+    reporter_path = REPO_ROOT / "scripts" / "stage_reporter.py"
+    spec = importlib.util.spec_from_file_location("stage_reporter_job_root_relative", reporter_path)
+    assert spec is not None and spec.loader is not None
+    reporter = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(reporter)
+    return reporter
+
+
+def test_stage_reporter_preserves_explicit_job_root_relative_outputs() -> None:
+    reporter = _load_stage_reporter()
+    value = "frustrampnn/results/candidate-1/workflow_component_result_v1.json"
+    assert reporter.normalize_job_root_relative_output(value) == value
+
+
+def test_stage_reporter_main_sends_job_root_relative_output_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reporter = _load_stage_reporter()
+    reporter_path = REPO_ROOT / "scripts" / "stage_reporter.py"
+    value = "frustrampnn/results/candidate-1/workflow_component_result_v1.json"
+    calls: list[dict[str, object]] = []
+
+    class Response:
+        status_code = 200
+        text = "ok"
+
+    def fake_post(url, **kwargs):
+        calls.append({"url": url, **kwargs})
+        return Response()
+
+    setattr(reporter, "STAGE_REPORT_TOKEN", "launch-scoped-test-token")
+    monkeypatch.setattr(reporter.requests, "post", fake_post)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(reporter_path),
+            "--job-root-relative",
+            "job-1",
+            "frustrampnn",
+            "complete",
+            value,
+        ],
+    )
+    reporter.main()
+    assert calls[0]["url"] == "http://localhost:8000/api/jobs/job-1/stage-complete"
+    assert calls[0]["json"] == [value]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        "/absolute/result.json",
+        "frustrampnn/./result.json",
+        "frustrampnn/../result.json",
+        "frustrampnn//result.json",
+        "frustrampnn\\result.json",
+    ],
+)
+def test_stage_reporter_rejects_unsafe_job_root_relative_outputs(value: str) -> None:
+    reporter = _load_stage_reporter()
+    with pytest.raises(ValueError, match="unsafe job-root-relative output"):
+        reporter.normalize_job_root_relative_output(value)
+
+
+def test_enabled_frustrampnn_reporters_request_job_root_relative_outputs() -> None:
+    paths = [
+        REPO_ROOT / "workflows" / "structure_prediction.nf",
+        REPO_ROOT / "workflows" / "frustrampnn_analysis.nf",
+        REPO_ROOT / "workflows" / "protein_design.nf",
+        REPO_ROOT / "workflows" / "complex_prediction.nf",
+        REPO_ROOT / "modules" / "antibody_frustrampnn_parent.nf",
+    ]
+    for path in paths:
+        source = path.read_text(encoding="utf-8")
+        assert "stage_reporter.py' --job-root-relative" in source, path
+
+
 @pytest.mark.parametrize("status", ["failed", "not_requested"])
 def test_stage_reporter_routes_non_success_terminal_states(
     status: str, monkeypatch: pytest.MonkeyPatch
