@@ -16,6 +16,9 @@ IDENTITY_DIMENSIONS = [
     {"id": "job_id", "kind": "identifier", "description": "Scheduler-owned parent job identity."},
     {"id": "design_id", "kind": "identifier", "description": "Persisted source Design identity."},
     {"id": "invocation_id", "kind": "identifier", "description": "FrustraMPNN invocation identity within the parent job."},
+    {"id": "configuration_id", "kind": "identifier", "description": "Global FrustraMPNN configuration identity."},
+    {"id": "configuration_sha256", "kind": "identifier", "description": "Content hash of the global FrustraMPNN configuration."},
+    {"id": "threshold_policy_id", "kind": "identifier", "description": "Versioned classification threshold policy."},
 ]
 RESULT_METRICS = [
     {"id": "mean_score", "kind": "number", "unit": "FrustraMPNN score", "formula": "mean of finite scoreable persisted slots"},
@@ -71,7 +74,10 @@ def _base_identity(row: Any) -> dict[str, Any]:
         "invocation_id": row.invocation_id,
         "source_artifact_sha256": row.source_artifact_sha256,
         "checkpoint_sha256": (row.runtime_identity_json or {}).get("checkpoint_sha256"),
-        "threshold_policy_id": ((row.summary_json or {}).get("threshold_policy") or {}).get("policy_id"),
+        "configuration_id": (row.summary_json or {}).get("configuration_id"),
+        "configuration_sha256": (row.summary_json or {}).get("configuration_sha256"),
+        "threshold_policy_id": ((row.summary_json or {}).get("threshold_policy") or {}).get("id")
+            or ((row.summary_json or {}).get("threshold_policy") or {}).get("policy_id"),
     }
 
 
