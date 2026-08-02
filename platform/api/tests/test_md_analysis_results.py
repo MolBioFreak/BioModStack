@@ -46,6 +46,7 @@ def test_v2_replica_protocol_comparison_allows_only_hash_bound_input_relocation(
     requested = {
         "schema": "bms.md.job.v2",
         "input": {"structure": "/parent/inputs/structure.pdb", "structure_sha256": "a" * 64, "structure_bytes": 42},
+        "execution": {"gpu_id": "2", "gpu_offload": "full", "ntmpi": 1, "ntomp": 8, "pin": "on"},
         "stages": {"production": {"steps": 5000}},
     }
     relocated = copy.deepcopy(requested)
@@ -60,6 +61,66 @@ def test_v2_replica_protocol_comparison_allows_only_hash_bound_input_relocation(
     protocol_drift = copy.deepcopy(relocated)
     protocol_drift["stages"]["production"]["steps"] = 5001
     assert md_results_module._replica_protocol_matches(requested, protocol_drift) is False
+
+    realized = copy.deepcopy(relocated)
+    realized["execution"] = {
+        **requested["execution"],
+        "gpu_id": "0",
+        "scheduler_gpu_id": "2",
+        "gpu_offload": "full_forces",
+    }
+    assert md_results_module._replica_protocol_matches(requested, realized) is False
+    assert md_results_module._replica_protocol_matches(
+        requested,
+        realized,
+        qualified_gpu_offload="full_forces",
+    ) is True
+
+    wrong_scheduler = copy.deepcopy(realized)
+    wrong_scheduler["execution"]["scheduler_gpu_id"] = "3"
+    assert md_results_module._replica_protocol_matches(
+        requested,
+        wrong_scheduler,
+        qualified_gpu_offload="full_forces",
+    ) is False
+
+    unqualified_policy = copy.deepcopy(realized)
+    unqualified_policy["execution"]["gpu_offload"] = "none"
+    assert md_results_module._replica_protocol_matches(
+        requested,
+        unqualified_policy,
+        qualified_gpu_offload="full_forces",
+    ) is False
+
+
+def test_preparation_gpu_policy_is_bound_to_requested_chemistry_and_input(tmp_path: Path) -> None:
+    requested = {
+        "schema": "bms.md.job.v2",
+        "engine": "gromacs",
+        "input": {"structure_sha256": "a" * 64, "structure_bytes": 42},
+        "chemistry": {
+            "profile_id": "amber_ff19sb_opc_protein_v1",
+            "profile_sha256": "b" * 64,
+            "runtime_identity": {"sif_sha256": "c" * 64},
+        },
+    }
+    manifest_path = tmp_path / "preparation" / "preparation_bundle" / "preparation_manifest.json"
+    manifest_path.parent.mkdir(parents=True)
+    manifest = {
+        "schema": "bms.md.preparation-bundle.v1",
+        "profile": {"id": "amber_ff19sb_opc_protein_v1", "sha256": "b" * 64},
+        "runtime": {"image_sha256": "c" * 64},
+        "source": {"sha256": "a" * 64, "bytes": 42},
+        "preparation": {"gromacs_gpu_offload": "full_forces"},
+    }
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    assert md_results_module._qualified_gpu_offload(tmp_path, requested) == "full_forces"
+
+    manifest["source"]["sha256"] = "d" * 64
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(MDResultError, match="preparation policy"):
+        md_results_module._qualified_gpu_offload(tmp_path, requested)
 
 
 def _record(path: Path, root: Path, **extra: str) -> dict:

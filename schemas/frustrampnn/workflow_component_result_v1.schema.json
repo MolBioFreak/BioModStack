@@ -1,0 +1,300 @@
+{
+  "$id": "https://biomodstack.local/schemas/frustrampnn/workflow_component_result_v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "succeeded"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "artifacts": {
+            "minItems": 8,
+            "maxItems": 9
+          }
+        }
+      }
+    }
+  ],
+  "properties": {
+    "artifacts": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "bytes": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cardinality": {
+            "additionalProperties": false,
+            "properties": {
+              "count": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "enum": [
+                  "rows",
+                  "residues",
+                  "slots",
+                  "records"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "count"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "relative_path": {
+            "minLength": 1,
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*//)(?!\\./).+$",
+            "type": "string"
+          },
+          "role": {
+            "const": "identity_authority"
+          },
+          "schema_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "schema_version": {
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "relative_path",
+          "schema_name",
+          "schema_version",
+          "sha256",
+          "bytes",
+          "cardinality"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "assigned_gpu": {
+      "additionalProperties": false,
+      "properties": {
+        "physical_device_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task_visible_device_index": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "physical_device_id",
+        "task_visible_device_index"
+      ],
+      "type": "object"
+    },
+    "candidate_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "component_contract_version": {
+      "const": "1.0"
+    },
+    "component_id": {
+      "const": "frustrampnn"
+    },
+    "diagnostic": {
+      "maxLength": 2048,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "duration_seconds": {
+      "minimum": 0,
+      "type": "number"
+    },
+    "ended_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "failure_class": {
+      "enum": [
+        "request_invalid", "source_missing", "source_hash_mismatch", "identity_ambiguous",
+        "normalization_failed", "runtime_unavailable", "runtime_digest_mismatch",
+        "checkpoint_mismatch", "gpu_admission_failed", "inference_nonzero_exit",
+        "inference_timeout", "raw_output_missing", "raw_output_invalid",
+        "position_mapping_failed", "wildtype_mismatch", "landscape_incomplete",
+        "manifest_invalid", "publication_failed", "ingestion_failed", null
+      ],
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "invocation_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "parent_job_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "parent_workflow_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "request_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "result_payload": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_name": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schema_version": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_name",
+        "schema_version"
+      ],
+      "type": "object"
+    },
+    "runtime_identity": {
+      "additionalProperties": false,
+      "properties": {
+        "checkpoint_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "checkpoint_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "executable_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "sif_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sif_sha256",
+        "executable_sha256",
+        "checkpoint_id",
+        "checkpoint_sha256"
+      ],
+      "type": "object"
+    },
+    "schema_name": {
+      "const": "workflow_component_result"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "source_artifact": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "media_type": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "producer_stage": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "relative_path": {
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*//)(?!\\./).+$",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "relative_path",
+        "sha256",
+        "media_type",
+        "producer_stage"
+      ],
+      "type": "object"
+    },
+    "started_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "succeeded",
+        "failed",
+        "not_run"
+      ]
+    }
+  },
+  "required": [
+    "schema_name",
+    "schema_version",
+    "request_sha256",
+    "invocation_id",
+    "component_id",
+    "component_contract_version",
+    "candidate_id",
+    "parent_job_id",
+    "parent_workflow_id",
+    "status",
+    "failure_class",
+    "diagnostic",
+    "source_artifact",
+    "runtime_identity",
+    "artifacts",
+    "result_payload",
+    "started_at",
+    "ended_at",
+    "duration_seconds",
+    "assigned_gpu"
+  ],
+  "title": "workflow_component_result_v1",
+  "type": "object"
+}

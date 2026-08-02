@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import hashlib
+import httpx
 import json
 import os
-
+import re
 import shutil
+import tempfile
 import uuid
 import copy
 import stat
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated, Any, Literal, Mapping
+from typing import Annotated, Any, BinaryIO, Literal, Mapping, cast
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
@@ -74,6 +76,7 @@ from services.conformational_mapping.request_builder import (
     validate_request_params,
 )
 from services.job_control import cancel_job_lineage
+from services.frustrampnn import runtime as _frustrampnn_runtime
 
 
 router = APIRouter(prefix="/api/conformational-mapping", tags=["conformational-mapping"])
@@ -144,9 +147,6 @@ _CM_VRAM_ESTIMATE_MB = {
     "confornets": 16_000,
     "protenix_v2_ensemble": 24_000,
 }
-_FRUSTRAMPNN_IMAGE_SHA256 = "c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da"
-
-
 def _cm_job_admission(backend: str, request_payload: Mapping[str, Any]) -> dict[str, int]:
     sequence_length = 0
     for target in request_payload["targets"]:
@@ -227,13 +227,14 @@ def _server_confornets_identity() -> dict[str, str]:
 
 
 def _runtime_registry(backend: str) -> dict[str, Any]:
-    analysis_image = get_container_dir() / "frustrampnn.sif"
-    if not analysis_image.is_file() or analysis_image.is_symlink():
-        raise HTTPException(status_code=503, detail="registered FrustraMPNN runtime is unavailable")
-    analysis_runtime = {
-        "container_name": "frustrampnn.sif",
-        "container_sha256": _FRUSTRAMPNN_IMAGE_SHA256,
-    }
+    try:
+        analysis_runtime = _frustrampnn_runtime.cm_analysis_runtime_registry_v1(
+            get_container_dir()
+        )
+    except _frustrampnn_runtime.RuntimeValidationError as exc:
+        raise HTTPException(
+            status_code=503, detail="registered FrustraMPNN runtime is unavailable"
+        ) from exc
     if backend == "confornets":
         return {
             "schema_name": "cm_runtime_registry", "schema_version": 1,
@@ -408,6 +409,66 @@ async def register_source(
         "format": _registered_source_format(destination.name),
         "sha256": content_sha256, "bytes": size, "metadata": metadata,
     }
+
+
+def _rcsb_http_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(timeout=httpx.Timeout(30.0), follow_redirects=False)
+
+
+@router.post("/sources/rcsb/{pdb_id}")
+async def register_rcsb_mmcif_source(
+    pdb_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    """Stream a public RCSB mmCIF into bounded storage, then register it immutably."""
+    accession = pdb_id.strip().upper()
+    if not re.fullmatch(r"[A-Z0-9]{4}", accession):
+        raise HTTPException(status_code=422, detail="RCSB accession must be exactly four letters or digits")
+    maximum_bytes = _SOURCE_MAX_BYTES["structure_upload"]
+    spool = tempfile.SpooledTemporaryFile(max_size=min(maximum_bytes, 8 * 1024 * 1024), mode="w+b")
+    prefix = bytearray()
+    size = 0
+    try:
+        try:
+            async with _rcsb_http_client() as client:
+                async with client.stream("GET", f"https://files.rcsb.org/download/{accession}.cif") as response:
+                    if response.status_code == 404:
+                        raise HTTPException(status_code=404, detail="RCSB accession was not found")
+                    if response.status_code != 200:
+                        raise HTTPException(status_code=502, detail="RCSB mmCIF download returned an unexpected status")
+                    async for chunk in response.aiter_bytes():
+                        size += len(chunk)
+                        if size > maximum_bytes:
+                            raise HTTPException(status_code=413, detail="RCSB mmCIF exceeds the registered-source limit")
+                        if len(prefix) < 4096:
+                            prefix.extend(chunk[: 4096 - len(prefix)])
+                        spool.write(chunk)
+        except HTTPException:
+            raise
+        except httpx.TimeoutException as exc:
+            raise HTTPException(status_code=504, detail="RCSB mmCIF download timed out") from exc
+        except httpx.HTTPError as exc:
+            raise HTTPException(status_code=502, detail="RCSB mmCIF download failed") from exc
+        if not bytes(prefix).lstrip().startswith(b"data_"):
+            raise HTTPException(status_code=502, detail="RCSB response is not raw mmCIF")
+        spool.seek(0)
+        upload = UploadFile(filename=f"{accession}.cif", file=cast(BinaryIO, spool))
+        return await register_source(
+            request=request,
+            source_kind="structure_upload",
+            metadata_json=json.dumps({
+                "name": f"RCSB {accession}",
+                "rcsb_accession": accession,
+                "rcsb_mmcif_url": f"https://files.rcsb.org/download/{accession}.cif",
+                "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                "source": "rcsb_raw_mmcif",
+            }),
+            file=upload,
+            session=session,
+        )
+    finally:
+        spool.close()
 
 
 def _principal(request: Request) -> str:

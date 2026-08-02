@@ -322,11 +322,14 @@ def test_protenix_rejects_non_v2_checkpoint_selection(tmp_path: Path) -> None:
 def test_frustrampnn_normalizes_protenix_mmcif_before_prediction() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     module_text = (repo_root / "modules" / "frustrampnn.nf").read_text(encoding="utf-8")
+    runner_text = (repo_root / "scripts" / "run_frustrampnn_component.py").read_text(
+        encoding="utf-8"
+    )
 
-    assert "tuple val(meta), path(structure)" in module_text
-    assert "MMCIFParser" in module_text
-    assert "PDBIO" in module_text
-    assert "frustrampnn predict --pdb ${meta.id}.pdb" in module_text
+    assert "tuple val(component_request_meta), path(source_structure)" in module_text
+    assert "input_path=source_structure" in runner_text
+    assert "output_pdb_path=normalized" in runner_text
+    assert "build_frustrampnn_command(" in runner_text
 
 
 def test_protenix_v2_requires_shared_checkpoint(tmp_path: Path) -> None:

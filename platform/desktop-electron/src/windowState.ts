@@ -135,7 +135,7 @@ function withAppPath(context: ShellContext, appPath: string, search = '', hash =
 
 function defaultFrontendOrigin(runtimeMode: ShellRuntimeMode): string {
   if (runtimeMode === 'dev') {
-    const devPort = process.env.BMS_DEV_WEB_HOST_PORT || '5173';
+    const devPort = process.env.BMS_DEV_WEB_HOST_PORT || '18082';
     return `http://127.0.0.1:${devPort}`;
   }
   const stablePort = process.env.BMS_WEB_HOST_PORT || '18080';

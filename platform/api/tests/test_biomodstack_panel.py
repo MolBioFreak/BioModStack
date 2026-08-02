@@ -278,7 +278,7 @@ def test_panel_open_browser_uses_explicit_runtime_frontend_url(monkeypatch) -> N
         module,
         "runtime_port_settings",
         lambda project_root=None: {
-            "dev_url": "http://127.0.0.1:5173/",
+            "dev_url": "http://127.0.0.1:18082/",
             "prod_url": "http://127.0.0.1:18080/bms/",
         },
     )
@@ -287,7 +287,7 @@ def test_panel_open_browser_uses_explicit_runtime_frontend_url(monkeypatch) -> N
     module.BioModStackPanel._on_open_browser(panel, None, module.DEV_RUNTIME_MODE)
     module.BioModStackPanel._on_open_browser(panel, None, module.CONTAINER_RUNTIME_MODE)
 
-    assert captured == ["http://127.0.0.1:5173/", "http://127.0.0.1:18080/bms/"]
+    assert captured == ["http://127.0.0.1:18082/", "http://127.0.0.1:18080/bms/"]
 
 
 def test_panel_jobs_row_labels_raw_production_database_scope(monkeypatch) -> None:
@@ -540,7 +540,7 @@ def test_panel_bioxp_summary_fails_closed_on_stale_evidence(monkeypatch) -> None
 
 def test_panel_bioxp_status_uses_only_compact_read_route(monkeypatch) -> None:
     module = load_module(monkeypatch)
-    captured: list[tuple[str, str, object, float]] = []
+    captured = []
 
     def fake_call(method, path, payload=None, timeout=8.0):
         captured.append((method, path, payload, timeout))
@@ -552,6 +552,41 @@ def test_panel_bioxp_status_uses_only_compact_read_route(monkeypatch) -> None:
 
     assert result["connection"]["configured"] is False
     assert captured == [("GET", "/api/bioxp/status", None, 2.5)]
+
+
+def test_local_api_calls_follow_selected_runtime_lane(monkeypatch) -> None:
+    module = load_module(monkeypatch)
+    captured = []
+
+    monkeypatch.setattr(module, "operator_runtime_mode", lambda project_root=None: "dev")
+    monkeypatch.setattr(
+        module,
+        "runtime_api_url",
+        lambda runtime_mode=None, project_root=None: "http://127.0.0.1:18002",
+    )
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            return b'{"connection": {"configured": true}}'
+
+    def fake_urlopen(request, timeout):
+        captured.append((request.full_url, request.method, timeout))
+        return Response()
+
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    result = module.call_local_api_json("GET", "/api/bioxp/status", timeout=2.5)
+
+    assert result["connection"]["configured"] is True
+    assert captured == [("http://127.0.0.1:18002/api/bioxp/status", "GET", 2.5)]
 
 
 def test_panel_contains_no_robot_host_lifecycle_or_remote_log_actions(monkeypatch) -> None:

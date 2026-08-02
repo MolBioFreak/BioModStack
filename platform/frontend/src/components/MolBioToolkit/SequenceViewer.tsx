@@ -489,11 +489,37 @@ export function SequenceViewer({
         }
     }, [onSelection]);
 
-    useEffect(() => () => {
+    const finishPointerSelection = useCallback(() => {
+        if (selectionPointerButtonRef.current !== 0) {
+            return;
+        }
         if (selectionCommitFrameRef.current !== null) {
             window.cancelAnimationFrame(selectionCommitFrameRef.current);
         }
+        selectionCommitFrameRef.current = window.requestAnimationFrame(() => {
+            flushPendingPointerSelection();
+            selectionPointerButtonRef.current = null;
+        });
+    }, [flushPendingPointerSelection]);
+
+    const cancelPointerSelection = useCallback(() => {
+        pendingPointerSelectionRef.current = null;
+        selectionPointerButtonRef.current = null;
     }, []);
+
+    useEffect(() => {
+        window.addEventListener('pointerup', finishPointerSelection, true);
+        window.addEventListener('pointercancel', cancelPointerSelection, true);
+        window.addEventListener('blur', cancelPointerSelection);
+        return () => {
+            window.removeEventListener('pointerup', finishPointerSelection, true);
+            window.removeEventListener('pointercancel', cancelPointerSelection, true);
+            window.removeEventListener('blur', cancelPointerSelection);
+            if (selectionCommitFrameRef.current !== null) {
+                window.cancelAnimationFrame(selectionCommitFrameRef.current);
+            }
+        };
+    }, [cancelPointerSelection, finishPointerSelection]);
 
     useEffect(() => {
         if (!touchBridgeEnabled || !viewerRef.current) {
@@ -550,21 +576,8 @@ export function SequenceViewer({
                     pendingPointerSelectionRef.current = null;
                 }
             }}
-            onPointerUpCapture={() => {
-                if (selectionPointerButtonRef.current === 0 && pendingPointerSelectionRef.current) {
-                    if (selectionCommitFrameRef.current !== null) {
-                        window.cancelAnimationFrame(selectionCommitFrameRef.current);
-                    }
-                    selectionCommitFrameRef.current = window.requestAnimationFrame(flushPendingPointerSelection);
-                }
-                window.setTimeout(() => {
-                    selectionPointerButtonRef.current = null;
-                }, 0);
-            }}
-            onPointerCancelCapture={() => {
-                pendingPointerSelectionRef.current = null;
-                selectionPointerButtonRef.current = null;
-            }}
+            onPointerUpCapture={finishPointerSelection}
+            onPointerCancelCapture={cancelPointerSelection}
         >
             {!sequenceData.circular && resolvedViewerMode !== 'linear' && (
                 <div

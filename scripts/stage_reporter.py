@@ -41,7 +41,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Report workflow stage status")
     parser.add_argument("job_id", help="UUID of the job")
     parser.add_argument("stage", help="Name of the stage (e.g., rfantibody)")
-    parser.add_argument("status", choices=["start", "complete"], help="Status to report")
+    parser.add_argument(
+        "status",
+        choices=["start", "complete", "failed", "not_requested"],
+        help="Status to report",
+    )
     parser.add_argument("outputs", nargs="*", help="List of output file paths")
 
     args = parser.parse_args()
@@ -55,12 +59,21 @@ def main() -> None:
         if args.status == "start":
             url = f"{API_BASE_URL}/api/jobs/{args.job_id}/stage-start"
             response = requests.post(url, params={"stage": args.stage}, headers=headers, timeout=10)
-        else:
+        elif args.status == "complete":
             url = f"{API_BASE_URL}/api/jobs/{args.job_id}/stage-complete"
             # FastAPI endpoint expects List[str] body directly.
             response = requests.post(
                 url,
                 params={"stage": args.stage},
+                json=cleaned_outputs,
+                headers=headers,
+                timeout=10,
+            )
+        else:
+            url = f"{API_BASE_URL}/api/jobs/{args.job_id}/stage-terminal"
+            response = requests.post(
+                url,
+                params={"stage": args.stage, "status": args.status},
                 json=cleaned_outputs,
                 headers=headers,
                 timeout=10,

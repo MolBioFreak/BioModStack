@@ -2,8 +2,6 @@ import type { CmLandscapePage, CmLandscapeRow } from './conformationalMappingApi
 import {
     groupExact20Landscape,
     type CmLandscapeResidue,
-    type CmStructureMap,
-    type CmStructureMapRow,
 } from './conformationalMappingSemantics.js';
 import type { ResidueRef } from '../../structureViewer/contracts/structureIdentity.js';
 import type { MetricLayer, MetricProvenance, MetricValue } from '../../structureViewer/metrics/metricContracts.js';
@@ -11,7 +9,7 @@ import type { MetricLayer, MetricProvenance, MetricValue } from '../../structure
 const CLASS_COLORS: Readonly<Record<string, string>> = {
     high: '#dc2626',
     neutral: '#f59e0b',
-    minimally_frustrated: '#0ea5e9',
+    minimal: '#0ea5e9',
 };
 const MAX_LANDSCAPE_ROWS = 200_000;
 const PAGE_SIZE = 1000;
@@ -22,7 +20,76 @@ export interface FrustraMpnnViewerMetricInput {
     readonly requestId: string;
     readonly candidateId: string;
     readonly residues: readonly CmLandscapeResidue[];
-    readonly structureMap: CmStructureMap;
+    readonly structureMap: FrustraMpnnMetricStructureMap;
+}
+
+export interface FrustraMpnnStructureMapRow {
+    readonly entity_instance_id: string;
+    readonly source_entity_id: string | null;
+    readonly label_asym_id: string | null;
+    readonly auth_asym_id: string;
+    readonly label_seq_id: number | null;
+    readonly auth_seq_id: number;
+    readonly insertion_code: string;
+    readonly sequence_index: number;
+    readonly pdb_chain_id: string;
+    readonly pdb_residue_id: number;
+    readonly pdb_insertion_code: string;
+    readonly model_position: number;
+    readonly residue_name: string;
+    readonly wt: string | null;
+    readonly selected_model: number;
+    readonly selected_altloc: string;
+    readonly backbone_complete: boolean;
+    readonly backbone_atoms: { readonly N: string | null; readonly CA: string | null; readonly C: string | null; readonly O: string | null };
+    readonly status: 'mapped' | 'missing_backbone' | 'nonstandard_residue' | 'excluded';
+    readonly reason: string | null;
+}
+
+export interface FrustraMpnnStructureMap {
+    readonly schema_name: 'frustrampnn_structure_map';
+    readonly schema_version: 1;
+    readonly target_id: string;
+    readonly parent_job_id: string;
+    readonly candidate_id: string;
+    readonly source_format: 'pdb' | 'mmcif';
+    readonly source_sha256: string;
+    readonly source_bytes: number;
+    readonly identity_authority: 'pdb_self_identity_v1' | 'mmcif_atom_site_v1' | 'producer_manifest_v1' | 'cm_complex_snapshot_v1';
+    readonly identity_domain: 'candidate_local' | 'source_authoritative';
+    readonly authority_artifact_sha256: string;
+    readonly normalized_pdb_sha256: string;
+    readonly selected_source_model: number;
+    readonly altloc_policy: string;
+    readonly normalizer_version: 'frustrampnn_structure_normalizer_v1';
+    readonly model_ready_sequence: string;
+    readonly model_ready_sequence_sha256: string;
+    readonly excluded_records: readonly {
+        readonly source_identity: string;
+        readonly reason_code: 'non_protein_entity' | 'not_selected' | 'missing_backbone' | 'nonstandard_residue' | 'unsupported_record';
+        readonly reason: string;
+    }[];
+    readonly rows: readonly FrustraMpnnStructureMapRow[];
+}
+
+type FrustraMpnnMetricStructureMapRow = Pick<
+    FrustraMpnnStructureMapRow,
+    | 'entity_instance_id'
+    | 'source_entity_id'
+    | 'label_asym_id'
+    | 'auth_asym_id'
+    | 'label_seq_id'
+    | 'auth_seq_id'
+    | 'insertion_code'
+    | 'sequence_index'
+> & {
+    readonly status: string;
+    readonly wt?: string | null;
+};
+
+interface FrustraMpnnMetricStructureMap {
+    readonly candidate_id: string;
+    readonly rows: readonly FrustraMpnnMetricStructureMapRow[];
 }
 
 export interface FrustraMpnnViewerMetricBundle {
@@ -31,7 +98,13 @@ export interface FrustraMpnnViewerMetricBundle {
     readonly residueProfiles: readonly { readonly identity: ResidueRef; readonly residue: CmLandscapeResidue }[];
 }
 
-const identityKey = (entityInstanceId: string, sequenceIndex: number): string => `${entityInstanceId}\u0000${sequenceIndex}`;
+const authorIdentityKey = (authAsymId: string, authSeqId: string | number, insertionCode: string): string => (
+    `${authAsymId}\u0000${String(authSeqId)}\u0000${insertionCode}`
+);
+
+const authorIdentityKeyForResidue = (residue: CmLandscapeResidue): string => (
+    authorIdentityKey(residue.auth_asym_id, residue.auth_seq_id, residue.insertion_code)
+);
 
 const finiteOk = (slot: CmLandscapeRow): slot is CmLandscapeRow & { score: number } => (
     slot.status === 'ok' && slot.scoreable && typeof slot.score === 'number' && Number.isFinite(slot.score)
@@ -77,32 +150,47 @@ const sharedProvenance = (
     };
 };
 
-const mappedRows = (structureMap: CmStructureMap): ReadonlyMap<string, CmStructureMapRow> => {
-    const rows = new Map<string, CmStructureMapRow>();
+const authorIdentityKeyForMapRow = (row: FrustraMpnnMetricStructureMapRow): string => (
+    authorIdentityKey(row.auth_asym_id, row.auth_seq_id, row.insertion_code)
+);
+
+const mappedRows = (structureMap: FrustraMpnnMetricStructureMap): ReadonlyMap<string, FrustraMpnnMetricStructureMapRow> => {
+    const rows = new Map<string, FrustraMpnnMetricStructureMapRow>();
+    const sourceIdentities = new Set<string>();
     for (const row of structureMap.rows) {
         if (row.status !== 'mapped') continue;
-        const key = identityKey(row.entity_instance_id, row.sequence_index);
-        if (rows.has(key)) throw new Error(`Duplicate mapped structure identity: ${row.entity_instance_id}:${row.sequence_index}`);
-        rows.set(key, row);
+        const sourceKey = `${row.entity_instance_id}\u0000${row.sequence_index}`;
+        if (sourceIdentities.has(sourceKey)) {
+            throw new Error(`Conflicting mapped structure source identity: ${row.entity_instance_id}:${row.sequence_index}`);
+        }
+        const authorKey = authorIdentityKeyForMapRow(row);
+        if (rows.has(authorKey)) {
+            throw new Error(`Ambiguous mapped author residue identity: ${row.auth_asym_id}:${row.auth_seq_id}${row.insertion_code}`);
+        }
+        sourceIdentities.add(sourceKey);
+        rows.set(authorKey, row);
     }
     return rows;
 };
 
-const exactIdentity = (residue: CmLandscapeResidue, row: CmStructureMapRow | undefined): ResidueRef => {
-    if (!row) throw new Error(`FrustraMPNN residue has no mapped structure identity: ${residue.entity_instance_id}:${residue.sequence_index}`);
+const exactIdentity = (residue: CmLandscapeResidue, row: FrustraMpnnMetricStructureMapRow | undefined): ResidueRef => {
+    if (!row) throw new Error(`FrustraMPNN identity mismatch: residue has no exact mapped author identity: ${residue.auth_asym_id}:${residue.auth_seq_id}${residue.insertion_code}`);
     const authSeqId = Number(residue.auth_seq_id);
     if (!Number.isInteger(authSeqId)
         || row.auth_asym_id !== residue.auth_asym_id
         || row.auth_seq_id !== authSeqId
-        || row.insertion_code !== residue.insertion_code) {
+        || row.insertion_code !== residue.insertion_code
+        || row.entity_instance_id !== residue.entity_instance_id
+        || row.sequence_index !== residue.sequence_index
+        || (row.wt != null && row.wt !== residue.wt)) {
         throw new Error(`FrustraMPNN/structure-map identity mismatch: ${residue.entity_instance_id}:${residue.sequence_index}`);
     }
     return {
         documentId: 'primary',
-        entityId: row.source_entity_id,
-        labelAsymId: row.label_asym_id,
+        entityId: row.source_entity_id ?? undefined,
+        labelAsymId: row.label_asym_id ?? undefined,
         authAsymId: row.auth_asym_id,
-        labelSeqId: row.label_seq_id,
+        labelSeqId: row.label_seq_id ?? undefined,
         authSeqId: row.auth_seq_id,
         insertionCode: row.insertion_code || undefined,
         sourceInstanceId: row.entity_instance_id,
@@ -110,6 +198,23 @@ const exactIdentity = (residue: CmLandscapeResidue, row: CmStructureMapRow | und
 };
 
 const unavailable = (identity: ResidueRef): MetricValue<ResidueRef> => ({ identity, value: null, missingness: 'unavailable' });
+
+const validateExactResidueSlots = (
+    candidateId: string,
+    residue: CmLandscapeResidue,
+): void => {
+    for (const slot of residue.slots) {
+        if (slot.candidate_id !== candidateId
+            || slot.entity_instance_id !== residue.entity_instance_id
+            || slot.auth_asym_id !== residue.auth_asym_id
+            || slot.auth_seq_id !== residue.auth_seq_id
+            || slot.insertion_code !== residue.insertion_code
+            || slot.sequence_index !== residue.sequence_index
+            || slot.wt !== residue.wt) {
+            throw new Error(`FrustraMPNN exact-20 candidate, author identity, or wild-type conflict: ${residue.auth_asym_id}:${residue.auth_seq_id}${residue.insertion_code}`);
+        }
+    }
+};
 
 export const createFrustraMpnnViewerMetrics = (input: FrustraMpnnViewerMetricInput): FrustraMpnnViewerMetricBundle => {
     if (input.structureMap.candidate_id !== input.candidateId) throw new Error('FrustraMPNN/structure-map candidate identity mismatch');
@@ -123,8 +228,13 @@ export const createFrustraMpnnViewerMetrics = (input: FrustraMpnnViewerMetricInp
     const residueProfiles: Array<{ identity: ResidueRef; residue: CmLandscapeResidue }> = [];
 
     for (const residue of input.residues) {
-        const identity = exactIdentity(residue, mapRows.get(identityKey(residue.entity_instance_id, residue.sequence_index)));
-        residueByIdentityKey.set(identityKey(residue.entity_instance_id, residue.sequence_index), residue);
+        validateExactResidueSlots(input.candidateId, residue);
+        const exactAuthorKey = authorIdentityKeyForResidue(residue);
+        if (residueByIdentityKey.has(exactAuthorKey)) {
+            throw new Error(`Duplicate FrustraMPNN exact author residue identity: ${residue.auth_asym_id}:${residue.auth_seq_id}${residue.insertion_code}`);
+        }
+        const identity = exactIdentity(residue, mapRows.get(authorIdentityKeyForResidue(residue)));
+        residueByIdentityKey.set(exactAuthorKey, residue);
         residueProfiles.push({ identity, residue });
         const native = residue.slots.find((slot) => slot.mutation_aa === residue.wt);
         if (!native) throw new Error(`FrustraMPNN residue lacks its native exact-20 slot: ${residue.key}`);
@@ -160,11 +270,11 @@ export const createFrustraMpnnViewerMetrics = (input: FrustraMpnnViewerMetricInp
                 formula: 'score(slot where mutation_aa = wild type)',
                 valueRange: [-3, 3],
                 categories: {
-                    high: { label: 'Highly frustrated (≤ -1.0)', color: CLASS_COLORS.high },
-                    neutral: { label: 'Neutral', color: CLASS_COLORS.neutral },
-                    minimally_frustrated: { label: 'Minimally frustrated (≥ 0.58)', color: CLASS_COLORS.minimally_frustrated },
+                    high: { label: 'Highly frustrated (canonical policy)', color: CLASS_COLORS.high },
+                    neutral: { label: 'Neutral (canonical policy)', color: CLASS_COLORS.neutral },
+                    minimal: { label: 'Minimally frustrated (canonical policy)', color: CLASS_COLORS.minimal },
                 },
-                palette: { colors: [CLASS_COLORS.high, CLASS_COLORS.neutral, CLASS_COLORS.minimally_frustrated], domain: [-3, 3], missingColor: '#475569' },
+                palette: { colors: [CLASS_COLORS.high, CLASS_COLORS.neutral, CLASS_COLORS.minimal], domain: [-3, 3], missingColor: '#475569' },
             },
             values: nativeValues,
         },
@@ -207,14 +317,17 @@ const sameDefined = <T,>(selected: T | undefined, expected: T | undefined): bool
 export const resolveFrustraMpnnResidueProfile = (
     bundle: FrustraMpnnViewerMetricBundle,
     selected: ResidueRef,
-): CmLandscapeResidue | undefined => bundle.residueProfiles.find(({ identity }) => (
-    sameDefined(selected.documentId, identity.documentId)
-    && sameDefined(selected.labelAsymId, identity.labelAsymId)
-    && sameDefined(selected.labelSeqId, identity.labelSeqId)
-    && sameDefined(selected.authAsymId, identity.authAsymId)
-    && sameDefined(selected.authSeqId, identity.authSeqId)
-    && sameDefined(selected.insertionCode || undefined, identity.insertionCode || undefined)
-))?.residue;
+): CmLandscapeResidue | undefined => {
+    if (!selected.authAsymId || !Number.isInteger(selected.authSeqId)) return undefined;
+    return bundle.residueProfiles.find(({ identity }) => (
+        identity.authAsymId === selected.authAsymId
+        && identity.authSeqId === selected.authSeqId
+        && (identity.insertionCode ?? '') === (selected.insertionCode ?? '')
+        && sameDefined(selected.documentId, identity.documentId)
+        && sameDefined(selected.labelAsymId, identity.labelAsymId)
+        && sameDefined(selected.labelSeqId, identity.labelSeqId)
+    ))?.residue;
+};
 
 export type FrustraMpnnLandscapePageLoader = (offset: number, limit: number) => Promise<CmLandscapePage>;
 

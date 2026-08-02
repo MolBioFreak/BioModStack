@@ -38,12 +38,12 @@ def _safe_filename(filename: str) -> str:
     return label[:255] or "source.obj"
 
 
-def _publish(path: Path, payload: bytes) -> None:
+def _publish(path: Path, payload: bytes) -> bool:
     path.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
     if path.exists():
         if path.is_symlink() or path.stat().st_nlink != 1 or path.read_bytes() != payload:
             raise RuntimeError(f"immutable Shape artifact conflict: {path.name}")
-        return
+        return False
     descriptor, temporary_name = tempfile.mkstemp(prefix=".shape-", dir=path.parent)
     temporary = Path(temporary_name)
     try:
@@ -57,7 +57,7 @@ def _publish(path: Path, payload: bytes) -> None:
         except FileExistsError:
             if path.is_symlink() or path.stat().st_nlink != 1 or path.read_bytes() != payload:
                 raise RuntimeError(f"immutable Shape artifact conflict: {path.name}")
-            return
+            return False
         directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
         try:
             os.fsync(directory)
@@ -65,6 +65,19 @@ def _publish(path: Path, payload: bytes) -> None:
             os.close(directory)
     finally:
         temporary.unlink(missing_ok=True)
+    return True
+
+
+def _cleanup_publications(paths: list[Path], *, root: Path) -> None:
+    for path in reversed(paths):
+        path.unlink(missing_ok=True)
+        parent = path.parent
+        while parent != root and parent.is_relative_to(root):
+            try:
+                parent.rmdir()
+            except OSError:
+                break
+            parent = parent.parent
 
 
 def _result(row: ShapeDesignGeometry) -> AdmittedGeometry:
@@ -97,21 +110,23 @@ async def admit_mesh_geometry(
         angstrom_per_unit=angstrom_per_unit,
     )
     source_id = f"cad_{canonical.source_sha256[:32]}"
-    geometry_id = f"geom_{canonical.geometry_sha256[:32]}"
     conversion = {
         "schema": "bms_shape_geometry_conversion_v1",
         "angstrom_per_unit": float(angstrom_per_unit),
         "center_mode": "volume_centroid_v1",
+        "source_format": normalized_format,
+        "source_parser": canonical.manifest["source_parser"],
+        "source_unit": source_unit,
     }
-    if normalized_format == "stl":
-        conversion.update(
-            {
-                "source_format": "stl",
-                "source_parser": canonical.manifest["source_parser"],
-                "source_unit": source_unit,
-            }
-        )
     conversion_sha256 = hashlib.sha256(_canonical_json(conversion)).hexdigest()
+    publication_identity = {
+        "schema": "bms_shape_geometry_publication_identity_v1",
+        "source_sha256": canonical.source_sha256,
+        "geometry_sha256": canonical.geometry_sha256,
+        "conversion_sha256": conversion_sha256,
+    }
+    publication_sha256 = hashlib.sha256(_canonical_json(publication_identity)).hexdigest()
+    geometry_id = f"geom_{publication_sha256[:32]}"
 
     existing = await session.scalar(
         select(ShapeDesignGeometry).where(
@@ -126,7 +141,7 @@ async def admit_mesh_geometry(
 
     root = (data_root / "shape_blueprint").resolve()
     source_relative = f"sources/{canonical.source_sha256}/source.{normalized_format}"
-    geometry_prefix = f"geometries/{canonical.geometry_sha256}"
+    geometry_prefix = f"geometries/{publication_sha256}"
     artifacts = {
         "vertices_f64": f"{geometry_prefix}/vertices.f64le",
         "faces_u32": f"{geometry_prefix}/faces.u32le",
@@ -135,12 +150,16 @@ async def admit_mesh_geometry(
         "preview_obj": f"{geometry_prefix}/preview.obj",
         "manifest": f"{geometry_prefix}/manifest.json",
     }
-    final_manifest = {
+    unhashed_manifest = {
         **canonical.manifest,
-        **({"source_unit": source_unit} if normalized_format == "stl" else {}),
+        "conversion_sha256": conversion_sha256,
+        "publication_sha256": publication_sha256,
+        "source_unit": source_unit,
         "conversion": conversion,
         "artifacts": artifacts,
     }
+    manifest_sha256 = hashlib.sha256(_canonical_json(unhashed_manifest)).hexdigest()
+    final_manifest = {**unhashed_manifest, "manifest_sha256": manifest_sha256}
     payloads = {
         source_relative: payload,
         artifacts["vertices_f64"]: canonical.vertices_f64,
@@ -150,12 +169,6 @@ async def admit_mesh_geometry(
         artifacts["preview_obj"]: canonical.preview_obj,
         artifacts["manifest"]: _canonical_json(final_manifest),
     }
-    for relative, content in payloads.items():
-        destination = (root / relative).resolve()
-        if not destination.is_relative_to(root):
-            raise RuntimeError("Shape publication escaped the data root")
-        _publish(destination, content)
-
     source = await session.get(ShapeCadSource, source_id)
     if source is None:
         source = ShapeCadSource(
@@ -184,7 +197,23 @@ async def admit_mesh_geometry(
         created_at=datetime.utcnow(),
     )
     session.add(row)
-    await session.commit()
+    # Reserve database identities before publication. SQLite then holds the
+    # writer transaction until commit, so rollback cleanup cannot race another
+    # admission that has adopted these deterministic publication paths.
+    created: list[Path] = []
+    try:
+        await session.flush()
+        for relative, content in payloads.items():
+            destination = (root / relative).resolve()
+            if not destination.is_relative_to(root):
+                raise RuntimeError("Shape publication escaped the data root")
+            if _publish(destination, content):
+                created.append(destination)
+        await session.commit()
+    except BaseException:
+        await session.rollback()
+        _cleanup_publications(created, root=root)
+        raise
     return _result(row)
 
 

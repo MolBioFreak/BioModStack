@@ -90,13 +90,19 @@ def normalize_flow_cell_info(flow_cell_info: Any) -> dict[str, Any]:
 
 
 def normalize_position(position: Any) -> dict[str, Any]:
-    """Normalize one MinKNOW flow-cell position to a BMS-safe device record."""
+    """Normalize one MinKNOW position to the browser-safe discovery contract.
+
+    The adapter may inspect flow-cell identifiers and connection metadata while
+    talking to MinKNOW, but those values are host-only inputs to device
+    classification. Discovery callers need only a position label, Mk1D
+    eligibility, and whether a flow cell is present. In particular, never put
+    flow-cell IDs, product/model identifiers, RPC ports, exception text, or
+    client objects in this return value.
+    """
     position_name = _string_or_none(_safe_get(position, "name"))
     state = _string_or_none(_safe_get(position, "state"))
     running = bool(_safe_get(position, "running", False))
     description = _safe_get(position, "description")
-    rpc_ports = _safe_get(description, "rpc_ports")
-    secure_port = _safe_get(rpc_ports, "secure")
 
     flow_cell: dict[str, Any] = {"present": False}
     connection_error = None
@@ -118,9 +124,7 @@ def normalize_position(position: Any) -> dict[str, Any]:
         "state": state,
         "running": running,
         "available_for_run": bool((not running) and flow_cell.get("present") and not connection_error),
-        "flow_cell": flow_cell,
-        "rpc_ports": {"secure": secure_port} if secure_port is not None else {},
-        "connection_error": connection_error,
+        "flow_cell": {"present": bool(flow_cell.get("present"))},
     }
 
 
@@ -146,11 +150,12 @@ def discover_minknow_devices(
     config: MinknowConnectionConfig | None = None,
     manager_factory: Callable[[MinknowConnectionConfig], Any] | None = None,
 ) -> dict[str, Any]:
-    """Return normalized MinKNOW position/device status for BMS.
+    """Return browser-safe MinKNOW position/device discovery status for BMS.
 
-    The returned shape is safe for the BMS API/frontend: no fake devices, no raw
-    client objects, and explicit status when the MinKNOW client is missing or the
-    manager cannot be reached.
+    This projection deliberately excludes fake devices, raw client objects, host
+    addresses, flow-cell IDs, RPC information, and exception text. Server-side
+    protocol preflight uses the host-agent control seam rather than this
+    discovery response when it needs sensitive MinKNOW details.
     """
     config = config or MinknowConnectionConfig.from_env()
     manager_factory = manager_factory or build_manager
@@ -160,10 +165,6 @@ def discover_minknow_devices(
         devices = [normalize_position(position) for position in positions]
         return {
             "implementation_status": MINKNOW_STATUS_CONFIGURED,
-            "minknow": {
-                "host": config.host,
-                "manager_port": config.port,
-            },
             "live_devices": devices,
             "fake_or_demo_devices": False,
             "message": "MinKNOW API reachable; live_devices reflects manager.flow_cell_positions().",
@@ -172,25 +173,22 @@ def discover_minknow_devices(
         if exc.name and exc.name.startswith("minknow_api"):
             return {
                 "implementation_status": MINKNOW_STATUS_CLIENT_MISSING,
-                "minknow": {"host": config.host, "manager_port": config.port},
                 "live_devices": [],
                 "fake_or_demo_devices": False,
                 "message": "minknow_api is not installed in this runtime.",
             }
         raise
-    except PermissionError as exc:
+    except PermissionError:
         return {
             "implementation_status": MINKNOW_STATUS_AUTH_ERROR,
-            "minknow": {"host": config.host, "manager_port": config.port},
             "live_devices": [],
             "fake_or_demo_devices": False,
-            "message": str(exc),
+            "message": "MinKNOW authentication is unavailable.",
         }
-    except Exception as exc:  # noqa: BLE001 - manager connection errors vary by grpc/minknow_api version
+    except Exception:  # noqa: BLE001 - manager connection errors vary by grpc/minknow_api version
         return {
             "implementation_status": MINKNOW_STATUS_UNREACHABLE,
-            "minknow": {"host": config.host, "manager_port": config.port},
             "live_devices": [],
             "fake_or_demo_devices": False,
-            "message": str(exc),
+            "message": "MinKNOW discovery is unavailable.",
         }

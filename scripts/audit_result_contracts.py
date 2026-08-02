@@ -90,7 +90,7 @@ def load_designs(path: str) -> List[Mapping[str, Any]]:
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json-file", help="Path to a saved designs API JSON payload")
-    parser.add_argument("--api-base-url", default="http://127.0.0.1:8000", help="BioModStack API base URL")
+    parser.add_argument("--api-base-url", default="http://127.0.0.1:18000", help="BioModStack API base URL")
     parser.add_argument("--job-id", help="Job id to fetch from /api/designs/by-job/{job_id}")
     parser.add_argument("--limit", type=int, default=5000)
     args = parser.parse_args(argv)

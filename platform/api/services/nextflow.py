@@ -11,6 +11,7 @@ import subprocess
 import os
 import signal
 import json
+import hashlib
 import csv
 import yaml
 import shutil
@@ -21,6 +22,7 @@ from typing import Deque, Dict, Any, Iterable, Iterator, Optional, List, Tuple, 
 import logging
 
 from services import stage_reporting
+
 
 logger = logging.getLogger(__name__)
 
@@ -359,6 +361,7 @@ MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
     ("antibody_child", "validation_batch"): "workflows/antibody_child.nf",
     ("rfantibody_child", "antibody_backbone"): "workflows/rfantibody_backbone.nf",
     ("fampnn_child", "sequence_design"): "workflows/fampnn_child.nf",
+    ("frustrampnn", "analyze"): "workflows/frustrampnn_analysis.nf",
     ("protein_modification_experimental", "de_novo_design"): "workflows/protein_cad_experimental.nf",
     ("protein_modification_experimental", "shape_blueprint"): "workflows/shape_blueprint_design.nf",
     ("protein_modification_experimental", "region_redesign"): "workflows/protein_local_redesign.nf",
@@ -1278,104 +1281,6 @@ async def maybe_auto_annotate_cdrs(job, session) -> None:
         logger.warning(f"[CDR AUTO] Failed to schedule viewer-minimum analyses: {e}")
 
 
-async def maybe_trigger_batch_frustrampnn(job, session) -> None:
-    """
-    BATCH-STAGE-GATE: Trigger batch FrustraMPNN after ALL sibling variants complete.
-    
-    Checks if:
-    1. Job is part of a batch (has batch_id)
-    2. Parent MSA job has run_frustrampnn_batch=True
-    3. ALL sibling variant jobs are complete (completed or failed)
-    
-    If all conditions met, collects PDBs from all variants and runs FrustraMPNN once.
-    """
-    if not job.batch_id:
-        return
-    
-    from database import Job, Design
-    from sqlalchemy import select, func, and_, or_
-    
-    try:
-        # Find parent MSA job in this batch
-        msa_result = await session.execute(
-            select(Job).where(
-                Job.batch_id == job.batch_id,
-                Job.job_phase == "msa_generation"
-            )
-        )
-        msa_job = msa_result.scalar_one_or_none()
-        
-        if not msa_job:
-            return
-        
-        # Check if FrustraMPNN batch is requested
-        run_frustrampnn_batch = msa_job.params.get("run_frustrampnn_batch", False)
-        if not run_frustrampnn_batch:
-            return
-        
-        # Check if already triggered (avoid duplicate runs)
-        if msa_job.params.get("_frustrampnn_batch_triggered"):
-            return
-        
-        # Count sibling variant jobs
-        variant_result = await session.execute(
-            select(func.count(Job.id)).where(
-                Job.batch_id == job.batch_id,
-                Job.job_phase == "inference"  # Variant jobs
-            )
-        )
-        total_variants = variant_result.scalar() or 0
-        
-        completed_result = await session.execute(
-            select(func.count(Job.id)).where(
-                Job.batch_id == job.batch_id,
-                Job.job_phase == "inference",
-                or_(Job.status == "completed", Job.status == "failed")
-            )
-        )
-        completed_variants = completed_result.scalar() or 0
-        
-        logger.info(f"[FRUST BATCH] Variant progress: {completed_variants}/{total_variants} for batch {job.batch_id[:8]}")
-        
-        if completed_variants < total_variants:
-            return
-        
-        # ALL VARIANTS COMPLETE - trigger batch FrustraMPNN
-        logger.info(f"[FRUST BATCH] All {total_variants} variants complete! Triggering batch FrustraMPNN...")
-        
-        # Mark as triggered to prevent duplicates
-        msa_job.params = {**msa_job.params, "_frustrampnn_batch_triggered": True}
-        
-        # Collect all PDB paths from designs in this batch
-        design_result = await session.execute(
-            select(Design.pdb_path, Design.job_id).where(
-                Design.job_id.in_(
-                    select(Job.id).where(
-                        Job.batch_id == job.batch_id,
-                        Job.job_phase == "inference"
-                    )
-                )
-            )
-        )
-        designs = design_result.all()
-        pdb_paths = [d.pdb_path for d in designs if d.pdb_path]
-        
-        if not pdb_paths:
-            logger.warning(f"[FRUST BATCH] No PDBs found for batch {job.batch_id[:8]}")
-            return
-        
-        logger.info(f"[FRUST BATCH] Running FrustraMPNN on {len(pdb_paths)} PDBs...")
-        
-        # Run FrustraMPNN batch in background task
-        asyncio.create_task(
-            run_batch_frustrampnn(pdb_paths, job.batch_id, session)
-        )
-        
-        await session.commit()
-        
-    except Exception as e:
-        logger.error(f"[FRUST BATCH] Error checking batch completion: {e}", exc_info=True)
-
 
 async def maybe_trigger_mutation_seed_refinement(job, session) -> None:
     """
@@ -1525,84 +1430,6 @@ async def maybe_trigger_mutation_seed_refinement(job, session) -> None:
 
     except Exception as e:
         logger.error(f"[MUT-SEED] Error triggering seeded refinement: {e}", exc_info=True)
-
-
-async def run_batch_frustrampnn(pdb_paths: list, batch_id: str, parent_session) -> None:
-    """
-    Run FrustraMPNN on a batch of PDBs and update Design table with frustration metrics.
-    
-    Uses the frustrampnn container with single model load for efficiency.
-    """
-    from database import async_session, Design
-    from sqlalchemy import select
-    from pathlib import Path
-    import subprocess
-    import tempfile
-    
-    logger.info(f"[FRUST BATCH] Starting FrustraMPNN for {len(pdb_paths)} PDBs...")
-    
-    try:
-        # Create manifest of PDBs
-        from paths import get_project_root
-        container_path = Path(get_project_root()) / "containers" / "frustrampnn.sif"
-        
-        if not container_path.exists():
-            logger.error(f"[FRUST BATCH] Container not found: {container_path}")
-            return
-        
-        # Process each PDB
-        for pdb_path in pdb_paths:
-            if not Path(pdb_path).exists():
-                logger.warning(f"[FRUST BATCH] PDB not found: {pdb_path}")
-                continue
-            
-            output_csv = Path(pdb_path).with_suffix('.frustration.csv')
-            
-            # Run frustrampnn predict
-            cmd = [
-                "apptainer", "run", "--nv",
-                str(container_path),
-                "predict",
-                "--pdb", pdb_path,
-                "--checkpoint", "/opt/frustrampnn_weights/megascale.ckpt",
-                "--output", str(output_csv)
-            ]
-            
-            try:
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-                if result.returncode != 0:
-                    logger.warning(f"[FRUST BATCH] FrustraMPNN failed for {pdb_path}: {result.stderr[:200]}")
-                    continue
-            except subprocess.TimeoutExpired:
-                logger.warning(f"[FRUST BATCH] FrustraMPNN timeout for {pdb_path}")
-                continue
-            
-            # Parse and update Design
-            if output_csv.exists():
-                from services.result_ingester import parse_frustration_csv
-                
-                frust_data = parse_frustration_csv(output_csv)
-                if frust_data:
-                    async with async_session() as session:
-                        # Find design by PDB path
-                        result = await session.execute(
-                            select(Design).where(Design.pdb_path == pdb_path)
-                        )
-                        design = result.scalar_one_or_none()
-                        
-                        if design:
-                            design.frustration_pct_high = frust_data.get("pct_high")
-                            design.frustration_high_count = frust_data.get("high_count")
-                            design.frustration_min_count = frust_data.get("min_count")
-                            design.frustration_residues = frust_data.get("residues")
-                            design.frustration_csv_path = str(output_csv)
-                            await session.commit()
-                            logger.info(f"[FRUST BATCH] Updated frustration for {design.name}")
-        
-        logger.info(f"[FRUST BATCH] Completed FrustraMPNN batch for {len(pdb_paths)} PDBs")
-        
-    except Exception as e:
-        logger.error(f"[FRUST BATCH] Error running batch FrustraMPNN: {e}", exc_info=True)
 
 
 def _build_msa_batch_command(params: Dict[str, Any], output_dir: str) -> List[str]:
@@ -2556,8 +2383,6 @@ async def launch_nextflow_job(
                                     from services.analysis_autorun import schedule_viewer_minimum_analyses_for_job
 
                                     schedule_viewer_minimum_analyses_for_job(str(job.id))
-                                    # BATCH-STAGE-GATE: Check if all sibling variants complete, trigger batch FrustraMPNN
-                                    await maybe_trigger_batch_frustrampnn(job, session)
                                     await maybe_trigger_mutation_seed_refinement(job, session)
                                 else:
                                     logger.warning(
@@ -2812,6 +2637,101 @@ def build_nextflow_command(
     """
     # Never mutate caller params; launch retries may reuse the same dict.
     params = dict(params or {})
+
+    if str(model_id or "").strip() == "frustrampnn":
+        if str(mode or "").strip() != "analyze":
+            raise ValueError("frustrampnn supports only mode=analyze")
+        unknown = sorted(set(params) - {"frustrampnn_batch_manifest_path", "_frustrampnn_child_v1", "gpu_id"})
+        if unknown:
+            raise ValueError(
+                "scheduler-owned FrustraMPNN launch parameters fail closed: "
+                + ", ".join(unknown)
+            )
+        batch_manifest_path = str(params.get("frustrampnn_batch_manifest_path") or "").strip()
+        if not batch_manifest_path:
+            raise ValueError("frustrampnn_batch_manifest_path is required")
+        if not job_id:
+            raise ValueError("FrustraMPNN scheduler launch requires job_id")
+        output_root = Path(os.path.abspath(str(output_dir)))
+        expected_manifest = output_root / "inputs" / "frustrampnn_scheduler_batch_v1.json"
+        manifest_path = Path(os.path.abspath(batch_manifest_path))
+        if manifest_path != expected_manifest or manifest_path.is_symlink() or not manifest_path.is_file():
+            raise ValueError("FrustraMPNN batch manifest is not the job-owned immutable authority")
+        envelope = params.get("_frustrampnn_child_v1")
+        if not isinstance(envelope, dict) or envelope.get("schema_name") != "bms.frustrampnn.scheduler-child.v1":
+            raise ValueError("FrustraMPNN scheduler-child envelope is required")
+        if envelope.get("execution_owner_job_id") != str(job_id):
+            raise ValueError("FrustraMPNN execution owner does not match job_id")
+        if envelope.get("batch_manifest_relative_path") != "inputs/frustrampnn_scheduler_batch_v1.json":
+            raise ValueError("FrustraMPNN manifest relative authority is invalid")
+        manifest_payload = manifest_path.read_bytes()
+        if len(manifest_payload) != envelope.get("batch_manifest_size_bytes"):
+            raise ValueError("FrustraMPNN batch manifest size binding is invalid")
+        if hashlib.sha256(manifest_payload).hexdigest() != envelope.get("batch_manifest_sha256"):
+            raise ValueError("FrustraMPNN batch manifest digest binding is invalid")
+        try:
+            batch = json.loads(manifest_payload)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("FrustraMPNN batch manifest is invalid JSON") from exc
+        records = batch.get("records") if isinstance(batch, dict) else None
+        if (
+            not isinstance(batch, dict)
+            or batch.get("schema_name") != "bms_frustrampnn_scheduler_batch"
+            or batch.get("schema_version") != 1
+            or batch.get("execution_owner_job_id") != str(job_id)
+            or not isinstance(records, list)
+            or not records
+            or len(records) != len(envelope.get("component_invocation_ids") or [])
+        ):
+            raise ValueError("FrustraMPNN batch manifest authority is invalid")
+        for record in records:
+            if not isinstance(record, dict):
+                raise ValueError("FrustraMPNN batch record is invalid")
+            for kind, expected_prefix in (("request", ("inputs", "requests")), ("source", ("inputs", "sources"))):
+                relative = record.get(f"{kind}_relative_path")
+                relative_path = Path(str(relative or ""))
+                if (
+                    not relative
+                    or relative_path.is_absolute()
+                    or ".." in relative_path.parts
+                    or relative_path.parts[:2] != expected_prefix
+                ):
+                    raise ValueError(f"FrustraMPNN {kind} path authority is invalid")
+                artifact = output_root / relative_path
+                if artifact.is_symlink() or not artifact.is_file():
+                    raise ValueError(f"FrustraMPNN {kind} snapshot is missing or unsafe")
+                payload = artifact.read_bytes()
+                if len(payload) != record.get(f"{kind}_size_bytes"):
+                    raise ValueError(f"FrustraMPNN {kind} size binding is invalid")
+                if hashlib.sha256(payload).hexdigest() != record.get(f"{kind}_sha256"):
+                    raise ValueError(f"FrustraMPNN {kind} digest binding is invalid")
+        gpu_id = params.get("gpu_id")
+        if isinstance(gpu_id, bool) or not isinstance(gpu_id, int) or gpu_id < 0:
+            raise ValueError("FrustraMPNN requires a non-negative scheduler-assigned gpu_id")
+        workflow_entrypoint = resolve_nextflow_entrypoint(
+            effective_profile="frustrampnn",
+            model_id="frustrampnn",
+            mode="analyze",
+            params=params,
+        )
+        command = [
+            resolve_nextflow_executable(),
+            "run",
+            workflow_entrypoint,
+            "-profile",
+            "workstation_ryzen7960x",
+            "-w",
+            str(get_work_dir()),
+            "--out_dir",
+            str(output_dir),
+            "--frustrampnn_batch_manifest_path",
+            batch_manifest_path,
+            "--frustrampnn_physical_gpu_id",
+            str(gpu_id),
+        ]
+        if job_id:
+            command.extend(["--job_id", str(job_id)])
+        return command
 
     if str(model_id or "").strip() == "conformational_mapping":
         if str(mode or "").strip() != "map":
@@ -3819,6 +3739,10 @@ def build_nextflow_command(
     
     # Dynamic parameter passing
     for key, value in params.items():
+        # Physical GPU assignment is exclusively scheduler-owned.  Never pass a
+        # request-supplied component override through the generic parameter lane.
+        if key == "frustrampnn_physical_gpu_id":
+            continue
         if value is not None:
             # Skip empty strings - they would become valueless flags interpreted as boolean true
             if value == '':
@@ -3841,7 +3765,15 @@ def build_nextflow_command(
                 logger.warning(f"Skipping dict parameter {key} - not supported in command line")
             else:
                 cmd.extend([f"--{nf_key}", str(value)])
-            
+
+    if params.get("run_frustrampnn") is True:
+        component_gpu = params.get("gpu_id")
+        if isinstance(component_gpu, bool) or not str(component_gpu).isdigit():
+            raise ValueError(
+                "Enabled FrustraMPNN requires a scheduler-assigned physical GPU ID"
+            )
+        cmd.extend(["--frustrampnn_physical_gpu_id", str(component_gpu)])
+
     return cmd
 
 

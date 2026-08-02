@@ -92,7 +92,6 @@ import {
     getPrimerHighlightRegions,
     normalizeStoredPrimerPlacement,
     prepareSelectionPrimer,
-    resolvePersistentSelection,
     type SelectionSnapshot,
 } from './utils/selectionActions';
 import { applyImportedTopology, type ImportTopology } from './utils/topology';
@@ -991,14 +990,10 @@ export function MolBioToolkitV2() {
         setVisibility(prev => ({ ...prev, [key]: !prev[key] }));
     }, []);
 
-    // Keep a completed range stable across SeqViz cursor/mouse-up emissions.
+    // SequenceViewer emits one finalized value per pointer gesture.
     const handleSelection = useCallback((sel: SelectionInfo) => {
-        setSelection((current) => resolvePersistentSelection(
-            current,
-            sel,
-            sequenceData.sequence.length,
-        ));
-    }, [sequenceData.sequence.length]);
+        setSelection(sel);
+    }, []);
 
     const closeQuickAddMenu = useCallback(() => {
         setQuickAddMenu(null);

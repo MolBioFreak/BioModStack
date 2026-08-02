@@ -26,8 +26,15 @@ import {
     resolveStructureLaunchConfig,
     resolveStructurePredictorSelection,
     resolveStructureSubmitTarget,
+    buildStructureFrustraMpnnSubmitParams,
     resolveTargetPreviewSource,
 } from '../src/components/structurePredictionUiState.js';
+
+test('structure workflow cards request canonical FrustraMPNN by default and preserve an explicit operator opt-out', () => {
+    assert.deepEqual(buildStructureFrustraMpnnSubmitParams(undefined), { run_frustrampnn: true });
+    assert.deepEqual(buildStructureFrustraMpnnSubmitParams(true), { run_frustrampnn: true });
+    assert.deepEqual(buildStructureFrustraMpnnSubmitParams(false), { run_frustrampnn: false });
+});
 
 test('structure prediction defaults new MSA submissions to the ColabFold server', () => {
     assert.equal(DEFAULT_STRUCTURE_MSA_PROVIDER, 'colabfold_api');

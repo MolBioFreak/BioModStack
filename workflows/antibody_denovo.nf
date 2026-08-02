@@ -1,6 +1,9 @@
 #!/usr/bin/env nextflow
 nextflow.enable.dsl = 2
 
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+
 
 def extractSequenceFromPDB(pdb_file) {
     def aa_codes = [
@@ -165,6 +168,111 @@ def buildValidationArtifactManifestJson(Map<String, ?> artifacts) {
     )
 }
 
+def antibodySha256(rawPath) {
+    def digest = java.security.MessageDigest.getInstance('SHA-256')
+    rawPath.toFile().withInputStream { stream ->
+        byte[] buffer = new byte[1024 * 1024]
+        int count
+        while ((count = stream.read(buffer)) != -1) digest.update(buffer, 0, count)
+    }
+    return digest.digest().encodeHex().toString()
+}
+
+def antibodyStableProducerKey(rawValue, String field) {
+    def value = rawValue?.toString()?.trim()
+    if (!(value ==~ /[A-Za-z0-9][A-Za-z0-9._-]*/)) {
+        throw new IllegalArgumentException("antibody_denovo:invalid_${field}")
+    }
+    return value
+}
+
+def antibodyCandidateId(parentJobId, producerStage, producerCandidateKey) {
+    def domain = [
+        'bms.frustrampnn.parent-candidate.v1',
+        parentJobId?.toString()?.trim(),
+        'antibody_denovo',
+        producerStage?.toString()?.trim(),
+        producerCandidateKey?.toString()?.trim(),
+    ]
+    if (domain.tail().any { !it || it.contains('\u0000') }) {
+        throw new IllegalArgumentException('antibody_denovo:invalid_candidate_identity')
+    }
+    def digest = java.security.MessageDigest.getInstance('SHA-256')
+        .digest(domain.join('\u0000').getBytes('UTF-8')).encodeHex().toString()[0..<32]
+    return "${digest[0..<8]}-${digest[8..<12]}-${digest[12..<16]}-${digest[16..<20]}-${digest[20..<32]}"
+}
+
+/*
+ * Single final-candidate adapter. Producer identity comes only from tuple
+ * metadata. Paths, basenames, arrival order, and content hashes authenticate
+ * bytes but never mint producer coordinates.
+ */
+def antibodyTerminalCandidate(rawMeta, rawPath, String terminalStage, String terminalMethod) {
+    if (!(rawMeta instanceof Map)) {
+        throw new IllegalArgumentException('antibody_denovo:missing_producer_metadata')
+    }
+    def producer = new LinkedHashMap(rawMeta as Map)
+    def artifactAuthority = producer.producer_artifact_key ?:
+        producer.producer_candidate_key ?: producer.artifact_key ?: producer.id
+    def artifactKey = antibodyStableProducerKey(artifactAuthority, 'producer_artifact_key')
+    def sampleAuthority = producer.containsKey('producer_sample') ? producer.producer_sample : artifactKey
+    def producerSample = sampleAuthority == null ? null : antibodyStableProducerKey(sampleAuthority, 'producer_sample')
+    def producerRank = producer.containsKey('producer_rank') ? producer.producer_rank : null
+    if (producerRank != null && (!(producerRank instanceof Integer) || (producerRank as int) < 0)) {
+        throw new IllegalArgumentException('antibody_denovo:invalid_producer_rank')
+    }
+    def method = producer.producer_method?.toString()?.trim() ?: terminalMethod
+    if (!(method ==~ /[a-z0-9][a-z0-9_-]*/)) {
+        throw new IllegalArgumentException('antibody_denovo:invalid_producer_method')
+    }
+    def outputKey = producer.producer_output_key?.toString()?.trim()
+    if (!outputKey) outputKey = "antibody_denovo/${artifactKey}.pdb"
+    if (outputKey.startsWith('/') || outputKey.contains('\\') || outputKey.contains('//') ||
+        outputKey.split('/').any { it in ['', '.', '..'] } || !(outputKey.toLowerCase().endsWith('.pdb'))) {
+        throw new IllegalArgumentException('antibody_denovo:invalid_producer_output_key')
+    }
+    def identityDomain = new TreeMap([
+        producer_method: method,
+        producer_output_key: outputKey.replaceFirst(/(?i)\.pdb$/, ''),
+        producer_rank: producerRank,
+        producer_sample: producerSample,
+    ])
+    def identityDigest = java.security.MessageDigest.getInstance('SHA-256')
+        .digest(JsonOutput.toJson(identityDomain).getBytes('UTF-8')).encodeHex().toString()
+    def artifactDigest = antibodySha256(rawPath)
+    def producerStage = "antibody_denovo:${terminalStage}"
+    def producerKey = "frustrampnn/sources/antibody_denovo/${identityDigest}/${artifactDigest}.normalized.pdb"
+    def parentJobId = params.job_id?.toString()?.trim()
+    if (!parentJobId) throw new IllegalArgumentException('antibody_denovo:missing_parent_job_id')
+    def transformationLineage = producer.transformation_lineage instanceof Collection
+        ? new ArrayList(producer.transformation_lineage as Collection)
+        : []
+    if (!transformationLineage.contains(terminalStage)) transformationLineage << terminalStage
+    return tuple([
+        candidate_id: antibodyCandidateId(parentJobId, producerStage, producerKey),
+        parent_job_id: parentJobId,
+        parent_workflow_id: 'antibody_denovo',
+        producer_stage: producerStage,
+        producer_candidate_key: producerKey,
+        producer_artifact_key: artifactKey,
+        producer_method: method,
+        producer_sample: producerSample,
+        producer_rank: producerRank,
+        producer_output_key: outputKey,
+        producer_identity_sha256: identityDigest,
+        producer_artifact_sha256: artifactDigest,
+        source_format: 'pdb',
+        requiredness: 'required',
+        checkpoint_id: 'megascale.ckpt',
+        child_job_id: producer.child_job_id ?: producer.producer_child_job_id,
+        iteration_id: producer.iteration_id ?: producer.iteration,
+        iteration_rank: producer.iteration_rank,
+        maturation_cycle: producer.maturation_cycle,
+        maturation_variant: producer.maturation_variant,
+        transformation_lineage: transformationLineage,
+    ], rawPath)
+}
+
 def ensureParamDefault(params, key, value) {
     if (!params.containsKey(key)) {
         params[key] = value
@@ -304,9 +412,11 @@ include { PrepBoltz ; PrepBoltzWithMSA ; RunBoltz } from '../modules/boltz'
 include { BoltzFromSequence } from '../modules/structure_prediction'
 include { ANARCII } from '../modules/utils/anarci'
 include { PredictTargetComplex } from '../modules/predict_target_complex'
-include { OpenMMRelaxation ; OpenMMScore } from '../modules/openmm'
-include { FrustrampnnQC ; AggregateFrustrationReports } from '../modules/frustrampnn'
+include { CanonicalFrustraMPNN } from '../modules/frustrampnn'
 include { BatchBoltzValidation ; BatchProtenixValidation ; BatchESMFold2Validation } from '../modules/antibody_batch'
+include { PrepareAntibodyFrustraMPNNCandidate ; PublishAntibodyFrustraMPNNCandidate ; AggregateAndReportAntibodyFrustraMPNN ; ReportAntibodyFrustraMPNNNotRequested } from '../modules/antibody_frustrampnn_parent'
+include { FinalizeSequentialValidationOutputs ; FinalizeTerminalAntibodyOutputs } from '../modules/antibody_output_finalization'
+include { AntibodyOpenMMRefinement } from '../modules/antibody_openmm_refinement'
 
 
 process SpawnRFantibodyJobs {
@@ -1707,182 +1817,6 @@ EOF
     """
 }
 
-process FinalizeSequentialValidationOutputs {
-    label 'process_low'
-
-    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.pdb"
-    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.json"
-    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.cif"
-    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.npz"
-    publishDir "${params.out_dir}/pdb_files/aligned_error", mode: 'copy', pattern: "validated_designs/aligned_error/*.json", saveAs: { filename -> filename.split('/')[-1] }
-    publishDir "${params.out_dir}", mode: 'copy', pattern: "aggregation_report.json"
-
-    input:
-    path artifact_manifest_file
-
-    output:
-    path "validated_designs/*.pdb", emit: pdbs, optional: true
-    path "validated_designs/*.json", emit: scores, optional: true
-    path "validated_designs/*.npz", emit: aligned_error, optional: true
-    path "validated_designs/aligned_error/*.json", emit: aligned_error_json, optional: true
-    path "aggregation_report.json", emit: report
-
-    script:
-    """
-    #!/bin/bash
-    set -euo pipefail
-
-    export JOB_ID="${params.job_id ?: 'unknown'}"
-    export BATCH_NAME="${params.batch_name ?: params.job_name ?: 'sequential_validation'}"
-    export OUTPUT_PATH="${params.out_dir}/pdb_files"
-
-    mkdir -p validated_designs
-
-    python3 <<'PY'
-import json
-import os
-import shutil
-from pathlib import Path
-
-manifest = json.loads(Path("${artifact_manifest_file}").read_text(encoding="utf-8"))
-validated_dir = Path("validated_designs")
-validated_dir.mkdir(parents=True, exist_ok=True)
-aligned_error_dir = validated_dir / "aligned_error"
-aligned_error_dir.mkdir(parents=True, exist_ok=True)
-
-total_pdbs = 0
-report_files: list[str] = []
-
-def choose_dest_name(base_dir: Path, filename: str) -> Path:
-    candidate = base_dir / filename
-    if not candidate.exists():
-        return candidate
-    stem = candidate.stem
-    suffix = candidate.suffix
-    counter = 2
-    while True:
-        candidate = base_dir / f"{stem}_{counter}{suffix}"
-        if not candidate.exists():
-            return candidate
-        counter += 1
-
-for key in ("pdbs", "cifs", "scores", "aligned_error"):
-    for raw_path in manifest.get(key) or []:
-        source_path = Path(str(raw_path)).expanduser()
-        if not source_path.exists():
-            print(f"[FinalizeSequentialValidationOutputs] WARNING: missing {key} artifact: {source_path}")
-            continue
-        dest_root = aligned_error_dir if key == "aligned_error" and source_path.suffix.lower() == ".json" else validated_dir
-        dest_path = choose_dest_name(dest_root, source_path.name)
-        shutil.copy2(source_path, dest_path)
-        if source_path.suffix.lower() == ".pdb":
-            total_pdbs += 1
-            if len(report_files) < 50:
-                report_files.append(str(dest_path))
-
-Path("report_files.txt").write_text("\\n".join(report_files), encoding="utf-8")
-Path("aggregation_report.json").write_text(
-    json.dumps(
-        {
-            "parent_job_id": os.environ["JOB_ID"],
-            "batch_name": os.environ["BATCH_NAME"],
-            "children_processed": 1,
-            "total_validated_designs": total_pdbs,
-            "output_path": os.environ["OUTPUT_PATH"],
-            "status": "complete",
-        },
-        indent=2,
-    ),
-    encoding="utf-8",
-)
-print(f"[FinalizeSequentialValidationOutputs] Copied {total_pdbs} validated PDB(s) from explicit manifest")
-PY
-
-    TOTAL_PDBS=\$(python3 - <<'PY'
-import json
-from pathlib import Path
-report = json.loads(Path("aggregation_report.json").read_text(encoding="utf-8"))
-print(int(report.get("total_validated_designs") or 0))
-PY
-    )
-
-    if [ "\$TOTAL_PDBS" -gt 0 ]; then
-        mkdir -p "${params.out_dir}/pdb_files/validated_designs"
-        while IFS= read -r -d '' staged_artifact; do
-            rel_path="\${staged_artifact#validated_designs/}"
-            dest_dir="${params.out_dir}/pdb_files/validated_designs/\$(dirname "\$rel_path")"
-            mkdir -p "\$dest_dir"
-            cp -f "\$staged_artifact" "\$dest_dir/"
-        done < <(find validated_designs -type f -print0)
-        cp -f aggregation_report.json "${params.out_dir}/aggregation_report.json"
-        echo "Triggering result ingestion for parent job..."
-        python3 ${params.code_root}/scripts/result_ingester.py \\
-            --job_id "${params.job_id ?: 'unknown'}" \\
-            --results_dir "${params.out_dir}" \\
-            --api_url "${params.api_url}" \\
-            2>&1 | tee ingest.log || echo "Warning: Ingestion had issues (non-fatal)"
-
-        if [ -s report_files.txt ]; then
-            mapfile -t report_files < report_files.txt
-            python3 ${params.code_root}/scripts/stage_reporter.py \\
-                "${params.job_id ?: 'unknown'}" \\
-                "structure_validation" \\
-                "complete" \\
-                "\${report_files[@]}" \\
-                || echo "Warning: Failed to report sequential structure_validation completion"
-        fi
-    fi
-
-    echo "Sequential validation closeout complete: \$TOTAL_PDBS designs ready for analytics"
-    """
-}
-
-process FinalizeTerminalAntibodyOutputs {
-    label 'process_low'
-
-    publishDir "${params.out_dir}", mode: 'copy', pattern: "terminal_closeout_report.json"
-
-    input:
-    path terminal_pdb_list_file
-
-    output:
-    path "terminal_closeout_report.json", emit: report
-
-    script:
-    """
-    #!/bin/bash
-    set -euo pipefail
-
-    if [ ! -e terminal_pdbs.list ] || [ ! "${terminal_pdb_list_file}" -ef terminal_pdbs.list ]; then
-        cp "${terminal_pdb_list_file}" terminal_pdbs.list
-    fi
-
-    TOTAL_PDBS=\$(grep -c . terminal_pdbs.list || true)
-
-    cat > terminal_closeout_report.json << EOF
-{
-    "job_id": "${params.job_id ?: 'unknown'}",
-    "job_name": "${params.job_name ?: 'antibody_batch'}",
-    "total_terminal_designs": \$TOTAL_PDBS,
-    "output_path": "${params.out_dir}",
-    "status": "complete"
-}
-EOF
-
-    if [ \$TOTAL_PDBS -gt 0 ]; then
-        echo "Triggering terminal result ingestion for parent job..."
-        python3 ${params.code_root}/scripts/result_ingester.py \\
-            --job_id "${params.job_id ?: 'unknown'}" \\
-            --results_dir "${params.out_dir}" \\
-            --api_url "${params.api_url}" \\
-            2>&1 | tee ingest.log || echo "Warning: Terminal ingestion had issues (non-fatal)"
-    fi
-
-    echo "Terminal antibody closeout complete: \$TOTAL_PDBS designs ready for analytics"
-    """
-}
-
-
 workflow ANTIBODY_DENOVO {
 take:
 target_pdb_ch // Channel: [meta, target_pdb]
@@ -1897,6 +1831,10 @@ def ppiflowBackboneRegionMode = workflowContext.ppiflowBackboneRegionMode
 def ppiflowMaturationRegionMode = workflowContext.ppiflowMaturationRegionMode
 def selectedInputDir = workflowContext.selectedInputDir
 def selectedInputIsSequenceConditioned = workflowContext.selectedInputIsSequenceConditioned
+
+if (params.run_affinity_maturation == true && params.run_frustrampnn == true) {
+    error('antibody_denovo:frustrampnn_stale_post_iggm_structure: IgGM changes sequence, but no producer-bound post-IgGM structure revalidation is wired')
+}
 
 
 log.info("Step 1: Generating CDR backbones with RFantibody...")
@@ -3135,76 +3073,9 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
 
 
     if (params.openmm_enabled == true) {
-        log.info("Step 3.5: Running OpenMM physics refinement...")
-        log.info("  Compute tier: ${params.openmm_compute_tier ?: 'fast'}")
-        log.info("  CDR-only mode: ${params.openmm_cdr_only ?: true}")
-        log.info("  Restraint mode: ${params.openmm_restraint_mode ?: 'framework'}")
-        
-        openmm_batched = validated_structures
-            .map { meta, pdb -> pdb }
-            .collect()
-            .flatten()
-            .buffer(size: 10, remainder: true)
-            .map { batch -> tuple("openmm_${batch.hashCode()}", batch) }
-        
-        OpenMMRelaxation(
-            openmm_batched,
-            params.openmm_compute_tier ?: 'fast',
-            params.openmm_cdr_only ?: true,
-            params.openmm_restraint_mode ?: 'framework',
-            params.openmm_antibody_chain ?: 'H',
-            params.openmm_force_field ?: 'amber14sb'
-        )
-        
-        OpenMMRelaxation.out.relaxed_pdbs.subscribe { pdbs ->
-            try {
-                def file_list = pdbs instanceof List ? pdbs : [pdbs]
-                def report_files = file_list.size() > 50 ? file_list[0..49] : file_list
-                def args = [params.job_id, "openmm_relaxation", "complete"] + report_files.collect { it.toString() }
-                def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
-                proc.waitFor()
-            } catch (Exception e) {
-                println "Warning: Failed to report stage openmm_relaxation: ${e.message}"
-            }
-        }
-        
-        if (params.openmm_compute_tier == 'full' || params.openmm_mmgbsa_mode != 'off') {
-            log.info("  Running MM-GBSA binding affinity scoring...")
-            
-            mmgbsa_batched = OpenMMRelaxation.out.relaxed_pdbs
-                .collect()
-                .flatten()
-                .buffer(size: 5, remainder: true)
-                .map { batch -> tuple("mmgbsa_${batch.hashCode()}", batch) }
-            
-            OpenMMScore(
-                mmgbsa_batched,
-                params.openmm_mmgbsa_mode ?: 'interface',
-                params.openmm_binder_chains ?: 'H',
-                params.openmm_target_chains ?: 'A',
-                params.openmm_force_field ?: 'amber14sb'
-            )
-            
-            OpenMMScore.out.scores_json.subscribe { jsons ->
-                try {
-                    def args = [params.job_id, "openmm_mmgbsa", "complete"]
-                    def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
-                    proc.waitFor()
-                } catch (Exception e) {
-                    println "Warning: Failed to report stage openmm_mmgbsa: ${e.message}"
-                }
-            }
-        }
-        
-        refined_structures = OpenMMRelaxation.out.relaxed_pdbs
-            .flatten()
-            .map { pdb ->
-                def name = pdb.baseName.replace('_relaxed', '')
-                def meta = [id: name]
-                [meta, pdb]
-            }
-    }
-    else {
+        AntibodyOpenMMRefinement(validated_structures)
+        refined_structures = AntibodyOpenMMRefinement.out.refined_structures
+    } else {
         refined_structures = validated_structures
     }
 
@@ -3257,23 +3128,60 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
         mutations = Channel.empty()
     }
 
+    def terminalStage = params.openmm_enabled == true
+        ? 'openmm_relaxation'
+        : params.run_post_validation_maturation == true
+            ? 'maturation_post_validation'
+            : params.run_structure_validation != false
+                ? "structure_validation_${(params.structure_validator ?: 'boltz2').toString().toLowerCase()}"
+                : params.run_ppiflow_maturation == true || params.run_maturation == true
+                    ? 'ppiflow_maturation'
+                    : 'sequence_design_terminal'
+    def terminalMethod = params.openmm_enabled == true
+        ? 'openmm'
+        : params.run_post_validation_maturation == true || params.run_ppiflow_maturation == true || params.run_maturation == true
+            ? 'ppiflow'
+            : params.run_structure_validation != false
+                ? (params.structure_validator ?: 'boltz2').toString().toLowerCase()
+                : params.seq_design_caliby == true
+                    ? 'caliby'
+                    : 'fampnn'
+
     if (params.run_frustrampnn == true) {
-        log.info("Step 4.x: Running FrustraMPNN QC on final candidates...")
-        frustrampnn_input = final_designs.flatMap { meta, pdb_or_pdbs ->
-            def pdb_list = pdb_or_pdbs instanceof List ? pdb_or_pdbs : [pdb_or_pdbs]
-            pdb_list.collect { pdb ->
-                def frustra_meta = [id: pdb.baseName]
-                tuple(frustra_meta, pdb)
-            }
+        def requiredness = params.frustrampnn_requiredness ?: 'required'
+        if (requiredness != 'required') {
+            error('antibody_denovo:frustrampnn_requiredness_must_be_required')
         }
-        FrustrampnnQC(frustrampnn_input)
-        AggregateFrustrationReports(FrustrampnnQC.out.summary.map { meta, summary -> summary }.collect())
+        log.info("Step 4.x: Running canonical FrustraMPNN on final antibody candidates...")
+        typed_terminal_candidates = final_designs.flatMap { candidate_meta, structure_or_structures ->
+            def structures = structure_or_structures instanceof Collection
+                ? new ArrayList(structure_or_structures as Collection)
+                : [structure_or_structures]
+            if (structures.size() != 1) {
+                error('antibody_denovo:ambiguous_terminal_candidate_metadata: every final structure requires its own producer metadata tuple')
+            }
+            [antibodyTerminalCandidate(candidate_meta, structures[0], terminalStage, terminalMethod)]
+        }.ifEmpty { error('antibody_denovo:no_final_candidates_for_required_frustrampnn') }
+
+        PrepareAntibodyFrustraMPNNCandidate(typed_terminal_candidates)
+        CanonicalFrustraMPNN(PrepareAntibodyFrustraMPNNCandidate.out.prepared)
+        PublishAntibodyFrustraMPNNCandidate(CanonicalFrustraMPNN.out.result)
+        frustrampnn_results = PublishAntibodyFrustraMPNNCandidate.out.published
+        AggregateAndReportAntibodyFrustraMPNN(
+            PublishAntibodyFrustraMPNNCandidate.out.published
+                .map { result_meta, result_manifest, marker -> marker }
+                .collect()
+        )
+    } else {
+        ReportAntibodyFrustraMPNNNotRequested(Channel.value('not_requested'))
+        frustrampnn_results = ReportAntibodyFrustraMPNNNotRequested.out.result
     }
 
     }
 
     emit:
     designs = final_designs // Final antibody designs
+    frustrampnn_results = frustrampnn_results // Typed canonical component result/status stream
     immunogenicity = immunogenicity_scores // AntiBERTy PLL scores
     stability = stability_scores_early // ThermoMPNN ddG scores
     mutations = mutations // IgGM suggested mutations

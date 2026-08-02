@@ -159,7 +159,7 @@ test('attachWindowDiagnostics ignores subframe failures and fallback-page reload
     },
   });
 
-  windowStub.emitDidFailLoad(-102, 'ERR_CONNECTION_REFUSED', 'http://127.0.0.1:5173/healthz', false);
+  windowStub.emitDidFailLoad(-102, 'ERR_CONNECTION_REFUSED', 'http://127.0.0.1:18082/healthz', false);
   windowStub.emitDidFailLoad(-3, 'ERR_ABORTED', 'data:text/html;charset=UTF-8,%3Chtml%3E', true);
   await Promise.resolve();
 
@@ -189,8 +189,8 @@ test('persistent diagnostics retain fresh runtime context with bounded records a
   const nextContext = {
     ...createShellContext(),
     runtimeMode: 'dev' as const,
-    windowUrl: 'http://127.0.0.1:5173/designs',
-    browserUrl: 'http://127.0.0.1:5173/designs',
+    windowUrl: 'http://127.0.0.1:18082/designs',
+    browserUrl: 'http://127.0.0.1:18082/designs',
   };
   const windowStub = createWindowStub();
 
@@ -206,8 +206,8 @@ test('persistent diagnostics retain fresh runtime context with bounded records a
     timestamp: '2026-07-15T23:00:00.000Z',
     kind: 'unresponsive',
     runtimeMode: 'dev',
-    windowUrl: 'http://127.0.0.1:5173/designs',
-    browserUrl: 'http://127.0.0.1:5173/designs',
+    windowUrl: 'http://127.0.0.1:18082/designs',
+    browserUrl: 'http://127.0.0.1:18082/designs',
     validatedURL: null,
     reason: null,
     exitCode: null,

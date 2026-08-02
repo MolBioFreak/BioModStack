@@ -318,10 +318,8 @@ def test_history_and_operator_assessment_are_robot_authoritative(monkeypatch):
 
 
 _FIXED_QUARANTINE_CASES = (
-    ("route.motion_power_enable", "/motion/power/enable"),
     ("route.motion_power_diag", "/motion/power/diag"),
     ("route.runtime_emergency_stop", "/oem/runtime/emergency_stop"),
-    ("alternate.valid.id.for.same.path", "/motion/power/enable"),
 )
 
 

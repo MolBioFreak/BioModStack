@@ -1,82 +1,96 @@
-process FrustrampnnQC {
-    tag "${meta.id}"
-    label 'process_gpu'
-    container "${params.container_dir}/frustrampnn.sif"
-    containerOptions "--nv"
-    
-    publishDir "${params.out_dir}/frustration", mode: 'copy'
-    
+nextflow.enable.dsl = 2
+
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+
+process CanonicalFrustraMPNNTask {
+    tag "frustrampnn:${component_request_meta.parent_job_id}:${component_request_meta.candidate_id}"
+    label 'frustrampnn_gpu'
+    errorStrategy 'terminate'
+    maxRetries 0
+    stageInMode 'copy'
+
+
     input:
-    tuple val(meta), path(structure)
-    
+    tuple val(component_request_meta), path(source_structure)
+
     output:
-    tuple val(meta), path("${meta.id}_frustration.csv"), emit: frustration
-    tuple val(meta), path("${meta.id}_summary.json"), emit: summary
-    
+    // Emit the terminal result envelope itself. Parent workflows must consume
+    // this status authority rather than treating request metadata as a result.
+    tuple path('candidate_bundle/workflow_component_result_v1.json'), \
+        path('candidate_bundle'), \
+        path('candidate_bundle/frustrampnn_result_manifest_v1.json'), emit: result
+
     script:
+    def requiredIdentityFields = [
+        'component_id', 'component_contract_version', 'invocation_id',
+        'parent_job_id', 'parent_workflow_id', 'candidate_id', 'requiredness'
+    ]
+    if (!(component_request_meta instanceof Map) ||
+        requiredIdentityFields.any { field -> !component_request_meta[field] }) {
+        throw new IllegalArgumentException(
+            'CanonicalFrustraMPNN requires typed parent/candidate/invocation metadata'
+        )
+    }
+    if (component_request_meta.component_id != 'frustrampnn') {
+        throw new IllegalArgumentException('CanonicalFrustraMPNN component_id must be frustrampnn')
+    }
+
+    def assigned_gpu = params.frustrampnn_physical_gpu_id?.toString()
+    if (!(assigned_gpu ==~ /(?:0|[1-9][0-9]*)/)) {
+        throw new IllegalArgumentException(
+            'CanonicalFrustraMPNN requires explicit scheduler-assigned frustrampnn_physical_gpu_id'
+        )
+    }
+    def request_base64 = JsonOutput.toJson(component_request_meta)
+        .getBytes('UTF-8').encodeBase64().toString()
+    def apptainer_bin = params.get('apptainer_bin') ?: 'apptainer'
+
     """
-    python3 - "${structure}" "${meta.id}.pdb" <<'PY'
-import shutil
-import sys
-from pathlib import Path
+    set -euo pipefail
+    export CUDA_VISIBLE_DEVICES='${assigned_gpu}'
+    '${params.api_python}' '${params.code_root}/scripts/run_frustrampnn_component.py' \
+      --request-base64 '${request_base64}' \
+      --structure '${source_structure}' \
+      --container '${params.container_dir}/frustrampnn.sif' \
+      --apptainer '${apptainer_bin}' \
+      --physical-gpu-id '${assigned_gpu}' \
+      --output-dir candidate_bundle
+    """
 
-source = Path(sys.argv[1])
-destination = Path(sys.argv[2])
-suffix = source.suffix.lower()
-
-if suffix in {'.cif', '.mmcif'}:
-    from Bio.PDB import MMCIFParser, PDBIO
-
-    parsed = MMCIFParser(QUIET=True).get_structure(destination.stem, str(source))
-    writer = PDBIO()
-    writer.set_structure(parsed)
-    writer.save(str(destination))
-elif suffix == '.pdb':
-    shutil.copyfile(source, destination)
-else:
-    raise RuntimeError(f'Unsupported structure format for FrustraMPNN: {source.name}')
-
-if not destination.is_file() or destination.stat().st_size == 0:
-    raise RuntimeError(f'Failed to prepare non-empty PDB input from {source}')
-PY
-    frustrampnn predict --pdb ${meta.id}.pdb --checkpoint /opt/frustrampnn_weights/megascale.ckpt --output ${meta.id}_frustration.csv
-    python3 -c "
-import pandas as pd, json
-df = pd.read_csv('${meta.id}_frustration.csv')
-native_df = df[df['mutation'].astype(str) == df['wildtype'].astype(str)] if {'mutation', 'wildtype'}.issubset(df.columns) else df
-pos = native_df.groupby(['position','chain'])['frustration_pred'].mean()
-json.dump({
-    'pdb': '${meta.id}',
-    'n_high_frust': int((pos <= -1.0).sum()),
-    'n_min_frust': int((pos >= 0.58).sum()),
-    'total': len(pos),
-    'pct_high_frust': round((pos <= -1.0).sum() / len(pos) * 100, 1)
-}, open('${meta.id}_summary.json','w'))
-"
+    stub:
+    def stub_assigned_gpu = params.frustrampnn_physical_gpu_id?.toString()
+    if (!(stub_assigned_gpu ==~ /(?:0|[1-9][0-9]*)/)) {
+        throw new IllegalArgumentException(
+            'CanonicalFrustraMPNN requires explicit scheduler-assigned frustrampnn_physical_gpu_id'
+        )
+    }
+    def stub_result = JsonOutput.toJson(component_request_meta + [status: 'succeeded'])
+    """
+    mkdir -p candidate_bundle
+    printf '%s\n' '${stub_result}' > candidate_bundle/workflow_component_result_v1.json
+    printf '{}\n' > candidate_bundle/frustrampnn_result_manifest_v1.json
     """
 }
 
-process AggregateFrustrationReports {
-    publishDir "${params.out_dir}/frustration", mode: 'copy'
-    
-    input:
-    path summaries
-    
-    output:
-    path "batch_frustration_report.json"
-    
-    script:
-    """
-    python3 -c "
-import json
-from pathlib import Path
-data = [json.load(open(f)) for f in Path('.').glob('*_summary.json')]
-json.dump({
-    'total_designs': len(data),
-    'zero_high_frust': sum(1 for d in data if d['n_high_frust']==0),
-    'avg_pct_high_frust': round(sum(d['pct_high_frust'] for d in data)/len(data), 1) if data else 0,
-    'designs': data
-}, open('batch_frustration_report.json','w'), indent=2)
-"
-    """
+workflow CanonicalFrustraMPNN {
+    take:
+    requests
+
+    main:
+    normalized_requests = requests.map { request_or_meta, source_structure ->
+        def component_request_meta = request_or_meta instanceof Map
+            ? request_or_meta
+            : new JsonSlurper().parse(request_or_meta)
+        tuple(component_request_meta, source_structure)
+    }
+    CanonicalFrustraMPNNTask(normalized_requests)
+    terminal_results = CanonicalFrustraMPNNTask.out.result.map {
+        result_path, candidate_bundle, result_manifest ->
+        def component_result_meta = new JsonSlurper().parse(result_path)
+        tuple(component_result_meta, candidate_bundle, result_manifest)
+    }
+
+    emit:
+    result = terminal_results
 }

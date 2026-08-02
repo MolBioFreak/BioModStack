@@ -131,8 +131,8 @@ def test_runtime_descriptor_for_dev_mode(tmp_path: Path, monkeypatch) -> None:
     assert descriptor["runtime_ready"] is True
     expected_api_port = services.runtime_api_port("dev", project_root=project_root)
     assert descriptor["api_url"] == f"http://127.0.0.1:{expected_api_port}"
-    assert descriptor["frontend_url"] == "http://127.0.0.1:5173/"
-    assert descriptor["browser_url"] == "http://127.0.0.1:5173/"
+    assert descriptor["frontend_url"] == "http://127.0.0.1:18082/"
+    assert descriptor["browser_url"] == "http://127.0.0.1:18082/"
     assert descriptor["router_basename"] == "/"
     assert descriptor["supported_launch_surfaces"] == ["browser", "electron", "none"]
     assert descriptor["services"] == [
@@ -311,12 +311,12 @@ def test_container_frontend_url_honors_install_profile_web_host_port(tmp_path: P
     monkeypatch.setattr(
         services,
         "install_profile_snapshot",
-        lambda profile=None, project_root=None: {"resolved": {"web_host_port": 19090}},
+        lambda profile=None, project_root=None: {"resolved": {"web_host_port": 18880}},
         raising=False,
     )
 
-    assert services.runtime_frontend_url("container", project_root=project_root) == "http://127.0.0.1:19090/bms/"
-    assert services.runtime_frontend_url("dev", project_root=project_root) == "http://127.0.0.1:5173/"
+    assert services.runtime_frontend_url("container", project_root=project_root) == "http://127.0.0.1:18880/bms/"
+    assert services.runtime_frontend_url("dev", project_root=project_root) == "http://127.0.0.1:18082/"
 
 
 def test_runtime_frontend_urls_honor_configured_dev_and_prod_ports(tmp_path: Path, monkeypatch) -> None:
@@ -324,12 +324,12 @@ def test_runtime_frontend_urls_honor_configured_dev_and_prod_ports(tmp_path: Pat
     monkeypatch.setattr(
         services,
         "install_profile_snapshot",
-        lambda profile=None, project_root=None: {"resolved": {"dev_web_host_port": 5179, "web_host_port": 19090}},
+        lambda profile=None, project_root=None: {"resolved": {"dev_web_host_port": 18882, "web_host_port": 18880}},
         raising=False,
     )
 
-    assert services.runtime_frontend_url("dev", project_root=project_root) == "http://127.0.0.1:5179/"
-    assert services.runtime_frontend_url("container", project_root=project_root) == "http://127.0.0.1:19090/bms/"
+    assert services.runtime_frontend_url("dev", project_root=project_root) == "http://127.0.0.1:18882/"
+    assert services.runtime_frontend_url("container", project_root=project_root) == "http://127.0.0.1:18880/bms/"
 
 
 def test_runtime_api_urls_keep_container_port_fixed_and_allow_dev_override(tmp_path: Path, monkeypatch) -> None:
@@ -337,13 +337,13 @@ def test_runtime_api_urls_keep_container_port_fixed_and_allow_dev_override(tmp_p
     monkeypatch.setattr(
         services,
         "install_profile_snapshot",
-        lambda profile=None, project_root=None: {"resolved": {"api_host_port": 9000, "dev_api_host_port": 9002}},
+        lambda profile=None, project_root=None: {"resolved": {"api_host_port": 18800, "dev_api_host_port": 18802}},
         raising=False,
     )
 
-    assert services.runtime_api_url("dev", project_root=project_root) == "http://127.0.0.1:9002"
-    assert services.runtime_api_health_url("dev", project_root=project_root) == "http://127.0.0.1:9002/api/health"
-    assert services.runtime_api_url("container", project_root=project_root) == "http://127.0.0.1:8000"
+    assert services.runtime_api_url("dev", project_root=project_root) == "http://127.0.0.1:18802"
+    assert services.runtime_api_health_url("dev", project_root=project_root) == "http://127.0.0.1:18802/api/health"
+    assert services.runtime_api_url("container", project_root=project_root) == "http://127.0.0.1:18000"
 
 
 def test_runtime_port_settings_preserve_profile_and_save_dev_and_prod_ports(tmp_path: Path, monkeypatch) -> None:
@@ -364,22 +364,22 @@ def test_runtime_port_settings_preserve_profile_and_save_dev_and_prod_ports(tmp_
     monkeypatch.setattr(
         services,
         "install_profile_snapshot",
-        lambda profile=None, project_root=None: {"resolved": {"dev_web_host_port": 5180, "web_host_port": 19090}},
+        lambda profile=None, project_root=None: {"resolved": {"dev_web_host_port": 18882, "web_host_port": 18880}},
         raising=False,
     )
 
-    settings = services.save_runtime_port_settings(dev_web_host_port=5180, prod_web_host_port=19090, project_root=project_root)
+    settings = services.save_runtime_port_settings(dev_web_host_port=18882, prod_web_host_port=18880, project_root=project_root)
 
-    assert saved == [{"data_root": "/srv/biomodstack", "web_host_port": 19090, "dev_web_host_port": 5180}]
+    assert saved == [{"data_root": "/srv/biomodstack", "web_host_port": 18880, "dev_web_host_port": 18882}]
     assert settings == {
         "dev_api_host_port": services.DEV_API_PORT,
         "prod_api_host_port": services.API_PORT,
-        "dev_web_host_port": 5180,
-        "prod_web_host_port": 19090,
-        "dev_api_url": "http://127.0.0.1:8002",
-        "prod_api_url": "http://127.0.0.1:8000",
-        "dev_url": "http://127.0.0.1:5180/",
-        "prod_url": "http://127.0.0.1:19090/bms/",
+        "dev_web_host_port": 18882,
+        "prod_web_host_port": 18880,
+        "dev_api_url": "http://127.0.0.1:18002",
+        "prod_api_url": "http://127.0.0.1:18000",
+        "dev_url": "http://127.0.0.1:18882/",
+        "prod_url": "http://127.0.0.1:18880/bms/",
     }
 
 
@@ -389,8 +389,8 @@ def test_render_user_units_exports_configured_dev_frontend_port(tmp_path: Path, 
         services,
         "install_profile_snapshot",
         lambda profile=None, project_root=None: {"resolved": {
-            "dev_api_host_port": 8179,
-            "dev_web_host_port": 5179,
+            "dev_api_host_port": 18279,
+            "dev_web_host_port": 18278,
             "web_host_port": 18080,
             "dev_data_root": "/srv/biomodstack-dev",
             "dev_inputs_dir": "/srv/biomodstack-dev/inputs",
@@ -408,7 +408,7 @@ def test_render_user_units_exports_configured_dev_frontend_port(tmp_path: Path, 
 
     units = services.render_user_units(project_root, runtime_mode="dev")
 
-    assert "Environment=BMS_API_BIND_PORT=8179" in units[services.API_SERVICE]
+    assert "Environment=BMS_API_BIND_PORT=18279" in units[services.API_SERVICE]
     assert "Environment=BMS_DATA=/srv/biomodstack-dev" in units[services.API_SERVICE]
     assert "Environment=BMS_DB_PATH=/srv/biomodstack-dev/biomodstack.db" in units[services.API_SERVICE]
     assert "Environment=BMS_WEIGHTS=/srv/biomodstack/weights" in units[services.API_SERVICE]
@@ -416,8 +416,8 @@ def test_render_user_units_exports_configured_dev_frontend_port(tmp_path: Path, 
     assert "Environment=BMS_WEIGHTS=/srv/biomodstack-dev/weights" not in units[services.API_SERVICE]
     assert "Environment=BMS_COLABFOLD_DB=/srv/biomodstack-dev/colabfold_db" not in units[services.API_SERVICE]
     assert "ExecStartPre=/usr/bin/mkdir -p /srv/biomodstack-dev" in units[services.API_SERVICE]
-    assert "Environment=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:8179" in units[services.FRONTEND_SERVICE]
-    assert "Environment=BMS_DEV_WEB_HOST_PORT=5179" in units[services.FRONTEND_SERVICE]
+    assert "Environment=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:18279" in units[services.FRONTEND_SERVICE]
+    assert "Environment=BMS_DEV_WEB_HOST_PORT=18278" in units[services.FRONTEND_SERVICE]
 
 
 def test_start_rejects_an_invalid_port_contract_before_touching_systemd(tmp_path: Path, monkeypatch) -> None:
@@ -426,9 +426,9 @@ def test_start_rejects_an_invalid_port_contract_before_touching_systemd(tmp_path
         services,
         "install_profile_snapshot",
         lambda profile=None, project_root=None: {"resolved": {
-            "api_host_port": 8000,
-            "dev_api_host_port": 8002,
-            "dev_web_host_port": 8002,
+            "api_host_port": 18000,
+            "dev_api_host_port": 18002,
+            "dev_web_host_port": 18002,
             "web_host_port": 18080,
         }},
     )
@@ -556,7 +556,7 @@ def test_operator_runtime_mode_prefers_fully_active_dev_runtime(tmp_path: Path, 
     )
 
     assert services.operator_runtime_mode(project_root=project_root) == services.DEV_RUNTIME_MODE
-    assert services.operator_frontend_url(project_root=project_root) == "http://127.0.0.1:5173/"
+    assert services.operator_frontend_url(project_root=project_root) == "http://127.0.0.1:18082/"
 
 
 
@@ -646,18 +646,20 @@ def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path, mo
     assert "StartLimitIntervalSec=300" in frontend_unit
     assert "StartLimitBurst=3" in frontend_unit
     assert f"PartOf={services.DEV_TARGET_UNIT}" in frontend_unit
-    assert f"Requires={services.TAILNET_GLOBAL_SERVICE}" in frontend_unit
+    assert f"Requires={services.TAILNET_GLOBAL_SERVICE}" not in frontend_unit
+    assert f"After=network-online.target {services.TAILNET_GLOBAL_SERVICE}" not in frontend_unit
     assert f"Wants={services.API_SERVICE}" not in frontend_unit
 
     tailnet_unit = units[services.TAILNET_GLOBAL_SERVICE]
     assert "Type=oneshot" in tailnet_unit
-    assert f"Before={services.FRONTEND_SERVICE}" in tailnet_unit
+    assert f"Before={services.FRONTEND_SERVICE}" not in tailnet_unit
     assert f"ExecStart=/usr/bin/env python3 {project_root}/scripts/install_tailnet_global_routes.py" in tailnet_unit
     # The unit must exceed the adapter policy convergence bound (90s).
     assert "TimeoutStartSec=120" in tailnet_unit
 
     target_unit = units[services.DEV_TARGET_UNIT]
-    assert f"Wants={services.API_SERVICE} {services.FRONTEND_SERVICE} {services.TAILNET_GLOBAL_SERVICE}" in target_unit
+    assert f"Wants={services.API_SERVICE} {services.FRONTEND_SERVICE}" in target_unit
+    assert services.TAILNET_GLOBAL_SERVICE not in target_unit
     assert "WantedBy=default.target" in target_unit
 
 
@@ -671,6 +673,7 @@ def test_render_user_units_support_container_runtime_mode(tmp_path: Path) -> Non
     assert f"Environment=BMS_HOME={project_root}" in adapter_unit
     assert "Environment=BMS_RUNTIME_MODE=container" in adapter_unit
     assert "Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=127.0.0.1" in adapter_unit
+    assert "Environment=BMS_WORKFLOW_ADAPTER_PORT=18001" in adapter_unit
     assert f"ExecStartPre=/usr/bin/env python3 {project_root / 'scripts' / 'rotate_biomodstack_logs.py'}" in adapter_unit
     assert f"ExecStart={project_root / 'scripts' / 'run_biomodstack_workflow_adapter.sh'}" in adapter_unit
     assert f"StandardOutput=append:{services.WORKFLOW_ADAPTER_LOG}" in adapter_unit
@@ -894,7 +897,7 @@ def test_runtime_listener_preflight_checks_all_stable_dependencies(monkeypatch, 
         "cpu-power",
         "host-agent",
     }
-    assert set(seen) == {8001, 8000, 18080, 8797, 8798}
+    assert set(seen) == {18001, 18000, 18080, 18797, 18798}
     assert all(component["status"] == "no-listener" for component in result["components"].values())
 
 
@@ -928,7 +931,7 @@ def test_assert_runtime_listener_preflight_reports_conflicting_component(monkeyp
             "ok": False,
             "components": {
                 "api": {
-                    "port": 8000,
+                    "port": 18000,
                     "ok": False,
                     "listeners": [{"pid": 321, "owner": "foreign"}],
                 }
@@ -936,7 +939,7 @@ def test_assert_runtime_listener_preflight_reports_conflicting_component(monkeyp
         },
     )
 
-    with pytest.raises(services.ServiceManagerError, match="api port 8000"):
+    with pytest.raises(services.ServiceManagerError, match="api port 18000"):
         services.assert_runtime_listener_preflight(project_root=tmp_path, runtime_mode="container")
 
 
@@ -1090,7 +1093,7 @@ def test_start_all_dev_mode_keeps_container_runtime_and_starts_only_dev_frontend
         ("ensure", "dev"),
         ("systemctl", ("start", services.FRONTEND_SERVICE, services.DEV_TARGET_UNIT)),
         ("wait", services.runtime_api_health_url("dev", project_root=project_root)),
-        ("wait", "http://127.0.0.1:5173/"),
+        ("wait", "http://127.0.0.1:18082/"),
     ]
 
 
@@ -1462,7 +1465,7 @@ def test_start_api_container_mode_blocks_foreign_api_listener_without_killing_it
         lambda *args, **kwargs: calls.append(("compose", args)),
     )
 
-    with pytest.raises(services.ServiceManagerError, match="api port 8000"):
+    with pytest.raises(services.ServiceManagerError, match="api port 18000"):
         services.start_api(project_root=project_root, runtime_mode="container")
 
     assert calls == []

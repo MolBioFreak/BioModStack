@@ -28,6 +28,17 @@ from migrations.add_state_landscape_analysis_page_order_index import (
 from migrations.add_molbio_ngs_receipts import migrate as migrate_molbio_ngs_receipts
 from migrations.add_approved_ngs_comparison_panels import migrate as migrate_approved_ngs_comparison_panels
 from migrations.add_md_lifecycle import migrate as migrate_md_lifecycle
+from migrations.add_ont_instrument_run_ledger import migrate as migrate_ont_instrument_run_ledger
+from migrations.add_ont_protocol_preflight import migrate as migrate_ont_protocol_preflight
+from migrations.add_ont_terminal_artifact_manifests import migrate as migrate_ont_terminal_artifact_manifests
+from migrations.enforce_ont_terminal_artifact_manifest_immutability import (
+    migrate as enforce_ont_terminal_artifact_manifest_immutability,
+)
+from migrations.relax_shape_geometry_hash_uniqueness import (
+    migrate as relax_shape_geometry_hash_uniqueness,
+)
+from migrations.sqlite_sha256 import register_sqlite_sha256
+from migrations.add_frustrampnn_persistence import migrate as migrate_frustrampnn_persistence
 from run_migration import migrate as migrate_stage_tracking
 
 
@@ -64,11 +75,18 @@ MIGRATIONS: List[Migration] = [
     Migration(15, "add_molbio_ngs_receipts", migrate_molbio_ngs_receipts),
     Migration(16, "add_approved_ngs_comparison_panels", migrate_approved_ngs_comparison_panels),
     Migration(17, "add_md_lifecycle", migrate_md_lifecycle),
+    Migration(18, "add_ont_instrument_run_ledger", migrate_ont_instrument_run_ledger),
+    Migration(19, "add_ont_protocol_preflight", migrate_ont_protocol_preflight),
+    Migration(20, "add_ont_terminal_artifact_manifests", migrate_ont_terminal_artifact_manifests),
+    Migration(21, "enforce_ont_terminal_artifact_manifest_immutability", enforce_ont_terminal_artifact_manifest_immutability),
+    Migration(22, "relax_shape_geometry_hash_uniqueness", relax_shape_geometry_hash_uniqueness),
+    Migration(23, "add_frustrampnn_persistence", migrate_frustrampnn_persistence),
 ]
 
 
 def _connect(db_path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path, timeout=30)
+    register_sqlite_sha256(conn)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=30000")
     return conn
@@ -87,9 +105,120 @@ def _ensure_migrations_table(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _get_applied_versions(conn: sqlite3.Connection) -> set[int]:
-    rows = conn.execute("SELECT version FROM schema_migrations").fetchall()
-    return {row[0] for row in rows}
+_LEGACY_ONT_TARGET_VERSIONS = {
+    "add_ont_instrument_run_ledger": 18,
+    "add_ont_protocol_preflight": 19,
+    "add_ont_terminal_artifact_manifests": 20,
+    "enforce_ont_terminal_artifact_manifest_immutability": 21,
+}
+
+
+def _has_exact_legacy_ont_prefix(conn: sqlite3.Connection) -> bool:
+    """Recognize only the unpublished contiguous ledger that needs MD insertion."""
+    rows = [
+        (int(version), str(name))
+        for version, name in conn.execute(
+            "SELECT version, name FROM schema_migrations ORDER BY version"
+        ).fetchall()
+    ]
+    canonical_prefix = [
+        (migration.version, migration.name) for migration in MIGRATIONS[:16]
+    ]
+    legacy_tail = [
+        (target - 1, name) for name, target in _LEGACY_ONT_TARGET_VERSIONS.items()
+    ]
+    if len(rows) <= len(canonical_prefix):
+        return False
+    expected = canonical_prefix + legacy_tail[: len(rows) - len(canonical_prefix)]
+    return rows == expected
+
+
+def _reconcile_legacy_ont_migration_versions(conn: sqlite3.Connection) -> None:
+    """Move the unpublished ONT 17..20 ledger to 18..21 before MD owns version 17."""
+    rows = conn.execute("SELECT version, name FROM schema_migrations ORDER BY version").fetchall()
+    by_name: dict[str, int] = {}
+    by_version: dict[int, str] = {}
+    for raw_version, raw_name in rows:
+        version = int(raw_version)
+        name = str(raw_name)
+        if name in by_name:
+            raise RuntimeError(f"duplicate schema migration name: {name}")
+        by_name[name] = version
+        by_version[version] = name
+
+    moves: list[tuple[str, int, int]] = []
+    migrating_names = set(_LEGACY_ONT_TARGET_VERSIONS)
+    for name, target in _LEGACY_ONT_TARGET_VERSIONS.items():
+        current = by_name.get(name)
+        if current is None or current == target:
+            continue
+        if current != target - 1:
+            raise RuntimeError(
+                f"unexpected legacy migration version for {name}: {current}; expected {target - 1} or {target}"
+            )
+        occupant = by_version.get(target)
+        if occupant is not None and occupant not in migrating_names:
+            raise RuntimeError(
+                f"cannot remap {name} to migration version {target}; occupied by {occupant}"
+            )
+        moves.append((name, current, target))
+
+    if not moves:
+        return
+
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        for name, current, target in moves:
+            cursor = conn.execute(
+                "UPDATE schema_migrations SET version = ? WHERE version = ? AND name = ?",
+                (-target, current, name),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError(f"failed to reserve remapped migration version for {name}")
+        for name, _current, target in moves:
+            cursor = conn.execute(
+                "UPDATE schema_migrations SET version = ? WHERE version = ? AND name = ?",
+                (target, -target, name),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError(f"failed to publish remapped migration version for {name}")
+        conn.execute(
+            "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
+            (17, "add_md_lifecycle", datetime.utcnow().isoformat()),
+        )
+        _validate_applied_migration_identities(_get_applied_migrations(conn))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def _get_applied_migrations(conn: sqlite3.Connection) -> dict[int, str]:
+    rows = conn.execute("SELECT version, name FROM schema_migrations").fetchall()
+    return {int(version): str(name) for version, name in rows}
+
+
+def _validate_applied_migration_identities(applied: dict[int, str]) -> None:
+    expected_by_version = {migration.version: migration.name for migration in MIGRATIONS}
+    expected_by_name = {migration.name: migration.version for migration in MIGRATIONS}
+    for version, name in applied.items():
+        expected_name = expected_by_version.get(version)
+        if expected_name is not None and name != expected_name:
+            raise RuntimeError(
+                f"schema migration version {version} is recorded as {name!r}; expected {expected_name!r}"
+            )
+        expected_version = expected_by_name.get(name)
+        if expected_version is not None and version != expected_version:
+            raise RuntimeError(
+                f"schema migration {name!r} is recorded at version {version}; expected version {expected_version}"
+            )
+    expected_prefix = {
+        migration.version: migration.name for migration in MIGRATIONS[: len(applied)]
+    }
+    if applied != expected_prefix:
+        raise RuntimeError(
+            "schema migration ledger must be a contiguous exact prefix of the registered migration history"
+        )
 
 
 def _run_migration(migration: Migration, db_path: str) -> None:
@@ -105,7 +234,14 @@ def run_all(db_path: str | None = None) -> None:
     conn = _connect(db_path)
     try:
         _ensure_migrations_table(conn)
-        applied = _get_applied_versions(conn)
+        if _has_exact_legacy_ont_prefix(conn):
+            # Apply the additive MD schema before atomically publishing its ledger
+            # identity alongside the ONT version remap. If this fails, the ledger
+            # remains byte-for-byte unchanged and a retry is safe.
+            _run_migration(MIGRATIONS[16], db_path)
+        _reconcile_legacy_ont_migration_versions(conn)
+        applied = _get_applied_migrations(conn)
+        _validate_applied_migration_identities(applied)
 
         for mig in MIGRATIONS:
             if mig.version in applied:

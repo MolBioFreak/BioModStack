@@ -108,8 +108,9 @@ function molstarCommonJsBuildResolver(): Plugin {
   }
 }
 
-const devApiTarget = process.env.BMS_DEV_API_PROXY_TARGET || 'http://127.0.0.1:8002'
+const devApiTarget = process.env.BMS_DEV_API_PROXY_TARGET || 'http://127.0.0.1:18002'
 const devApiProxySecret = process.env.BMS_DEV_API_PROXY_SECRET?.trim() || ''
+const devMk1dReconnectProxySecret = process.env.BMS_DEV_MK1D_RECONNECT_PROXY_SECRET?.trim() || ''
 const buildRevision = /^[0-9a-f]{40}$/.test(process.env.VITE_BMS_BUILD_SHA?.trim() || '')
   ? process.env.VITE_BMS_BUILD_SHA!.trim()
   : 'unknown'
@@ -180,11 +181,11 @@ export default defineConfig(({ mode }) => ({
     },
   },
   server: {
-    // Browser development owns Vite's documented default port. Keep it strict
-    // so the stable hosted /bms/ surface cannot silently occupy the dev port.
+    // Browser development owns the governed BMS Development web port. Keep it
+    // strict so no unrelated listener can silently displace the live surface.
     host: '127.0.0.1',
-    port: 5173,
-    origin: 'http://127.0.0.1:5173',
+    port: 18082,
+    origin: 'http://127.0.0.1:18082',
     strictPort: true,
     allowedHosts: ['compute-node.taileb3a90.ts.net'],
     // Prevent watching pipeline directories that can have millions of files
@@ -202,7 +203,18 @@ export default defineConfig(({ mode }) => ({
       ]
     },
     proxy: {
-      // Proxy /api requests to backend server
+      // Reconnect is available only on this local development proxy. The
+      // Tailnet ingress has an explicit deny route and never receives this key.
+      '/api/ont/devices/reconnect': {
+        target: devApiTarget,
+        changeOrigin: true,
+        // The fixed helper transaction may wait up to 120 seconds for MinKNOW.
+        // Keep the local proxy alive for that bounded response.
+        timeout: 130_000,
+        proxyTimeout: 130_000,
+        ...(devMk1dReconnectProxySecret ? { headers: { 'X-BMS-MK1D-Reconnect-Proxy-Secret': devMk1dReconnectProxySecret } } : {}),
+      },
+      // Proxy other API requests to backend server
       '/api': {
         target: devApiTarget,
         changeOrigin: true,

@@ -81,8 +81,8 @@ const FAMILY_META: Record<AnalysisLens, { title: string; description: string; ac
         accent: 'border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-200',
     },
     frustrampnn: {
-        title: 'FrustraMPNN QC',
-        description: 'Frustration burden and post hoc structure quality checks for selected designs.',
+        title: 'Frustration analysis',
+        description: 'Residue-level frustration maps and substitution guidance for selected structures.',
         accent: 'border-amber-500/30 bg-amber-500/10 text-amber-200',
     },
     protenix: {

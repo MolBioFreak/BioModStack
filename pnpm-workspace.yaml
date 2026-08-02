@@ -8,3 +8,6 @@ onlyBuiltDependencies:
 
 ignoredBuiltDependencies:
   - esbuild
+
+patchedDependencies:
+  seqviz@3.10.14: patches/seqviz@3.10.14.patch

@@ -10,11 +10,13 @@ import copy
 import hashlib
 import json
 import math
+import os
 import re
+import stat
 import uuid
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, List, Any, Mapping
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import delete, select
@@ -28,7 +30,13 @@ from antibody_pipeline_contract import (
     normalize_antibody_artifact_class,
     normalize_antibody_pipeline_contract_version,
 )
-from database import Design, Job, ShapeDesignGeometry, ShapeDesignRequest
+from database import (
+    Design,
+    FrustraMPNNResult,
+    Job,
+    ShapeDesignGeometry,
+    ShapeDesignRequest,
+)
 from paths import get_data_root, resolve_runtime_data_path
 from services.rfantibody_metadata import load_rfantibody_trb_summary
 from services.cdr_annotator import extract_sequence_from_pdb, identify_binder_chains
@@ -40,162 +48,17 @@ from .conformational_mapping.persistence import (
     get_request as get_cm_request,
     ingest_result_bundle as ingest_cm_result_bundle,
 )
+from .frustrampnn.contracts import canonical_json_bytes, canonical_json_loads
+from .frustrampnn.identity import deterministic_candidate_id
+from .frustrampnn.manifests import MANIFEST_PATH
+from .frustrampnn.structure import StructureNormalizationError, read_structure_bytes
+from .frustrampnn.persistence import (
+    FrustraMPNNPersistenceError,
+    ingest_result_bundle as ingest_frustrampnn_result_bundle,
+    load_and_validate_result_bundle as validate_frustrampnn_result_bundle,
+)
 from .structure_utils import calculate_epitope_contacts, compute_contact_geometry_metrics, compute_gyration_radius, get_per_chain_fampnn_psce
 
-
-def _is_native_frustration_row(row: Dict[str, Any]) -> bool:
-    wildtype = row.get("wildtype")
-    mutation = row.get("mutation")
-    if wildtype is None or mutation is None:
-        return True
-    return str(wildtype).strip() == str(mutation).strip()
-
-
-def _summarize_frustration_rows(rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    if not rows:
-        return None
-
-    pos_values: Dict[tuple[int, str], List[float]] = {}
-    for row in rows:
-        if not _is_native_frustration_row(row):
-            continue
-        try:
-            position = int(row["position"])
-            chain = str(row["chain"])
-            value = float(row["frustration_pred"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        key = (position, chain)
-        pos_values.setdefault(key, []).append(value)
-
-    if not pos_values:
-        return None
-
-    residues = []
-    high_count = 0
-    min_count = 0
-    for (pos, chain), values in sorted(pos_values.items(), key=lambda item: (item[0][1], item[0][0])):
-        frust = sum(values) / len(values)
-        if frust <= -1.0:
-            frust_class = "high"
-            high_count += 1
-        elif frust >= 0.58:
-            frust_class = "min"
-            min_count += 1
-        else:
-            frust_class = "neutral"
-        residues.append({
-            "pos": pos,
-            "chain": chain,
-            "frust": round(float(frust), 3),
-            "frustClass": frust_class,
-        })
-
-    total = len(pos_values)
-    pct_high = round(high_count / total * 100, 1) if total > 0 else 0.0
-    return {
-        "high_count": high_count,
-        "min_count": min_count,
-        "pct_high": pct_high,
-        "residues": residues,
-    }
-
-
-def _normalize_frustration_target_name(value: str) -> str:
-    raw = str(value).strip()
-    return Path(raw).stem if raw else raw
-
-
-def extract_frustration_targets(csv_path: Path) -> List[str]:
-    """
-    Return distinct design/PDB identifiers embedded in a frustration CSV.
-
-    FrustraMPNN can emit one CSV per structure or a batch CSV with a `pdb` column.
-    """
-    try:
-        import pandas as pd
-
-        df = pd.read_csv(csv_path, usecols=lambda c: c in {"pdb"})
-        if "pdb" not in df.columns:
-            return []
-        seen: List[str] = []
-        for value in df["pdb"].dropna().astype(str).tolist():
-            normalized = _normalize_frustration_target_name(value)
-            if normalized and normalized not in seen:
-                seen.append(normalized)
-        return seen
-    except ImportError:
-        pass
-    except Exception as e:
-        print(f"[Ingester] Error extracting frustration targets from {csv_path}: {e}")
-        return []
-
-    try:
-        with open(csv_path, "r") as f:
-            reader = csv.DictReader(f)
-            if "pdb" not in (reader.fieldnames or []):
-                return []
-            seen: List[str] = []
-            for row in reader:
-                value = row.get("pdb")
-                if not value:
-                    continue
-                normalized = _normalize_frustration_target_name(value)
-                if normalized and normalized not in seen:
-                    seen.append(normalized)
-            return seen
-    except Exception as e:
-        print(f"[Ingester] Error extracting frustration targets without pandas from {csv_path}: {e}")
-        return []
-
-
-def parse_frustration_csv(csv_path: Path, pdb_name_filter: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """
-    Parse FrustraMPNN output CSV into structured frustration data.
-    
-    FrustraMPNN CSVs contain one row per position/mutation. For structural QC we want
-    the native profile only, i.e. rows where mutation == wildtype.
-    
-    Returns:
-        dict with keys:
-            - high_count: int (residues with frust <= -1.0)
-            - min_count: int (residues with frust >= 0.58)
-            - pct_high: float (percent highly frustrated)
-            - residues: list of dicts with {pos, chain, frust, frustClass}
-    """
-    try:
-        import pandas as pd
-        df = pd.read_csv(csv_path)
-
-        if pdb_name_filter and "pdb" in df.columns:
-            target = _normalize_frustration_target_name(pdb_name_filter)
-            df = df[df["pdb"].astype(str).map(_normalize_frustration_target_name) == target]
-            if df.empty:
-                return None
-
-        cols = [col for col in ["position", "chain", "frustration_pred", "wildtype", "mutation"] if col in df.columns]
-        rows = df[cols].to_dict("records")
-        return _summarize_frustration_rows(rows)
-    except ImportError:
-        # Fallback without pandas
-        try:
-            with open(csv_path, 'r') as f:
-                reader = csv.DictReader(f)
-                rows = []
-                target = _normalize_frustration_target_name(pdb_name_filter) if pdb_name_filter else None
-                for row in reader:
-                    if target and row.get("pdb"):
-                        if _normalize_frustration_target_name(row["pdb"]) != target:
-                            continue
-                    rows.append(row)
-
-                return _summarize_frustration_rows(rows)
-        except Exception as e:
-            print(f"[Ingester] Error parsing frustration CSV without pandas: {e}")
-            return None
-    except Exception as e:
-        print(f"[Ingester] Error parsing frustration CSV: {e}")
-        return None
 
 
 def _normalize_boltzgen_design_name(design_name: str) -> str:
@@ -2876,6 +2739,850 @@ async def _ingest_shape_result_manifest(
     return created
 
 
+_FRUSTRAMPNN_TERMINAL_STAGES = frozenset({"frustrampnn", "canonical_frustrampnn"})
+_FRUSTRAMPNN_TERMINAL_RESULT = "workflow_component_result_v1.json"
+
+
+def _explicit_stage_paths(value: Any) -> list[str]:
+    """Flatten only values persisted under an explicit FrustraMPNN stage key."""
+
+    if isinstance(value, (str, Path)):
+        return [str(value)]
+    if isinstance(value, (list, tuple)):
+        paths: list[str] = []
+        for item in value:
+            paths.extend(_explicit_stage_paths(item))
+        return paths
+    if isinstance(value, dict):
+        paths = []
+        for item in value.values():
+            paths.extend(_explicit_stage_paths(item))
+        return paths
+    return []
+
+
+def _open_absolute_no_symlinks(path: Path, *, directory: bool | None) -> int:
+    """Open an absolute path component-by-component without following symlinks."""
+
+    absolute = Path(os.path.abspath(path))
+    parts = absolute.parts[1:]
+    descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for index, part in enumerate(parts):
+            is_leaf = index == len(parts) - 1
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            if not is_leaf or directory is True:
+                flags |= os.O_DIRECTORY
+            next_descriptor = os.open(part, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = next_descriptor
+        metadata = os.fstat(descriptor)
+        expected = (
+            stat.S_ISDIR(metadata.st_mode)
+            if directory is True
+            else stat.S_ISREG(metadata.st_mode)
+            if directory is False
+            else stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode)
+        )
+        if not expected:
+            raise OSError("stage authority path has the wrong physical type")
+        return descriptor
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def _stage_path(path: str, output_path: Path) -> Path:
+    job_root = output_path.absolute()
+    candidate = Path(path)
+    candidate = candidate.absolute() if candidate.is_absolute() else (job_root / candidate).absolute()
+    try:
+        candidate.relative_to(job_root)
+    except ValueError as exc:
+        raise FrustraMPNNPersistenceError(
+            "FrustraMPNN terminal stage output escapes the exact job root"
+        ) from exc
+    descriptor = -1
+    try:
+        descriptor = _open_absolute_no_symlinks(candidate, directory=None)
+    except OSError as exc:
+        raise FrustraMPNNPersistenceError(
+            "FrustraMPNN terminal stage output is missing, unsafe, or traverses a symlink"
+        ) from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    return candidate
+
+
+def _read_explicit_terminal_envelope(bundle_root: Path) -> dict[str, Any]:
+    """Read the exact terminal child without following root or leaf symlinks."""
+
+    leaf_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    root_fd = -1
+    terminal_fd = -1
+    try:
+        root_fd = _open_absolute_no_symlinks(bundle_root, directory=True)
+        terminal_fd = os.open(_FRUSTRAMPNN_TERMINAL_RESULT, leaf_flags, dir_fd=root_fd)
+        metadata = os.fstat(terminal_fd)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise FrustraMPNNPersistenceError(
+                "FrustraMPNN explicit terminal result is not a regular file"
+            )
+        with os.fdopen(terminal_fd, "rb", closefd=True) as handle:
+            terminal_fd = -1
+            payload = handle.read()
+    except OSError as exc:
+        raise FrustraMPNNPersistenceError(
+            "FrustraMPNN explicit terminal result is missing or unsafe"
+        ) from exc
+    finally:
+        if terminal_fd >= 0:
+            os.close(terminal_fd)
+        if root_fd >= 0:
+            os.close(root_fd)
+    try:
+        terminal = canonical_json_loads(payload)
+    except Exception as exc:
+        raise FrustraMPNNPersistenceError(
+            "FrustraMPNN explicit terminal result is invalid JSON"
+        ) from exc
+    if not isinstance(terminal, dict) or canonical_json_bytes(terminal) != payload:
+        raise FrustraMPNNPersistenceError(
+            "FrustraMPNN explicit terminal result is not canonical JSON"
+        )
+    return terminal
+
+
+_PROTEIN_DESIGN_INTEGER_PROJECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("num_helices", ("pr_helices",)),
+    ("num_strands", ("pr_strands",)),
+)
+_PROTEIN_DESIGN_FLOAT_PROJECTIONS: tuple[
+    tuple[str, tuple[str, ...], bool], ...
+] = (
+    ("rog", ("pr_RoG",), False),
+    ("rfd_rog", ("rfd_RoG",), False),
+    ("mpnn_score", ("seq_mpnn_score",), True),
+    ("fampnn_psce", ("seq_fampnn_psce",), False),
+    ("plddt_overall", ("pr_plddt", "plddt"), False),
+    ("plddt_binder", ("pr_plddt_binder",), False),
+    ("plddt_target", ("pr_plddt_target",), False),
+    ("pae_interaction", ("pr_pae_interaction",), False),
+    ("pae_overall", ("pr_pae", "pae"), False),
+    ("rmsd_overall", ("pr_rmsd",), False),
+    ("rmsd_binder", ("pr_rmsd_binder",), False),
+    ("conf_score", ("conf_score",), False),
+    ("ptm", ("ptm",), False),
+)
+_CANONICAL_NONNEGATIVE_INTEGER = re.compile(r"(?:0|[1-9][0-9]*)\Z")
+_CANONICAL_FINITE_NUMBER = re.compile(
+    r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?\Z"
+)
+_AUTHORITATIVE_CSV_HEADER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+_SQLITE_INTEGER_MAX = (1 << 63) - 1
+
+
+def _protein_design_numeric_error(
+    candidate_id: str,
+    field: str,
+    detail: str,
+) -> FrustraMPNNPersistenceError:
+    return FrustraMPNNPersistenceError(
+        f"canonical protein_design metadata candidate {candidate_id!r} "
+        f"field {field!r} {detail}"
+    )
+
+
+def _strict_optional_count(value: Any, *, candidate_id: str, field: str) -> int | None:
+    if value in (None, ""):
+        return None
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, str)
+        or _CANONICAL_NONNEGATIVE_INTEGER.fullmatch(value) is None
+    ):
+        raise _protein_design_numeric_error(
+            candidate_id,
+            field,
+            "must be a canonical nonnegative integer",
+        )
+    parsed = int(value)
+    if parsed > _SQLITE_INTEGER_MAX:
+        raise _protein_design_numeric_error(
+            candidate_id,
+            field,
+            "overflows the persisted integer domain",
+        )
+    return parsed
+
+
+def _strict_optional_float(
+    value: Any,
+    *,
+    candidate_id: str,
+    field: str,
+    allow_negative: bool,
+) -> float | None:
+    if value in (None, ""):
+        return None
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, str)
+        or _CANONICAL_FINITE_NUMBER.fullmatch(value) is None
+    ):
+        raise _protein_design_numeric_error(
+            candidate_id,
+            field,
+            "must be a canonical finite number",
+        )
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise _protein_design_numeric_error(
+            candidate_id,
+            field,
+            "must be finite and within the persisted float domain",
+        )
+    if not allow_negative and parsed < 0:
+        raise _protein_design_numeric_error(
+            candidate_id,
+            field,
+            "must be nonnegative",
+        )
+    return parsed
+
+
+def _typed_protein_design_metadata_row(
+    row: dict[str, Any],
+    *,
+    candidate_id: str,
+) -> dict[str, Any]:
+    typed = dict(row)
+    for _design_field, csv_fields in _PROTEIN_DESIGN_INTEGER_PROJECTIONS:
+        for field in csv_fields:
+            if field in typed:
+                typed[field] = _strict_optional_count(
+                    typed[field], candidate_id=candidate_id, field=field
+                )
+    for _design_field, csv_fields, allow_negative in _PROTEIN_DESIGN_FLOAT_PROJECTIONS:
+        for field in csv_fields:
+            if field in typed:
+                typed[field] = _strict_optional_float(
+                    typed[field],
+                    candidate_id=candidate_id,
+                    field=field,
+                    allow_negative=allow_negative,
+                )
+    if "producer_rank" in typed:
+        typed["producer_rank"] = _strict_optional_count(
+            typed["producer_rank"], candidate_id=candidate_id, field="producer_rank"
+        )
+    if typed.get("producer_sample") == "":
+        typed["producer_sample"] = None
+    try:
+        canonical_json_bytes(typed)
+    except (TypeError, ValueError) as exc:
+        raise FrustraMPNNPersistenceError(
+            f"canonical protein_design metadata candidate {candidate_id!r} "
+            "is not strict JSON serializable"
+        ) from exc
+    return typed
+
+
+def _read_strict_authoritative_csv_rows(
+    csv_path: Path,
+) -> tuple[tuple[str, ...], list[dict[str, str]]]:
+    """Read CSV authority only after proving an exact, unambiguous ASCII header."""
+
+    try:
+        with csv_path.open("r", encoding="utf-8", newline="") as handle:
+            records = list(csv.reader(handle, strict=True))
+    except (OSError, UnicodeError, csv.Error) as exc:
+        raise FrustraMPNNPersistenceError(
+            "canonical protein_design metadata is unreadable or malformed"
+        ) from exc
+    if not records or not records[0]:
+        raise FrustraMPNNPersistenceError(
+            "canonical protein_design metadata has no header"
+        )
+    header = records[0]
+    if any(not field for field in header):
+        raise FrustraMPNNPersistenceError(
+            "canonical protein_design metadata header contains an empty field"
+        )
+    normalized = [field.strip().casefold() for field in header]
+    if len(set(normalized)) != len(normalized):
+        raise FrustraMPNNPersistenceError(
+            "canonical protein_design metadata header contains duplicate or whitespace-colliding fields"
+        )
+    if any(
+        field != field.strip()
+        or not field.isascii()
+        or _AUTHORITATIVE_CSV_HEADER.fullmatch(field) is None
+        for field in header
+    ):
+        raise FrustraMPNNPersistenceError(
+            "canonical protein_design metadata header contains invalid, confusable, or noncanonical fields"
+        )
+    rows: list[dict[str, str]] = []
+    for record in records[1:]:
+        if len(record) != len(header):
+            raise FrustraMPNNPersistenceError(
+                "canonical protein_design metadata row does not match its authoritative header"
+            )
+        rows.append(dict(zip(header, record, strict=True)))
+    return tuple(header), rows
+
+
+def _prevalidate_protein_design_metadata(
+    output_path: Path,
+    candidate_ids: set[str],
+) -> dict[str, dict[str, Any]]:
+    """Read and type the complete parent metadata set before any ORM write."""
+
+    csv_path = output_path / "results" / "all_designs.csv"
+    if not csv_path.exists():
+        raise FrustraMPNNPersistenceError(
+            "canonical protein_design all_designs.csv is required"
+        )
+    fieldnames, raw_rows = _read_strict_authoritative_csv_rows(csv_path)
+    if "candidate_id" not in fieldnames:
+        raise FrustraMPNNPersistenceError(
+            "canonical protein_design all_designs.csv header requires candidate_id authority"
+        )
+    rows: dict[str, dict[str, Any]] = {}
+    for raw_row in raw_rows:
+        row: dict[str, Any] = dict(raw_row)
+        candidate_id = row["candidate_id"]
+        if not candidate_id:
+            raise FrustraMPNNPersistenceError(
+                "canonical protein_design metadata has a missing candidate_id"
+            )
+        if candidate_id in rows:
+            raise FrustraMPNNPersistenceError(
+                f"canonical protein_design metadata candidate {candidate_id!r} "
+                "has a duplicate candidate_id"
+            )
+        if candidate_id not in candidate_ids:
+            raise FrustraMPNNPersistenceError(
+                f"canonical protein_design metadata candidate {candidate_id!r} "
+                "is an unmatched candidate_id"
+            )
+        rows[candidate_id] = _typed_protein_design_metadata_row(
+            row,
+            candidate_id=candidate_id,
+        )
+    if set(rows) != candidate_ids:
+        raise FrustraMPNNPersistenceError(
+            "canonical protein_design metadata candidate set is incomplete"
+        )
+    return rows
+
+
+_PROTEIN_DESIGN_CANONICAL_IDENTITY_FIELDS = (
+    "candidate_id",
+    "parent_job_id",
+    "parent_workflow_id",
+    "producer_stage",
+    "producer_candidate_key",
+    "producer_method",
+    "producer_output_key",
+    "producer_identity_sha256",
+    "producer_artifact_sha256",
+    "source_format",
+)
+_PROTEIN_DESIGN_HASH = re.compile(r"[0-9a-f]{64}")
+_PROTEIN_DESIGN_METHOD = re.compile(r"[a-z0-9][a-z0-9_-]*")
+
+
+def _canonical_protein_design_claim(row: Mapping[str, Any]) -> bool:
+    """Recognize workflow ownership without letting a partial row evade validation."""
+
+    return (
+        str(row.get("parent_workflow_id") or "").strip() == "protein_design"
+        or str(row.get("producer_stage") or "").strip().startswith("protein_design:")
+        or str(row.get("producer_candidate_key") or "").strip().startswith(
+            "frustrampnn/sources/"
+        )
+    )
+
+
+def _validate_canonical_protein_design_identity(
+    row: dict[str, Any], *, parent_job_id: str
+) -> None:
+    candidate_id = str(row.get("candidate_id") or "").strip()
+    for field in _PROTEIN_DESIGN_CANONICAL_IDENTITY_FIELDS:
+        value = row.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise FrustraMPNNPersistenceError(
+                f"canonical protein_design metadata candidate {candidate_id!r} "
+                f"has an incomplete {field} identity field"
+            )
+    if row["parent_workflow_id"] != "protein_design" or row["parent_job_id"] != parent_job_id:
+        raise FrustraMPNNPersistenceError(
+            f"canonical protein_design metadata candidate {candidate_id!r} "
+            "does not belong to the persisted protein_design job"
+        )
+    if _PROTEIN_DESIGN_METHOD.fullmatch(row["producer_method"]) is None:
+        raise FrustraMPNNPersistenceError(
+            f"canonical protein_design metadata candidate {candidate_id!r} "
+            "has an invalid producer_method"
+        )
+    for field in ("producer_identity_sha256", "producer_artifact_sha256"):
+        if _PROTEIN_DESIGN_HASH.fullmatch(row[field]) is None:
+            raise FrustraMPNNPersistenceError(
+                f"canonical protein_design metadata candidate {candidate_id!r} "
+                f"has an invalid {field}"
+            )
+    if row["source_format"] not in {"pdb", "mmcif"}:
+        raise FrustraMPNNPersistenceError(
+            f"canonical protein_design metadata candidate {candidate_id!r} "
+            "has an invalid source_format"
+        )
+    for field in ("producer_candidate_key", "producer_output_key"):
+        value = row[field]
+        path = Path(value)
+        if (
+            "\\" in value
+            or path.is_absolute()
+            or any(part in {"", ".", ".."} for part in path.parts)
+        ):
+            raise FrustraMPNNPersistenceError(
+                f"canonical protein_design metadata candidate {candidate_id!r} "
+                f"has an unsafe {field}"
+            )
+    expected = deterministic_candidate_id(
+        parent_job_id=parent_job_id,
+        parent_workflow_id="protein_design",
+        producer_stage=row["producer_stage"],
+        producer_candidate_key=row["producer_candidate_key"],
+    )
+    if candidate_id != expected:
+        raise FrustraMPNNPersistenceError(
+            "canonical protein_design metadata candidate_id is not deterministic"
+        )
+
+
+def _prevalidate_published_protein_design_metadata(
+    output_path: Path, *, parent_job_id: str
+) -> tuple[dict[str, dict[str, Any]], dict[str, str]] | None:
+    """Preflight a complete disabled-path canonical CSV before any ORM mutation."""
+
+    csv_path = output_path / "results" / "all_designs.csv"
+    _fieldnames, raw_rows = _read_strict_authoritative_csv_rows(csv_path)
+    claims = [_canonical_protein_design_claim(row) for row in raw_rows]
+    if not any(claims):
+        return None
+    if not raw_rows or not all(claims):
+        raise FrustraMPNNPersistenceError(
+            "canonical protein_design metadata cannot mix canonical and historical rows"
+        )
+    candidate_ids = {
+        str(row.get("candidate_id") or "").strip() for row in raw_rows
+    }
+    if "" in candidate_ids or len(candidate_ids) != len(raw_rows):
+        raise FrustraMPNNPersistenceError(
+            "canonical protein_design metadata candidate set is incomplete or duplicated"
+        )
+    typed_rows = _prevalidate_protein_design_metadata(output_path, candidate_ids)
+    physical_paths: dict[str, str] = {}
+    for candidate_id, row in typed_rows.items():
+        _validate_canonical_protein_design_identity(row, parent_job_id=parent_job_id)
+        physical_paths[candidate_id] = find_pdb_path(
+            output_path,
+            str(row.get("description") or ""),
+            producer_output_key=row["producer_output_key"],
+            producer_artifact_sha256=row["producer_artifact_sha256"],
+        )
+    return typed_rows, physical_paths
+
+
+def _first_present_metadata_value(
+    row: Mapping[str, Any], fields: tuple[str, ...]
+) -> Any:
+    for field in fields:
+        value = row.get(field)
+        if value is not None:
+            return value
+    return None
+
+
+def _protein_design_projection_values(
+    design: Design,
+    row: Mapping[str, Any],
+) -> dict[str, Any]:
+    description = row.get("description", "")
+    values: dict[str, Any] = {
+        "name": description if description != "" else design.name,
+        "backbone_id": (
+            parse_backbone_id(description)
+            if isinstance(description, str) and description != ""
+            else design.backbone_id
+        ),
+    }
+    for design_field, csv_fields in _PROTEIN_DESIGN_INTEGER_PROJECTIONS:
+        values[design_field] = _first_present_metadata_value(row, csv_fields)
+    for design_field, csv_fields, _allow_negative in _PROTEIN_DESIGN_FLOAT_PROJECTIONS:
+        values[design_field] = _first_present_metadata_value(row, csv_fields)
+    return values
+
+
+def _strict_canonical_json_equal(left: Any, right: Any) -> bool:
+    """Compare JSON authority by canonical bytes, preserving signed-zero identity."""
+
+    try:
+        return canonical_json_bytes(left) == canonical_json_bytes(right)
+    except (TypeError, ValueError):
+        return False
+
+
+def _enrich_protein_design_from_metadata(
+    design: Design, row: dict[str, Any]
+) -> None:
+    """Apply prevalidated typed protein-design metrics to one Design."""
+
+    values = _protein_design_projection_values(design, row)
+    for field, value in values.items():
+        setattr(design, field, value)
+    provenance = dict(design.provenance or {})
+    provenance["all_designs_metadata"] = dict(row)
+    design.provenance = provenance
+
+
+def _assert_protein_design_metadata_replay(
+    design: Design,
+    row: dict[str, Any],
+) -> None:
+    """Require the persisted ordinary projection to equal its immutable snapshot."""
+
+    expected = _protein_design_projection_values(design, row)
+    observed = {field: getattr(design, field) for field in expected}
+    provenance = design.provenance if isinstance(design.provenance, dict) else {}
+    if observed != expected or not _strict_canonical_json_equal(
+        provenance.get("all_designs_metadata"), row
+    ):
+        raise FrustraMPNNPersistenceError(
+            "canonical protein_design metadata replay contradicts persisted Design fields"
+        )
+
+
+async def _ingest_explicit_frustrampnn_results(
+    current_job: Job | None,
+    output_path: Path,
+    session: AsyncSession,
+    *,
+    commit: bool,
+) -> int | None:
+    """Ingest exact terminal stage products, or return None when none exist."""
+
+    if current_job is None:
+        return None
+
+    provenance = (
+        current_job.provenance if isinstance(current_job.provenance, dict) else {}
+    )
+    terminal_states = provenance.get("stage_terminal_states")
+    frustrampnn_terminal_entries = (
+        [
+            (stage, state)
+            for stage, state in terminal_states.items()
+            if str(stage).strip().lower() in _FRUSTRAMPNN_TERMINAL_STAGES
+        ]
+        if isinstance(terminal_states, dict)
+        else []
+    )
+    not_requested_entries = [
+        (stage, state)
+        for stage, state in frustrampnn_terminal_entries
+        if isinstance(state, dict) and state.get("status") == "not_requested"
+    ]
+    if not_requested_entries:
+        if (
+            len(frustrampnn_terminal_entries) != 1
+            or frustrampnn_terminal_entries[0]
+            != ("frustrampnn", {"status": "not_requested", "outputs": []})
+        ):
+            raise FrustraMPNNPersistenceError(
+                "FrustraMPNN not-requested terminal state must be exact"
+            )
+        frustrampnn_output_entries = (
+            [
+                (stage, outputs)
+                for stage, outputs in current_job.stage_outputs.items()
+                if str(stage).strip().lower() in _FRUSTRAMPNN_TERMINAL_STAGES
+            ]
+            if isinstance(current_job.stage_outputs, dict)
+            else []
+        )
+        if (
+            len(frustrampnn_output_entries) != 1
+            or frustrampnn_output_entries[0] != ("frustrampnn", [])
+        ):
+            raise FrustraMPNNPersistenceError(
+                "FrustraMPNN not-requested persisted stage outputs must be exactly empty"
+            )
+        # This terminal component intentionally has no candidate bundle to ingest.
+        # Continue with ordinary parent-result ingestion rather than returning a
+        # canonical candidate count and bypassing the parent workflow's Designs.
+        return None
+
+    if not isinstance(current_job.stage_outputs, dict):
+        return None
+    explicit: list[str] = []
+    discovered_stage = False
+    for stage, outputs in current_job.stage_outputs.items():
+        if str(stage).strip().lower() not in _FRUSTRAMPNN_TERMINAL_STAGES:
+            continue
+        discovered_stage = True
+        explicit.extend(_explicit_stage_paths(outputs))
+    if not discovered_stage:
+        return None
+
+    paths = [_stage_path(path, output_path) for path in explicit]
+    manifests = [path for path in paths if path.name == MANIFEST_PATH]
+    terminal_paths = [
+        path for path in paths if path.name == _FRUSTRAMPNN_TERMINAL_RESULT
+    ]
+    if not manifests:
+        raise FrustraMPNNPersistenceError(
+            "FrustraMPNN terminal stage output has no explicit canonical manifest"
+        )
+    manifest_roots = [os.fspath(path.parent.absolute()) for path in manifests]
+    terminal_roots_list = [
+        os.fspath(path.parent.absolute()) for path in terminal_paths
+    ]
+    if (
+        len(manifest_roots) != len(set(manifest_roots))
+        or len(terminal_roots_list) != len(set(terminal_roots_list))
+    ):
+        raise FrustraMPNNPersistenceError(
+            "FrustraMPNN terminal stage output contains duplicate bundle roots"
+        )
+    if set(manifest_roots) != set(terminal_roots_list):
+        raise FrustraMPNNPersistenceError(
+            "FrustraMPNN canonical manifest and terminal envelope roots are not exact pairs"
+        )
+
+    roots: list[Path] = []
+    seen_roots: set[str] = set()
+    for manifest_path in manifests:
+        root = manifest_path.parent.absolute()
+        root_key = os.fspath(root)
+        if root_key not in seen_roots:
+            roots.append(root)
+            seen_roots.add(root_key)
+    terminal_roots = {os.fspath(path.parent.absolute()) for path in terminal_paths}
+    if any(os.fspath(root) not in terminal_roots for root in roots):
+        raise FrustraMPNNPersistenceError(
+            "FrustraMPNN canonical manifest lacks its explicit terminal envelope output"
+        )
+
+    validated_candidates = []
+    parent_designs: list[tuple[str, str, Path, Any]] = []
+    invocation_roots: dict[str, Path] = {}
+    candidate_roots: dict[str, Path] = {}
+    for root in roots:
+        terminal = _read_explicit_terminal_envelope(root)
+        bundle = validate_frustrampnn_result_bundle(
+            root,
+            expected_parent_job_id=str(current_job.id),
+            terminal_envelope=terminal,
+        )
+        invocation_id = bundle.manifest["invocation_id"]
+        prior_root = invocation_roots.get(invocation_id)
+        if prior_root is not None:
+            raise FrustraMPNNPersistenceError(
+                "FrustraMPNN terminal stage output contains duplicate invocation IDs "
+                "across distinct bundle roots"
+            )
+        invocation_roots[invocation_id] = root
+        validated_candidates.append((root, terminal, bundle))
+
+        request = bundle.request
+        if request["parent_workflow_id"] not in {
+            "structure_prediction",
+            "protein_design",
+        }:
+            continue
+        source_artifact = request["source_artifact"]
+        candidate_id = str(bundle.manifest["candidate_id"])
+        producer_stage = str(source_artifact.get("producer_stage") or "").strip()
+        producer_candidate_key = str(source_artifact.get("relative_path") or "").strip()
+        if ":" not in producer_stage or not all(
+            part.strip() for part in producer_stage.split(":", 1)
+        ):
+            # Pre-Phase-5 canonical bundles already attach to a Design seeded by
+            # the parent ingester. Only typed parent-candidate authority opts in
+            # to deterministic precreation; Phase 7 removes the compatibility path.
+            continue
+        expected_candidate_id = deterministic_candidate_id(
+            parent_job_id=str(current_job.id),
+            parent_workflow_id=request["parent_workflow_id"],
+            producer_stage=producer_stage,
+            producer_candidate_key=producer_candidate_key,
+        )
+        if (
+            candidate_id != expected_candidate_id
+            or source_artifact.get("artifact_id") != candidate_id
+        ):
+            raise FrustraMPNNPersistenceError(
+                "FrustraMPNN parent manifest violates deterministic candidate identity"
+            )
+        prior_candidate_root = candidate_roots.get(candidate_id)
+        if prior_candidate_root is not None:
+            raise FrustraMPNNPersistenceError(
+                "FrustraMPNN terminal stage output contains duplicate candidate IDs"
+            )
+        candidate_roots[candidate_id] = root
+
+        source_path = _stage_path(producer_candidate_key, output_path)
+        try:
+            source_sha256 = hashlib.sha256(read_structure_bytes(source_path)).hexdigest()
+        except (OSError, StructureNormalizationError) as exc:
+            raise FrustraMPNNPersistenceError(
+                "FrustraMPNN parent source structure is missing or unsafe"
+            ) from exc
+        if source_sha256 != source_artifact["sha256"]:
+            raise FrustraMPNNPersistenceError(
+                "FrustraMPNN parent source structure SHA-256 does not match request authority"
+            )
+        parent_designs.append(
+            (candidate_id, producer_candidate_key, source_path, bundle)
+        )
+
+    # Finish the complete physical/identity preflight and all read-only replay
+    # checks before the first ORM write. Protein-design metadata is keyed only by
+    # the canonical candidate identity; basename/path heuristics are forbidden.
+    protein_candidate_ids = {
+        candidate_id
+        for candidate_id, _candidate_key, _source_path, candidate_bundle in parent_designs
+        if candidate_bundle.request["parent_workflow_id"] == "protein_design"
+    }
+    protein_metadata = (
+        _prevalidate_protein_design_metadata(output_path, protein_candidate_ids)
+        if protein_candidate_ids
+        else {}
+    )
+
+    # The deterministic Design rows then become visible to canonical
+    # persistence through one explicit flush.
+    existing_results: dict[str, FrustraMPNNResult | None] = {}
+    for _root, _terminal, bundle in validated_candidates:
+        invocation_id = bundle.manifest["invocation_id"]
+        existing_results[invocation_id] = await session.get(
+            FrustraMPNNResult, (str(current_job.id), invocation_id)
+        )
+    designs_to_add: list[Design] = []
+    for candidate_id, candidate_key, source_path, _bundle in parent_designs:
+        design = await session.get(Design, candidate_id)
+        if design is not None:
+            if design.job_id != str(current_job.id) or design.pdb_path != os.fspath(source_path):
+                raise FrustraMPNNPersistenceError(
+                    "FrustraMPNN deterministic Design identity conflicts with persisted authority"
+                )
+            existing_result = existing_results[_bundle.manifest["invocation_id"]]
+            if existing_result is not None and _bundle.request["parent_workflow_id"] == "protein_design":
+                metadata_row = protein_metadata[candidate_id]
+                if not _strict_canonical_json_equal(
+                    existing_result.parent_metadata_json, metadata_row
+                ):
+                    raise FrustraMPNNPersistenceError(
+                        "canonical protein_design metadata replay conflicts with immutable metadata snapshot"
+                    )
+                _assert_protein_design_metadata_replay(design, metadata_row)
+            continue
+        designs_to_add.append(
+            Design(
+                id=candidate_id,
+                job_id=str(current_job.id),
+                name=candidate_key,
+                pdb_path=os.fspath(source_path),
+                source_stage="frustrampnn_candidate",
+                source_stage_family=str(_bundle.request["parent_workflow_id"]),
+                source_stage_mode=str(
+                    _bundle.request["source_artifact"]["producer_stage"]
+                ),
+                artifact_class=(
+                    "designed_structure"
+                    if _bundle.request["parent_workflow_id"] == "protein_design"
+                    else "predicted_structure"
+                ),
+                created_at=datetime.utcnow(),
+            )
+        )
+
+    created = 0
+    try:
+        session.add_all(designs_to_add)
+        if designs_to_add:
+            await session.flush()
+        for candidate_id, row in protein_metadata.items():
+            design = await session.get(Design, candidate_id)
+            if design is None:
+                raise FrustraMPNNPersistenceError(
+                    "canonical protein_design metadata references a missing Design"
+                )
+            _enrich_protein_design_from_metadata(design, row)
+        for root, terminal, bundle in validated_candidates:
+            invocation_id = bundle.manifest["invocation_id"]
+            await ingest_frustrampnn_result_bundle(
+                session,
+                root,
+                parent_job_id=str(current_job.id),
+                terminal_envelope=terminal,
+                commit=False,
+                validated_bundle=bundle,
+                parent_metadata_snapshot=(
+                    protein_metadata[str(bundle.manifest["candidate_id"])]
+                    if bundle.request["parent_workflow_id"] == "protein_design"
+                    else None
+                ),
+            )
+            if existing_results[invocation_id] is None:
+                created += 1
+        if commit:
+            await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+    return created
+
+
+def _canonical_protein_design_row_id(
+    row: Mapping[str, Any], *, parent_job_id: str
+) -> Optional[str]:
+    """Return a validated workflow-owned Design ID, when the row declares one."""
+    if str(row.get("parent_workflow_id") or "").strip() != "protein_design":
+        return None
+    from .frustrampnn.identity import deterministic_candidate_id
+
+    fields = {
+        "candidate_id": str(row.get("candidate_id") or "").strip(),
+        "parent_job_id": str(row.get("parent_job_id") or "").strip(),
+        "producer_stage": str(row.get("producer_stage") or "").strip(),
+        "producer_candidate_key": str(row.get("producer_candidate_key") or "").strip(),
+    }
+    if any(not value for value in fields.values()):
+        raise FrustraMPNNPersistenceError(
+            "protein_design metadata declares canonical ownership without complete identity fields"
+        )
+    if fields["parent_job_id"] != parent_job_id:
+        raise FrustraMPNNPersistenceError(
+            "protein_design metadata parent_job_id does not match the persisted job"
+        )
+    expected = deterministic_candidate_id(
+        parent_job_id=parent_job_id,
+        parent_workflow_id="protein_design",
+        producer_stage=fields["producer_stage"],
+        producer_candidate_key=fields["producer_candidate_key"],
+    )
+    if fields["candidate_id"] != expected:
+        raise FrustraMPNNPersistenceError(
+            "protein_design metadata candidate_id is not deterministic"
+        )
+    return expected
+
+
 async def ingest_job_results(
     job_id: str, 
     output_dir: str, 
@@ -2903,6 +3610,17 @@ async def ingest_job_results(
         output_path = resolve_runtime_data_path(output_path)
     else:
         output_path = get_data_root() / output_dir
+
+    job_result = await session.execute(select(Job).where(Job.id == job_id))
+    current_job = job_result.scalar_one_or_none()
+    canonical_count = await _ingest_explicit_frustrampnn_results(
+        current_job,
+        output_path,
+        session,
+        commit=commit,
+    )
+    if canonical_count is not None:
+        return canonical_count
 
     if not output_path.exists():
         print(f"[Ingester] Output dir not found: {output_path}")
@@ -3034,7 +3752,19 @@ async def ingest_job_results(
     
     designs_created = 0
 
-    designs_created = 0
+    canonical_metadata: dict[str, dict[str, Any]] = {}
+    canonical_physical_paths: dict[str, str] = {}
+    if csv_path.exists():
+        try:
+            canonical_preflight = _prevalidate_published_protein_design_metadata(
+                output_path,
+                parent_job_id=str(current_job.id),
+            )
+        except FrustraMPNNPersistenceError:
+            await session.rollback()
+            raise
+        if canonical_preflight is not None:
+            canonical_metadata, canonical_physical_paths = canonical_preflight
 
     # Stage-review rows are ephemeral parent-review artifacts. Remove them before
     # real final-stage ingestion so completed jobs don't double-count review rows.
@@ -3067,19 +3797,53 @@ async def ingest_job_results(
         try:
             with open(csv_path, 'r') as f:
                 reader = csv.DictReader(f)
-                
-                for row in reader:
+                rows_to_ingest = (
+                    list(canonical_metadata.values())
+                    if canonical_metadata
+                    else reader
+                )
+
+                for row in rows_to_ingest:
                     # Map CSV columns to Design fields
                     design_name = row.get('description', f'design_{designs_created}')
-                    structure_path_str = find_pdb_path(output_path, design_name)
+                    canonical_design_id = (
+                        str(row.get("candidate_id") or "") if canonical_metadata else ""
+                    )
+                    structure_path_str = canonical_physical_paths.get(canonical_design_id)
+                    if structure_path_str is None:
+                        structure_path_str = find_pdb_path(
+                            output_path,
+                            design_name,
+                            producer_output_key=row.get("producer_output_key"),
+                            producer_artifact_sha256=row.get("producer_artifact_sha256"),
+                        )
                     structure_path = Path(structure_path_str) if structure_path_str else None
                     structure_cdr_lengths = _parse_hlt_cdr_lengths(structure_path)
                     fam_json_path = _find_fampnn_sidecar_path(structure_path, output_path) if structure_path else None
                     fam_payload = _load_json_payload(fam_json_path) if fam_json_path else None
                     fam_metrics = _extract_fampnn_metrics(fam_payload, structure_path)
                     fampnn_record = _build_fampnn_payload(fam_payload, fam_metrics)
-                    row_mpnn_score = safe_float(row.get('seq_mpnn_score'))
-                    row_fampnn_psce = safe_float(row.get('seq_fampnn_psce'))
+                    canonical_row = canonical_metadata.get(canonical_design_id)
+                    strict_projection: dict[str, Any] = {}
+                    if canonical_row is not None:
+                        for design_field, csv_fields in _PROTEIN_DESIGN_INTEGER_PROJECTIONS:
+                            strict_projection[design_field] = _first_present_metadata_value(
+                                canonical_row, csv_fields
+                            )
+                        for design_field, csv_fields, _allow_negative in _PROTEIN_DESIGN_FLOAT_PROJECTIONS:
+                            strict_projection[design_field] = _first_present_metadata_value(
+                                canonical_row, csv_fields
+                            )
+                    row_mpnn_score = (
+                        strict_projection["mpnn_score"]
+                        if canonical_row is not None
+                        else safe_float(row.get('seq_mpnn_score'))
+                    )
+                    row_fampnn_psce = (
+                        strict_projection["fampnn_psce"]
+                        if canonical_row is not None
+                        else safe_float(row.get('seq_fampnn_psce'))
+                    )
                     lineage = await _resolve_parent_design_lineage(
                         session,
                         job_context,
@@ -3098,8 +3862,12 @@ async def ingest_job_results(
                     if fampnn_record:
                         design_provenance["fampnn"] = fampnn_record
 
+                    design_id = _canonical_protein_design_row_id(
+                        row,
+                        parent_job_id=str(current_job.id),
+                    ) or str(uuid.uuid4())
                     design = Design(
-                        id=str(uuid.uuid4()),
+                        id=design_id,
                         job_id=job_id,
                         name=design_name,
                         pdb_path=str(structure_path) if structure_path else None,
@@ -3109,25 +3877,25 @@ async def ingest_job_results(
                         backbone_id=parse_backbone_id(design_name),
                         
                         # Structural metrics (predicted structures)
-                        num_helices=safe_int(row.get('pr_helices')),
-                        num_strands=safe_int(row.get('pr_strands')),
-                        rog=safe_float(row.get('pr_RoG')),
+                        num_helices=(strict_projection["num_helices"] if canonical_row is not None else safe_int(row.get('pr_helices'))),
+                        num_strands=(strict_projection["num_strands"] if canonical_row is not None else safe_int(row.get('pr_strands'))),
+                        rog=(strict_projection["rog"] if canonical_row is not None else safe_float(row.get('pr_RoG'))),
                         # RFdiffusion backbone metrics
-                        rfd_rog=safe_float(row.get('rfd_RoG')),
+                        rfd_rog=(strict_projection["rfd_rog"] if canonical_row is not None else safe_float(row.get('rfd_RoG'))),
                         
                         # Sequence design metrics
-                        mpnn_score=row_mpnn_score if row_mpnn_score is not None else fam_metrics.get("mpnn_score"),
-                        fampnn_psce=row_fampnn_psce if row_fampnn_psce is not None else fam_metrics.get("avg_psce"),
+                        mpnn_score=(row_mpnn_score if canonical_row is not None or row_mpnn_score is not None else fam_metrics.get("mpnn_score")),
+                        fampnn_psce=(row_fampnn_psce if canonical_row is not None or row_fampnn_psce is not None else fam_metrics.get("avg_psce")),
                         binder_length=fam_metrics.get("binder_length"),
                         
                         # Structure prediction metrics (AF2/Boltz)
-                        plddt_overall=safe_float(row.get('pr_plddt') or row.get('plddt')),
-                        plddt_binder=safe_float(row.get('pr_plddt_binder')),
-                        plddt_target=safe_float(row.get('pr_plddt_target')),
-                        pae_interaction=safe_float(row.get('pr_pae_interaction')),
-                        pae_overall=safe_float(row.get('pr_pae') or row.get('pae')),
-                        rmsd_overall=safe_float(row.get('pr_rmsd')),
-                        rmsd_binder=safe_float(row.get('pr_rmsd_binder')),
+                        plddt_overall=(strict_projection["plddt_overall"] if canonical_row is not None else safe_float(row.get('pr_plddt') or row.get('plddt'))),
+                        plddt_binder=(strict_projection["plddt_binder"] if canonical_row is not None else safe_float(row.get('pr_plddt_binder'))),
+                        plddt_target=(strict_projection["plddt_target"] if canonical_row is not None else safe_float(row.get('pr_plddt_target'))),
+                        pae_interaction=(strict_projection["pae_interaction"] if canonical_row is not None else safe_float(row.get('pr_pae_interaction'))),
+                        pae_overall=(strict_projection["pae_overall"] if canonical_row is not None else safe_float(row.get('pr_pae') or row.get('pae'))),
+                        rmsd_overall=(strict_projection["rmsd_overall"] if canonical_row is not None else safe_float(row.get('pr_rmsd'))),
+                        rmsd_binder=(strict_projection["rmsd_binder"] if canonical_row is not None else safe_float(row.get('pr_rmsd_binder'))),
                         cdr_h1_length=structure_cdr_lengths.get("H1"),
                         cdr_h2_length=structure_cdr_lengths.get("H2"),
                         cdr_h3_length=structure_cdr_lengths.get("H3"),
@@ -3136,8 +3904,8 @@ async def ingest_job_results(
                         cdr_l3_length=structure_cdr_lengths.get("L3"),
                         
                         # Boltz-2 specific
-                        conf_score=safe_float(row.get('conf_score')),
-                        ptm=safe_float(row.get('ptm')),
+                        conf_score=(strict_projection["conf_score"] if canonical_row is not None else safe_float(row.get('conf_score'))),
+                        ptm=(strict_projection["ptm"] if canonical_row is not None else safe_float(row.get('ptm'))),
                         
                         # User annotations (defaults)
                         is_favorite=False,
@@ -3195,6 +3963,9 @@ async def ingest_job_results(
                         lineage.get("source_design"),
                         structure_path=structure_path,
                     )
+                    if canonical_row is not None:
+                        _enrich_protein_design_from_metadata(design, canonical_row)
+                        _assert_protein_design_metadata_replay(design, canonical_row)
                     
                     session.add(design)
                     designs_created += 1
@@ -3203,6 +3974,9 @@ async def ingest_job_results(
                 await session.commit()
             print(f"[Ingester] Ingested {designs_created} designs for job {job_id}")
             
+        except FrustraMPNNPersistenceError:
+            await session.rollback()
+            raise
         except Exception as e:
             print(f"[Ingester] Error ingesting results: {e}")
             await session.rollback()
@@ -3226,7 +4000,6 @@ async def ingest_job_results(
     # Post-ingestion: Attach supplementary metrics from pipeline stages
     if designs_created > 0:
         await ingest_screening_data(job_id, output_path, session)
-        await ingest_frustration_data(job_id, output_path, session)
         await ingest_maturation_data(job_id, output_path, session)
 
     return designs_created
@@ -4265,128 +5038,6 @@ async def ingest_collected_ppiflow_structures(
 
     return created
 
-
-async def ingest_frustration_data(
-    job_id: str,
-    output_path: Path,
-    session: AsyncSession
-) -> int:
-    """
-    Parse FrustraMPNN output CSVs and update matching designs with frustration data.
-    
-    FrustraMPNN outputs are in {output_dir}/frustration/{design_name}_frustration.csv
-    """
-    frustration_dir = output_path / "frustration"
-    if not frustration_dir.exists():
-        print(f"[Ingester] No frustration directory found at {frustration_dir}")
-        return 0
-    
-    # Find all frustration CSVs
-    frustration_csvs = list(frustration_dir.glob("*_frustration.csv"))
-    if not frustration_csvs:
-        print(f"[Ingester] No frustration CSV files found in {frustration_dir}")
-        return 0
-    
-    print(f"[Ingester] Found {len(frustration_csvs)} frustration CSVs to process")
-    
-    from database import Job
-    job_info = await session.execute(
-        select(Job).where(Job.id == job_id)
-    )
-    current_job = job_info.scalar_one_or_none()
-    
-    design_job_ids = [job_id]
-    if current_job:
-        if current_job.parent_job_id:
-            design_job_ids.append(current_job.parent_job_id)
-        if current_job.batch_id:
-            batch_res = await session.execute(
-                select(Job.id).where(Job.batch_id == current_job.batch_id)
-            )
-            design_job_ids.extend([row[0] for row in batch_res.all()])
-        
-        child_result = await session.execute(
-            select(Job.id).where(Job.parent_job_id == job_id)
-        )
-        design_job_ids.extend([row[0] for row in child_result.all()])
-
-        # Check for iteration Source ID stored in params
-        params_dict = _parse_job_params(current_job.params)
-        if params_dict.get("iteration_source_job_id"):
-            design_job_ids.append(params_dict["iteration_source_job_id"])
-        if params_dict.get("iteration_source_root_job_id"):
-            design_job_ids.append(params_dict["iteration_source_root_job_id"])
-
-    design_job_ids = list(set(design_job_ids))
-
-    async def find_matching_design(design_token: str) -> Optional[Design]:
-        normalized = _normalize_frustration_target_name(design_token)
-        if not normalized:
-            return None
-
-        candidate_names = [normalized]
-        exact_result = await session.execute(
-            select(Design).where(
-                Design.job_id.in_(design_job_ids),
-                Design.name.in_(candidate_names)
-            )
-        )
-        design = exact_result.scalar_one_or_none()
-        if design:
-            return design
-
-        prefix_result = await session.execute(
-            select(Design).where(
-                Design.job_id.in_(design_job_ids),
-                Design.name.like(f"{normalized}%")
-            )
-        )
-        design = prefix_result.scalars().first()
-        if design:
-            return design
-
-        pdb_result = await session.execute(
-            select(Design).where(
-                Design.job_id.in_(design_job_ids),
-                Design.pdb_path.like(f"%/{normalized}.pdb")
-            )
-        )
-        return pdb_result.scalars().first()
-
-    updated_count = 0
-    
-    for csv_path in frustration_csvs:
-        csv_targets = extract_frustration_targets(csv_path)
-        target_names = csv_targets or [csv_path.stem.replace("_frustration", "")]
-
-        for target_name in target_names:
-            design = await find_matching_design(target_name)
-            if not design:
-                print(f"[Ingester] No matching design for frustration target: {target_name}")
-                continue
-
-            frust_data = parse_frustration_csv(csv_path, pdb_name_filter=target_name if csv_targets else None)
-            if not frust_data:
-                print(f"[Ingester] Failed to parse frustration CSV: {csv_path} (target={target_name})")
-                continue
-
-            design.frustration_high_count = frust_data['high_count']
-            design.frustration_min_count = frust_data['min_count']
-            design.frustration_pct_high = frust_data['pct_high']
-            design.frustration_residues = frust_data['residues']
-            design.frustration_csv_path = str(csv_path)
-
-            updated_count += 1
-            print(
-                f"[Ingester] Updated {design.name} with frustration data: "
-                f"{frust_data['high_count']} high, {frust_data['min_count']} min"
-            )
-    
-    if updated_count > 0:
-        await session.commit()
-        print(f"[Ingester] Updated {updated_count} designs with frustration data")
-    
-    return updated_count
 
 
 async def ingest_loose_files(
@@ -5429,30 +6080,99 @@ def extract_pdb_files(output_path: Path) -> Path:
     return pdb_dir
 
 
-def find_pdb_path(output_path: Path, design_name: str) -> str:
-    """Find the PDB file path for a design."""
-    # Check in pdb_files directory first (extracted from tar.gz)
-    pdb_files = output_path / "pdb_files"
-    if pdb_files.exists():
-        pdb_file = pdb_files / f"{design_name}.pdb"
-        if pdb_file.exists():
-            return str(pdb_file)
-        # Check validated designs subdir
-        validated_dir = pdb_files / "validated_designs"
-        if validated_dir.exists():
-            pdb_file = validated_dir / f"{design_name}.pdb"
-            if pdb_file.exists():
-                return str(pdb_file)
-    
-    # Check in best_designs directory
-    best_designs = output_path / "best_designs"
-    if best_designs.exists():
-        pdb_file = best_designs / f"{design_name}.pdb"
-        if pdb_file.exists():
-            return str(pdb_file)
-    
-    # Fallback - return expected path in pdb_files
-    return str(output_path / "pdb_files" / f"{design_name}.pdb")
+def find_pdb_path(
+    output_path: Path,
+    design_name: str,
+    *,
+    producer_output_key: str | None = None,
+    producer_artifact_sha256: str | None = None,
+) -> str:
+    """Resolve one exact, physical published PDB or fail closed.
+
+    The production publication layout is authoritative, while the older layouts
+    remain supported only when one exact regular file exists.  A producer output
+    key and digest, when projected by the workflow, bind the selected file to
+    the typed terminal producer rather than to an inferred basename.
+    """
+
+    root = Path(output_path).absolute()
+    raw_key = (producer_output_key or "").strip()
+    if raw_key:
+        if "\\" in raw_key:
+            raise FrustraMPNNPersistenceError(
+                "protein_design producer output key is unsafe"
+            )
+        key_path = Path(raw_key)
+        if key_path.is_absolute() or any(part in {"", ".", ".."} for part in key_path.parts):
+            raise FrustraMPNNPersistenceError(
+                "protein_design producer output key is unsafe"
+            )
+        filename = key_path.name
+    else:
+        filename = f"{design_name}.pdb"
+    if (
+        not filename
+        or Path(filename).name != filename
+        or Path(filename).suffix.lower() != ".pdb"
+    ):
+        raise FrustraMPNNPersistenceError(
+            "protein_design published structure identity is unsafe"
+        )
+
+    supported = (
+        root / "results" / "best_designs" / filename,
+        root / "pdb_files" / filename,
+        root / "pdb_files" / "validated_designs" / filename,
+        root / "best_designs" / filename,
+    )
+    matches: list[tuple[Path, str]] = []
+    for candidate in supported:
+        try:
+            present = candidate.exists() or candidate.is_symlink()
+        except OSError as exc:
+            raise FrustraMPNNPersistenceError(
+                "protein_design published structure is unsafe"
+            ) from exc
+        if not present:
+            continue
+        try:
+            fd = _open_absolute_no_symlinks(candidate, directory=False)
+            try:
+                digest = hashlib.sha256()
+                while True:
+                    chunk = os.read(fd, 1024 * 1024)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+            finally:
+                os.close(fd)
+        except (OSError, FrustraMPNNPersistenceError) as exc:
+            raise FrustraMPNNPersistenceError(
+                "protein_design published structure is an unsafe symlink or non-regular file"
+            ) from exc
+        matches.append((candidate, digest.hexdigest()))
+
+    if not matches:
+        raise FrustraMPNNPersistenceError(
+            f"protein_design published structure is missing: {filename}"
+        )
+    if len(matches) != 1:
+        raise FrustraMPNNPersistenceError(
+            f"protein_design published structure is ambiguous: {filename}"
+        )
+
+    selected, observed_sha256 = matches[0]
+    expected_sha256 = (producer_artifact_sha256 or "").strip().lower()
+    if expected_sha256:
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
+            raise FrustraMPNNPersistenceError(
+                "protein_design producer artifact SHA-256 is invalid"
+            )
+        if observed_sha256 != expected_sha256:
+            raise FrustraMPNNPersistenceError(
+                "protein_design published structure SHA-256 contradicts producer identity"
+            )
+    return os.fspath(selected)
 
 
 def safe_float(value) -> Optional[float]:

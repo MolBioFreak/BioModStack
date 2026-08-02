@@ -24,6 +24,8 @@ BioModStack is operated as a managed service. Keep the repository limited to cod
 
 - **Development:** use `test`, development configuration, isolated development state, and local/managed development services. Validate behavior here first.
 - **Production:** use `main`, production configuration, managed persistent state, and the approved deployment path. Do not make direct source edits or ad-hoc service substitutions in production.
+- **Development sync interval is intentionally 60 seconds.** `biomodstack-dev-sync.timer` checks `origin/test` once every 60 seconds; that expected delay is not a fault.
+- Canonical Development is deployment-owned and must never be edited directly. Create a worktree from current `origin/test`, reconcile again immediately before integration, rerun affected tests, and push only a fast-forward update to `test`.
 - A service is not deployed merely because code was pushed. Prove the deployed revision and runtime ownership separately.
 
 ## Tailnet / Tailscale Serve

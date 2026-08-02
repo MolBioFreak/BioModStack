@@ -58,7 +58,16 @@ class MetadataConverter:
         metadata_field_names = [
             # List of all possible fields
             # ID fields
-            'description','fold_id', 'seq_id',
+            'candidate_id', 'description','fold_id', 'seq_id',
+            # Canonical protein-design terminal producer lineage.  These fields
+            # are injected while the scheduler still owns the typed
+            # ``(candidate_meta, structure)`` tuple; they must survive the
+            # ordinary metadata merge unchanged.
+            'parent_job_id', 'parent_workflow_id', 'producer_stage',
+            'producer_candidate_key', 'producer_method', 'producer_sample',
+            'producer_rank', 'producer_output_key',
+            'producer_identity_sha256', 'producer_artifact_sha256',
+            'source_format',
             # RFdiffusion fields
             'rfd_sampled_mask',
             # RFD design secondary structure and RoG
@@ -126,7 +135,17 @@ class MetadataConverter:
                             continue
 
                         metadata_fold_ids.add(fold_id)
-                        key = (fold_id, seq_id)
+                        candidate_id = data.get('candidate_id')
+                        # Candidate-bound terminal rows are keyed by canonical
+                        # identity, never by fold/sequence IDs, filename,
+                        # basename, physical path, row order, or content hash.
+                        # The legacy fold/sequence key remains for ordinary
+                        # non-terminal metadata.
+                        key = (
+                            ('candidate_id', str(candidate_id))
+                            if candidate_id not in (None, '')
+                            else (fold_id, seq_id)
+                        )
                         
                         if key not in combined_entries:
                             combined_entries[key] = {}
@@ -140,6 +159,26 @@ class MetadataConverter:
 
                     logging.info(f"Processed {metadata_fold_seq_count} fold_id + seq_id metadata entries")
                     logging.info(f"Merged fold-only metadata into {merge_count} entries")
+
+            # Candidate-bound terminal rows carry their canonical identity from
+            # a scheduled tuple-owned process.  Merge earlier ordinary rows by
+            # the existing logical fold/sequence metadata key, then remove the
+            # superseded unbound row.  Canonical identity is never inferred
+            # from filename, path, order, or content hash.
+            terminal_keys = [
+                key for key, row in combined_entries.items()
+                if row.get('candidate_id') not in (None, '')
+            ]
+            ordinary_keys_consumed = set()
+            for terminal_key in terminal_keys:
+                terminal_row = combined_entries[terminal_key]
+                ordinary_key = (terminal_row.get('fold_id'), terminal_row.get('seq_id'))
+                ordinary_row = combined_entries.get(ordinary_key)
+                if ordinary_row is not None and ordinary_key != terminal_key:
+                    combined_entries[terminal_key] = {**ordinary_row, **terminal_row}
+                    ordinary_keys_consumed.add(ordinary_key)
+            for ordinary_key in ordinary_keys_consumed:
+                combined_entries.pop(ordinary_key, None)
 
             # Fold-Only Entries
             fold_only_count = 0

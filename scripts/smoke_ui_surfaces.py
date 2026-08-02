@@ -14,10 +14,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ELECTRON_DIR = REPO_ROOT / "platform/desktop-electron"
 
-DEFAULT_VITE_CLIENT_URL = "http://127.0.0.1:5173/@vite/client"
-DEFAULT_VITE_ROOT_URL = "http://127.0.0.1:5173/"
+DEFAULT_VITE_CLIENT_URL = "http://127.0.0.1:18082/@vite/client"
+DEFAULT_VITE_ROOT_URL = "http://127.0.0.1:18082/"
 DEFAULT_STABLE_URL = "http://127.0.0.1:18080/bms/"
-DEFAULT_API_HEALTH_URL = "http://127.0.0.1:8000/api/health"
+DEFAULT_API_HEALTH_URL = "http://127.0.0.1:18000/api/health"
 EXPECTED_ELECTRON_STABLE_URL = "http://127.0.0.1:18080/bms/"
 
 

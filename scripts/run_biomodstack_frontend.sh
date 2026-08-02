@@ -21,7 +21,7 @@ frontend_mode() {
 cd "$PROJECT_DIR/platform/frontend"
 case "$(frontend_mode)" in
     dev)
-        exec npm run dev -- --host 127.0.0.1 --port "${BMS_DEV_WEB_HOST_PORT:-5173}"
+        exec npm run dev -- --host 127.0.0.1 --port "${BMS_DEV_WEB_HOST_PORT:-18082}"
         ;;
     prod)
         echo "BioModStack frontend production mode is provided by the bms-web container." >&2

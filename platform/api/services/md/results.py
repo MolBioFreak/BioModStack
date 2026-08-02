@@ -45,7 +45,12 @@ MAX_ANALYSIS_POINTS = 10_000
 MAX_RESIDUE_METRICS = 10_000
 
 
-def _replica_protocol_matches(requested: Mapping[str, Any], observed: Any) -> bool:
+def _replica_protocol_matches(
+    requested: Mapping[str, Any],
+    observed: Any,
+    *,
+    qualified_gpu_offload: str | None = None,
+) -> bool:
     if observed == requested:
         return True
     if requested.get("schema") != "bms.md.job.v2" or not isinstance(observed, Mapping):
@@ -76,7 +81,72 @@ def _replica_protocol_matches(requested: Mapping[str, Any], observed: Any) -> bo
         **observed_input,
         "structure": requested_input["structure"],
     }
-    return normalized_observed == requested
+    if normalized_observed == requested:
+        return True
+    requested_execution = requested.get("execution")
+    observed_execution = observed.get("execution")
+    if not isinstance(requested_execution, Mapping) or not isinstance(observed_execution, Mapping):
+        return False
+    scheduler_gpu_id = requested_execution.get("gpu_id")
+    if not isinstance(scheduler_gpu_id, str):
+        return False
+    expected_execution = {
+        **requested_execution,
+        "gpu_id": "0",
+        "scheduler_gpu_id": scheduler_gpu_id,
+    }
+    if qualified_gpu_offload is not None:
+        expected_execution["gpu_offload"] = qualified_gpu_offload
+    expected_observed = dict(requested)
+    expected_observed["input"] = normalized_observed["input"]
+    expected_observed["execution"] = expected_execution
+    return normalized_observed == expected_observed
+
+
+def _qualified_gpu_offload(root: Path, requested: Mapping[str, Any]) -> str | None:
+    if requested.get("schema") != "bms.md.job.v2" or requested.get("engine") != "gromacs":
+        return None
+    manifest_path = root / "preparation" / "preparation_bundle" / "preparation_manifest.json"
+    if not manifest_path.is_file():
+        return None
+    try:
+        manifest = _load_json(manifest_path, "MD_PREPARATION_POLICY_INVALID")
+        profile = manifest.get("profile")
+        runtime = manifest.get("runtime")
+        source = manifest.get("source")
+        preparation = manifest.get("preparation")
+        chemistry = requested.get("chemistry")
+        requested_input = requested.get("input")
+        runtime_identity = chemistry.get("runtime_identity") if isinstance(chemistry, Mapping) else None
+        policy = preparation.get("gromacs_gpu_offload") if isinstance(preparation, Mapping) else None
+        valid = (
+            manifest.get("schema") == "bms.md.preparation-bundle.v1"
+            and isinstance(profile, Mapping)
+            and isinstance(runtime, Mapping)
+            and isinstance(source, Mapping)
+            and isinstance(chemistry, Mapping)
+            and isinstance(requested_input, Mapping)
+            and isinstance(runtime_identity, Mapping)
+            and profile.get("id") == chemistry.get("profile_id")
+            and profile.get("sha256") == chemistry.get("profile_sha256")
+            and runtime.get("image_sha256") == runtime_identity.get("sif_sha256")
+            and source.get("sha256") == requested_input.get("structure_sha256")
+            and source.get("bytes") == requested_input.get("structure_bytes")
+            and policy in {"full", "full_forces", "none"}
+        )
+    except (AttributeError, TypeError, MDResultError) as exc:
+        raise MDResultError(
+            "MD_PREPARATION_POLICY_INVALID",
+            "MD preparation policy is unavailable or invalid",
+            409,
+        ) from exc
+    if not valid:
+        raise MDResultError(
+            "MD_PREPARATION_POLICY_INVALID",
+            "MD preparation policy does not match the requested chemistry and input",
+            409,
+        )
+    return str(policy)
 MAX_TRAJECTORY_PLAYBACK_FRAMES = 10_000
 
 
@@ -533,6 +603,7 @@ def completion_barrier(job: MDJobRecord) -> dict[str, Any]:
         raise MDResultError("MD_COMPLETION_BLOCKED", "MD requested seed contract is missing", 409)
 
     replica_hashes: dict[int, str] = {}
+    qualified_gpu_offload = _qualified_gpu_offload(root, job_spec)
     replica_seeds: set[int] = set()
     required_roles = {
         "analysis_topology",
@@ -552,7 +623,11 @@ def completion_barrier(job: MDJobRecord) -> dict[str, Any]:
         except ValidationError as exc:
             raise MDResultError("MD_COMPLETION_BLOCKED", f"MD replica {index} fails its run schema", 409) from exc
         seed = manifest.get("replica_seed")
-        if not _replica_protocol_matches(job_spec, manifest.get("config")):
+        if not _replica_protocol_matches(
+            job_spec,
+            manifest.get("config"),
+            qualified_gpu_offload=qualified_gpu_offload,
+        ):
             raise MDResultError("MD_COMPLETION_BLOCKED", "MD replica configuration does not match the requested scientific protocol", 409)
         engine = manifest.get("engine")
         if (

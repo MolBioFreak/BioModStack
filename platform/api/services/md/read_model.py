@@ -5,7 +5,7 @@ from collections import Counter, defaultdict
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import Job, MdAttemptSegment, MdCheckpoint, MdEvent, MdReplicaRun, MdRun
+from database import Job, JobArtifact, MdAttemptSegment, MdCheckpoint, MdEvent, MdReplicaRun, MdRun
 from services.md.state import RETRYABLE_INFRASTRUCTURE_FAILURES
 from services.md.artifacts import (
     MdArtifactProvenanceError, project_durable_md_artifacts, resolve_resume_checkpoint_artifacts,
@@ -13,7 +13,7 @@ from services.md.artifacts import (
 from services.md.pause_actuator import _checkpoint_roots
 
 
-def _actions(phase: str, has_checkpoint: bool, retryable: bool, *, pause_ready: bool = False) -> list[str]:
+def _actions(phase: str, has_checkpoint: bool, retryable: bool, *, pre_replica_terminal: bool = False, pause_ready: bool = False) -> list[str]:
     actions: list[str] = []
     if phase == "replicas_running" and pause_ready:
         actions.append("pause")
@@ -23,6 +23,8 @@ def _actions(phase: str, has_checkpoint: bool, retryable: bool, *, pause_ready: 
         actions.append("retry_dynamics")
     if phase not in {"completed", "partial", "failed", "cancelled", "cancelling"}:
         actions.append("cancel")
+    if pre_replica_terminal:
+        actions.extend(["view_logs", "reorchestrate", "delete_failed_launch"])
     return actions
 
 
@@ -233,6 +235,8 @@ async def md_run_snapshot(session: AsyncSession, job_id: str) -> dict | None:
         segments=segments,
         checkpoints=checkpoints,
     )
+    artifact_count = await session.scalar(select(func.count(JobArtifact.id)).where(JobArtifact.owner_job_id == job_id))
+    child_count = await session.scalar(select(func.count(Job.id)).where(Job.parent_job_id == job_id))
     checkpoint_artifact_ids = artifact_projection.checkpoint_artifact_ids
     segment_replica = {item.id: item.replica_run_id for item in segments}
     paused_ids = {item.id for item in replicas if item.active and item.state == "paused"}
@@ -294,8 +298,14 @@ async def md_run_snapshot(session: AsyncSession, job_id: str) -> dict | None:
         "requested_time_ps": requested_ps,
         "checkpoint_available": checkpoint_available,
         "allowed_actions": _actions(
-            run.phase, checkpoint_available, retryable, pause_ready=pause_ready,
+            run.phase, checkpoint_available, retryable,
+            pre_replica_terminal=run.phase in {"failed", "cancelled"} and not replicas and not segments and not checkpoints and not artifact_count and not child_count,
+            pause_ready=pause_ready,
         ),
+        "action_explanations": {
+            "resume_dynamics": "Unavailable: this failed launch has no accepted checkpoint.",
+            "retry_dynamics": "Unavailable: this failed launch never created a replica attempt.",
+        } if run.phase in {"failed", "cancelled"} and not replicas else {},
         "replicas": [{
             "id": item.id, "replica_index": item.replica_index, "attempt": item.attempt,
             "state": item.state, "active": item.active, "engine": item.engine,

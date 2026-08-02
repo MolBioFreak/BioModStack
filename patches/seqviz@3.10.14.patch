@@ -1,0 +1,149 @@
+diff --git a/dist/index.js b/dist/index.js
+index 77fb4fd349799dda9e111887c9b2484fefe4c1e8..68c350c02e2dd28380277ebe766f1a470d509c23 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -1823,6 +1823,9 @@ var InfiniteScroll = /** @class */ (function (_super) {
+         _this.componentDidMount = function () {
+             _this.handleScrollOrResize(); // ref should now be set
+             window.addEventListener("resize", _this.handleScrollOrResize);
++            window.addEventListener("mouseup", _this.stopIncrementingScroller, true);
++            window.addEventListener("pointercancel", _this.stopIncrementingScroller, true);
++            window.addEventListener("blur", _this.stopIncrementingScroller);
+         };
+         _this.componentDidUpdate = function (prevProps, prevState, snapshot) {
+             if (!_this.scroller.current) {
+@@ -1843,6 +1846,10 @@ var InfiniteScroll = /** @class */ (function (_super) {
+         };
+         _this.componentWillUnmount = function () {
+             window.removeEventListener("resize", _this.handleScrollOrResize);
++            window.removeEventListener("mouseup", _this.stopIncrementingScroller, true);
++            window.removeEventListener("pointercancel", _this.stopIncrementingScroller, true);
++            window.removeEventListener("blur", _this.stopIncrementingScroller);
++            _this.stopIncrementingScroller();
+         };
+         /**
+          * more info at: https://reactjs.org/docs/react-component.html#getsnapshotbeforeupdate
+@@ -1956,18 +1963,24 @@ var InfiniteScroll = /** @class */ (function (_super) {
+         };
+         _this.incrementScroller = function (incAmount) {
+             _this.stopIncrementingScroller();
+-            _this.timeoutID = setTimeout(function () {
++            var step = function () {
+                 if (!_this.scroller.current) {
+                     return;
+                 }
++                var previousScrollTop = _this.scroller.current.scrollTop;
+                 _this.scroller.current.scrollTop += incAmount;
+-                _this.incrementScroller(incAmount);
+-            }, 5);
++                if (_this.scroller.current.scrollTop === previousScrollTop) {
++                    _this.scrollFrameID = null;
++                    return;
++                }
++                _this.scrollFrameID = requestAnimationFrame(step);
++            };
++            _this.scrollFrameID = requestAnimationFrame(step);
+         };
+         _this.stopIncrementingScroller = function () {
+-            if (_this.timeoutID) {
+-                clearTimeout(_this.timeoutID);
+-                _this.timeoutID = null;
++            if (_this.scrollFrameID !== null && _this.scrollFrameID !== undefined) {
++                cancelAnimationFrame(_this.scrollFrameID);
++                _this.scrollFrameID = null;
+             }
+         };
+         /**
+@@ -1985,7 +1998,7 @@ var InfiniteScroll = /** @class */ (function (_super) {
+             }
+             // not relevant, some other type of event, not a selection drag
+             if (e.buttons !== 1) {
+-                if (_this.timeoutID) {
++                if (_this.scrollFrameID !== null && _this.scrollFrameID !== undefined) {
+                     _this.stopIncrementingScroller();
+                 }
+                 return;
+@@ -3840,6 +3853,11 @@ var SelectionHandler = /** @class */ (function (_super) {
+         _this.selectionStarted = false;
+         /* was the last selection action a shift click, used for shift-click catch up */
+         _this.shiftSelection = false;
++        /* synchronous anchor for the active linear gesture */
++        _this.linearDragStart = null;
++        /* coalesce continuous drag selection updates to one renderer frame */
++        _this.pendingDragSelection = null;
++        _this.selectionFrameID = null;
+         /* unix time of the last click (awful attempt at detecting double clicks) */
+         _this.lastClick = Date.now();
+         /** a map between the id of child elements and their associated SelectRanges */
+@@ -3853,10 +3871,41 @@ var SelectionHandler = /** @class */ (function (_super) {
+             if (!document)
+                 return;
+             document.removeEventListener("mouseup", _this.stopDrag);
++            if (_this.selectionFrameID !== null) {
++                cancelAnimationFrame(_this.selectionFrameID);
++                _this.selectionFrameID = null;
++            }
++        };
++        _this.flushDragSelection = function () {
++            if (_this.selectionFrameID !== null) {
++                cancelAnimationFrame(_this.selectionFrameID);
++                _this.selectionFrameID = null;
++            }
++            var selection = _this.pendingDragSelection;
++            _this.pendingDragSelection = null;
++            if (selection) {
++                _this.setSelection(selection);
++            }
++        };
++        _this.queueDragSelection = function (selection) {
++            _this.pendingDragSelection = selection;
++            if (_this.selectionFrameID !== null) {
++                return;
++            }
++            _this.selectionFrameID = requestAnimationFrame(function () {
++                _this.selectionFrameID = null;
++                var nextSelection = _this.pendingDragSelection;
++                _this.pendingDragSelection = null;
++                if (nextSelection) {
++                    _this.setSelection(nextSelection);
++                }
++            });
+         };
+         /** Stop the current drag event from happening */
+         _this.stopDrag = function () {
++            _this.flushDragSelection();
+             _this.dragEvent = false;
++            _this.linearDragStart = null;
+         };
+         /**
+          * Called at start of drag to make sure checkers are reset to default state
+@@ -3959,15 +4008,17 @@ var SelectionHandler = /** @class */ (function (_super) {
+         _this.handleLinearSeqEvent = function (e, knownRange) {
+             var selection = _this.context;
+             var currBase = _this.calculateBaseLinear(e, knownRange);
+-            var clockwiseDrag = selection.start !== null && currBase >= (selection.start || 0);
+             if (e.type === "mousedown" && currBase !== null) {
+                 // this is the start of a drag event
+-                _this.setSelection(__assign(__assign({}, selectionContext_1.defaultSelection), { clockwise: clockwiseDrag, end: currBase, start: e.shiftKey ? selection.start : currBase }));
++                _this.linearDragStart = e.shiftKey ? selection.start : currBase;
++                var dragStart = _this.linearDragStart === null ? currBase : _this.linearDragStart;
++                _this.setSelection(__assign(__assign({}, selectionContext_1.defaultSelection), { clockwise: currBase >= dragStart, end: currBase, start: dragStart }));
+                 _this.dragEvent = true;
+             }
+             else if (_this.dragEvent && currBase !== null) {
+                 // continue a drag event that's currently happening
+-                _this.setSelection(__assign(__assign({}, selectionContext_1.defaultSelection), { clockwise: clockwiseDrag, end: currBase, start: selection.start }));
++                var dragStart = _this.linearDragStart === null ? selection.start : _this.linearDragStart;
++                _this.queueDragSelection(__assign(__assign({}, selectionContext_1.defaultSelection), { clockwise: currBase >= (dragStart || 0), end: currBase, start: dragStart }));
+             }
+         };
+         /**
+@@ -4054,7 +4105,7 @@ var SelectionHandler = /** @class */ (function (_super) {
+                     end = currBase; // nothing special just update the selection
+                 }
+                 _this.shiftSelection = false;
+-                _this.setSelection(__assign(__assign({}, selectionContext_1.defaultSelection), { clockwise: clockwise, end: end, start: start, type: "SEQ" }));
++                _this.queueDragSelection(__assign(__assign({}, selectionContext_1.defaultSelection), { clockwise: clockwise, end: end, start: start, type: "SEQ" }));
+             }
+         };
+         /**

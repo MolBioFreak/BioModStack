@@ -217,6 +217,7 @@ export interface BioXpOperatorActionSpec {
     dependencies: BioXpOperatorDependency[];
     requires_confirmation: boolean;
     timeout_seconds: number;
+    required_provider_capability: string | null;
     inputs: BioXpOperatorInputSpec[];
     stages: string[];
 }

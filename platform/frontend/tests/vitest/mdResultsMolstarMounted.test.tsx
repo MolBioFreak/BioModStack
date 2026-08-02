@@ -1,6 +1,7 @@
 import React, { StrictMode, act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const ownerStats = vi.hoisted(() => ({ initialized: 0, disposed: 0, live: 0, maximumLive: 0, representationPresets: [] as string[] }));
@@ -55,6 +56,10 @@ const shaA = 'a'.repeat(64);
 const shaB = 'b'.repeat(64);
 
 const seedJob = (client: QueryClient, jobId: string, marker: string, replicas = 1) => {
+    client.setQueryData(['md-run', jobId], response({
+        schema: 'bms.md.run-detail.v1', job_id: jobId, job_status: 'completed', queue_status: 'completed', phase: 'completed', state_version: 1,
+        chemistry: { profile_id: 'amber', profile_sha256: shaA, assurance: 'curated', verification_status: 'verified' }, engine: 'gromacs', replica_count: replicas, replica_summary: { completed: replicas }, simulated_time_ps: 100, requested_time_ps: 100, checkpoint_available: false, allowed_actions: [], replicas: [], segments: [], checkpoints: [], events: [],
+    }));
     client.setQueryData(['md-summary', jobId], response({
         schema: 'bms.md.summary.v1', job_id: jobId, status: 'completed', result_state: 'completed',
         source: 'validated_job_owned_manifests', bounded: true, aggregate_manifest_sha256: shaA,
@@ -92,7 +97,7 @@ describe('mounted MD results and sole Molstar route lifecycle', () => {
         const root = createRoot(container);
         const renderJob = async (jobId: string) => {
             await act(async () => {
-                root.render(<StrictMode><QueryClientProvider client={client}><MDResultsPane key={jobId} jobId={jobId} /></QueryClientProvider></StrictMode>);
+                root.render(<StrictMode><MemoryRouter><QueryClientProvider client={client}><MDResultsPane key={jobId} jobId={jobId} /></QueryClientProvider></MemoryRouter></StrictMode>);
                 await new Promise((resolve) => setTimeout(resolve, 20));
             });
         };

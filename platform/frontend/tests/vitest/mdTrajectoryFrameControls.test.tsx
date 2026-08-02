@@ -1,6 +1,7 @@
 import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-plotly.js', () => ({ default: () => <div data-testid="plot" /> }));
@@ -25,6 +26,10 @@ const frames = [
 ];
 
 const seedPlayback = (client: QueryClient, jobId: string) => {
+    client.setQueryData(['md-run', jobId], response({
+        schema: 'bms.md.run-detail.v1', job_id: jobId, job_status: 'completed', queue_status: 'completed', phase: 'completed', state_version: 1,
+        chemistry: { profile_id: 'amber', profile_sha256: shaA, assurance: 'curated', verification_status: 'verified' }, engine: 'gromacs', replica_count: 1, replica_summary: { completed: 1 }, simulated_time_ps: 1000, requested_time_ps: 1000, checkpoint_available: false, allowed_actions: [], replicas: [], segments: [], checkpoints: [], events: [],
+    }));
     client.setQueryData(['md-summary', jobId], response({
         schema: 'bms.md.summary.v1', job_id: jobId, status: 'completed', result_state: 'completed',
         source: 'validated_job_owned_manifests', bounded: true, aggregate_manifest_sha256: shaA,
@@ -65,7 +70,7 @@ describe('governed MD trajectory frame controls', () => {
         const root = createRoot(container);
 
         await act(async () => {
-            root.render(<QueryClientProvider client={client}><MDResultsPane jobId="job-md-playback" /></QueryClientProvider>);
+            root.render(<MemoryRouter><QueryClientProvider client={client}><MDResultsPane jobId="job-md-playback" /></QueryClientProvider></MemoryRouter>);
             await Promise.resolve();
         });
 
@@ -101,7 +106,7 @@ describe('governed MD trajectory frame controls', () => {
         const root = createRoot(container);
 
         await act(async () => {
-            root.render(<QueryClientProvider client={client}><MDResultsPane jobId="job-md" /></QueryClientProvider>);
+            root.render(<MemoryRouter><QueryClientProvider client={client}><MDResultsPane jobId="job-md" /></QueryClientProvider></MemoryRouter>);
             await Promise.resolve();
         });
 

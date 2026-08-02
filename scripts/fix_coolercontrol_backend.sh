@@ -336,9 +336,9 @@ verify() {
 
   log "Checking /api/gpu/fan-control..."
   if command -v jq >/dev/null 2>&1; then
-    curl -sS "http://127.0.0.1:8000/api/gpu/fan-control" | jq '{backend,supported,message,available_modes}'
+    curl -sS "http://127.0.0.1:18000/api/gpu/fan-control" | jq '{backend,supported,message,available_modes}'
   else
-    curl -sS "http://127.0.0.1:8000/api/gpu/fan-control"
+    curl -sS "http://127.0.0.1:18000/api/gpu/fan-control"
     printf '\n'
   fi
 }

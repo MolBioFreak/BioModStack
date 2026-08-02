@@ -183,65 +183,49 @@ test('Nanopore surfaces expose external documentation linkouts in a compact box'
 });
 
 
-test('NGS instrument mode is separated from file-analysis launch', () => {
+test('NGS instrument control uses only opaque intent handles and has no browser raw-start client', () => {
     const ngsToolkit = readSource('src/components/NGSToolkit.tsx');
     const api = readSource('src/lib/api.ts');
     const panel = readSource('src/components/ngs/OntInstrumentPanel.tsx');
+    const ontApi = api.slice(api.indexOf('// ONT INSTRUMENT CONTROL API'));
 
     assert.match(ngsToolkit, /type ToolkitView = 'launch' \| 'instrument' \| 'runs'/u);
-    assert.match(ngsToolkit, /Start instrument run/u);
+    assert.match(ngsToolkit, /Instrument intent/u);
+    assert.doesNotMatch(ngsToolkit, /Start instrument run/u);
     assert.match(ngsToolkit, /<OntInstrumentPanel/u);
     assert.match(api, /fetchOntDeviceStatus/u);
-    assert.match(api, /startOntInstrumentRun/u);
-    assert.match(api, /stopOntInstrumentRun/u);
-    assert.match(panel, /Real starts remain disabled until a real available position is present/u);
-    assert.match(panel, /Analyze existing data/u);
-    assert.match(panel, /Start instrument run/u);
+    assert.match(api, /createOntRunIntent/u);
+    assert.match(api, /startOntRunIntent/u);
+    assert.match(api, /option_id: string/u);
+    assert.match(api, /option_receipt_id: string/u);
+    assert.match(api, /intent_generation: number/u);
+    assert.doesNotMatch(api, /startOntInstrumentRun|stopOntInstrumentRun|beginOntHardwareCheck|refreshOntPosition|restartOntPosition/u);
+    assert.doesNotMatch(ontApi, /flow_cell_id|protocol_id|model_id|output_director(?:y|ies)|minknow_payload|output_files|hardware_check_run_id/u);
+    assert.match(panel, /submit its opaque protocol intent/u);
+    assert.match(panel, /Protocol and output policy are server-issued opaque handles/u);
+    assert.match(panel, /Validate run intent/u);
+    assert.match(panel, /physical MinKNOW start remains disabled/u);
+    assert.match(panel, /createOntRunIntent/u);
+    assert.match(panel, /startOntRunIntent/u);
+    assert.match(api, /requestMk1dReconnect/u);
+    assert.match(api, /confirm_reconnect: true/u);
+    assert.match(panel, /Reconnect Mk1D \(local host\)/u);
+    assert.match(panel, /not available through Tailnet/u);
+    assert.doesNotMatch(panel, /startOntInstrumentRun|Start fake test run|TEST-MK1D|Run hardware check|output_director(?:y|ies)|flow_cell_id|protocol_id|model_id/u);
+    assert.doesNotMatch(panel, /\.filter\(\(device\) => device\.device_type === 'mk1d'\)/u);
 });
 
-test('NGS instrument panel exposes no fake or demo Mk1D mode', () => {
+test('NGS instrument panel renders only safe device truth and an intent status', () => {
     const panel = readSource('src/components/ngs/OntInstrumentPanel.tsx');
     const api = readSource('src/lib/api.ts');
+    const ontApi = api.slice(api.indexOf('// ONT INSTRUMENT CONTROL API'));
 
-    assert.match(panel, /devices = liveDevices\.filter\(\(device\) => device\.device_type === 'mk1d' && !device\.fake_or_demo_device\)/u);
-    assert.doesNotMatch(panel, /TEST_MODE_MK1D_DEVICE|TEST-MK1D|FAKE TEST CONNECTION|Start fake test run|test mode Mk1D|mirrored by fake starts/u);
-    assert.doesNotMatch(api, /fake_or_demo_device\?: boolean/u);
     assert.match(panel, /Instrument positions/u);
-    assert.match(panel, /Run setup/u);
-    assert.match(panel, /Start packet/u);
-    assert.match(panel, /POD5 raw signal/u);
-    assert.match(panel, /Basecaller/u);
-});
-
-
-test('NGS instrument panel exposes live flow-cell scrutiny and safe reconnect controls', () => {
-    const panel = readSource('src/components/ngs/OntInstrumentPanel.tsx');
-    const api = readSource('src/lib/api.ts');
-
-    assert.match(panel, /Selected position truth/u);
-    assert.match(panel, /Configuration test cell flag/u);
+    assert.match(panel, /Flow cell: \{device\.flow_cell\.present \? 'present' : 'absent'\}/u);
+    assert.match(panel, /No protocol option is currently available/u);
     assert.match(panel, /Preflight blockers/u);
-    assert.match(panel, /Refresh\/reconnect position/u);
-    assert.match(panel, /Restart instrument unavailable/u);
-    assert.match(panel, /Real start disabled until MinKNOW reports a present sequencing flow cell/u);
-    assert.match(api, /refreshOntPosition/u);
-    assert.match(api, /restartOntPosition/u);
-    assert.match(api, /is_ctc\?: boolean/u);
-    assert.match(api, /channel_count\?: number/u);
-    assert.match(api, /output_directories\?: Record<string, string>/u);
-});
-
-
-test('NGS instrument panel exposes guarded MinKNOW hardware check controls', () => {
-    const panel = readSource('src/components/ngs/OntInstrumentPanel.tsx');
-    const api = readSource('src/lib/api.ts');
-
-    assert.match(panel, /Run hardware check/u);
-    assert.match(panel, /Hardware check requires MinKNOW to report a present flow cell\/test cell/u);
-    assert.match(panel, /window\.confirm\('Start a MinKNOW hardware check/u);
-    assert.match(panel, /Hardware checks in API history/u);
-    assert.match(panel, /Protocol runs in API history/u);
-    assert.match(api, /beginOntHardwareCheck/u);
-    assert.match(api, /confirm_hardware_check: true/u);
-    assert.match(api, /hardware_check_run_id\?: string/u);
+    assert.match(panel, /Intent \{lastRun\.id\} · \{lastRun\.status\}/u);
+    assert.match(ontApi, /interface OntFlowCellInfo \{\s+present: boolean;/u);
+    assert.match(ontApi, /output_summary: Record<'fastq' \| 'pod5' \| 'bam', number>/u);
+    assert.doesNotMatch(ontApi, /fake_or_demo_device\?: boolean|is_ctc\?: boolean|channel_count\?: number|output_director(?:y|ies)|rpc_ports|connection_error/u);
 });

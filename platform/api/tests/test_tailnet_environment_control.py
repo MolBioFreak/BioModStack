@@ -18,7 +18,7 @@ def test_tailnet_control_base_indexes_current_selection(monkeypatch) -> None:
         "current_tailnet_environment",
         lambda: {
             "selected_environment": "development",
-            "serve_root_proxy": "http://127.0.0.1:5173",
+            "serve_root_proxy": "http://127.0.0.1:18082",
         },
     )
     headers = _enable_operator(monkeypatch)

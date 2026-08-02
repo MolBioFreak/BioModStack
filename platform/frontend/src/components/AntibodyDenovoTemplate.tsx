@@ -38,6 +38,12 @@ import {
 import { useLiveGpuCatalog } from './useLiveGpuCatalog';
 import { ModelDocumentationLinks } from './ModelDocumentationLinks';
 import { createLatestAsyncResourceController } from '../lib/latestAsyncResource';
+import { ModelIntegrationControl, useModelIntegrationConfig } from './ModelIntegrationControl';
+import {
+    applyModelIntegrationChoice,
+    applyModelIntegrationDefault,
+    createModelIntegrationSelection,
+} from './modelIntegrationControlState';
 
 interface AntibodyDenovoTemplateProps {
     onBack: () => void;
@@ -369,7 +375,22 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [fampnnConstraintMode, setFampnnConstraintMode] = useState<'generic' | 'antibody'>('antibody');
     const [useAntiberty, setUseAntiberty] = useState(false);  // Disabled by default, planned for removal
     const [, setUseThermoMPNN] = useState(true);  // Legacy setter retained for template/state hydration
-    const [runFrustrampnn, setRunFrustrampnn] = useState(false);
+    const frustrampnnIntegrationQuery = useModelIntegrationConfig('frustrampnn');
+    const initialFrustrampnnSelection = createModelIntegrationSelection(initialValues?.run_frustrampnn, false);
+    const frustrampnnSelectionRef = useRef(initialFrustrampnnSelection);
+    const [runFrustrampnn, setRunFrustrampnn] = useState(initialFrustrampnnSelection.value);
+    const configuredFrustrampnnDefault = frustrampnnIntegrationQuery.data?.workflows?.antibody_design?.default_enabled;
+    useEffect(() => {
+        const previous = frustrampnnSelectionRef.current;
+        const next = applyModelIntegrationDefault(previous, configuredFrustrampnnDefault);
+        frustrampnnSelectionRef.current = next;
+        if (next !== previous) setRunFrustrampnn(next.value);
+    }, [configuredFrustrampnnDefault]);
+    const updateRunFrustrampnn = (checked: boolean) => {
+        const next = applyModelIntegrationChoice(frustrampnnSelectionRef.current, checked);
+        frustrampnnSelectionRef.current = next;
+        setRunFrustrampnn(next.value);
+    };
     const [runStructureValidation, setRunStructureValidation] = useState(initialValues?.run_structure_validation !== false);
     const [runAnarciiPost, setRunAnarciiPost] = useState(false);
     const [anarciiIncludeChildren, setAnarciiIncludeChildren] = useState(true);
@@ -1240,7 +1261,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         if (preset === 'fampnn_only') {
             setSeqDesigner('fampnn');
             setRunStructureValidation(false);
-            setRunFrustrampnn(false);
+            updateRunFrustrampnn(false);
             setQualitySettings((current) => applyPpiFlowStageMode(current, 'off'));
             setInteractiveWorkflow(true);
             setInteractiveGateStage('post_fampnn');
@@ -1249,7 +1270,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         if (preset === 'validation_only') {
             setSeqDesigner('none');
             setRunStructureValidation(true);
-            setRunFrustrampnn(false);
+            updateRunFrustrampnn(false);
             setQualitySettings((current) => applyPpiFlowStageMode(current, 'off'));
             setInteractiveWorkflow(true);
             setInteractiveGateStage('post_structure_validation');
@@ -1258,7 +1279,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         if (preset === 'ppiflow_only') {
             setSeqDesigner('none');
             setRunStructureValidation(false);
-            setRunFrustrampnn(false);
+            updateRunFrustrampnn(false);
             setQualitySettings((current) => {
                 const nextStageMode = current.ppiflow_stage_mode !== 'off'
                     ? current.ppiflow_stage_mode
@@ -1288,7 +1309,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             if (initialValues.run_immunogenicity_scoring !== undefined) setUseAntiberty(initialValues.run_immunogenicity_scoring);
             if (initialValues.run_thermompnn !== undefined) setUseThermoMPNN(initialValues.run_thermompnn);
             else if (initialValues.run_stability_scoring !== undefined) setUseThermoMPNN(initialValues.run_stability_scoring);
-            if (initialValues.run_frustrampnn !== undefined) setRunFrustrampnn(initialValues.run_frustrampnn);
+            if (typeof initialValues.run_frustrampnn === 'boolean') updateRunFrustrampnn(initialValues.run_frustrampnn);
             if (initialValues.run_structure_validation !== undefined) setRunStructureValidation(initialValues.run_structure_validation !== false);
             if (initialValues.run_anarcii_post !== undefined) setRunAnarciiPost(initialValues.run_anarcii_post);
             if (initialValues.anarcii_include_children !== undefined) setAnarciiIncludeChildren(initialValues.anarcii_include_children);
@@ -2472,7 +2493,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     )}
                     {effectiveRunFrustrampnn && (
                         <span className="rounded-full border px-2.5 py-1" style={themedTagStyle('var(--error)')}>
-                            FrustraMPNN QC
+                            Frustration analysis
                         </span>
                     )}
                     {useManualMutagenesis && (
@@ -2642,24 +2663,20 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             </select>
                         </label>
 
-                        <label className="rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-xs text-slate-300">
-                            <div className="flex items-center justify-between gap-3">
-                                <span>FrustraMPNN QC</span>
-                                <input
-                                    type="checkbox"
-                                    checked={runFrustrampnn}
-                                    onChange={(e) => {
-                                        setRefinementPreset('custom');
-                                        setUseManualMutagenesis(false);
-                                        setRunFrustrampnn(e.target.checked);
-                                    }}
-                                    className="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500 focus:ring-indigo-500"
-                                />
-                            </div>
-                            <div className="mt-2 text-[11px] text-slate-500">
-                                Optional QC pass after structure generation.
-                            </div>
-                        </label>
+                        <div className="rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-xs text-slate-300">
+                            <ModelIntegrationControl
+                                modelId="frustrampnn"
+                                workflowId="antibody_design"
+                                checked={runFrustrampnn}
+                                onChange={(checked) => {
+                                    setRefinementPreset('custom');
+                                    setUseManualMutagenesis(false);
+                                    updateRunFrustrampnn(checked);
+                                }}
+                                fallbackLabel="Frustration analysis"
+                                integration={frustrampnnIntegrationQuery.data}
+                            />
+                        </div>
                     </div>
 
                     <div className="mt-4 rounded-lg border border-emerald-500/20 bg-slate-950/70 p-3">
@@ -4797,26 +4814,17 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     </div>
                     )}
 
-                    {/* FrustraMPNN QC */}
+                    {/* Globally configured frustration analysis */}
                     {showQcPanels && (
                     <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4">
-                        <div className="flex items-center justify-between">
-                            <div>
-                                <h3 className="text-sm font-semibold text-slate-200">FrustraMPNN QC</h3>
-                                <p className="text-xs text-slate-500 mt-1">
-                                    Annotate final candidates with local frustration (post-pipeline, FIO only).
-                                </p>
-                            </div>
-                            <label className="flex items-center gap-2 text-sm text-slate-300">
-                                <input
-                                    type="checkbox"
-                                    checked={runFrustrampnn}
-                                    onChange={(e) => setRunFrustrampnn(e.target.checked)}
-                                    className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-amber-600"
-                                />
-                                Enable
-                            </label>
-                        </div>
+                        <ModelIntegrationControl
+                            modelId="frustrampnn"
+                            workflowId="antibody_design"
+                            checked={runFrustrampnn}
+                            onChange={updateRunFrustrampnn}
+                            fallbackLabel="Frustration analysis"
+                            integration={frustrampnnIntegrationQuery.data}
+                        />
                     </div>
                     )}
 
@@ -5380,7 +5388,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         if (typeof p.run_immunogenicity_scoring === 'boolean') { setUseAntiberty(p.run_immunogenicity_scoring); loaded.push('run_immunogenicity_scoring'); }
                         if (typeof p.run_thermompnn === 'boolean') { setUseThermoMPNN(p.run_thermompnn); loaded.push('run_thermompnn'); }
                         else if (typeof p.run_stability_scoring === 'boolean') { setUseThermoMPNN(p.run_stability_scoring); loaded.push('run_stability_scoring'); }
-                        if (typeof p.run_frustrampnn === 'boolean') { setRunFrustrampnn(p.run_frustrampnn); loaded.push('run_frustrampnn'); }
+                        if (typeof p.run_frustrampnn === 'boolean') { updateRunFrustrampnn(p.run_frustrampnn); loaded.push('run_frustrampnn'); }
                         if (typeof p.run_structure_validation === 'boolean') { setRunStructureValidation(p.run_structure_validation); loaded.push('run_structure_validation'); }
                         if (typeof p.run_anarcii_post === 'boolean') { setRunAnarciiPost(p.run_anarcii_post); loaded.push('run_anarcii_post'); }
                         if (typeof p.anarcii_include_children === 'boolean') { setAnarciiIncludeChildren(p.anarcii_include_children); loaded.push('anarcii_include_children'); }

@@ -127,3 +127,82 @@ test('rendered external import refresh clears stale IDs, filters formats, become
     await act(async () => { renderer!.unmount(); });
     client.clear();
 });
+
+
+test('rendered pasted sequence canonicalizes bytes, rejects invalid residues, and selects the returned handle', async () => {
+    memory.clear();
+    const registered: Array<{ kind: string; bytes: string; name: string; metadata: Record<string, unknown> }> = [];
+    const available: CmSource[] = [];
+    const returned: CmSource = {
+        source_id: 'cm_src_sequence_returned',
+        source_kind: 'protein_sequence',
+        format: 'fasta',
+        sha256: 'c'.repeat(64),
+        bytes: 4,
+        metadata: { sequence: 'ACDE', target_id: 'cm_src_sequence_returned' },
+    };
+    const services = {
+        listSources: async () => [...available],
+        registerSource: async (kind: string, file: File, metadata: Record<string, unknown>) => {
+            registered.push({ kind, bytes: await file.text(), name: file.name, metadata });
+            available.splice(0, available.length, returned);
+            return returned;
+        },
+        submitRequest: async () => { throw new Error('submission is not part of this test'); },
+    };
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+        renderer = create(React.createElement(
+            QueryClientProvider,
+            { client },
+            React.createElement(
+                MemoryRouter,
+                null,
+                React.createElement(ConformationalMappingLauncher, {
+                    initialValues: { backend: 'confornets' },
+                    services,
+                }),
+            ),
+        ));
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+
+    const root = renderer!.root;
+    const sourceType = root.findAllByType('select').find((node) =>
+        containsOption(node, 'Protein sequence'));
+    assert.ok(sourceType, 'source-type selector was not rendered');
+    await act(async () => { sourceType.props.onChange({ target: { value: 'protein_sequence' } }); });
+
+    const sequenceBox = () => root.findAllByType('textarea').find((node) =>
+        String(node.props.placeholder || '').startsWith('MQIFVKTL'))!;
+    const registerButton = () => root.findAllByType('button').find((node) =>
+        node.props.children === 'Register and select sequence')!;
+
+    await act(async () => { sequenceBox().props.onChange({ target: { value: 'ACD*' } }); });
+    await act(async () => { registerButton().props.onClick(); });
+    assert.equal(registered.length, 0);
+    assert.equal(
+        root.findAllByProps({ role: 'alert' })[0].props.children,
+        'Paste one-letter protein residues only (ACDEFGHIKLMNPQRSTVWY); FASTA headers are not part of the registered sequence bytes.',
+    );
+
+    await act(async () => { sequenceBox().props.onChange({ target: { value: ' ac d\nE ' } }); });
+    await act(async () => {
+        registerButton().props.onClick();
+        await new Promise<void>((resolve) => setImmediate(resolve));
+    });
+    assert.deepEqual(registered, [{
+        kind: 'protein_sequence',
+        bytes: 'ACDE',
+        name: 'protein-sequence.fasta',
+        metadata: { name: 'protein-sequence.fasta' },
+    }]);
+    const sequenceSelect = root.findAllByType('select').find((node) =>
+        node.findAllByType('option').some((option) => option.props.value === returned.source_id));
+    assert.ok(sequenceSelect, 'returned sequence was not added to the registered selector');
+    assert.equal(sequenceSelect.props.value, returned.source_id);
+
+    await act(async () => { renderer!.unmount(); });
+    client.clear();
+});

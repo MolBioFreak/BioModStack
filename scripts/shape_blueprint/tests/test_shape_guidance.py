@@ -63,13 +63,23 @@ class ShapeGuidanceTests(unittest.TestCase):
         self.assertGreater(receipt["gradient_norm"], 0.0)
         self.assertGreater(receipt["applied_update_norm"], 0.0)
 
-    def test_guidance_scale_is_zero_outside_window_and_bounded_inside(self) -> None:
+    def test_projection_update_strength_does_not_vanish_with_residue_count(self) -> None:
+        field = self.field()
+        coordinates = torch.zeros((1, 256, 3), dtype=torch.float32)
+        coordinates[..., 0] = 10.0
+        projected, receipt = field.project(coordinates, step_size=0.2, max_update=0.5)
+        update_norm = torch.linalg.vector_norm(projected - coordinates, dim=-1)
+        self.assertGreater(float(torch.sqrt(update_norm.square().mean())), 0.19)
+        self.assertLessEqual(float(update_norm.max()), 0.500001)
+        self.assertGreater(receipt["rms_atom_update"], 0.19)
+
+    def test_guidance_ramps_then_holds_through_terminal_step(self) -> None:
         self.assertEqual(guidance_scale(step=0, total_steps=100), 0.0)
         self.assertEqual(guidance_scale(step=19, total_steps=100), 0.0)
         self.assertGreater(guidance_scale(step=20, total_steps=100), 0.0)
-        self.assertEqual(guidance_scale(step=50, total_steps=100), 1.0)
-        self.assertEqual(guidance_scale(step=80, total_steps=100), 0.0)
-        self.assertEqual(guidance_scale(step=99, total_steps=100), 0.0)
+        self.assertGreater(guidance_scale(step=50, total_steps=100), 0.0)
+        self.assertEqual(guidance_scale(step=80, total_steps=100), 1.0)
+        self.assertEqual(guidance_scale(step=99, total_steps=100), 1.0)
 
 
 if __name__ == "__main__":

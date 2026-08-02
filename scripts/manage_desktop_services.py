@@ -27,6 +27,10 @@ from biomodstack_services import (  # noqa: E402
     stop_api,
     stop_all,
 )
+from biomodstack_tailnet import (  # noqa: E402
+    TailnetEnvironmentError,
+    select_tailnet_environment,
+)
 
 
 NOTIFY_ICON = "applications-science"
@@ -73,6 +77,10 @@ def main() -> int:
             if args.notify:
                 notify(f"🚀 Starting BioModStack {target} runtime target…")
             start_runtime_target(target=target)
+            if target == "dev":
+                select_tailnet_environment("development")
+            elif target == "prod":
+                select_tailnet_environment("production")
             if args.notify:
                 notify("✅ BioModStack requested runtime target is running")
             print(f"Started runtime target: {target}")
@@ -153,7 +161,13 @@ def main() -> int:
             if not any(line.rstrip().endswith(fallback_log_path) for line in lines):
                 print(fallback_log_line)
             return 0
-    except (ServiceManagerError, FileNotFoundError, OSError, subprocess.CalledProcessError) as exc:
+    except (
+        ServiceManagerError,
+        TailnetEnvironmentError,
+        FileNotFoundError,
+        OSError,
+        subprocess.CalledProcessError,
+    ) as exc:
         if args.notify:
             notify(f"❌ {exc}", icon="dialog-error")
         print(f"ERROR: {exc}", file=sys.stderr)

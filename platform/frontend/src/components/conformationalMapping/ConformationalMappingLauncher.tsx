@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import {
     cmApiError,
     listCmSources,
+    registerCmRcsbMmcif,
     registerCmSource,
     submitCmRequest,
     type CmAnalysisPolicy,
@@ -23,6 +24,7 @@ interface Props {
     initialValues?: Record<string, unknown>;
     services?: {
         listSources?: typeof listCmSources;
+        registerSource?: typeof registerCmSource;
         submitRequest?: typeof submitCmRequest;
     };
 }
@@ -189,6 +191,8 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
     const [transferKind, setTransferKind] = useState<'confornet_state' | 'mse_state'>('confornet_state');
     const [sourceTestCases, setSourceTestCases] = useState('');
     const [snapshotEditor, setSnapshotEditor] = useState('');
+    const [pastedSequence, setPastedSequence] = useState('');
+    const [rcsbPdbId, setRcsbPdbId] = useState('');
     const [error, setError] = useState<string | null>(null);
 
     const update = <K extends keyof LauncherState>(key: K, value: LauncherState[K]) =>
@@ -312,7 +316,7 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
     }, [expectedCount, form, seedValues, stepValues, structureSources]);
 
     const register = useMutation({
-        mutationFn: async ({ file, kind }: { file: File; kind: CmSourceKind }) => registerCmSource(kind, file, {
+        mutationFn: async ({ file, kind }: { file: File; kind: CmSourceKind }) => (services?.registerSource || registerCmSource)(kind, file, {
             name: file.name,
             ...(sourceTargetId.trim() ? { target_id: sourceTargetId.trim() } : {}),
             ...(kind === 'structure_upload' || kind === 'structure_artifact' ? { state: sourceState.trim() || 'reference' } : {}),
@@ -321,9 +325,21 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
         onSuccess: async (source) => {
             setError(null); setSourceFile(null);
             if (source.source_kind === 'complex_snapshot') update('snapshotId', source.source_id);
+            if (source.source_kind === 'protein_sequence') update('sequenceId', source.source_id);
             await queryClient.invalidateQueries({ queryKey: ['cm-sources'] });
         },
         onError: (value) => setError(cmApiError(value, 'Source registration failed.')),
+    });
+
+    const registerRcsb = useMutation({
+        mutationFn: () => registerCmRcsbMmcif(rcsbPdbId),
+        onSuccess: async (source) => {
+            setError(null);
+            setRcsbPdbId('');
+            update('importIds', [source.source_id]);
+            await queryClient.invalidateQueries({ queryKey: ['cm-sources'] });
+        },
+        onError: (value) => setError(cmApiError(value, 'RCSB mmCIF registration failed.')),
     });
 
     const registerSnapshotEditor = () => {
@@ -332,6 +348,17 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
             if (!parsed || (typeof parsed !== 'object')) throw new Error('Snapshot JSON must contain an object or ordered array.');
             register.mutate({ file: new File([snapshotEditor], 'complete-complex-snapshot.json', { type: 'application/json' }), kind: 'complex_snapshot' });
         } catch (value) { setError(value instanceof Error ? value.message : 'Snapshot JSON is invalid.'); }
+    };
+    const registerPastedSequence = () => {
+        const canonicalSequence = pastedSequence.replace(/\s+/g, '').toUpperCase();
+        if (!canonicalSequence || /[^ACDEFGHIKLMNPQRSTVWY]/.test(canonicalSequence)) {
+            setError('Paste one-letter protein residues only (ACDEFGHIKLMNPQRSTVWY); FASTA headers are not part of the registered sequence bytes.');
+            return;
+        }
+        register.mutate({
+            file: new File([canonicalSequence], 'protein-sequence.fasta', { type: 'text/plain' }),
+            kind: 'protein_sequence',
+        });
     };
 
     const buildPayload = (): CmSubmitRequest => {
@@ -447,6 +474,8 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
                 </div>
                 {(sourceKind === 'structure_upload' || sourceKind === 'structure_artifact') && <label className="mt-3 block max-w-sm space-y-1 text-xs text-slate-400">Reference state label<input value={sourceState} onChange={(event) => setSourceState(event.target.value)} className={inputClass} /></label>}
                 {sourceKind === 'confornets_state' && <div className="mt-3 grid max-w-2xl gap-3 sm:grid-cols-2"><label className="space-y-1 text-xs text-slate-400">Transfer-state kind<select value={transferKind} onChange={(event) => setTransferKind(event.target.value as typeof transferKind)} className={inputClass}><option value="confornet_state">ConforNet state</option><option value="mse_state">MSE state</option></select></label><label className="space-y-1 text-xs text-slate-400">Source test cases<input value={sourceTestCases} onChange={(event) => setSourceTestCases(event.target.value)} className={inputClass} /></label></div>}
+                {sourceKind === 'protein_sequence' && <section className="mt-4 rounded-xl border border-sky-500/25 bg-sky-500/5 p-3" aria-label="Paste protein sequence"><div className="flex flex-wrap items-start justify-between gap-2"><div><h4 className="text-sm font-medium text-sky-100">Paste protein sequence</h4><p className="mt-1 max-w-3xl text-xs leading-5 text-slate-400">Whitespace is normalized before immutable registration. Enter a target ID above to retain a human-readable source label; sequence bytes are registered without a FASTA header.</p></div><span className="text-xs text-slate-500">{pastedSequence.replace(/\s+/g, '').length.toLocaleString()} residues</span></div><textarea value={pastedSequence} onChange={(event) => setPastedSequence(event.target.value)} rows={5} spellCheck={false} className={`${inputClass} mt-3 font-mono text-xs`} placeholder="MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG" /><button type="button" disabled={!pastedSequence.trim() || register.isPending} onClick={registerPastedSequence} className="mt-3 rounded-lg border border-sky-400/40 px-3 py-2 text-sm text-sky-100 disabled:opacity-40">Register and select sequence</button></section>}
+                <section className="mt-4 rounded-xl border border-violet-500/25 bg-violet-500/5 p-3" aria-label="RCSB PDB tie-in"><h4 className="text-sm font-medium text-violet-100">RCSB PDB tie-in</h4><p className="mt-1 max-w-3xl text-xs leading-5 text-slate-400">Enter a four-character PDB accession. BioModStack downloads raw RCSB mmCIF on the server, validates it as mmCIF, then registers an immutable CM structure handle. Cached PDB bytes and browser URLs are never submitted as CM authority.</p><div className="mt-3 flex max-w-xl gap-2"><input value={rcsbPdbId} onChange={(event) => setRcsbPdbId(event.target.value.toUpperCase())} maxLength={4} placeholder="1UBQ" className={inputClass} /><button type="button" disabled={!/^[A-Z0-9]{4}$/.test(rcsbPdbId) || registerRcsb.isPending} onClick={() => registerRcsb.mutate()} className="shrink-0 rounded-lg border border-violet-400/40 px-3 py-2 text-sm text-violet-100 disabled:opacity-40">Register raw mmCIF</button></div></section>
                 <details className="mt-4 rounded-xl border border-slate-800 bg-slate-950/40 p-3"><summary className="cursor-pointer text-sm font-medium text-slate-300">Complete-complex snapshot editor</summary><p className="mt-2 text-xs text-slate-500">Paste one complete <code>cm_complex_snapshot</code> object or an ordered array. The server performs canonical schema validation before registering it.</p><textarea value={snapshotEditor} onChange={(event) => setSnapshotEditor(event.target.value)} rows={8} spellCheck={false} className={`${inputClass} mt-3 font-mono text-xs`} placeholder='{"schema_name":"cm_complex_snapshot",...}' /><button type="button" disabled={!snapshotEditor.trim() || register.isPending} onClick={registerSnapshotEditor} className="mt-3 rounded-lg border border-orange-400/40 px-3 py-2 text-sm text-orange-200 disabled:opacity-40">Validate and register snapshot</button></details>
             </section>
 

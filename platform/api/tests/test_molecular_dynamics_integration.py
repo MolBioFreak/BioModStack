@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import json
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,7 @@ from services.nextflow import (  # noqa: E402
     resolve_nextflow_entrypoint,
 )
 from services.result_contracts import resolve_result_contract  # noqa: E402
+from scripts.bms_md import spawn_replicas as spawn_replicas_module  # noqa: E402
 
 
 def _flag_value(command: list[str], flag: str) -> str:
@@ -116,6 +118,8 @@ def test_md_workflow_uses_bounded_singleton_entrypoints() -> None:
     orchestrator = (workflow_root / "orchestrator.nf").read_text(encoding="utf-8")
     assert "scripts.bms_md.spawn_replicas" in orchestrator
     assert "scripts/wait_for_children.py" in orchestrator
+    assert orchestrator.count("--expected_children ${spawn_result}") == 2
+    assert "--batch_name" not in orchestrator
     assert "scripts.bms_md.aggregate_children" in orchestrator
     assert "MD_ASSERT_REPLICA_OUTCOME" in orchestrator
     assert "MD_GROMACS_REPLICA" not in orchestrator
@@ -148,6 +152,66 @@ def test_md_workflow_uses_bounded_singleton_entrypoints() -> None:
     assert "label 'MolecularDynamicsOpenMM'" in openmm_module
     assert "python3 -m scripts.bms_md.cli run" in gromacs_module
     assert "python3 -m scripts.bms_md.cli run" in openmm_module
+    for replica_module in (gromacs_module, openmm_module):
+        assert "python3 -m scripts.bms_md.cli validate" in replica_module
+        assert "--gpu-id 0" in replica_module
+        assert '--scheduler-gpu-id "${params.gpu_id}"' in replica_module
+        assert "--config runtime_config.json" in replica_module
+    assert "preparation_manifest.json" in gromacs_module
+    assert '["preparation"]["gromacs_gpu_offload"]' in gromacs_module
+    assert '--gpu-offload "\\${runtime_gpu_offload}"' in gromacs_module
+
+
+def test_md_replica_spawn_pins_the_scheduler_to_the_requested_physical_gpu(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = tmp_path / "normalized_config.json"
+    config.write_text(
+        json.dumps(
+            {
+                "engine": "gromacs",
+                "engine_runtime": {"sif_sha256": "a" * 64},
+                "chemistry": {"profile_id": "accepted"},
+                "protocol": {},
+                "input": {"structure_sha256": "b" * 64},
+                "random_seed": 20260801,
+                "execution": {"gpu_id": "2"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    metadata = tmp_path / "metadata.json"
+    metadata.write_text(json.dumps({"replicas": 1, "engine": "gromacs"}), encoding="utf-8")
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    posted: list[dict[str, object]] = []
+
+    class Response:
+        ok = True
+        status_code = 201
+        text = ""
+
+        @staticmethod
+        def json() -> dict[str, str]:
+            return {"id": "child", "name": "replica", "status": "queued"}
+
+    def fake_post(_url: str, *, json: dict[str, object], timeout: int) -> Response:
+        assert timeout == 30
+        posted.append(json)
+        return Response()
+
+    monkeypatch.setattr(spawn_replicas_module.requests, "post", fake_post)
+    spawn_replicas_module.spawn_replicas(
+        parent_job_id="parent",
+        parent_name="md",
+        normalized_config=config,
+        metadata_path=metadata,
+        preparation_bundle=bundle,
+        api_url="http://api",
+    )
+
+    assert posted[0]["pinned_gpu"] == 2
 
 
 def test_md_nextflow_profile_propagates_the_feature_gate_into_containers() -> None:

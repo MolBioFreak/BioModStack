@@ -25,6 +25,7 @@ from .import_snapshot import (
 
 MAX_IMPORT_FILES = 256
 MAX_IMPORT_BYTES = 2 * 1024 * 1024 * 1024
+MAX_RUNTIME_ASSET_BYTES = 6 * 1024 * 1024 * 1024
 _ALLOWED_SUFFIXES = {".cif", ".mmcif", ".pdb"}
 
 
@@ -106,7 +107,7 @@ def stage_registered_assets(
     *,
     principal_id: str,
     destination_root: Path | str,
-    maximum_bytes: int = MAX_IMPORT_BYTES,
+    maximum_bytes: int = MAX_RUNTIME_ASSET_BYTES,
 ) -> dict[str, Path]:
     """Copy immutable non-structure runtime assets by registered identity."""
 

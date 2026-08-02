@@ -96,6 +96,10 @@ def test_start_ui_gui_sh_restarts_requested_runtime_and_opens_matching_browser_u
     env["PATH"] = f"{fake_bin}:{env['PATH']}"
     env["BMS_CAPTURE_ARGS_PATH"] = str(captured_args)
     env["BMS_CAPTURE_URL_PATH"] = str(captured_url)
+    # A long-lived desktop session may still export the exact retired Vite
+    # port after the governed listener migration.  The launcher must not
+    # reopen that dead endpoint.
+    env["BMS_DEV_WEB_HOST_PORT"] = "5173"
 
     result = subprocess.run(
         ["bash", str(START_UI_GUI), "--runtime", "dev"],
@@ -107,4 +111,4 @@ def test_start_ui_gui_sh_restarts_requested_runtime_and_opens_matching_browser_u
 
     assert result.returncode == 0
     assert captured_args.read_text(encoding="utf-8").splitlines() == ["restart", "--runtime", "dev"]
-    assert captured_url.read_text(encoding="utf-8").strip() == "http://localhost:5173/"
+    assert captured_url.read_text(encoding="utf-8").strip() == "http://localhost:18082/"

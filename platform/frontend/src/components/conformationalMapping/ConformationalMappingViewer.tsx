@@ -58,7 +58,19 @@ import {
     resolveFrustraMpnnResidueProfile,
 } from './frustraMpnnViewerMetrics';
 
-interface Props { requestId: string; title?: string }
+interface Props {
+    requestId: string;
+    title?: string;
+    services?: {
+        getStatus?: typeof getCmStatus;
+        getProgress?: typeof getCmProgress;
+        getFailureReceipts?: typeof getCmFailureReceipts;
+        getResults?: typeof getCmResults;
+        getLandscape?: typeof getCmLandscape;
+        artifactUrl?: typeof cmArtifactUrl;
+    };
+    Workbench?: typeof StructureWorkbench;
+}
 type DetailTab = StateLandscapeWorkspaceTab;
 type LifecycleTab = 'progress' | 'logs' | 'failures';
 
@@ -82,7 +94,7 @@ const analysisIdentity = (row: CmAnalysisResult): string => {
     return `${String(identity.target_id)} · ${String(identity.auth_asym_id)}:${String(identity.auth_seq_id)}${String(identity.insertion_code || '')} · ${String(identity.validated_wt)}→${String(identity.substitution)}`;
 };
 
-export function ConformationalMappingViewer({ requestId, title = 'Conformational Mapping' }: Props) {
+export function ConformationalMappingViewer({ requestId, title = 'Conformational Mapping', services, Workbench = StructureWorkbench }: Props) {
     const navigate = useNavigate();
     const location = useLocation();
     const queryClient = useQueryClient();
@@ -131,12 +143,12 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
     const locationReceipt = (location.state as { cmSubmissionReceipt?: CmSubmitReceipt } | null)?.cmSubmissionReceipt;
     const receipt = locationReceipt?.request_id === requestId ? locationReceipt : null;
     const status = useQuery({
-        queryKey: ['cm-status', requestId], queryFn: () => getCmStatus(requestId),
+        queryKey: ['cm-status', requestId], queryFn: () => (services?.getStatus || getCmStatus)(requestId),
         refetchInterval: (query) => TERMINAL.has(query.state.data?.status || '') ? false : 2000,
         retry: false,
     });
     const progress = useQuery({
-        queryKey: ['cm-progress', requestId], queryFn: () => getCmProgress(requestId),
+        queryKey: ['cm-progress', requestId], queryFn: () => (services?.getProgress || getCmProgress)(requestId),
         enabled: Boolean(status.data),
         refetchInterval: TERMINAL.has(status.data?.status || '') ? false : 2000,
         retry: false,
@@ -147,11 +159,11 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
         retry: false,
     });
     const failures = useQuery({
-        queryKey: ['cm-failure-receipts', requestId], queryFn: () => getCmFailureReceipts(requestId),
+        queryKey: ['cm-failure-receipts', requestId], queryFn: () => (services?.getFailureReceipts || getCmFailureReceipts)(requestId),
         enabled: Boolean(status.data), retry: false,
     });
     const results = useQuery({
-        queryKey: ['cm-results', requestId], queryFn: () => getCmResults(requestId),
+        queryKey: ['cm-results', requestId], queryFn: () => (services?.getResults || getCmResults)(requestId),
         enabled: status.data?.status === 'completed' && APPROVED_CM_CONTRACTS.has(status.data.result_contract_id), retry: false,
     });
 
@@ -225,6 +237,15 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
         setOverlayIds((current) => current.filter((id) => id !== selected?.candidate_id));
     }, [selected?.candidate_id]);
     useEffect(() => {
+        if (!parsed.data || !selected) return;
+        setOverlayIds((current) => {
+            const retained = current.filter((id) => id !== selected.candidate_id && parsed.data!.candidates.some((candidate) => candidate.candidate_id === id));
+            if (retained.length) return retained;
+            const firstAlternative = parsed.data!.candidates.find((candidate) => candidate.candidate_id !== selected.candidate_id);
+            return firstAlternative ? [firstAlternative.candidate_id] : retained;
+        });
+    }, [parsed.data, selected?.candidate_id]);
+    useEffect(() => {
         setSelectedPairId('');
         setSelectedStateRowKey(null);
         setStateAnalysisOffset(0);
@@ -277,13 +298,13 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
             const candidate = parsed.data!.candidates.find((item) => item.candidate_id === id);
             if (!candidate) throw new Error('Overlay candidate is absent from API candidate order');
             const artifact = candidateStructureArtifact(candidate, parsed.data!.value.artifacts);
-            return { id, structureUrl: cmArtifactUrl(requestId, artifact.artifact_id), format: 'cif' as const, label: candidateLabel(candidate) };
+            return { id, structureUrl: (services?.artifactUrl || cmArtifactUrl)(requestId, artifact.artifact_id), format: 'cif' as const, label: candidateLabel(candidate) };
         });
     }, [overlayIds, parsed.data, requestId, selected]);
 
     const landscape = useQuery({
         queryKey: ['cm-landscape', requestId, selected?.candidate_id, landscapeOffset],
-        queryFn: () => getCmLandscape(requestId, selected!.candidate_id, landscapeOffset, 1000),
+        queryFn: () => (services?.getLandscape || getCmLandscape)(requestId, selected!.candidate_id, landscapeOffset, 1000),
         enabled: Boolean(selected), retry: false,
     });
     const landscapeParsed = useMemo(() => {
@@ -297,7 +318,7 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
     const completeLandscape = useQuery({
         queryKey: ['cm-landscape-complete', requestId, selected?.candidate_id],
         queryFn: () => collectCompleteFrustraMpnnLandscape(
-            (offset, limit) => getCmLandscape(requestId, selected!.candidate_id, offset, limit),
+            (offset, limit) => (services?.getLandscape || getCmLandscape)(requestId, selected!.candidate_id, offset, limit),
         ),
         enabled: Boolean(selected && structureMap), retry: false,
     });
@@ -385,10 +406,11 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
 
                 {status.data?.status === 'completed' && !statusContractError && results.isLoading && <div className="rounded-xl border border-slate-800 p-5 text-sm text-slate-400">Loading and validating canonical Phase 11 records…</div>}
                 {(results.isError || parsed.error) && <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-red-200"><div className="font-semibold">Canonical result validation failed closed</div><p className="mt-1 text-sm">{parsed.error || cmApiError(results.error, 'Results could not be loaded through the approved contract.')}</p></div>}
+                {!statusContractError && parsed.data && parsed.data.candidates.length === 0 && <div role="alert" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-amber-100"><div className="font-semibold">No canonical structural candidates were published</div><p className="mt-1 text-sm">This completed request has no governed candidate structure to display or overlay.</p></div>}
 
                 {!statusContractError && parsed.data && selected && selectedArtifact && <>
                     <section className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
-                        <aside className="max-h-[760px] overflow-auto rounded-2xl border border-slate-800 bg-slate-900/70 p-3" aria-label="Canonical candidates in API order"><div className="sticky top-0 z-10 mb-2 bg-slate-900 pb-2"><h2 className="text-sm font-semibold text-white">Candidates in API order</h2><p className="mt-1 text-[11px] text-slate-500">Identity and ordering come only from the canonical ensemble record.</p></div>{parsed.data.candidates.map((candidate, index) => <div key={candidate.candidate_id} className={`mb-2 rounded-lg border p-2 ${candidate.candidate_id === selected.candidate_id ? 'border-orange-400/60 bg-orange-500/10' : 'border-slate-800'}`}><button type="button" onClick={() => selectCandidateForStateAnalysis(candidate.candidate_id)} className="w-full text-left"><div className="text-xs font-medium text-white">Candidate {index + 1}</div><div className="mt-1 text-[11px] leading-4 text-slate-400">{candidateLabel(candidate)}</div><div className="mt-1 truncate font-mono text-[10px] text-slate-600">{candidate.candidate_id}</div></button><label className="mt-2 flex items-center gap-2 text-[11px] text-slate-400"><input type="checkbox" checked={overlayIds.includes(candidate.candidate_id)} disabled={candidate.candidate_id === selected.candidate_id || (!overlayIds.includes(candidate.candidate_id) && overlayIds.length >= 5)} onChange={(event) => setOverlayIds((current) => event.target.checked ? [...current, candidate.candidate_id] : current.filter((id) => id !== candidate.candidate_id))} />Overlay hypothesis</label></div>)}</aside>
+                        <aside className="max-h-[760px] overflow-auto rounded-2xl border border-slate-800 bg-slate-900/70 p-3" aria-label="Canonical structural hypotheses in API order"><div className="sticky top-0 z-10 mb-2 bg-slate-900 pb-2"><h2 className="text-sm font-semibold text-white">Structural hypotheses in API order</h2><p className="mt-1 text-[11px] text-slate-500">Choose the primary coordinate set, then compare immutable alternative candidate coordinates as overlays. These are predicted hypotheses, not time-resolved sampling or state populations.</p></div>{parsed.data.candidates.map((candidate, index) => <div key={candidate.candidate_id} className={`mb-2 rounded-lg border p-2 ${candidate.candidate_id === selected.candidate_id ? 'border-orange-400/60 bg-orange-500/10' : 'border-slate-800'}`}><button type="button" onClick={() => selectCandidateForStateAnalysis(candidate.candidate_id)} className="w-full text-left"><div className="text-xs font-medium text-white">{candidate.candidate_id === selected.candidate_id ? `Primary hypothesis · Candidate ${index + 1}` : `Candidate ${index + 1}`}</div><div className="mt-1 text-[11px] leading-4 text-slate-400">{candidateLabel(candidate)}</div><div className="mt-1 truncate font-mono text-[10px] text-slate-600">{candidate.candidate_id}</div></button><label className="mt-2 flex items-center gap-2 text-[11px] text-slate-400"><input type="checkbox" checked={overlayIds.includes(candidate.candidate_id)} disabled={candidate.candidate_id === selected.candidate_id || (!overlayIds.includes(candidate.candidate_id) && overlayIds.length >= 5)} onChange={(event) => setOverlayIds((current) => event.target.checked ? [...current, candidate.candidate_id] : current.filter((id) => id !== candidate.candidate_id))} />Compare as structural overlay</label></div>)}</aside>
                         <div className="space-y-3">
                             <section
                                 ref={viewerShellRef}
@@ -397,8 +419,9 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
                             >
                                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 p-3">
                                     <div>
-                                        <span className="text-sm font-medium text-white">Candidate structure</span>
-                                        <span className="ml-2 text-xs text-slate-500">{overlays.length} overlays</span>
+                                        <span className="text-sm font-medium text-white">Primary structural hypothesis</span>
+                                        <span className="ml-2 text-xs text-slate-500">{overlays.length ? `${overlays.length} immutable alternative coordinate overlay${overlays.length === 1 ? '' : 's'}` : 'no alternative selected'}</span>
+                                        <p className="mt-1 text-[11px] text-slate-500">Overlay visibility compares registered candidate coordinates only; it does not estimate conformer populations, kinetics, thermodynamics, or trajectories.</p>
                                     </div>
                                     <div className="flex items-center gap-2">
                                         <span className="text-xs text-slate-400">{frustraMpnnMetrics ? `${frustraMpnnMetrics.residueProfiles.length} exact mapped residue profiles` : completeLandscape.isLoading ? 'Loading complete FrustraMPNN landscape…' : 'FrustraMPNN visual layers unavailable'}</span>
@@ -406,9 +429,9 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
                                     </div>
                                 </div>
                                 <div className={`min-h-0 ${isViewerFullscreen ? 'flex-1' : 'h-[680px]'}`}>
-                                    <StructureWorkbench
+                                    <Workbench
                                         mode="standard"
-                                        structureUrl={cmArtifactUrl(requestId, selectedArtifact.artifact_id)}
+                                        structureUrl={(services?.artifactUrl || cmArtifactUrl)(requestId, selectedArtifact.artifact_id)}
                                         format="cif"
                                         height="100%"
                                         label={candidateLabel(selected)}
@@ -433,14 +456,20 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
                             )}
                             {selectedFrustraMpnnProfile && (
                                 <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-3" aria-label="Exact-20 residue profile">
-                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div className="flex flex-wrap items-start justify-between gap-3">
                                         <div>
-                                            <div className="text-sm font-medium text-white">Exact-20 residue profile</div>
+                                            <div className="text-sm font-medium text-white">20 amino-acid substitution profile</div>
                                             <div className="mt-1 font-mono text-xs text-slate-400">
-                                                {selectedFrustraMpnnProfile.auth_asym_id}:{selectedFrustraMpnnProfile.auth_seq_id}{selectedFrustraMpnnProfile.insertion_code} · sequence {selectedFrustraMpnnProfile.sequence_index} · WT {selectedFrustraMpnnProfile.wt}
+                                                {selectedFrustraMpnnProfile.auth_asym_id}:{selectedFrustraMpnnProfile.auth_seq_id}{selectedFrustraMpnnProfile.insertion_code} · sequence {selectedFrustraMpnnProfile.sequence_index} · native {selectedFrustraMpnnProfile.wt}
                                             </div>
                                         </div>
-                                        <span className="text-[11px] text-slate-500">Selected from Mol* or linked sequence</span>
+                                        <span className="text-[11px] text-slate-500">Pick a residue in Mol* or the sequence track</span>
+                                    </div>
+                                    <div className="mt-3 flex flex-wrap gap-2 text-[11px]" aria-label="FrustraMPNN score category legend">
+                                        <span className="rounded border border-sky-500/40 bg-sky-500/10 px-2 py-1 text-sky-200">Blue · minimally frustrated</span>
+                                        <span className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-amber-100">Amber · neutral</span>
+                                        <span className="rounded border border-red-500/40 bg-red-500/10 px-2 py-1 text-red-200">Red · high frustration</span>
+                                        <span className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-slate-400">Gray · unavailable</span>
                                     </div>
                                     <div className="mt-3 grid grid-cols-5 gap-1 sm:grid-cols-10 xl:grid-cols-20">
                                         {selectedFrustraMpnnProfile.slots.map((slot) => (

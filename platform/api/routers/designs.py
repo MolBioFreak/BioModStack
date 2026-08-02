@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, case, inspect as sa_inspect
 from sqlalchemy.exc import NoInspectionAvailable
 from sqlalchemy.orm import load_only
-from typing import Optional, List, Dict, Any, Union
+from typing import Optional, List, Dict, Any, Union, Literal
 from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime
 from pathlib import Path
@@ -151,6 +151,31 @@ class ChainMetric(BaseModel):
 class ChainMetricsResponse(BaseModel):
     design_id: str
     chains: Dict[str, ChainMetric]
+
+
+class FrustraMPNNCanonicalDesignProjection(BaseModel):
+    contract_version: Optional[str] = None
+    status: Optional[str] = None
+    source_sha256: Optional[str] = None
+    manifest_relpath: Optional[str] = None
+    landscape_relpath: Optional[str] = None
+    summary_relpath: Optional[str] = None
+    runtime_sha256: Optional[str] = None
+    failure_class: Optional[str] = None
+    failure_detail: Optional[str] = None
+
+
+class FrustraMPNNLegacySummaryProjection(BaseModel):
+    high_count: Optional[int] = None
+    min_count: Optional[int] = None
+    pct_high: Optional[float] = None
+    csv_relpath: Optional[str] = None
+
+
+class DesignFrustraMPNNProjection(BaseModel):
+    authority: Literal["canonical", "legacy_summary"]
+    canonical: Optional[FrustraMPNNCanonicalDesignProjection] = None
+    legacy_summary: Optional[FrustraMPNNLegacySummaryProjection] = None
 
 
 class DesignResponse(BaseModel):
@@ -333,6 +358,7 @@ class DesignResponse(BaseModel):
     frustration_residues: Optional[List[dict]] = None  # [{pos, chain, frust, frustClass}]
     frustration_csv_path: Optional[str] = None
     frustration_csv_relpath: Optional[str] = None
+    frustrampnn: Optional[DesignFrustraMPNNProjection] = None
     
     # PPIFlow Maturation
     maturation_delta_interface: Optional[float] = None
@@ -526,6 +552,15 @@ ANALYTICS_LOAD_ONLY_COLUMNS = (
     Design.frustration_high_count,
     Design.frustration_min_count,
     Design.frustration_pct_high,
+    Design.frustrampnn_contract_version,
+    Design.frustrampnn_status,
+    Design.frustrampnn_source_sha256,
+    Design.frustrampnn_manifest_relpath,
+    Design.frustrampnn_landscape_relpath,
+    Design.frustrampnn_summary_relpath,
+    Design.frustrampnn_runtime_sha256,
+    Design.frustrampnn_failure_class,
+    Design.frustrampnn_failure_detail,
     Design.maturation_delta_interface,
     Design.maturation_interface_score,
     Design.maturation_rmsd,
@@ -685,6 +720,15 @@ DESIGN_LIST_LOAD_ONLY_COLUMNS = (
     Design.frustration_high_count,
     Design.frustration_min_count,
     Design.frustration_pct_high,
+    Design.frustrampnn_contract_version,
+    Design.frustrampnn_status,
+    Design.frustrampnn_source_sha256,
+    Design.frustrampnn_manifest_relpath,
+    Design.frustrampnn_landscape_relpath,
+    Design.frustrampnn_summary_relpath,
+    Design.frustrampnn_runtime_sha256,
+    Design.frustrampnn_failure_class,
+    Design.frustrampnn_failure_detail,
     Design.maturation_delta_interface,
     Design.maturation_interface_score,
     Design.maturation_rmsd,
@@ -1765,6 +1809,15 @@ def _safe_allowed_relative(path_str: Optional[str]) -> Optional[str]:
         return None
 
 
+def _canonical_artifact_relpath(path_str: Optional[str]) -> Optional[str]:
+    if not path_str:
+        return None
+    candidate = Path(path_str)
+    if candidate.is_absolute() or len(candidate.parts) != 1 or candidate.name != path_str:
+        return None
+    return candidate.as_posix()
+
+
 def _design_to_response(
     design: Design,
     *,
@@ -1774,7 +1827,7 @@ def _design_to_response(
     unloaded = set(state.unloaded)
     data: Dict[str, Any] = {}
     for field_name in DesignResponse.model_fields.keys():
-        if field_name == "frustration_csv_relpath":
+        if field_name in {"frustration_csv_relpath", "frustrampnn"}:
             continue
         if field_name in unloaded:
             data[field_name] = None
@@ -1787,6 +1840,61 @@ def _design_to_response(
     for field_name in ("aligned_error_path", "aligned_error_format", "aligned_error_key"):
         data[field_name] = None if field_name in unloaded else getattr(design, field_name, None)
     data["frustration_csv_relpath"] = None if "frustration_csv_path" in unloaded else _safe_allowed_relative(design.frustration_csv_path)
+    canonical_raw = {
+        field_name: None if field_name in unloaded else getattr(design, field_name, None)
+        for field_name in (
+            "frustrampnn_contract_version",
+            "frustrampnn_status",
+            "frustrampnn_source_sha256",
+            "frustrampnn_manifest_relpath",
+            "frustrampnn_landscape_relpath",
+            "frustrampnn_summary_relpath",
+            "frustrampnn_runtime_sha256",
+            "frustrampnn_failure_class",
+            "frustrampnn_failure_detail",
+        )
+    }
+    canonical_fields = {
+        "contract_version": canonical_raw["frustrampnn_contract_version"],
+        "status": canonical_raw["frustrampnn_status"],
+        "source_sha256": canonical_raw["frustrampnn_source_sha256"],
+        "manifest_relpath": _canonical_artifact_relpath(canonical_raw["frustrampnn_manifest_relpath"]),
+        "landscape_relpath": _canonical_artifact_relpath(canonical_raw["frustrampnn_landscape_relpath"]),
+        "summary_relpath": _canonical_artifact_relpath(canonical_raw["frustrampnn_summary_relpath"]),
+        "runtime_sha256": canonical_raw["frustrampnn_runtime_sha256"],
+        "failure_class": canonical_raw["frustrampnn_failure_class"],
+        "failure_detail": canonical_raw["frustrampnn_failure_detail"],
+    }
+    canonical_present = any(value is not None for value in canonical_raw.values())
+    legacy_present = any(
+        data.get(field_name) is not None
+        for field_name in (
+            "frustration_high_count",
+            "frustration_min_count",
+            "frustration_pct_high",
+            "frustration_residues",
+            "frustration_csv_path",
+        )
+    )
+    if canonical_present:
+        data["frustrampnn"] = {
+            "authority": "canonical",
+            "canonical": canonical_fields,
+            "legacy_summary": None,
+        }
+    elif legacy_present:
+        data["frustrampnn"] = {
+            "authority": "legacy_summary",
+            "canonical": None,
+            "legacy_summary": {
+                "high_count": data.get("frustration_high_count"),
+                "min_count": data.get("frustration_min_count"),
+                "pct_high": data.get("frustration_pct_high"),
+                "csv_relpath": data.get("frustration_csv_relpath"),
+            },
+        }
+    else:
+        data["frustrampnn"] = None
     fampnn_metrics = _compute_fampnn_response_metrics(
         design,
         include_structure_fallback=include_fampnn_structure_fallback,

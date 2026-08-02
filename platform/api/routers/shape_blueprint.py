@@ -47,16 +47,12 @@ def _summary(row: ShapeDesignGeometry | AdmittedGeometry) -> dict[str, object]:
     manifest = dict(row.manifest)
     bounds = [float(value) for value in cast(list[float], manifest["bounds_angstrom"])]
     scale = float(str(manifest["angstrom_per_unit"]))
-    source_unit = str(
-        manifest.get(
-            "source_unit",
-            next((label for label, value in _UNIT_TO_ANGSTROM.items() if value == scale), "custom"),
-        )
-    )
+    source_unit = str(manifest["source_unit"])
     return {
         "geometry_id": row.geometry_id,
         "source_id": row.source_id,
         "geometry_sha256": row.geometry_sha256,
+        "manifest_sha256": str(manifest["manifest_sha256"]),
         "source_sha256": manifest["source_sha256"],
         "point_pool_sha256": manifest["point_pool_sha256"],
         "sdf_sha256": manifest["sdf_sha256"],
@@ -68,17 +64,30 @@ def _summary(row: ShapeDesignGeometry | AdmittedGeometry) -> dict[str, object]:
         "point_count": int(manifest["point_count"]),
         "bounds_angstrom": bounds,
         "dimensions_angstrom": [bounds[index + 3] - bounds[index] for index in range(3)],
-        "source_format": str(manifest.get("source_format", "obj")),
-        "source_parser": str(manifest.get("source_parser", "obj_strict_v1")),
+        "source_format": str(manifest["source_format"]),
+        "source_parser": str(manifest["source_parser"]),
         "source_unit": source_unit,
         "angstrom_per_unit": scale,
     }
 
 
+def _current_summary_or_conflict(row: ShapeDesignGeometry) -> dict[str, object]:
+    try:
+        return _summary(row)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "legacy_shape_geometry",
+                "message": "Shape geometry predates the current immutable provenance contract",
+            },
+        ) from exc
+
+
 @router.post("/geometries", status_code=status.HTTP_201_CREATED)
 async def upload_geometry(
     file: UploadFile = File(...),
-    unit: str = Form("angstrom"),
+    unit: str | None = Form(None),
     session: AsyncSession = Depends(get_session),
 ):
     suffix = Path(file.filename or "").suffix.lower()
@@ -88,7 +97,10 @@ async def upload_geometry(
             status_code=422,
             detail={"code": "unsupported_format", "message": "accepted mesh formats are OBJ and STL"},
         )
-    scale = _UNIT_TO_ANGSTROM.get(unit)
+    if source_format == "stl" and unit is None:
+        raise HTTPException(status_code=422, detail={"code": "unit_required", "message": "STL source unit must be explicit"})
+    normalized_unit = unit or "angstrom"
+    scale = _UNIT_TO_ANGSTROM.get(normalized_unit)
     if scale is None:
         raise HTTPException(status_code=422, detail={"code": "invalid_unit", "message": "unsupported source unit"})
     payload = await file.read(MAX_MESH_BYTES + 1)
@@ -101,7 +113,7 @@ async def upload_geometry(
             payload=payload,
             filename=file.filename or f"source.{source_format}",
             source_format=source_format,
-            source_unit=unit,
+            source_unit=normalized_unit,
             angstrom_per_unit=scale,
         )
     except ShapeGeometryError as exc:
@@ -118,7 +130,15 @@ async def list_geometries(session: AsyncSession = Depends(get_session)):
             ).limit(100)
         )
     ).scalars().all()
-    return {"geometries": [_summary(row) for row in rows]}
+    geometries: list[dict[str, object]] = []
+    for row in rows:
+        try:
+            geometries.append(_summary(row))
+        except (KeyError, TypeError, ValueError):
+            # Legacy rows without the complete immutable provenance contract
+            # must not be selectable as if their units or hashes were known.
+            continue
+    return {"geometries": geometries}
 
 
 async def _geometry_or_404(session: AsyncSession, geometry_id: str) -> ShapeDesignGeometry:
@@ -130,7 +150,7 @@ async def _geometry_or_404(session: AsyncSession, geometry_id: str) -> ShapeDesi
 
 @router.get("/geometries/{geometry_id}")
 async def get_geometry(geometry_id: str, session: AsyncSession = Depends(get_session)):
-    return _summary(await _geometry_or_404(session, geometry_id))
+    return _current_summary_or_conflict(await _geometry_or_404(session, geometry_id))
 
 
 @router.get("/geometries/{geometry_id}/preview.obj")

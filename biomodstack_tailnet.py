@@ -7,6 +7,7 @@ import base64
 import binascii
 import fcntl
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -47,25 +48,19 @@ SUPPORTED_ENVIRONMENTS = ("development", "production")
 CANONICAL_DEVELOPMENT_ROOT = Path("/home/dalab/biomodstack/dev-test-canonical")
 CANONICAL_PRODUCTION_ROOT = Path("/home/dalab/biomodstack/prod-main-canonical")
 CONTROL_PATH = "/api/tailnet-environment"
-CONTROL_TARGET = "http://127.0.0.1:8001"
+PRODUCTION_API_PORT = 18000
+WORKFLOW_ADAPTER_PORT = 18001
+DEFAULT_CONTROL_TARGET = "http://127.0.0.1:18001"
 LEGACY_CONTROL_TARGET = "http://127.0.0.1:8001/api/workflow-adapter/tailnet-environment"
+PRIOR_LOOPBACK_CONTROL_TARGET = "http://127.0.0.2:8001"
 STATS_TOOLKIT_TARGET = "http://127.0.0.1:18180"
-GLOBAL_SERVE_HANDLERS: Mapping[str, str] = {
-    CONTROL_PATH: CONTROL_TARGET,
-    "/api/mobile-apk": "http://127.0.0.1:8000/api/mobile-apk",
-    "/api/mobile-ui": "http://127.0.0.1:8000/api/mobile-ui",
-    "/stats/embed": f"{STATS_TOOLKIT_TARGET}/stats",
-    "/stats/assets": f"{STATS_TOOLKIT_TARGET}/stats/assets",
-    "/stats/embed/health/live": f"{STATS_TOOLKIT_TARGET}/health/live",
-    "/stats/embed/health/ready": f"{STATS_TOOLKIT_TARGET}/health/ready",
-    "/stats/embed/api/v1/capabilities": f"{STATS_TOOLKIT_TARGET}/api/v1/capabilities",
-    "/stats/embed/api/v1/tools": f"{STATS_TOOLKIT_TARGET}/api/v1/tools",
-}
 LEGACY_GLOBAL_SERVE_HANDLERS: Mapping[str, frozenset[str]] = {
     # The original embed mapping mounted the Stats server root. The governed
     # application now lives at /stats; allow only this exact prior target to be
     # migrated transactionally while continuing to reject foreign owners.
     "/stats/embed": frozenset({STATS_TOOLKIT_TARGET}),
+    "/api/mobile-apk": frozenset({"http://127.0.0.1:8000/api/mobile-apk"}),
+    "/api/mobile-ui": frozenset({"http://127.0.0.1:8000/api/mobile-ui"}),
 }
 DEPRECATED_SERVE_HANDLERS: Mapping[str, str] = {
     "/am": "http://127.0.0.1:5174/am",
@@ -90,6 +85,52 @@ _BUILD_TIME_PATTERN = re.compile(
 
 class TailnetEnvironmentError(ServiceManagerError):
     """Raised when an environment switch cannot be completed safely."""
+
+
+def _configured_control_target(environment: Mapping[str, str] | None = None) -> str:
+    values = os.environ if environment is None else environment
+    target = values.get("BMS_TAILNET_CONTROL_TARGET", DEFAULT_CONTROL_TARGET).rstrip("/")
+    parsed = urllib.parse.urlsplit(target)
+    try:
+        address = ipaddress.ip_address(parsed.hostname or "")
+        port = parsed.port
+    except ValueError as exc:
+        raise TailnetEnvironmentError(
+            "BMS_TAILNET_CONTROL_TARGET must be the workflow adapter's loopback HTTP target on port 18001"
+        ) from exc
+    if (
+        parsed.scheme != "http"
+        or parsed.username is not None
+        or parsed.password is not None
+        or not address.is_loopback
+        or port != 18001
+        or parsed.path not in ("", "/")
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise TailnetEnvironmentError(
+            "BMS_TAILNET_CONTROL_TARGET must be the workflow adapter's loopback HTTP target on port 18001"
+        )
+    return f"http://{address.compressed}:18001"
+
+
+CONTROL_TARGET = _configured_control_target()
+LEGACY_CONTROL_TARGETS = frozenset({
+    LEGACY_CONTROL_TARGET,
+    "http://127.0.0.1:8001",
+    PRIOR_LOOPBACK_CONTROL_TARGET,
+})
+GLOBAL_SERVE_HANDLERS: Mapping[str, str] = {
+    CONTROL_PATH: CONTROL_TARGET,
+    "/api/mobile-apk": "http://127.0.0.1:18000/api/mobile-apk",
+    "/api/mobile-ui": "http://127.0.0.1:18000/api/mobile-ui",
+    "/stats/embed": f"{STATS_TOOLKIT_TARGET}/stats",
+    "/stats/assets": f"{STATS_TOOLKIT_TARGET}/stats/assets",
+    "/stats/embed/health/live": f"{STATS_TOOLKIT_TARGET}/health/live",
+    "/stats/embed/health/ready": f"{STATS_TOOLKIT_TARGET}/health/ready",
+    "/stats/embed/api/v1/capabilities": f"{STATS_TOOLKIT_TARGET}/api/v1/capabilities",
+    "/stats/embed/api/v1/tools": f"{STATS_TOOLKIT_TARGET}/api/v1/tools",
+}
 
 
 def _managed_image_id(environment_name: str, sealed_default: str) -> str:
@@ -283,7 +324,7 @@ def _set_serve_root(target: str) -> None:
 def _set_serve_path(path: str, target: str) -> None:
     allowed_targets = dict(GLOBAL_SERVE_HANDLERS)
     allowed_targets[CONTROL_PATH] = CONTROL_TARGET
-    if path == CONTROL_PATH and target == LEGACY_CONTROL_TARGET:
+    if path == CONTROL_PATH and target in LEGACY_CONTROL_TARGETS:
         pass
     elif target in LEGACY_GLOBAL_SERVE_HANDLERS.get(path, frozenset()):
         pass
@@ -313,7 +354,7 @@ def _restore_control_route(snapshot: ServeSnapshot) -> None:
         _clear_serve_path(CONTROL_PATH)
         return
     prior_target = str(prior_control.get("Proxy", "")).rstrip("/")
-    if prior_target not in (CONTROL_TARGET, LEGACY_CONTROL_TARGET):
+    if prior_target != CONTROL_TARGET and prior_target not in LEGACY_CONTROL_TARGETS:
         raise TailnetEnvironmentError("prior Tailnet control target is not restorable")
     _set_serve_path(CONTROL_PATH, prior_target)
 
@@ -324,7 +365,7 @@ def _ensure_control_route(snapshot: ServeSnapshot) -> bool:
         existing_target = str(existing.get("Proxy", "")).rstrip("/")
         if existing_target == CONTROL_TARGET:
             return False
-        if existing_target != LEGACY_CONTROL_TARGET:
+        if existing_target not in LEGACY_CONTROL_TARGETS:
             raise TailnetEnvironmentError(
                 f"Tailnet control path is already owned by an unexpected target: {existing}"
             )
@@ -356,7 +397,7 @@ def _control_route_needs_mutation(snapshot: ServeSnapshot) -> bool:
     existing_target = str(existing.get("Proxy", "")).rstrip("/")
     if existing_target == CONTROL_TARGET:
         return False
-    if existing_target != LEGACY_CONTROL_TARGET:
+    if existing_target not in LEGACY_CONTROL_TARGETS:
         raise TailnetEnvironmentError(
             f"Tailnet control path is already owned by an unexpected target: {existing}"
         )
@@ -381,7 +422,7 @@ def ensure_global_tailnet_routes() -> ServeSnapshot:
             existing_target = str(existing.get("Proxy", "")).rstrip("/")
             allowed_existing = {target}
             if path == CONTROL_PATH:
-                allowed_existing.add(LEGACY_CONTROL_TARGET)
+                allowed_existing.update(LEGACY_CONTROL_TARGETS)
             allowed_existing.update(LEGACY_GLOBAL_SERVE_HANDLERS.get(path, frozenset()))
             if existing_target not in allowed_existing:
                 raise TailnetEnvironmentError(
@@ -537,6 +578,27 @@ def _api_build_identity(probe: Mapping[str, object], *, source: str) -> dict[str
     ):
         raise TailnetEnvironmentError(f"{source} API health is not live and ready")
     return identity
+
+
+def _wait_for_healthy_api(
+    url: str,
+    *,
+    timeout_seconds: float = 90.0,
+) -> dict[str, object]:
+    """Wait for HTTP and semantic API readiness after service startup."""
+    deadline = time.monotonic() + timeout_seconds
+    last_error: TailnetEnvironmentError | None = None
+    while time.monotonic() < deadline:
+        try:
+            probe = _url_probe(url, expect_json=True)
+            _api_build_identity(probe, source="local")
+            return probe
+        except TailnetEnvironmentError as exc:
+            last_error = exc
+            time.sleep(0.25)
+    if last_error is not None:
+        raise last_error
+    raise TailnetEnvironmentError(f"selected API did not become healthy at {url}")
 
 
 def _git_revision(root: Path) -> str:
@@ -815,7 +877,7 @@ def _install_operator_development_frontend(root: Path, mutation_ledger: set[str]
         f"ExecStartPre=/usr/bin/env python3 {root}/scripts/rotate_biomodstack_logs.py\n"
         "ExecStart=\n"
         f"ExecStart=/usr/bin/node {root}/platform/frontend/node_modules/vite/bin/vite.js "
-        "--host 127.0.0.1 --port 5173\n",
+        "--host 127.0.0.1 --port 18082\n",
     )
     daemon_reload(project_root=root)
 
@@ -823,7 +885,7 @@ def _install_operator_development_frontend(root: Path, mutation_ledger: set[str]
 def _adapter_matches_root(root: Path) -> bool:
     expected = str((root / "platform" / "api").resolve())
     revision = _git_revision(root)
-    reports = _exclusive_listener_reports(8001)
+    reports = _exclusive_listener_reports(WORKFLOW_ADAPTER_PORT)
     if not reports:
         return False
     for report in reports:
@@ -905,7 +967,7 @@ def _adapter_identity_policy_matches(
     runtime_revision: str,
     reports: list[dict[str, object]] | None = None,
 ) -> bool:
-    addresses = _listener_bind_addresses(8001)
+    addresses = _listener_bind_addresses(WORKFLOW_ADAPTER_PORT)
     if addresses not in ({"127.0.0.1"}, {"::1"}, {"127.0.0.1", "::1"}):
         return False
     expected_cwd = str((root / "platform" / "api").resolve())
@@ -914,13 +976,13 @@ def _adapter_identity_policy_matches(
     expected_uvicorn = (root / "platform" / "api" / ".venv" / "bin" / "uvicorn").resolve()
     expected_args = [
         "workflow_adapter_app:app",
-        "--port", "8001",
+        "--port", str(WORKFLOW_ADAPTER_PORT),
         "--host", "127.0.0.1",
         "--no-proxy-headers",
         "--no-access-log",
     ]
     if reports is None:
-        reports = _exclusive_listener_reports(8001)
+        reports = _exclusive_listener_reports(WORKFLOW_ADAPTER_PORT)
     if not reports:
         return False
     for report in reports:
@@ -949,9 +1011,9 @@ def _adapter_identity_policy_matches(
 
 
 def _adapter_control_policy_matches(login: str) -> bool:
-    if _listener_bind_addresses(8001) not in ({"127.0.0.1"}, {"::1"}, {"127.0.0.1", "::1"}):
+    if _listener_bind_addresses(WORKFLOW_ADAPTER_PORT) not in ({"127.0.0.1"}, {"::1"}, {"127.0.0.1", "::1"}):
         return False
-    reports = _exclusive_listener_reports(8001)
+    reports = _exclusive_listener_reports(WORKFLOW_ADAPTER_PORT)
     pids: list[int] = []
     for report in reports:
         pid = report.get("pid")
@@ -1030,8 +1092,7 @@ def _start_selected_environment(spec: EnvironmentSpec, root: Path) -> set[str]:
     # Both views use the existing managed API/DB. Selection must not rebuild or
     # restart it, nor start the unselected environment. Require the shared API
     # (and immutable production web, when selected) to be healthy first.
-    api_probe = _url_probe(spec.api_health_url, expect_json=True)
-    _api_build_identity(api_probe, source="local")
+    _wait_for_healthy_api(spec.api_health_url)
     # The authenticated Tailnet selector is an independently owned control lane.
     # Always keep it on canonical Development source, regardless of which runtime
     # is being selected or whether Development's API revision temporarily lags
@@ -1075,7 +1136,7 @@ def _start_selected_environment(spec: EnvironmentSpec, root: Path) -> set[str]:
         wait_for_http(spec.frontend_url)
         wait_for_http(spec.api_health_url)
         _url_probe(spec.frontend_url)
-        _url_probe(spec.api_health_url, expect_json=True)
+        _wait_for_healthy_api(spec.api_health_url)
         if spec.runtime_mode == DEV_RUNTIME_MODE and not _wait_for_development_frontend(spec, root):
             raise TailnetEnvironmentError(
                 f"development frontend listener is not owned by {root / 'platform' / 'frontend'}"
@@ -1309,7 +1370,7 @@ def _host_listener_closure(port: int) -> dict[str, object]:
 def _validated_workflow_adapter_listener(
     root: Path, runtime_revision: str
 ) -> dict[str, object]:
-    closure = _host_listener_closure(8001)
+    closure = _host_listener_closure(WORKFLOW_ADAPTER_PORT)
     reports = closure.get("listener_reports")
     if not isinstance(reports, list):
         raise TailnetEnvironmentError("listener ownership reports are unavailable")
@@ -1318,7 +1379,7 @@ def _validated_workflow_adapter_listener(
         root, login, runtime_revision=runtime_revision, reports=reports
     ):
         raise TailnetEnvironmentError("workflow adapter listener lost exact authenticated service ownership")
-    confirmed = _host_listener_closure(8001)
+    confirmed = _host_listener_closure(WORKFLOW_ADAPTER_PORT)
     confirmed_reports = confirmed.get("listener_reports")
     if (
         confirmed != closure
@@ -1605,7 +1666,7 @@ def _valid_container_process_roles(
                 and report.get("argv") == [
                     "/app/platform/api/.venv/bin/python",
                     "/app/platform/api/.venv/bin/uvicorn",
-                    "main:app", "--host", "127.0.0.1", "--port", "8000",
+                    "main:app", "--host", "127.0.0.1", "--port", str(PRODUCTION_API_PORT),
                 ]
                 and report.get("cwd") == "/app/platform/api"
                 and report.get("uid") == 1000
@@ -1806,13 +1867,13 @@ def _validated_production_tailnet_proxy(root: Path) -> dict[str, object]:
         and isinstance(mounts[0], Mapping)
         and mounts[0].get("Type") == "bind"
         and Path(str(mounts[0].get("Source", ""))).resolve() == config
-        and mounts[0].get("Destination") == "/etc/nginx/conf.d/default.conf"
+        and mounts[0].get("Destination") == "/etc/nginx/templates/default.conf.template"
         and mounts[0].get("RW") is False
     )
     if labels.get(PRODUCTION_TAILNET_PROXY_SHA_LABEL) != config_sha or not expected_mount:
         raise TailnetEnvironmentError("production Tailnet proxy does not match the reviewed config")
     host_config = item.get("HostConfig", {})
-    expected_bind = f"{config}:/etc/nginx/conf.d/default.conf:ro"
+    expected_bind = f"{config}:/etc/nginx/templates/default.conf.template:ro"
     if (
         host_config.get("Binds") != [expected_bind]
         or host_config.get("Mounts") not in (None, [])
@@ -2030,7 +2091,7 @@ def _validated_container_runtime(root: Path, *, require_web: bool) -> dict[str, 
     expected_process_identity = {
         "biomodstack-api": (
             "/bin/sh -ec /app/platform/api/.venv/bin/python run_migrations.py && exec "
-            "/app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000",
+            "/app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 18000",
             "/app/platform/api",
         ),
         "biomodstack-web": ("/docker-entrypoint.sh nginx -g daemon off;", "/"),

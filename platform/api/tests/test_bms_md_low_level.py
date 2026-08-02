@@ -505,6 +505,38 @@ def test_gromacs_command_supports_gpu_forces_with_cpu_update_for_virtual_sites(t
     assert command[command.index("-update") + 1] == "cpu"
 
 
+def test_validate_cli_applies_preparation_selected_gpu_offload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts.bms_md import cli
+
+    source, _ = _materialized_gromacs(tmp_path)
+    output = tmp_path / "runtime.json"
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    payload["execution"]["gpu_offload"] = "full"
+    source.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setenv("BMS_FEATURE_MOLECULAR_DYNAMICS", "1")
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "bms-md",
+            "validate",
+            "--config",
+            str(source),
+            "--gpu-offload",
+            "full_forces",
+            "--output",
+            str(output),
+        ],
+    )
+
+    cli.main()
+
+    normalized = json.loads(output.read_text(encoding="utf-8"))
+    assert normalized["execution"]["gpu_offload"] == "full_forces"
+
+
 def test_gromacs_command_omits_restart_flags_without_checkpoint(tmp_path: Path) -> None:
     command = build_mdrun_command(
         gmx="gmx",

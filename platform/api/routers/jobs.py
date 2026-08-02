@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, B
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, update
 from sqlalchemy.exc import OperationalError
-from typing import Optional, List, Dict, Any, NoReturn
+from typing import Optional, List, Dict, Any, Callable, NoReturn, cast
 from types import SimpleNamespace
 from copy import deepcopy
 import asyncio
@@ -204,7 +204,7 @@ def _md_output_path_forbidden() -> MDLaunchError:
     )
 
 
-def _prepare_md_output_dir(job_name: str, timestamp: str) -> tuple[Path, bool]:
+def _prepare_md_output_dir(job_name: str, timestamp: str, preallocated_job_id: str | None = None) -> tuple[Path, bool]:
     """Create one contained MD output directory and report whether this call owns it."""
 
     safe_name = str(job_name or "").strip()
@@ -213,7 +213,9 @@ def _prepare_md_output_dir(job_name: str, timestamp: str) -> tuple[Path, bool]:
 
     try:
         results_root = get_results_dir().expanduser().resolve()
-        output_path = results_root / f"{safe_name}_{timestamp}"
+        # Typed internal replays have a deterministic identity.  Their result
+        # root must be a direct, canonical child of Development's results root.
+        output_path = results_root / (preallocated_job_id or f"{safe_name}_{timestamp}")
         resolved_output = output_path.resolve()
         if output_path.is_symlink() or not resolved_output.is_relative_to(results_root):
             raise _md_output_path_forbidden()
@@ -223,6 +225,12 @@ def _prepare_md_output_dir(job_name: str, timestamp: str) -> tuple[Path, bool]:
         except FileExistsError:
             if output_path.is_symlink() or not output_path.is_dir():
                 raise _md_output_path_forbidden()
+            if preallocated_job_id is not None:
+                raise MDLaunchError(
+                    "MD_OUTPUT_COLLISION",
+                    "The deterministic MD re-orchestration output root already exists without a durable replay receipt",
+                    status_code=409,
+                )
             created = False
         resolved_output = output_path.resolve()
         if not resolved_output.is_relative_to(results_root):
@@ -5061,8 +5069,10 @@ async def import_proteinbase_bundle_job(
 def _build_msa_batch_child_params(
     source_params: Dict[str, Any],
     sequences_for_msa: List[Dict[str, Any]],
+    source_model_id: Any = None,
+    source_mode: Any = None,
 ) -> Dict[str, Any]:
-    return {
+    child_params = {
         'sequences': sequences_for_msa,
         'sequences_json': json.dumps(sequences_for_msa),
         'reference_sequence': source_params.get('msa_reference_sequence'),
@@ -5094,8 +5104,8 @@ def _build_msa_batch_child_params(
         'msa_target_shard_mode': source_params.get('msa_target_shard_mode'),
         'msa_target_shards': source_params.get('msa_target_shards'),
         'msa_target_shard_min_size_gb': source_params.get('msa_target_shard_min_size_gb'),
-        'run_frustrampnn_batch': source_params.get('run_frustrampnn', False),
     }
+    return child_params
 
 
 def _standard_job_output_dir(name: str, timestamp: str, preallocated_job_id: str | None) -> Path:
@@ -5111,10 +5121,17 @@ async def create_job(
     session: AsyncSession = Depends(get_session),
     _preallocated_job_id: Any = Depends(lambda: None),
     _commit: Any = Depends(lambda: True),
+    _md_output_creation: Any = Depends(lambda: None),
+    _md_input_resolver: Any = Depends(lambda: None),
 ):
     """Create and queue a new pipeline job."""
     require_molecular_dynamics_feature(job_data.model_id)
     _raise_if_workflow_launches_disabled("create new workflow jobs")
+    md_input_resolver: Callable[[str], str] = (
+        cast(Callable[[str], str], _md_input_resolver)
+        if callable(_md_input_resolver)
+        else _resolve_md_input_path_for_runtime
+    )
     retired_model_ids = {
         "antibody" + "_" + "denovo",
         "template_" + "antibody" + "_" + "denovo",
@@ -5127,6 +5144,11 @@ async def create_job(
     }
     normalized_model_id = str(job_data.model_id or "").strip().lower()
     normalized_mode = str(job_data.mode or "").strip().lower()
+    if normalized_model_id == "frustrampnn":
+        raise HTTPException(
+            status_code=422,
+            detail="FrustraMPNN jobs must use the typed server-owned analysis endpoints.",
+        )
     if normalized_model_id == "molecular_dynamics" and normalized_mode == "analyze" and _md_analysis_gpu_requested(job_data):
         raise _md_analysis_error(
             "MD_ANALYSIS_GPU_FORBIDDEN",
@@ -5209,7 +5231,7 @@ async def create_job(
                 normalize_md_job_spec(
                     params=job_data.params,
                     job_id="validation-preview",
-                    resolve_runtime_path=_resolve_md_input_path_for_runtime,
+                    resolve_runtime_path=md_input_resolver,
                 )
             except (
                 MDLaunchError,
@@ -5407,10 +5429,14 @@ async def create_job(
     md_output_dir_created = False
     if is_md_launch:
         try:
-            md_output_path, md_output_dir_created = _prepare_md_output_dir(job_data.name, timestamp)
+            md_output_path, md_output_dir_created = _prepare_md_output_dir(
+                job_data.name, timestamp, preallocated_job_id,
+            )
         except MDLaunchError as exc:
             _raise_md_launch_http_error(exc)
         base_output_dir = str(md_output_path)
+        if isinstance(_md_output_creation, dict):
+            _md_output_creation.update({"path": md_output_path, "created": md_output_dir_created})
     else:
         # Presentation-only names must not split one deterministic Job's
         # filesystem ownership across concurrent equivalent requests.
@@ -5529,6 +5555,8 @@ async def create_job(
             params=_build_msa_batch_child_params(
                 source_params=job_data.params,
                 sequences_for_msa=sequences_for_msa,
+                source_model_id=job_data.model_id,
+                source_mode=job_data.mode,
             ),
             output_dir=msa_output_dir,
             status=JobStatus.QUEUED.value,
@@ -5629,7 +5657,7 @@ async def create_job(
                     params=job_params,
                     job_id=job_id,
                     output_dir=Path(output_dir),
-                    resolve_runtime_path=_resolve_md_input_path_for_runtime,
+                    resolve_runtime_path=md_input_resolver,
                 )
             except (
                 MDLaunchError,
@@ -5929,9 +5957,52 @@ async def launch_antibody_iteration_from_designs(
             detail=f"Some selected designs were not found: {', '.join(missing_designs[:10])}",
         )
 
-    ordered_designs = [design_by_id[design_id] for design_id in design_ids]
-    selection_dir = _materialize_antibody_selection(root_job, source_job, ordered_designs, request.action)
     action = request.action.strip().lower()
+    ordered_designs = [design_by_id[design_id] for design_id in design_ids]
+    if action == "frustrampnn":
+        if (
+            request.param_overrides
+            or request.cdr_indel_config is not None
+            or request.manual_mutagenesis_config is not None
+            or request.name_suffix is not None
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="FrustraMPNN runtime, path, GPU, and naming overrides are server-owned.",
+            )
+        from services.frustrampnn.jobs import (
+            FrustraMPNNChildError,
+            create_child_job as create_frustrampnn_child_job,
+            design_selections as resolve_frustrampnn_selections,
+        )
+
+        try:
+            selections = await resolve_frustrampnn_selections(
+                session,
+                source_parent=source_job,
+                design_ids=design_ids,
+            )
+            child = await create_frustrampnn_child_job(
+                session,
+                selections=selections,
+                source_parent=source_job,
+                trigger="antibody_iteration",
+            )
+        except FrustraMPNNChildError as exc:
+            await session.rollback()
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        launched_job = await get_job(str(child.id), session)
+        return AntibodyIterationLaunchResponse(
+            message=f"Queued FrustraMPNN analysis for {len(ordered_designs)} selected designs.",
+            action=action,
+            source_job_id=source_job.id,
+            root_job_id=root_job.id,
+            selection_dir=str(child.output_dir),
+            selected_design_count=len(ordered_designs),
+            launched_job=launched_job,
+        )
+
+    selection_dir = _materialize_antibody_selection(root_job, source_job, ordered_designs, request.action)
     variant_note = ""
     variant_count = len(ordered_designs)
     if action == "cdr_indel_round":
@@ -6823,6 +6894,16 @@ async def report_stage_complete(
     stage_outputs = job.stage_outputs or {}
     stage_outputs[stage] = outputs
     job.stage_outputs = stage_outputs
+
+    provenance = dict(job.provenance or {})
+    terminal_states = dict(provenance.get("stage_terminal_states") or {})
+    existing_terminal = terminal_states.get(stage)
+    complete_terminal = {"status": "complete", "outputs": list(outputs)}
+    if existing_terminal is not None and existing_terminal != complete_terminal:
+        raise HTTPException(status_code=409, detail="workflow stage terminal state is immutable")
+    terminal_states[stage] = complete_terminal
+    provenance["stage_terminal_states"] = terminal_states
+    job.provenance = provenance
     
     # Clear current stage (will be set when next stage starts)
     job.current_stage = None
@@ -6836,6 +6917,57 @@ async def report_stage_complete(
         "job_id": job_id,
         "completed_stages": completed,
         "outputs_count": len(outputs)
+    }
+
+
+@router.post("/{job_id}/stage-terminal")
+async def report_stage_terminal(
+    job_id: str,
+    request: Request,
+    stage: str,
+    status: str,
+    outputs: List[str] = [],
+    session: AsyncSession = Depends(get_session),
+):
+    """Persist a non-success terminal state for an optional or unrequested stage."""
+
+    if status not in {"failed", "not_requested"}:
+        raise HTTPException(status_code=422, detail="unsupported workflow stage terminal status")
+    result = await session.execute(select(Job).where(Job.id == job_id).with_for_update())
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    authorization = str(request.headers.get("authorization") or "")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not stage_reporting.token_is_authorized(job.provenance, token):
+        raise HTTPException(status_code=403, detail="invalid workflow stage credential")
+
+    completed = list(job.completed_stages or [])
+    if stage in completed:
+        raise HTTPException(status_code=409, detail="completed workflow stage cannot be reclassified")
+    terminal = {"status": status, "outputs": list(outputs)}
+    provenance = dict(job.provenance or {})
+    terminal_states = dict(provenance.get("stage_terminal_states") or {})
+    existing = terminal_states.get(stage)
+    if existing is not None and existing != terminal:
+        raise HTTPException(status_code=409, detail="workflow stage terminal state is immutable")
+    terminal_states[stage] = terminal
+    provenance["stage_terminal_states"] = terminal_states
+    job.provenance = provenance
+
+    stage_outputs = dict(job.stage_outputs or {})
+    stage_outputs[stage] = list(outputs)
+    job.stage_outputs = stage_outputs
+    if job.current_stage == stage:
+        job.current_stage = None
+    await session.commit()
+    logger.info("Job %s: Stage '%s' terminal state is %s", job_id, stage, status)
+    return {
+        "message": f"Stage '{stage}' marked {status}",
+        "job_id": job_id,
+        "stage": stage,
+        "status": status,
+        "outputs_count": len(outputs),
     }
 
 
@@ -7843,6 +7975,7 @@ async def get_job_logs(
         "nextflow_log": None,
         "exit_code": None,
         "parsed_error": None,
+        "nextflow_log_source": None,
     }
     
     # --- Step 1: Find the nextflow log for THIS job ---
@@ -7855,8 +7988,10 @@ async def get_job_logs(
             nf_log_candidates.append(output_path / "nextflow.log")
             nf_log_candidates.append(output_path / ".nextflow.log")
     
-    # Fallback: global .nextflow.log (may be from a different job)
-    nf_log_candidates.append(CODE_ROOT / ".nextflow.log")
+    # A global Nextflow log is only a legacy diagnostic for non-MD jobs.  It is
+    # not job-owned and can otherwise disclose another MD launch's failure.
+    if job.model_id != "molecular_dynamics":
+        nf_log_candidates.append(CODE_ROOT / ".nextflow.log")
     
     for nf_path in nf_log_candidates:
         if nf_path and nf_path.exists():
@@ -7865,6 +8000,7 @@ async def get_job_logs(
                     nf_log_content = f.read()
                     lines = nf_log_content.split('\n')
                     logs_data["nextflow_log"] = "\n".join(lines[-tail:])
+                    logs_data["nextflow_log_source"] = "job_output" if output_path and nf_path.parent == output_path else "legacy_global"
                 break
             except Exception:
                 continue

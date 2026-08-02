@@ -161,11 +161,11 @@ default_origins = [
     "https://localhost",
     "http://127.0.0.1",
     "https://127.0.0.1",
-    "http://127.0.0.1:5173",
+    "http://127.0.0.1:18082",
     "http://localhost:3000",
-    "http://localhost:5173",
+    "http://localhost:18082",
     "https://localhost:3000",
-    "https://localhost:5173",
+    "https://localhost:18082",
 ]
 env_origins = os.getenv("CORS_ORIGINS")
 allowed_origins = [o.strip() for o in env_origins.split(",")] if env_origins else default_origins

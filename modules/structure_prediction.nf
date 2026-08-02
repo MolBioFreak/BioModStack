@@ -2,6 +2,9 @@
 // Modules for predicting 3D protein structure directly from amino acid sequence
 // Supported predictors: Boltz-2, RF3 (RoseTTAFold3), Protenix, ESMFold2
 
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+
 include { ProtenixPredict ; ProtenixFromComplex ; PrepProtenixComplex } from './protenix.nf'
 include { ESMFold2Predict } from './esmfold2_experimental.nf'
 
@@ -13,6 +16,266 @@ def resolveBooleanParam(value, defaultValue) {
         return value
     }
     return value.toString().equalsIgnoreCase('true')
+}
+
+def canonicalProducerOutputs(outputs, producerMethod) {
+    def outputRoots = [
+        rf3: '/output/',
+        protenix: '/predictions/',
+        esmfold2: '/esmfold2_results/',
+    ]
+    if (!outputRoots.containsKey(producerMethod)) {
+        throw new IllegalArgumentException('typed sequence producer method is unsupported')
+    }
+    return outputs.flatMap { rawOutput ->
+        def values = rawOutput instanceof Collection ? rawOutput as List : [rawOutput]
+        if (values.size() != 2 || !(values[0] instanceof Map)) {
+            throw new IllegalArgumentException(
+                "${producerMethod} sequence outputs require task-coupled typed identity"
+            )
+        }
+        def producerMetadata = new LinkedHashMap(values[0] as Map)
+        def requiredFields = [
+            'producer_artifact_id', 'producer_artifact_key', 'producer_sample',
+            'producer_sequence', 'producer_fold', 'producer_rank',
+            'producer_submission_id', 'producer_submission_name',
+            'original_submission_identity',
+        ] as Set
+        if ((producerMetadata.keySet() as Set) != requiredFields ||
+            producerMetadata.producer_artifact_id != producerMetadata.producer_artifact_key ||
+            producerMetadata.producer_sample != producerMetadata.producer_artifact_id) {
+            throw new IllegalArgumentException('typed sequence producer output metadata is invalid')
+        }
+        def produced = values[1]
+        def predictedFiles = produced instanceof Collection ? produced : [produced]
+        if (predictedFiles.isEmpty()) {
+            throw new IllegalArgumentException('typed sequence producer emitted no structures')
+        }
+        predictedFiles.collect { predicted ->
+            def rawPath = predicted.toString().replace('\\', '/')
+            def marker = outputRoots[producerMethod]
+            def markerIndex = rawPath.lastIndexOf(marker)
+            if (markerIndex < 0) {
+                throw new IllegalArgumentException(
+                    "${producerMethod} sequence output escaped its producer root"
+                )
+            }
+            def relativeOutput = rawPath.substring(markerIndex + marker.length())
+            if (!relativeOutput || relativeOutput.startsWith('/') ||
+                relativeOutput.split('/').any { it in ['', '.', '..'] }) {
+                throw new IllegalArgumentException('typed sequence producer output path is noncanonical')
+            }
+            def digest = java.security.MessageDigest.getInstance('SHA-256')
+            predicted.toFile().withInputStream { stream ->
+                byte[] buffer = new byte[1024 * 1024]
+                int count
+                while ((count = stream.read(buffer)) != -1) {
+                    digest.update(buffer, 0, count)
+                }
+            }
+            def artifactDigest = digest.digest().encodeHex().toString()
+            def sourceName = relativeOutput.toLowerCase()
+            def sourceFormat = sourceName.endsWith('.pdb') ? 'pdb' :
+                (sourceName.endsWith('.cif') || sourceName.endsWith('.mmcif') ? 'mmcif' : null)
+            if (sourceFormat == null) {
+                throw new IllegalArgumentException('typed sequence producer output format is unsupported')
+            }
+            def record = new LinkedHashMap(producerMetadata)
+            record.producer_method = producerMethod
+            record.producer_output_key = "${producerMetadata.producer_artifact_key}/${relativeOutput}"
+            record.producer_artifact_sha256 = artifactDigest
+            record.source_format = sourceFormat
+            tuple(record, predicted)
+        }
+    }
+}
+
+def sequenceProducerMetadata(sequence, sequenceName) {
+    def authority = sequenceName?.toString()?.trim()
+    def sequenceValue = sequence?.toString()?.trim()
+    if (!(authority ==~ /[A-Za-z0-9][A-Za-z0-9._-]*/) || !sequenceValue) {
+        throw new IllegalArgumentException('sequence producer identity and sequence must be non-empty and safe')
+    }
+    return [
+        producer_artifact_id: authority,
+        producer_artifact_key: authority,
+        producer_sample: authority,
+        producer_sequence: sequenceValue,
+        producer_fold: null,
+        producer_rank: null,
+        producer_submission_id: authority,
+        producer_submission_name: authority,
+        original_submission_identity: [id: authority, name: authority],
+    ]
+}
+
+def validateSequenceProducerMetadata(rawMetadata, sequence, sequenceName) {
+    if (!(rawMetadata instanceof Map)) {
+        throw new IllegalArgumentException('sequence producer metadata must be typed')
+    }
+    def metadata = new LinkedHashMap(rawMetadata as Map)
+    def requiredFields = [
+        'producer_artifact_id', 'producer_artifact_key', 'producer_sample',
+        'producer_sequence', 'producer_fold', 'producer_rank',
+        'producer_submission_id', 'producer_submission_name',
+        'original_submission_identity',
+    ] as Set
+    if ((metadata.keySet() as Set) != requiredFields) {
+        throw new IllegalArgumentException('sequence producer metadata fields are not exact')
+    }
+    ['producer_artifact_id', 'producer_artifact_key', 'producer_sample',
+     'producer_sequence', 'producer_submission_id', 'producer_submission_name'].each { field ->
+        if (!(metadata[field] instanceof CharSequence) || !metadata[field].toString().trim()) {
+            throw new IllegalArgumentException("sequence producer ${field} is empty")
+        }
+        metadata[field] = metadata[field].toString().trim()
+    }
+    ['producer_artifact_id', 'producer_artifact_key', 'producer_sample',
+     'producer_submission_id'].each { field ->
+        if (!(metadata[field] ==~ /[A-Za-z0-9][A-Za-z0-9._-]*/)) {
+            throw new IllegalArgumentException("sequence producer ${field} is not a safe stable ID")
+        }
+    }
+    if (metadata.producer_artifact_id != metadata.producer_artifact_key ||
+        metadata.producer_sample != metadata.producer_artifact_id) {
+        throw new IllegalArgumentException('sequence producer artifact identity fields disagree')
+    }
+    if (metadata.producer_sequence != sequence?.toString()?.trim()) {
+        throw new IllegalArgumentException('sequence producer metadata disagrees with task sequence')
+    }
+    if (metadata.producer_rank != null &&
+        (!(metadata.producer_rank instanceof Integer) || (metadata.producer_rank as int) < 0)) {
+        throw new IllegalArgumentException('sequence producer rank is invalid')
+    }
+    if (metadata.producer_fold != null &&
+        !(metadata.producer_fold instanceof CharSequence) && !(metadata.producer_fold instanceof Integer)) {
+        throw new IllegalArgumentException('sequence producer fold is invalid')
+    }
+    def original = metadata.original_submission_identity
+    if (!(original instanceof Map) || (original.keySet() as Set) != (['id', 'name'] as Set) ||
+        original.id != metadata.producer_submission_id ||
+        original.name != metadata.producer_submission_name) {
+        throw new IllegalArgumentException('sequence producer original submission identity is invalid')
+    }
+    def taskName = sequenceName?.toString()?.trim()
+    if (!(taskName ==~ /[A-Za-z0-9][A-Za-z0-9._-]*/)) {
+        throw new IllegalArgumentException('sequence producer task name is unsafe')
+    }
+    return metadata
+}
+
+def normalizeSequenceProducerInputs(inputChannel) {
+    return inputChannel.collect(flat: false).flatMap { rawRecords ->
+        def records = rawRecords ?: []
+        def normalized = records.collect { rawRecord ->
+            def values = rawRecord instanceof Collection ? rawRecord as List : [rawRecord]
+            def metadata
+            def sequence
+            def sequenceName
+            if (values.size() == 3 && values[0] instanceof Map) {
+                metadata = values[0]
+                sequence = values[1]
+                sequenceName = values[2]
+            }
+            else if (values.size() == 2) {
+                sequence = values[0]
+                sequenceName = values[1]
+                metadata = sequenceProducerMetadata(sequence, sequenceName)
+            }
+            else {
+                throw new IllegalArgumentException('sequence predictor input must be a typed triple or legacy pair')
+            }
+            tuple(validateSequenceProducerMetadata(metadata, sequence, sequenceName), sequence.toString(), sequenceName.toString())
+        }
+        def artifactIds = normalized.collect { it[0].producer_artifact_id }
+        def artifactKeys = normalized.collect { it[0].producer_artifact_key }
+        if (artifactIds.toSet().size() != artifactIds.size() || artifactKeys.toSet().size() != artifactKeys.size()) {
+            throw new IllegalArgumentException('sequence producer identities must be unique within one input set')
+        }
+        normalized
+    }
+}
+
+def sequenceCanonicalProducerOutputs(outputs, producerMethod) {
+    return outputs.flatMap { producerMetadata, producerManifest, produced ->
+        def manifest = new JsonSlurper().parse(producerManifest)
+        if (manifest.schema_name != 'sequence_structure_producer_candidates' ||
+            manifest.schema_version != 1 || !(manifest.candidates instanceof Collection)) {
+            throw new IllegalArgumentException('sequence producer candidate manifest is invalid')
+        }
+        def predictedFiles = produced instanceof Collection ? produced : [produced]
+        if (manifest.candidates.size() != predictedFiles.size()) {
+            throw new IllegalArgumentException('sequence producer manifest/file set is incomplete')
+        }
+        def boundKeys = [] as Set
+        predictedFiles.collect { predicted ->
+            def rawPath = predicted.toString().replace('\\', '/')
+            def marker = '/predictions/'
+            def markerIndex = rawPath.lastIndexOf(marker)
+            if (markerIndex < 0) {
+                throw new IllegalArgumentException('sequence producer output escaped predictions root')
+            }
+            def relativeOutput = rawPath.substring(markerIndex + marker.length())
+            def expectedOutputKey = "${producerMetadata.producer_artifact_key}/${relativeOutput}"
+            def digest = java.security.MessageDigest.getInstance('SHA-256')
+            predicted.toFile().withInputStream { stream ->
+                byte[] buffer = new byte[1024 * 1024]
+                int count
+                while ((count = stream.read(buffer)) != -1) digest.update(buffer, 0, count)
+            }
+            def artifactDigest = digest.digest().encodeHex().toString()
+            def matches = manifest.candidates.findAll { record ->
+                record.producer_method == producerMethod &&
+                    record.producer_artifact_id == producerMetadata.producer_artifact_id &&
+                    record.producer_artifact_key == producerMetadata.producer_artifact_key &&
+                    record.producer_output_key == expectedOutputKey &&
+                    record.producer_artifact_sha256 == artifactDigest
+            }
+            if (matches.size() != 1 || !boundKeys.add(expectedOutputKey)) {
+                throw new IllegalArgumentException('sequence producer metadata does not bind one emitted file')
+            }
+            tuple(new LinkedHashMap(matches[0] as Map), predicted)
+        }
+    }
+}
+
+def complexCanonicalProducerOutputs(outputs) {
+    outputs.flatMap { producerSample, producerManifest, produced ->
+        def manifest = new groovy.json.JsonSlurper().parse(producerManifest)
+        if (manifest.schema_name != 'structure_producer_candidates' ||
+            manifest.schema_version != 1 || !(manifest.candidates instanceof Collection)) {
+            throw new IllegalArgumentException('complex producer candidate manifest is invalid')
+        }
+        def predictedFiles = produced instanceof Collection ? produced : [produced]
+        predictedFiles.collect { predicted ->
+            def rawPath = predicted.toString().replace('\\', '/')
+            def marker = '/predictions/'
+            def markerIndex = rawPath.lastIndexOf(marker)
+            if (markerIndex < 0) {
+                throw new IllegalArgumentException('complex producer output escaped predictions root')
+            }
+            def stagedOutputKey = rawPath.substring(markerIndex + marker.length())
+            def digest = java.security.MessageDigest.getInstance('SHA-256')
+            predicted.toFile().withInputStream { stream ->
+                byte[] buffer = new byte[1024 * 1024]
+                int count
+                while ((count = stream.read(buffer)) != -1) digest.update(buffer, 0, count)
+            }
+            def artifactDigest = digest.digest().encodeHex().toString()
+            def matches = manifest.candidates.findAll { record ->
+                record.producer_output_key == stagedOutputKey &&
+                    record.producer_artifact_sha256 == artifactDigest
+            }
+            if (matches.size() != 1) {
+                throw new IllegalArgumentException('complex producer metadata does not bind one emitted file')
+            }
+            def record = matches[0] as Map
+            if (record.producer_sample != (producerSample == null ? null : producerSample.toString())) {
+                throw new IllegalArgumentException('complex producer sample disagrees with scheduler input')
+            }
+            tuple(record, predicted)
+        }
+    }
 }
 
 // Generate MSA using local MMseqs2 database - GPU ACCELERATED!
@@ -147,7 +410,7 @@ process BatchMSAGeneration {
     """
 }
 
-process BoltzFromSequence {
+process BoltzFromSequenceTask {
     label 'Boltz'
     label 'gpu'
     publishDir "${params.out_dir}/run/boltz_seq", mode: 'copy', pattern: "*.log"
@@ -157,11 +420,10 @@ process BoltzFromSequence {
     publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "msa/*.a3m"
 
     input:
-    tuple val(sequence), val(sequence_name)
+    tuple val(producer_meta), val(sequence), val(sequence_name)
 
     output:
-    path "predictions/*.pdb", emit: pdbs, optional: true
-    path "predictions/*.cif", emit: cifs, optional: true
+    tuple val(producer_meta), path("producer_candidates.json"), path("predictions/*.{pdb,cif}"), emit: canonical_structures
     path "predictions/*.json", emit: jsons, optional: true
     path "msa/*.a3m", emit: msa, optional: true
     path "*.log"
@@ -170,6 +432,7 @@ process BoltzFromSequence {
     def recycling = params.boltz_recycling_steps ?: 3
     def sampling = params.boltz_sampling_steps ?: 50
     def numSamples = params.boltz_diffusion_samples ?: params.boltz_num_samples ?: 1
+    def producerMetadataBase64 = JsonOutput.toJson(producer_meta).bytes.encodeBase64().toString()
     def msaDbPath = params.msa_local_db
     def msaCacheDir = params.msa_cache_dir
     def msaThreads = params.msa_threads ?: 48
@@ -305,11 +568,58 @@ PYEOF
         echo "ERROR: Boltz produced no output files"
         exit 1
     fi
+
+    python3 ${params.code_root ?: '/app'}/scripts/write_sequence_producer_manifest.py \
+        --metadata-base64 '${producerMetadataBase64}' \
+        --predictions-dir predictions \
+        --producer-method boltz \
+        --output producer_candidates.json
     """
 }
 
+workflow BoltzFromSequence {
+    take:
+    input_ch
+
+    main:
+    normalized_inputs = normalizeSequenceProducerInputs(input_ch)
+    BoltzFromSequenceTask(normalized_inputs)
+    canonical_structures = sequenceCanonicalProducerOutputs(BoltzFromSequenceTask.out.canonical_structures, 'boltz')
+    canonical_pdbs = canonical_structures.filter { producer_meta, predicted ->
+        predicted.toString().toLowerCase().endsWith('.pdb')
+    }
+    canonical_cifs = canonical_structures.filter { producer_meta, predicted ->
+        def name = predicted.toString().toLowerCase()
+        name.endsWith('.cif') || name.endsWith('.mmcif')
+    }
+    pdbs = BoltzFromSequenceTask.out.canonical_structures
+        .map { producer_meta, producer_manifest, produced ->
+            def files = produced instanceof Collection ? produced : [produced]
+            files.findAll { it.toString().toLowerCase().endsWith('.pdb') }
+        }
+        .filter { !it.isEmpty() }
+    cifs = BoltzFromSequenceTask.out.canonical_structures
+        .map { producer_meta, producer_manifest, produced ->
+            def files = produced instanceof Collection ? produced : [produced]
+            files.findAll {
+                def name = it.toString().toLowerCase()
+                name.endsWith('.cif') || name.endsWith('.mmcif')
+            }
+        }
+        .filter { !it.isEmpty() }
+
+    emit:
+    pdbs = pdbs
+    cifs = cifs
+    jsons = BoltzFromSequenceTask.out.jsons
+    msa = BoltzFromSequenceTask.out.msa
+    canonical_structures = canonical_structures
+    canonical_pdbs = canonical_pdbs
+    canonical_cifs = canonical_cifs
+}
+
 // Boltz with pre-computed MSA (no rate limiting!)
-process BoltzFromSequenceWithMSA {
+process BoltzFromSequenceWithMSATask {
     label 'Boltz'
     label 'gpu'
     publishDir "${params.out_dir}/run/boltz_seq", mode: 'copy', pattern: "*.log"
@@ -318,11 +628,10 @@ process BoltzFromSequenceWithMSA {
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.json", saveAs: { filename -> filename.split('/')[-1] }
 
     input:
-    tuple val(sequence), val(sequence_name), path(msa_file)
+    tuple val(producer_meta), val(sequence), val(sequence_name), path(msa_file)
 
     output:
-    path "predictions/*.pdb", emit: pdbs, optional: true
-    path "predictions/*.cif", emit: cifs, optional: true
+    tuple val(producer_meta), path("producer_candidates.json"), path("predictions/*.{pdb,cif}"), emit: canonical_structures
     path "predictions/*.json", emit: jsons, optional: true
     path "*.log"
 
@@ -330,6 +639,7 @@ process BoltzFromSequenceWithMSA {
     def recycling = params.boltz_recycling_steps ?: 3
     def sampling = params.boltz_sampling_steps ?: 50
     def numSamples = params.boltz_diffusion_samples ?: params.boltz_num_samples ?: 1
+    def producerMetadataBase64 = JsonOutput.toJson(producer_meta).bytes.encodeBase64().toString()
     """
     set -o pipefail  # Propagate exit codes through pipes
     
@@ -436,7 +746,46 @@ PYEOF
         echo "ERROR: Boltz produced no output files"
         exit 1
     fi
+
+    python3 ${params.code_root ?: '/app'}/scripts/write_sequence_producer_manifest.py \
+        --metadata-base64 '${producerMetadataBase64}' \
+        --predictions-dir predictions \
+        --producer-method boltz \
+        --output producer_candidates.json
     """
+}
+
+workflow BoltzFromSequenceWithMSA {
+    take:
+    input_ch
+
+    main:
+    typed_inputs = input_ch.map { producer_meta, sequence, sequence_name, msa_file ->
+        tuple(validateSequenceProducerMetadata(producer_meta, sequence, sequence_name), sequence, sequence_name, msa_file)
+    }
+    BoltzFromSequenceWithMSATask(typed_inputs)
+    canonical_structures = sequenceCanonicalProducerOutputs(BoltzFromSequenceWithMSATask.out.canonical_structures, 'boltz')
+    pdbs = BoltzFromSequenceWithMSATask.out.canonical_structures
+        .map { producer_meta, producer_manifest, produced ->
+            def files = produced instanceof Collection ? produced : [produced]
+            files.findAll { it.toString().toLowerCase().endsWith('.pdb') }
+        }
+        .filter { !it.isEmpty() }
+    cifs = BoltzFromSequenceWithMSATask.out.canonical_structures
+        .map { producer_meta, producer_manifest, produced ->
+            def files = produced instanceof Collection ? produced : [produced]
+            files.findAll {
+                def name = it.toString().toLowerCase()
+                name.endsWith('.cif') || name.endsWith('.mmcif')
+            }
+        }
+        .filter { !it.isEmpty() }
+
+    emit:
+    pdbs = pdbs
+    cifs = cifs
+    jsons = BoltzFromSequenceWithMSATask.out.jsons
+    canonical_structures = canonical_structures
 }
 
 // Complex prep stage: generate chain-level MSAs and Boltz YAML on host/runtime CPU label.
@@ -951,7 +1300,7 @@ process BoltzFromComplex {
     tuple val(complex_name), path(complex_yaml), path(msa_dir)
 
     output:
-    path "predictions/*.pdb", emit: pdbs, optional: true
+    tuple val(complex_name), path("producer_candidates.json"), path("predictions/*.pdb"), emit: canonical_pdbs, optional: true
     path "predictions/*.cif", emit: cifs, optional: true
     path "predictions/*.json", emit: jsons, optional: true
     path "predictions/*.npz", emit: npz, optional: true
@@ -962,6 +1311,7 @@ process BoltzFromComplex {
     def sampling = params.boltz_sampling_steps ?: 50
     def numSamples = params.boltz_diffusion_samples ?: params.boltz_num_samples ?: 1
     def geometryMode = params.boltz_target_geometry_mode ?: (params.boltz_anchor_target ? 'conditioned' : 'flexible')
+    def producerSampleBase64 = complex_name.toString().getBytes('UTF-8').encodeBase64().toString()
     """
     set -o pipefail
 
@@ -1019,6 +1369,13 @@ process BoltzFromComplex {
             ${params.fixed_target_model_number ? '--target_model_number ' + params.fixed_target_model_number : ''} \\
             2>&1 | tee -a boltz_complex_${complex_name}.log
     fi
+
+    python3 '${params.code_root}/scripts/write_structure_producer_manifest.py' \
+      --predictions-root predictions \
+      --producer-method boltz \
+      --producer-sample-base64 '${producerSampleBase64}' \
+      --format pdb \
+      --output producer_candidates.json
     """
 }
 
@@ -1030,11 +1387,11 @@ process RF3FromSequence {
     publishDir "${params.out_dir}/pdb_files/rf3", mode: 'copy', pattern: "output/**/*.json"
 
     input:
-    tuple val(sequence), val(sequence_name), path(msa)
+    tuple val(producer_meta), val(sequence), val(sequence_name), path(msa)
 
     output:
-    path "output/**/*.pdb", emit: pdbs, optional: true
-    path "output/**/*.cif", emit: cifs, optional: true
+    tuple val(producer_meta), path("output/**/*.pdb"), emit: typed_pdbs, optional: true
+    tuple val(producer_meta), path("output/**/*.cif"), emit: typed_cifs, optional: true
     path "output/**/*.json", emit: jsons, optional: true
     path "*.log"
 
@@ -1148,8 +1505,10 @@ workflow structure_prediction_wf {
     def boltz_use_msa = resolveBooleanParam(params.boltz_use_msa, false)
     def rf3_use_msa = resolveBooleanParam(params.rf3_use_msa, false)
     def protenix_use_msa = resolveBooleanParam(params.protenix_use_msa, true)
+    typed_inputs = normalizeSequenceProducerInputs(input_ch)
 
     structures = channel.empty()
+    canonical_structures = channel.empty()
 
     // Determine which predictors need MSA
     def need_boltz_msa  = (pred_method in ['boltz', 'both', 'all'] && boltz_use_msa)
@@ -1164,80 +1523,139 @@ workflow structure_prediction_wf {
 
         if (hasProvidedMsa) {
             // Use precomputed MSA (e.g., from MSA batch job)
-            def inputs_with_msa = input_ch.map { seq, name -> tuple(seq, name, provided_msa) }
+            def inputs_with_msa = typed_inputs.map { producer_meta, seq, name ->
+                tuple(producer_meta, seq, name, provided_msa)
+            }
 
             if (pred_method == 'boltz' || pred_method == 'both' || pred_method == 'all') {
                 BoltzFromSequenceWithMSA(inputs_with_msa)
                 structures = structures.mix(BoltzFromSequenceWithMSA.out.pdbs, BoltzFromSequenceWithMSA.out.cifs)
+                canonical_structures = canonical_structures.mix(BoltzFromSequenceWithMSA.out.canonical_structures)
             }
 
             if (pred_method == 'rf3' || pred_method == 'both' || pred_method == 'all') {
                 RF3FromSequence(inputs_with_msa)
-                structures = structures.mix(RF3FromSequence.out.pdbs, RF3FromSequence.out.cifs)
+                rf3_canonical_outputs = canonicalProducerOutputs(
+                    RF3FromSequence.out.typed_pdbs.mix(RF3FromSequence.out.typed_cifs), 'rf3'
+                )
+                structures = structures.mix(
+                    rf3_canonical_outputs.map { producer_meta, predicted -> predicted }
+                )
+                canonical_structures = canonical_structures.mix(rf3_canonical_outputs)
             }
 
             if (pred_method == 'protenix' || pred_method == 'all') {
                 // Protenix takes [sequence, name] and handles MSA internally via protenix prep
-                ProtenixPredict(input_ch)
-                structures = structures.mix(ProtenixPredict.out.cifs)
+                ProtenixPredict(typed_inputs)
+                protenix_canonical_outputs = canonicalProducerOutputs(
+                    ProtenixPredict.out.typed_cifs, 'protenix'
+                )
+                structures = structures.mix(
+                    protenix_canonical_outputs.map { producer_meta, predicted -> predicted }
+                )
+                canonical_structures = canonical_structures.mix(protenix_canonical_outputs)
             }
         } else {
             // STEP 1: Generate MSA ONCE per unique sequence
-            def base_seq = input_ch
+            def base_seq = typed_inputs
                 .first()
-                .map { seq, _name -> tuple(seq, "base_msa") }
+                .map { _producer_meta, seq, _name -> tuple(seq, "base_msa") }
 
             GenerateLocalMSA(base_seq)
 
             // STEP 2: Combine the single MSA with all job inputs
             def msa_ch = GenerateLocalMSA.out.msa.map { _seq, _name, msa_file -> msa_file }
-            def inputs_with_msa = input_ch.combine(msa_ch)
+            def inputs_with_msa = typed_inputs.combine(msa_ch)
 
             // STEP 3: Run predictions with cached MSA
             if (pred_method == 'boltz' || pred_method == 'both' || pred_method == 'all') {
                 BoltzFromSequenceWithMSA(inputs_with_msa)
                 structures = structures.mix(BoltzFromSequenceWithMSA.out.pdbs, BoltzFromSequenceWithMSA.out.cifs)
+                canonical_structures = canonical_structures.mix(BoltzFromSequenceWithMSA.out.canonical_structures)
             }
 
             if (pred_method == 'rf3' || pred_method == 'both' || pred_method == 'all') {
                 RF3FromSequence(inputs_with_msa)
-                structures = structures.mix(RF3FromSequence.out.pdbs, RF3FromSequence.out.cifs)
+                rf3_canonical_outputs = canonicalProducerOutputs(
+                    RF3FromSequence.out.typed_pdbs.mix(RF3FromSequence.out.typed_cifs), 'rf3'
+                )
+                structures = structures.mix(
+                    rf3_canonical_outputs.map { producer_meta, predicted -> predicted }
+                )
+                canonical_structures = canonical_structures.mix(rf3_canonical_outputs)
             }
 
             if (pred_method == 'protenix' || pred_method == 'all') {
-                ProtenixPredict(input_ch)
-                structures = structures.mix(ProtenixPredict.out.cifs)
+                ProtenixPredict(typed_inputs)
+                protenix_canonical_outputs = canonicalProducerOutputs(
+                    ProtenixPredict.out.typed_cifs, 'protenix'
+                )
+                structures = structures.mix(
+                    protenix_canonical_outputs.map { producer_meta, predicted -> predicted }
+                )
+                canonical_structures = canonical_structures.mix(protenix_canonical_outputs)
             }
         }
     }
     else {
         // No MSA needed - run directly
         if (pred_method == 'boltz' || pred_method == 'both' || pred_method == 'all') {
-            BoltzFromSequence(input_ch)
+            BoltzFromSequence(typed_inputs)
             structures = structures.mix(BoltzFromSequence.out.pdbs, BoltzFromSequence.out.cifs)
+            canonical_structures = canonical_structures.mix(BoltzFromSequence.out.canonical_structures)
         }
 
         if (pred_method == 'rf3' || pred_method == 'both' || pred_method == 'all') {
             def dummy_msa = file("${params.code_root}/NO_MSA")
-            def inputs_no_msa = input_ch.map { seq, name -> tuple(seq, name, dummy_msa) }
+            def inputs_no_msa = typed_inputs.map { producer_meta, seq, name ->
+                tuple(producer_meta, seq, name, dummy_msa)
+            }
             RF3FromSequence(inputs_no_msa)
-            structures = structures.mix(RF3FromSequence.out.pdbs, RF3FromSequence.out.cifs)
+            rf3_canonical_outputs = canonicalProducerOutputs(
+                RF3FromSequence.out.typed_pdbs.mix(RF3FromSequence.out.typed_cifs), 'rf3'
+            )
+            structures = structures.mix(
+                rf3_canonical_outputs.map { producer_meta, predicted -> predicted }
+            )
+            canonical_structures = canonical_structures.mix(rf3_canonical_outputs)
         }
 
         if (pred_method == 'protenix' || pred_method == 'all') {
             // Protenix handles its own MSA via built-in protenix prep or ESM
-            ProtenixPredict(input_ch)
-            structures = structures.mix(ProtenixPredict.out.cifs)
+            ProtenixPredict(typed_inputs)
+            protenix_canonical_outputs = canonicalProducerOutputs(
+                ProtenixPredict.out.typed_cifs, 'protenix'
+            )
+            structures = structures.mix(
+                protenix_canonical_outputs.map { producer_meta, predicted -> predicted }
+            )
+            canonical_structures = canonical_structures.mix(protenix_canonical_outputs)
         }
 
         if (pred_method == 'esmfold2') {
-            ESMFold2Predict(input_ch)
-            structures = structures.mix(ESMFold2Predict.out.cifs)
+            ESMFold2Predict(typed_inputs)
+            esmfold2_canonical_outputs = canonicalProducerOutputs(
+                ESMFold2Predict.out.typed_cifs, 'esmfold2'
+            )
+            structures = structures.mix(
+                esmfold2_canonical_outputs.map { producer_meta, predicted -> predicted }
+            )
+            canonical_structures = canonical_structures.mix(esmfold2_canonical_outputs)
         }
+    }
+
+    canonical_structures = canonical_structures.unique { producer_meta, predicted ->
+        def producerIdentity = producer_meta.producer_artifact_id ?: producer_meta.producer_artifact_key
+        def representationKey = producer_meta.producer_output_key ?: producer_meta.producer_artifact_key
+        def representationStem = representationKey.toString().replaceFirst(/\.(pdb|cif|mmcif)$/, '')
+        def representationDigest = producer_meta.producer_representation_sha256 ?:
+            producer_meta.producer_artifact_sha256 ?: producer_meta.producer_artifact_key
+        "${producer_meta.producer_method}:${producerIdentity}:${producer_meta.producer_rank}:${representationStem}:${representationDigest}"
     }
 
     emit:
     structures
+    canonical_structures
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1255,30 +1673,45 @@ workflow complex_prediction_wf {
     def pred_method = params.pred_method ?: 'boltz'
 
     structures = channel.empty()
+    canonical_candidates = channel.empty()
 
     if (pred_method == 'protenix') {
-        // Convert BMS JSON → Protenix-format JSON, then predict
+        // Convert BMS JSON → Protenix-format JSON, then predict.
         PrepProtenixComplex(input_ch)
         ProtenixFromComplex(PrepProtenixComplex.out.protenix_json)
-        structures = ProtenixFromComplex.out.structures
+        canonical_candidates = complexCanonicalProducerOutputs(
+            ProtenixFromComplex.out.canonical_structures
+        )
+        structures = canonical_candidates.map { producer_meta, predicted -> predicted }
     }
     else if (pred_method == 'all') {
-        // Run both Boltz + Protenix in parallel
+        // Run both Boltz + Protenix in parallel without collapsing producer identity.
         PrepareComplexWithMSA(input_ch)
         BoltzFromComplex(PrepareComplexWithMSA.out.prepared)
 
         PrepProtenixComplex(input_ch)
         ProtenixFromComplex(PrepProtenixComplex.out.protenix_json)
 
-        structures = BoltzFromComplex.out.pdbs.mix(ProtenixFromComplex.out.structures)
+        boltz_candidates = complexCanonicalProducerOutputs(
+            BoltzFromComplex.out.canonical_pdbs
+        )
+        protenix_candidates = complexCanonicalProducerOutputs(
+            ProtenixFromComplex.out.canonical_structures
+        )
+        canonical_candidates = boltz_candidates.mix(protenix_candidates)
+        structures = canonical_candidates.map { producer_meta, predicted -> predicted }
     }
     else {
-        // Default: Boltz-2 complex prediction
+        // Default: Boltz-2 complex prediction.
         PrepareComplexWithMSA(input_ch)
         BoltzFromComplex(PrepareComplexWithMSA.out.prepared)
-        structures = BoltzFromComplex.out.pdbs
+        canonical_candidates = complexCanonicalProducerOutputs(
+            BoltzFromComplex.out.canonical_pdbs
+        )
+        structures = canonical_candidates.map { producer_meta, predicted -> predicted }
     }
 
     emit:
     structures
+    canonical_candidates
 }

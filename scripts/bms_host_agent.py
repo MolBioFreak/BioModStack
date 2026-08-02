@@ -19,11 +19,11 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 from lib.ont_minknow_host import discover_status as discover_ont_status
+from lib.ont_minknow_host import observe_run as observe_ont_run
 from lib.ont_minknow_host import protocol_options as discover_ont_protocol_options
 from lib.ont_minknow_host import begin_hardware_check as begin_ont_hardware_check
 from lib.ont_minknow_host import refresh_position as refresh_ont_position
 from lib.ont_minknow_host import restart_position as restart_ont_position
-from lib.ont_minknow_host import start_protocol as start_ont_protocol
 from lib.ont_minknow_host import stop_protocol as stop_ont_protocol
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -290,30 +290,46 @@ def run_action(service_id: str, action: str, *, tail: int = 120, advanced: bool 
     return redact_value(payload)
 
 
+def _public_ont_device(device: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the host-agent's safe browser/API status projection for Mk1D only."""
+    if str(device.get("device_type") or "").strip().lower() != "mk1d":
+        return None
+    raw_flow_cell = device.get("flow_cell")
+    flow_cell = raw_flow_cell if isinstance(raw_flow_cell, dict) else {}
+    return {
+        "position": str(device.get("position") or "").strip() or "Mk1D position",
+        "device_type": "mk1d",
+        "state": device.get("state"),
+        "running": device.get("running") is True,
+        "available_for_run": device.get("available_for_run") is True,
+        "flow_cell": {"present": flow_cell.get("present") is True},
+        "fake_or_demo_device": False,
+    }
+
+
 def ont_route_payload(path: str) -> dict[str, Any] | None:
     """Return host-agent ONT route payloads or None for unknown/not-found routes."""
     parsed = urlparse(path)
     route_path = parsed.path.rstrip("/") or "/"
     if route_path.startswith("/ont/runs/"):
         minknow_run_id = unquote(route_path.removeprefix("/ont/runs/")).strip()
-        return {
-            "status": "unknown",
-            "minknow_run_id": minknow_run_id,
-            "output_files": {"fastq": [], "pod5": [], "bam": []},
-            "detail": "MinKNOW run status polling is not implemented until live run-control wiring is validated",
-            "fake_or_demo_devices": False,
-        }
+        return observe_ont_run(minknow_run_id)
     if route_path not in {"/ont/status", "/ont/positions"} and not route_path.startswith("/ont/positions/"):
         return None
 
     status = discover_ont_status()
-    devices = list(status.get("live_devices") or []) if isinstance(status, dict) else []
+    raw_devices = list(status.get("live_devices") or []) if isinstance(status, dict) else []
+    devices = [projection for projection in (_public_ont_device(device) for device in raw_devices) if projection is not None]
     base = {
         "implementation_status": status.get("implementation_status") if isinstance(status, dict) else "unknown",
-        "fake_or_demo_devices": bool(status.get("fake_or_demo_devices", False)) if isinstance(status, dict) else False,
+        "fake_or_demo_devices": False,
     }
     if route_path == "/ont/status":
-        return status
+        return {
+            **base,
+            "live_devices": devices,
+            "message": "Mk1D discovery is available." if base["implementation_status"] == "configured" else "Mk1D discovery is unavailable.",
+        }
     if route_path == "/ont/positions":
         return {**base, "positions": devices}
 
@@ -348,9 +364,6 @@ def ont_post_route_payload(path: str, payload: dict[str, Any]) -> tuple[int, dic
     if route_path.startswith("/ont/positions/") and route_path.endswith("/restart"):
         position = unquote(route_path.removeprefix("/ont/positions/").removesuffix("/restart")).strip().rstrip("/")
         return restart_ont_position(position, payload)
-    if route_path.startswith("/ont/positions/") and route_path.endswith("/start"):
-        position = unquote(route_path.removeprefix("/ont/positions/").removesuffix("/start")).strip().rstrip("/")
-        return start_ont_protocol(position, payload)
     if route_path.startswith("/ont/runs/") and route_path.endswith("/stop"):
         minknow_run_id = unquote(route_path.removeprefix("/ont/runs/").removesuffix("/stop")).strip().rstrip("/")
         return stop_ont_protocol(minknow_run_id, payload)
@@ -449,7 +462,7 @@ class HostAgentHandler(BaseHTTPRequestHandler):
 def main() -> int:
     parser = argparse.ArgumentParser(description="BMS host-local control agent")
     parser.add_argument("--host", default=os.getenv("BMS_HOST_AGENT_BIND", "127.0.0.1"))
-    parser.add_argument("--port", type=int, default=int(os.getenv("BMS_HOST_AGENT_PORT", "8798")))
+    parser.add_argument("--port", type=int, default=int(os.getenv("BMS_HOST_AGENT_PORT", "18798")))
     args = parser.parse_args()
     server = ThreadingHTTPServer((args.host, args.port), HostAgentHandler)
     print(f"bms-host-agent listening on http://{args.host}:{args.port}", flush=True)

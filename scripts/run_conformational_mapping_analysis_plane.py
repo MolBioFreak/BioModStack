@@ -7,10 +7,8 @@ import argparse
 import hashlib
 import json
 import os
-import re
 import shutil
-import stat
-import subprocess
+
 import sys
 from pathlib import Path
 
@@ -19,15 +17,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "platform" / "api")
 from services.conformational_mapping.analysis import analyze_landscapes  # noqa: E402
 from services.conformational_mapping.clash import build_clash_rows  # noqa: E402
 from services.conformational_mapping.contracts import canonical_json_bytes, canonical_sha256  # noqa: E402
-from services.conformational_mapping.frustration import finalize_landscape  # noqa: E402
+from services.conformational_mapping.frustrampnn_adapter import (  # noqa: E402
+    bind_cm_candidate_snapshot_bytes,
+    normalize_cm_structure,
+    project_cm_landscape,
+    project_cm_structure_map,
+)
 from services.conformational_mapping.resampling import pair_terminal_manifests  # noqa: E402
 from services.conformational_mapping.state_landscape_analysis import (  # noqa: E402
     derive_state_landscape_analysis_for_request,
 )
-from services.conformational_mapping.structure_normalizer import (  # noqa: E402
-    bind_candidate_complex_snapshot,
-    normalize_conformational_mapping_structure,
+from services.frustrampnn.analysis import (  # noqa: E402
+    finalize_landscape as finalize_neutral_landscape,
 )
+from services.frustrampnn.structure import read_structure_bytes  # noqa: E402
+from services.frustrampnn import runtime as _frustrampnn_runtime  # noqa: E402
 
 
 def _sha256(path: Path) -> str:
@@ -48,87 +52,51 @@ def _record(root: Path, path: Path, role: str, candidate_id: str | None) -> dict
     }
 
 
+def _candidate_structure_path(root: Path, relative_value: object) -> Path:
+    """Preserve path components so the adapter can reject symlinks no-follow."""
+
+    if not isinstance(relative_value, str) or not relative_value or "\\" in relative_value:
+        raise RuntimeError("candidate structure path is unsafe")
+    relative = Path(relative_value)
+    if relative.is_absolute() or any(part in {"", ".", ".."} for part in relative.parts):
+        raise RuntimeError("candidate structure path must be a safe relative path")
+    return root / relative
+
+
 def _container_sha256(
     apptainer: str, container: Path, internal_path: str, *, container_fd: int | None = None,
 ) -> str:
-    result = subprocess.run(
-        [apptainer, "exec", str(container), "sha256sum", internal_path],
-        check=True,
-        capture_output=True,
-        text=True,
-        pass_fds=(() if container_fd is None else (container_fd,)),
+    return _frustrampnn_runtime.container_sha256(
+        apptainer, container, internal_path, container_fd=container_fd,
     )
-    digest = result.stdout.split(maxsplit=1)[0] if result.stdout.strip() else ""
-    if not re.fullmatch(r"[0-9a-f]{64}", digest):
-        raise RuntimeError(f"container asset has no valid SHA-256 identity: {internal_path}")
-    return digest
 
 
 def _sha256_fd(fd: int) -> str:
-    digest = hashlib.sha256()
-    os.lseek(fd, 0, os.SEEK_SET)
-    while chunk := os.read(fd, 1024 * 1024):
-        digest.update(chunk)
-    os.lseek(fd, 0, os.SEEK_SET)
-    return digest.hexdigest()
+    return _frustrampnn_runtime.sha256_fd(fd)
 
 
 def _open_verified_container(path: Path, expected_sha256: object) -> tuple[int, str]:
-    """Open, hash, and pin one regular image generation for every Apptainer launch."""
+    return _frustrampnn_runtime.open_verified_container(path, expected_sha256).detach()
 
-    expected = str(expected_sha256 or "")
-    if not re.fullmatch(r"[0-9a-f]{64}", expected):
-        raise RuntimeError("registered FrustraMPNN image SHA-256 is malformed")
-    absolute = Path(os.path.abspath(path))
-    if len(absolute.parts) < 2:
-        raise RuntimeError("registered FrustraMPNN container path has no file component")
-    directory_flags = (
-        os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_DIRECTORY", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-    )
-    leaf_flags = os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
-    directory_fd: int | None = None
-    try:
-        directory_fd = os.open(absolute.anchor, directory_flags)
-        for component in absolute.parts[1:-1]:
-            next_fd = os.open(component, directory_flags, dir_fd=directory_fd)
-            os.close(directory_fd)
-            directory_fd = next_fd
-        fd = os.open(absolute.parts[-1], leaf_flags, dir_fd=directory_fd)
-    except OSError as exc:
-        raise RuntimeError(
-            "registered FrustraMPNN container path must exist and contain no symlinks"
-        ) from exc
-    finally:
-        if directory_fd is not None:
-            os.close(directory_fd)
-    try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            raise RuntimeError("registered FrustraMPNN container is not a regular file")
-        actual = _sha256_fd(fd)
-        if actual != expected:
-            raise RuntimeError("registered FrustraMPNN image SHA-256 does not match installed bytes")
-        return fd, actual
-    except Exception:
-        os.close(fd)
-        raise
+
 def _frustrampnn_command(
     *, apptainer: str, container: Path, tool: str, normalized: Path,
     checkpoint: Path, raw: Path, output_root: Path, gpu_id: int,
-) -> list[str]:
-    if gpu_id < 0:
-        raise RuntimeError("assigned FrustraMPNN GPU must be non-negative")
-    return [
-        apptainer, "exec", "--nv", "--containall", "--writable-tmpfs",
-        "--env", "CUDA_DEVICE_ORDER=PCI_BUS_ID",
-        "--env", f"CUDA_VISIBLE_DEVICES={gpu_id}",
-        "--bind", f"{output_root.resolve()}:{output_root.resolve()}",
-        str(container), tool, "predict", "--pdb", str(normalized.resolve()),
-        "--checkpoint", str(checkpoint), "--output", str(raw.resolve()),
-    ]
+) -> _frustrampnn_runtime.FrustraMPNNInvocation:
+    return _frustrampnn_runtime.build_frustrampnn_command(
+        apptainer=apptainer,
+        container=container,
+        tool=tool,
+        normalized=normalized,
+        checkpoint=checkpoint,
+        raw=raw,
+        output_root=output_root,
+        physical_gpu_id=gpu_id,
+    )
 
 
-def main() -> None:
+
+def _main(active_pins: list[_frustrampnn_runtime.PinnedContainer]) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--request", type=Path, required=True)
     parser.add_argument("--runtime-registry", type=Path, required=True)
@@ -144,6 +112,11 @@ def main() -> None:
     args = parser.parse_args()
     if args.gpu_id < 0:
         parser.error("--gpu-id must be non-negative")
+    configured_container = Path(
+        _frustrampnn_runtime.validate_configured_container_path(
+            args.frustrampnn_container,
+        )
+    )
 
     request = json.loads(args.request.read_text(encoding="utf-8"))
     runtime_registry = json.loads(args.runtime_registry.read_text(encoding="utf-8"))
@@ -152,7 +125,9 @@ def main() -> None:
     snapshot_by_target = {item["target_id"]: item for item in snapshots}
     if args.out.exists():
         raise RuntimeError("analysis-plane output already exists")
-    shutil.copytree(args.canonical, args.out, copy_function=shutil.copy2)
+    shutil.copytree(
+        args.canonical, args.out, copy_function=shutil.copy2, symlinks=True,
+    )
     ensemble = json.loads((args.out / "cm_ensemble_v1.json").read_text(encoding="utf-8"))
     derived = args.out / "derived"
     records: list[dict[str, object]] = []
@@ -164,11 +139,15 @@ def main() -> None:
         "container_name", "container_sha256",
     }:
         raise RuntimeError("registered FrustraMPNN image identity is missing or malformed")
-    if analysis_runtime["container_name"] != args.frustrampnn_container.name:
+    if analysis_runtime["container_name"] != configured_container.name:
         raise RuntimeError("registered FrustraMPNN image name does not match the selected container")
     container_fd, container_sha256 = _open_verified_container(
-        args.frustrampnn_container, analysis_runtime["container_sha256"]
+        configured_container, analysis_runtime["container_sha256"]
     )
+    container_pin = _frustrampnn_runtime.PinnedContainer(
+        container_fd, container_sha256
+    )
+    active_pins.append(container_pin)
     container = Path(f"/proc/self/fd/{container_fd}")
     apptainer = shutil.which(args.apptainer_bin)
     if not apptainer:
@@ -179,6 +158,15 @@ def main() -> None:
     tool_sha256 = _container_sha256(
         apptainer, container, args.frustrampnn_bin, container_fd=container_fd,
     )
+    identity = _frustrampnn_runtime.FRUSTRAMPNN_RUNTIME_IDENTITY
+    if checkpoint_sha256 != identity.checkpoint_sha256:
+        raise RuntimeError(
+            "FrustraMPNN checkpoint SHA-256 does not match the central runtime registry"
+        )
+    if tool_sha256 != identity.executable_sha256:
+        raise RuntimeError(
+            "FrustraMPNN executable SHA-256 does not match the central runtime registry"
+        )
 
     for candidate in ensemble["candidates"]:
         candidate_id = candidate["candidate_id"]
@@ -186,42 +174,74 @@ def main() -> None:
         snapshot = snapshot_by_target.get(target_id)
         if snapshot is None:
             raise RuntimeError(f"candidate target has no authoritative complex snapshot: {target_id}")
-        structure = (args.out / candidate["authoritative_structure_path"]).resolve(strict=True)
-        structure.relative_to(args.out.resolve())
+        structure = _candidate_structure_path(
+            args.out, candidate["authoritative_structure_path"],
+        )
         if structure.suffix.lower() not in {".cif", ".mmcif", ".pdb"}:
             raise RuntimeError("canonical analysis requires an authoritative coordinate structure")
-        candidate_snapshot = bind_candidate_complex_snapshot(
-            snapshot, candidate_id=candidate_id, structure_path=structure,
+        source_bytes = read_structure_bytes(structure)
+        candidate_snapshot = bind_cm_candidate_snapshot_bytes(
+            snapshot,
+            candidate_id=candidate_id,
+            source_bytes=source_bytes,
+            source_suffix=structure.suffix,
         )
         candidate_root = derived / candidate_id
         normalized = candidate_root / "normalized.pdb"
         map_path = candidate_root / "cm_structure_map_v1.json"
+        neutral_map_path = candidate_root / ".frustrampnn_structure_map_v1.json"
+        authority_path = candidate_root / ".frustrampnn_producer_manifest_v1.json"
         raw = candidate_root / "frustrampnn_raw.csv"
+        runtime_output = candidate_root / ".frustrampnn-runtime-output"
+        raw_runtime = runtime_output / raw.name
         landscape_path = candidate_root / "cm_frustration_landscape_v1.json"
         snapshot_path = candidate_root / "cm_candidate_complex_snapshot_v1.json"
         candidate_root.mkdir(parents=True)
+        runtime_output.mkdir()
         snapshot_path.write_bytes(canonical_json_bytes(candidate_snapshot))
-        structure_map = normalize_conformational_mapping_structure(
-            input_path=structure, output_pdb_path=normalized, map_path=map_path,
-            target_id=target_id, candidate_id=candidate_id,
+        neutral_map = normalize_cm_structure(
+            input_path=structure,
+            output_pdb_path=normalized,
+            map_path=neutral_map_path,
+            authority_artifact_path=authority_path,
+            target_id=target_id,
+            parent_job_id=request["request_id"],
+            candidate_id=candidate_id,
             complex_snapshot=candidate_snapshot,
+            selected_model=None,
+            altloc_policy="blank_or_explicit:A",
+            source_bytes=source_bytes,
         )
-        subprocess.run(
-            _frustrampnn_command(
+        structure_map = project_cm_structure_map(neutral_map, candidate_snapshot)
+        map_path.write_bytes(canonical_json_bytes(structure_map) + b"\n")
+        invocation = _frustrampnn_command(
                 apptainer=apptainer, container=container, tool=args.frustrampnn_bin,
-                normalized=normalized, checkpoint=args.checkpoint, raw=raw,
-                output_root=args.out, gpu_id=args.gpu_id,
-            ),
+                normalized=normalized, checkpoint=args.checkpoint, raw=raw_runtime,
+                output_root=runtime_output, gpu_id=args.gpu_id,
+            )
+        _frustrampnn_runtime.execute_frustrampnn(
+            invocation,
+            container_pin,
             check=True,
-            pass_fds=(container_fd,),
         )
-        landscape = finalize_landscape(
-            raw, structure_map, checkpoint_id=args.checkpoint_id,
+        os.replace(raw_runtime, raw)
+        runtime_output.rmdir()
+        neutral_landscape = finalize_neutral_landscape(
+            raw,
+            neutral_map,
+            expected_normalized_pdb_sha256=neutral_map["normalized_pdb_sha256"],
+            expected_model_ready_sequence_sha256=neutral_map["model_ready_sequence_sha256"],
+        )
+        landscape = project_cm_landscape(
+            neutral_landscape,
+            checkpoint_id=args.checkpoint_id,
             checkpoint_sha256=checkpoint_sha256,
             tool_id="frustrampnn",
             tool_sha256=tool_sha256,
             container_sha256=container_sha256,
         )
+        neutral_map_path.unlink()
+        authority_path.unlink()
         landscape_path.write_bytes(canonical_json_bytes(landscape))
         candidate_clashes = build_clash_rows(
             normalized, structure_map, candidate_id=candidate_id,
@@ -367,7 +387,17 @@ def main() -> None:
         index_without_hash["state_landscape_analyses"] = [state_landscape_analysis]
     index = {**index_without_hash, "index_sha256": canonical_sha256(index_without_hash)}
     (args.out / "cm_derived_index_v1.json").write_bytes(canonical_json_bytes(index))
-    os.close(container_fd)
+    container_pin.close()
+    active_pins.remove(container_pin)
+
+
+def main() -> None:
+    active_pins: list[_frustrampnn_runtime.PinnedContainer] = []
+    try:
+        _main(active_pins)
+    finally:
+        for pin in reversed(active_pins):
+            pin.close()
 
 
 if __name__ == "__main__":

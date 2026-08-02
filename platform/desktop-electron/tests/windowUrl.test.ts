@@ -13,8 +13,8 @@ test('dev shell context defaults to the root BioModStack frontend url', () => {
   const context = resolveShellContext({ runtimeMode: 'dev' });
 
   assert.equal(context.routerBasename, '/');
-  assert.equal(context.windowUrl, 'http://127.0.0.1:5173/');
-  assert.equal(context.browserUrl, 'http://127.0.0.1:5173/');
+  assert.equal(context.windowUrl, 'http://127.0.0.1:18082/');
+  assert.equal(context.browserUrl, 'http://127.0.0.1:18082/');
 });
 
 test('dev shell context honors the configured Vite dev port without changing stable /bms/', () => {
@@ -61,14 +61,14 @@ test('runtime switch context reloads the requested channel while preserving the 
   });
   const stableSwitch = resolveRuntimeSwitchContext({
     currentContext: devSwitch,
-    currentUrl: 'http://127.0.0.1:5173/designer/oligos',
+    currentUrl: 'http://127.0.0.1:18082/designer/oligos',
     targetRuntimeMode: 'container',
   });
 
   assert.equal(devSwitch.runtimeMode, 'dev');
   assert.equal(devSwitch.routerBasename, '/');
-  assert.equal(devSwitch.windowUrl, 'http://127.0.0.1:5173/designs?job=abc#metrics');
-  assert.equal(devSwitch.browserUrl, 'http://127.0.0.1:5173/designs?job=abc#metrics');
+  assert.equal(devSwitch.windowUrl, 'http://127.0.0.1:18082/designs?job=abc#metrics');
+  assert.equal(devSwitch.browserUrl, 'http://127.0.0.1:18082/designs?job=abc#metrics');
   assert.equal(stableSwitch.runtimeMode, 'container');
   assert.equal(stableSwitch.routerBasename, '/bms/');
   assert.equal(stableSwitch.windowUrl, 'http://127.0.0.1:18080/bms/designer/oligos');
@@ -92,9 +92,9 @@ test('runtime switching ignores the currently active shell origin and basename e
     });
 
     assert.equal(devSwitch.runtimeMode, 'dev');
-    assert.equal(devSwitch.frontendOrigin, 'http://127.0.0.1:5173');
+    assert.equal(devSwitch.frontendOrigin, 'http://127.0.0.1:18082');
     assert.equal(devSwitch.routerBasename, '/');
-    assert.equal(devSwitch.windowUrl, 'http://127.0.0.1:5173/designer/oligos');
+    assert.equal(devSwitch.windowUrl, 'http://127.0.0.1:18082/designer/oligos');
   } finally {
     if (previousRuntimeMode === undefined) delete process.env.BMS_RUNTIME_MODE;
     else process.env.BMS_RUNTIME_MODE = previousRuntimeMode;

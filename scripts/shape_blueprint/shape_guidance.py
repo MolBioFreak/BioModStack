@@ -15,19 +15,18 @@ def guidance_scale(
     start_fraction: float = 0.2,
     end_fraction: float = 0.8,
 ) -> float:
-    """Deterministic triangular schedule over an explicit diffusion-step window."""
+    """Ramp Shape guidance to full strength, then hold through the terminal step."""
     if total_steps <= 1:
         raise ValueError("total_steps must be greater than one")
     if not (0.0 <= start_fraction < end_fraction <= 1.0):
         raise ValueError("guidance fractions must satisfy 0 <= start < end <= 1")
     start = int(math.ceil(total_steps * start_fraction))
     end = int(math.floor(total_steps * end_fraction))
-    if step < start or step >= end:
+    if step < start:
         return 0.0
-    midpoint = (start + end) // 2
-    if step <= midpoint:
-        return float(step - start + 1) / float(midpoint - start + 1)
-    return float(end - step) / float(end - midpoint)
+    if step >= end:
+        return 1.0
+    return float(step - start + 1) / float(end - start + 1)
 
 
 @dataclass(frozen=True)
@@ -127,7 +126,13 @@ class ShapeGuidanceField:
             gradient = torch.autograd.grad(
                 losses["total"], working, create_graph=False
             )[0]
-        delta = -float(step_size) * gradient
+        # Mean-reduced Chamfer/SDF gradients shrink with residue and point count.
+        # Normalize per diffusion sample so step_size remains an RMS Angstrom
+        # displacement per guided residue rather than vanishing on real jobs.
+        atom_gradient_norm = torch.linalg.vector_norm(gradient, dim=-1)
+        gradient_rms = torch.sqrt(atom_gradient_norm.square().mean(dim=-1, keepdim=True))
+        gradient_rms = torch.clamp(gradient_rms, min=1e-12).unsqueeze(-1)
+        delta = -float(step_size) * gradient / gradient_rms
         norms = torch.linalg.vector_norm(delta, dim=-1, keepdim=True)
         scale = torch.clamp(float(max_update) / torch.clamp(norms, min=1e-12), max=1.0)
         delta = delta * scale
@@ -138,6 +143,9 @@ class ShapeGuidanceField:
             "outside": float(losses["outside"].detach().cpu()),
             "gradient_norm": float(torch.linalg.vector_norm(gradient).detach().cpu()),
             "applied_update_norm": float(torch.linalg.vector_norm(delta).detach().cpu()),
+            "rms_atom_update": float(
+                torch.sqrt(torch.linalg.vector_norm(delta, dim=-1).square().mean()).detach().cpu()
+            ),
             "max_atom_update": float(torch.linalg.vector_norm(delta, dim=-1).max().detach().cpu()),
         }
         return projected, receipt

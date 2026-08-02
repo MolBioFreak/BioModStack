@@ -48,6 +48,11 @@ def validate_bundle(
         raise ValueError("unsupported Shape request schema")
     if manifest.get("schema") != "bms_shape_canonical_geometry_v1":
         raise ValueError("unsupported Shape geometry manifest schema")
+    manifest_hash = str(manifest.get("manifest_sha256") or "")
+    unhashed_manifest = dict(manifest)
+    unhashed_manifest.pop("manifest_sha256", None)
+    if hashlib.sha256(_canonical(unhashed_manifest)).hexdigest() != manifest_hash:
+        raise ValueError("Shape geometry manifest hash mismatch")
     request_hash = str(request.get("request_sha256") or "")
     unhashed = dict(request)
     unhashed.pop("request_sha256", None)
@@ -57,6 +62,8 @@ def validate_bundle(
         raise ValueError("request and geometry manifest disagree")
     if request.get("point_pool_sha256") != manifest.get("point_pool_sha256"):
         raise ValueError("request and point-pool manifest disagree")
+    if request.get("geometry_manifest_sha256") != manifest_hash:
+        raise ValueError("request and geometry manifest hash disagree")
     if request.get("sdf_sha256") != manifest.get("sdf_sha256"):
         raise ValueError("request and SDF manifest disagree")
     if request.get("sdf_sign") != "positive_inside" or manifest.get("sdf_sign") != "positive_inside":
@@ -81,6 +88,7 @@ def validate_bundle(
         "request_sha256": request_hash,
         "geometry_id": request["geometry_id"],
         "geometry_sha256": request["geometry_sha256"],
+        "geometry_manifest_sha256": manifest_hash,
         "point_pool_sha256": points_hash,
         "vertices_sha256": vertices_hash,
         "faces_sha256": faces_hash,

@@ -20,6 +20,7 @@ import {
     DEFAULT_STRUCTURE_MSA_TARGET_SHARDS,
     buildBoltzCpSubmitParams,
     buildBoltzApiStructureRequest,
+    buildStructureFrustraMpnnSubmitParams,
     buildStructureMsaSubmitParams,
     buildTargetPreviewSelection,
     buildTargetPreviewSelections,
@@ -49,6 +50,12 @@ import { parsePDBFile, getModelByNumber, type Chain, type ParsedPDB } from '../u
 import { useLiveGpuCatalog } from './useLiveGpuCatalog';
 import { ModelDocumentationLinks, type ModelDocumentationTopic } from './ModelDocumentationLinks';
 import { resolveInitialGpuPinningState } from './gpuToggleState.js';
+import { ModelIntegrationControl, useModelIntegrationConfig } from './ModelIntegrationControl';
+import {
+    applyModelIntegrationChoice,
+    applyModelIntegrationDefault,
+    createModelIntegrationSelection,
+} from './modelIntegrationControlState';
 
 
 interface StructurePredictionTemplateProps {
@@ -145,6 +152,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const { gpuOptions } = useLiveGpuCatalog();
+    const frustrampnnIntegrationQuery = useModelIntegrationConfig('frustrampnn');
     const normalizeProtenixModel = (_model?: string) => 'protenix-v2';
     const initialPrimaryProteinComponent = resolveInitialPrimaryProteinComponent(initialValues);
     const initialPrimarySequence = initialPrimaryProteinComponent?.sequence || initialValues?.sequence || '';
@@ -169,6 +177,23 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     // Core state
     const initialGpuPinningState = resolveInitialGpuPinningState(initialValues);
     const [jobName, setJobName] = useState(initialValues?.name || initialValues?.job_name || 'structure_prediction');
+    const initialFrustrampnnSelection = createModelIntegrationSelection(initialValues?.run_frustrampnn, true);
+    const frustrampnnSelectionRef = useRef(initialFrustrampnnSelection);
+    const [runFrustrampnn, setRunFrustrampnn] = useState(initialFrustrampnnSelection.value);
+    const configuredFrustrampnnDefault = frustrampnnIntegrationQuery.data?.workflows?.structure_prediction?.default_enabled;
+    useEffect(() => {
+        const previous = frustrampnnSelectionRef.current;
+        const next = applyModelIntegrationDefault(previous, configuredFrustrampnnDefault);
+        frustrampnnSelectionRef.current = next;
+        if (next !== previous) {
+            setRunFrustrampnn(next.value);
+        }
+    }, [configuredFrustrampnnDefault]);
+    const updateRunFrustrampnn = (checked: boolean) => {
+        const next = applyModelIntegrationChoice(frustrampnnSelectionRef.current, checked);
+        frustrampnnSelectionRef.current = next;
+        setRunFrustrampnn(next.value);
+    };
     const [pinnedGpus, setPinnedGpus] = useState(initialGpuPinningState.pinnedGpus);
     const [lockGpus, setLockGpus] = useState(initialGpuPinningState.lockGpus);
     const clearGpuPinning = () => {
@@ -680,6 +705,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
             pinned_gpus: pinnedGpus,
             lock_gpus: lockGpus && pinnedGpus.length > 0,
             allow_retries: allowRetries,
+            ...buildStructureFrustraMpnnSubmitParams(runFrustrampnn),
         };
 
         if (isBoltzCpLaunch) {
@@ -789,7 +815,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         return Object.fromEntries(
             Object.entries(params).filter(([, value]) => value !== undefined)
         );
-    }, [jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, isBoltzCpLaunch, esmfold2Variant, usesEsmFold2, usesBoltz, usesRf3, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpShardPlanId, bcpOutputFormat, bcpWriteFullPae, bcpContextQueryTileTokens, bcpSeed, boltzCpGpuSettings.gpuIds, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, rf3UseMsa, rf3NumRecycles, rf3NumSamples, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
+    }, [jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, runFrustrampnn, isBoltzCpLaunch, esmfold2Variant, usesEsmFold2, usesBoltz, usesRf3, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpShardPlanId, bcpOutputFormat, bcpWriteFullPae, bcpContextQueryTileTokens, bcpSeed, boltzCpGpuSettings.gpuIds, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, rf3UseMsa, rf3NumRecycles, rf3NumSamples, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
     const targetPreview = targetSource
         ? resolveTargetPreviewSource({
             previewUrl: targetPreviewUrl,
@@ -945,6 +971,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
             sequence_name: sequenceName,
             pred_method: resolvedPredictorSelection.canonicalSelection,
             num_parallel_jobs: launchConfig.showParallelJobs ? numParallelJobs : 1,
+            ...buildStructureFrustraMpnnSubmitParams(runFrustrampnn),
         };
 
         if (isBoltzCpLaunch) {
@@ -2613,17 +2640,27 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
 
                 {/* Submit */}
                 <div className={`flex ${isBoltzApi ? 'justify-end' : 'justify-between'} items-center pt-6 border-t border-slate-800`}>
-                    {/* Left side: Allow Retries checkbox */}
-                    {!isBoltzApi && <label className="flex items-center gap-2 cursor-pointer text-slate-400 hover:text-slate-300">
-                        <input
-                            type="checkbox"
-                            checked={allowRetries}
-                            onChange={e => setAllowRetries(e.target.checked)}
-                            className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-amber-500 focus:ring-amber-500"
+                    {/* Left side: managed post-prediction analysis and retry policy */}
+                    {!isBoltzApi && <div className="flex flex-wrap items-start gap-5">
+                        <ModelIntegrationControl
+                            modelId="frustrampnn"
+                            workflowId="structure_prediction"
+                            checked={runFrustrampnn}
+                            onChange={updateRunFrustrampnn}
+                            fallbackLabel="Frustration analysis"
+                            integration={frustrampnnIntegrationQuery.data}
                         />
-                        <span className="text-sm">Allow Retries</span>
-                        <span className="text-xs text-slate-500">(retry OOM errors)</span>
-                    </label>}
+                        <label className="flex items-center gap-2 cursor-pointer text-slate-400 hover:text-slate-300">
+                            <input
+                                type="checkbox"
+                                checked={allowRetries}
+                                onChange={e => setAllowRetries(e.target.checked)}
+                                className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-amber-500 focus:ring-amber-500"
+                            />
+                            <span className="text-sm">Allow Retries</span>
+                            <span className="text-xs text-slate-500">(retry OOM errors)</span>
+                        </label>
+                    </div>}
 
                     {/* Right side: Submit button */}
                     <button

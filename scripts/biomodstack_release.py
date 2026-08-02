@@ -223,13 +223,13 @@ class ProductionReleaseBackend:
             / "releases"
         ).resolve()
         self.api_url = api_url or os.environ.get(
-            "BMS_RELEASE_API_URL", "http://127.0.0.1:8000/api/health"
+            "BMS_RELEASE_API_URL", "http://127.0.0.1:18000/api/health"
         )
         self.browser_url = browser_url or os.environ.get(
             "BMS_RELEASE_BROWSER_URL", "http://127.0.0.1:18080/bms/"
         )
         self.operator_url = operator_url or os.environ.get(
-            "BMS_RELEASE_OPERATOR_URL", "http://127.0.0.1:5173/"
+            "BMS_RELEASE_OPERATOR_URL", "http://127.0.0.1:18082/"
         )
         operator_origin = self.operator_url.rstrip("/")
         self.operator_api_url = f"{operator_origin}/api/health"
@@ -621,13 +621,13 @@ class ProductionReleaseBackend:
             Type=simple
             Environment=BMS_HOME={self.repo_root}
             Environment=BMS_RUNTIME_MODE={services.CONTAINER_RUNTIME_MODE}
-            Environment=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:8000
+            Environment=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:18000
             Environment=VITE_BMS_BUILD_SHA={identity.revision}
             Environment=VITE_BMS_BUILD_ID={identity.build_id}
             Environment=VITE_BMS_BUILD_TIME={identity.build_time}
             WorkingDirectory={frontend_root}
             ExecStartPre=/usr/bin/env python3 {log_rotator}
-            ExecStart={vite} --host 127.0.0.1 --port 5173 --strictPort
+            ExecStart={vite} --host 127.0.0.1 --port 18082 --strictPort
             Restart=on-failure
             RestartSec=10
             TimeoutStopSec=20

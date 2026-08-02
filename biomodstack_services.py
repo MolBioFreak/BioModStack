@@ -18,8 +18,13 @@ from pathlib import Path
 from textwrap import dedent
 
 from biomodstack_runtime_profile import (
+    DEFAULT_API_HOST_PORT,
+    DEFAULT_CPU_POWER_PORT,
+    DEFAULT_DEV_API_HOST_PORT,
     DEFAULT_DEV_WEB_HOST_PORT,
+    DEFAULT_HOST_AGENT_PORT,
     DEFAULT_WEB_HOST_PORT,
+    DEFAULT_WORKFLOW_ADAPTER_PORT,
     get_biomodstack_config_dir as runtime_profile_config_dir,
     install_profile_snapshot as runtime_profile_snapshot,
     load_install_profile,
@@ -64,13 +69,13 @@ CONTAINER_RUNTIME_MODE = "container"
 DEFAULT_RUNTIME_MODE = CONTAINER_RUNTIME_MODE
 VALID_RUNTIME_MODES = {DEV_RUNTIME_MODE, CONTAINER_RUNTIME_MODE}
 
-API_PORT = 8000
-DEV_API_PORT = 8002
+API_PORT = DEFAULT_API_HOST_PORT
+DEV_API_PORT = DEFAULT_DEV_API_HOST_PORT
 FRONTEND_PORT = DEFAULT_DEV_WEB_HOST_PORT
 STABLE_FRONTEND_PORT = DEFAULT_WEB_HOST_PORT
-WORKFLOW_ADAPTER_PORT = 8001
-CPU_POWER_PORT = 8797
-HOST_AGENT_PORT = 8798
+WORKFLOW_ADAPTER_PORT = DEFAULT_WORKFLOW_ADAPTER_PORT
+CPU_POWER_PORT = DEFAULT_CPU_POWER_PORT
+HOST_AGENT_PORT = DEFAULT_HOST_AGENT_PORT
 API_HEALTH_URL = f"http://127.0.0.1:{API_PORT}/api/health"
 FRONTEND_URL = f"http://127.0.0.1:{STABLE_FRONTEND_PORT}/bms/"
 WORKFLOW_ADAPTER_HEALTH_URL = f"http://127.0.0.1:{WORKFLOW_ADAPTER_PORT}/api/workflow-adapter/health"
@@ -365,7 +370,7 @@ def runtime_api_port(runtime_mode: str | None = None, project_root: Path | None 
     mode = resolve_runtime_mode(runtime_mode)
     if mode == DEV_RUNTIME_MODE:
         return _resolved_profile_int(project_root, "dev_api_host_port", DEV_API_PORT)
-    # docker/api.Dockerfile binds the stable image to 8000; keeping this
+    # docker/api.Dockerfile binds the stable image to the registry port; keeping this
     # immutable prevents a profile/UI URL from drifting away from the listener.
     return API_PORT
 
@@ -975,6 +980,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
             Environment=BMS_HOME={root}
             Environment=BMS_RUNTIME_MODE={CONTAINER_RUNTIME_MODE}
             Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=127.0.0.1
+            Environment=BMS_WORKFLOW_ADAPTER_PORT={WORKFLOW_ADAPTER_PORT}
             ExecStartPre=/usr/bin/env python3 {log_rotator}
             ExecStart={adapter_runner}
             Restart=on-failure
@@ -1063,20 +1069,19 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Description=BioModStack global Tailnet launch-surface policy
         After=network-online.target
         Wants=network-online.target
-        Before={FRONTEND_SERVICE}
 
         [Service]
         Type=oneshot
         Environment=BMS_HOME={root}
         ExecStart=/usr/bin/env python3 {tailnet_global_installer}
+        # Tailnet is installed only after an explicit Development or Production
+        # selection has proved that environment live. It is never a prerequisite
+        # for starting either runtime.
         # The installer may legitimately wait up to 90 seconds for a restarted
         # workflow adapter to prove its policy identity.  Keep systemd's bound
         # above that inner convergence bound so it cannot terminate a valid
         # installation mid-transaction.
         TimeoutStartSec=120
-
-        [Install]
-        WantedBy={DEV_TARGET_UNIT}
         """
     )
 
@@ -1094,7 +1099,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Type=simple
         Environment=BMS_HOME={root}
         Environment=BMS_RUNTIME_MODE={DEV_RUNTIME_MODE}
-        Environment=BMS_FRONTEND_HEALTH_URL=http://127.0.0.1:5173/
+        Environment=BMS_FRONTEND_HEALTH_URL=http://127.0.0.1:{dev_web_host_port}/
         Environment=BMS_API_MODE=dev
         Environment=BMS_API_BIND_PORT={dev_api_host_port}
         Environment=BMS_DATA={dev_data_root}
@@ -1132,8 +1137,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         [Unit]
         Description=BioModStack frontend dev service
         PartOf={DEV_TARGET_UNIT}
-        Requires={TAILNET_GLOBAL_SERVICE}
-        After=network-online.target {TAILNET_GLOBAL_SERVICE}
+        After=network-online.target
         Wants=network-online.target
         StartLimitIntervalSec=300
         StartLimitBurst=3
@@ -1167,7 +1171,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         f"""\
         [Unit]
         Description=BioModStack development UI target
-        Wants={API_SERVICE} {FRONTEND_SERVICE} {TAILNET_GLOBAL_SERVICE}
+        Wants={API_SERVICE} {FRONTEND_SERVICE}
 
         [Install]
         WantedBy=default.target

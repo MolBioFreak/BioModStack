@@ -161,47 +161,21 @@ export interface MDRunDetail {
     chemistry: { profile_id: string; profile_sha256: string; assurance: string; verification_status: string; requested_scope?: string | null };
     engine: 'gromacs' | 'openmm'; replica_count: number; replica_summary: Record<string, number>;
     simulated_time_ps: number; requested_time_ps: number; checkpoint_available: boolean;
-    allowed_actions: Array<'pause' | 'resume_dynamics' | 'retry_dynamics' | 'cancel'>;
+    allowed_actions: Array<'pause' | 'resume_dynamics' | 'retry_dynamics' | 'cancel' | 'view_logs' | 'reorchestrate' | 'delete_failed_launch'>;
+    action_explanations?: Partial<Record<'resume_dynamics' | 'retry_dynamics', string>>;
     replicas: Array<{ id: string; replica_index: number; attempt: number; state: string; active: boolean; engine: string; failure: unknown; retry_eligible: boolean }>;
     segments: Array<{ id: string; replica_run_id: string; segment_index: number; state: string; source_segment_id: string | null; source_checkpoint_id: string | null; start_step: number | null; end_step: number | null; start_time_ps: number | null; end_time_ps: number | null }>;
     checkpoints: Array<{ id: string; segment_id: string; logical_role: string; relative_path: string; sha256: string; bytes: number; step: number; time_ps: number }>;
     events: Array<{ id: string; event_type: string; state_version: number; payload: Record<string, unknown>; created_at: string }>;
 }
 
-export interface MDQueueRun {
-    job_id: string;
-    name: string;
-    job_status: string;
-    queue_status: string;
-    phase: string;
-    state_version: number;
-    engine: 'gromacs' | 'openmm';
-    replica_count: number;
-    replica_summary: Record<string, number>;
-    simulated_time_ps: number;
-    requested_time_ps: number;
-    checkpoint_available: boolean;
-    allowed_actions: MDRunDetail['allowed_actions'];
-    chemistry: { profile_id: string; assurance: string; verification_status: string; requested_scope: string | null };
-    created_at: string;
-    updated_at: string;
-}
-
-export interface MDQueueProjection {
-    schema: 'bms.md.queue.v1';
-    bounded: true;
-    limit: number;
-    count: number;
-    runs: MDQueueRun[];
-}
-
-export const fetchMDQueue = (limit: number = 25) =>
-    api.get<MDQueueProjection>('/api/molecular-dynamics/runs', { params: { limit } });
 export const fetchMDRun = (jobId: string) => api.get<MDRunDetail>(`/api/molecular-dynamics/runs/${jobId}`);
 export const pauseMDRun = (jobId: string, stateVersion: number, idempotencyKey: string) => api.post<MDRunDetail>(`/api/molecular-dynamics/runs/${jobId}/pause`, { expected_state_version: stateVersion, idempotency_key: idempotencyKey });
 export const cancelMDRun = (jobId: string, stateVersion: number, idempotencyKey: string) => api.post<MDRunDetail>(`/api/molecular-dynamics/runs/${jobId}/cancel`, { expected_state_version: stateVersion, idempotency_key: idempotencyKey });
 export const resumeMDRun = (jobId: string, stateVersion: number, idempotencyKey: string) => api.post(`/api/molecular-dynamics/runs/${jobId}/resume`, { expected_state_version: stateVersion, idempotency_key: idempotencyKey });
 export const retryMDDynamics = (jobId: string, replicaIndex: number, stateVersion: number, idempotencyKey: string) => api.post<{ schema: 'bms.md.retry-receipt.v1'; job_id: string; replica_run_id: string; child_job_id: string; replica_index: number; attempt: number }>(`/api/molecular-dynamics/runs/${jobId}/retry`, { replica_index: replicaIndex, expected_state_version: stateVersion, idempotency_key: idempotencyKey });
+export const reorchestrateMDRun = (jobId: string, stateVersion: number, idempotencyKey: string) => api.post<{ new_job_id: string }>(`/api/molecular-dynamics/runs/${jobId}/reorchestrate`, { expected_state_version: stateVersion, idempotency_key: idempotencyKey });
+export const deleteFailedMDLaunch = (jobId: string, stateVersion: number) => api.delete(`/api/molecular-dynamics/runs/${jobId}/failed-launch`, { data: { expected_state_version: stateVersion } });
 
 // Log data for View Logs modal
 export interface JobLogs {
@@ -213,6 +187,7 @@ export interface JobLogs {
     nextflow_log: string | null;
     exit_code: number | null;
     parsed_error: string | null;
+    nextflow_log_source?: 'job_output' | 'legacy_global' | null;
 }
 
 export interface BoltzCpPhysicalGpuResolution {
@@ -529,6 +504,7 @@ export interface ShapeGeometrySummary {
     geometry_id: string;
     source_id: string;
     geometry_sha256: string;
+    manifest_sha256: string;
     source_sha256: string;
     preview_obj_sha256: string | null;
     point_pool_sha256: string;
@@ -541,7 +517,7 @@ export interface ShapeGeometrySummary {
     bounds_angstrom: [number, number, number, number, number, number];
     dimensions_angstrom: [number, number, number];
     source_format: 'obj' | 'stl';
-    source_parser: 'obj_strict_v1' | 'stl_ascii_v1' | 'stl_binary_v1';
+    source_parser: 'obj_triangle_v1' | 'stl_ascii_v1' | 'stl_binary_v1';
     source_unit: string;
     angstrom_per_unit: number;
 }
@@ -551,6 +527,7 @@ export interface ShapeLaunchRequest {
     name: string;
     geometry_id: string;
     expected_geometry_sha256: string;
+    expected_geometry_manifest_sha256: string;
     expected_point_pool_sha256: string;
     target_length: number;
     num_backbones: number;
@@ -1055,11 +1032,31 @@ export const continueProteinLocalReview = (
 };
 
 // Models API
+export interface ModelWorkflowIntegration {
+    default_enabled: boolean;
+    enabled_summary: string;
+}
+
+export interface ModelIntegrationConfig {
+    model_id: string;
+    model_name: string;
+    model_version: string;
+    stage_parameter: string;
+    operator_label: string;
+    checkpoint_label: string | null;
+    model_summary: string;
+    semantic_roles: string[];
+    workflows: Record<string, ModelWorkflowIntegration>;
+}
+
 export const fetchModels = (category?: string) =>
     api.get<UntypedApiValue[]>('/api/models', { params: { category } });
 
 export const fetchModelById = (id: string) =>
     api.get<UntypedApiValue>(`/api/models/${id}`);
+
+export const fetchModelIntegration = (id: string) =>
+    api.get<ModelIntegrationConfig>(`/api/models/${id}/integration`);
 
 // Files API
 export const fetchFiles = (path: string = '/') =>
@@ -1157,6 +1154,31 @@ export interface RfaConfidenceScope {
     counts?: Record<string, number> | null;
     plddt?: Record<string, number | null> | null;
     status?: string | null;
+}
+
+export interface DesignFrustraMPNNCanonicalProjection {
+    contract_version?: string | null;
+    status?: string | null;
+    source_sha256?: string | null;
+    manifest_relpath?: string | null;
+    landscape_relpath?: string | null;
+    summary_relpath?: string | null;
+    runtime_sha256?: string | null;
+    failure_class?: string | null;
+    failure_detail?: string | null;
+}
+
+export interface DesignFrustraMPNNLegacySummaryProjection {
+    high_count?: number | null;
+    min_count?: number | null;
+    pct_high?: number | null;
+    csv_relpath?: string | null;
+}
+
+export interface DesignFrustraMPNNProjection {
+    authority: 'canonical' | 'legacy_summary';
+    canonical?: DesignFrustraMPNNCanonicalProjection | null;
+    legacy_summary?: DesignFrustraMPNNLegacySummaryProjection | null;
 }
 
 export interface Design {
@@ -1324,6 +1346,7 @@ export interface Design {
     frustration_residues: Array<{ pos: number; chain: string; frust: number; frustClass: string }> | null;
     frustration_csv_path: string | null;
     frustration_csv_relpath?: string | null;
+    frustrampnn?: DesignFrustraMPNNProjection | null;
     // PPIFlow maturation metrics
     maturation_delta_interface: number | null;
     maturation_interface_score: number | null;
@@ -3303,50 +3326,16 @@ export const togglePrimerFavorite = (id: string) =>
 // ============================================================
 export interface OntFlowCellInfo {
     present: boolean;
-    is_ctc?: boolean | null;
-    has_adapter?: boolean | null;
-    flow_cell_id?: string | null;
-    user_specified_flow_cell_id?: string | null;
-    product_code?: string | null;
-    user_specified_product_code?: string | null;
-    sample_rate?: number | null;
-    channel_count?: number | null;
-    wells_per_channel?: number | null;
-    use_count?: number | null;
-    use_count_limit?: number | null;
-    adapter_id?: string | null;
-    barcode_kit?: string | null;
-}
-
-export interface OntDeviceInfo {
-    device_id?: string | null;
-    device_type?: string | null;
-    is_simulated?: boolean | null;
-    max_channel_count?: number | null;
-    max_wells_per_channel?: number | null;
-    can_set_temperature?: boolean | null;
-    digitisation?: number | null;
-    firmware_version?: Array<{ component: string; version: string }>;
 }
 
 export interface OntLiveDevice {
     position: string;
-    device_type?: 'mk1b' | 'mk1d' | string | null;
+    device_type: 'mk1d';
     state?: string | null;
-    protocol_state?: string | null;
-    running?: boolean;
-    available_for_run?: boolean;
-    flow_cell?: OntFlowCellInfo;
-    device_info?: OntDeviceInfo;
-    device_state?: Record<string, string | number | boolean | null | undefined>;
-    output_directories?: Record<string, string>;
-    acquisition_status?: Record<string, string | number | boolean | null | undefined>;
-    current_protocol?: Record<string, unknown> | null;
-    protocol_runs?: Array<Record<string, unknown>>;
-    acquisition_runs?: Array<Record<string, unknown>>;
-    hardware_check_runs?: Array<Record<string, unknown>>;
-    connection_error?: string | null;
-    fake_or_demo_device?: false;
+    running: boolean;
+    available_for_run: boolean;
+    flow_cell: OntFlowCellInfo;
+    fake_or_demo_device: false;
 }
 
 export interface OntDeviceStatus {
@@ -3354,51 +3343,82 @@ export interface OntDeviceStatus {
     live_devices: OntLiveDevice[];
     fake_or_demo_devices: false;
     message?: string;
-    minknow?: Record<string, unknown>;
+}
+
+export interface OntRunEvent {
+    id: string;
+    event_type: string;
+    status: string;
+    observed_at: string;
+    observed_generation: number;
 }
 
 export interface OntInstrumentRun {
     id: string;
-    minknow_run_id: string;
     position: string;
     status: string;
-    handoff_ready?: boolean;
-    output_files?: Record<string, string[]>;
+    observed_generation: number;
+    sample_id?: string | null;
+    experiment_group?: string | null;
+    handoff_ready: boolean;
+    output_summary: Record<'fastq' | 'pod5' | 'bam', number>;
+    events: OntRunEvent[];
     fake_or_demo_devices: false;
+}
+
+export interface OntProtocolOption {
+    option_id: string;
+    option_receipt_id: string;
+    expires_at: string;
+    protocol_label: string;
+    basecalling_enabled: boolean;
+    output_policy_id: string;
+    output_policy_label: string;
 }
 
 export interface OntProtocolOptions {
     position: string;
     can_start: boolean;
     blockers: string[];
-    protocol_id?: string | null;
-    output_directories?: Record<string, string>;
+    flow_cell_present: boolean;
+    options: OntProtocolOption[];
     fake_or_demo_devices: false;
 }
 
 export const fetchOntDeviceStatus = () =>
     api.get<OntDeviceStatus>('/api/ont/devices/status');
 
-export const fetchOntProtocolOptions = (position: string, kit?: string) =>
-    api.get<OntProtocolOptions>(`/api/ont/positions/${encodeURIComponent(position)}/protocol-options`, { params: { kit } });
+export interface OntMk1dReconnectResponse {
+    action: 'manual_mk1d_reconnect';
+    receipt: {
+        receipt_id: string;
+        status: 'completed' | 'failed' | 'blocked' | 'busy';
+        minknow: string;
+        host_agent_recreate: string;
+        host_agent_health: string;
+    };
+    device_status_observed: boolean;
+    connected: boolean;
+}
 
-export const beginOntHardwareCheck = (position: string) =>
-    api.post<{ action: string; detail: string; position: string; hardware_check_run_id?: string | null; fake_or_demo_devices: false }>(`/api/ont/positions/${encodeURIComponent(position)}/hardware-check`, { confirm_hardware_check: true });
+export const requestMk1dReconnect = () =>
+    api.post<OntMk1dReconnectResponse>('/api/ont/devices/reconnect', { confirm_reconnect: true });
 
-export const refreshOntPosition = (position: string) =>
-    api.post<{ action: string; detail: string; position: OntLiveDevice; fake_or_demo_devices: false }>(`/api/ont/positions/${encodeURIComponent(position)}/refresh`, { confirm_refresh: true });
+export const fetchOntProtocolOptions = (position: string) =>
+    api.get<OntProtocolOptions>(`/api/ont/positions/${encodeURIComponent(position)}/protocol-options`);
 
-export const restartOntPosition = (position: string) =>
-    api.post<{ detail: string; position: string; fake_or_demo_devices: false }>(`/api/ont/positions/${encodeURIComponent(position)}/restart`, { confirm_restart: true });
+export const createOntRunIntent = (position: string, payload: {
+    option_id: string;
+    option_receipt_id: string;
+    sample_id?: string;
+    experiment_group?: string;
+}) => api.post<OntInstrumentRun>(`/api/ont/positions/${encodeURIComponent(position)}/run-intents`, payload);
 
-export const startOntInstrumentRun = (position: string, payload: Record<string, unknown>) =>
-    api.post<OntInstrumentRun>(`/api/ont/positions/${encodeURIComponent(position)}/start`, payload);
+export const startOntRunIntent = (runId: string, payload: { confirm_start: boolean; intent_generation: number }) =>
+    api.post<OntInstrumentRun>(`/api/ont/runs/${encodeURIComponent(runId)}/start`, payload);
 
 export const fetchOntInstrumentRun = (runId: string) =>
     api.get<OntInstrumentRun>(`/api/ont/runs/${encodeURIComponent(runId)}`);
-
-export const stopOntInstrumentRun = (runId: string, payload: { confirm_stop: boolean }) =>
-    api.post<OntInstrumentRun>(`/api/ont/runs/${encodeURIComponent(runId)}/stop`, payload);
 
 export interface ViewerVolumeInventoryV1 {
     readonly schema: 'bms.viewer.volume-list.v1';

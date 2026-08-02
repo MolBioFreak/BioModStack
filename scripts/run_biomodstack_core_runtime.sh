@@ -42,6 +42,27 @@ load_env_file_overrides() {
     done < "$env_file"
 }
 
+load_root_owned_mk1d_recovery_gid() {
+    # This is the managed runtime source for the socket group. Do not source it:
+    # require a root-owned regular file with exactly one numeric assignment.
+    local recovery_env='/etc/biomodstack/mk1d-reconnect.env'
+    [ -e "$recovery_env" ] || return 0
+    if [ ! -f "$recovery_env" ] || [ -L "$recovery_env" ] || [ "$(stat -c '%u:%g:%a' "$recovery_env")" != '0:0:644' ]; then
+        echo "BioModStack stable runtime is blocked: invalid root-owned Mk1D recovery GID file." >&2
+        exit 78
+    fi
+    local line extra key value
+    IFS= read -r line < "$recovery_env" || true
+    IFS= read -r extra < <(tail -n +2 "$recovery_env") || true
+    key="${line%%=*}"
+    value="${line#*=}"
+    if [ "$key" != 'BMS_MK1D_RECOVERY_GID' ] || [ "$value" = "$line" ] || [[ ! "$value" =~ ^[0-9]+$ ]] || [ -n "$extra" ]; then
+        echo "BioModStack stable runtime is blocked: malformed Mk1D recovery GID file." >&2
+        exit 78
+    fi
+    export BMS_MK1D_RECOVERY_GID="$value"
+}
+
 PROFILE_CORE_RUNTIME_ENV_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/biomodstack/core-runtime.env"
 LEGACY_CORE_RUNTIME_ENV_FILE="$PROJECT_DIR/.env.core-runtime.local"
 CORE_RUNTIME_ENV_FILE="${BMS_CORE_RUNTIME_ENV_FILE:-$PROFILE_CORE_RUNTIME_ENV_FILE}"
@@ -54,6 +75,7 @@ elif [ -f "$LEGACY_CORE_RUNTIME_ENV_FILE" ]; then
     load_env_file_overrides "$LEGACY_CORE_RUNTIME_ENV_FILE"
     compose_extra_args=(--env-file "$LEGACY_CORE_RUNTIME_ENV_FILE")
 fi
+load_root_owned_mk1d_recovery_gid
 
 if [ -z "${BMS_STATE_DIR:-}" ]; then
     echo "BioModStack stable runtime is blocked: BMS_STATE_DIR must be explicitly configured; no fallback state root is permitted." >&2
@@ -64,7 +86,7 @@ if [ ! -d "$BMS_STATE_DIR" ]; then
     exit 78
 fi
 export BMS_CONTAINER_STATE_PATH="${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}"
-export BMS_API_HOST_PORT="${BMS_API_HOST_PORT:-8000}"
+export BMS_API_HOST_PORT="${BMS_API_HOST_PORT:-18000}"
 export BMS_WEB_HOST_PORT="${BMS_WEB_HOST_PORT:-18080}"
 
 if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then

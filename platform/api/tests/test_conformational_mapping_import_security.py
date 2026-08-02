@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import inspect
 import os
 from pathlib import Path, PurePosixPath
 
@@ -30,6 +31,19 @@ from services.conformational_mapping.import_snapshot import (
 
 
 PDB = b"ATOM      1  CA  GLY A   1       0.000   0.000   0.000  1.00 20.00           C\n"
+
+
+def test_runtime_assets_have_a_separate_bounded_staging_ceiling() -> None:
+    assert import_stager.MAX_IMPORT_BYTES == 2 * 1024 * 1024 * 1024
+    assert import_stager.MAX_RUNTIME_ASSET_BYTES == 6 * 1024 * 1024 * 1024
+    assert (
+        inspect.signature(import_stager.stage_registered_assets)
+        .parameters["maximum_bytes"]
+        .default
+        == import_stager.MAX_RUNTIME_ASSET_BYTES
+    )
+
+
 MMCIF = b"""data_minimal
 _entry.id minimal
 loop_

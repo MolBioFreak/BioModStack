@@ -11,6 +11,7 @@ if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
 import routers.jobs as jobs
+from services import nextflow as nextflow_service
 
 
 def test_build_msa_batch_child_params_preserves_local_runtime_contract() -> None:
@@ -83,6 +84,31 @@ def test_build_msa_batch_child_params_preserves_local_runtime_contract() -> None
         "msa_target_shard_mode": "required",
         "msa_target_shards": 2,
         "msa_target_shard_min_size_gb": 0,
-        "run_frustrampnn_batch": True,
     }.items():
         assert child_params[key] == expected
+    assert "run_frustrampnn_batch" not in child_params
+
+
+def test_msa_child_params_drop_retired_scoring_ownership_metadata() -> None:
+    owner_key = "_frustrampnn_execution_" + "owner_v1"
+    params = jobs._build_msa_batch_child_params(
+        source_params={
+            "run_frustrampnn": True,
+            owner_key: {"schema_name": "frustrampnn_execution_owner"},
+        },
+        sequences_for_msa=[{"name": "reference_msa", "sequence": "ACDEFG"}],
+        source_model_id="boltz2",
+        source_mode="predict",
+    )
+
+    assert owner_key not in params
+    assert "run_frustrampnn_batch" not in params
+
+
+def test_msa_completion_has_no_retired_direct_scoring_owner() -> None:
+    trigger_name = "maybe_trigger_batch_" + "frustrampnn"
+    runner_name = "run_batch_" + "frustrampnn"
+    canonical_name = "_is_canonical_protein_design_" + "batch"
+    assert not hasattr(nextflow_service, trigger_name)
+    assert not hasattr(nextflow_service, runner_name)
+    assert not hasattr(nextflow_service, canonical_name)

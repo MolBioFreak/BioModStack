@@ -102,18 +102,24 @@ def test_compose_core_runtime_contract() -> None:
     assert api["build"]["target"] == "api-runtime"
     assert api["container_name"] == "biomodstack-api"
     assert api["network_mode"] == "host"
-    assert "group_add" not in api
+    assert api["group_add"] == ["${BMS_MK1D_RECOVERY_GID:-65534}"]
+    assert api["volumes"][-1] == {
+        "type": "bind",
+        "source": "${BMS_MK1D_RECOVERY_SOCKET_DIR:-/run/biomodstack}",
+        "target": "/run/biomodstack",
+        "read_only": True,
+    }
     assert "ports" not in api
     assert "extra_hosts" not in api
     assert api["environment"]["BMS_HOME"] == "/app"
     assert api["environment"]["BMS_CORE_RUNTIME_MODE"] == "${BMS_CORE_RUNTIME_MODE:-1}"
     assert (
         api["environment"]["BMS_WORKFLOW_ADAPTER_URL"]
-        == "${BMS_WORKFLOW_ADAPTER_URL:-http://127.0.0.1:8001}"
+        == "${BMS_WORKFLOW_ADAPTER_URL:-http://127.0.0.1:18001}"
     )
     assert (
         api["environment"]["BMS_HOST_AGENT_URL"]
-        == "${BMS_HOST_AGENT_URL:-http://127.0.0.1:8798}"
+        == "${BMS_HOST_AGENT_URL:-http://127.0.0.1:18798}"
     )
     assert (
         api["environment"]["BMS_HOST_AGENT_TIMEOUT_SECONDS"]
@@ -121,7 +127,7 @@ def test_compose_core_runtime_contract() -> None:
     )
     assert (
         api["environment"]["BMS_CPU_POWER_COLLECTOR_URL"]
-        == "${BMS_CPU_POWER_COLLECTOR_URL:-http://127.0.0.1:8797/power}"
+        == "${BMS_CPU_POWER_COLLECTOR_URL:-http://127.0.0.1:18797/power}"
     )
     assert (
         api["environment"]["BMS_DOCKER_COMPOSE_PROJECT"]
@@ -129,7 +135,8 @@ def test_compose_core_runtime_contract() -> None:
     )
     assert "BMS_DOCKER_GID" not in api["environment"]
     assert "BMS_FRONTEND_HEALTH_URL" not in api["environment"]
-    assert api["environment"]["CORS_ORIGINS"] == "${CORS_ORIGINS:-http://127.0.0.1,http://127.0.0.1:5173,http://127.0.0.1:18080,http://localhost,https://localhost,http://localhost:5173,http://localhost:18080,https://localhost:5173,https://127.0.0.1}"
+    assert api["environment"]["CORS_ORIGINS"] == "${CORS_ORIGINS:-http://127.0.0.1,http://127.0.0.1:18082,http://127.0.0.1:18080,http://localhost,https://localhost,http://localhost:18082,http://localhost:18080,https://localhost:18082,https://127.0.0.1}"
+    assert "http://127.0.0.1:18000/api/health" in api["healthcheck"]["test"][-1]
     assert api["environment"]["BMS_WEIGHTS"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/weights"
     assert api["environment"]["BMS_COLABFOLD_DB"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/colabfold_db"
     assert api["environment"]["BMS_MSA_CACHE"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/msa_cache"
@@ -163,7 +170,7 @@ def test_compose_core_runtime_contract() -> None:
     assert cpu_power["environment"]["BMS_POWER_CAP_ROOT"] == "/host_sys/class/powercap"
     assert cpu_power["environment"]["BMS_CPU_POWER_BIND_HOST"] == "127.0.0.1"
     assert (
-        cpu_power["environment"]["BMS_CPU_POWER_PORT"] == "${BMS_CPU_POWER_PORT:-8797}"
+        cpu_power["environment"]["BMS_CPU_POWER_PORT"] == "${BMS_CPU_POWER_PORT:-18797}"
     )
     assert cpu_power["command"] == [
         "python",
@@ -171,6 +178,10 @@ def test_compose_core_runtime_contract() -> None:
     ]
     assert cpu_power["volumes"][0]["source"] == "/sys"
     assert cpu_power["volumes"][0]["read_only"] is True
+
+    host_agent = compose["services"]["bms-host-agent"]
+    assert host_agent["command"][-1] == "18798"
+    assert "http://127.0.0.1:18798/health" in host_agent["healthcheck"]["test"][-1]
 
     web = compose["services"]["bms-web"]
     assert web["build"]["dockerfile"] == "docker/web.Dockerfile"
@@ -186,6 +197,20 @@ def test_compose_core_runtime_contract() -> None:
     assert not compose.get("volumes")
 
 
+
+def test_mk1d_reconnect_runtime_group_is_loaded_only_from_validated_root_config() -> None:
+    launcher = (REPO_ROOT / "scripts" / "run_biomodstack_core_runtime.sh").read_text(encoding="utf-8")
+    example = (REPO_ROOT / ".env.core-runtime.example").read_text(encoding="utf-8")
+
+    assert "load_root_owned_mk1d_recovery_gid" in launcher
+    assert "stat -c '%u:%g:%a'" in launcher
+    assert "0:0:644" in launcher
+    assert "BMS_MK1D_RECOVERY_GID" in launcher
+    assert "load_root_owned_mk1d_recovery_gid" in launcher.split("load_env_file_overrides", 1)[-1]
+    assert "BMS_MK1D_RECOVERY_GID=" not in example
+    assert "BMS_MK1D_RECONNECT_TIMEOUT_SECONDS=100" in example
+
+
 def test_nginx_contract_preserves_bms_and_api_routes() -> None:
     nginx_conf = (REPO_ROOT / "docker" / "web" / "nginx.conf").read_text(
         encoding="utf-8"
@@ -198,7 +223,39 @@ def test_nginx_contract_preserves_bms_and_api_routes() -> None:
     assert "location /bms/ {" in nginx_conf
     assert "try_files $uri $uri/ /bms/index.html;" in nginx_conf
     assert "location /api/ {" in nginx_conf
-    assert "proxy_pass http://127.0.0.1:8000;" in nginx_conf
+    assert "proxy_pass http://127.0.0.1:18000;" in nginx_conf
+
+
+def test_mk1d_reconnect_is_a_local_bms_host_route_and_tailnet_cannot_forward_it() -> None:
+    api_compose = yaml.safe_load((REPO_ROOT / "compose.core-runtime.yml").read_text(encoding="utf-8"))
+    tailnet_compose = yaml.safe_load((REPO_ROOT / "compose.tailnet-control.yml").read_text(encoding="utf-8"))
+    web_nginx = (REPO_ROOT / "docker" / "web" / "nginx.conf").read_text(encoding="utf-8")
+    tailnet_nginx = (REPO_ROOT / "docker" / "tailnet-production-proxy.conf").read_text(encoding="utf-8")
+    env_example = (REPO_ROOT / ".env.core-runtime.example").read_text(encoding="utf-8")
+
+    api_environment = api_compose["services"]["bms-api"]["environment"]
+    web_environment = api_compose["services"]["bms-web"]["environment"]
+    assert api_environment["BMS_MK1D_RECONNECT_LOCAL_PROXY_SECRET"] == "${BMS_MK1D_RECONNECT_LOCAL_PROXY_SECRET:-}"
+    assert web_environment["BMS_MK1D_RECONNECT_LOCAL_PROXY_SECRET"] == "${BMS_MK1D_RECONNECT_LOCAL_PROXY_SECRET:-}"
+    assert "BMS_MK1D_RECONNECT_TRUSTED_PROXY_HOSTS" not in api_environment
+    assert "BMS_MK1D_RECONNECT_ALLOWED_TAILSCALE_USERS" not in api_environment
+    assert "BMS_MK1D_RECONNECT_LOCAL_PROXY_SECRET=" in env_example
+    assert "BMS_MK1D_RECONNECT_ALLOWED_TAILSCALE_USERS" not in env_example
+
+    reconnect_location = web_nginx.split("location = /api/ont/devices/reconnect {", 1)[1].split("\n    }", 1)[0]
+    assert "allow 127.0.0.1;" in reconnect_location
+    assert "allow ::1;" in reconnect_location
+    assert "deny all;" in reconnect_location
+    assert 'proxy_set_header X-BMS-MK1D-Reconnect-Proxy-Secret "${BMS_MK1D_RECONNECT_LOCAL_PROXY_SECRET}";' in reconnect_location
+    assert 'proxy_set_header Tailscale-User-Login "";' in reconnect_location
+    assert "Tailscale-User-Login $http_" not in reconnect_location
+    assert "X-BMS-CM-Proxy-Secret" not in reconnect_location
+
+    tailnet_location = tailnet_nginx.split("location = /api/ont/devices/reconnect {", 1)[1].split("\n    }", 1)[0]
+    assert "return 403;" in tailnet_location
+    assert "proxy_pass" not in tailnet_location
+    assert "BMS_MK1D_RECONNECT_LOCAL_PROXY_SECRET" not in tailnet_compose["services"]["tailnet-production-proxy"].get("environment", {})
+    assert tailnet_compose["services"]["tailnet-production-proxy"]["volumes"][0].endswith(":/etc/nginx/conf.d/default.conf:ro")
 
 
 def test_dockerignore_keeps_local_runtime_state_out_of_images() -> None:
@@ -269,15 +326,15 @@ def test_core_runtime_env_example_documents_transition_knobs() -> None:
         "BMS_CONTAINER_STATE_PATH=",
         "BMS_WORK=/var/lib/biomodstack/work",
         "BMS_WEB_HOST_PORT=18080",
-        "CORS_ORIGINS=http://127.0.0.1,http://127.0.0.1:5173,http://127.0.0.1:18080,http://localhost,https://localhost,http://localhost:5173,http://localhost:18080,https://localhost:5173,https://127.0.0.1",
+        "CORS_ORIGINS=http://127.0.0.1,http://127.0.0.1:18082,http://127.0.0.1:18080,http://localhost,https://localhost,http://localhost:18082,http://localhost:18080,https://localhost:18082,https://127.0.0.1",
         "BMS_CORE_RUNTIME_MODE=1",
-        "BMS_WORKFLOW_ADAPTER_URL=http://127.0.0.1:8001",
+        "BMS_WORKFLOW_ADAPTER_URL=http://127.0.0.1:18001",
         "BMS_FEATURE_BIOXP=1",
         "BMS_BIOXP_MUTATIONS_ENABLED=0",
         "BMS_BIOXP_ALLOWED_HOSTS=robot",
         "BMS_BIOXP_ALLOWED_CIDRS=",
         "BMS_DOCKER_COMPOSE_PROJECT=biomodstack-core-runtime",
-        "BMS_HOST_AGENT_URL=http://127.0.0.1:8798",
+        "BMS_HOST_AGENT_URL=http://127.0.0.1:18798",
         "BMS_HOST_AGENT_TIMEOUT_SECONDS=2.0",
     ]:
         assert required in env_example
@@ -309,7 +366,7 @@ def test_frontend_dev_server_owns_vite_default_port_with_hmr_enabled() -> None:
 
     assert "strictPort: true" in vite_config
     assert "hmr: false" not in vite_config
-    assert "127.0.0.1:5173" in vite_config
+    assert "127.0.0.1:18082" in vite_config
 
 
 def test_one_command_ui_surface_smoke_checker_exists() -> None:
@@ -317,7 +374,7 @@ def test_one_command_ui_surface_smoke_checker_exists() -> None:
 
     assert smoke_script.exists()
     text = smoke_script.read_text(encoding="utf-8")
-    assert "http://127.0.0.1:5173/@vite/client" in text
+    assert "http://127.0.0.1:18082/@vite/client" in text
     assert "http://127.0.0.1:18080/bms/" in text
     assert "platform/desktop-electron" in text
 
@@ -350,7 +407,7 @@ def test_api_dockerfile_uses_prebuilt_venv_at_runtime() -> None:
     assert "docker-compose" in dockerfile
     assert "/app/platform/api/.venv/bin/python run_migrations.py" in dockerfile
     assert "exec /app/platform/api/.venv/bin/uvicorn main:app" in dockerfile
-    assert "--host 127.0.0.1 --port 8000" in dockerfile
+    assert "--host 127.0.0.1 --port 18000" in dockerfile
     assert 'CMD ["uv", "run", "uvicorn"' not in dockerfile
 
 
@@ -474,8 +531,18 @@ def test_workflow_adapter_script_runs_host_native_adapter_without_recursive_rout
         'BMS_WORKFLOW_ADAPTER_BIND_HOST="${BMS_WORKFLOW_ADAPTER_BIND_HOST:-127.0.0.1}"'
         in adapter_script
     )
+    for systemd_authority_key in (
+        "BMS_FEATURE_MOLECULAR_DYNAMICS",
+        "BMS_MD_ANALYSIS_ENABLED",
+        "BMS_MD_ANALYSIS_CONTAINER",
+        "BMS_MD_ANALYSIS_SIF_SHA256",
+        "BMS_MD_ANALYSIS_IMPLEMENTATION_SHA256",
+    ):
+        assert systemd_authority_key in adapter_script.split(
+            "SYSTEMD_AUTHORITY_KEYS=(", 1
+        )[1].split(")", 1)[0]
     assert (
-        'uv run --no-sync uvicorn workflow_adapter_app:app --port 8001 '
+        'uv run --no-sync uvicorn workflow_adapter_app:app --port "$BMS_WORKFLOW_ADAPTER_PORT" '
         '--host "$BMS_WORKFLOW_ADAPTER_BIND_HOST" --no-proxy-headers --no-access-log'
         in adapter_script
     )

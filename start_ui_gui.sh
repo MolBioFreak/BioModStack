@@ -41,7 +41,13 @@ notify() {
 browser_url="http://localhost:${BMS_WEB_HOST_PORT:-18080}/bms/"
 case "${RUNTIME_MODE,,}" in
     dev)
-        browser_url="http://localhost:5173/"
+        dev_web_port="${BMS_DEV_WEB_HOST_PORT:-18082}"
+        # Desktop sessions can retain this exact pre-governance export for
+        # hours after the listener moved.  Never reopen the retired endpoint.
+        if [ "$dev_web_port" = "5173" ]; then
+            dev_web_port="18082"
+        fi
+        browser_url="http://localhost:${dev_web_port}/"
         ;;
     container)
         ;;

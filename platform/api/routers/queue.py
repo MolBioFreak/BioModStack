@@ -462,9 +462,10 @@ async def list_queue(
     if stale_jobs:
         await session.commit()
     
-    # Only show jobs that went through the new orchestrator (have vram_estimate_mb set)
+    # One global scheduler projection: MD and non-MD jobs are visible here.
+    # The stale-state repair above remains deliberately non-MD because durable
+    # MD lifecycle state has its own guarded reconciliation semantics.
     query = select(Job).where(
-        ~Job.id.in_(md_owned),
         Job.queue_status.in_(['queued', 'running', 'paused']),
         Job.awaiting_input == False,
         Job.vram_estimate_mb.isnot(None)
@@ -475,7 +476,6 @@ async def list_queue(
     
     if status:
         query = select(Job).where(
-            ~Job.id.in_(md_owned),
             Job.queue_status == status
         ).order_by(Job.priority.desc(), Job.created_at)
     
@@ -530,8 +530,6 @@ async def get_queue_stats(session: AsyncSession = Depends(get_session)):
         )
     )
     jobs = result.scalars().all()
-    md_owned = await get_md_owned_job_ids(session)
-    jobs = [job for job in jobs if job.id not in md_owned]
     
     queued = sum(1 for j in jobs if j.queue_status == 'queued')
     running = sum(1 for j in jobs if j.queue_status == 'running')

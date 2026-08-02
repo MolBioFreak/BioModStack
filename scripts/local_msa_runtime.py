@@ -14,7 +14,7 @@ DEFAULT_GPUSERVER_WAIT_TIMEOUT = 120
 DEFAULT_GPUSERVER_STARTUP_WAIT_SECONDS = 5.0
 DEFAULT_MSA_SERVER_STATUS_URL = (
     os.getenv("BMS_MSA_SERVER_STATUS_URL")
-    or "http://127.0.0.1:8000/api/msa/server/status"
+    or "http://127.0.0.1:18000/api/msa/server/status"
 )
 
 DB_ALIAS_BY_NAME = {

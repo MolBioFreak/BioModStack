@@ -50,7 +50,7 @@ def test_dev_api_launcher_does_not_inherit_container_adapter_routing(tmp_path: P
 
     home.joinpath(".biomodstack", "env.sh").write_text(
         "export BMS_CORE_RUNTIME_MODE=1\n"
-        "export BMS_WORKFLOW_ADAPTER_URL=http://127.0.0.1:8001\n"
+        "export BMS_WORKFLOW_ADAPTER_URL=http://127.0.0.1:18001\n"
         "export BMS_DATA=/mnt/BioModStack\n"
         "export BMS_DB_PATH=/mnt/BioModStack/biomodstack.db\n",
         encoding="utf-8",

@@ -412,6 +412,12 @@ export const buildBoltzCpSubmitParams = ({
     return params;
 };
 
+export const buildStructureFrustraMpnnSubmitParams = (
+    enabled: boolean | undefined,
+): { run_frustrampnn: boolean } => ({
+    run_frustrampnn: enabled !== false,
+});
+
 export const buildStructureMsaSubmitParams = ({
     provider,
     preset,
