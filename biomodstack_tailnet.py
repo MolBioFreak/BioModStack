@@ -7,6 +7,7 @@ import base64
 import binascii
 import fcntl
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -47,20 +48,9 @@ SUPPORTED_ENVIRONMENTS = ("development", "production")
 CANONICAL_DEVELOPMENT_ROOT = Path("/home/dalab/biomodstack/dev-test-canonical")
 CANONICAL_PRODUCTION_ROOT = Path("/home/dalab/biomodstack/prod-main-canonical")
 CONTROL_PATH = "/api/tailnet-environment"
-CONTROL_TARGET = "http://127.0.0.1:8001"
+DEFAULT_CONTROL_TARGET = "http://127.0.0.1:8001"
 LEGACY_CONTROL_TARGET = "http://127.0.0.1:8001/api/workflow-adapter/tailnet-environment"
 STATS_TOOLKIT_TARGET = "http://127.0.0.1:18180"
-GLOBAL_SERVE_HANDLERS: Mapping[str, str] = {
-    CONTROL_PATH: CONTROL_TARGET,
-    "/api/mobile-apk": "http://127.0.0.1:8000/api/mobile-apk",
-    "/api/mobile-ui": "http://127.0.0.1:8000/api/mobile-ui",
-    "/stats/embed": f"{STATS_TOOLKIT_TARGET}/stats",
-    "/stats/assets": f"{STATS_TOOLKIT_TARGET}/stats/assets",
-    "/stats/embed/health/live": f"{STATS_TOOLKIT_TARGET}/health/live",
-    "/stats/embed/health/ready": f"{STATS_TOOLKIT_TARGET}/health/ready",
-    "/stats/embed/api/v1/capabilities": f"{STATS_TOOLKIT_TARGET}/api/v1/capabilities",
-    "/stats/embed/api/v1/tools": f"{STATS_TOOLKIT_TARGET}/api/v1/tools",
-}
 LEGACY_GLOBAL_SERVE_HANDLERS: Mapping[str, frozenset[str]] = {
     # The original embed mapping mounted the Stats server root. The governed
     # application now lives at /stats; allow only this exact prior target to be
@@ -90,6 +80,48 @@ _BUILD_TIME_PATTERN = re.compile(
 
 class TailnetEnvironmentError(ServiceManagerError):
     """Raised when an environment switch cannot be completed safely."""
+
+
+def _configured_control_target(environment: Mapping[str, str] | None = None) -> str:
+    values = os.environ if environment is None else environment
+    target = values.get("BMS_TAILNET_CONTROL_TARGET", DEFAULT_CONTROL_TARGET).rstrip("/")
+    parsed = urllib.parse.urlsplit(target)
+    try:
+        address = ipaddress.ip_address(parsed.hostname or "")
+        port = parsed.port
+    except ValueError as exc:
+        raise TailnetEnvironmentError(
+            "BMS_TAILNET_CONTROL_TARGET must be the workflow adapter's loopback HTTP target on port 8001"
+        ) from exc
+    if (
+        parsed.scheme != "http"
+        or parsed.username is not None
+        or parsed.password is not None
+        or not address.is_loopback
+        or port != 8001
+        or parsed.path not in ("", "/")
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise TailnetEnvironmentError(
+            "BMS_TAILNET_CONTROL_TARGET must be the workflow adapter's loopback HTTP target on port 8001"
+        )
+    return f"http://{address.compressed}:8001"
+
+
+CONTROL_TARGET = _configured_control_target()
+LEGACY_CONTROL_TARGETS = frozenset({LEGACY_CONTROL_TARGET, DEFAULT_CONTROL_TARGET})
+GLOBAL_SERVE_HANDLERS: Mapping[str, str] = {
+    CONTROL_PATH: CONTROL_TARGET,
+    "/api/mobile-apk": "http://127.0.0.1:8000/api/mobile-apk",
+    "/api/mobile-ui": "http://127.0.0.1:8000/api/mobile-ui",
+    "/stats/embed": f"{STATS_TOOLKIT_TARGET}/stats",
+    "/stats/assets": f"{STATS_TOOLKIT_TARGET}/stats/assets",
+    "/stats/embed/health/live": f"{STATS_TOOLKIT_TARGET}/health/live",
+    "/stats/embed/health/ready": f"{STATS_TOOLKIT_TARGET}/health/ready",
+    "/stats/embed/api/v1/capabilities": f"{STATS_TOOLKIT_TARGET}/api/v1/capabilities",
+    "/stats/embed/api/v1/tools": f"{STATS_TOOLKIT_TARGET}/api/v1/tools",
+}
 
 
 def _managed_image_id(environment_name: str, sealed_default: str) -> str:
@@ -283,7 +315,7 @@ def _set_serve_root(target: str) -> None:
 def _set_serve_path(path: str, target: str) -> None:
     allowed_targets = dict(GLOBAL_SERVE_HANDLERS)
     allowed_targets[CONTROL_PATH] = CONTROL_TARGET
-    if path == CONTROL_PATH and target == LEGACY_CONTROL_TARGET:
+    if path == CONTROL_PATH and target in LEGACY_CONTROL_TARGETS:
         pass
     elif target in LEGACY_GLOBAL_SERVE_HANDLERS.get(path, frozenset()):
         pass
@@ -313,7 +345,7 @@ def _restore_control_route(snapshot: ServeSnapshot) -> None:
         _clear_serve_path(CONTROL_PATH)
         return
     prior_target = str(prior_control.get("Proxy", "")).rstrip("/")
-    if prior_target not in (CONTROL_TARGET, LEGACY_CONTROL_TARGET):
+    if prior_target != CONTROL_TARGET and prior_target not in LEGACY_CONTROL_TARGETS:
         raise TailnetEnvironmentError("prior Tailnet control target is not restorable")
     _set_serve_path(CONTROL_PATH, prior_target)
 
@@ -324,7 +356,7 @@ def _ensure_control_route(snapshot: ServeSnapshot) -> bool:
         existing_target = str(existing.get("Proxy", "")).rstrip("/")
         if existing_target == CONTROL_TARGET:
             return False
-        if existing_target != LEGACY_CONTROL_TARGET:
+        if existing_target not in LEGACY_CONTROL_TARGETS:
             raise TailnetEnvironmentError(
                 f"Tailnet control path is already owned by an unexpected target: {existing}"
             )
@@ -356,7 +388,7 @@ def _control_route_needs_mutation(snapshot: ServeSnapshot) -> bool:
     existing_target = str(existing.get("Proxy", "")).rstrip("/")
     if existing_target == CONTROL_TARGET:
         return False
-    if existing_target != LEGACY_CONTROL_TARGET:
+    if existing_target not in LEGACY_CONTROL_TARGETS:
         raise TailnetEnvironmentError(
             f"Tailnet control path is already owned by an unexpected target: {existing}"
         )
@@ -381,7 +413,7 @@ def ensure_global_tailnet_routes() -> ServeSnapshot:
             existing_target = str(existing.get("Proxy", "")).rstrip("/")
             allowed_existing = {target}
             if path == CONTROL_PATH:
-                allowed_existing.add(LEGACY_CONTROL_TARGET)
+                allowed_existing.update(LEGACY_CONTROL_TARGETS)
             allowed_existing.update(LEGACY_GLOBAL_SERVE_HANDLERS.get(path, frozenset()))
             if existing_target not in allowed_existing:
                 raise TailnetEnvironmentError(

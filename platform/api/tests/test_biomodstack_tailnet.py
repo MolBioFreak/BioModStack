@@ -543,6 +543,48 @@ def test_control_route_refuses_unexpected_existing_target(monkeypatch) -> None:
         tailnet._ensure_control_route(snapshot)
 
 
+def test_control_target_accepts_only_explicit_loopback_http_listener() -> None:
+    assert tailnet._configured_control_target({}) == "http://127.0.0.1:8001"
+    assert tailnet._configured_control_target(
+        {"BMS_TAILNET_CONTROL_TARGET": "http://127.0.0.2:8001"}
+    ) == "http://127.0.0.2:8001"
+
+    for target in (
+        "https://127.0.0.2:8001",
+        "http://0.0.0.0:8001",
+        "http://192.168.1.5:8001",
+        "http://127.0.0.2:9000",
+        "http://127.0.0.2:8001/other",
+    ):
+        with pytest.raises(tailnet.TailnetEnvironmentError, match="loopback HTTP target"):
+            tailnet._configured_control_target({"BMS_TAILNET_CONTROL_TARGET": target})
+
+
+def test_control_route_migrates_exact_prior_loopback_target(monkeypatch) -> None:
+    monkeypatch.setattr(tailnet, "CONTROL_TARGET", "http://127.0.0.2:8001")
+    snapshot = tailnet.ServeSnapshot(
+        origin="https://node.example.ts.net",
+        root_proxy="http://127.0.0.1:5173",
+        handlers={tailnet.CONTROL_PATH: {"Proxy": "http://127.0.0.1:8001"}},
+        raw={},
+    )
+    targets: list[str] = []
+    monkeypatch.setattr(tailnet, "_set_serve_path", lambda path, target: targets.append(target))
+    monkeypatch.setattr(
+        tailnet,
+        "_read_serve_snapshot",
+        lambda: tailnet.ServeSnapshot(
+            origin=snapshot.origin,
+            root_proxy=snapshot.root_proxy,
+            handlers={tailnet.CONTROL_PATH: {"Proxy": tailnet.CONTROL_TARGET}},
+            raw={},
+        ),
+    )
+
+    assert tailnet._ensure_control_route(snapshot) is True
+    assert targets == ["http://127.0.0.2:8001"]
+
+
 def test_control_route_migrates_sealed_legacy_path_target(monkeypatch) -> None:
     snapshot = tailnet.ServeSnapshot(
         origin="https://node.example.ts.net",
