@@ -11,6 +11,7 @@ from typing import Any
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 from rfd3.model.inference_sampler import SampleDiffusionWithMotif
 from shape_guidance import ShapeGuidanceField, guidance_scale
@@ -46,7 +47,7 @@ class ShapeGuidedDiffusionSampler(SampleDiffusionWithMotif):
     shape_connectivity_weight: float = 5.0
     shape_start_fraction: float = 0.2
     shape_end_fraction: float = 0.8
-    shape_terminal_scale: float = 0.1
+    shape_terminal_scale: float = 1.0
     _shape_fields: dict[str, ShapeGuidanceField] = field(default_factory=dict, init=False, repr=False)
     _shape_manifest: dict[str, Any] | None = field(default=None, init=False, repr=False)
 
@@ -97,6 +98,16 @@ class ShapeGuidedDiffusionSampler(SampleDiffusionWithMotif):
         self._shape_fields[cache_key] = shape_field
         self._shape_manifest = manifest
         return shape_field
+
+    @staticmethod
+    def _smooth_ca_delta(delta: torch.Tensor) -> torch.Tensor:
+        if delta.shape[1] < 2:
+            return delta
+        channels = delta.transpose(1, 2)
+        padded = F.pad(channels, (2, 2), mode="replicate")
+        kernel = delta.new_tensor([1.0, 4.0, 6.0, 4.0, 1.0]).div_(16.0)
+        weight = kernel.view(1, 1, 5).expand(3, 1, 5)
+        return F.conv1d(padded, weight, groups=3).transpose(1, 2)
 
     @staticmethod
     def _atom_mask(value: torch.Tensor, atom_count: int) -> torch.Tensor:
@@ -157,7 +168,8 @@ class ShapeGuidedDiffusionSampler(SampleDiffusionWithMotif):
             outside_weight=self.shape_outside_weight,
             connectivity_weight=self.shape_connectivity_weight,
         )
-        ca_delta = projected_ca - ca_coordinates
+        raw_ca_delta = projected_ca - ca_coordinates
+        ca_delta = self._smooth_ca_delta(raw_ca_delta)
         token_count = int(token_map.max().item()) + 1
         token_delta = torch.zeros(
             (X_L.shape[0], token_count, 3), dtype=X_L.dtype, device=X_L.device
@@ -185,6 +197,8 @@ class ShapeGuidedDiffusionSampler(SampleDiffusionWithMotif):
             "total_steps": int(total_steps),
             "schedule_scale": float(scale),
             "guided_ca_count": int(guided_ca.sum().item()),
+            "raw_delta_adjacent_rms": float(torch.sqrt(torch.diff(raw_ca_delta, dim=1).square().sum(dim=-1).mean()).cpu()) if raw_ca_delta.shape[1] > 1 else 0.0,
+            "smoothed_delta_adjacent_rms": float(torch.sqrt(torch.diff(ca_delta, dim=1).square().sum(dim=-1).mean()).cpu()) if ca_delta.shape[1] > 1 else 0.0,
             **receipt,
         }
         receipt_path = Path(self.shape_receipt_path)

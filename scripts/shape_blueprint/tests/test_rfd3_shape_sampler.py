@@ -98,6 +98,17 @@ class RFD3ShapeSamplerTests(unittest.TestCase):
         self.assertEqual(receipt["geometry_sha256"], "a" * 64)
         self.assertEqual(receipt["guided_ca_count"], 1)
 
+    def test_sequence_smoothing_suppresses_neighboring_displacement_jumps(self) -> None:
+        alternating = torch.tensor(
+            [[[0.5 if index % 2 == 0 else -0.5, 0.0, 0.0] for index in range(31)]],
+            dtype=torch.float32,
+        )
+        smoothed = ShapeGuidedDiffusionSampler._smooth_ca_delta(alternating)
+        raw_roughness = torch.linalg.vector_norm(torch.diff(alternating, dim=1), dim=-1).mean()
+        smooth_roughness = torch.linalg.vector_norm(torch.diff(smoothed, dim=1), dim=-1).mean()
+        self.assertLess(float(smooth_roughness), float(raw_roughness) * 0.2)
+        self.assertLessEqual(float(torch.linalg.vector_norm(smoothed, dim=-1).max()), 0.5)
+
     def test_guidance_is_inactive_outside_registered_window(self) -> None:
         sampler = self.sampler()
         coordinates = torch.randn((1, 2, 3))
