@@ -590,12 +590,17 @@ class Design(Base):
     # ═══════════════════════════════════════════════════════════════════════════
     # FRUSTRATION ANALYSIS (FrustraMPNN)
     # ═══════════════════════════════════════════════════════════════════════════
-    frustration_high_count = Column(Integer, nullable=True)    # Residues with frust <= -1.0
-    frustration_min_count = Column(Integer, nullable=True)     # Residues with frust >= 0.58
-    frustration_pct_high = Column(Float, nullable=True)        # Percent highly frustrated
+    # Canonical summary projection used by shared Design analytics. Numerical
+    # thresholds and classifications remain owned by the persisted backend
+    # threshold policy; these columns do not reclassify scores.
+    frustration_high_count = Column(Integer, nullable=True)
+    frustration_min_count = Column(Integer, nullable=True)
+    frustration_pct_high = Column(Float, nullable=True)        # 0..100 percentage
     frustration_residues = Column(JSON, nullable=True)         # Historical read-only per-residue projection
     frustration_csv_path = Column(String(500), nullable=True)  # Historical read-only CSV path
-    # Canonical manifest-first FrustraMPNN projection. New ingestion writes only these fields.
+    # Canonical manifest-first FrustraMPNN authority fields. The three scalar
+    # columns above are deterministic summary projections; these retain the
+    # immutable contract/artifact lineage needed to interpret them.
     frustrampnn_contract_version = Column(String(32), nullable=True)
     frustrampnn_status = Column(String(32), nullable=True)
     frustrampnn_source_sha256 = Column(String(64), nullable=True)
