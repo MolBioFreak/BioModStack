@@ -27,6 +27,7 @@ import type { ResidueRef } from '../structureViewer/contracts/structureIdentity.
 import { getFrustraMpnnResultContext } from './frustraMpnnResultSurface.js';
 import FrustraMpnnLandscapeOverview from './FrustraMpnnLandscapeOverview.js';
 import FrustraMpnnPlotlyAnalytics from './FrustraMpnnPlotlyAnalytics.js';
+import FrustraMpnnCrossDatasetExplorer from './FrustraMpnnCrossDatasetExplorer.js';
 
 const PAGE_SIZE = 500;
 const terminalJob = new Set(['completed', 'failed', 'cancelled']);
@@ -311,6 +312,8 @@ export default function FrustraMpnnResultsViewer({
                                 <ClassSummary title="Full-landscape classes" counts={detail.data.summary.complete_landscape_counts} fractions={detail.data.summary.complete_landscape_fractions} />
                             </div>
                         </section>
+
+                        <FrustraMpnnCrossDatasetExplorer currentDatasetId={job.id} />
 
                         {allResidues.length > 0 && <FrustraMpnnPlotlyAnalytics
                             residues={allResidues}

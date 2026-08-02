@@ -1,6 +1,7 @@
 import { api } from './api.js';
 import type { CmLandscapePage, CmLandscapeRow } from '../components/conformationalMapping/conformationalMappingApi.js';
 import type { FrustraMpnnStructureMap } from '../components/conformationalMapping/frustraMpnnViewerMetrics.js';
+import { parseFrustraMpnnMultidimensionalPage, type FrustraMpnnMultidimensionalPage } from '../components/frustraMpnnMultidimensionalModel.js';
 
 export type FrustraMpnnTerminalStatus = 'succeeded' | 'failed' | 'not_run';
 export type FrustraMpnnJobStatus = 'queued' | 'running' | 'awaiting_input' | 'completed' | 'failed' | 'cancelled';
@@ -475,3 +476,19 @@ export const fetchFrustraMpnnStructureMap = async (
 ): Promise<FrustraMpnnStructureMap> => (
     await api.get<FrustraMpnnStructureMap>(frustraMpnnArtifactUrl(jobId, artifactId), { signal })
 ).data;
+
+export const fetchFrustraMpnnMultidimensionalPoints = async (
+    datasetIds: string[] = [],
+    limit = 1000,
+    signal?: AbortSignal,
+): Promise<FrustraMpnnMultidimensionalPage> => {
+    const response = await api.get<unknown>('/api/frustrampnn/analytics/points', {
+        params: {
+            level: 'result',
+            limit,
+            ...(datasetIds.length > 0 ? { dataset_ids: datasetIds.join(',') } : {}),
+        },
+        signal,
+    });
+    return parseFrustraMpnnMultidimensionalPage(response.data);
+};

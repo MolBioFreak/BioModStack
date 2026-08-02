@@ -27,6 +27,7 @@ from database import (
     Job,
     get_session,
 )
+from services.frustrampnn.analytics import multidimensional_points, parse_dataset_ids
 from services.frustrampnn.jobs import (
     FrustraMPNNChildError,
     child_receipt,
@@ -275,6 +276,24 @@ async def list_results(
         "limit": limit,
         "offset": offset,
     }
+
+
+@router.get("/analytics/points")
+async def analytics_points(
+    level: str = Query("result", pattern="^(result|residue|mutation)$"),
+    dataset_ids: Optional[str] = Query(None, max_length=1000),
+    limit: int = Query(500, ge=1, le=5000),
+    offset: int = Query(0, ge=0),
+    session: AsyncSession = Depends(get_session),
+):
+    """Return bounded machine-described FrustraMPNN points across workflow datasets."""
+    return await multidimensional_points(
+        session,
+        level=level,  # type: ignore[arg-type]
+        dataset_ids=parse_dataset_ids(dataset_ids),
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/results/{invocation_id}")
