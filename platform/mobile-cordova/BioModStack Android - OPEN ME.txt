@@ -1,0 +1,21 @@
+BioModStack Android deliverables
+
+Project folder:
+/home/dalab/Desktop/BioModStack Cordova Android Project
+
+APK folder:
+/home/dalab/Desktop/BioModStack Android APK
+
+Direct APK path:
+/home/dalab/Desktop/BioModStack Android APK/BioModStack-debug-phone.apk
+
+Checksum file:
+/home/dalab/Desktop/BioModStack Android APK/BioModStack-debug-phone.apk.sha256
+
+SHA256:
+5a6095565479eb321c61cf67416143f1f5498a2bffab48b857773d5488839bf2
+
+Notes:
+- The APK is a debug sideload build for phone testing.
+- The project folder contains the full standalone Cordova wrapper and build scripts.
+- The APK folder contains the ready-to-transfer APK plus checksum and README.
