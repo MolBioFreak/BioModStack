@@ -12,6 +12,8 @@ import {
     useBioXpStatus,
     useConnectBioXp,
     useDisconnectBioXp,
+    useBioXpOperatorControlCatalog,
+    useInvokeBioXpOperatorAction,
 } from '../lib/bioxpClient';
 import { BioXpCameraPanel } from './BioXpCameraPanel';
 import { BioXpOperatorControlTabs } from './BioXpOperatorControlTabs';
@@ -63,7 +65,7 @@ const AXES: readonly AxisControls[] = [
         label: 'Z Axis',
         controls: [
             { label: 'Move −', operation: 'move-negative' },
-            { label: 'Home', operation: 'home' },
+            { label: 'OEM Z Home', operation: 'home' },
             { label: 'Move +', operation: 'move-positive' },
         ],
     },
@@ -71,7 +73,9 @@ const AXES: readonly AxisControls[] = [
         axis: 'g',
         label: 'Gripper',
         controls: [
+            { label: 'Move −', operation: 'move-negative' },
             { label: 'Home', operation: 'commission-home' },
+            { label: 'Move +', operation: 'move-positive' },
             { label: 'Open', operation: 'open' },
             { label: 'Close', operation: 'close' },
             { label: 'Open Wide', operation: 'open-wide' },
@@ -98,6 +102,21 @@ export function BioXpCockpit() {
     const executeCommand = useBioXpCommand();
     const stopCommand = useBioXpCommand();
     const emergencyStop = useBioXpEmergencyStop();
+    const operatorCatalog = useBioXpOperatorControlCatalog(true);
+    const invokeOperatorAction = useInvokeBioXpOperatorAction();
+    const [manualSteps, setManualSteps] = useState<Record<'x' | 'y' | 'z' | 'g', number>>({
+        x: 10000,
+        y: 10000,
+        z: 10000,
+        g: 10000,
+    });
+    const [absoluteTargets, setAbsoluteTargets] = useState<Record<'x' | 'y' | 'z' | 'g', number>>({
+        x: 60,
+        y: 0,
+        z: 65000,
+        g: 0,
+    });
+    const [zPseudoHome, setZPseudoHome] = useState<500 | 65000>(65000);
     const [controllerAction, setControllerAction] = useState<'claim' | 'recovery' | null>(null);
 
     const status = currentStatusData(statusQuery);
@@ -161,23 +180,52 @@ export function BioXpCockpit() {
         });
     };
 
-    const runControl = (axis: Axis, operation: Operation) => {
-        setControllerAction(null);
-        send({
-            command: 'run_axis_diagnostic',
-            expected_generation: generation,
-            idempotency_key: crypto.randomUUID(),
-            axis,
-            operation,
+    const operatorActionForPath = (path: string) => (operatorCatalog.data?.actions ?? []).find(
+        (action) => action.kind === 'primitive' && action.informational_path === path,
+    );
+
+    const invokeOperatorPath = (path: string, inputs: Record<string, unknown>) => {
+        const action = operatorActionForPath(path);
+        if (!action) return;
+        invokeOperatorAction.mutate({
+            actionId: action.action_id,
+            connectionGeneration: generation,
+            ownershipGeneration: operatorCatalog.data?.ownership_generation ?? 0,
+            inputs,
         });
     };
 
-    const stopAxis = (axis: Axis) => stopCommand.mutate({
-        command: 'stop_axis_diagnostic',
-        expected_generation: generation,
-        idempotency_key: crypto.randomUUID(),
-        axis,
-    });
+    const runControl = (axis: Axis, operation: Operation) => {
+        setControllerAction(null);
+        if (operation === 'move-negative' || operation === 'move-positive') {
+            if (axis === 'door') return;
+            const magnitude = Math.abs(manualSteps[axis]);
+            invokeOperatorPath('/motion/oem/manual/relative', {
+                axis,
+                steps: operation === 'move-negative' ? -magnitude : magnitude,
+            });
+            return;
+        }
+        if (operation === 'home' || operation === 'commission-home') {
+            invokeOperatorPath('/motion/oem/manual/home', { axis });
+            return;
+        }
+        const path = axis === 'g'
+            ? ({ open: '/motion/gripper/open', close: '/motion/gripper/close', 'open-wide': '/motion/gripper/open_wide' } as const)[operation as 'open' | 'close' | 'open-wide']
+            : ({ open: '/motion/thermal_door/open', close: '/motion/thermal_door/close' } as const)[operation as 'open' | 'close'];
+        if (path) invokeOperatorPath(path, {});
+    };
+
+    const runAbsolute = (axis: 'x' | 'y' | 'z' | 'g') => invokeOperatorPath(
+        '/motion/oem/manual/absolute',
+        {
+            axis,
+            position_steps: absoluteTargets[axis],
+            ...(axis === 'z' ? { z_pseudo_home: zPseudoHome } : {}),
+        },
+    );
+
+    const stopAxis = (axis: Axis) => invokeOperatorPath('/motion/diagnostics/stop', { axis });
 
     const latestResult = cockpitState.latestResult;
     const latestResultText = latestResult && 'command' in latestResult
@@ -238,8 +286,6 @@ export function BioXpCockpit() {
 
             <BioXpQuickDashboard connected={active} />
 
-            <BioXpOperatorControlTabs generation={generation} connected={active} />
-
             <section className="rounded-xl border border-amber-700/60 bg-amber-950/20 p-4">
                 <h2 className="text-lg font-semibold">Controller Transport & Recovery</h2>
                 <p className="mt-1 text-sm text-slate-400">Claim the robot USB transport first, then clear the non-homing motion latch.</p>
@@ -282,10 +328,25 @@ export function BioXpCockpit() {
             </section>
 
             <section className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
-                <h2 className="text-lg font-semibold">Manual Controls</h2>
-                {unavailable.run_axis_diagnostic && (
-                    <p className="mt-1 break-words text-sm text-amber-200">Motion unavailable: {unavailable.run_axis_diagnostic}</p>
+                <h2 className="text-lg font-semibold">Exact OEM Manual Controls</h2>
+                <p className="mt-1 text-sm text-slate-400">Relative moves use the literal OEM <code>moveSteps(axis, steps)</code> route. Home/Open/Close use the axis-specific OEM mechanisms.</p>
+                {operatorCatalog.isError && (
+                    <p className="mt-1 break-words text-sm text-red-300">Robot manual-control catalog unavailable: {bioXpErrorText(operatorCatalog.error)}</p>
                 )}
+                <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                        type="button"
+                        disabled={!active || !operatorActionForPath('/motion/oem/machine_config') || invokeOperatorAction.isPending}
+                        onClick={() => invokeOperatorPath('/motion/oem/machine_config', {})}
+                        className={actionClass}
+                    >Show OEM axis/config tables</button>
+                    <button
+                        type="button"
+                        disabled={!active || !operatorActionForPath('/motion/oem/position_table') || invokeOperatorAction.isPending}
+                        onClick={() => invokeOperatorPath('/motion/oem/position_table', {})}
+                        className={actionClass}
+                    >Show OEM position table</button>
+                </div>
                 <div className="mt-3 grid gap-3 lg:grid-cols-2">
                     {AXES.map(({ axis, label, controls }) => (
                         <article key={axis} className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
@@ -293,19 +354,76 @@ export function BioXpCockpit() {
                                 <h3 className="font-semibold">{label}</h3>
                                 <button
                                     type="button"
-                                    disabled={!isAvailable('stop_axis_diagnostic') || cockpitState.stopBlocked}
-                                    title={unavailable.stop_axis_diagnostic}
+                                    disabled={!active || !operatorActionForPath('/motion/diagnostics/stop') || invokeOperatorAction.isPending}
+                                    title="Immediate OEM motor stop for this component"
                                     onClick={() => stopAxis(axis)}
                                     className="rounded bg-red-800 px-3 py-1.5 text-sm font-semibold hover:bg-red-700 disabled:opacity-35"
                                 >Stop</button>
                             </div>
+                            {axis !== 'door' && (
+                                <div className="mt-3 grid gap-2">
+                                    <label className="block text-xs text-slate-300">
+                                        Relative move steps
+                                        <input
+                                            type="number"
+                                            min={1}
+                                            max={160000}
+                                            step={1}
+                                            value={manualSteps[axis]}
+                                            onChange={(event) => {
+                                                const parsed = Number.parseInt(event.target.value || '1', 10);
+                                                const bounded = Number.isFinite(parsed) ? Math.max(1, Math.min(160000, Math.abs(parsed))) : 1;
+                                                setManualSteps((current) => ({ ...current, [axis]: bounded }));
+                                            }}
+                                            className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 font-mono text-sm"
+                                        />
+                                    </label>
+                                    <label className="block text-xs text-slate-300">
+                                        OEM absolute target (steps)
+                                        <div className="mt-1 flex gap-2">
+                                            <input
+                                                type="number"
+                                                step={1}
+                                                value={absoluteTargets[axis]}
+                                                onChange={(event) => {
+                                                    const parsed = Number.parseInt(event.target.value || '0', 10);
+                                                    setAbsoluteTargets((current) => ({
+                                                        ...current,
+                                                        [axis]: Number.isFinite(parsed) ? parsed : 0,
+                                                    }));
+                                                }}
+                                                className="min-w-0 flex-1 rounded border border-slate-700 bg-slate-950 p-2 font-mono text-sm"
+                                            />
+                                            <button
+                                                type="button"
+                                                disabled={!active || !operatorActionForPath('/motion/oem/manual/absolute') || invokeOperatorAction.isPending}
+                                                onClick={() => runAbsolute(axis)}
+                                                className={actionClass}
+                                            >Go absolute</button>
+                                        </div>
+                                    </label>
+                                    {axis === 'z' && (
+                                        <label className="block text-xs text-amber-200">
+                                            OEM Z context / PSUDO_Z_HOME
+                                            <select
+                                                value={zPseudoHome}
+                                                onChange={(event) => setZPseudoHome(Number(event.target.value) === 500 ? 500 : 65000)}
+                                                className="mt-1 w-full rounded border border-amber-700 bg-slate-950 p-2 font-mono text-sm"
+                                            >
+                                                <option value={65000}>65000 — low-home context</option>
+                                                <option value={500}>500 — high-home context</option>
+                                            </select>
+                                        </label>
+                                    )}
+                                </div>
+                            )}
                             <div className="mt-3 flex flex-wrap gap-2">
                                 {controls.map(({ label: controlLabel, operation }) => (
                                     <button
                                         key={operation}
                                         type="button"
-                                        disabled={!isAvailable('run_axis_diagnostic') || busy}
-                                        title={unavailable.run_axis_diagnostic}
+                                        disabled={!active || operatorCatalog.isLoading || invokeOperatorAction.isPending}
+                                        title="Robot-owned exact OEM action"
                                         onClick={() => runControl(axis, operation)}
                                         className={actionClass}
                                     >{controlLabel}</button>
@@ -314,7 +432,24 @@ export function BioXpCockpit() {
                         </article>
                     ))}
                 </div>
+                {invokeOperatorAction.error && (
+                    <p role="alert" className="mt-3 whitespace-pre-wrap break-words text-sm text-red-300">{bioXpErrorText(invokeOperatorAction.error)}</p>
+                )}
+                {invokeOperatorAction.data && (
+                    <details className="mt-3 rounded border border-slate-800 bg-slate-900/60 p-3" open>
+                        <summary className="cursor-pointer text-sm font-semibold">Latest exact-OEM action receipt</summary>
+                        <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap text-xs text-slate-300">{JSON.stringify(invokeOperatorAction.data, null, 2)}</pre>
+                    </details>
+                )}
             </section>
+
+            <details className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
+                <summary className="cursor-pointer text-lg font-semibold">Advanced Full Command Catalog</summary>
+                <p className="mt-1 text-sm text-slate-400">All primitive, service, recovery, and diagnostic routes. Kept collapsed so handler state and exact manual controls remain primary.</p>
+                <div className="mt-4">
+                    <BioXpOperatorControlTabs generation={generation} connected={active} />
+                </div>
+            </details>
 
             <BioXpCameraPanel
                 connected={active}
