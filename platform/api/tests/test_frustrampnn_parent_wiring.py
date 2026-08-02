@@ -8,6 +8,8 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -65,11 +67,127 @@ def test_structure_prediction_has_one_canonical_manifest_first_cutover() -> None
     assert ".subscribe" not in workflow
     assert "frustrampnn" in workflow
     assert "frustrampnn not_requested" in workflow
+    assert "structure_prediction_frustrampnn_terminal_manifest" in workflow
+    assert "status: 'not_requested'" in workflow
+    assert "requiredness: 'not_requested'" in workflow
+    assert "candidate_count: 0" in workflow
     assert "errorStrategy 'terminate'" in CANONICAL_MODULE.read_text(encoding="utf-8")
     assert "predicted.getName()" not in prediction_module
     assert "MessageDigest.getInstance('SHA-256')" in prediction_module
     assert "canonicalProducerOutputs(BoltzFromSequence.out.cifs, 'boltz')" not in prediction_module
     assert "canonicalProducerOutputs(RF3FromSequence.out.cifs, 'rf3')" not in prediction_module
+
+
+@pytest.mark.asyncio
+async def test_not_requested_stage_continues_ordinary_parent_result_ingestion(
+    tmp_path: Path,
+) -> None:
+    from services.result_ingester import _ingest_explicit_frustrampnn_results
+
+    job = SimpleNamespace(
+        id="job-frustrampnn-disabled",
+        stage_outputs={"structure_prediction": ["final/design.pdb"], "frustrampnn": []},
+        provenance={
+            "stage_terminal_states": {
+                "structure_prediction": {
+                    "status": "complete",
+                    "outputs": ["final/design.pdb"],
+                },
+                "frustrampnn": {"status": "not_requested", "outputs": []}
+            }
+        },
+    )
+
+    created = await _ingest_explicit_frustrampnn_results(
+        cast(Any, job),
+        tmp_path,
+        cast(Any, SimpleNamespace()),
+        commit=True,
+    )
+
+    assert created is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stage_outputs", "terminal_states"),
+    [
+        (None, {"frustrampnn": {"status": "not_requested", "outputs": []}}),
+        ([], {"frustrampnn": {"status": "not_requested", "outputs": []}}),
+        ({}, {"frustrampnn": {"status": "not_requested", "outputs": []}}),
+        (
+            {"structure_prediction": ["final/design.pdb"]},
+            {"frustrampnn": {"status": "not_requested", "outputs": []}},
+        ),
+        (
+            {},
+            {"FrustraMPNN": {"status": "not_requested", "outputs": []}},
+        ),
+        ({"frustrampnn": []}, {"frustrampnn": {"status": "not_requested"}}),
+        (
+            {"frustrampnn": []},
+            {"frustrampnn": {"status": "not_requested", "outputs": None}},
+        ),
+        (
+            {"frustrampnn": None},
+            {"frustrampnn": {"status": "not_requested", "outputs": []}},
+        ),
+        (
+            {"frustrampnn": {}},
+            {"frustrampnn": {"status": "not_requested", "outputs": []}},
+        ),
+        (
+            {"canonical_frustrampnn": []},
+            {"frustrampnn": {"status": "not_requested", "outputs": []}},
+        ),
+        (
+            {"frustrampnn": [], "FrustraMPNN": []},
+            {"frustrampnn": {"status": "not_requested", "outputs": []}},
+        ),
+        (
+            {"frustrampnn": [], " frustrampnn": []},
+            {"frustrampnn": {"status": "not_requested", "outputs": []}},
+        ),
+        (
+            {"frustrampnn": []},
+            {
+                "frustrampnn": {"status": "not_requested", "outputs": []},
+                "FrustraMPNN": {"status": "not_requested", "outputs": []},
+            },
+        ),
+        (
+            {"frustrampnn": []},
+            {
+                "frustrampnn": {"status": "not_requested", "outputs": []},
+                "canonical_frustrampnn": {
+                    "status": "not_requested",
+                    "outputs": [],
+                },
+            },
+        ),
+    ],
+)
+async def test_not_requested_stage_rejects_non_exact_persisted_state(
+    tmp_path: Path,
+    stage_outputs: object,
+    terminal_states: object,
+) -> None:
+    from services.frustrampnn.persistence import FrustraMPNNPersistenceError
+    from services.result_ingester import _ingest_explicit_frustrampnn_results
+
+    job = SimpleNamespace(
+        id="job-frustrampnn-disabled-malformed",
+        stage_outputs=stage_outputs,
+        provenance={"stage_terminal_states": terminal_states},
+    )
+
+    with pytest.raises(FrustraMPNNPersistenceError, match="not-requested"):
+        await _ingest_explicit_frustrampnn_results(
+            cast(Any, job),
+            tmp_path,
+            cast(Any, SimpleNamespace()),
+            commit=True,
+        )
 
 
 def test_canonical_scheduler_publishes_closed_candidate_bundles_without_legacy_gpu_flags() -> None:

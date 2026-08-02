@@ -92,6 +92,10 @@ def test_plain_pdb_projection_and_scheduler_owned_terminal_reporting() -> None:
     assert "params.frustrampnn_requiredness ?: 'required'" in workflow
     assert "frustrampnn_requiredness must be required" in workflow
     assert "frustrampnn not_requested" in workflow
+    assert "protein_design_frustrampnn_terminal_manifest" in workflow
+    assert "status: 'not_requested'" in workflow
+    assert "requiredness: 'not_requested'" in workflow
+    assert "candidate_count: 0" in workflow
     assert "publish_frustrampnn_bundle.py" in workflow
     assert "frustrampnn complete" in workflow
     assert "test \\\"\\${#outputs[@]}\\\" -gt 0" in workflow

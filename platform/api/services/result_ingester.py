@@ -3275,7 +3275,58 @@ async def _ingest_explicit_frustrampnn_results(
 ) -> int | None:
     """Ingest exact terminal stage products, or return None when none exist."""
 
-    if current_job is None or not isinstance(current_job.stage_outputs, dict):
+    if current_job is None:
+        return None
+
+    provenance = (
+        current_job.provenance if isinstance(current_job.provenance, dict) else {}
+    )
+    terminal_states = provenance.get("stage_terminal_states")
+    frustrampnn_terminal_entries = (
+        [
+            (stage, state)
+            for stage, state in terminal_states.items()
+            if str(stage).strip().lower() in _FRUSTRAMPNN_TERMINAL_STAGES
+        ]
+        if isinstance(terminal_states, dict)
+        else []
+    )
+    not_requested_entries = [
+        (stage, state)
+        for stage, state in frustrampnn_terminal_entries
+        if isinstance(state, dict) and state.get("status") == "not_requested"
+    ]
+    if not_requested_entries:
+        if (
+            len(frustrampnn_terminal_entries) != 1
+            or frustrampnn_terminal_entries[0]
+            != ("frustrampnn", {"status": "not_requested", "outputs": []})
+        ):
+            raise FrustraMPNNPersistenceError(
+                "FrustraMPNN not-requested terminal state must be exact"
+            )
+        frustrampnn_output_entries = (
+            [
+                (stage, outputs)
+                for stage, outputs in current_job.stage_outputs.items()
+                if str(stage).strip().lower() in _FRUSTRAMPNN_TERMINAL_STAGES
+            ]
+            if isinstance(current_job.stage_outputs, dict)
+            else []
+        )
+        if (
+            len(frustrampnn_output_entries) != 1
+            or frustrampnn_output_entries[0] != ("frustrampnn", [])
+        ):
+            raise FrustraMPNNPersistenceError(
+                "FrustraMPNN not-requested persisted stage outputs must be exactly empty"
+            )
+        # This terminal component intentionally has no candidate bundle to ingest.
+        # Continue with ordinary parent-result ingestion rather than returning a
+        # canonical candidate count and bypassing the parent workflow's Designs.
+        return None
+
+    if not isinstance(current_job.stage_outputs, dict):
         return None
     explicit: list[str] = []
     discovered_stage = False
