@@ -1880,12 +1880,14 @@ async def launch_nextflow_job(
             logger.info(f"Job {job_id} was cancelled just before spawn, aborting")
             return
 
-        # Canonical conformational-mapping launch parameters are intentionally
-        # closed: cm_request_path is request authority and gpu_id is the only
-        # scheduler-owned addition.  Generic CPU-share hints must not weaken
-        # that boundary or make a valid request fail closed downstream.
+        # Canonical conformational-mapping and FrustraMPNN launch parameters
+        # are intentionally closed. Their request/manifest is authority and
+        # gpu_id is the only scheduler-owned addition. Generic CPU-share hints
+        # must not weaken those boundaries or make valid requests fail closed;
+        # both workflows consume deployment-owned CPU defaults from Nextflow
+        # configuration instead.
         dynamic_gpu_cpus = None
-        if model_id != "conformational_mapping":
+        if model_id not in {"conformational_mapping", "frustrampnn"}:
             dynamic_gpu_cpus = await _resolve_dynamic_gpu_cpu_share(session, job, launch_params)
         if dynamic_gpu_cpus is not None:
             launch_params["cpus_per_gpu"] = dynamic_gpu_cpus
