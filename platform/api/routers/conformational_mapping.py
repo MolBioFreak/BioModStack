@@ -236,6 +236,22 @@ async def _ensure_managed_confornets_checkpoint(
         return None
     digest = _sha256_path(checkpoint)
     size = checkpoint.stat().st_size
+    existing_by_digest = (
+        await session.execute(
+            select(ConformationalMappingSource).where(
+                ConformationalMappingSource.source_kind == "confornets_checkpoint",
+                ConformationalMappingSource.content_sha256 == digest,
+                ConformationalMappingSource.immutable.is_(True),
+            )
+        )
+    ).scalars().all()
+    if len(existing_by_digest) == 1:
+        existing = existing_by_digest[0]
+        if existing.size_bytes != size or existing.principal_id != _PERSONAL_WORKFLOW_PRINCIPAL:
+            raise HTTPException(status_code=503, detail="managed ConforNets checkpoint identity conflicts")
+        return existing
+    if len(existing_by_digest) > 1:
+        raise HTTPException(status_code=503, detail="managed ConforNets checkpoint identity is ambiguous")
     source_id = f"cm_src_server_confornets_checkpoint_{digest[:32]}"
     existing = await session.get(ConformationalMappingSource, source_id)
     if existing is not None:

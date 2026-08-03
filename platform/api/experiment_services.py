@@ -917,6 +917,16 @@ class ExistingJobMaterializer:
         scheduler = payload.get("scheduler")
         if not isinstance(scheduler, dict):
             raise DispatchFailure("dispatch payload has no scheduler object")
+        scheduler_params = scheduler.get("params")
+        if isinstance(scheduler_params, dict) and str(scheduler_params.get("workflow_adapter", "")).startswith("bms.cm."):
+            from services.conformational_mapping.global_adapter import materialize_preallocated_cm_job
+
+            return await materialize_preallocated_cm_job(
+                self.core_session,
+                attempt_id=attempt_id,
+                scheduler=scheduler,
+                run_group_id=str(payload.get("run_group_id") or ""),
+            )
         required = ("name", "model_id", "mode", "params")
         if any(field not in scheduler for field in required) or not isinstance(scheduler["params"], dict):
             raise DispatchFailure("dispatch scheduler payload is incomplete")
