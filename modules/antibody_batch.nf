@@ -51,6 +51,7 @@ process BatchBoltzValidation {
     def boltzAnchorArgs = anchor_target ? "--anchor_target --target_chains \"${resolvedTargetChains}\" --template_manifest target_templates/manifest.json" : ""
     def boltzBatchCache = shellQuote(params.get('boltz_models', '') ?: '')
     def boltzBatchCacheFallback = shellQuote("${params.get('data_root', '') ?: params.get('code_root', '.')}/cache/boltz")
+    def boltzHomeFallback = shellQuote("${params.get('data_root', '') ?: params.get('code_root', '.')}/cache/boltz/home")
     """
     set -euo pipefail
     shopt -s nullglob
@@ -79,16 +80,26 @@ process BatchBoltzValidation {
     # This loads the model ONCE and processes all sequences.
     # Keep heavyweight Boltz checkpoints in the shared BMS model/cache path;
     # never let Boltz repopulate HOME/.boltz inside each Nextflow task work dir.
+    # The shared model cache may be read-only in Apptainer; keep only HOME writable.
     BOLTZ_SHARED_CACHE=${boltzBatchCache}
     if [ -z "\$BOLTZ_SHARED_CACHE" ]; then
         BOLTZ_SHARED_CACHE=${boltzBatchCacheFallback}
+    fi
+    # The managed container binds the host Boltz model directory at /boltzcache.
+    if [ -d /boltzcache ]; then
+        BOLTZ_SHARED_CACHE=/boltzcache
     fi
     export BOLTZ_CACHE_DIR="\$BOLTZ_SHARED_CACHE"
     export BOLTZ_CACHE="\$BOLTZ_SHARED_CACHE"
     export NUMBA_CACHE_DIR="\$(pwd)/.numba_cache"
     export XDG_CACHE_HOME="\$(pwd)/.cache_home"
     export HOME="\$BOLTZ_SHARED_CACHE/home"
-    mkdir -p "\$BOLTZ_CACHE_DIR" "\$NUMBA_CACHE_DIR" "\$XDG_CACHE_HOME" "\$HOME"
+    mkdir -p "\$BOLTZ_CACHE_DIR" "\$NUMBA_CACHE_DIR" "\$XDG_CACHE_HOME"
+    if ! mkdir -p "\$HOME" 2>/dev/null; then
+        BOLTZ_HOME_FALLBACK=${boltzHomeFallback}
+        mkdir -p "\$BOLTZ_HOME_FALLBACK"
+        export HOME="\$BOLTZ_HOME_FALLBACK"
+    fi
     
     boltz predict yamls/ \\
         --cache "\$BOLTZ_CACHE_DIR" \\
