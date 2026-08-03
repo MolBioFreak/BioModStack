@@ -192,6 +192,9 @@ async def materialize_preallocated_cm_job(
         encoding="utf-8",
     )
     token, token_digest = issue_request_capability()
+    admission = _cm_job_admission(backend, {"targets": analysis_targets})
+    if backend == "confornets" and int(submission.get("confornets", {}).get("confornet_count", 0)) >= 5:
+        admission["vram_estimate_mb"] = 32000
     job = Job(
         id=attempt_id,
         name=str(submission["name"]),
@@ -201,7 +204,7 @@ async def materialize_preallocated_cm_job(
         params=materialized.launch_params,
         output_dir=str(output_root),
         queue_status="queued",
-        **_cm_job_admission(backend, {"targets": analysis_targets}),
+        **admission,
         lineage_root_job_id=attempt_id,
         batch_id=run_group_id,
         stage_family="conformational_mapping",
