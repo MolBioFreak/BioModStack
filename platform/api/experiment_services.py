@@ -1066,7 +1066,7 @@ async def retry_failed_run_group(
     )
     for run in runs:
         previous = latest_by_run.get(run.resource_id)
-        if previous is None or previous.state != "failed":
+        if previous is None or previous.state not in {"failed", "cancelled"}:
             continue
         preparation_id = replacement_preparation_ids.get(run.resource_id, run.preparation_id)
         preparation = await session.get(ExperimentWorkflowPreparation, preparation_id)
