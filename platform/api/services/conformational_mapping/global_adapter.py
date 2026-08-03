@@ -5,9 +5,10 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import ConformationalMappingSource, Job
+from database import ConformationalMappingRequest, ConformationalMappingSource, Job
 from paths import get_results_dir
 from routers.conformational_mapping import (
     _PERSONAL_WORKFLOW_PRINCIPAL,
@@ -72,6 +73,23 @@ async def materialize_preallocated_cm_job(
         raise DispatchFailure("global CM adapter requires a typed generator submission")
     if str(submission.get("backend")) != backend:
         raise DispatchFailure("CM adapter/backend identity disagrees")
+
+    existing_job = await core_session.get(Job, attempt_id)
+    if existing_job is not None:
+        existing_request = (
+            await core_session.execute(
+                select(ConformationalMappingRequest).where(ConformationalMappingRequest.job_id == attempt_id)
+            )
+        ).scalar_one_or_none()
+        if existing_request is None:
+            raise DispatchFailure("preallocated CM job exists without its canonical request")
+        return {
+            "scheduler_job_id": attempt_id,
+            "request_id": existing_request.request_id,
+            "request_sha256": existing_request.request_sha256,
+            "core_status": existing_job.status,
+            "recovered_existing": True,
+        }
 
     output_root = get_results_dir() / f"conformational_mapping_{attempt_id}"
     if output_root.exists() and any(output_root.iterdir()):
