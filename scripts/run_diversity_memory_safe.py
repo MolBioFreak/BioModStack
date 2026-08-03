@@ -77,8 +77,11 @@ def _single_objective_output(
         confornet=confornet,
         num_recycles=num_recycles,
     )
+    si_input = si_input.unsqueeze(1)
+    si_trunk = si_trunk.unsqueeze(1)
+    zij_trunk = zij_trunk.unsqueeze(1)
     if objective is diversity.ObjectiveType.DIST_CDF_MSE:
-        distogram_logits = model.aux_heads.distogram(z=zij_trunk)
+        distogram_logits = model.aux_heads.distogram(z=zij_trunk.squeeze(1))
         return distogram_to_cdf(distogram_logits)
 
     batch = copy.deepcopy(query.batch)
