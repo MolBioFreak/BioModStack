@@ -1101,6 +1101,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment=BMS_RUNTIME_MODE={DEV_RUNTIME_MODE}
         Environment=BMS_FRONTEND_HEALTH_URL=http://127.0.0.1:{dev_web_host_port}/
         Environment=BMS_API_MODE=dev
+        Environment=BMS_API_RELOAD=0
         Environment=BMS_API_BIND_PORT={dev_api_host_port}
         Environment=BMS_DATA={dev_data_root}
         Environment=BMS_STATE_DIR={dev_data_root}
@@ -1122,7 +1123,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Restart=on-failure
         RestartSec=10
         TimeoutStopSec=20
-        KillMode=control-group
+        KillMode=process
         {api_limits}
         StandardOutput=append:{API_LOG}
         StandardError=append:{API_LOG}
