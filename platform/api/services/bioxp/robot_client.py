@@ -210,8 +210,14 @@ class BioXpRobotClient:
                     "collect_hardware_snapshot",
                     timeout_override=_AUTOMATIC_SNAPSHOT_TIMEOUT_SECONDS,
                 )
-                _require_published_snapshot(collected)
+                snapshot_id = _require_published_snapshot(collected)
                 payload = await self.probe_status_only()
+                payload = dict(payload)
+                payload["automatic_snapshot_refresh"] = {
+                    "attempted": True,
+                    "published": True,
+                    "snapshot_id": snapshot_id,
+                }
                 self._snapshot_retry_after = 0.0
             except (RobotResponseError, RobotTransportError) as exc:
                 # Runtime reachability remains truthful when only the query-only

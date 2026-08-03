@@ -11,7 +11,11 @@ from typing import Any, Protocol
 from urllib.parse import urlsplit
 
 from .errors import ConnectionStateError, ProfileStoreError, TargetPolicyError
-from .models import BioXpProfile, BioXpSnapshot
+from .models import (
+    DEFAULT_BIOXP_FRESHNESS_BUDGET_SECONDS,
+    BioXpProfile,
+    BioXpSnapshot,
+)
 from .profile_store import BioXpProfileStore
 from .robot_client import BioXpRobotClient, CameraImage
 from .target_policy import BioXpTargetPolicy, ValidatedBioXpTarget
@@ -69,7 +73,7 @@ class BioXpConnectionService:
         target_policy: BioXpTargetPolicy,
         *,
         client_factory: ClientFactory | None = None,
-        freshness_budget_seconds: float = 30.0,
+        freshness_budget_seconds: float | None = DEFAULT_BIOXP_FRESHNESS_BUDGET_SECONDS,
         active_probe_interval_seconds: float | None = None,
         clock: Clock | None = None,
         initial_generation: int | None = None,
@@ -95,6 +99,7 @@ class BioXpConnectionService:
         self._hardware_observed_at: datetime | None = None
         self._hardware_observation_fresh: bool | None = None
         self._hardware_evidence_error: str | None = None
+        self._automatic_snapshot_refresh: dict[str, Any] | None = None
         self._capabilities: tuple[str, ...] = ()
         self._startup_lifecycle: dict[str, Any] | None = None
         self._maintenance_state: dict[str, Any] | None = None
@@ -104,16 +109,38 @@ class BioXpConnectionService:
 
     async def save_profile(self, profile: BioXpProfile) -> BioXpSnapshot:
         canonical = self.target_policy.validate(profile.api_url)
-        normalized = profile.model_copy(update={"api_url": canonical.api_url})
         async with self._transition_lock:
+            existing = self.profile_store.load()
+            freshness_budget_seconds = (
+                profile.freshness_budget_seconds
+                if "freshness_budget_seconds" in profile.model_fields_set or existing is None
+                else existing.freshness_budget_seconds
+            )
+            normalized = profile.model_copy(update={
+                "api_url": canonical.api_url,
+                "freshness_budget_seconds": freshness_budget_seconds,
+            })
             await self._deactivate_locked(increment=bool(self._client or self._active_target))
             self.profile_store.save(normalized)
+            self.freshness_budget_seconds = normalized.freshness_budget_seconds
         return self.snapshot()
 
     async def forget_profile(self) -> BioXpSnapshot:
         async with self._transition_lock:
             await self._deactivate_locked(increment=True)
             self.profile_store.forget()
+            self.freshness_budget_seconds = DEFAULT_BIOXP_FRESHNESS_BUDGET_SECONDS
+        return self.snapshot()
+
+    async def set_freshness_budget_seconds(self, value: float | None) -> BioXpSnapshot:
+        """Persist the BMS age-expiry policy without reconnecting or touching hardware."""
+        async with self._transition_lock:
+            profile = self.profile_store.load()
+            if profile is None:
+                raise ConnectionStateError("Save a BioXP profile before changing freshness policy")
+            updated = profile.model_copy(update={"freshness_budget_seconds": value})
+            self.profile_store.save(updated)
+            self.freshness_budget_seconds = value
         return self.snapshot()
 
     async def connect(self) -> BioXpSnapshot:
@@ -130,6 +157,7 @@ class BioXpConnectionService:
             await self._stop_active_probe_locked()
             if self._client is not None:
                 await self._client.close()
+            self.freshness_budget_seconds = profile.freshness_budget_seconds
             self._generation += 1
             self._clear_observation()
             self._active_target = target
@@ -230,6 +258,9 @@ class BioXpConnectionService:
                 if status_only
                 else await self._client.probe()
             )
+            automatic_snapshot_refresh = payload.get("automatic_snapshot_refresh")
+            if isinstance(automatic_snapshot_refresh, dict):
+                self._automatic_snapshot_refresh = copy.deepcopy(automatic_snapshot_refresh)
             startup = payload.get("startup")
             self._startup_lifecycle = copy.deepcopy(startup) if isinstance(startup, dict) else None
             found_maintenance, maintenance_state = _find_maintenance_state(payload)
@@ -328,7 +359,7 @@ class BioXpConnectionService:
         try:
             while True:
                 await asyncio.sleep(self.active_probe_interval_seconds)
-                await self.probe_status_only()
+                await self.probe()
         except asyncio.CancelledError:
             raise
         except (ConnectionStateError, TargetPolicyError):
@@ -342,6 +373,7 @@ class BioXpConnectionService:
         self._hardware_observed_at = None
         self._hardware_observation_fresh = None
         self._hardware_evidence_error = None
+        self._automatic_snapshot_refresh = None
         self._capabilities = ()
         self._startup_lifecycle = None
         self._maintenance_state = None
@@ -360,7 +392,7 @@ class BioXpConnectionService:
         stale = False
         if self._observed_at is not None:
             age = max(0.0, (now - self._observed_at).total_seconds())
-            fresh = age <= self.freshness_budget_seconds
+            fresh = self.freshness_budget_seconds is None or age <= self.freshness_budget_seconds
             stale = not fresh
         expose_observation = fresh is True
         return BioXpSnapshot(
@@ -380,6 +412,7 @@ class BioXpConnectionService:
             hardware_observation_fresh=self._hardware_observation_fresh,
             hardware_observation_stale=self._hardware_observation_fresh is False,
             hardware_evidence_error=self._hardware_evidence_error,
+            automatic_snapshot_refresh=copy.deepcopy(self._automatic_snapshot_refresh),
             capabilities=self._capabilities,
             observed_at=self._observed_at,
             freshness_budget_seconds=self.freshness_budget_seconds,
@@ -455,7 +488,7 @@ def _robot_evidence_time(
     payload: dict[str, Any],
     *,
     now: datetime,
-    local_freshness_budget_seconds: float,
+    local_freshness_budget_seconds: float | None,
 ) -> tuple[datetime | None, str | None]:
     """Preserve robot-owned hardware cache age separately from runtime liveness."""
 

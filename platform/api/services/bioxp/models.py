@@ -6,6 +6,20 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
+DEFAULT_BIOXP_FRESHNESS_BUDGET_SECONDS = 30 * 60
+
+
+class BioXpFreshnessSettings(BaseModel):
+    """BMS observation expiry; ``null`` disables only local age expiry."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    freshness_budget_seconds: float | None = Field(
+        default=DEFAULT_BIOXP_FRESHNESS_BUDGET_SECONDS,
+        gt=0,
+    )
+
+
 class BioXpProfile(BaseModel):
     """The only persisted BMS-side BioXP configuration schema."""
 
@@ -14,6 +28,10 @@ class BioXpProfile(BaseModel):
     schema_version: Literal[1] = 1
     display_name: str = Field(default="BioXP3200", min_length=1, max_length=120)
     api_url: str = Field(min_length=1, max_length=2048)
+    freshness_budget_seconds: float | None = Field(
+        default=DEFAULT_BIOXP_FRESHNESS_BUDGET_SECONDS,
+        gt=0,
+    )
 
 
 class BioXpSnapshot(BaseModel):
@@ -33,9 +51,10 @@ class BioXpSnapshot(BaseModel):
     hardware_observation_fresh: bool | None = None
     hardware_observation_stale: bool = False
     hardware_evidence_error: str | None = None
+    automatic_snapshot_refresh: dict[str, Any] | None = None
     capabilities: tuple[str, ...] = ()
     observed_at: datetime | None = None
-    freshness_budget_seconds: float = Field(gt=0)
+    freshness_budget_seconds: float | None = Field(default=DEFAULT_BIOXP_FRESHNESS_BUDGET_SECONDS, gt=0)
     observation_fresh: bool | None = None
     observation_stale: bool = False
     last_observed_reachable: bool | None = None

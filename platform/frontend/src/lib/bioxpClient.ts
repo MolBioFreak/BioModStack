@@ -14,9 +14,10 @@ export interface BioXpConnectionSnapshot {
     hardware_fresh: boolean | null;
     hardware_stale: boolean;
     hardware_evidence_error: string | null;
+    automatic_snapshot_refresh: Record<string, unknown> | null;
     capabilities: string[];
     observed_at: string | null;
-    freshness_budget_seconds: number;
+    freshness_budget_seconds: number | null;
     fresh: boolean | null;
     last_error: string | null;
     startup_lifecycle: BioXpStartupLifecycle | null;
@@ -286,6 +287,7 @@ export interface BioXpProfileView {
     valid: boolean;
     display_name: string | null;
     target_url: string | null;
+    freshness_budget_seconds: number | null;
     detail?: string;
 }
 
@@ -293,6 +295,7 @@ export interface BioXpProfileWrite {
     schema_version?: 1;
     display_name: string;
     api_url: string;
+    freshness_budget_seconds?: number | null;
 }
 
 export type BioXpProtocolStep =
@@ -657,6 +660,14 @@ export const useDisconnectBioXp = () => useRefreshMutation(
 
 export const useProbeBioXp = () => useRefreshMutation(
     async () => (await api.post<BioXpConnectionSnapshot>('/api/bioxp/connection/probe')).data,
+);
+
+export const useUpdateBioXpFreshness = () => useRefreshMutation(
+    async (freshnessBudgetSeconds: number | null) => (
+        await api.put<BioXpConnectionSnapshot>('/api/bioxp/settings/freshness', {
+            freshness_budget_seconds: freshnessBudgetSeconds,
+        })
+    ).data,
 );
 
 export const useRecoverBioXpMotion = () => useRefreshMutation(

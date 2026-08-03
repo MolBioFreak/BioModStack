@@ -13,7 +13,7 @@ from services.bioxp.errors import (
     TargetPolicyError,
 )
 from services.bioxp.connection import mask_target_url
-from services.bioxp.models import BioXpProfile
+from services.bioxp.models import BioXpFreshnessSettings, BioXpProfile
 from services.bioxp.runtime import BioXpRuntime, bioxp_connection_enabled
 
 from .dependencies import get_bioxp_runtime, mutations_enabled, require_bioxp_mutation_access
@@ -46,6 +46,7 @@ def _safe_profile(runtime: BioXpRuntime) -> dict[str, Any]:
             "valid": False,
             "display_name": None,
             "target_url": None,
+            "freshness_budget_seconds": runtime.connection.freshness_budget_seconds,
             "detail": str(exc),
         }
     if profile is None:
@@ -54,12 +55,14 @@ def _safe_profile(runtime: BioXpRuntime) -> dict[str, Any]:
             "valid": True,
             "display_name": None,
             "target_url": None,
+            "freshness_budget_seconds": runtime.connection.freshness_budget_seconds,
         }
     return {
         "configured": True,
         "valid": True,
         "display_name": profile.display_name,
         "target_url": mask_target_url(profile.api_url),
+        "freshness_budget_seconds": profile.freshness_budget_seconds,
     }
 
 
@@ -78,6 +81,21 @@ async def put_profile(
     except (TargetPolicyError, ProfileStoreError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return _safe_profile(runtime)
+
+
+@router.put("/settings/freshness")
+async def put_freshness_settings(
+    settings: BioXpFreshnessSettings,
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+) -> dict[str, Any]:
+    """Change only BMS observation expiry; no robot command or reconnect occurs."""
+    try:
+        snapshot = await runtime.connection.set_freshness_budget_seconds(
+            settings.freshness_budget_seconds,
+        )
+    except (ConnectionStateError, ProfileStoreError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _public_snapshot(snapshot)
 
 
 @router.delete("/profile")
