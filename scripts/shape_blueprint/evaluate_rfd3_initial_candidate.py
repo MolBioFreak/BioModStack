@@ -373,7 +373,11 @@ def _validate_request_manifest(request: dict[str, Any], manifest: dict[str, Any]
     if not isinstance(manifest.get("sdf_grid_shape"), list) or len(manifest["sdf_grid_shape"]) != 3:
         raise ValueError("initial admission SDF grid shape is invalid")
     length_policy = request.get("length_policy")
-    if not isinstance(length_policy, dict) or length_policy.get("mode") not in {"fixed", "uniform_integer_range"}:
+    if not isinstance(length_policy, dict) or length_policy.get("mode") not in {
+        "fixed",
+        "uniform_integer_range",
+        "deterministic_range",
+    }:
         raise ValueError("initial admission length policy is invalid")
     minimum, maximum = length_policy.get("min"), length_policy.get("max")
     if not isinstance(minimum, int) or not isinstance(maximum, int) or minimum > maximum:

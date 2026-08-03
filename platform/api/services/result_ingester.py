@@ -2598,6 +2598,28 @@ async def _ingest_shape_result_manifest(
     for key, expected in bindings.items():
         if not expected or manifest.get(key) != expected:
             raise RuntimeError(f"Shape result manifest {key} binding mismatch")
+    aggregate_descriptor = manifest.get("rfd3_aggregate")
+    aggregate_payload: dict[str, Any] | None = None
+    if aggregate_descriptor is not None:
+        aggregate_path = _shape_contained_artifact(output_root, aggregate_descriptor, "RFD3 aggregate manifest")
+        try:
+            aggregate_payload = json.loads(aggregate_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError("RFD3 aggregate manifest is malformed") from exc
+        if not isinstance(aggregate_payload, dict):
+            raise RuntimeError("RFD3 aggregate manifest is not an object")
+        aggregate_unsigned = dict(aggregate_payload)
+        claimed_aggregate_sha = aggregate_unsigned.pop("aggregate_sha256", None)
+        aggregate_hash = hashlib.sha256(
+            json.dumps(aggregate_unsigned, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        ).hexdigest()
+        if (
+            aggregate_payload.get("schema") != "bms_rfd3_aggregate_manifest_v1"
+            or aggregate_payload.get("request_sha256") != request.request_sha256
+            or not isinstance(claimed_aggregate_sha, str)
+            or aggregate_hash != claimed_aggregate_sha
+        ):
+            raise RuntimeError("RFD3 aggregate manifest binding is invalid")
 
     candidates = manifest.get("candidates")
     outcome = manifest.get("outcome")
@@ -2699,6 +2721,12 @@ async def _ingest_shape_result_manifest(
         producer_provenance = item.get("provenance") or {}
         if not isinstance(producer_provenance, dict):
             raise RuntimeError(f"Shape candidate provenance is invalid: {candidate_id}")
+        if aggregate_descriptor is not None:
+            producer_provenance = {
+                **producer_provenance,
+                "rfd3_aggregate": dict(aggregate_descriptor),
+                "rfd3_aggregate_status": aggregate_payload.get("status") if aggregate_payload else None,
+            }
         design = Design(
             id=str(uuid.uuid4()),
             job_id=str(job.id),

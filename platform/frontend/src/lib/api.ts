@@ -541,7 +541,7 @@ export interface ShapeLaunchRequest {
     sequences_per_backbone: number;
     seed: number;
     sequence_policy?: 'auto' | 'skip' | 'external';
-    sequence_engine?: 'proteinmpnn' | 'ligandmpnn' | 'fampnn';
+    sequence_engine?: 'proteinmpnn' | 'fampnn';
     validator_suite?: Array<'boltz2' | 'esmfold2' | 'protenix_v2'>;
     guidance_profile: 'rfd3_unguided_control_v1' | 'rfd3_ca_shape_transfer_control_v1';
 }

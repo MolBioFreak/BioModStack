@@ -527,17 +527,16 @@ def test_shape_workflow_supplies_typed_esmfold2_input_tuple() -> None:
     )
 
     assert (
-        "tuple([producer_method: engine, producer_artifact_id: name], sequence, name, source)"
+        "tuple([\n            producer_method: engine,\n            producer_artifact_id: name,\n            source_backbone_sha256: sourceSha,\n        ], sequence, name, source)"
         in workflow
     )
     assert (
-        "ESMFold2Predict(shape_sequences.map { producer_meta, sequence, name, _source -> "
+        "ESMFold2Predict(shape_sequences.map { producer_meta, sequence, name, source -> "
         "tuple(producer_meta, sequence, name) })"
         in workflow
     )
     assert (
-        "sequence_sources = shape_sequences.map { _producer_meta, _sequence, name, source -> "
-        "tuple(name, source) }"
+        "shapeSequences.map { producerMeta, sequence, name, source -> tuple(name, source) }"
         in workflow
     )
     assert "AdmitRFD3InitialCandidate" in workflow
@@ -550,10 +549,10 @@ def test_shape_workflow_supplies_typed_esmfold2_input_tuple() -> None:
     assert "RunShapeRFD3(\n        PlanRFD3Batches.out.batch_requests" in workflow
     assert "BuildRFD3Aggregate" in workflow
     assert "initial_admission_records" in workflow
-    assert "sequence_policy != 'skip'" in workflow
-    assert "sequence_engine == 'proteinmpnn'" in workflow
-    assert "sequence_engine == 'fampnn'" in workflow
-    assert "sequence_enabled" in workflow
+    assert "sequencePolicy != 'skip'" in workflow
+    assert "sequenceEngine == 'proteinmpnn'" in workflow
+    assert "sequenceEngine == 'fampnn'" in workflow
+    assert "sequenceEnabled" in workflow
 
 
 def test_shape_request_v2_accepts_range_length_and_conditional_sequence_policy() -> None:

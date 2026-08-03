@@ -72,6 +72,7 @@ def build_result(
     request_path: Path,
     candidate_bundles: Iterable[Path],
     output_dir: Path,
+    aggregate_path: Path | None = None,
 ) -> dict[str, Any]:
     request = _read_json(request_path, "Shape request")
     required = (
@@ -87,6 +88,24 @@ def build_result(
         raise ValueError("Shape result output directory must be new or empty")
     candidate_root = output_dir / "results" / "shape_candidates"
     candidate_root.mkdir(parents=True, exist_ok=True)
+    aggregate_descriptor = None
+    aggregate = None
+    if aggregate_path is not None:
+        aggregate = _read_json(aggregate_path, "RFD3 aggregate manifest")
+        if aggregate.get("schema") != "bms_rfd3_aggregate_manifest_v1":
+            raise ValueError("RFD3 aggregate manifest schema is invalid")
+        if aggregate.get("request_sha256") != request["request_sha256"]:
+            raise ValueError("RFD3 aggregate request binding mismatch")
+        claimed_aggregate_sha = aggregate.get("aggregate_sha256")
+        unsigned_aggregate = dict(aggregate)
+        unsigned_aggregate.pop("aggregate_sha256", None)
+        if not isinstance(claimed_aggregate_sha, str) or hashlib.sha256(
+            json.dumps(unsigned_aggregate, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        ).hexdigest() != claimed_aggregate_sha:
+            raise ValueError("RFD3 aggregate manifest hash is invalid")
+        aggregate_destination = output_dir / "results" / "rfd3_aggregate_manifest.json"
+        shutil.copyfile(aggregate_path, aggregate_destination)
+        aggregate_descriptor = _artifact(aggregate_destination, output_dir)
 
     accepted: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
@@ -162,8 +181,10 @@ def build_result(
     else:
         reason = {
             "code": "no_refolded_candidates",
-            "message": "all upstream scientific stages completed but produced no refolded candidates",
+            "message": "all upstream scientific stages completed but produced no terminal candidates",
         }
+    if aggregate is not None and reason is not None:
+        reason["rfd3_aggregate_status"] = str(aggregate.get("status") or "unknown")
     manifest = {
         "schema": "bms_shape_result_v1",
         "outcome": outcome,
@@ -174,6 +195,8 @@ def build_result(
         "rejected_count": len(rejected),
         "rejections": rejected,
         "reason": reason,
+        "rfd3_aggregate": aggregate_descriptor,
+        "rfd3_aggregate_status": aggregate.get("status") if aggregate is not None else None,
     }
     _atomic_json(output_dir / "results" / "shape_result_manifest.json", manifest)
     return manifest
@@ -183,6 +206,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--job-id", required=True)
     parser.add_argument("--request", required=True, type=Path)
+    parser.add_argument("--aggregate", type=Path)
     parser.add_argument("--candidate-bundle", action="append", default=[], type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     args = parser.parse_args()
@@ -191,6 +215,7 @@ def main() -> int:
         request_path=args.request,
         candidate_bundles=args.candidate_bundle,
         output_dir=args.output_dir,
+        aggregate_path=args.aggregate,
     )
     return 0
 

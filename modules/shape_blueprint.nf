@@ -123,6 +123,29 @@ process AdmitRFD3InitialCandidate {
     """
 }
 
+process PrepareShapeBackbone {
+    tag "${candidate.simpleName}"
+    label 'ShapeAdmission'
+    stageInMode 'copy'
+
+    input:
+    tuple path(candidate), path(admission)
+
+    output:
+    tuple val(candidate_id), path('shape_backbone_bundle'), emit: backbone
+
+    script:
+    def admissionPayload = new groovy.json.JsonSlurper().parse(admission)
+    def candidate_id = admissionPayload.candidate_id.toString()
+    """
+    set -euo pipefail
+    python3 ${params.code_root}/scripts/shape_blueprint/prepare_shape_backbone.py \\
+        --candidate ${candidate} \\
+        --admission ${admission} \\
+        --output-dir shape_backbone_bundle
+    """
+}
+
 process BuildRFD3Aggregate {
     label 'ShapeAdmission'
     stageInMode 'copy'
@@ -131,7 +154,7 @@ process BuildRFD3Aggregate {
 
     input:
     path batch_plan
-    path admission_files, arity: '1..*'
+    path admission_files, arity: '0..*'
 
     output:
     path 'rfd3_aggregate_manifest.json', emit: aggregate
@@ -142,7 +165,9 @@ process BuildRFD3Aggregate {
     """
     set -euo pipefail
     mkdir -p ${admissionDir}
-    cp ${admissionArgs} ${admissionDir}/
+    if [ -n '${admissionArgs}' ]; then
+        cp ${admissionArgs} ${admissionDir}/
+    fi
     python3 ${params.code_root}/scripts/shape_blueprint/build_rfd3_aggregate.py \\
         --plan ${batch_plan} \\
         --admission-dir ${admissionDir} \\
@@ -151,7 +176,7 @@ process BuildRFD3Aggregate {
 }
 
 process RunShapeProteinMPNN {
-    tag "${backbone.simpleName}"
+    tag "${candidate_id}"
     label 'MPNN'
     label 'gpu_light'
     stageInMode 'copy'
@@ -159,15 +184,15 @@ process RunShapeProteinMPNN {
     publishDir "${params.out_dir}/run/shape_sequences/proteinmpnn", mode: 'copy'
 
     input:
-    path backbone
+    tuple val(candidate_id), path(backbone)
     val sequence_count
     val seed
 
     output:
-    path "${backbone.simpleName}_proteinmpnn", emit: bundle
+    path "${candidate_id}_proteinmpnn", emit: bundle
 
     script:
-    def bundle = "${backbone.simpleName}_proteinmpnn"
+    def bundle = "${candidate_id}_proteinmpnn"
     """
     set -euo pipefail
     eval "\$(/bin/micromamba shell hook --shell bash)"
@@ -183,7 +208,7 @@ process RunShapeProteinMPNN {
 }
 
 process RunShapeFAMPNN {
-    tag "${backbone.simpleName}"
+    tag "${candidate_id}"
     label 'FAMPNN'
     label 'gpu_light'
     stageInMode 'copy'
@@ -191,15 +216,15 @@ process RunShapeFAMPNN {
     publishDir "${params.out_dir}/run/shape_sequences/fampnn", mode: 'copy'
 
     input:
-    path backbone
+    tuple val(candidate_id), path(backbone)
     val sequence_count
     val seed
 
     output:
-    path "${backbone.simpleName}_fampnn", emit: bundle
+    path "${candidate_id}_fampnn", emit: bundle
 
     script:
-    def bundle = "${backbone.simpleName}_fampnn"
+    def bundle = "${candidate_id}_fampnn"
     """
     set -euo pipefail
     /opt/venv/bin/python ${params.code_root}/scripts/shape_blueprint/run_shape_sequence.py \\
@@ -225,7 +250,7 @@ process EvaluateShapeCandidate {
     path sdf_grid
 
     output:
-    path "shape_candidate_bundle_${task.index}", emit: bundle
+    tuple val(sequence_name), path("shape_candidate_bundle_${task.index}"), emit: bundle
 
     script:
     def bundle = "shape_candidate_bundle_${task.index}"
@@ -244,6 +269,85 @@ process EvaluateShapeCandidate {
     """
 }
 
+process RunShapeValidatorEvidence {
+    tag "${sequence_name}"
+    label 'ShapeValidator'
+    stageInMode 'copy'
+
+    input:
+    tuple val(sequence_name), path(esm_structure), path(esm_metrics), val(sequence)
+    val validator_suite
+    val seed
+
+    output:
+    tuple val(sequence_name), path('shape_validator_records.json'), emit: evidence
+
+    script:
+    def validators = (validator_suite ?: []).join(',')
+    """
+    set -euo pipefail
+    python3 ${params.code_root}/scripts/shape_blueprint/run_shape_validator_suite.py \\
+        --sequence '${sequence}' \\
+        --sequence-name '${sequence_name}' \\
+        --esm-metrics ${esm_metrics} \\
+        --validators '${validators}' \\
+        --seed ${seed as Integer} \\
+        --code-root ${params.code_root} \\
+        --output shape_validator_records.json
+    """
+}
+
+process AttachShapePostRefold {
+    tag "${sequence_name}"
+    label 'ShapeValidator'
+    stageInMode 'copy'
+
+    input:
+    tuple val(sequence_name), path(candidate_bundle), path(validator_records)
+    path request_json
+    path geometry_manifest
+    path point_pool
+    path sdf_grid
+
+    output:
+    tuple val(sequence_name), path('attached_shape_candidate_bundle'), emit: bundle
+
+    script:
+    """
+    set -euo pipefail
+    cp -a ${candidate_bundle} attached_shape_candidate_bundle
+    python3 ${params.code_root}/scripts/shape_blueprint/attach_shape_post_refold.py \\
+        --bundle attached_shape_candidate_bundle \\
+        --validator-records ${validator_records} \\
+        --request ${request_json} \\
+        --geometry-manifest ${geometry_manifest} \\
+        --points ${point_pool} \\
+        --sdf ${sdf_grid}
+    """
+}
+
+process BuildShapeSkipBundle {
+    tag "${candidate_id}"
+    label 'ShapeEvaluate'
+    stageInMode 'copy'
+
+    input:
+    tuple val(candidate_id), path(backbone_bundle)
+    path request_json
+
+    output:
+    path 'shape_skip_bundle', emit: bundle
+
+    script:
+    """
+    set -euo pipefail
+    python3 ${params.code_root}/scripts/shape_blueprint/build_shape_skip_bundle.py \\
+        --backbone-dir ${backbone_bundle} \\
+        --request ${request_json} \\
+        --output-dir shape_skip_bundle
+    """
+}
+
 process BuildShapeResult {
     label 'ShapeEvaluate'
     stageInMode 'copy'
@@ -255,6 +359,7 @@ process BuildShapeResult {
     input:
     path candidate_bundles, arity: '0..*'
     path request_json
+    path aggregate_manifest
     val job_id
 
     output:
@@ -267,6 +372,7 @@ process BuildShapeResult {
     python3 ${params.code_root}/scripts/shape_blueprint/build_shape_result.py \\
         --job-id '${job_id}' \\
         --request ${request_json} \\
+        --aggregate ${aggregate_manifest} \\
         ${bundleArgs} \\
         --output-dir final_shape_result
     """

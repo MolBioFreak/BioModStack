@@ -110,8 +110,8 @@ class SubmittedShapeRequest(BaseModel):
     seed: int = Field(default=0, ge=0, le=2_147_483_647)
     generator: Literal["rfd3"] = "rfd3"
     sequence_policy: Literal["auto", "skip", "external"] = "auto"
-    sequence_engine: Literal["proteinmpnn", "ligandmpnn", "fampnn"] | None = None
-    sequence_engines: tuple[Literal["proteinmpnn", "ligandmpnn", "fampnn"], ...] = ()
+    sequence_engine: Literal["proteinmpnn", "fampnn"] | None = None
+    sequence_engines: tuple[Literal["proteinmpnn", "fampnn"], ...] = ()
     predictor: Literal["esmfold2"] = "esmfold2"
     validator_suite: tuple[Literal["boltz2", "esmfold2", "protenix_v2"], ...] = (
         "boltz2",
@@ -138,6 +138,12 @@ class SubmittedShapeRequest(BaseModel):
             raise ValueError("sequence_engine is required when sequence_policy is external")
         if self.sequence_policy != "external" and self.sequence_engine is not None:
             raise ValueError("sequence_engine is only valid with sequence_policy=external")
+        if self.sequence_policy == "skip" and self.sequences_per_backbone != 0:
+            raise ValueError("sequence_policy=skip requires sequences_per_backbone=0")
+        if self.sequence_policy == "external" and self.sequences_per_backbone == 0:
+            raise ValueError("sequence_policy=external requires sequences_per_backbone > 0")
+        if any(engine not in {"proteinmpnn", "fampnn"} for engine in self.sequence_engines):
+            raise ValueError("only ProteinMPNN and FAMPNN are supported for Shape sequence design")
         return self
 
 

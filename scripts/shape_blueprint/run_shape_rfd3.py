@@ -148,8 +148,8 @@ def validate_request_v2(request: dict, manifest: dict) -> tuple[dict, dict]:
     sequence_policy = request.get("sequence_policy", "auto")
     if sequence_policy not in {"auto", "skip", "external"}:
         raise ValueError("Shape sequence policy is invalid")
-    if sequence_policy == "external" and request.get("sequence_engine") not in {"proteinmpnn", "ligandmpnn", "fampnn"}:
-        raise ValueError("Shape external sequence policy requires a supported sequence engine")
+    if sequence_policy == "external" and request.get("sequence_engine") not in {"proteinmpnn", "fampnn"}:
+        raise ValueError("Shape external sequence policy requires ProteinMPNN or FAMPNN")
     if sequence_policy != "external" and request.get("sequence_engine") is not None:
         raise ValueError("Shape sequence engine is only valid with sequence_policy=external")
     candidate_ids = request.get("candidate_ids")
