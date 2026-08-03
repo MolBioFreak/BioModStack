@@ -673,6 +673,38 @@ JSON
     """
 }
 
+process CheckFrustraYield {
+    label 'process_low'
+
+    input:
+    val candidate_count
+
+    output:
+    path "frustrampnn_yield_guard.ok", emit: ok
+
+    script:
+    def reportJson = groovy.json.JsonOutput.prettyPrint(
+        groovy.json.JsonOutput.toJson([
+            status: "completed_zero_yield",
+            stage: "frustrampnn",
+            reason: "No final antibody candidates reached required FrustraMPNN analysis after upstream workflow completion",
+            recommendation: "Inspect the terminal validation/maturation child outputs and resolve any upstream failure before retrying required FrustraMPNN analysis"
+        ])
+    )
+    """
+    set -euo pipefail
+    if [ "${candidate_count}" -le 0 ]; then
+        mkdir -p "${params.out_dir}"
+        cat > "${params.out_dir}/frustrampnn_zero_yield_report.json" <<'JSON'
+${reportJson}
+JSON
+        echo "ZERO-YIELD: no final candidates reached required FrustraMPNN" >&2
+        exit 1
+    fi
+    touch frustrampnn_yield_guard.ok
+    """
+}
+
 process CheckPPIFlowYield {
     label 'process_low'
 
@@ -3161,7 +3193,9 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
                 error('antibody_denovo:ambiguous_terminal_candidate_metadata: every final structure requires its own producer metadata tuple')
             }
             [antibodyTerminalCandidate(candidate_meta, structures[0], terminalStage, terminalMethod)]
-        }.ifEmpty { error('antibody_denovo:no_final_candidates_for_required_frustrampnn') }
+        }
+        def frustrampnn_candidate_count = typed_terminal_candidates.map { _candidate -> 1 }.count()
+        CheckFrustraYield(frustrampnn_candidate_count)
 
         PrepareAntibodyFrustraMPNNCandidate(typed_terminal_candidates)
         CanonicalFrustraMPNN(PrepareAntibodyFrustraMPNNCandidate.out.prepared)
