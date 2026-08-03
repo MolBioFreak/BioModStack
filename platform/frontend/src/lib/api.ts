@@ -522,6 +522,12 @@ export interface ShapeGeometrySummary {
     angstrom_per_unit: number;
 }
 
+export interface ShapeLengthPolicy {
+    mode: 'fixed' | 'uniform_integer_range' | 'deterministic_range';
+    min: number;
+    max: number;
+}
+
 export interface ShapeLaunchRequest {
     client_request_id: string;
     name: string;
@@ -529,11 +535,15 @@ export interface ShapeLaunchRequest {
     expected_geometry_sha256: string;
     expected_geometry_manifest_sha256: string;
     expected_point_pool_sha256: string;
-    target_length: number;
+    target_length?: number;
+    length_policy?: ShapeLengthPolicy;
     num_backbones: number;
     sequences_per_backbone: number;
     seed: number;
-    guidance_profile: 'paper_like_rfd3_v1';
+    sequence_policy?: 'auto' | 'skip' | 'external';
+    sequence_engine?: 'proteinmpnn' | 'ligandmpnn' | 'fampnn';
+    validator_suite?: Array<'boltz2' | 'esmfold2' | 'protenix_v2'>;
+    guidance_profile: 'rfd3_unguided_control_v1' | 'rfd3_ca_shape_transfer_control_v1';
 }
 
 export const listShapeGeometries = () =>

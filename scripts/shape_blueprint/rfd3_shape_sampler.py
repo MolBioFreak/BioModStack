@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 from typing import Any
 
 import numpy as np
@@ -51,6 +52,7 @@ class ShapeGuidedDiffusionSampler(SampleDiffusionWithMotif):
     shape_target_point_count: int = 0
     shape_target_point_seed: int = 0
     shape_guidance_profile: str = "rfd3_transfer_v1"
+    shape_profile_registry_sha256: str = ""
     shape_source_shape_weight: float = 1.0
     shape_source_guide_scale: float = 1.0
     shape_rfd3_transfer_coefficient: float = 0.5
@@ -75,6 +77,8 @@ class ShapeGuidedDiffusionSampler(SampleDiffusionWithMotif):
             raise ValueError("Shape target point seed must be non-negative")
         if not self.shape_guidance_profile:
             raise ValueError("Shape guidance profile is required")
+        if not re.fullmatch(r"[0-9a-f]{64}", self.shape_profile_registry_sha256):
+            raise ValueError("Shape profile registry hash is required and must be SHA-256")
         if self.shape_source_shape_weight <= 0 or self.shape_source_guide_scale <= 0:
             raise ValueError("Shape source guidance factors must be positive")
         if self.shape_rfd3_transfer_coefficient < 0:
@@ -233,12 +237,18 @@ class ShapeGuidedDiffusionSampler(SampleDiffusionWithMotif):
             "target_sampling": "seeded_subset_of_immutable_uniform_interior_pool_v1" if self.shape_target_point_count else "complete_immutable_uniform_interior_pool_v1",
             "target_point_seed": int(self.shape_target_point_seed),
             "guidance_profile": self.shape_guidance_profile,
+            "profile_registry_sha256": self.shape_profile_registry_sha256,
             "source_shape_weight": float(self.shape_source_shape_weight),
             "source_guide_scale": float(self.shape_source_guide_scale),
             "rfd3_transfer_coefficient": float(self.shape_rfd3_transfer_coefficient),
             "sdf_sha256": manifest.get("sdf_sha256"),
             "step_index": int(step_i),
             "total_steps": int(total_steps),
+            "effective_step_size": float(self.shape_step_size * scale),
+            "shape_outside_weight": float(self.shape_outside_weight),
+            "shape_chamfer_weight": float(self.shape_chamfer_weight),
+            "shape_connectivity_weight": float(self.shape_connectivity_weight),
+            "shape_max_update_angstrom": float(self.shape_max_update * scale),
             "schedule_scale": float(scale),
             "guidance_decay": "constant",
             "gradient_scaling": "raw",

@@ -1,0 +1,31 @@
+{
+  "schema": "bms_rfd3_batch_policy_registry_v1",
+  "child_batch_limit": 32,
+  "allocation_policies": {
+    "fixed_length_v1": {
+      "id": "fixed_length_v1",
+      "mode": "fixed",
+      "description": "All candidates in one request use the request fixed length.",
+      "bucket_count": 1
+    },
+    "balanced_bucket_v1": {
+      "id": "balanced_bucket_v1",
+      "mode": "deterministic_range",
+      "description": "Ten deterministic length buckets, assigned round-robin then grouped for homogeneous child batches.",
+      "bucket_count": 10,
+      "formula": "length=min+round(bucket_index*(max-min)/(bucket_count-1))",
+      "assignment": "candidate_index_modulo_bucket_count"
+    }
+  },
+  "resource_profiles": {
+    "rfd3_shape_runtime_v1": {
+      "id": "rfd3_shape_runtime_v1",
+      "gpu_memory_classes_gib": {
+        "16": {"max_residue_length": 320},
+        "32": {"max_residue_length": 600}
+      },
+      "observed_boundary": "350_residue_run_failed_on_16_gib_and_completed_on_32_gib_class_hardware",
+      "admission_basis": "recorded_runtime_evidence_not_modelled_estimate"
+    }
+  }
+}

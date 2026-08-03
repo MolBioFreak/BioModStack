@@ -30,6 +30,29 @@ process ValidateShapeBundle {
     """
 }
 
+process PlanRFD3Batches {
+    label 'ShapePlanning'
+    stageInMode 'copy'
+
+    publishDir "${params.out_dir}/run/shape_batches", mode: 'copy', pattern: 'rfd3_batch_plan.json'
+
+    input:
+    path request_json
+
+    output:
+    path 'rfd3_batch_plan.json', emit: plan
+    path 'batch_requests/*.json', emit: batch_requests
+
+    script:
+    """
+    set -euo pipefail
+    python3 ${params.code_root}/scripts/shape_blueprint/plan_rfd3_batches.py \\
+        --request ${request_json} \\
+        --output-dir . \\
+        --gpu-memory-gib ${params.shape_gpu_memory_gib ?: 32}
+    """
+}
+
 process RunShapeRFD3 {
     label 'ShapeRFD3'
     label 'gpu'
@@ -67,6 +90,63 @@ process RunShapeRFD3 {
         --output-dir rfd3_results \
         --receipt shape_rfd3_runtime_receipt.json \
         > shape_rfd3.log 2>&1
+    """
+}
+
+process AdmitRFD3InitialCandidate {
+    tag "${candidate.simpleName}"
+    label 'ShapeAdmission'
+    stageInMode 'copy'
+
+    publishDir "${params.out_dir}/run/shape_initial_admission", mode: 'copy'
+
+    input:
+    path candidate
+    path request_json
+    path geometry_manifest
+    path points_f32le
+    path sdf_f32le
+
+    output:
+    tuple path(candidate), path('initial_admission.json'), emit: admitted
+
+    script:
+    """
+    set -euo pipefail
+    python3 ${params.code_root}/scripts/shape_blueprint/evaluate_rfd3_initial_candidate.py \\
+        --candidate ${candidate} \\
+        --request ${request_json} \\
+        --manifest ${geometry_manifest} \\
+        --points ${points_f32le} \\
+        --sdf ${sdf_f32le} \\
+        --output initial_admission.json
+    """
+}
+
+process BuildRFD3Aggregate {
+    label 'ShapeAdmission'
+    stageInMode 'copy'
+
+    publishDir "${params.out_dir}/run/shape_batches", mode: 'copy', pattern: 'rfd3_aggregate_manifest.json'
+
+    input:
+    path batch_plan
+    path admission_files, arity: '1..*'
+
+    output:
+    path 'rfd3_aggregate_manifest.json', emit: aggregate
+
+    script:
+    def admissionDir = 'initial_admission_records'
+    def admissionArgs = admission_files.collect { file -> "${file}" }.join(' ')
+    """
+    set -euo pipefail
+    mkdir -p ${admissionDir}
+    cp ${admissionArgs} ${admissionDir}/
+    python3 ${params.code_root}/scripts/shape_blueprint/build_rfd3_aggregate.py \\
+        --plan ${batch_plan} \\
+        --admission-dir ${admissionDir} \\
+        --output rfd3_aggregate_manifest.json
     """
 }
 

@@ -30,10 +30,13 @@ def _sequence_module():
     return module
 
 
-def test_paper_like_rfd3_profile_is_identical_at_request_and_runtime_boundaries() -> None:
-    from services.shape_requests import PAPER_LIKE_RFD3_PROFILE
+def test_rfd3_profile_registry_is_identical_at_request_and_runtime_boundaries() -> None:
+    from services.shape_requests import RFD3_PROFILE_REGISTRY, RFD3_PROFILE_REGISTRY_SHA256
 
-    assert _module().PAPER_LIKE_RFD3_PROFILE == PAPER_LIKE_RFD3_PROFILE
+    module = _module()
+    assert module.RFD3_PROFILE_REGISTRY == RFD3_PROFILE_REGISTRY
+    assert module.PROFILE_REGISTRY_SHA256 == RFD3_PROFILE_REGISTRY_SHA256
+    assert "paper_like_rfd3_v1" not in module.RFD3_PROFILE_REGISTRY
 
 
 def _write_backbone(path: Path) -> None:
@@ -48,36 +51,25 @@ def test_shape_rfd3_wrapper_binds_request_and_guidance_paths(tmp_path: Path) -> 
     module = _module()
     point_data = b"points"
     sdf_data = b"sdf"
+    profile = module.RFD3_PROFILE_REGISTRY["rfd3_ca_shape_transfer_control_v1"]
     request = {
-        "schema": "bms_shape_design_request_v1",
-        "request_id": "00000000-0000-4000-8000-000000000009",
+        "schema": "bms_shape_design_request_v2",
+        "request_id": "shape_00000000-0000-4000-8000-000000000009",
         "geometry_sha256": "2" * 64,
         "point_pool_sha256": hashlib.sha256(point_data).hexdigest(),
         "sdf_sha256": hashlib.sha256(sdf_data).hexdigest(),
         "sdf_sign": "positive_inside",
         "sdf_grid_shape": [48, 48, 48],
+        "length_policy": {"mode": "fixed", "min": 100, "max": 100},
         "target_length": 100,
         "num_backbones": 2,
         "seed": 9,
         "generator": "rfd3",
-        "guidance_profile": {
-            "id": "paper_like_rfd3_v1",
-            "paper_doi": "10.64898/2026.07.22.740177",
-            "shape_ctrl_commit": "e1a518b61e216d3c597a46e5a151b9e24756e33e",
-            "source_shape_weight": 0.75,
-            "source_guide_scale": 2.0,
-            "source_sdf_weight": 1.0,
-            "source_chamfer_weight": 1.0,
-            "source_target_point_count": 800,
-            "target_sampling": "seeded_subset_of_immutable_uniform_interior_pool_v1",
-            "rfd3_transfer_coefficient": 0.13333333333333333,
-            "effective_step_size": 0.2,
-            "max_update_angstrom": 0.5,
-            "guidance_decay": "constant",
-            "gradient_scaling": "raw",
-            "outside_reduction": "sum",
-            "connectivity_weight": 0.0,
-        },
+        "sequence_policy": "auto",
+        "sequence_engine": None,
+        "validator_suite": ["boltz2", "esmfold2", "protenix_v2"],
+        "guidance_profile": profile,
+        "guidance_profile_registry_sha256": module.PROFILE_REGISTRY_SHA256,
     }
     manifest = {
         "schema": "bms_shape_canonical_geometry_v1",
@@ -110,6 +102,17 @@ def test_shape_rfd3_wrapper_binds_request_and_guidance_paths(tmp_path: Path) -> 
     installed_shape_sampler = tmp_path / "bms_shape_sampler.py"
     installed_shape_sampler.write_bytes(module.SAMPLER_SOURCE.read_bytes())
     setattr(module, "INSTALLED_SHAPE_SAMPLER", installed_shape_sampler)
+    setattr(
+        module,
+        "_rfd3_runtime_identity",
+        lambda: {
+            "rfd3_imported_root": "/fake/rfd3",
+            "rfd3_imported_version": "unpackaged",
+            "rfd3_imported_tree_sha256": "c" * 64,
+            "rc_foundry_version": "0.1.9",
+            "atomworks_version": "2.2.0",
+        },
+    )
     fake = tmp_path / "fake-rfd3"
     fake.write_text(
         "#!/usr/bin/env python3\n"
@@ -118,7 +121,7 @@ def test_shape_rfd3_wrapper_binds_request_and_guidance_paths(tmp_path: Path) -> 
         "out=pathlib.Path(next(x.split('=',1)[1] for x in args if x.startswith('out_dir='))); out.mkdir(parents=True, exist_ok=True)\n"
         "n=int(next(x.split('=',1)[1] for x in args if x.startswith('n_batches=')))\n"
         "receipt=pathlib.Path(next(x.split('=',1)[1] for x in args if x.startswith('+inference_sampler.shape_receipt_path=')))\n"
-        "receipt.write_text('{\"schema\":\"bms_rfd3_shape_guidance_step_v4\",\"guidance_profile\":\"paper_like_rfd3_v1\",\"active_target_point_count\":800,\"active_point_pool_sha256\":\"' + 'a'*64 + '\"}\\n')\n"
+        "receipt.write_text('{\"schema\":\"bms_rfd3_shape_guidance_step_v4\",\"guidance_profile\":\"rfd3_ca_shape_transfer_control_v1\",\"profile_registry_sha256\":\"' + '" + module.PROFILE_REGISTRY_SHA256 + "' + '\",\"shape_outside_weight\":1.0,\"shape_chamfer_weight\":1.0,\"shape_connectivity_weight\":0.0,\"shape_max_update_angstrom\":0.5,\"active_target_point_count\":800,\"active_point_pool_sha256\":\"' + 'a'*64 + '\"}\\n')\n"
         "[(out/f'design_{i}.cif.gz').write_bytes(b'cif') for i in range(n)]\n"
         "[(out/f'design_{i}.json').write_text('{}') for i in range(n)]\n"
     )
@@ -146,13 +149,14 @@ def test_shape_rfd3_wrapper_binds_request_and_guidance_paths(tmp_path: Path) -> 
     assert "+inference_sampler.shape_max_update=0.5" in args
     assert "+inference_sampler.shape_target_point_count=800" in args
     assert "+inference_sampler.shape_target_point_seed=9" in args
-    assert "+inference_sampler.shape_guidance_profile=paper_like_rfd3_v1" in args
+    assert "+inference_sampler.shape_guidance_profile=rfd3_ca_shape_transfer_control_v1" in args
+    assert f"+inference_sampler.shape_profile_registry_sha256={module.PROFILE_REGISTRY_SHA256}" in args
     assert "+inference_sampler.shape_source_shape_weight=0.75" in args
     assert "+inference_sampler.shape_source_guide_scale=2.0" in args
     assert "+inference_sampler.shape_rfd3_transfer_coefficient=0.13333333333333333" in args
-    assert "+inference_sampler.shape_sdf_weight=1.0" in args
+    assert "+inference_sampler.shape_outside_weight=1.0" in args
     assert "+inference_sampler.shape_chamfer_weight=1.0" in args
-    assert not any("shape_connectivity_weight" in arg for arg in args)
+    assert "+inference_sampler.shape_connectivity_weight=0.0" in args
     assert not any("shape_terminal_scale" in arg for arg in args)
     assert f"+inference_sampler.shape_manifest_path={manifest_path.resolve()}" in args
     assert f"+inference_sampler.shape_points_path={points_path.resolve()}" in args
@@ -162,7 +166,7 @@ def test_shape_rfd3_wrapper_binds_request_and_guidance_paths(tmp_path: Path) -> 
     assert runtime["output_backbone_count"] == 2
     assert runtime["num_timesteps"] == 200
     assert runtime["guidance_step_size"] == 0.2
-    assert runtime["guidance_profile"]["id"] == "paper_like_rfd3_v1"
+    assert runtime["guidance_profile"]["id"] == "rfd3_ca_shape_transfer_control_v1"
     assert runtime["active_target_point_count"] == 800
     assert runtime["active_point_pool_sha256"] == "a" * 64
     assert runtime["target_sampling"] == "seeded_subset_of_immutable_uniform_interior_pool_v1"
@@ -178,6 +182,10 @@ def test_shape_rfd3_wrapper_binds_request_and_guidance_paths(tmp_path: Path) -> 
     assert runtime["guidance_reference"] == "X_denoised_L"
     assert runtime["native_update_equation"] == "X_next=X_noisy+step_scale*d_t*delta_L_guided"
     assert runtime["foundry_version_pin"] == "0.1.9"
+    assert runtime["rfd3_version"] == "unpackaged"
+    assert runtime["rfd3_imported_tree_sha256"] == "c" * 64
+    assert runtime["rc_foundry_version"] == "0.1.9"
+    assert runtime["atomworks_version"] == "2.2.0"
     assert runtime["foundry_commit"] == "a36d29c5c0d196a1c1c23349878683b6643da67d"
     assert runtime["shape_ctrl_commit"] == "e1a518b61e216d3c597a46e5a151b9e24756e33e"
     assert len(runtime["shape_guidance_sha256"]) == 64
@@ -209,8 +217,24 @@ def test_shape_rfd3_wrapper_rejects_request_manifest_mismatch(tmp_path: Path) ->
     module = _module()
     request = tmp_path / "request.json"
     manifest = tmp_path / "manifest.json"
-    request.write_text(json.dumps({"schema": "bms_shape_design_request_v1", "geometry_sha256": "a" * 64}))
-    manifest.write_text(json.dumps({"geometry_sha256": "b" * 64}))
+    request_payload = {
+        "schema": "bms_shape_design_request_v2",
+        "geometry_sha256": "a" * 64,
+        "point_pool_sha256": "c" * 64,
+        "length_policy": {"mode": "fixed", "min": 100, "max": 100},
+        "num_backbones": 1,
+        "seed": 0,
+        "generator": "rfd3",
+        "sequence_policy": "auto",
+        "sequence_engine": None,
+        "guidance_profile": module.RFD3_PROFILE_REGISTRY["rfd3_ca_shape_transfer_control_v1"],
+        "guidance_profile_registry_sha256": module.PROFILE_REGISTRY_SHA256,
+    }
+    request_payload["request_sha256"] = hashlib.sha256(
+        json.dumps(request_payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    ).hexdigest()
+    request.write_text(json.dumps(request_payload))
+    manifest.write_text(json.dumps({"geometry_sha256": "b" * 64, "point_pool_sha256": "c" * 64}))
     with __import__("pytest").raises(ValueError, match="geometry identity"):
         module.validate_request(request, manifest)
 

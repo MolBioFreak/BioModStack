@@ -50,8 +50,13 @@ export default function ShapeBlueprintTemplate() {
     const [unit, setUnit] = useState('angstrom');
     const [name, setName] = useState('Shape Blueprint design');
     const [targetLength, setTargetLength] = useState(120);
+    const [lengthMode, setLengthMode] = useState<'fixed' | 'deterministic_range'>('fixed');
+    const [minimumLength, setMinimumLength] = useState(350);
+    const [maximumLength, setMaximumLength] = useState(450);
     const [numBackbones, setNumBackbones] = useState(1);
     const [sequencesPerBackbone, setSequencesPerBackbone] = useState(1);
+    const [sequencePolicy, setSequencePolicy] = useState<'auto' | 'skip' | 'external'>('auto');
+    const [sequenceEngine, setSequenceEngine] = useState<'proteinmpnn' | 'ligandmpnn' | 'fampnn'>('proteinmpnn');
     const [seed, setSeed] = useState(0);
     const [error, setError] = useState<string | null>(null);
     const [reviewMode, setReviewMode] = useState<'surface' | 'points'>('surface');
@@ -89,11 +94,18 @@ export default function ShapeBlueprintTemplate() {
             return submitShapeBlueprint(buildShapeLaunchRequest(selected, {
                 client_request_id: clientRequestId,
                 name: name.trim() || 'Shape Blueprint design',
-                target_length: targetLength,
+                target_length: lengthMode === 'fixed' ? targetLength : undefined,
+                length_policy: {
+                    mode: lengthMode,
+                    min: lengthMode === 'fixed' ? targetLength : minimumLength,
+                    max: lengthMode === 'fixed' ? targetLength : maximumLength,
+                },
                 num_backbones: numBackbones,
-                sequences_per_backbone: sequencesPerBackbone,
+                sequences_per_backbone: sequencePolicy === 'skip' ? 0 : sequencesPerBackbone,
+                sequence_policy: sequencePolicy,
+                sequence_engine: sequencePolicy === 'external' ? sequenceEngine : undefined,
                 seed,
-                guidance_profile: 'paper_like_rfd3_v1',
+                guidance_profile: 'rfd3_ca_shape_transfer_control_v1',
             }));
         },
         onSuccess: (response) => {
@@ -140,13 +152,16 @@ export default function ShapeBlueprintTemplate() {
                     <div className="border-t border-slate-800 pt-4">
                         <h2 className="font-semibold text-white">2. Launch settings</h2>
                         <div className="mt-3 rounded-lg border border-cyan-500/30 bg-cyan-500/10 p-3 text-xs leading-5 text-cyan-100">
-                            <strong>Guidance: paper-like RFD3 v1.</strong> Uses the released example's 0.75 shape weight, guide scale 2, constant schedule, and 800 active interior targets through the reviewed native RFD3 <code>delta_L</code> transfer. It is an RFD3 adaptation—not classic-RFdiffusion parity.
+                            <strong>Guidance: RFD3 Cα shape-transfer control v1.</strong> Uses the source controller's 0.75 shape weight, guide scale 2, constant schedule, and 800 active interior targets through the reviewed native RFD3 <code>delta_L</code> transfer. It is a modern RFD3 transfer—not classic-RFdiffusion parity—and it is not yet a promoted protein-validity profile.
                         </div>
                         <label className="mt-3 block text-xs text-slate-400">Job name<input value={name} onChange={(event) => setName(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white" /></label>
                         <div className="mt-3 grid grid-cols-2 gap-3">
-                            <label className="text-xs text-slate-400">Target length<input type="number" min={40} max={600} value={targetLength} onChange={(event) => setTargetLength(boundedInteger(event.target.value, 120, 40, 600))} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white" /></label>
-                            <label className="text-xs text-slate-400">RFD3 backbones<input type="number" min={1} max={32} value={numBackbones} onChange={(event) => setNumBackbones(boundedInteger(event.target.value, 1, 1, 32))} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white" /></label>
-                            <label className="text-xs text-slate-400">Sequences / lane<input type="number" min={1} max={8} value={sequencesPerBackbone} onChange={(event) => setSequencesPerBackbone(boundedInteger(event.target.value, 1, 1, 8))} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white" /></label>
+                            <label className="text-xs text-slate-400">Length policy<select value={lengthMode} onChange={(event) => setLengthMode(event.target.value as 'fixed' | 'deterministic_range')} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"><option value="fixed">Fixed length</option><option value="deterministic_range">Deterministic range</option></select></label>
+                            {lengthMode === 'fixed' ? <label className="text-xs text-slate-400">Target length<input type="number" min={40} max={600} value={targetLength} onChange={(event) => setTargetLength(boundedInteger(event.target.value, 120, 40, 600))} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white" /></label> : <><label className="text-xs text-slate-400">Minimum length<input type="number" min={40} max={600} value={minimumLength} onChange={(event) => setMinimumLength(boundedInteger(event.target.value, 350, 40, 600))} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white" /></label><label className="text-xs text-slate-400">Maximum length<input type="number" min={40} max={600} value={maximumLength} onChange={(event) => setMaximumLength(boundedInteger(event.target.value, 450, 40, 600))} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white" /></label></>}
+                            <label className="text-xs text-slate-400">RFD3 total candidates<input type="number" min={1} max={200} value={numBackbones} onChange={(event) => setNumBackbones(boundedInteger(event.target.value, 1, 1, 200))} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white" /></label>
+                            <label className="text-xs text-slate-400">Sequence policy<select value={sequencePolicy} onChange={(event) => setSequencePolicy(event.target.value as 'auto' | 'skip' | 'external')} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"><option value="auto">Auto · ProteinMPNN when needed</option><option value="skip">Skip sequence design</option><option value="external">Explicit engine</option></select></label>
+                            {sequencePolicy === 'external' && <label className="text-xs text-slate-400">Sequence engine<select value={sequenceEngine} onChange={(event) => setSequenceEngine(event.target.value as 'proteinmpnn' | 'ligandmpnn' | 'fampnn')} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"><option value="proteinmpnn">ProteinMPNN</option><option value="ligandmpnn">LigandMPNN</option><option value="fampnn">FAMPNN</option></select></label>}
+                            <label className="text-xs text-slate-400">Sequences / admitted backbone<input type="number" min={sequencePolicy === 'skip' ? 0 : 1} max={8} disabled={sequencePolicy === 'skip'} value={sequencePolicy === 'skip' ? 0 : sequencesPerBackbone} onChange={(event) => setSequencesPerBackbone(boundedInteger(event.target.value, 1, 1, 8))} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white disabled:opacity-50" /></label>
                             <label className="text-xs text-slate-400">Deterministic seed<input type="number" min={0} max={2147483647} value={seed} onChange={(event) => setSeed(boundedInteger(event.target.value, 0, 0, 2147483647))} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white" /></label>
                         </div>
                     </div>

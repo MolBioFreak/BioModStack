@@ -62,7 +62,8 @@ class RFD3ShapeSamplerTests(unittest.TestCase):
             shape_max_update=0.2,
             shape_target_point_count=target_point_count,
             shape_target_point_seed=17,
-            shape_guidance_profile="paper_like_rfd3_v1",
+            shape_guidance_profile="rfd3_ca_shape_transfer_control_v1",
+            shape_profile_registry_sha256="f" * 64,
             shape_rfd3_transfer_coefficient=step_size,
         )
 
@@ -84,7 +85,7 @@ class RFD3ShapeSamplerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "point-pool hash"):
             sampler.load_field(torch.device("cpu"))
 
-    def test_paper_like_profile_uses_reproducible_subset_of_canonical_interior_pool(self) -> None:
+    def test_transfer_control_profile_uses_reproducible_subset_of_canonical_interior_pool(self) -> None:
         first = self.sampler(target_point_count=2)
         second = self.sampler(target_point_count=2)
         first_field = first.load_field(torch.device("cpu"))
@@ -128,7 +129,12 @@ class RFD3ShapeSamplerTests(unittest.TestCase):
         self.assertEqual(receipt["geometry_sha256"], "a" * 64)
         self.assertEqual(receipt["guided_ca_count"], 1)
         self.assertEqual(receipt["schema"], "bms_rfd3_shape_guidance_step_v4")
-        self.assertEqual(receipt["guidance_profile"], "paper_like_rfd3_v1")
+        self.assertEqual(receipt["guidance_profile"], "rfd3_ca_shape_transfer_control_v1")
+        self.assertEqual(receipt["profile_registry_sha256"], "f" * 64)
+        self.assertEqual(receipt["shape_outside_weight"], 1.0)
+        self.assertEqual(receipt["shape_chamfer_weight"], 1.0)
+        self.assertEqual(receipt["shape_max_update_angstrom"], 0.2)
+        self.assertEqual(receipt["effective_step_size"], 0.5)
         self.assertEqual(receipt["active_target_point_count"], 4)
         self.assertEqual(len(receipt["active_point_pool_sha256"]), 64)
         self.assertEqual(receipt["guidance_decay"], "constant")
