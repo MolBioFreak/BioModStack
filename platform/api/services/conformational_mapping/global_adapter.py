@@ -226,7 +226,7 @@ async def materialize_preallocated_cm_job(
     token, token_digest = issue_request_capability()
     admission = _cm_job_admission(backend, {"targets": analysis_targets})
     if backend == "confornets" and int(submission.get("confornets", {}).get("confornet_count", 0)) >= 5:
-        admission["vram_estimate_mb"] = 32000
+        admission["vram_estimate_mb"] = 24000
         admission["pinned_gpu"] = _largest_gpu_with_memory(32000)
     job = Job(
         id=attempt_id,
