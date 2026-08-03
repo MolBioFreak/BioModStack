@@ -121,20 +121,24 @@ def _streaming_diversity_training_step(
     confornet_manager.optimizer.zero_grad()
     total_value = 0.0
 
+    with torch.no_grad():
+        references = [
+            _single_objective_output(
+                model, confornet, query, objective, noise_schedule,
+                fixed_noise, device, num_recycles,
+            )
+            for confornet in confornet_manager.confornets
+        ]
+
     for current_index, current_confornet in enumerate(confornet_manager.confornets):
         current = _single_objective_output(
             model, current_confornet, query, objective, noise_schedule,
             fixed_noise, device, num_recycles,
         )
         pair_loss = None
-        for reference_index, reference_confornet in enumerate(confornet_manager.confornets):
+        for reference_index, reference in enumerate(references):
             if reference_index == current_index:
                 continue
-            with torch.no_grad():
-                reference = _single_objective_output(
-                    model, reference_confornet, query, objective, noise_schedule,
-                    fixed_noise, device, num_recycles,
-                )
             term = (current - reference).square().mean()
             pair_loss = term if pair_loss is None else pair_loss + term
         if pair_loss is None:
@@ -143,6 +147,8 @@ def _streaming_diversity_training_step(
         pair_loss.backward()
         total_value += float(pair_loss.detach().cpu())
         del current
+
+    del references
 
     for confornet in confornet_manager.confornets:
         torch.nn.utils.clip_grad_norm_(confornet.parameters(), confornet_manager.grad_clip)
