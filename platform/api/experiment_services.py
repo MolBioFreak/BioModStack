@@ -933,13 +933,13 @@ async def reconcile_run_group(
         if not attempts:
             continue
         attempt = attempts[0]
-        if attempt.state in {"succeeded", "failed", "cancelled"}:
+        if attempt.state in {"completed", "failed", "cancelled"}:
             continue
         job = await core_session.get(Job, attempt.scheduler_job_id)
         if job is None or str(job.status).lower() not in TERMINAL_CORE_JOB_STATES:
             continue
         status = str(job.status).lower()
-        terminal_state = "succeeded" if status in {"completed", "succeeded"} else "cancelled" if status in {"cancelled", "canceled"} else "failed"
+        terminal_state = "completed" if status in {"completed", "succeeded"} else "cancelled" if status in {"cancelled", "canceled"} else "failed"
         receipt = {
             "schema": "bms.experiment.terminal-receipt.v1",
             "job_id": attempt.scheduler_job_id,
@@ -982,10 +982,10 @@ async def reconcile_run_group(
         changed = True
     if changed:
         states = [run.state for run in runs]
-        if all(state == "succeeded" for state in states):
-            group.state = "succeeded"
+        if all(state == "completed" for state in states):
+            group.state = "completed"
         elif any(state == "failed" for state in states):
-            group.state = "failed" if all(state in {"failed", "cancelled", "succeeded"} for state in states) else "partially_dispatched"
+            group.state = "failed" if all(state in {"failed", "cancelled", "completed"} for state in states) else "partially_dispatched"
         elif any(state in {"dispatch_pending", "dispatched", "running"} for state in states):
             group.state = "partially_dispatched"
         group.generation += 1
