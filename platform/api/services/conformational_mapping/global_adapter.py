@@ -106,7 +106,10 @@ async def materialize_preallocated_cm_job(
             for index, snapshot in enumerate(snapshots)
         ]
         request_params["protenix_snapshot_id"] = snapshot_source.source_id
-        (output_root / "cm_complex_snapshots_v1.json").write_bytes(staged.read_bytes())
+        (output_root / "cm_complex_snapshots_v1.json").write_text(
+            json.dumps(snapshots, sort_keys=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
         analysis_targets = snapshots
     else:
         sequence_source = await _source(core_session, str(submission["registered_sequence_id"]), "protein_sequence")

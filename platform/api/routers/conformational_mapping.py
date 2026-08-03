@@ -702,6 +702,7 @@ async def submit_request(
             or len({snapshot.get("target_id") for snapshot in snapshots}) != len(snapshots)
         ):
             raise HTTPException(status_code=422, detail="registered snapshot order or target identity is invalid")
+        snapshot_payload = snapshots
         params["targets"] = [
             {"target_id": snapshot["target_id"], "target_order": index}
             for index, snapshot in enumerate(snapshots)
@@ -817,7 +818,11 @@ async def submit_request(
                 [_registered(snapshot_source)], principal_id=principal_id,
                 destination_root=root / "registered_snapshot",
             )[snapshot_source.source_id]
-            (root / "cm_complex_snapshots_v1.json").write_bytes(staged_snapshot.read_bytes())
+            snapshot_payload = snapshots if isinstance(snapshots, list) else [snapshots]
+            (root / "cm_complex_snapshots_v1.json").write_text(
+                json.dumps(snapshot_payload, sort_keys=True, separators=(",", ":")),
+                encoding="utf-8",
+            )
         if confor_sources:
             staged_assets = stage_registered_assets(
                 [_registered(source) for source in confor_sources],
