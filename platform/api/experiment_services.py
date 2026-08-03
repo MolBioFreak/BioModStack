@@ -985,7 +985,7 @@ async def reconcile_run_group(
         if all(state == "succeeded" for state in states):
             group.state = "succeeded"
         elif any(state == "failed" for state in states):
-            group.state = "failed" if all(state in {"failed", "cancelled", "succeeded"} for state in states) else "partially_failed"
+            group.state = "failed" if all(state in {"failed", "cancelled", "succeeded"} for state in states) else "partially_dispatched"
         elif any(state in {"dispatch_pending", "dispatched", "running"} for state in states):
             group.state = "partially_dispatched"
         group.generation += 1
