@@ -5132,14 +5132,12 @@ async def create_job(
         if callable(_md_input_resolver)
         else _resolve_md_input_path_for_runtime
     )
+    # BindCraft is the only retired workflow.  The dedicated antibody/de-novo
+    # launcher remains supported and resolves to workflows/antibody_denovo.nf.
     retired_model_ids = {
-        "antibody" + "_" + "denovo",
-        "template_" + "antibody" + "_" + "denovo",
         "bind" + "craft",
     }
     retired_modes = {
-        "antibody" + "_" + "denovo",
-        "antibody" + "_" + "denovo" + "_pipeline",
         "bind" + "craft",
     }
     normalized_model_id = str(job_data.model_id or "").strip().lower()
