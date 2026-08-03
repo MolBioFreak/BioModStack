@@ -150,7 +150,12 @@ def _build_run_command(request: dict[str, Any], assets_dir: Path, raw_dir: Path)
     scripts = repo_path / "scripts"
 
     if task == "diversity":
-        cmd = [sys.executable, str(scripts / "run_diversity.py"), *common]
+        diversity_script = scripts / "run_diversity.py"
+        if int(params.get("k_confornets", 2)) >= 5:
+            memory_safe_script = Path(__file__).with_name("run_diversity_memory_safe.py")
+            if memory_safe_script.is_file():
+                diversity_script = memory_safe_script
+        cmd = [sys.executable, str(diversity_script), *common]
         cmd.extend([
             "--k-confornets",
             str(params.get("k_confornets", 2)),
