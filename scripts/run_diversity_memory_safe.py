@@ -27,8 +27,17 @@ def _memory_safe_load_model(checkpoint_path, model_update=None, device=None, sub
             "settings": {
                 "blocks_per_ckpt": 1,
                 "ckpt_intermediate_steps": True,
-                "memory": {"eval": {"chunk_size": 1}},
-            }
+                "memory": {
+                    "train": {"chunk_size": 1, "use_deepspeed_evo_attention": True},
+                    "eval": {"chunk_size": 1, "use_deepspeed_evo_attention": True},
+                },
+            },
+            "architecture": {
+                "msa": {"msa_module": {"tune_chunk_size": False}},
+                "pairformer": {"tune_chunk_size": False},
+                "template": {"template_pair_stack": {"tune_chunk_size": False}},
+                "diffusion_module": {"diffusion_conditioning": {"tune_chunk_size": False}},
+            },
         }
     )
     return _original_load_model(
