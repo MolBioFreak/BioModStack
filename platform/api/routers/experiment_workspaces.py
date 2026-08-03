@@ -120,6 +120,7 @@ class RunGroupCreateRequest(StrictRequestModel):
 
 class RetryRunGroupRequest(StrictRequestModel):
     idempotency_key: str = Field(min_length=1, max_length=255)
+    replacement_preparation_ids: dict[str, str] = Field(default_factory=dict)
 
 
 class ExternalReceiptCreateRequest(StrictRequestModel):
@@ -684,6 +685,7 @@ async def retry_workspace_run_group(
             workspace_id,
             run_group_id,
             idempotency_key=payload.idempotency_key,
+            replacement_preparation_ids=payload.replacement_preparation_ids,
         )
         await session.commit()
         return {"id": group.resource_id, "state": group.state, "generation": group.generation}

@@ -1008,6 +1008,7 @@ async def retry_failed_run_group(
     run_group_id: str,
     *,
     idempotency_key: str,
+    replacement_preparation_ids: dict[str, str] | None = None,
 ) -> ExperimentRunGroup:
     """Create fresh attempts for failed runs; terminal attempts are never reused."""
     group = await session.get(ExperimentRunGroup, run_group_id)
@@ -1034,7 +1035,16 @@ async def retry_failed_run_group(
                 failed_run_ids.append(run.resource_id)
     if not failed_run_ids:
         raise ValidationFailure("run group has no reconciled failed runs eligible for retry")
-    request_sha256 = sha256_text(canonical_json({"run_group_id": run_group_id, "failed_run_ids": failed_run_ids}))
+    replacement_preparation_ids = replacement_preparation_ids or {}
+    request_sha256 = sha256_text(
+        canonical_json(
+            {
+                "run_group_id": run_group_id,
+                "failed_run_ids": failed_run_ids,
+                "replacement_preparation_ids": replacement_preparation_ids,
+            }
+        )
+    )
     scope = f"run_group_retry:{workspace_id}:{run_group_id}"
     existing_claim = await session.get(ExperimentIdempotencyClaim, (scope, idempotency_key))
     if existing_claim is not None:
@@ -1058,9 +1068,10 @@ async def retry_failed_run_group(
         previous = latest_by_run.get(run.resource_id)
         if previous is None or previous.state != "failed":
             continue
-        preparation = await session.get(ExperimentWorkflowPreparation, run.preparation_id)
-        if preparation is None or preparation.validation_status != "valid":
-            raise ValidationFailure("failed run has no valid preparation for retry")
+        preparation_id = replacement_preparation_ids.get(run.resource_id, run.preparation_id)
+        preparation = await session.get(ExperimentWorkflowPreparation, preparation_id)
+        if preparation is None or preparation.workspace_id != workspace_id or preparation.validation_status != "valid":
+            raise ValidationFailure("failed run has no valid replacement preparation in this workspace")
         attempt_resource = await _resource(
             session,
             kind="run_attempt",
@@ -1104,6 +1115,8 @@ async def retry_failed_run_group(
             )
         )
         expected_generation = int(run.generation)
+        previous_preparation_id = run.preparation_id
+        run.preparation_id = preparation.resource_id
         run.state = "dispatch_pending"
         run.generation = expected_generation + 1
         sequence = int(
@@ -1125,7 +1138,14 @@ async def retry_failed_run_group(
                 resulting_generation=run.generation,
                 idempotency_key=f"retry:{run_group_id}:{attempt.resource_id}",
                 event_type="run_attempt_retry_created",
-                payload_json=canonical_json({"previous_attempt_id": previous.resource_id, "attempt_id": attempt.resource_id}),
+                payload_json=canonical_json(
+                    {
+                        "previous_attempt_id": previous.resource_id,
+                        "attempt_id": attempt.resource_id,
+                        "previous_preparation_id": previous_preparation_id,
+                        "replacement_preparation_id": preparation.resource_id,
+                    }
+                ),
                 created_at=now(),
             )
         )
