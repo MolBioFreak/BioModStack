@@ -186,6 +186,19 @@ def get_db_url() -> str:
     return os.getenv("DATABASE_URL") or f"sqlite+aiosqlite:///{get_db_path()}"
 
 
+def get_experiment_db_path() -> Path:
+    """Return the dedicated global experiment-control SQLite path."""
+    configured = os.getenv("BMS_EXPERIMENT_DB_PATH")
+    if configured:
+        return _resolve_path(configured)
+    return get_data_root() / "experiments.db"
+
+
+def get_experiment_db_url() -> str:
+    """Return the future-portable global experiment-control database URL."""
+    return os.getenv("BMS_EXPERIMENT_DATABASE_URL") or f"sqlite+aiosqlite:///{get_experiment_db_path()}"
+
+
 def get_allowed_roots() -> dict[str, Path]:
     code_root = get_code_root()
     roots = {
