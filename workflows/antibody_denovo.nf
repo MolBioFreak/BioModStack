@@ -2957,9 +2957,15 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
                         pdb_validation_batches,
                         msa_file_ch
                     )
-                    boltz_validation_pdbs = boltz_validation_pdbs.mix(BatchBoltzValidation.out.pdbs)
-                    boltz_validation_scores = boltz_validation_scores.mix(BatchBoltzValidation.out.scores)
-                    boltz_validation_aligned_error = boltz_validation_aligned_error.mix(BatchBoltzValidation.out.aligned_error)
+                    AlignBoltzValidation(
+                        BatchBoltzValidation.out.raw_pdbs.flatten().collect(),
+                        BatchBoltzValidation.out.raw_scores.flatten().collect(),
+                        BatchBoltzValidation.out.raw_aligned_error.flatten().collect(),
+                        BatchBoltzValidation.out.original_designs.flatten().collect()
+                    )
+                    boltz_validation_pdbs = boltz_validation_pdbs.mix(AlignBoltzValidation.out.pdbs)
+                    boltz_validation_scores = boltz_validation_scores.mix(AlignBoltzValidation.out.scores)
+                    boltz_validation_aligned_error = boltz_validation_aligned_error.mix(AlignBoltzValidation.out.aligned_error)
 
                     if (run_antifold) {
                         BoltzFromSequence(sequence_only_validation_designs)
