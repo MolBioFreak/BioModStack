@@ -123,6 +123,16 @@ class RetryRunGroupRequest(StrictRequestModel):
     replacement_preparation_ids: dict[str, str] = Field(default_factory=dict)
 
 
+class StatsHandoffRequest(StrictRequestModel):
+    stats_run_id: str = Field(min_length=1, max_length=255)
+    toolkit_version: str = Field(min_length=1, max_length=128)
+    source_resource_ids: list[str] = Field(min_length=1)
+    source_content_digests: list[str] = Field(min_length=1)
+    result_content_digest: str = Field(min_length=64, max_length=64)
+    result_generation_or_revision: str = Field(min_length=1, max_length=255)
+    acknowledgement: dict[str, Any] = Field(default_factory=dict)
+
+
 class ExternalReceiptCreateRequest(StrictRequestModel):
     store_id: str = Field(min_length=1, max_length=128)
     entity_kind: str = Field(min_length=1, max_length=128)
@@ -764,6 +774,53 @@ async def get_workspace_analytics_summary(
     try:
         return await workspace_analytics(session, workspace_id, limit=limit)
     except ExperimentOperationError as exc:
+        raise _error(exc) from exc
+
+
+@router.post("/{workspace_id}/analytics/stats-handoffs", status_code=status.HTTP_201_CREATED)
+async def register_stats_toolkit_handoff(
+    workspace_id: str,
+    payload: StatsHandoffRequest,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    try:
+        if len(payload.source_resource_ids) != len(payload.source_content_digests):
+            raise ExperimentOperationError("Stats Toolkit source IDs and digests must have equal length")
+        for resource_id, digest in zip(payload.source_resource_ids, payload.source_content_digests):
+            resource = await session.get(ExperimentResource, resource_id)
+            if resource is None or resource.workspace_id not in {workspace_id, None} and resource.id != workspace_id:
+                raise ExperimentOperationError("Stats Toolkit source is not owned by this workspace")
+            if len(digest) != 64 or digest != digest.lower() or any(char not in "0123456789abcdef" for char in digest):
+                raise ExperimentOperationError("Stats Toolkit source digest must be lowercase SHA-256")
+        receipt = await register_external_entity_receipt(
+            session,
+            workspace_id=workspace_id,
+            store_id="stats-toolkit",
+            entity_kind="stats_toolkit_run",
+            entity_id=payload.stats_run_id,
+            generation_or_revision=payload.result_generation_or_revision,
+            content_digest=payload.result_content_digest,
+            availability="available",
+            acknowledgement={
+                "schema": "bms.experiment.stats-handoff.v1",
+                "toolkit_version": payload.toolkit_version,
+                "source_resource_ids": payload.source_resource_ids,
+                "source_content_digests": payload.source_content_digests,
+                **payload.acknowledgement,
+            },
+        )
+        await session.commit()
+        return {
+            "schema": "bms.experiment.stats-handoff.v1",
+            "receipt_id": receipt.id,
+            "workspace_id": workspace_id,
+            "stats_run_id": payload.stats_run_id,
+            "result_content_digest": receipt.content_digest,
+            "source_resource_ids": payload.source_resource_ids,
+            "toolkit_version": payload.toolkit_version,
+        }
+    except ExperimentServiceError as exc:
+        await session.rollback()
         raise _error(exc) from exc
 
 
