@@ -127,8 +127,15 @@ export interface BioXpOperatorDashboardAxis {
     speed_steps_s: number | null;
     run_current: number | null;
     standby_current: number | null;
+    left_switch_state: number | null;
+    right_switch_state: number | null;
     left_switch_active: boolean | null;
     right_switch_active: boolean | null;
+    left_switch_disabled: boolean | null;
+    right_switch_disabled: boolean | null;
+    coordinate_contract: string | null;
+    min_steps: number | null;
+    max_steps: number | null;
     motor_temperature_c: number | null;
     motor_temperature_available: boolean;
 }
@@ -141,6 +148,23 @@ export interface BioXpOperatorDashboard {
     operation: { state: string | null; reason: string | null };
     enclosure: { door_closed: boolean | null; latch_closed: boolean | null };
     axes: BioXpOperatorDashboardAxis[];
+    z_axis: {
+        status: BioXpOperatorDashboardAxis | null;
+        provider: {
+            bound?: boolean;
+            state?: string;
+            expected_startup_stage?: string | null;
+            startup_terminal_state?: string | null;
+            reference_state?: string;
+            awaiting_observation_receipt_id?: string | null;
+            last_failure?: unknown;
+        };
+        snapshot_freshness: Record<string, unknown>;
+        last_failure: unknown;
+        authority: string;
+        board: number;
+        motor: number;
+    };
     temperatures: Array<{ sensor: string; label: string; unit: '°C'; temperature_c: number | null; available: boolean }>;
     pipettes: { ok?: boolean; channels?: Array<Record<string, unknown>>; error?: string };
     snapshot: { snapshot_id: string | null; freshness: { state?: string; age_s?: number | null; fresh_for_s?: number | null }; collection_triggered: false };
@@ -214,20 +238,22 @@ export interface BioXpOperatorActionReceipt {
     action_id: string;
     kind: BioXpOperatorActionKind;
     safety_class: BioXpOperatorSafetyClass;
-    status: 'acknowledged' | 'queued' | 'completed' | 'failed' | 'blocked';
+    status: 'acknowledged' | 'admission_pending' | 'queued' | 'completed' | 'failed' | 'blocked' | 'rejected';
     idempotency_key: string;
     ownership_generation: number;
     started_at: string;
     finished_at: string | null;
     duration_ms: number | null;
     remote_acknowledged: boolean;
-    physical_effect_verified: false;
+    controller_acknowledged: boolean;
+    physical_effect_verified: boolean;
     machine_assessment: 'pass' | 'fail' | 'unverified';
     operator_assessment: 'pass' | 'fail' | null;
     operator_note: string | null;
     operator_assessment_idempotency_key?: string | null;
     operator_assessed_at?: number | null;
     inputs: Record<string, unknown>;
+    requested_inputs?: Record<string, unknown> | null;
     response: Record<string, unknown> | null;
     error: string | null;
     stage_receipts: Record<string, unknown>[];

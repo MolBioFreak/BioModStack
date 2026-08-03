@@ -7,7 +7,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from routers import bioxp
-from services.bioxp.errors import ConnectionStateError
+from routers.bioxp.operator_controls import _translate_robot_error
+from services.bioxp.errors import ConnectionStateError, RobotResponseError
 from services.bioxp.operator_semantic_quarantine import OPERATOR_SEMANTIC_QUARANTINE_BY_PATH
 from services.bioxp.robot_client import DEFAULT_ROBOT_ROUTES
 
@@ -24,6 +25,15 @@ def catalog():
         "operation": {"state": "stopped", "reason": "ready"},
         "enclosure": {"door_closed": True, "latch_closed": True},
         "axes": [{"axis": "x", "reference": "referenced", "position_steps": 123, "speed_steps_s": 0, "run_current": 31, "standby_current": 8, "left_switch_active": False, "right_switch_active": True, "motor_temperature_c": None, "motor_temperature_available": False}],
+        "z_axis": {
+            "status": None,
+            "provider": {"bound": True, "state": "prepared_unreferenced"},
+            "snapshot_freshness": {"state": "fresh"},
+            "last_failure": None,
+            "authority": "Serial206OemInitializationProvider",
+            "board": 4,
+            "motor": 1,
+        },
         "temperatures": [{"sensor": "tc_temp_c", "label": "Thermal cycler block", "unit": "°C", "temperature_c": 37.0, "available": True}],
         "pipettes": {"ok": True, "channels": [{"channel": 0, "available": True}]},
         "snapshot": {"snapshot_id": "snap-1", "freshness": {"state": "fresh", "age_s": 1.0, "fresh_for_s": 30.0}, "collection_triggered": False},
@@ -84,6 +94,7 @@ def receipt(*, action_id="motion.home_xy", key="invoke-12345678", command_id="cm
         "finished_at": "2026-07-30T18:00:01Z",
         "duration_ms": 1000,
         "remote_acknowledged": True,
+        "controller_acknowledged": True,
         "physical_effect_verified": False,
         "machine_assessment": "unverified",
         "operator_assessment": None,
@@ -154,6 +165,17 @@ def make_client(monkeypatch, *, mutations=True):
     app.state.bioxp_runtime = runtime
     app.include_router(bioxp.router, prefix="/api/bioxp")
     return TestClient(app), runtime
+
+
+def test_robot_409_translation_preserves_structured_detail():
+    detail = {"error": "action_unavailable", "reason": {"key": "z_switch_masks_clear", "met": False}}
+    translated = _translate_robot_error(RobotResponseError(409, detail))
+    assert translated.status_code == 409
+    assert translated.detail == {
+        "error": "bioxp_robot_response_error",
+        "robot_status": 409,
+        "robot_detail": detail,
+    }
 
 
 def test_robot_client_uses_fixed_operator_routes_only():

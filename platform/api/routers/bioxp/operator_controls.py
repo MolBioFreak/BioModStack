@@ -103,7 +103,14 @@ async def _resolve_action_quarantine(
 def _translate_robot_error(exc: Exception) -> HTTPException:
     if isinstance(exc, RobotResponseError):
         status = exc.status_code if 400 <= exc.status_code < 500 else 502
-        return HTTPException(status_code=status, detail=str(exc))
+        return HTTPException(
+            status_code=status,
+            detail={
+                "error": "bioxp_robot_response_error",
+                "robot_status": exc.status_code,
+                "robot_detail": exc.detail,
+            },
+        )
     if isinstance(exc, ConnectionStateError):
         return HTTPException(status_code=409, detail=str(exc))
     return HTTPException(status_code=502, detail=str(exc) or exc.__class__.__name__)

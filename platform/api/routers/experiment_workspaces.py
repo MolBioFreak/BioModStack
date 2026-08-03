@@ -20,6 +20,18 @@ from experiment_models import (
     ExperimentValidation,
     ExperimentWorkflowPreparation,
     ExperimentWorkflowRun,
+    ExperimentSyncState,
+)
+from experiment_operations import (
+    BackupNotFound,
+    ExportNotFound,
+    ExperimentOperationError,
+    build_workspace_export,
+    create_online_backup,
+    register_external_entity_receipt,
+    verify_backup,
+    verify_workspace_export,
+    workspace_analytics,
 )
 from experiment_services import (
     ExistingJobMaterializer,
@@ -34,6 +46,8 @@ from experiment_services import (
     create_run_group,
     create_workflow,
     dispatch_pending_outbox,
+    reconcile_run_group,
+    retry_failed_run_group,
     archive_aggregate,
     clone_workflow,
     prepare_workflow,
@@ -104,8 +118,33 @@ class RunGroupCreateRequest(StrictRequestModel):
     idempotency_key: str = Field(min_length=1, max_length=255)
 
 
+class RetryRunGroupRequest(StrictRequestModel):
+    idempotency_key: str = Field(min_length=1, max_length=255)
+    replacement_preparation_ids: dict[str, str] = Field(default_factory=dict)
+
+
+class StatsHandoffRequest(StrictRequestModel):
+    stats_run_id: str = Field(min_length=1, max_length=255)
+    toolkit_version: str = Field(min_length=1, max_length=128)
+    source_resource_ids: list[str] = Field(min_length=1)
+    source_content_digests: list[str] = Field(min_length=1)
+    result_content_digest: str = Field(min_length=64, max_length=64)
+    result_generation_or_revision: str = Field(min_length=1, max_length=255)
+    acknowledgement: dict[str, Any] = Field(default_factory=dict)
+
+
+class ExternalReceiptCreateRequest(StrictRequestModel):
+    store_id: str = Field(min_length=1, max_length=128)
+    entity_kind: str = Field(min_length=1, max_length=128)
+    entity_id: str = Field(min_length=1, max_length=255)
+    generation_or_revision: str = Field(min_length=1, max_length=255)
+    content_digest: str = Field(min_length=64, max_length=64)
+    availability: str = Field(default="available", min_length=1, max_length=32)
+    acknowledgement: dict[str, Any] = Field(default_factory=dict)
+
+
 def _error(exc: ExperimentServiceError) -> HTTPException:
-    if isinstance(exc, NotFound):
+    if isinstance(exc, (NotFound, BackupNotFound, ExportNotFound)):
         return HTTPException(status_code=404, detail=str(exc))
     if isinstance(exc, (RevisionConflict, IdempotencyConflict)):
         return HTTPException(status_code=409, detail=str(exc))
@@ -625,6 +664,200 @@ async def get_workspace_run_group(
         "created_at": group.created_at,
         "updated_at": group.updated_at,
     }
+
+
+@router.post("/{workspace_id}/run-groups/{run_group_id}/reconcile")
+async def reconcile_workspace_run_group(
+    workspace_id: str,
+    run_group_id: str,
+    session: AsyncSession = Depends(get_experiment_session),
+    core_session: AsyncSession = Depends(get_core_session),
+) -> dict[str, Any]:
+    try:
+        group = await reconcile_run_group(session, core_session, workspace_id, run_group_id)
+        await session.commit()
+        return {"id": group.resource_id, "state": group.state, "generation": group.generation}
+    except ExperimentServiceError as exc:
+        await session.rollback()
+        raise _error(exc) from exc
+
+
+@router.post("/{workspace_id}/run-groups/{run_group_id}/retry")
+async def retry_workspace_run_group(
+    workspace_id: str,
+    run_group_id: str,
+    payload: RetryRunGroupRequest,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    try:
+        group = await retry_failed_run_group(
+            session,
+            workspace_id,
+            run_group_id,
+            idempotency_key=payload.idempotency_key,
+            replacement_preparation_ids=payload.replacement_preparation_ids,
+        )
+        await session.commit()
+        return {"id": group.resource_id, "state": group.state, "generation": group.generation}
+    except ExperimentServiceError as exc:
+        await session.rollback()
+        raise _error(exc) from exc
+
+
+@router.post("/ops/backup", status_code=status.HTTP_201_CREATED)
+async def create_experiment_backup() -> dict[str, Any]:
+    try:
+        return create_online_backup()
+    except ExperimentOperationError as exc:
+        raise _error(exc) from exc
+
+
+@router.get("/ops/backups/{backup_id}/verify")
+async def verify_experiment_backup(backup_id: str) -> dict[str, Any]:
+    try:
+        return verify_backup(backup_id)
+    except ExperimentOperationError as exc:
+        raise _error(exc) from exc
+
+
+@router.get("/ops/sync-health")
+async def get_experiment_sync_health(
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    states = (
+        await session.execute(select(ExperimentSyncState).order_by(ExperimentSyncState.state_key))
+    ).scalars().all()
+    return {
+        "schema": "bms.experiment.sync-health.v1",
+        "single_writer": True,
+        "credentials_exposed": False,
+        "states": [
+            {
+                "state_key": state.state_key,
+                "local_generation": state.local_generation,
+                "remote_generation": state.remote_generation,
+                "pending_changes": state.pending_changes,
+                "last_success_at": state.last_success_at,
+                "last_error": state.last_error,
+                "updated_at": state.updated_at,
+            }
+            for state in states
+        ],
+    }
+
+
+@router.post("/{workspace_id}/exports", status_code=status.HTTP_201_CREATED)
+async def export_workspace(
+    workspace_id: str,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    try:
+        return await build_workspace_export(session, workspace_id)
+    except ExperimentOperationError as exc:
+        raise _error(exc) from exc
+
+
+@router.get("/exports/{export_id}/verify")
+async def verify_workspace_export_route(export_id: str) -> dict[str, Any]:
+    try:
+        return verify_workspace_export(export_id)
+    except ExperimentOperationError as exc:
+        raise _error(exc) from exc
+
+
+@router.get("/{workspace_id}/analytics/summary")
+async def get_workspace_analytics_summary(
+    workspace_id: str,
+    limit: int = 100,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    try:
+        return await workspace_analytics(session, workspace_id, limit=limit)
+    except ExperimentOperationError as exc:
+        raise _error(exc) from exc
+
+
+@router.post("/{workspace_id}/analytics/stats-handoffs", status_code=status.HTTP_201_CREATED)
+async def register_stats_toolkit_handoff(
+    workspace_id: str,
+    payload: StatsHandoffRequest,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    try:
+        if len(payload.source_resource_ids) != len(payload.source_content_digests):
+            raise ExperimentOperationError("Stats Toolkit source IDs and digests must have equal length")
+        for resource_id, digest in zip(payload.source_resource_ids, payload.source_content_digests):
+            resource = await session.get(ExperimentResource, resource_id)
+            if resource is None or resource.workspace_id not in {workspace_id, None} and resource.id != workspace_id:
+                raise ExperimentOperationError("Stats Toolkit source is not owned by this workspace")
+            if len(digest) != 64 or digest != digest.lower() or any(char not in "0123456789abcdef" for char in digest):
+                raise ExperimentOperationError("Stats Toolkit source digest must be lowercase SHA-256")
+        receipt = await register_external_entity_receipt(
+            session,
+            workspace_id=workspace_id,
+            store_id="stats-toolkit",
+            entity_kind="stats_toolkit_run",
+            entity_id=payload.stats_run_id,
+            generation_or_revision=payload.result_generation_or_revision,
+            content_digest=payload.result_content_digest,
+            availability="available",
+            acknowledgement={
+                "schema": "bms.experiment.stats-handoff.v1",
+                "toolkit_version": payload.toolkit_version,
+                "source_resource_ids": payload.source_resource_ids,
+                "source_content_digests": payload.source_content_digests,
+                **payload.acknowledgement,
+            },
+        )
+        await session.commit()
+        return {
+            "schema": "bms.experiment.stats-handoff.v1",
+            "receipt_id": receipt.id,
+            "workspace_id": workspace_id,
+            "stats_run_id": payload.stats_run_id,
+            "result_content_digest": receipt.content_digest,
+            "source_resource_ids": payload.source_resource_ids,
+            "toolkit_version": payload.toolkit_version,
+        }
+    except ExperimentServiceError as exc:
+        await session.rollback()
+        raise _error(exc) from exc
+
+
+@router.post("/{workspace_id}/external-receipts", status_code=status.HTTP_201_CREATED)
+async def register_workspace_external_receipt(
+    workspace_id: str,
+    payload: ExternalReceiptCreateRequest,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    try:
+        receipt = await register_external_entity_receipt(
+            session,
+            workspace_id=workspace_id,
+            store_id=payload.store_id,
+            entity_kind=payload.entity_kind,
+            entity_id=payload.entity_id,
+            generation_or_revision=payload.generation_or_revision,
+            content_digest=payload.content_digest,
+            availability=payload.availability,
+            acknowledgement=payload.acknowledgement,
+        )
+        await session.commit()
+        return {
+            "id": receipt.id,
+            "workspace_id": receipt.workspace_id,
+            "store_id": receipt.store_id,
+            "entity_kind": receipt.entity_kind,
+            "entity_id": receipt.entity_id,
+            "generation_or_revision": receipt.generation_or_revision,
+            "content_digest": receipt.content_digest,
+            "availability": receipt.availability,
+            "acknowledgement": json.loads(receipt.acknowledgement_json or "{}"),
+            "created_at": receipt.created_at,
+        }
+    except ExperimentServiceError as exc:
+        await session.rollback()
+        raise _error(exc) from exc
 
 
 @router.post("/dispatch/once")
