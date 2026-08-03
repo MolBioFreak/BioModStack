@@ -1291,13 +1291,25 @@ async def dispatch_pending_outbox(
     if run is None:
         raise DispatchFailure("attempt references a missing workflow run")
     run.state = "dispatched"
+    expected_generation = int(run.generation)
+    run.generation = expected_generation + 1
+    sequence = int(
+        (
+            await session.execute(
+                select(func.max(ExperimentRunEvent.sequence_number)).where(
+                    ExperimentRunEvent.workflow_run_id == run.resource_id
+                )
+            )
+        ).scalar_one()
+        or 0
+    ) + 1
     session.add(
         ExperimentRunEvent(
             workspace_id=run.workspace_id,
             workflow_run_id=run.resource_id,
-            sequence_number=2,
-            expected_generation=0,
-            resulting_generation=1,
+            sequence_number=sequence,
+            expected_generation=expected_generation,
+            resulting_generation=run.generation,
             idempotency_key=f"scheduler-materialized:{attempt.resource_id}",
             event_type="scheduler_job_materialized",
             payload_json=canonical_json(receipt),
