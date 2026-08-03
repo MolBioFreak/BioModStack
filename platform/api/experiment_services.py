@@ -98,6 +98,12 @@ def new_id(_prefix: str) -> str:
 
 WORKFLOW_ADAPTER_REGISTRY: dict[str, set[str]] = {
     "generic_test": {"generic.test.adapter.v1"},
+    "conformational_mapping": {
+        "bms.cm.protenix_v2.adapter.v1",
+        "bms.cm.confornets.adapter.v1",
+        "bms.cm.frustrampnn.adapter.v1",
+        "bms.cm.comparison.adapter.v1",
+    },
 }
 
 
@@ -115,6 +121,30 @@ def _validate_workflow_payload(payload: dict[str, Any]) -> None:
     adapter_id = str(payload["adapter_id"])
     if adapter_id not in WORKFLOW_ADAPTER_REGISTRY.get(family, set()):
         raise ValidationFailure(f"workflow adapter is not registered: {family}/{adapter_id}")
+    if family == "conformational_mapping":
+        stage = payload.get("stage")
+        stage_by_adapter = {
+            "bms.cm.protenix_v2.adapter.v1": ("protenix_v2_sampling", "protenix_v2_ensemble"),
+            "bms.cm.confornets.adapter.v1": ("confornets_sampling", "confornets"),
+            "bms.cm.frustrampnn.adapter.v1": ("frustrampnn_analysis", "frustrampnn"),
+            "bms.cm.comparison.adapter.v1": ("cross_ensemble_comparison", "comparison"),
+        }
+        expected_stage, expected_backend = stage_by_adapter[adapter_id]
+        if stage != expected_stage or payload.get("backend") != expected_backend:
+            raise ValidationFailure("CM workflow stage, backend, and adapter identity disagree")
+        receipt_ids = payload.get("source_receipt_ids")
+        if not isinstance(receipt_ids, list) or not receipt_ids or any(
+            not isinstance(value, str) or not value for value in receipt_ids
+        ):
+            raise ValidationFailure("CM workflow requires explicit source receipt IDs")
+        cardinality = payload.get("expected_cardinality")
+        if isinstance(cardinality, bool) or not isinstance(cardinality, int) or cardinality < 1:
+            raise ValidationFailure("CM workflow expected_cardinality must be a positive integer")
+        dependencies = payload.get("depends_on", [])
+        if not isinstance(dependencies, list) or any(not isinstance(value, str) or not value for value in dependencies):
+            raise ValidationFailure("CM workflow depends_on must be an ordered ID list")
+        if adapter_id in {"bms.cm.frustrampnn.adapter.v1", "bms.cm.comparison.adapter.v1"} and not dependencies:
+            raise ValidationFailure("CM analysis/comparison stages require explicit dependencies")
     nodes = payload["nodes"]
     edges = payload["edges"]
     if not isinstance(nodes, list) or not nodes:

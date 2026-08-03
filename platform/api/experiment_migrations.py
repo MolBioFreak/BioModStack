@@ -205,6 +205,8 @@ CREATE TABLE IF NOT EXISTS run_events (
     UNIQUE(workflow_run_id, sequence_number),
     UNIQUE(workflow_run_id, idempotency_key)
 );
+CREATE UNIQUE INDEX IF NOT EXISTS ux_experiment_run_events_idempotency
+    ON run_events(workflow_run_id, idempotency_key);
 
 CREATE TABLE IF NOT EXISTS idempotency_claims (
     scope TEXT NOT NULL,
@@ -544,6 +546,74 @@ def migration_checksum() -> str:
     return hashlib.sha256(MIGRATION_V2_SQL.encode("utf-8")).hexdigest()
 
 
+_REQUIRED_SCHEMA_COLUMNS: dict[str, set[str]] = {
+    "experiment_schema_migrations": {"version", "name", "checksum", "description", "applied_at"},
+    "resources": {"id", "kind", "workspace_id", "lifecycle_owner_id", "created_at", "archived_at"},
+    "aggregate_heads": {"aggregate_id", "aggregate_kind", "workspace_id", "parent_id", "current_revision_id", "head_generation", "lifecycle_state", "display_name", "description", "created_at", "updated_at"},
+    "revisions": {"resource_id", "subject_id", "revision_number", "parent_revision_id", "schema_name", "schema_version", "canonical_payload", "payload_sha256", "dependency_graph_sha256", "provenance_json", "created_at"},
+    "revision_edges": {"revision_id", "role", "ordinal", "target_resource_id", "expected_sha256", "metadata_json"},
+    "workflow_drafts": {"resource_id", "workflow_id", "base_revision_id", "canonical_payload", "generation", "created_at", "updated_at"},
+    "dataset_revision_members": {"revision_id", "ordinal", "role", "semantic_identity", "value_json", "content_sha256", "size_bytes", "media_type"},
+    "workflow_preparations": {"resource_id", "workspace_id", "workflow_revision_id", "normalized_request_json", "normalized_request_sha256", "scheduler_payload_json", "validation_status", "validation_receipt_json", "validation_resource_id", "expected_cardinality", "created_at", "prepared_at"},
+    "run_groups": {"resource_id", "workspace_id", "launch_idempotency_key", "request_sha256", "state", "generation", "created_at", "updated_at"},
+    "run_group_preparations": {"run_group_id", "preparation_id", "ordinal"},
+    "workflow_runs": {"resource_id", "workspace_id", "run_group_id", "preparation_id", "node_id", "requiredness", "state", "generation", "created_at"},
+    "run_attempts": {"resource_id", "workspace_id", "workflow_run_id", "attempt_number", "scheduler_job_id", "state", "external_binding_receipt_json", "runtime_identity_json", "terminal_receipt_json", "created_at"},
+    "dispatch_outbox": {"id", "workspace_id", "run_attempt_id", "event_type", "payload_json", "payload_sha256", "status", "dispatch_attempts", "lease_token", "last_error", "acknowledgement_json", "created_at", "updated_at"},
+    "run_events": {"id", "workspace_id", "workflow_run_id", "sequence_number", "expected_generation", "resulting_generation", "idempotency_key", "event_type", "payload_json", "created_at"},
+    "idempotency_claims": {"scope", "idempotency_key", "request_sha256", "result_resource_id", "response_json", "created_at"},
+    "external_entity_receipts": {"id", "workspace_id", "resource_id", "store_id", "entity_kind", "entity_id", "generation_or_revision", "content_digest", "availability", "acknowledgement_json", "created_at"},
+    "lineage_edges": {"id", "workspace_id", "source_resource_id", "target_resource_id", "edge_mode", "edge_key", "metadata_json", "created_at"},
+    "workflow_revision_nodes": {"revision_id", "ordinal", "node_id", "node_kind", "node_json"},
+    "workflow_revision_edges": {"revision_id", "ordinal", "source_node_id", "target_node_id", "edge_json"},
+    "artifact_blobs": {"sha256", "size_bytes", "media_type", "storage_key", "state", "verified_at", "created_at"},
+    "artifacts": {"resource_id", "blob_sha256", "logical_role", "logical_key", "schema_name", "schema_version", "provenance_json", "created_at"},
+    "validations": {"resource_id", "subject_resource_id", "validator_name", "validator_version", "outcome", "input_graph_sha256", "receipt_json", "receipt_sha256", "created_at"},
+    "log_streams": {"resource_id", "attempt_id", "stream_name", "state", "created_at", "closed_at"},
+    "log_chunks": {"stream_id", "sequence_number", "content_sha256", "artifact_blob_sha256", "content_text", "created_at"},
+    "audit_events": {"id", "workspace_id", "resource_id", "event_type", "generation", "payload_json", "created_at"},
+    "sync_state": {"state_key", "local_generation", "remote_generation", "pending_changes", "last_success_at", "last_error", "updated_at"},
+}
+_REQUIRED_INDEXES = {"ux_experiment_run_events_idempotency"}
+
+
+def attest_schema(connection: sqlite3.Connection) -> dict[str, object]:
+    """Verify required structure independently of the migration ledger."""
+    missing_tables: list[str] = []
+    missing_columns: dict[str, list[str]] = {}
+    for table, columns in _REQUIRED_SCHEMA_COLUMNS.items():
+        table_exists = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        ).fetchone()
+        if table_exists is None:
+            missing_tables.append(table)
+            continue
+        actual = _table_columns(connection, table)
+        missing = sorted(columns - actual)
+        if missing:
+            missing_columns[table] = missing
+    actual_indexes = {
+        row[1]
+        for table in _REQUIRED_SCHEMA_COLUMNS
+        for row in connection.execute(f'PRAGMA index_list("{table}")')
+    }
+    missing_indexes = sorted(_REQUIRED_INDEXES - actual_indexes)
+    actual_triggers = {
+        row[0]
+        for row in connection.execute("SELECT name FROM sqlite_master WHERE type='trigger'")
+    }
+    missing_triggers = sorted(set(_MIGRATION_TRIGGER_NAMES) - actual_triggers)
+    foreign_key_errors = [list(row) for row in connection.execute("PRAGMA foreign_key_check")]
+    return {
+        "ok": not (missing_tables or missing_columns or missing_indexes or missing_triggers or foreign_key_errors),
+        "missing_tables": missing_tables,
+        "missing_columns": missing_columns,
+        "missing_indexes": missing_indexes,
+        "missing_triggers": missing_triggers,
+        "foreign_key_errors": foreign_key_errors,
+    }
+
+
 def _table_columns(connection: sqlite3.Connection, table: str) -> set[str]:
     return {row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')}
 
@@ -730,9 +800,16 @@ def run_all(db_path: str | Path) -> None:
             _cleanup_legacy_receipt_table(connection)
         else:
             raise RuntimeError(f"experiment migration ledger mismatch: {rows!r}")
+        connection.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_experiment_run_events_idempotency "
+            "ON run_events(workflow_run_id, idempotency_key)"
+        )
         violations = connection.execute("PRAGMA foreign_key_check").fetchall()
         if violations:
             raise sqlite3.IntegrityError(f"experiment foreign-key violations: {violations!r}")
+        attestation = attest_schema(connection)
+        if not attestation["ok"]:
+            raise sqlite3.IntegrityError(f"experiment schema attestation failed: {attestation!r}")
     except Exception:
         connection.rollback()
         raise
@@ -754,6 +831,7 @@ def health(db_path: str | Path) -> dict[str, object]:
             "journal_mode": connection.execute("PRAGMA journal_mode").fetchone()[0],
             "foreign_keys": connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1,
             "synchronous": connection.execute("PRAGMA synchronous").fetchone()[0],
+            "attestation": attest_schema(connection),
             "migration": (
                 {
                     "version": migration[0],
@@ -770,4 +848,4 @@ def health(db_path: str | Path) -> dict[str, object]:
         connection.close()
 
 
-__all__ = ["MIGRATION_VERSION", "MIGRATION_NAME", "MIGRATION_SQL", "migration_checksum", "run_all", "health"]
+__all__ = ["MIGRATION_VERSION", "MIGRATION_NAME", "MIGRATION_SQL", "migration_checksum", "attest_schema", "run_all", "health"]
