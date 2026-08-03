@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -33,6 +34,37 @@ _GENERATOR_ADAPTERS = {
     "bms.cm.protenix_v2.adapter.v1": "protenix_v2_ensemble",
     "bms.cm.confornets.adapter.v1": "confornets",
 }
+
+
+def _largest_gpu_with_memory(minimum_mb: int) -> int:
+    try:
+        completed = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=index,memory.total",
+                "--format=csv,noheader,nounits",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise DispatchFailure("cannot discover GPU inventory for memory-bound CM attempt") from exc
+    candidates: list[tuple[int, int]] = []
+    for line in completed.stdout.splitlines():
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) != 2:
+            continue
+        try:
+            gpu_id, memory_mb = int(parts[0]), int(parts[1])
+        except ValueError:
+            continue
+        if memory_mb >= minimum_mb:
+            candidates.append((memory_mb, gpu_id))
+    if not candidates:
+        raise DispatchFailure(f"no installed GPU satisfies the {minimum_mb} MB CM memory requirement")
+    return max(candidates)[1]
 
 
 def _registered(source: ConformationalMappingSource) -> RegisteredArtifact:
@@ -195,6 +227,7 @@ async def materialize_preallocated_cm_job(
     admission = _cm_job_admission(backend, {"targets": analysis_targets})
     if backend == "confornets" and int(submission.get("confornets", {}).get("confornet_count", 0)) >= 5:
         admission["vram_estimate_mb"] = 32000
+        admission["pinned_gpu"] = _largest_gpu_with_memory(32000)
     job = Job(
         id=attempt_id,
         name=str(submission["name"]),
