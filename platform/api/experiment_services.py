@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -898,6 +898,249 @@ async def create_run_group(
         generation=0,
         payload={"preparation_ids": [str(value) for value in preparation_ids], "idempotency_key": idempotency_key},
     )
+    return group
+
+
+TERMINAL_CORE_JOB_STATES = {"completed", "succeeded", "failed", "cancelled", "canceled"}
+
+
+async def reconcile_run_group(
+    session: AsyncSession,
+    core_session: AsyncSession,
+    workspace_id: str,
+    run_group_id: str,
+) -> ExperimentRunGroup:
+    """Project authoritative core terminal state into global attempts exactly once."""
+    from database import Job
+
+    group = await session.get(ExperimentRunGroup, run_group_id)
+    if group is None or group.workspace_id != workspace_id:
+        raise NotFound("run group not found")
+    runs = (
+        await session.execute(
+            select(ExperimentWorkflowRun).where(ExperimentWorkflowRun.run_group_id == run_group_id)
+        )
+    ).scalars().all()
+    changed = False
+    for run in runs:
+        attempts = (
+            await session.execute(
+                select(ExperimentRunAttempt)
+                .where(ExperimentRunAttempt.workflow_run_id == run.resource_id)
+                .order_by(ExperimentRunAttempt.attempt_number.desc())
+            )
+        ).scalars().all()
+        if not attempts:
+            continue
+        attempt = attempts[0]
+        if attempt.state in {"succeeded", "failed", "cancelled"}:
+            continue
+        job = await core_session.get(Job, attempt.scheduler_job_id)
+        if job is None or str(job.status).lower() not in TERMINAL_CORE_JOB_STATES:
+            continue
+        status = str(job.status).lower()
+        terminal_state = "succeeded" if status in {"completed", "succeeded"} else "cancelled" if status in {"cancelled", "canceled"} else "failed"
+        receipt = {
+            "schema": "bms.experiment.terminal-receipt.v1",
+            "job_id": attempt.scheduler_job_id,
+            "status": status,
+            "terminal_state": terminal_state,
+            "completed_at": str(job.completed_at) if job.completed_at else None,
+            "error_message": job.error_message,
+            "output_dir": job.output_dir,
+            "provenance": job.provenance,
+        }
+        expected_generation = int(run.generation)
+        attempt.state = terminal_state
+        attempt.terminal_receipt_json = canonical_json(receipt)
+        attempt.runtime_identity_json = canonical_json(job.provenance or {})
+        run.state = terminal_state
+        run.generation = expected_generation + 1
+        sequence = int(
+            (
+                await session.execute(
+                    select(func.max(ExperimentRunEvent.sequence_number)).where(
+                        ExperimentRunEvent.workflow_run_id == run.resource_id
+                    )
+                )
+            ).scalar_one()
+            or 0
+        ) + 1
+        session.add(
+            ExperimentRunEvent(
+                workspace_id=workspace_id,
+                workflow_run_id=run.resource_id,
+                sequence_number=sequence,
+                expected_generation=expected_generation,
+                resulting_generation=run.generation,
+                idempotency_key=f"core-terminal:{attempt.scheduler_job_id}:{status}",
+                event_type="core_terminal_projected",
+                payload_json=canonical_json(receipt),
+                created_at=now(),
+            )
+        )
+        changed = True
+    if changed:
+        states = [run.state for run in runs]
+        if all(state == "succeeded" for state in states):
+            group.state = "succeeded"
+        elif any(state == "failed" for state in states):
+            group.state = "failed" if all(state in {"failed", "cancelled", "succeeded"} for state in states) else "partially_failed"
+        elif any(state in {"dispatch_pending", "dispatched", "running"} for state in states):
+            group.state = "partially_dispatched"
+        group.generation += 1
+        group.updated_at = now()
+        add_audit_event(
+            session,
+            workspace_id=workspace_id,
+            resource_id=run_group_id,
+            event_type="run_group_reconciled",
+            generation=group.generation,
+            payload={"state": group.state},
+        )
+        await session.flush()
+    return group
+
+
+async def retry_failed_run_group(
+    session: AsyncSession,
+    workspace_id: str,
+    run_group_id: str,
+    *,
+    idempotency_key: str,
+) -> ExperimentRunGroup:
+    """Create fresh attempts for failed runs; terminal attempts are never reused."""
+    group = await session.get(ExperimentRunGroup, run_group_id)
+    if group is None or group.workspace_id != workspace_id:
+        raise NotFound("run group not found")
+    runs = (
+        await session.execute(
+            select(ExperimentWorkflowRun).where(ExperimentWorkflowRun.run_group_id == run_group_id)
+        )
+    ).scalars().all()
+    failed_run_ids: list[str] = []
+    latest_by_run: dict[str, ExperimentRunAttempt] = {}
+    for run in runs:
+        attempts = (
+            await session.execute(
+                select(ExperimentRunAttempt)
+                .where(ExperimentRunAttempt.workflow_run_id == run.resource_id)
+                .order_by(ExperimentRunAttempt.attempt_number.desc())
+            )
+        ).scalars().all()
+        if attempts:
+            latest_by_run[run.resource_id] = attempts[0]
+            if attempts[0].state == "failed":
+                failed_run_ids.append(run.resource_id)
+    if not failed_run_ids:
+        raise ValidationFailure("run group has no reconciled failed runs eligible for retry")
+    request_sha256 = sha256_text(canonical_json({"run_group_id": run_group_id, "failed_run_ids": failed_run_ids}))
+    scope = f"run_group_retry:{workspace_id}:{run_group_id}"
+    existing_claim = await session.get(ExperimentIdempotencyClaim, (scope, idempotency_key))
+    if existing_claim is not None:
+        if existing_claim.request_sha256 != request_sha256:
+            raise IdempotencyConflict("retry idempotency key was reused with a different failed-run set")
+        existing = await session.get(ExperimentRunGroup, existing_claim.result_resource_id)
+        if existing is None:
+            raise DispatchFailure("retry idempotency claim points to a missing run group")
+        return existing
+    session.add(
+        ExperimentIdempotencyClaim(
+            scope=scope,
+            idempotency_key=idempotency_key,
+            request_sha256=request_sha256,
+            result_resource_id=run_group_id,
+            response_json=canonical_json({"run_group_id": run_group_id}),
+            created_at=now(),
+        )
+    )
+    for run in runs:
+        previous = latest_by_run.get(run.resource_id)
+        if previous is None or previous.state != "failed":
+            continue
+        preparation = await session.get(ExperimentWorkflowPreparation, run.preparation_id)
+        if preparation is None or preparation.validation_status != "valid":
+            raise ValidationFailure("failed run has no valid preparation for retry")
+        attempt_resource = await _resource(
+            session,
+            kind="run_attempt",
+            workspace_id=workspace_id,
+            lifecycle_owner_id=run.resource_id,
+        )
+        attempt = ExperimentRunAttempt(
+            resource_id=attempt_resource.id,
+            workspace_id=workspace_id,
+            workflow_run_id=run.resource_id,
+            attempt_number=previous.attempt_number + 1,
+            scheduler_job_id=attempt_resource.id,
+            state="pending",
+            created_at=now(),
+        )
+        session.add(attempt)
+        await session.flush()
+        scheduler_payload = json.loads(preparation.scheduler_payload_json)
+        outbox_payload = {
+            "schema": "bms.experiment.dispatch.v1",
+            "run_group_id": run_group_id,
+            "workflow_run_id": run.resource_id,
+            "attempt_id": attempt.resource_id,
+            "scheduler_job_id": attempt.scheduler_job_id,
+            "workflow_revision_id": preparation.workflow_revision_id,
+            "scheduler": scheduler_payload,
+        }
+        outbox_json = canonical_json(outbox_payload)
+        session.add(
+            ExperimentDispatchOutbox(
+                id=new_id("dispatch"),
+                workspace_id=workspace_id,
+                run_attempt_id=attempt.resource_id,
+                event_type="materialize_scheduler_job",
+                payload_json=outbox_json,
+                payload_sha256=sha256_text(outbox_json),
+                status="pending",
+                dispatch_attempts=0,
+                created_at=now(),
+                updated_at=now(),
+            )
+        )
+        expected_generation = int(run.generation)
+        run.state = "dispatch_pending"
+        run.generation = expected_generation + 1
+        sequence = int(
+            (
+                await session.execute(
+                    select(func.max(ExperimentRunEvent.sequence_number)).where(
+                        ExperimentRunEvent.workflow_run_id == run.resource_id
+                    )
+                )
+            ).scalar_one()
+            or 0
+        ) + 1
+        session.add(
+            ExperimentRunEvent(
+                workspace_id=workspace_id,
+                workflow_run_id=run.resource_id,
+                sequence_number=sequence,
+                expected_generation=expected_generation,
+                resulting_generation=run.generation,
+                idempotency_key=f"retry:{run_group_id}:{attempt.resource_id}",
+                event_type="run_attempt_retry_created",
+                payload_json=canonical_json({"previous_attempt_id": previous.resource_id, "attempt_id": attempt.resource_id}),
+                created_at=now(),
+            )
+        )
+    group.state = "dispatch_pending"
+    group.generation += 1
+    group.updated_at = now()
+    add_audit_event(
+        session,
+        workspace_id=workspace_id,
+        resource_id=run_group_id,
+        event_type="run_group_retry_created",
+        generation=group.generation,
+        payload={"failed_run_ids": failed_run_ids, "idempotency_key": idempotency_key},
+    )
+    await session.flush()
     return group
 
 

@@ -46,6 +46,8 @@ from experiment_services import (
     create_run_group,
     create_workflow,
     dispatch_pending_outbox,
+    reconcile_run_group,
+    retry_failed_run_group,
     archive_aggregate,
     clone_workflow,
     prepare_workflow,
@@ -113,6 +115,10 @@ class ArchiveRequest(StrictRequestModel):
 
 class RunGroupCreateRequest(StrictRequestModel):
     preparation_ids: list[str] = Field(min_length=1)
+    idempotency_key: str = Field(min_length=1, max_length=255)
+
+
+class RetryRunGroupRequest(StrictRequestModel):
     idempotency_key: str = Field(min_length=1, max_length=255)
 
 
@@ -647,6 +653,43 @@ async def get_workspace_run_group(
         "created_at": group.created_at,
         "updated_at": group.updated_at,
     }
+
+
+@router.post("/{workspace_id}/run-groups/{run_group_id}/reconcile")
+async def reconcile_workspace_run_group(
+    workspace_id: str,
+    run_group_id: str,
+    session: AsyncSession = Depends(get_experiment_session),
+    core_session: AsyncSession = Depends(get_core_session),
+) -> dict[str, Any]:
+    try:
+        group = await reconcile_run_group(session, core_session, workspace_id, run_group_id)
+        await session.commit()
+        return {"id": group.resource_id, "state": group.state, "generation": group.generation}
+    except ExperimentServiceError as exc:
+        await session.rollback()
+        raise _error(exc) from exc
+
+
+@router.post("/{workspace_id}/run-groups/{run_group_id}/retry")
+async def retry_workspace_run_group(
+    workspace_id: str,
+    run_group_id: str,
+    payload: RetryRunGroupRequest,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    try:
+        group = await retry_failed_run_group(
+            session,
+            workspace_id,
+            run_group_id,
+            idempotency_key=payload.idempotency_key,
+        )
+        await session.commit()
+        return {"id": group.resource_id, "state": group.state, "generation": group.generation}
+    except ExperimentServiceError as exc:
+        await session.rollback()
+        raise _error(exc) from exc
 
 
 @router.post("/ops/backup", status_code=status.HTTP_201_CREATED)
