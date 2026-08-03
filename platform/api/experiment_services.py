@@ -1031,7 +1031,7 @@ async def retry_failed_run_group(
         ).scalars().all()
         if attempts:
             latest_by_run[run.resource_id] = attempts[0]
-            if attempts[0].state == "failed":
+            if attempts[0].state in {"failed", "cancelled"}:
                 failed_run_ids.append(run.resource_id)
     if not failed_run_ids:
         raise ValidationFailure("run group has no reconciled failed runs eligible for retry")
