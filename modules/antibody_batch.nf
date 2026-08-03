@@ -163,7 +163,7 @@ process BatchBoltzValidation {
     # We need access to the original un-repacked templates to calculate RMSD
     # The originals are in 'pdbs' (the input chunk).
     mkdir -p original_designs
-    cp \${pdbs} original_designs/
+    cp ${pdbs} original_designs/
     original_design_count=\$(find original_designs -maxdepth 1 -name '*.pdb' | wc -l)
     if [ "\$original_design_count" -eq 0 ]; then
         echo "[BatchBoltzValidation] ERROR: No original design PDBs were staged for RMSD alignment" >&2
