@@ -185,6 +185,7 @@ class OperatorActionReceipt(BaseModel):
     duration_ms: StrictInt | StrictFloat | None = Field(default=None, ge=0)
     remote_acknowledged: StrictBool
     controller_acknowledged: StrictBool = False
+    controller_terminal_state_verified: StrictBool = False
     physical_effect_verified: StrictBool
     machine_assessment: ActionAssessment
     operator_assessment: Literal["pass", "fail"] | None = None
@@ -199,6 +200,10 @@ class OperatorActionReceipt(BaseModel):
     inputs: dict[str, Any] = Field(default_factory=dict, max_length=64)
     requested_inputs: dict[str, Any] | None = Field(default=None, max_length=64)
     response: dict[str, Any] | None = None
+    authority_receipt_id: str | None = Field(default=None, max_length=128)
+    authority_receipt_status: str | dict[str, Any] | None = None
+    observation_receipt_id: str | None = Field(default=None, max_length=128)
+    observes_command_id: str | None = Field(default=None, max_length=128)
     error: str | None = Field(default=None, max_length=4000)
     stage_receipts: list[dict[str, Any]] = Field(default_factory=list, max_length=256)
 
