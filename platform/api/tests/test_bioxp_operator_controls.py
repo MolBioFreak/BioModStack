@@ -257,6 +257,47 @@ def test_one_invocation_maps_to_one_action_id_not_a_browser_path(monkeypatch):
     )]
 
 
+def test_z_stop_invocation_skips_catalog_preflight_but_keeps_generation_contract(monkeypatch):
+    client, runtime = make_client(monkeypatch)
+    runtime.connection.client.responses["invoke_operator_action"] = receipt(
+        action_id="oem.z.stop",
+        key="z-stop-12345678",
+        command_id="z-stop-command-1",
+    )
+
+    response = client.post("/api/bioxp/operator-controls/actions/oem.z.stop", json={
+        "expected_connection_generation": 77,
+        "expected_ownership_generation": 7,
+        "idempotency_key": "z-stop-12345678",
+        "inputs": {},
+    })
+
+    assert response.status_code == 200, response.text
+    assert response.json()["action_id"] == "oem.z.stop"
+    assert runtime.connection.client.calls == [(
+        "invoke_operator_action",
+        {
+            "path_params": {"action_id": "oem.z.stop"},
+            "json_data": {
+                "expected_generation": 7,
+                "idempotency_key": "z-stop-12345678",
+                "inputs": {},
+            },
+        },
+    )]
+
+    runtime.connection.client.calls.clear()
+    stale = client.post("/api/bioxp/operator-controls/actions/oem.z.stop", json={
+        "expected_connection_generation": 999,
+        "expected_ownership_generation": 7,
+        "idempotency_key": "z-stop-stale-12345678",
+        "inputs": {},
+    })
+    assert stale.status_code == 409
+    assert "connection generation changed" in stale.json()["detail"].lower()
+    assert runtime.connection.client.calls == []
+
+
 def test_receipt_identity_mismatch_fails_closed(monkeypatch):
     client, runtime = make_client(monkeypatch)
     runtime.connection.client.responses["invoke_operator_action"] = receipt(action_id="motion.home_z")

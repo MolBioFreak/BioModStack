@@ -77,6 +77,12 @@ async def _resolve_action_quarantine(
     expected_connection_generation: int,
     expected_ownership_generation: int,
 ) -> str | None:
+    # A safety stop must not wait for a fresh full catalog while a motion
+    # transaction is still holding the robot's provider-state lock. The robot
+    # invocation still enforces the connection and ownership generations and
+    # dispatches only the finite oem.z.stop action.
+    if action_id == "oem.z.stop":
+        return None
     try:
         payload = await runtime.connection.request_active(
             "operator_control_catalog",
