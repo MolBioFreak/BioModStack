@@ -24,7 +24,7 @@ def catalog():
         "motion": {"enabled": False, "reason": "Motion is inactive."},
         "operation": {"state": "stopped", "reason": "ready"},
         "enclosure": {"door_closed": True, "latch_closed": True},
-        "axes": [{"axis": "x", "reference": "referenced", "position_steps": 123, "speed_steps_s": 0, "run_current": 31, "standby_current": 8, "left_switch_active": False, "right_switch_active": True, "motor_temperature_c": None, "motor_temperature_available": False}],
+        "axes": [{"axis": "x", "reference": "referenced", "position_steps": 123, "speed_steps_s": 0, "run_current": 31, "standby_current": 8, "left_switch_raw_active": False, "right_switch_raw_active": True, "left_switch_active": False, "right_switch_active": True, "motor_temperature_c": None, "motor_temperature_available": False}],
         "z_axis": {
             "status": None,
             "provider": {"bound": True, "state": "prepared_unreferenced"},
@@ -220,6 +220,8 @@ def test_dashboard_and_input_admission_are_robot_owned(monkeypatch):
     })
     assert dashboard.status_code == 200, dashboard.text
     assert dashboard.json()["motion"]["enabled"] is False
+    assert dashboard.json()["axes"][0]["left_switch_raw_active"] is False
+    assert dashboard.json()["axes"][0]["right_switch_raw_active"] is True
     assert dashboard.json()["axes"][0]["motor_temperature_available"] is False
     assert dashboard.json()["temperatures"][0]["label"] == "Thermal cycler block"
     assert dashboard.json()["temperatures"][0]["unit"] == "°C"

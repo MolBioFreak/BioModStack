@@ -130,6 +130,8 @@ export interface BioXpOperatorDashboardAxis {
     standby_current: number | null;
     left_switch_state: number | null;
     right_switch_state: number | null;
+    left_switch_raw_active: boolean | null;
+    right_switch_raw_active: boolean | null;
     left_switch_active: boolean | null;
     right_switch_active: boolean | null;
     left_switch_disabled: boolean | null;

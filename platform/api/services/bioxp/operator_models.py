@@ -46,6 +46,8 @@ class OperatorDashboardAxis(BaseModel):
     standby_current: StrictInt | None = None
     left_switch_state: StrictInt | None = None
     right_switch_state: StrictInt | None = None
+    left_switch_raw_active: StrictBool | None = None
+    right_switch_raw_active: StrictBool | None = None
     left_switch_active: StrictBool | None = None
     right_switch_active: StrictBool | None = None
     left_switch_disabled: StrictBool | None = None
