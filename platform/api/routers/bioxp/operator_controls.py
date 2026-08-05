@@ -217,18 +217,27 @@ async def invoke_operator_action(
     )
     if quarantine_reason is not None:
         raise HTTPException(status_code=409, detail=quarantine_reason)
+    action_payload = {
+        "expected_generation": request.expected_ownership_generation,
+        "idempotency_key": request.idempotency_key,
+        "inputs": request.inputs,
+    }
     try:
-        payload = await runtime.connection.request_active(
-            "invoke_operator_action",
-            expected_generation=request.expected_connection_generation,
-            require_fresh=True,
-            path_params={"action_id": action_id},
-            json_data={
-                "expected_generation": request.expected_ownership_generation,
-                "idempotency_key": request.idempotency_key,
-                "inputs": request.inputs,
-            },
-        )
+        if action_id == "oem.z.stop":
+            payload = await runtime.connection.request_active_safety_interrupt(
+                "invoke_operator_action",
+                expected_generation=request.expected_connection_generation,
+                path_params={"action_id": action_id},
+                json_data=action_payload,
+            )
+        else:
+            payload = await runtime.connection.request_active(
+                "invoke_operator_action",
+                expected_generation=request.expected_connection_generation,
+                require_fresh=True,
+                path_params={"action_id": action_id},
+                json_data=action_payload,
+            )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
     receipt = _validate(OperatorActionReceipt, payload)

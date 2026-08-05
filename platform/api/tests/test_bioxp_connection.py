@@ -35,6 +35,8 @@ class FakeRobotClient:
         self.status_only_probes = 0
         self.request_started: asyncio.Event | None = None
         self.request_release: asyncio.Event | None = None
+        self.blocking_route_name: str | None = None
+        self.blocking_action_id: str | None = None
 
     async def probe(self) -> dict[str, Any]:
         self.probes += 1
@@ -54,7 +56,16 @@ class FakeRobotClient:
     async def request(self, route_name: str, **kwargs: Any) -> dict[str, Any]:
         if self.request_started is not None:
             self.request_started.set()
-        if self.request_release is not None:
+        if self.request_release is not None and (
+            self.blocking_route_name is None
+            or (
+                route_name == self.blocking_route_name
+                and (
+                    self.blocking_action_id is None
+                    or (kwargs.get("path_params") or {}).get("action_id") == self.blocking_action_id
+                )
+            )
+        ):
             await self.request_release.wait()
         return {"route_name": route_name, "kwargs": kwargs}
 
@@ -343,6 +354,49 @@ def test_generation_bound_request_lease_serializes_disconnect(tmp_path: Path) ->
         disconnected = await disconnect_task
         assert disconnected.generation == connected.generation + 1
         assert disconnected.active is False
+
+    asyncio.run(exercise())
+
+
+def test_safety_interrupt_bypasses_active_request_lease_without_allowing_disconnect(tmp_path: Path) -> None:
+    _, BioXpProfile, _, _ = _load()
+    clients: list[FakeRobotClient] = []
+    service = _service(tmp_path, clients)
+
+    async def exercise() -> None:
+        await service.save_profile(BioXpProfile(api_url="http://robot:8123"))
+        connected = await service.connect()
+        robot = clients[0]
+        robot.request_started = asyncio.Event()
+        robot.request_release = asyncio.Event()
+        robot.blocking_route_name = "invoke_operator_action"
+        robot.blocking_action_id = "oem.z.diagnostic_home_axis"
+
+        movement_task = asyncio.create_task(service.request_active(
+            "invoke_operator_action",
+            expected_generation=connected.generation,
+            path_params={"action_id": "oem.z.diagnostic_home_axis"},
+            json_data={"expected_generation": 7, "idempotency_key": "home-action", "inputs": {}},
+        ))
+        await robot.request_started.wait()
+
+        stop = await asyncio.wait_for(service.request_active_safety_interrupt(
+            "invoke_operator_action",
+            expected_generation=connected.generation,
+            path_params={"action_id": "oem.z.stop"},
+            json_data={"expected_generation": 7, "idempotency_key": "stop-action", "inputs": {}},
+        ), timeout=0.1)
+        assert stop["kwargs"]["path_params"] == {"action_id": "oem.z.stop"}
+        assert movement_task.done() is False
+
+        disconnect_task = asyncio.create_task(service.disconnect())
+        await asyncio.sleep(0)
+        assert disconnect_task.done() is False
+
+        robot.request_release.set()
+        await movement_task
+        disconnected = await disconnect_task
+        assert disconnected.generation == connected.generation + 1
 
     asyncio.run(exercise())
 

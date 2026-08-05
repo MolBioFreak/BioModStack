@@ -87,6 +87,7 @@ class BioXpConnectionService:
         self.active_probe_interval_seconds = active_probe_interval_seconds
         self.clock = clock or _utcnow
         self._transition_lock = asyncio.Lock()
+        self._safety_interrupt_lock = asyncio.Lock()
         self._client: RobotClientProtocol | None = None
         self._active_target: ValidatedBioXpTarget | None = None
         # Opaque per-process epoch: delayed requests from a previous process
@@ -155,13 +156,14 @@ class BioXpConnectionService:
                 self._last_error = str(exc)
                 raise
             await self._stop_active_probe_locked()
-            if self._client is not None:
-                await self._client.close()
-            self.freshness_budget_seconds = profile.freshness_budget_seconds
-            self._generation += 1
-            self._clear_observation()
-            self._active_target = target
-            self._client = self.client_factory(target)
+            async with self._safety_interrupt_lock:
+                if self._client is not None:
+                    await self._client.close()
+                self.freshness_budget_seconds = profile.freshness_budget_seconds
+                self._generation += 1
+                self._clear_observation()
+                self._active_target = target
+                self._client = self.client_factory(target)
             if not await self._probe_locked(status_only=True):
                 error = self._last_error or "BioXP robot probe failed"
                 await self._deactivate_locked(increment=False)
@@ -182,11 +184,12 @@ class BioXpConnectionService:
                 self._last_error = str(exc)
                 raise
             if validated != self._active_target:
-                await self._client.close()
-                self._client = self.client_factory(validated)
-                self._active_target = validated
-                self._generation += 1
-                self._clear_observation()
+                async with self._safety_interrupt_lock:
+                    await self._client.close()
+                    self._client = self.client_factory(validated)
+                    self._active_target = validated
+                    self._generation += 1
+                    self._clear_observation()
             await self._probe_locked()
         return self.snapshot()
 
@@ -201,11 +204,12 @@ class BioXpConnectionService:
                 self._last_error = str(exc)
                 raise
             if validated != self._active_target:
-                await self._client.close()
-                self._client = self.client_factory(validated)
-                self._active_target = validated
-                self._generation += 1
-                self._clear_observation()
+                async with self._safety_interrupt_lock:
+                    await self._client.close()
+                    self._client = self.client_factory(validated)
+                    self._active_target = validated
+                    self._generation += 1
+                    self._clear_observation()
             await self._probe_locked(status_only=True)
         return self.snapshot()
 
@@ -232,6 +236,29 @@ class BioXpConnectionService:
             if path_params is not None:
                 kwargs["path_params"] = path_params
             return await client.request(route_name, **kwargs)
+
+    async def request_active_safety_interrupt(
+        self,
+        route_name: str,
+        *,
+        expected_generation: int,
+        json_data: dict[str, Any] | None = None,
+        path_params: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """Dispatch exact Z STOP without waiting behind an active motion lease."""
+        if route_name != "invoke_operator_action" or path_params != {"action_id": "oem.z.stop"}:
+            raise ValueError("BioXP safety-interrupt transport is reserved for exact oem.z.stop")
+        async with self._safety_interrupt_lock:
+            client = self._client
+            if client is None or self._active_target is None:
+                raise ConnectionStateError("BioXP saved profile is not actively connected")
+            if self._generation != expected_generation:
+                raise ConnectionStateError("Expected connection generation does not match the active generation")
+            return await client.request(
+                route_name,
+                json_data=json_data,
+                path_params=path_params,
+            )
 
     @asynccontextmanager
     async def active_request_lease(
@@ -324,13 +351,14 @@ class BioXpConnectionService:
 
     async def _deactivate_locked(self, *, increment: bool) -> None:
         await self._stop_active_probe_locked()
-        if self._client is not None:
-            await self._client.close()
-        self._client = None
-        self._active_target = None
-        if increment:
-            self._generation += 1
-        self._clear_observation()
+        async with self._safety_interrupt_lock:
+            if self._client is not None:
+                await self._client.close()
+            self._client = None
+            self._active_target = None
+            if increment:
+                self._generation += 1
+            self._clear_observation()
 
     def _start_active_probe_locked(self) -> None:
         if self.active_probe_interval_seconds is None or self._client is None:

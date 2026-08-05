@@ -147,6 +147,7 @@ class FakeConnection:
     def __init__(self):
         self.client = FakeRobotClient()
         self.value = FakeSnapshot()
+        self.safety_interrupt_calls = []
 
     def snapshot(self):
         return self.value
@@ -157,6 +158,14 @@ class FakeConnection:
                 f"BioXP connection generation changed: expected {expected_generation}, current {self.value.generation}"
             )
         assert require_fresh is True
+        return await self.client.request(route_name, **kwargs)
+
+    async def request_active_safety_interrupt(self, route_name, *, expected_generation, **kwargs):
+        if expected_generation != self.value.generation:
+            raise ConnectionStateError(
+                f"BioXP connection generation changed: expected {expected_generation}, current {self.value.generation}"
+            )
+        self.safety_interrupt_calls.append((route_name, kwargs))
         return await self.client.request(route_name, **kwargs)
 
 
@@ -281,6 +290,17 @@ def test_z_stop_invocation_skips_catalog_preflight_but_keeps_generation_contract
 
     assert response.status_code == 200, response.text
     assert response.json()["action_id"] == "oem.z.stop"
+    assert runtime.connection.safety_interrupt_calls == [(
+        "invoke_operator_action",
+        {
+            "path_params": {"action_id": "oem.z.stop"},
+            "json_data": {
+                "expected_generation": 7,
+                "idempotency_key": "z-stop-12345678",
+                "inputs": {},
+            },
+        },
+    )]
     assert runtime.connection.client.calls == [(
         "invoke_operator_action",
         {
