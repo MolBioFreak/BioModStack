@@ -325,6 +325,26 @@ def test_z_stop_invocation_skips_catalog_preflight_but_keeps_generation_contract
     assert runtime.connection.client.calls == []
 
 
+def test_z_abort_invocation_uses_independent_interrupt_lane(monkeypatch):
+    client, runtime = make_client(monkeypatch)
+    runtime.connection.client.responses["invoke_operator_action"] = receipt(
+        action_id="oem.z.abort",
+        key="z-abort-12345678",
+        command_id="z-abort-command-1",
+    )
+
+    response = client.post("/api/bioxp/operator-controls/actions/oem.z.abort", json={
+        "expected_connection_generation": 77,
+        "expected_ownership_generation": 7,
+        "idempotency_key": "z-abort-12345678",
+        "inputs": {},
+    })
+
+    assert response.status_code == 200, response.text
+    assert response.json()["action_id"] == "oem.z.abort"
+    assert runtime.connection.safety_interrupt_calls[0][1]["path_params"] == {"action_id": "oem.z.abort"}
+
+
 def test_receipt_identity_mismatch_fails_closed(monkeypatch):
     client, runtime = make_client(monkeypatch)
     runtime.connection.client.responses["invoke_operator_action"] = receipt(action_id="motion.home_z")

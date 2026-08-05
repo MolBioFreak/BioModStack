@@ -7,7 +7,6 @@ import {
     useDisconnectBioXp,
     useUpdateBioXpFreshness,
     useAssessBioXpOperatorAction,
-    useBioXpOperatorActionAdmission,
     useBioXpOperatorActionHistory,
     useBioXpOperatorControlCatalog,
     useBioXpOperatorDashboard,
@@ -152,24 +151,6 @@ export function BioXpCockpit() {
     const freshnessSummary = connection?.freshness_budget_seconds == null
         ? 'Disabled — no BMS observation-age expiry'
         : `${Math.round(connection.freshness_budget_seconds / 60)} minutes`;
-    const zMoveNegativeAdmission = useBioXpOperatorActionAdmission(
-        'oem.z.move_steps', generation, ownershipGeneration,
-        { steps: -Math.abs(manualSteps.z) }, active,
-    );
-    const zMovePositiveAdmission = useBioXpOperatorActionAdmission(
-        'oem.z.move_steps', generation, ownershipGeneration,
-        { steps: Math.abs(manualSteps.z) }, active,
-    );
-    const zAbsoluteAdmission = useBioXpOperatorActionAdmission(
-        'oem.z.move_absolute', generation, ownershipGeneration,
-        { position_steps: absoluteTargets.z }, active,
-    );
-    const zHomeAdmission = useBioXpOperatorActionAdmission(
-        'oem.z.manual_home', generation, ownershipGeneration, {}, active,
-    );
-    const zDiagnosticHomeAdmission = useBioXpOperatorActionAdmission(
-        'oem.z.diagnostic_home_axis', generation, ownershipGeneration, {}, active,
-    );
 
     const ownership = connection?.ownership;
     const maintenance = connection?.maintenance_state;
@@ -202,8 +183,6 @@ export function BioXpCockpit() {
         inputs: Record<string, unknown>,
         mutation = invokeOperatorAction,
     ) => {
-        const action = operatorActionById(actionId);
-        if (action?.requires_confirmation === true && !window.confirm(`Confirm robot action: ${action.label}\n\n${action.description}`)) return;
         mutation.mutate({ actionId, connectionGeneration: generation, ownershipGeneration, inputs });
     };
 
@@ -234,11 +213,11 @@ export function BioXpCockpit() {
 
     const runControl = (axis: Axis, operation: Operation) => {
         if (axis === 'z') {
-            if (operation === 'move-negative' && zMoveNegativeAdmission.data?.enabled === true) {
+            if (operation === 'move-negative') {
                 invokeAction('oem.z.move_steps', { steps: -Math.abs(manualSteps.z) });
-            } else if (operation === 'move-positive' && zMovePositiveAdmission.data?.enabled === true) {
+            } else if (operation === 'move-positive') {
                 invokeAction('oem.z.move_steps', { steps: Math.abs(manualSteps.z) });
-            } else if ((operation === 'home' || operation === 'commission-home') && zHomeAdmission.data?.enabled === true) {
+            } else if (operation === 'home' || operation === 'commission-home') {
                 invokeAction('oem.z.manual_home', {});
             }
             return;
@@ -264,7 +243,7 @@ export function BioXpCockpit() {
 
     const runAbsolute = (axis: 'x' | 'y' | 'z' | 'g') => {
         if (axis === 'z') {
-            if (zAbsoluteAdmission.data?.enabled === true) invokeAction('oem.z.move_absolute', { position_steps: absoluteTargets.z });
+            invokeAction('oem.z.move_absolute', { position_steps: absoluteTargets.z });
             return;
         }
         invokeOperatorPath('/motion/oem/manual/absolute', { axis, position_steps: absoluteTargets[axis] });
@@ -275,8 +254,10 @@ export function BioXpCockpit() {
         : invokeOperatorPath('/motion/diagnostics/stop', { axis });
 
     const runZDiagnosticHome = () => {
-        if (zDiagnosticHomeAdmission.data?.enabled === true) invokeAction('oem.z.diagnostic_home_axis', {});
+        invokeAction('oem.z.diagnostic_home_axis', {});
     };
+
+    const abortZ = () => invokeAction('oem.z.abort', {}, emergencyAction);
 
     const setZHomeAtCurrentPosition = () => {
         const note = zSetHomeNote.trim();
@@ -456,13 +437,24 @@ export function BioXpCockpit() {
                         <article key={axis} className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
                             <div className="flex items-center justify-between gap-2">
                                 <h3 className="font-semibold">{label}</h3>
-                                <button
-                                    type="button"
-                                    disabled={!active || (axis === 'z' ? operatorActionById('oem.z.stop')?.enabled !== true : operatorActionForPath('/motion/diagnostics/stop')?.enabled !== true) || (axis === 'z' ? emergencyAction.isPending : invokeOperatorAction.isPending)}
-                                    title="Immediate OEM motor stop for this component"
-                                    onClick={() => stopAxis(axis)}
-                                    className="rounded bg-red-800 px-3 py-1.5 text-sm font-semibold hover:bg-red-700 disabled:opacity-35"
-                                >Stop</button>
+                                <div className="flex gap-2">
+                                    <button
+                                        type="button"
+                                        disabled={!active || (axis === 'z' ? operatorActionById('oem.z.stop')?.enabled !== true : operatorActionForPath('/motion/diagnostics/stop')?.enabled !== true) || (axis === 'z' ? emergencyAction.isPending : invokeOperatorAction.isPending)}
+                                        title="Immediate OEM motor stop for this component"
+                                        onClick={() => stopAxis(axis)}
+                                        className="rounded bg-red-800 px-3 py-1.5 text-sm font-semibold hover:bg-red-700 disabled:opacity-35"
+                                    >Stop</button>
+                                    {axis === 'z' && (
+                                        <button
+                                            type="button"
+                                            disabled={!active || operatorActionById('oem.z.abort')?.enabled !== true || emergencyAction.isPending}
+                                            title="OEM full-machine forceAbortMotion; invalidates Z reference"
+                                            onClick={abortZ}
+                                            className="rounded bg-red-950 px-3 py-1.5 text-sm font-semibold text-red-100 ring-1 ring-red-600 hover:bg-red-900 disabled:opacity-35"
+                                        >Abort</button>
+                                    )}
+                                </div>
                             </div>
                             {axis !== 'door' && (
                                 <div className="mt-3 grid gap-2">
@@ -482,6 +474,18 @@ export function BioXpCockpit() {
                                             className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 font-mono text-sm"
                                         />
                                     </label>
+                                    {axis === 'z' && (
+                                        <div className="flex flex-wrap gap-1" aria-label="Z step presets">
+                                            {[1000, 5000, 10000, 25000].map((steps) => (
+                                                <button
+                                                    key={steps}
+                                                    type="button"
+                                                    onClick={() => setManualSteps((current) => ({ ...current, z: steps }))}
+                                                    className={`rounded px-2 py-1 text-xs ${manualSteps.z === steps ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+                                                >{steps.toLocaleString()}</button>
+                                            ))}
+                                        </div>
+                                    )}
                                     <label className="block text-xs text-slate-300">
                                         OEM absolute target (steps)
                                         <div className="mt-1 flex gap-2">
@@ -500,7 +504,7 @@ export function BioXpCockpit() {
                                             />
                                             <button
                                                 type="button"
-                                                disabled={!active || (axis === 'z' ? zAbsoluteAdmission.data?.enabled !== true : operatorActionForPath('/motion/oem/manual/absolute')?.enabled !== true) || invokeOperatorAction.isPending}
+                                                disabled={!active || (axis === 'z' ? operatorActionById('oem.z.move_absolute')?.enabled !== true : operatorActionForPath('/motion/oem/manual/absolute')?.enabled !== true) || invokeOperatorAction.isPending}
                                                 onClick={() => runAbsolute(axis)}
                                                 className={actionClass}
                                             >Go absolute</button>
@@ -514,7 +518,7 @@ export function BioXpCockpit() {
                                             <div className="mt-2 flex flex-wrap gap-2">
                                                 <button type="button" className={actionClass} disabled={operatorActionById('oem.z.prepare')?.enabled !== true || busy} onClick={() => invokeAction('oem.z.prepare', {})}>Prepare Z</button>
                                                 <button type="button" className={actionClass} disabled={operatorActionById('oem.z.reconcile_switch_masks')?.enabled !== true || busy} onClick={() => invokeAction('oem.z.reconcile_switch_masks', { confirm: 'RECONCILE_Z_SWITCH_MASKS' })}>Reconcile GAP12/13</button>
-                                                <button type="button" className={actionClass} disabled={zDiagnosticHomeAdmission.data?.enabled !== true || busy} onClick={runZDiagnosticHome}>HomeAxis diagnostic (597)</button>
+                                                <button type="button" className={actionClass} disabled={operatorActionById('oem.z.diagnostic_home_axis')?.enabled !== true || busy} onClick={runZDiagnosticHome}>HomeAxis diagnostic (597)</button>
                                             </div>
                                             <div className="mt-3 rounded border border-cyan-900/80 p-2">
                                                 <label className="block text-xs text-cyan-100">
@@ -577,14 +581,8 @@ export function BioXpCockpit() {
                                                 : null
                                         : null;
                                     const action = zActionId ? operatorActionById(zActionId) : path ? operatorActionForPath(path) : null;
-                                    const zAdmission = axis === 'z'
-                                        ? operation === 'move-negative' ? zMoveNegativeAdmission.data
-                                            : operation === 'move-positive' ? zMovePositiveAdmission.data
-                                                : operation === 'home' || operation === 'commission-home' ? zHomeAdmission.data
-                                                    : null
-                                        : null;
-                                    const enabled = axis === 'z' ? zAdmission?.enabled === true : action?.enabled === true;
-                                    const unavailableReason = zAdmission?.disabled_reason ?? action?.disabled_reason ?? action?.unavailable_reason ?? 'Robot action unavailable.';
+                                    const enabled = action?.enabled === true;
+                                    const unavailableReason = action?.disabled_reason ?? action?.unavailable_reason ?? 'Robot action unavailable.';
                                     return (
                                         <button
                                             key={operation}
@@ -602,6 +600,9 @@ export function BioXpCockpit() {
                 </div>
                 {invokeOperatorAction.error && (
                     <p role="alert" className="mt-3 whitespace-pre-wrap break-words text-sm text-red-300">{bioXpErrorText(invokeOperatorAction.error)}</p>
+                )}
+                {invokeOperatorAction.isPending && (
+                    <p role="status" className="mt-3 rounded border border-cyan-800 bg-cyan-950/30 p-2 text-sm text-cyan-100">Command accepted by BMS; waiting for the robot-owned terminal receipt. Stop and Abort remain available.</p>
                 )}
                 {invokeOperatorAction.data && (
                     <details className="mt-3 rounded border border-slate-800 bg-slate-900/60 p-3" open>

@@ -245,9 +245,10 @@ class BioXpConnectionService:
         json_data: dict[str, Any] | None = None,
         path_params: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        """Dispatch exact Z STOP without waiting behind an active motion lease."""
-        if route_name != "invoke_operator_action" or path_params != {"action_id": "oem.z.stop"}:
-            raise ValueError("BioXP safety-interrupt transport is reserved for exact oem.z.stop")
+        """Dispatch an exact Z interrupt without waiting behind an active motion lease."""
+        action_id = path_params.get("action_id") if path_params else None
+        if route_name != "invoke_operator_action" or action_id not in {"oem.z.stop", "oem.z.abort"}:
+            raise ValueError("BioXP safety-interrupt transport is reserved for exact oem.z.stop/oem.z.abort")
         async with self._safety_interrupt_lock:
             client = self._client
             if client is None or self._active_target is None:

@@ -177,7 +177,6 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
         setLocalError(null);
         try {
             const normalized = normalizeInput(selected, inputs);
-            if (selected.requires_confirmation && !window.confirm(`Run ${selected.label}?\n\n${selected.description}`)) return;
             invoke.mutate({
                 actionId: selected.action_id,
                 connectionGeneration: generation,
