@@ -4,7 +4,7 @@ import {
     type BioXpOperatorActionReceipt,
     type BioXpOperatorActionSpec,
     bioXpErrorText,
-    useAssessBioXpOperatorAction,
+
     useBioXpOperatorActionAdmission,
     useBioXpOperatorActionHistory,
     useBioXpOperatorControlCatalog,
@@ -98,7 +98,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
     const catalogQuery = useBioXpOperatorControlCatalog(connected);
     const historyQuery = useBioXpOperatorActionHistory(connected);
     const invoke = useInvokeBioXpOperatorAction();
-    const assess = useAssessBioXpOperatorAction();
+
     const [pane, setPane] = useState<Pane>('primitive');
     const [subsystemFilter, setSubsystemFilter] = useState<PrimitiveGroup>('all');
     const [actionSearch, setActionSearch] = useState('');
@@ -106,7 +106,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
     const [expandedSubsystems, setExpandedSubsystems] = useState<Set<string>>(() => new Set());
     const [inputs, setInputs] = useState<Record<string, unknown>>({});
     const [localError, setLocalError] = useState<string | null>(null);
-    const [assessmentNote, setAssessmentNote] = useState('');
+
 
     const primitiveActions = useMemo(
         () => (catalogQuery.error ? [] : (catalogQuery.data?.actions ?? [])).filter((action) => action.kind === 'primitive'),
@@ -157,7 +157,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
     const actionEnabled = admission.error ? false : (admission.data?.enabled ?? (selected ? selected.enabled : false));
     const disabledReason = admission.data?.disabled_reason ?? (selected ? selected.disabled_reason : null) ?? 'Robot did not admit this action.';
     const dependencies = admission.data?.dependencies ?? (selected ? selected.dependencies : []);
-    const latestReceipt = invoke.data ?? assess.data ?? historyQuery.data?.receipts[0];
+    const latestReceipt = invoke.data ?? historyQuery.data?.receipts[0];
     const isSafetyInterrupt = selected?.safety_class === 'stop' || selected?.safety_class === 'emergency';
     const sourceAuthorityAllowsAction = catalogQuery.data?.source_authority_verified === true || isSafetyInterrupt;
 
@@ -188,23 +188,8 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
         }
     };
 
-    const recordAssessment = (receipt: BioXpOperatorActionReceipt, verdict: 'pass' | 'fail') => {
-        const note = assessmentNote.trim();
-        if (!note) {
-            setLocalError('A non-empty operator observation is required for PASS/FAIL.');
-            return;
-        }
-        assess.mutate({
-            commandId: receipt.command_id,
-            connectionGeneration: generation,
-            ownershipGeneration: catalogQuery.data?.ownership_generation ?? 0,
-            verdict,
-            note,
-        });
-    };
-
     const contractError = catalogQuery.error ? bioXpErrorText(catalogQuery.error) : null;
-    const actionError = invoke.error ? bioXpErrorText(invoke.error) : assess.error ? bioXpErrorText(assess.error) : localError;
+    const actionError = invoke.error ? bioXpErrorText(invoke.error) : localError;
 
     return (
         <section className="rounded-xl border border-cyan-800/60 bg-slate-950/70 p-4" data-bioxp-operator-control-tabs>
@@ -366,8 +351,6 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
             {latestReceipt && pane !== 'logs' && (
                 <div className="mt-4 space-y-3">
                     <ReceiptCard receipt={latestReceipt} />
-                    <label className="block text-sm"><span className="text-slate-300">Your physical observation</span><textarea value={assessmentNote} onChange={(event) => setAssessmentNote(event.target.value)} rows={2} className="mt-1 w-full rounded border border-slate-700 bg-slate-900 p-2" /></label>
-                    <div className="flex gap-2"><button type="button" disabled={assess.isPending} onClick={() => recordAssessment(latestReceipt, 'pass')} className="rounded bg-emerald-700 px-3 py-2 text-sm font-semibold disabled:opacity-35">Record PASS</button><button type="button" disabled={assess.isPending} onClick={() => recordAssessment(latestReceipt, 'fail')} className="rounded bg-red-800 px-3 py-2 text-sm font-semibold disabled:opacity-35">Record FAIL</button></div>
                 </div>
             )}
         </section>

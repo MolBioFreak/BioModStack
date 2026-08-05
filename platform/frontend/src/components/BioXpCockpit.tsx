@@ -6,7 +6,7 @@ import {
     useConnectBioXp,
     useDisconnectBioXp,
     useUpdateBioXpFreshness,
-    useAssessBioXpOperatorAction,
+
     useBioXpOperatorActionHistory,
     useBioXpOperatorControlCatalog,
     useBioXpOperatorDashboard,
@@ -101,7 +101,7 @@ export function BioXpCockpit() {
     const operatorCatalog = useBioXpOperatorControlCatalog(true);
     const invokeOperatorAction = useInvokeBioXpOperatorAction();
     const emergencyAction = useInvokeBioXpOperatorAction();
-    const assessOperatorAction = useAssessBioXpOperatorAction();
+
     const recoverMotion = useRecoverBioXpMotion();
     const updateFreshness = useUpdateBioXpFreshness();
     const [manualSteps, setManualSteps] = useState<Record<'x' | 'y' | 'z' | 'g', number>>({
@@ -118,14 +118,7 @@ export function BioXpCockpit() {
     });
     const [freshnessMinutes, setFreshnessMinutes] = useState('30');
     const [freshnessDisabled, setFreshnessDisabled] = useState(false);
-    const [zSetHomeNote, setZSetHomeNote] = useState('');
-    const [zObservation, setZObservation] = useState({
-        physicalMotionObserved: false,
-        expectedDirectionObserved: false,
-        homeEndpointObserved: false,
-        stoppedObserved: false,
-        note: '',
-    });
+
 
     const status = statusQuery.data;
     const connection = status?.connection;
@@ -165,7 +158,7 @@ export function BioXpCockpit() {
         () => (historyQuery.data?.receipts ?? []).slice(0, 8),
         [historyQuery.data?.receipts],
     );
-    const busy = invokeOperatorAction.isPending || emergencyAction.isPending || recoverMotion.isPending || assessOperatorAction.isPending || updateFreshness.isPending;
+    const busy = invokeOperatorAction.isPending || emergencyAction.isPending || recoverMotion.isPending || updateFreshness.isPending;
     const connectedLabel = active
         ? connection?.reachable === false ? 'Connection error' : 'Connected'
         : 'Disconnected';
@@ -259,39 +252,9 @@ export function BioXpCockpit() {
 
     const abortZ = () => invokeAction('oem.z.abort', {}, emergencyAction);
 
-    const setZHomeAtCurrentPosition = () => {
-        const note = zSetHomeNote.trim();
-        if (!note) return;
-        invokeAction('oem.z.set_home', { note });
-    };
+    const setZHomeAtCurrentPosition = () => invokeAction('oem.z.set_home', {});
 
-    const recordZObservation = (verdict: 'pass' | 'fail') => {
-        const commandId = dashboardQuery.data?.z_axis.provider.awaiting_observation_receipt_id;
-        const note = zObservation.note.trim();
-        if (!commandId || note.length < 3) return;
-        if (verdict === 'pass' && !(
-            zObservation.expectedDirectionObserved
-            && zObservation.homeEndpointObserved
-            && zObservation.stoppedObserved
-        )) return;
-        invokeAction('oem.z.observe', {
-            command_id: commandId,
-            verdict,
-            physical_motion_observed: zObservation.physicalMotionObserved,
-            expected_direction_observed: zObservation.expectedDirectionObserved,
-            home_endpoint_observed: zObservation.homeEndpointObserved,
-            stopped_observed: zObservation.stoppedObserved,
-            note,
-        });
-    };
-
-    const assessReceipt = (commandId: string, verdict: 'pass' | 'fail') => {
-        const note = window.prompt(`Describe the independent physical observation for ${verdict.toUpperCase()}:`);
-        if (!note?.trim()) return;
-        assessOperatorAction.mutate({ commandId, connectionGeneration: generation, ownershipGeneration, verdict, note: note.trim() });
-    };
-
-    const error = invokeOperatorAction.error ?? assessOperatorAction.error ?? recoverMotion.error ?? updateFreshness.error ?? emergencyAction.error ?? connect.error ?? disconnect.error;
+    const error = invokeOperatorAction.error ?? recoverMotion.error ?? updateFreshness.error ?? emergencyAction.error ?? connect.error ?? disconnect.error;
 
     return (
         <div className="space-y-4 p-4 text-slate-100 md:p-6">
@@ -521,51 +484,12 @@ export function BioXpCockpit() {
                                                 <button type="button" className={actionClass} disabled={operatorActionById('oem.z.reconcile_switch_masks')?.enabled !== true || busy} onClick={() => invokeAction('oem.z.reconcile_switch_masks', { confirm: 'RECONCILE_Z_SWITCH_MASKS' })}>Reconcile GAP12/13</button>
                                                 <button type="button" className={actionClass} disabled={operatorActionById('oem.z.diagnostic_home_axis')?.enabled !== true || busy} onClick={runZDiagnosticHome}>HomeAxis diagnostic (597)</button>
                                             </div>
-                                            <div className="mt-3 rounded border border-cyan-900/80 p-2">
-                                                <label className="block text-xs text-cyan-100">
-                                                    Set-home evidence note
-                                                    <input
-                                                        type="text"
-                                                        maxLength={240}
-                                                        value={zSetHomeNote}
-                                                        onChange={(event) => setZSetHomeNote(event.target.value)}
-                                                        placeholder="Why the current physical Z position is home"
-                                                        className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 text-sm text-slate-100"
-                                                    />
-                                                </label>
-                                                <button
-                                                    type="button"
-                                                    className={`${actionClass} mt-2`}
-                                                    disabled={operatorActionById('oem.z.set_home')?.enabled !== true || !zSetHomeNote.trim() || busy}
-                                                    onClick={setZHomeAtCurrentPosition}
-                                                >Set Z home here (no motion)</button>
-                                            </div>
-                                            {dashboardQuery.data?.z_axis.provider.awaiting_observation_receipt_id && (
-                                                <div className="mt-3 rounded border border-amber-700/70 bg-amber-950/20 p-2 text-amber-100">
-                                                    <p className="font-semibold">Physical observation for <code>{dashboardQuery.data.z_axis.provider.awaiting_observation_receipt_id}</code></p>
-                                                    <div className="mt-2 grid gap-1 sm:grid-cols-2">
-                                                        <label className="flex items-center gap-2"><input type="checkbox" checked={zObservation.physicalMotionObserved} onChange={(event) => setZObservation((current) => ({ ...current, physicalMotionObserved: event.target.checked }))} />Physical Z displacement seen</label>
-                                                        <label className="flex items-center gap-2"><input type="checkbox" checked={zObservation.expectedDirectionObserved} onChange={(event) => setZObservation((current) => ({ ...current, expectedDirectionObserved: event.target.checked }))} />Expected home-direction behavior seen</label>
-                                                        <label className="flex items-center gap-2"><input type="checkbox" checked={zObservation.homeEndpointObserved} onChange={(event) => setZObservation((current) => ({ ...current, homeEndpointObserved: event.target.checked }))} />Home endpoint observed</label>
-                                                        <label className="flex items-center gap-2"><input type="checkbox" checked={zObservation.stoppedObserved} onChange={(event) => setZObservation((current) => ({ ...current, stoppedObserved: event.target.checked }))} />Z is stopped</label>
-                                                    </div>
-                                                    <p className="mt-1 text-xs text-amber-200">A pass requires expected home behavior, the home endpoint, and stopped state. Physical displacement may remain unchecked only for the source-defined already-home short circuit.</p>
-                                                    <label className="mt-2 block">
-                                                        Observation note
-                                                        <textarea
-                                                            minLength={3}
-                                                            maxLength={1000}
-                                                            value={zObservation.note}
-                                                            onChange={(event) => setZObservation((current) => ({ ...current, note: event.target.value }))}
-                                                            className="mt-1 min-h-20 w-full rounded border border-slate-700 bg-slate-950 p-2 text-sm text-slate-100"
-                                                        />
-                                                    </label>
-                                                    <div className="mt-2 flex flex-wrap gap-2">
-                                                        <button type="button" className={actionClass} disabled={zObservation.note.trim().length < 3 || !zObservation.expectedDirectionObserved || !zObservation.homeEndpointObserved || !zObservation.stoppedObserved || busy} onClick={() => recordZObservation('pass')}>Record observed pass</button>
-                                                        <button type="button" className="rounded bg-red-800 px-3 py-2 text-sm font-semibold disabled:opacity-35" disabled={zObservation.note.trim().length < 3 || busy} onClick={() => recordZObservation('fail')}>Record observed fail</button>
-                                                    </div>
-                                                </div>
-                                            )}
+                                            <button
+                                                type="button"
+                                                className={`${actionClass} mt-3`}
+                                                disabled={operatorActionById('oem.z.set_home')?.enabled !== true || busy}
+                                                onClick={setZHomeAtCurrentPosition}
+                                            >Set Z home here (no motion)</button>
                                             {dashboardQuery.data?.z_axis.last_failure != null && <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap text-red-200">{JSON.stringify(dashboardQuery.data.z_axis.last_failure, null, 2)}</pre>}
                                         </div>
                                     )}
@@ -669,12 +593,6 @@ export function BioXpCockpit() {
                                 <p className="mt-1 text-xs text-slate-400">
                                     {record.remote_acknowledged ? 'Robot HTTP acknowledged' : 'Robot HTTP did not acknowledge'} · {record.controller_acknowledged ? 'Controller ACK' : 'No controller ACK'} · {record.physical_effect_verified ? 'Physical effect verified' : 'Physical effect unverified'}
                                 </p>
-                                {record.safety_class === 'motion' && record.operator_assessment == null && (
-                                    <div className="mt-2 flex gap-2">
-                                        <button type="button" className={actionClass} disabled={assessOperatorAction.isPending} onClick={() => assessReceipt(record.command_id, 'pass')}>Observed pass</button>
-                                        <button type="button" className="rounded bg-red-800 px-3 py-2 text-xs font-semibold disabled:opacity-35" disabled={assessOperatorAction.isPending} onClick={() => assessReceipt(record.command_id, 'fail')}>Observed fail</button>
-                                    </div>
-                                )}
                             </article>
                         ))}
                     </div>
