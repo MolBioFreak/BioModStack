@@ -25,8 +25,16 @@ test('main Z controls use stable provider-owned semantic actions', () => {
 
 test('main Z surface exposes every disabled reason', () => {
   assert.match(source, /zPrimaryDisabledReasons/);
-  assert.match(source, /action\?\.disabled_reason \?\? action\?\.unavailable_reason/);
+  assert.match(source, /Absolute move', zAbsoluteDisabledReason/);
   assert.match(source, /Activate: \{operatorActionById\('meta\.activate_motion'\)\?\.disabled_reason/);
+});
+
+test('typed Z absolute target uses local catalog bounds before robot revalidation', () => {
+  assert.match(source, /dependency\.key !== 'z_target_oem_envelope'/);
+  assert.match(source, /absoluteTargets\.z >= zAbsoluteMinimum/);
+  assert.match(source, /absoluteTargets\.z <= zAbsoluteMaximum/);
+  assert.match(source, /axis === 'z' \? !zAbsoluteEnabled/);
+  assert.doesNotMatch(source, /axis === 'z' \? operatorActionById\('oem\.z\.move_absolute'\)\?\.enabled !== true/);
 });
 
 test('set-home requires a known stationary provider state', () => {

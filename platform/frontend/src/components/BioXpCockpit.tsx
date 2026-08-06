@@ -171,15 +171,35 @@ export function BioXpCockpit() {
         (action) => action.action_id === actionId,
     );
     const zStatus = dashboardQuery.data?.z_axis.status;
+    const zAbsoluteAction = operatorActionById('oem.z.move_absolute');
+    const zAbsoluteInput = zAbsoluteAction?.inputs.find((input) => input.name === 'position_steps');
+    const zAbsoluteMinimum = typeof zAbsoluteInput?.minimum === 'number' ? zAbsoluteInput.minimum : 0;
+    const zAbsoluteMaximum = typeof zAbsoluteInput?.maximum === 'number' ? zAbsoluteInput.maximum : 160000;
+    const zAbsoluteStaticBlocker = zAbsoluteAction?.dependencies.find(
+        (dependency) => dependency.key !== 'z_target_oem_envelope' && dependency.met !== true,
+    );
+    const zAbsoluteTargetInRange = Number.isInteger(absoluteTargets.z)
+        && absoluteTargets.z >= zAbsoluteMinimum
+        && absoluteTargets.z <= zAbsoluteMaximum;
+    const zAbsoluteDisabledReason = !zAbsoluteAction
+        ? 'Robot action unavailable.'
+        : zAbsoluteAction.provider_available !== true || zAbsoluteAction.available !== true
+            ? zAbsoluteAction.unavailable_reason ?? zAbsoluteAction.disabled_reason ?? 'Robot action unavailable.'
+            : zAbsoluteStaticBlocker
+                ? zAbsoluteStaticBlocker.reason ?? zAbsoluteAction.disabled_reason ?? 'Robot action unavailable.'
+                : !zAbsoluteTargetInRange
+                    ? `Requested Z target must be an integer from ${zAbsoluteMinimum} through ${zAbsoluteMaximum}.`
+                    : null;
+    const zAbsoluteEnabled = zAbsoluteDisabledReason === null;
     const zSetHomeStateReason = zStatus?.position_steps == null
         ? 'Set Home is unavailable until the provider reports the current Z position.'
         : zStatus.speed_steps_s !== 0
             ? 'Set Home is unavailable until Z is confirmed stationary.'
             : null;
     const zPrimaryDisabledReasons = [
-        ['Home', operatorActionById('oem.z.manual_home')],
-        ['Relative move', operatorActionById('oem.z.move_steps')],
-        ['Absolute move', operatorActionById('oem.z.move_absolute')],
+        ['Home', operatorActionById('oem.z.manual_home')?.enabled === true ? null : operatorActionById('oem.z.manual_home')?.disabled_reason ?? operatorActionById('oem.z.manual_home')?.unavailable_reason ?? 'Robot action unavailable.'],
+        ['Relative move', operatorActionById('oem.z.move_steps')?.enabled === true ? null : operatorActionById('oem.z.move_steps')?.disabled_reason ?? operatorActionById('oem.z.move_steps')?.unavailable_reason ?? 'Robot action unavailable.'],
+        ['Absolute move', zAbsoluteDisabledReason],
     ] as const;
 
     const invokeAction = (
@@ -483,7 +503,8 @@ export function BioXpCockpit() {
                                             />
                                             <button
                                                 type="button"
-                                                disabled={!active || (axis === 'z' ? operatorActionById('oem.z.move_absolute')?.enabled !== true : operatorActionForPath('/motion/oem/manual/absolute')?.enabled !== true) || invokeOperatorAction.isPending}
+                                                disabled={!active || (axis === 'z' ? !zAbsoluteEnabled : operatorActionForPath('/motion/oem/manual/absolute')?.enabled !== true) || invokeOperatorAction.isPending}
+                                                title={axis === 'z' ? zAbsoluteDisabledReason ?? 'Robot-owned exact OEM absolute move' : undefined}
                                                 onClick={() => runAbsolute(axis)}
                                                 className={actionClass}
                                             >Go absolute</button>
@@ -508,10 +529,10 @@ export function BioXpCockpit() {
                                                 onClick={setZHomeAtCurrentPosition}
                                             >Set Z home here (no motion)</button>
                                             {zSetHomeStateReason && <p className="mt-2 text-amber-200">{zSetHomeStateReason}</p>}
-                                            {zPrimaryDisabledReasons.map(([label, action]) => (
-                                                action?.enabled === true ? null : (
+                                            {zPrimaryDisabledReasons.map(([label, reason]) => (
+                                                reason === null ? null : (
                                                     <p key={label} className="mt-1 text-amber-200">
-                                                        {label}: {action?.disabled_reason ?? action?.unavailable_reason ?? 'Robot action unavailable.'}
+                                                        {label}: {reason}
                                                     </p>
                                                 )
                                             ))}
