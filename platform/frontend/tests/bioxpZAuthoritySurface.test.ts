@@ -31,6 +31,7 @@ test('main Z surface exposes every disabled reason', () => {
 
 test('typed Z absolute target uses local catalog bounds before robot revalidation', () => {
   assert.match(source, /dependency\.key !== 'z_target_oem_envelope'/);
+  assert.match(source, /zAbsoluteAction\.provider_available !== true/);
   assert.match(source, /absoluteTargets\.z >= zAbsoluteMinimum/);
   assert.match(source, /absoluteTargets\.z <= zAbsoluteMaximum/);
   assert.match(source, /axis === 'z' \? !zAbsoluteEnabled/);

@@ -183,8 +183,8 @@ export function BioXpCockpit() {
         && absoluteTargets.z <= zAbsoluteMaximum;
     const zAbsoluteDisabledReason = !zAbsoluteAction
         ? 'Robot action unavailable.'
-        : zAbsoluteAction.provider_available !== true || zAbsoluteAction.available !== true
-            ? zAbsoluteAction.unavailable_reason ?? zAbsoluteAction.disabled_reason ?? 'Robot action unavailable.'
+        : zAbsoluteAction.provider_available !== true
+            ? zAbsoluteAction.provider_unavailable_reason ?? 'Robot action unavailable.'
             : zAbsoluteStaticBlocker
                 ? zAbsoluteStaticBlocker.reason ?? zAbsoluteAction.disabled_reason ?? 'Robot action unavailable.'
                 : !zAbsoluteTargetInRange
