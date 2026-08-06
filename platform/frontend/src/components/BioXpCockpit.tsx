@@ -198,6 +198,7 @@ export function BioXpCockpit() {
             : null;
     const zPrimaryDisabledReasons = [
         ['Home', operatorActionById('oem.z.manual_home')?.enabled === true ? null : operatorActionById('oem.z.manual_home')?.disabled_reason ?? operatorActionById('oem.z.manual_home')?.unavailable_reason ?? 'Robot action unavailable.'],
+        ['Z Clear', operatorActionById('oem.z.clear')?.enabled === true ? null : operatorActionById('oem.z.clear')?.disabled_reason ?? operatorActionById('oem.z.clear')?.unavailable_reason ?? 'Robot action unavailable.'],
         ['Relative move', operatorActionById('oem.z.move_steps')?.enabled === true ? null : operatorActionById('oem.z.move_steps')?.disabled_reason ?? operatorActionById('oem.z.move_steps')?.unavailable_reason ?? 'Robot action unavailable.'],
         ['Absolute move', zAbsoluteDisabledReason],
     ] as const;
@@ -509,6 +510,20 @@ export function BioXpCockpit() {
                                                 className={actionClass}
                                             >Go absolute</button>
                                         </div>
+                                        {axis === 'z' && (
+                                            <div className="mt-2 flex flex-wrap gap-1" aria-label="Z clear reference presets">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setAbsoluteTargets((current) => ({ ...current, z: 500 }))}
+                                                    className={`rounded px-2 py-1 text-xs ${absoluteTargets.z === 500 ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+                                                >Tips loaded · 500</button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setAbsoluteTargets((current) => ({ ...current, z: 65000 }))}
+                                                    className={`rounded px-2 py-1 text-xs ${absoluteTargets.z === 65000 ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+                                                >No tips · 65,000</button>
+                                            </div>
+                                        )}
                                     </label>
                                     {axis === 'z' && (
                                         <div className="rounded border border-cyan-800/70 bg-cyan-950/20 p-3 text-xs text-cyan-100">
@@ -520,6 +535,13 @@ export function BioXpCockpit() {
                                                 <button type="button" className={actionClass} disabled={operatorActionById('oem.z.resume_after_abort')?.enabled !== true || busy} onClick={() => invokeAction('oem.z.resume_after_abort', {})}>Resume Z after abort</button>
                                                 <button type="button" className={actionClass} disabled={operatorActionById('oem.z.reconcile_switch_masks')?.enabled !== true || busy} onClick={() => invokeAction('oem.z.reconcile_switch_masks', { confirm: 'RECONCILE_Z_SWITCH_MASKS' })}>Reconcile GAP12/13</button>
                                                 <button type="button" className={actionClass} disabled={operatorActionById('oem.z.diagnostic_home_axis')?.enabled !== true || busy} onClick={runZDiagnosticHome}>HomeAxis diagnostic (597)</button>
+                                                <button
+                                                    type="button"
+                                                    className={actionClass}
+                                                    disabled={operatorActionById('oem.z.clear')?.enabled !== true || busy}
+                                                    title={operatorActionById('oem.z.clear')?.disabled_reason ?? 'Move to the robot-owned clear position selected from tip and gantry state'}
+                                                    onClick={() => invokeAction('oem.z.clear', {})}
+                                                >Z Clear (automatic OEM position)</button>
                                             </div>
                                             <button
                                                 type="button"

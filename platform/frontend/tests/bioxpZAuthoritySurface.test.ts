@@ -15,12 +15,22 @@ test('main Z controls use stable provider-owned semantic actions', () => {
     'oem.z.diagnostic_home_axis',
     'oem.z.move_steps',
     'oem.z.move_absolute',
+    'oem.z.clear',
     'oem.z.stop',
     'oem.z.abort',
   ]) assert.match(source, new RegExp(action.replaceAll('.', '\\.')));
   assert.match(source, /operatorActionById\('oem\.z\.manual_home'\)/);
   assert.match(source, /operatorActionById\('oem\.z\.move_steps'\)/);
   assert.match(source, /operatorActionById\('oem\.z\.move_absolute'\)/);
+});
+
+test('main Z surface exposes OEM clear and both quick reference targets', () => {
+  assert.match(source, /invokeAction\('oem\.z\.clear', \{\}\)/);
+  assert.match(source, /Z Clear \(automatic OEM position\)/);
+  assert.match(source, /Tips loaded · 500/);
+  assert.match(source, /No tips · 65,000/);
+  assert.match(source, /setAbsoluteTargets\(\(current\) => \(\{ \.\.\.current, z: 500 \}\)\)/);
+  assert.match(source, /setAbsoluteTargets\(\(current\) => \(\{ \.\.\.current, z: 65000 \}\)\)/);
 });
 
 test('main Z surface exposes every disabled reason', () => {
