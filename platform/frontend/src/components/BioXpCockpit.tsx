@@ -170,7 +170,6 @@ export function BioXpCockpit() {
     const operatorActionById = (actionId: string) => (operatorCatalog.data?.actions ?? []).find(
         (action) => action.action_id === actionId,
     );
-    const zStatus = dashboardQuery.data?.z_axis.status;
     const zAbsoluteAction = operatorActionById('oem.z.move_absolute');
     const zAbsoluteInput = zAbsoluteAction?.inputs.find((input) => input.name === 'position_steps');
     const zAbsoluteMinimum = typeof zAbsoluteInput?.minimum === 'number' ? zAbsoluteInput.minimum : 0;
@@ -191,17 +190,6 @@ export function BioXpCockpit() {
                     ? `Requested Z target must be an integer from ${zAbsoluteMinimum} through ${zAbsoluteMaximum}.`
                     : null;
     const zAbsoluteEnabled = zAbsoluteDisabledReason === null;
-    const zSetHomeStateReason = zStatus?.position_steps == null
-        ? 'Set Home is unavailable until the provider reports the current Z position.'
-        : zStatus.speed_steps_s !== 0
-            ? 'Set Home is unavailable until Z is confirmed stationary.'
-            : null;
-    const zPrimaryDisabledReasons = [
-        ['Home', operatorActionById('oem.z.manual_home')?.enabled === true ? null : operatorActionById('oem.z.manual_home')?.disabled_reason ?? operatorActionById('oem.z.manual_home')?.unavailable_reason ?? 'Robot action unavailable.'],
-        ['Z Clear', operatorActionById('oem.z.clear')?.enabled === true ? null : operatorActionById('oem.z.clear')?.disabled_reason ?? operatorActionById('oem.z.clear')?.unavailable_reason ?? 'Robot action unavailable.'],
-        ['Relative move', operatorActionById('oem.z.move_steps')?.enabled === true ? null : operatorActionById('oem.z.move_steps')?.disabled_reason ?? operatorActionById('oem.z.move_steps')?.unavailable_reason ?? 'Robot action unavailable.'],
-        ['Absolute move', zAbsoluteDisabledReason],
-    ] as const;
 
     const invokeAction = (
         actionId: string,
@@ -278,13 +266,7 @@ export function BioXpCockpit() {
         ? invokeAction('oem.z.stop', {}, emergencyAction)
         : invokeOperatorPath('/motion/diagnostics/stop', { axis });
 
-    const runZDiagnosticHome = () => {
-        invokeAction('oem.z.diagnostic_home_axis', {});
-    };
-
     const abortZ = () => invokeAction('oem.z.abort', {}, emergencyAction);
-
-    const setZHomeAtCurrentPosition = () => invokeAction('oem.z.set_home', {});
 
     const error = invokeOperatorAction.error ?? recoverMotion.error ?? updateFreshness.error ?? emergencyAction.error ?? connect.error ?? disconnect.error;
 
@@ -531,10 +513,6 @@ export function BioXpCockpit() {
                                             <p className="mt-1"><strong>Position:</strong> {dashboardQuery.data?.z_axis.status?.position_steps ?? 'unknown'} · <strong>Reference:</strong> {dashboardQuery.data?.z_axis.status?.reference ?? 'unknown'} · <strong>Authority state:</strong> {dashboardQuery.data?.z_axis.provider.state ?? 'unknown'}</p>
                                             <p className="mt-1"><strong>GAP9/10:</strong> {dashboardQuery.data?.z_axis.status?.left_switch_state ?? 'unknown'} / {dashboardQuery.data?.z_axis.status?.right_switch_state ?? 'unknown'} · <strong>Disable GAP13/12:</strong> {String(dashboardQuery.data?.z_axis.status?.left_switch_disabled ?? 'unknown')} / {String(dashboardQuery.data?.z_axis.status?.right_switch_disabled ?? 'unknown')}</p>
                                             <div className="mt-2 flex flex-wrap gap-2">
-                                                <button type="button" className={actionClass} disabled={operatorActionById('oem.z.prepare')?.enabled !== true || busy} onClick={() => invokeAction('oem.z.prepare', {})}>Prepare Z</button>
-                                                <button type="button" className={actionClass} disabled={operatorActionById('oem.z.resume_after_abort')?.enabled !== true || busy} onClick={() => invokeAction('oem.z.resume_after_abort', {})}>Resume Z after abort</button>
-                                                <button type="button" className={actionClass} disabled={operatorActionById('oem.z.reconcile_switch_masks')?.enabled !== true || busy} onClick={() => invokeAction('oem.z.reconcile_switch_masks', { confirm: 'RECONCILE_Z_SWITCH_MASKS' })}>Reconcile GAP12/13</button>
-                                                <button type="button" className={actionClass} disabled={operatorActionById('oem.z.diagnostic_home_axis')?.enabled !== true || busy} onClick={runZDiagnosticHome}>HomeAxis diagnostic (597)</button>
                                                 <button
                                                     type="button"
                                                     className={actionClass}
@@ -543,21 +521,6 @@ export function BioXpCockpit() {
                                                     onClick={() => invokeAction('oem.z.clear', {})}
                                                 >Z Clear (automatic OEM position)</button>
                                             </div>
-                                            <button
-                                                type="button"
-                                                className={`${actionClass} mt-3`}
-                                                disabled={operatorActionById('oem.z.set_home')?.enabled !== true || zSetHomeStateReason !== null || busy}
-                                                title={zSetHomeStateReason ?? operatorActionById('oem.z.set_home')?.disabled_reason ?? 'Set the current stationary Z coordinate to zero without motion'}
-                                                onClick={setZHomeAtCurrentPosition}
-                                            >Set Z home here (no motion)</button>
-                                            {zSetHomeStateReason && <p className="mt-2 text-amber-200">{zSetHomeStateReason}</p>}
-                                            {zPrimaryDisabledReasons.map(([label, reason]) => (
-                                                reason === null ? null : (
-                                                    <p key={label} className="mt-1 text-amber-200">
-                                                        {label}: {reason}
-                                                    </p>
-                                                )
-                                            ))}
                                             {dashboardQuery.data?.z_axis.last_failure != null && <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap text-red-200">{JSON.stringify(dashboardQuery.data.z_axis.last_failure, null, 2)}</pre>}
                                         </div>
                                     )}
