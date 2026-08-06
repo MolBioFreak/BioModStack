@@ -57,6 +57,7 @@ class OperatorDashboardAxis(BaseModel):
     max_steps: StrictInt | None = None
     motor_temperature_c: StrictFloat | StrictInt | None = None
     motor_temperature_available: StrictBool
+    telemetry_authority: str | None = Field(default=None, max_length=120)
 
 
 class OperatorDashboardTemperature(BaseModel):
