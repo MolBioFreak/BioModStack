@@ -719,7 +719,7 @@ export const useInvokeBioXpOperatorAction = () => {
                 },
             )
         ).data,
-        onSuccess: (receipt) => {
+        onSuccess: (receipt, variables) => {
             queryClient.setQueryData<BioXpOperatorActionHistory>(operatorHistoryKey, (current) => ({
                 schema_version: 'bioxp.operator_action_history.v1',
                 receipts: [
@@ -728,6 +728,10 @@ export const useInvokeBioXpOperatorAction = () => {
                 ].slice(0, 100),
             }));
             void queryClient.invalidateQueries({ queryKey: statusKey });
+            if (variables.actionId === 'meta.activate_motion' || variables.actionId.startsWith('oem.z.')) {
+                void queryClient.invalidateQueries({ queryKey: operatorCatalogKey });
+                void queryClient.invalidateQueries({ queryKey: operatorDashboardKey });
+            }
         },
     });
 };

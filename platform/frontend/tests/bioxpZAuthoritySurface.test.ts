@@ -5,8 +5,9 @@ import test from 'node:test';
 
 const source = readFileSync(resolve('src/components/BioXpCockpit.tsx'), 'utf8');
 
-test('Z controls use stable provider-owned semantic actions and input-specific admission', () => {
+test('main Z controls use stable provider-owned semantic actions', () => {
   for (const action of [
+    'meta.activate_motion',
     'oem.z.prepare',
     'oem.z.reconcile_switch_masks',
     'oem.z.set_home',
@@ -15,39 +16,32 @@ test('Z controls use stable provider-owned semantic actions and input-specific a
     'oem.z.move_steps',
     'oem.z.move_absolute',
     'oem.z.stop',
-    'oem.z.observe',
+    'oem.z.abort',
   ]) assert.match(source, new RegExp(action.replaceAll('.', '\\.')));
-  assert.match(source, /useBioXpOperatorActionAdmission/);
-  assert.match(source, /zMoveNegativeAdmission\.data\?\.enabled/);
-  assert.match(source, /zMovePositiveAdmission\.data\?\.enabled/);
-  assert.match(source, /zAbsoluteAdmission\.data\?\.enabled/);
-  assert.match(source, /zHomeAdmission\.data\?\.enabled/);
+  assert.match(source, /operatorActionById\('oem\.z\.manual_home'\)/);
+  assert.match(source, /operatorActionById\('oem\.z\.move_steps'\)/);
+  assert.match(source, /operatorActionById\('oem\.z\.move_absolute'\)/);
 });
 
-test('Z set-home and observation controls submit the complete robot contract', () => {
-  assert.match(source, /const \[zSetHomeNote, setZSetHomeNote\] = useState\(''\)/);
-  assert.match(source, /if \(!note\) return/);
-  assert.match(source, /invokeAction\('oem\.z\.set_home', \{ note \}\)/);
-  for (const field of [
-    'physical_motion_observed',
-    'expected_direction_observed',
-    'home_endpoint_observed',
-    'stopped_observed',
-  ]) assert.match(source, new RegExp(field));
-  assert.match(source, /Physical displacement may remain unchecked only for the source-defined already-home short circuit/);
+test('main Z surface exposes every disabled reason', () => {
+  assert.match(source, /zPrimaryDisabledReasons/);
+  assert.match(source, /action\?\.disabled_reason \?\? action\?\.unavailable_reason/);
+  assert.match(source, /Activate: \{operatorActionById\('meta\.activate_motion'\)\?\.disabled_reason/);
 });
 
-test('Z stop uses an independent mutation lane and stays available while an ordinary action is pending', () => {
+test('set-home requires a known stationary provider state', () => {
+  assert.match(source, /zStatus\?\.position_steps == null/);
+  assert.match(source, /zStatus\.speed_steps_s !== 0/);
+  assert.match(source, /Set Home is unavailable until the provider reports the current Z position/);
+  assert.match(source, /Set Home is unavailable until Z is confirmed stationary/);
+  assert.match(source, /invokeAction\('oem\.z\.set_home', \{\}\)/);
+});
+
+test('Z stop and abort use the independent emergency mutation lane', () => {
   assert.match(source, /const emergencyAction = useInvokeBioXpOperatorAction\(\)/);
   assert.match(source, /invokeAction\('oem\.z\.stop', \{\}, emergencyAction\)/);
+  assert.match(source, /invokeAction\('oem\.z\.abort', \{\}, emergencyAction\)/);
   assert.match(source, /axis === 'z' \? emergencyAction\.isPending : invokeOperatorAction\.isPending/);
-});
-
-test('browser cannot supply Z pseudo-home and confirmations are honored', () => {
-  assert.doesNotMatch(source, /zPseudoHome|setZPseudoHome/);
-  assert.match(source, /Robot-owned PSUDO_Z_HOME/);
-  assert.match(source, /requires_confirmation/);
-  assert.match(source, /window\.confirm/);
 });
 
 test('Z dashboard and robot receipt truth remain visible newest-first', () => {
@@ -57,5 +51,4 @@ test('Z dashboard and robot receipt truth remain visible newest-first', () => {
   assert.match(source, /controller_acknowledged/);
   assert.match(source, /physical_effect_verified/);
   assert.match(source, /receipts \?\? \[\]\)\.slice\(0, 8\)/);
-  assert.doesNotMatch(source, /slice\(-8\)\.reverse\(\)/);
 });

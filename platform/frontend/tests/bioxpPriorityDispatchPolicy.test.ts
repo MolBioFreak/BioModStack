@@ -12,10 +12,14 @@ function hookBody(name: string, nextName: string): string {
     return source.slice(start, end);
 }
 
-test('operator command completion does not await broad telemetry refresh', () => {
+test('operator command completion refreshes only Z state without awaiting it', () => {
     const body = hookBody('useInvokeBioXpOperatorAction', 'useAssessBioXpOperatorAction');
     assert.doesNotMatch(body, /useRefreshMutation/);
-    assert.doesNotMatch(body, /invalidateQueries\(\{ queryKey: operator(?:Catalog|Dashboard|History)Key/);
+    assert.doesNotMatch(body, /onSuccess: async/);
+    assert.match(body, /variables\.actionId === 'meta\.activate_motion'/);
+    assert.match(body, /variables\.actionId\.startsWith\('oem\.z\.'\)/);
+    assert.match(body, /invalidateQueries\(\{ queryKey: operatorCatalogKey/);
+    assert.match(body, /invalidateQueries\(\{ queryKey: operatorDashboardKey/);
     assert.match(body, /setQueryData<BioXpOperatorActionHistory>/);
     assert.match(body, /queryKey: statusKey/);
 });

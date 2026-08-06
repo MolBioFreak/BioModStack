@@ -152,7 +152,7 @@ export function BioXpCockpit() {
         : 'Unavailable';
     const dashboardMotion = dashboardQuery.data?.motion;
     const motionLabel = dashboardMotion
-        ? dashboardMotion.enabled ? 'Enabled — all robot readiness gates passed' : `Blocked${dashboardMotion.reason ? ` — ${dashboardMotion.reason}` : ''}`
+        ? dashboardMotion.enabled ? 'Enabled — Z provider ready; each command verifies live controller state' : `Blocked${dashboardMotion.reason ? ` — ${dashboardMotion.reason}` : ''}`
         : 'Unavailable';
     const recentCommands = useMemo(
         () => (historyQuery.data?.receipts ?? []).slice(0, 8),
@@ -170,6 +170,17 @@ export function BioXpCockpit() {
     const operatorActionById = (actionId: string) => (operatorCatalog.data?.actions ?? []).find(
         (action) => action.action_id === actionId,
     );
+    const zStatus = dashboardQuery.data?.z_axis.status;
+    const zSetHomeStateReason = zStatus?.position_steps == null
+        ? 'Set Home is unavailable until the provider reports the current Z position.'
+        : zStatus.speed_steps_s !== 0
+            ? 'Set Home is unavailable until Z is confirmed stationary.'
+            : null;
+    const zPrimaryDisabledReasons = [
+        ['Home', operatorActionById('oem.z.manual_home')],
+        ['Relative move', operatorActionById('oem.z.move_steps')],
+        ['Absolute move', operatorActionById('oem.z.move_absolute')],
+    ] as const;
 
     const invokeAction = (
         actionId: string,
@@ -367,6 +378,11 @@ export function BioXpCockpit() {
                         className="rounded bg-amber-700 px-4 py-2 font-semibold hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-35"
                     >Non-homing Recovery</button>
                 </div>
+                {operatorActionById('meta.activate_motion')?.enabled !== true && (
+                    <p className="mt-2 text-sm text-amber-100">
+                        Activate: {operatorActionById('meta.activate_motion')?.disabled_reason ?? 'Robot action unavailable.'}
+                    </p>
+                )}
                 {recoverMotion.error && (
                     <p role="alert" className="mt-2 break-words text-sm text-red-300">Non-homing recovery failed: {bioXpErrorText(recoverMotion.error)}</p>
                 )}
@@ -487,9 +503,18 @@ export function BioXpCockpit() {
                                             <button
                                                 type="button"
                                                 className={`${actionClass} mt-3`}
-                                                disabled={operatorActionById('oem.z.set_home')?.enabled !== true || busy}
+                                                disabled={operatorActionById('oem.z.set_home')?.enabled !== true || zSetHomeStateReason !== null || busy}
+                                                title={zSetHomeStateReason ?? operatorActionById('oem.z.set_home')?.disabled_reason ?? 'Set the current stationary Z coordinate to zero without motion'}
                                                 onClick={setZHomeAtCurrentPosition}
                                             >Set Z home here (no motion)</button>
+                                            {zSetHomeStateReason && <p className="mt-2 text-amber-200">{zSetHomeStateReason}</p>}
+                                            {zPrimaryDisabledReasons.map(([label, action]) => (
+                                                action?.enabled === true ? null : (
+                                                    <p key={label} className="mt-1 text-amber-200">
+                                                        {label}: {action?.disabled_reason ?? action?.unavailable_reason ?? 'Robot action unavailable.'}
+                                                    </p>
+                                                )
+                                            ))}
                                             {dashboardQuery.data?.z_axis.last_failure != null && <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap text-red-200">{JSON.stringify(dashboardQuery.data.z_axis.last_failure, null, 2)}</pre>}
                                         </div>
                                     )}
