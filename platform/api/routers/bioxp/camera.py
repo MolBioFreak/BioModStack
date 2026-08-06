@@ -37,7 +37,7 @@ async def _leased_camera_call(
     method_name: str,
 ) -> Any:
     try:
-        async with runtime.connection.active_request_lease(
+        async with runtime.connection.active_query_lease(
             expected_generation=expected_generation,
             require_fresh=False,
         ) as client:

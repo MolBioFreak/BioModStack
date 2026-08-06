@@ -160,6 +160,14 @@ class FakeConnection:
         assert require_fresh is True
         return await self.client.request(route_name, **kwargs)
 
+    async def request_active_query(self, route_name, *, expected_generation, require_fresh=True, **kwargs):
+        return await self.request_active(
+            route_name,
+            expected_generation=expected_generation,
+            require_fresh=require_fresh,
+            **kwargs,
+        )
+
     async def request_active_safety_interrupt(self, route_name, *, expected_generation, **kwargs):
         if expected_generation != self.value.generation:
             raise ConnectionStateError(
@@ -259,7 +267,6 @@ def test_one_invocation_maps_to_one_action_id_not_a_browser_path(monkeypatch):
     assert response.status_code == 200
     assert response.json()["physical_effect_verified"] is False
     assert runtime.connection.client.calls == [
-        ("operator_control_catalog", {}),
         (
             "invoke_operator_action",
         {
@@ -491,7 +498,7 @@ def test_semantically_unproven_operator_paths_are_visible_but_never_mutation_rel
 
     assert runtime.connection.client.calls == [
         ("operator_control_catalog", {})
-        for _ in range(len(_FIXED_QUARANTINE_CASES) * 2)
+        for _ in range(len(_FIXED_QUARANTINE_CASES))
     ]
 
 

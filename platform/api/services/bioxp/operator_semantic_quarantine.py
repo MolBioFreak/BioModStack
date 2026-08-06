@@ -13,3 +13,8 @@ OPERATOR_SEMANTIC_QUARANTINE_BY_PATH: dict[str, str] = {
     ),
     "/oem/runtime/emergency_stop": EMERGENCY_STOP_QUARANTINE_REASON,
 }
+
+OPERATOR_SEMANTIC_QUARANTINE_BY_ACTION_ID: dict[str, str] = {
+    "route.motion_power_diag": OPERATOR_SEMANTIC_QUARANTINE_BY_PATH["/motion/power/diag"],
+    "route.runtime_emergency_stop": OPERATOR_SEMANTIC_QUARANTINE_BY_PATH["/oem/runtime/emergency_stop"],
+}

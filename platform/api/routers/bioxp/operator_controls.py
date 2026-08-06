@@ -16,7 +16,10 @@ from services.bioxp.operator_models import (
     OperatorControlCatalog,
     OperatorDashboard,
 )
-from services.bioxp.operator_semantic_quarantine import OPERATOR_SEMANTIC_QUARANTINE_BY_PATH
+from services.bioxp.operator_semantic_quarantine import (
+    OPERATOR_SEMANTIC_QUARANTINE_BY_ACTION_ID,
+    OPERATOR_SEMANTIC_QUARANTINE_BY_PATH,
+)
 from services.bioxp.runtime import BioXpRuntime
 
 from .dependencies import get_bioxp_runtime, require_bioxp_mutation_access
@@ -84,7 +87,7 @@ async def _resolve_action_quarantine(
     if action_id in {"oem.z.stop", "oem.z.abort"}:
         return None
     try:
-        payload = await runtime.connection.request_active(
+        payload = await runtime.connection.request_active_query(
             "operator_control_catalog",
             expected_generation=expected_connection_generation,
             require_fresh=True,
@@ -135,7 +138,7 @@ async def operator_control_catalog(
 ) -> OperatorControlCatalog:
     snapshot = runtime.connection.snapshot()
     try:
-        payload = await runtime.connection.request_active(
+        payload = await runtime.connection.request_active_query(
             "operator_control_catalog",
             expected_generation=snapshot.generation,
             require_fresh=True,
@@ -151,7 +154,7 @@ async def operator_dashboard(
 ) -> OperatorDashboard:
     snapshot = runtime.connection.snapshot()
     try:
-        payload = await runtime.connection.request_active(
+        payload = await runtime.connection.request_active_query(
             "operator_dashboard",
             expected_generation=snapshot.generation,
             require_fresh=True,
@@ -184,7 +187,7 @@ async def operator_action_admission(
             quarantine_reason,
         )
     try:
-        payload = await runtime.connection.request_active(
+        payload = await runtime.connection.request_active_query(
             "operator_action_admission",
             expected_generation=request.expected_connection_generation,
             require_fresh=True,
@@ -209,12 +212,7 @@ async def invoke_operator_action(
     request: OperatorActionInvokeRequest,
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> OperatorActionReceipt:
-    quarantine_reason = await _resolve_action_quarantine(
-        runtime,
-        action_id=action_id,
-        expected_connection_generation=request.expected_connection_generation,
-        expected_ownership_generation=request.expected_ownership_generation,
-    )
+    quarantine_reason = OPERATOR_SEMANTIC_QUARANTINE_BY_ACTION_ID.get(action_id)
     if quarantine_reason is not None:
         raise HTTPException(status_code=409, detail=quarantine_reason)
     action_payload = {
@@ -252,7 +250,7 @@ async def operator_action_history(
 ) -> OperatorActionHistory:
     snapshot = runtime.connection.snapshot()
     try:
-        payload = await runtime.connection.request_active(
+        payload = await runtime.connection.request_active_query(
             "operator_action_history",
             expected_generation=snapshot.generation,
             require_fresh=True,
@@ -269,7 +267,7 @@ async def operator_action_receipt(
 ) -> OperatorActionReceipt:
     snapshot = runtime.connection.snapshot()
     try:
-        payload = await runtime.connection.request_active(
+        payload = await runtime.connection.request_active_query(
             "operator_action_receipt",
             expected_generation=snapshot.generation,
             require_fresh=True,

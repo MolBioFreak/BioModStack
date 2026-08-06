@@ -505,7 +505,8 @@ export const useBioXpOperatorControlCatalog = (enabled = true) => useQuery({
         await api.get<BioXpOperatorControlCatalog>('/api/bioxp/operator-controls/catalog')
     ).data,
     enabled,
-    refetchInterval: enabled ? 5_000 : false,
+    refetchInterval: enabled ? 15_000 : false,
+    refetchIntervalInBackground: false,
     retry: false,
 });
 
@@ -515,7 +516,8 @@ export const useBioXpOperatorDashboard = (enabled = true) => useQuery({
         await api.get<BioXpOperatorDashboard>('/api/bioxp/operator-controls/dashboard')
     ).data,
     enabled,
-    refetchInterval: enabled ? 5_000 : false,
+    refetchInterval: enabled ? 15_000 : false,
+    refetchIntervalInBackground: false,
     retry: false,
 });
 
@@ -537,7 +539,6 @@ export const useBioXpOperatorActionAdmission = (
         )
     ).data,
     enabled: enabled && Boolean(actionId) && connectionGeneration > 0 && ownershipGeneration > 0 && inputs !== null,
-    refetchInterval: enabled ? 5_000 : false,
     retry: false,
 });
 
@@ -547,7 +548,6 @@ export const useBioXpOperatorActionHistory = (enabled = true) => useQuery({
         await api.get<BioXpOperatorActionHistory>('/api/bioxp/operator-controls/history')
     ).data,
     enabled,
-    refetchInterval: enabled ? 2_000 : false,
     retry: false,
 });
 
@@ -563,7 +563,7 @@ export const useBioXpCameraStatus = (
         })).data;
     },
     enabled: enabled && connectionGeneration !== null,
-    refetchInterval: enabled ? 1_000 : false,
+    refetchInterval: enabled ? 5_000 : false,
     refetchIntervalInBackground: false,
     retry: false,
 });
@@ -591,7 +591,8 @@ export const useBioXpOemFullLifecycleContract = (enabled = true) => useQuery({
         await api.get<BioXpOemFullLifecycleContract>('/api/bioxp/oem-full-lifecycle/contract')
     ).data,
     enabled,
-    refetchInterval: enabled ? 10_000 : false,
+    refetchInterval: enabled ? 30_000 : false,
+    refetchIntervalInBackground: false,
     retry: false,
 });
 
@@ -627,8 +628,8 @@ const useRefreshMutation = <TVariables, TData>(
     const queryClient = useQueryClient();
     return useMutation({
         mutationFn,
-        onSuccess: async () => {
-            await Promise.all([
+        onSuccess: () => {
+            void Promise.all([
                 queryClient.invalidateQueries({ queryKey: statusKey }),
 
                 queryClient.invalidateQueries({ queryKey: profileKey }),
@@ -700,23 +701,36 @@ export const useSubmitBioXpProtocol = () => useRefreshMutation(
 );
 
 
-export const useInvokeBioXpOperatorAction = () => useRefreshMutation(
-    async ({ actionId, connectionGeneration, ownershipGeneration, inputs }: {
-        actionId: string;
-        connectionGeneration: number;
-        ownershipGeneration: number;
-        inputs: Record<string, unknown>;
-    }) => (
-        await api.post<BioXpOperatorActionReceipt>(
-            `/api/bioxp/operator-controls/actions/${encodeURIComponent(actionId)}`,
-            {
-                ...bioXpOperatorGenerationPayload(connectionGeneration, ownershipGeneration),
-                idempotency_key: crypto.randomUUID(),
-                inputs,
-            },
-        )
-    ).data,
-);
+export const useInvokeBioXpOperatorAction = () => {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: async ({ actionId, connectionGeneration, ownershipGeneration, inputs }: {
+            actionId: string;
+            connectionGeneration: number;
+            ownershipGeneration: number;
+            inputs: Record<string, unknown>;
+        }) => (
+            await api.post<BioXpOperatorActionReceipt>(
+                `/api/bioxp/operator-controls/actions/${encodeURIComponent(actionId)}`,
+                {
+                    ...bioXpOperatorGenerationPayload(connectionGeneration, ownershipGeneration),
+                    idempotency_key: crypto.randomUUID(),
+                    inputs,
+                },
+            )
+        ).data,
+        onSuccess: (receipt) => {
+            queryClient.setQueryData<BioXpOperatorActionHistory>(operatorHistoryKey, (current) => ({
+                schema_version: 'bioxp.operator_action_history.v1',
+                receipts: [
+                    receipt,
+                    ...(current?.receipts ?? []).filter((row) => row.command_id !== receipt.command_id),
+                ].slice(0, 100),
+            }));
+            void queryClient.invalidateQueries({ queryKey: statusKey });
+        },
+    });
+};
 
 export const useAssessBioXpOperatorAction = () => useRefreshMutation(
     async ({ commandId, connectionGeneration, ownershipGeneration, verdict, note }: {
