@@ -37,7 +37,7 @@ def test_startup_is_disconnected_and_unverified_commands_are_not_advertised(
     assert saved.json()["target_url"] != "http://robot:8123"
     assert status.status_code == 200
     assert status.json()["connection"]["active"] is False
-    assert status.json()["available_commands"] == []
+    assert "available_commands" not in status.json()
 
     restarted = create_bioxp_runtime(data_root=tmp_path)
     with _client(restarted) as client:
@@ -84,7 +84,7 @@ def test_offline_compile_is_open_but_local_submission_requires_mutation_authoriz
     assert detail.json()["events"][-1]["to_state"] == "submission_blocked"
 
 
-def test_unregistered_commands_and_stop_without_active_target_fail_closed_regardless_global_setting(
+def test_retired_bms_command_and_stop_routes_are_absent_regardless_global_setting(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -110,15 +110,10 @@ def test_unregistered_commands_and_stop_without_active_target_fail_closed_regard
         )
     asyncio.run(runtime.close())
 
-    assert disabled_command.status_code == 503
-    assert "mutations are disabled" in disabled_command.json()["detail"].lower()
-    assert disabled_stop.status_code == 503
-    assert "mutations are disabled" in disabled_stop.json()["detail"].lower()
-    assert authorized_command.status_code == 409
-    assert "disabled" in authorized_command.json()["detail"].lower()
-    assert authorized_stop.status_code == 409
-    assert "quarantined" in authorized_stop.json()["detail"].lower()
-    assert "physical aggregate abort" in authorized_stop.json()["detail"].lower()
+    assert disabled_command.status_code == 404
+    assert disabled_stop.status_code == 404
+    assert authorized_command.status_code == 404
+    assert authorized_stop.status_code == 404
 
 
 def test_malformed_persisted_profile_is_sanitized_without_auto_connect(
@@ -146,56 +141,3 @@ def test_malformed_persisted_profile_is_sanitized_without_auto_connect(
     assert status.json()["connection"]["active"] is False
     assert connect.status_code == 409
     assert "malformed" in connect.json()["detail"].lower()
-
-
-def test_status_motion_admission_follows_robot_capabilities_not_bms_maintenance_projection(monkeypatch) -> None:
-    from datetime import datetime, timezone
-    from types import SimpleNamespace
-
-    from routers.bioxp.connection import get_status
-    from services.bioxp.command_registry import DEFAULT_COMMAND_REGISTRY
-    from services.bioxp.models import BioXpSnapshot
-
-    monkeypatch.setenv("BMS_BIOXP_MUTATIONS_ENABLED", "1")
-
-    class Connection:
-        def snapshot(self):
-            return BioXpSnapshot(
-                configured=True,
-                active=True,
-                generation=23,
-                reachable=True,
-                runtime_ready=True,
-                hardware_ready=True,
-                hardware_observation_fresh=True,
-                capabilities=(
-                    "run_axis_diagnostic",
-                    "run_oem_motor_stage",
-                    "stop_axis_diagnostic",
-                    "recover_motion_non_homing",
-                ),
-                observed_at=datetime.now(timezone.utc),
-                freshness_budget_seconds=30.0,
-                observation_fresh=True,
-                startup_lifecycle={"stages": {"initial_check": {"state": "passed"}}},
-                maintenance_state={
-                    "motion_blocked": True,
-                    "recovery_required": True,
-                    "block_reason": "USB owner changed",
-                },
-                ownership={"transport": "owned", "usb": "service", "router": "running"},
-            )
-
-    runtime = SimpleNamespace(
-        connection=Connection(),
-        commands=SimpleNamespace(registry=DEFAULT_COMMAND_REGISTRY),
-        startup_warnings=(),
-        legacy_jobs=SimpleNamespace(model_dump=lambda: {"migrated": 0, "quarantined": 0}),
-    )
-    status = asyncio.run(get_status(runtime))
-
-    assert "recover_motion_non_homing" in status["available_commands"]
-    assert "run_axis_diagnostic" not in status["available_commands"]
-    assert "run_oem_motor_stage" not in status["available_commands"]
-    assert "USB owner changed" in status["unavailable_commands"]["run_axis_diagnostic"]
-    assert "stop_axis_diagnostic" in status["available_commands"]

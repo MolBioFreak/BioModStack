@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import math
 
 import torch
 
@@ -14,19 +13,20 @@ def guidance_scale(
     total_steps: int,
     start_fraction: float = 0.2,
     end_fraction: float = 0.8,
+    terminal_scale: float = 0.1,
 ) -> float:
-    """Ramp Shape guidance to full strength, then hold through the terminal step."""
+    """Return the released shape_ctrl constant guide-decay multiplier.
+
+    The retained fraction arguments are compatibility-only for already persisted
+    Shape requests.  The published de-novo and reshaping examples both use
+    ``potentials.guide_decay=constant`` and therefore apply the same guide scale
+    at every reverse step.
+    """
     if total_steps <= 1:
         raise ValueError("total_steps must be greater than one")
-    if not (0.0 <= start_fraction < end_fraction <= 1.0):
-        raise ValueError("guidance fractions must satisfy 0 <= start < end <= 1")
-    start = int(math.ceil(total_steps * start_fraction))
-    end = int(math.floor(total_steps * end_fraction))
-    if step < start:
-        return 0.0
-    if step >= end:
-        return 1.0
-    return float(step - start + 1) / float(end - start + 1)
+    if step < 0 or step >= total_steps:
+        raise ValueError("step must identify one reverse step")
+    return 1.0
 
 
 @dataclass(frozen=True)
@@ -102,7 +102,10 @@ class ShapeGuidanceField:
         distances = torch.cdist(coordinates, targets, p=2).square()
         chamfer = distances.amin(dim=-1).mean() + distances.amin(dim=-2).mean()
         signed = self.signed_distance(coordinates)
-        outside = torch.relu(-signed).square().mean()
+        # Upstream shape_ctrl sums squared point-to-mesh distances for every
+        # outside C-alpha.  The positive-inside SDF stores Euclidean distance,
+        # so squaring its negative part is the equivalent differentiable term.
+        outside = torch.relu(-signed).square().sum()
         adjacent = torch.linalg.vector_norm(coordinates[:, 1:, :] - coordinates[:, :-1, :], dim=-1)
         connectivity = (adjacent - 3.8).square().mean() if coordinates.shape[1] > 1 else coordinates.sum() * 0.0
         total = (
@@ -135,13 +138,10 @@ class ShapeGuidanceField:
             gradient = torch.autograd.grad(
                 losses["total"], working, create_graph=False
             )[0]
-        # Mean-reduced Chamfer/SDF gradients shrink with residue and point count.
-        # Normalize per diffusion sample so step_size remains an RMS Angstrom
-        # displacement per guided residue rather than vanishing on real jobs.
-        atom_gradient_norm = torch.linalg.vector_norm(gradient, dim=-1)
-        gradient_rms = torch.sqrt(atom_gradient_norm.square().mean(dim=-1, keepdim=True))
-        gradient_rms = torch.clamp(gradient_rms, min=1e-12).unsqueeze(-1)
-        delta = -float(step_size) * gradient / gradient_rms
+        # Preserve upstream shape_ctrl semantics: the potential contributes its
+        # raw gradient.  Do not normalize it into a forced Angstrom movement;
+        # the gradient must naturally weaken as the structure fits the mesh.
+        delta = -float(step_size) * gradient
         norms = torch.linalg.vector_norm(delta, dim=-1, keepdim=True)
         scale = torch.clamp(float(max_update) / torch.clamp(norms, min=1e-12), max=1.0)
         delta = delta * scale

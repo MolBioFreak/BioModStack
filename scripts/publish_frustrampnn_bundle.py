@@ -125,9 +125,14 @@ def publish(*, source_bundle: Path, allowed_root: Path, destination: Path, marke
             relative_path=request["source_artifact"]["relative_path"],
         )
         result = {
-            "result": str(destination / "workflow_component_result_v1.json"),
-            "manifest": str(destination / MANIFEST_PATH),
-            "source": str(source_target),
+            # Stage-report authority is always relative to the exact job root.
+            # This remains stable whether Nextflow passed an absolute out_dir or
+            # a data-root-relative one and lets ingestion reject path escapes.
+            "result": (
+                destination / "workflow_component_result_v1.json"
+            ).relative_to(root).as_posix(),
+            "manifest": (destination / MANIFEST_PATH).relative_to(root).as_posix(),
+            "source": source_target.relative_to(root).as_posix(),
         }
         marker.parent.mkdir(parents=True, exist_ok=True)
         descriptor, marker_name = tempfile.mkstemp(prefix=f".{marker.name}.tmp-", dir=marker.parent)

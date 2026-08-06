@@ -11,7 +11,7 @@ def shellQuote(value) {
 
 process PrepCanonicalConforNetsRequest {
     label 'ConforNetsCanonical'
-    stageInMode 'copy'
+    stageInMode 'rellink'
 
     input:
     path request_root
@@ -36,7 +36,7 @@ process PrepCanonicalConforNetsRequest {
 process RunCanonicalConforNets {
     label 'ConforNetsCanonical'
     label 'gpu'
-    stageInMode 'copy'
+    stageInMode 'rellink'
 
     input:
     path request_json

@@ -517,9 +517,15 @@ export interface ShapeGeometrySummary {
     bounds_angstrom: [number, number, number, number, number, number];
     dimensions_angstrom: [number, number, number];
     source_format: 'obj' | 'stl';
-    source_parser: 'obj_triangle_v1' | 'stl_ascii_v1' | 'stl_binary_v1';
+    source_parser: 'obj_triangle_v1' | 'obj_triangle_v2' | 'stl_ascii_v1' | 'stl_binary_v1';
     source_unit: string;
     angstrom_per_unit: number;
+}
+
+export interface ShapeLengthPolicy {
+    mode: 'fixed' | 'uniform_integer_range' | 'deterministic_range';
+    min: number;
+    max: number;
 }
 
 export interface ShapeLaunchRequest {
@@ -529,10 +535,15 @@ export interface ShapeLaunchRequest {
     expected_geometry_sha256: string;
     expected_geometry_manifest_sha256: string;
     expected_point_pool_sha256: string;
-    target_length: number;
+    target_length?: number;
+    length_policy?: ShapeLengthPolicy;
     num_backbones: number;
     sequences_per_backbone: number;
     seed: number;
+    sequence_policy?: 'auto' | 'skip' | 'external';
+    sequence_engine?: 'proteinmpnn' | 'fampnn';
+    validator_suite?: Array<'boltz2' | 'esmfold2' | 'protenix_v2'>;
+    guidance_profile: 'rfd3_unguided_control_v1' | 'rfd3_ca_shape_transfer_control_v1';
 }
 
 export const listShapeGeometries = () =>

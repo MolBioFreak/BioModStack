@@ -86,9 +86,45 @@ def test_closed_obj_canonicalization_is_deterministic() -> None:
     assert first.point_count == 4096
     assert first.bounds_angstrom == [-10.0, -10.0, -10.0, 10.0, 10.0, 10.0]
     assert first.manifest["source_format"] == "obj"
-    assert first.manifest["source_parser"] == "obj_triangle_v1"
+    assert first.manifest["source_parser"] == "obj_triangle_v2"
     points = np.frombuffer(first.points_f32, dtype="<f4").reshape((-1, 3))
     assert np.all(points >= -10.0) and np.all(points <= 10.0)
+
+
+def test_blender_paper_obj_metadata_and_vertex_normal_faces_preserve_source_bytes() -> None:
+    geometry = _geometry()
+    vertex_lines = b"\n".join(line for line in CUBE_OBJ.splitlines() if line.startswith(b"v "))
+    face_lines = b"\n".join(
+        b"f " + b" ".join(token + b"//1" for token in line.split()[1:])
+        for line in CUBE_OBJ.splitlines()
+        if line.startswith(b"f ")
+    )
+    paper_dialect = (
+        b"# Blender export\n"
+        b"mtllib paper_fixture.mtl\n"
+        b"o obj_0\n"
+        + vertex_lines
+        + b"\nvn 0 0 1\n"
+        + b"s 0\n"
+        + b"usemtl paper_material\n"
+        + face_lines
+        + b"\n"
+    )
+
+    admitted = geometry.canonicalize_obj(paper_dialect, angstrom_per_unit=1.0)
+    stripped = geometry.canonicalize_obj(CUBE_OBJ, angstrom_per_unit=1.0)
+
+    assert admitted.vertices_f64 == stripped.vertices_f64
+    assert admitted.faces_u32 == stripped.faces_u32
+    assert admitted.source_sha256 == hashlib.sha256(paper_dialect).hexdigest()
+    assert admitted.source_sha256 != stripped.source_sha256
+
+
+def test_unrecognized_obj_record_remains_fail_closed() -> None:
+    geometry = _geometry()
+    with pytest.raises(geometry.ShapeGeometryError) as exc:
+        geometry.canonicalize_obj(CUBE_OBJ + b"vp 0 0 0\n", angstrom_per_unit=1.0)
+    assert exc.value.code == "invalid_obj"
 
 
 def test_canonical_sdf_grid_is_deterministic_and_signed() -> None:
@@ -151,7 +187,7 @@ def test_stl_and_obj_sources_have_distinct_source_bound_geometry_identity() -> N
     assert obj.faces_u32 == stl.faces_u32
     assert obj.geometry_sha256 != stl.geometry_sha256
     assert obj.manifest["source_format"] == "obj"
-    assert obj.manifest["source_parser"] == "obj_triangle_v1"
+    assert obj.manifest["source_parser"] == "obj_triangle_v2"
     assert stl.manifest["source_format"] == "stl"
 
 
@@ -460,7 +496,7 @@ async def test_shape_geometry_http_upload_list_and_preview(tmp_path: Path, monke
             body = uploaded.json()
             assert body["vertex_count"] == 8 and body["point_count"] == 4096
             assert body["source_format"] == "obj"
-            assert body["source_parser"] == "obj_triangle_v1"
+            assert body["source_parser"] == "obj_triangle_v2"
             assert body["source_unit"] == "angstrom"
             assert len(body["preview_obj_sha256"]) == 64
             assert "principal" not in body and "owner" not in body
@@ -504,10 +540,10 @@ async def test_shape_geometry_http_upload_list_and_preview(tmp_path: Path, monke
             )
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             assert manifest["source_format"] == "obj"
-            assert manifest["source_parser"] == "obj_triangle_v1"
+            assert manifest["source_parser"] == "obj_triangle_v2"
             assert manifest["source_unit"] == "angstrom"
             assert manifest["conversion"]["source_format"] == "obj"
-            assert manifest["conversion"]["source_parser"] == "obj_triangle_v1"
+            assert manifest["conversion"]["source_parser"] == "obj_triangle_v2"
             assert manifest["conversion"]["source_unit"] == "angstrom"
     finally:
         await engine.dispose()

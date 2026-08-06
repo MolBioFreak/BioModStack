@@ -111,7 +111,6 @@ def job_expects_design_results(job: Job) -> bool:
         "esmfold2",
         "esmfold2_experimental",
         "fampnn",
-        "frustrampnn",
         "ligandmpnn",
         "ppiflow",
         "protein_local_redesign",

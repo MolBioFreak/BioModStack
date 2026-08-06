@@ -1880,12 +1880,14 @@ async def launch_nextflow_job(
             logger.info(f"Job {job_id} was cancelled just before spawn, aborting")
             return
 
-        # Canonical conformational-mapping launch parameters are intentionally
-        # closed: cm_request_path is request authority and gpu_id is the only
-        # scheduler-owned addition.  Generic CPU-share hints must not weaken
-        # that boundary or make a valid request fail closed downstream.
+        # Canonical conformational-mapping and FrustraMPNN launch parameters
+        # are intentionally closed. Their request/manifest is authority and
+        # gpu_id is the only scheduler-owned addition. Generic CPU-share hints
+        # must not weaken those boundaries or make valid requests fail closed;
+        # both workflows consume deployment-owned CPU defaults from Nextflow
+        # configuration instead.
         dynamic_gpu_cpus = None
-        if model_id != "conformational_mapping":
+        if model_id not in {"conformational_mapping", "frustrampnn"}:
             dynamic_gpu_cpus = await _resolve_dynamic_gpu_cpu_share(session, job, launch_params)
         if dynamic_gpu_cpus is not None:
             launch_params["cpus_per_gpu"] = dynamic_gpu_cpus
@@ -2736,7 +2738,7 @@ def build_nextflow_command(
     if str(model_id or "").strip() == "conformational_mapping":
         if str(mode or "").strip() != "map":
             raise ValueError("conformational_mapping supports only mode=map")
-        unknown = sorted(set(params) - {"cm_request_path", "gpu_id"})
+        unknown = sorted(set(params) - {"cm_request_path", "gpu_id", "resume_work_dir"})
         if unknown:
             raise ValueError(
                 "canonical conformational-mapping launch parameters fail closed: "
@@ -2745,6 +2747,14 @@ def build_nextflow_command(
         request_path = str(params.get("cm_request_path") or "").strip()
         if not request_path:
             raise ValueError("cm_request_path is required")
+        canonical_work_dir = Path(get_work_dir()).resolve()
+        resume_work_dir = params.get("resume_work_dir")
+        if resume_work_dir not in (None, ""):
+            requested_resume_work_dir = Path(str(resume_work_dir)).expanduser().resolve()
+            if requested_resume_work_dir != canonical_work_dir:
+                raise ValueError(
+                    "conformational_mapping resume_work_dir must equal the authoritative work directory"
+                )
         gpu_id = params.get("gpu_id")
         if gpu_id is None:
             normalized_gpu_id = None
@@ -2769,10 +2779,14 @@ def build_nextflow_command(
             "-profile",
             "conformational_mapping,workstation_ryzen7960x",
             "-w",
-            str(get_work_dir()),
+            str(canonical_work_dir),
+        ]
+        if resume_work_dir not in (None, ""):
+            command.append("-resume")
+        command.extend([
             "--out_dir",
             str(output_dir),
-        ]
+        ])
         if job_id:
             command.extend(["--job_id", str(job_id)])
         command.extend(["--cm_request_path", request_path])

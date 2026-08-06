@@ -35,6 +35,10 @@ class FakeRobotClient:
         self.status_only_probes = 0
         self.request_started: asyncio.Event | None = None
         self.request_release: asyncio.Event | None = None
+        self.blocking_route_name: str | None = None
+        self.blocking_action_id: str | None = None
+        self.status_probe_started: asyncio.Event | None = None
+        self.status_probe_release: asyncio.Event | None = None
 
     async def probe(self) -> dict[str, Any]:
         self.probes += 1
@@ -44,6 +48,10 @@ class FakeRobotClient:
 
     async def probe_status_only(self) -> dict[str, Any]:
         self.status_only_probes += 1
+        if self.status_probe_started is not None:
+            self.status_probe_started.set()
+        if self.status_probe_release is not None:
+            await self.status_probe_release.wait()
         if self.probe_error:
             raise self.probe_error
         return self.probe_result
@@ -54,7 +62,16 @@ class FakeRobotClient:
     async def request(self, route_name: str, **kwargs: Any) -> dict[str, Any]:
         if self.request_started is not None:
             self.request_started.set()
-        if self.request_release is not None:
+        if self.request_release is not None and (
+            self.blocking_route_name is None
+            or (
+                route_name == self.blocking_route_name
+                and (
+                    self.blocking_action_id is None
+                    or (kwargs.get("path_params") or {}).get("action_id") == self.blocking_action_id
+                )
+            )
+        ):
             await self.request_release.wait()
         return {"route_name": route_name, "kwargs": kwargs}
 
@@ -314,6 +331,41 @@ def test_maintenance_state_projects_from_status_and_nested_command_or_error_resp
     assert service.snapshot().maintenance_state is None
 
 
+def test_query_request_does_not_block_critical_command_dispatch(tmp_path: Path) -> None:
+    _, BioXpProfile, _, _ = _load()
+    clients: list[FakeRobotClient] = []
+    service = _service(tmp_path, clients)
+
+    async def exercise() -> None:
+        await service.save_profile(BioXpProfile(api_url="http://robot:8123"))
+        connected = await service.connect()
+        robot = clients[0]
+        robot.request_started = asyncio.Event()
+        robot.request_release = asyncio.Event()
+        robot.blocking_route_name = "operator_control_catalog"
+
+        query_task = asyncio.create_task(service.request_active_query(
+            "operator_control_catalog",
+            expected_generation=connected.generation,
+        ))
+        await robot.request_started.wait()
+
+        command = await asyncio.wait_for(service.request_active(
+            "invoke_operator_action",
+            expected_generation=connected.generation,
+            path_params={"action_id": "oem.z.manual_home"},
+            json_data={"expected_generation": 7, "idempotency_key": "home-action", "inputs": {}},
+        ), timeout=0.1)
+        assert command["route_name"] == "invoke_operator_action"
+        assert query_task.done() is False
+
+        robot.request_release.set()
+        query = await query_task
+        assert query["route_name"] == "operator_control_catalog"
+
+    asyncio.run(exercise())
+
+
 def test_generation_bound_request_lease_serializes_disconnect(tmp_path: Path) -> None:
     _, BioXpProfile, _, _ = _load()
     clients: list[FakeRobotClient] = []
@@ -343,6 +395,49 @@ def test_generation_bound_request_lease_serializes_disconnect(tmp_path: Path) ->
         disconnected = await disconnect_task
         assert disconnected.generation == connected.generation + 1
         assert disconnected.active is False
+
+    asyncio.run(exercise())
+
+
+def test_safety_interrupt_bypasses_active_request_lease_without_allowing_disconnect(tmp_path: Path) -> None:
+    _, BioXpProfile, _, _ = _load()
+    clients: list[FakeRobotClient] = []
+    service = _service(tmp_path, clients)
+
+    async def exercise() -> None:
+        await service.save_profile(BioXpProfile(api_url="http://robot:8123"))
+        connected = await service.connect()
+        robot = clients[0]
+        robot.request_started = asyncio.Event()
+        robot.request_release = asyncio.Event()
+        robot.blocking_route_name = "invoke_operator_action"
+        robot.blocking_action_id = "oem.z.diagnostic_home_axis"
+
+        movement_task = asyncio.create_task(service.request_active(
+            "invoke_operator_action",
+            expected_generation=connected.generation,
+            path_params={"action_id": "oem.z.diagnostic_home_axis"},
+            json_data={"expected_generation": 7, "idempotency_key": "home-action", "inputs": {}},
+        ))
+        await robot.request_started.wait()
+
+        stop = await asyncio.wait_for(service.request_active_safety_interrupt(
+            "invoke_operator_action",
+            expected_generation=connected.generation,
+            path_params={"action_id": "oem.z.stop"},
+            json_data={"expected_generation": 7, "idempotency_key": "stop-action", "inputs": {}},
+        ), timeout=0.1)
+        assert stop["kwargs"]["path_params"] == {"action_id": "oem.z.stop"}
+        assert movement_task.done() is False
+
+        disconnect_task = asyncio.create_task(service.disconnect())
+        await asyncio.sleep(0)
+        assert disconnect_task.done() is False
+
+        robot.request_release.set()
+        await movement_task
+        disconnected = await disconnect_task
+        assert disconnected.generation == connected.generation + 1
 
     asyncio.run(exercise())
 
@@ -455,6 +550,33 @@ def test_connection_and_active_monitor_are_status_only_and_stop_on_disconnect(tm
         stopped_at = clients[0].status_only_probes
         await asyncio.sleep(0.04)
         assert clients[0].status_only_probes == stopped_at
+
+    asyncio.run(scenario())
+
+
+def test_active_monitor_probe_does_not_block_critical_command_dispatch(tmp_path: Path) -> None:
+    _, BioXpProfile, _, _ = _load()
+    clients: list[FakeRobotClient] = []
+
+    async def scenario() -> None:
+        service = _service(tmp_path, clients, active_probe_interval_seconds=0.01)
+        await service.save_profile(BioXpProfile(api_url="http://robot:8123"))
+        connected = await service.connect()
+        robot = clients[0]
+        robot.status_probe_started = asyncio.Event()
+        robot.status_probe_release = asyncio.Event()
+        await robot.status_probe_started.wait()
+
+        command = await asyncio.wait_for(service.request_active(
+            "invoke_operator_action",
+            expected_generation=connected.generation,
+            path_params={"action_id": "oem.z.manual_home"},
+            json_data={"expected_generation": 7, "idempotency_key": "home-action", "inputs": {}},
+        ), timeout=0.1)
+        assert command["route_name"] == "invoke_operator_action"
+
+        robot.status_probe_release.set()
+        await service.disconnect()
 
     asyncio.run(scenario())
 

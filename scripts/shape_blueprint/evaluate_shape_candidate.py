@@ -101,7 +101,17 @@ def evaluate_candidate(
         raise ValueError("candidate output directory must be new or empty")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    expected_length = int(request["target_length"])
+    length_policy = request.get("length_policy")
+    if not isinstance(length_policy, dict) or length_policy.get("mode") not in {
+        "fixed",
+        "uniform_integer_range",
+        "deterministic_range",
+    }:
+        raise ValueError("Shape request length policy is invalid")
+    minimum = length_policy.get("min")
+    maximum = length_policy.get("max")
+    if not isinstance(minimum, int) or not isinstance(maximum, int) or minimum > maximum:
+        raise ValueError("Shape request length policy bounds are invalid")
     if request.get("geometry_sha256") != geometry.get("geometry_sha256"):
         raise ValueError("geometry SHA-256 binding mismatch")
     if request.get("point_pool_sha256") != _sha256(points_path):
@@ -121,6 +131,10 @@ def evaluate_candidate(
 
     source = load_structure(str(source_backbone), model=1)
     candidate = load_structure(str(structure_path), model=1)
+    source_ca_count = int(np.count_nonzero((source.atom_name == "CA") & (~source.hetero)))
+    if not minimum <= source_ca_count <= maximum:
+        raise ValueError("source backbone length is outside the request length policy")
+    expected_length = source_ca_count
     source_ca = _ca_coordinates(source, expected_length, "source backbone")
     candidate_ca = _ca_coordinates(candidate, expected_length, "ESMFold2 structure")
     source_ca_distances = np.linalg.norm(np.diff(source_ca, axis=0), axis=1)

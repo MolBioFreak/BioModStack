@@ -22,17 +22,31 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import (
     FrustraMPNNArtifact,
+    FrustraMPNNComparison,
+    FrustraMPNNComparisonRow,
+    FrustraMPNNGuidancePlan,
     FrustraMPNNLandscapeRow,
     FrustraMPNNResult,
     Job,
     get_session,
 )
+from services.frustrampnn.analytics import multidimensional_points, parse_dataset_ids
+from services.frustrampnn.comparison import ComparisonValidationError, compare_landscape_set, compare_landscapes
+from services.frustrampnn.derived import (
+    DerivedPersistenceError,
+    load_persisted_landscape,
+    persist_comparison,
+    persist_guidance_plan,
+)
+from services.frustrampnn.guidance import GuidanceValidationError, build_guidance_plan
+from services.frustrampnn.contracts import canonical_sha256
 from services.frustrampnn.jobs import (
     FrustraMPNNChildError,
     child_receipt,
     create_child_job,
     create_reanalysis_child,
     design_selections,
+    handoff_selection,
     upload_selection,
 )
 
@@ -54,6 +68,36 @@ class AnalyzeDesignsRequest(BaseModel):
 
 class ReanalyzeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class ComparisonCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reference_job_id: str = Field(min_length=1)
+    reference_invocation_id: str = Field(min_length=1)
+    target_job_id: str = Field(min_length=1)
+    target_invocation_id: str = Field(min_length=1)
+
+
+class MultiComparisonCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reference_job_id: str = Field(min_length=1)
+    reference_invocation_id: str = Field(min_length=1)
+    targets: list[ComparisonCreateRequest] = Field(min_length=1)
+
+
+class GuidanceCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_job_id: str = Field(min_length=1)
+    source_invocation_id: str = Field(min_length=1)
+    region: dict[str, Any]
+    objective: dict[str, Any]
+    constraints: dict[str, Any] = Field(default_factory=dict)
+    ranking: dict[str, Any] = Field(default_factory=dict)
+    rationale: str = Field(min_length=1)
+    guidance_id: str | None = Field(default=None, min_length=1)
 
 
 async def _child_job_receipt(session: AsyncSession, child: Job) -> dict[str, Any]:
@@ -87,6 +131,80 @@ async def analyze_uploaded_structure(
             trigger="upload_analyze",
         )
         return await _child_job_receipt(session, job)
+    except FrustraMPNNChildError as exc:
+        await session.rollback()
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.post("/candidates/handoff", status_code=status.HTTP_202_ACCEPTED)
+async def handoff_external_candidate(
+    request: Request,
+    structure_file: UploadFile = File(..., description="Externally produced PDB or mmCIF structure"),
+    session: AsyncSession = Depends(get_session),
+):
+    """Accept one producer-owned candidate and queue a fresh FrustraMPNN child."""
+    allowed = {
+        "structure_file", "candidate_id", "producer_id", "parent_job_id", "parent_invocation_id",
+        "parent_landscape_sha256", "guidance_id", "nucleotide_edit_set", "protein_sequence_sha256",
+        "expected_structure_sha256",
+    }
+    form = await request.form()
+    if set(form) - allowed or set(request.query_params):
+        raise HTTPException(422, "FrustraMPNN handoff overrides/unknown fields are forbidden")
+    def _form_value(name: str, *, required: bool = True) -> str | None:
+        value = form.get(name)
+        if value is None or not isinstance(value, str) or (required and not value):
+            if required:
+                raise HTTPException(422, f"handoff field {name} is required")
+            return None
+        return value
+    try:
+        parent_job_id = _form_value("parent_job_id")
+        parent_invocation_id = _form_value("parent_invocation_id")
+        parent_job = await session.get(Job, parent_job_id)
+        if parent_job is None:
+            raise HTTPException(404, "handoff parent Job not found")
+        parent_result = await _scoped_result(parent_invocation_id or "", parent_job_id or "", session)
+        edit_text = _form_value("nucleotide_edit_set", required=False) or "[]"
+        try:
+            edit_set = json.loads(edit_text)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(422, "nucleotide_edit_set must be JSON") from exc
+        if not isinstance(edit_set, list) or any(not isinstance(item, dict) for item in edit_set):
+            raise HTTPException(422, "nucleotide_edit_set must be a JSON list of objects")
+        payload = await structure_file.read()
+        expected = _form_value("expected_structure_sha256", required=False)
+        if expected is not None and hashlib.sha256(payload).hexdigest() != expected:
+            raise HTTPException(422, "uploaded handoff structure SHA-256 does not match expected_structure_sha256")
+        selection = handoff_selection(
+            candidate_id=_form_value("candidate_id") or "",
+            producer_id=_form_value("producer_id") or "",
+            payload=payload,
+            filename=structure_file.filename or "",
+            parent_job_id=parent_job_id or "",
+            parent_invocation_id=parent_invocation_id or "",
+            parent_landscape_sha256=_form_value("parent_landscape_sha256") or "",
+            guidance_id=_form_value("guidance_id", required=False),
+            nucleotide_edit_set=edit_set,
+            protein_sequence_sha256=_form_value("protein_sequence_sha256", required=False),
+        )
+        child = await create_child_job(
+            session,
+            selections=[selection],
+            source_parent=parent_job,
+            trigger="external_candidate_handoff",
+        )
+        receipt = await _child_job_receipt(session, child)
+        receipt["handoff"] = {
+            "parent_landscape_sha256": _form_value("parent_landscape_sha256") or "",
+            "parent_candidate_id": parent_result.candidate_id,
+            "guidance_id": _form_value("guidance_id", required=False),
+            "producer_id": _form_value("producer_id") or "",
+        }
+        return receipt
+    except HTTPException:
+        await session.rollback()
+        raise
     except FrustraMPNNChildError as exc:
         await session.rollback()
         raise HTTPException(422, str(exc)) from exc
@@ -275,6 +393,184 @@ async def list_results(
         "limit": limit,
         "offset": offset,
     }
+
+
+@router.get("/analytics/points")
+async def analytics_points(
+    level: str = Query("result", pattern="^(result|residue|mutation)$"),
+    dataset_ids: Optional[str] = Query(None, max_length=1000),
+    limit: int = Query(500, ge=1, le=5000),
+    offset: int = Query(0, ge=0),
+    session: AsyncSession = Depends(get_session),
+):
+    """Return bounded machine-described FrustraMPNN points across workflow datasets."""
+    return await multidimensional_points(
+        session,
+        level=level,  # type: ignore[arg-type]
+        dataset_ids=parse_dataset_ids(dataset_ids),
+        limit=limit,
+        offset=offset,
+    )
+
+
+def _comparison_payload(model: FrustraMPNNComparison) -> dict[str, Any]:
+    payload = dict(model.payload_json)
+    payload["comparison_id"] = model.comparison_id
+    payload["persisted"] = True
+    payload["created_at"] = model.created_at
+    payload["reference"] = {
+        "parent_job_id": model.reference_parent_job_id,
+        "invocation_id": model.reference_invocation_id,
+    }
+    payload["target"] = {
+        "parent_job_id": model.target_parent_job_id,
+        "invocation_id": model.target_invocation_id,
+    }
+    return payload
+
+
+def _guidance_payload(model: FrustraMPNNGuidancePlan) -> dict[str, Any]:
+    payload = dict(model.payload_json)
+    payload["guidance_id"] = model.guidance_id
+    payload["persisted"] = True
+    payload["created_at"] = model.created_at
+    return payload
+
+
+@router.post("/comparisons", status_code=status.HTTP_201_CREATED)
+async def create_comparison(
+    body: ComparisonCreateRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        reference_result = await _scoped_result(body.reference_invocation_id, body.reference_job_id, session)
+        target_result = await _scoped_result(body.target_invocation_id, body.target_job_id, session)
+        reference_landscape = await load_persisted_landscape(session, reference_result)
+        target_landscape = await load_persisted_landscape(session, target_result)
+        comparison_id = "cmp-" + canonical_sha256([
+            reference_landscape["landscape_sha256"], target_landscape["landscape_sha256"],
+        ])[:32]
+        payload = compare_landscapes(reference_landscape, target_landscape, comparison_id=comparison_id)
+        stored = await persist_comparison(
+            session, payload, reference_result=reference_result, target_result=target_result,
+        )
+        await session.commit()
+        return _comparison_payload(stored)
+    except (ComparisonValidationError, DerivedPersistenceError) as exc:
+        await session.rollback()
+        code = 409 if "conflict" in str(exc).lower() else 422
+        raise HTTPException(code, str(exc)) from exc
+
+
+@router.post("/comparisons/multi", status_code=status.HTTP_201_CREATED)
+async def create_multi_comparison(
+    body: MultiComparisonCreateRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        reference_result = await _scoped_result(body.reference_invocation_id, body.reference_job_id, session)
+        target_results = [
+            await _scoped_result(item.target_invocation_id, item.target_job_id, session)
+            for item in body.targets
+        ]
+        reference_landscape = await load_persisted_landscape(session, reference_result)
+        target_landscapes = [await load_persisted_landscape(session, result) for result in target_results]
+        comparison_id = "cmp-" + canonical_sha256([
+            reference_landscape["landscape_sha256"],
+            *[landscape["landscape_sha256"] for landscape in target_landscapes],
+        ])[:32]
+        payload = compare_landscape_set(reference_landscape, target_landscapes, comparison_id=comparison_id)
+        stored = await persist_comparison(
+            session, payload, reference_result=reference_result, target_result=target_results[0],
+        )
+        await session.commit()
+        return _comparison_payload(stored)
+    except (ComparisonValidationError, DerivedPersistenceError) as exc:
+        await session.rollback()
+        code = 409 if "conflict" in str(exc).lower() else 422
+        raise HTTPException(code, str(exc)) from exc
+
+
+@router.get("/comparisons/{comparison_id}")
+async def get_comparison(comparison_id: str, session: AsyncSession = Depends(get_session)):
+    model = await session.get(FrustraMPNNComparison, comparison_id)
+    if model is None:
+        raise HTTPException(404, "FrustraMPNN comparison not found")
+    return _comparison_payload(model)
+
+
+@router.get("/comparisons/{comparison_id}/rows")
+async def comparison_rows(
+    comparison_id: str,
+    limit: int = Query(200, ge=1, le=5000),
+    offset: int = Query(0, ge=0),
+    session: AsyncSession = Depends(get_session),
+):
+    model = await session.get(FrustraMPNNComparison, comparison_id)
+    if model is None:
+        raise HTTPException(404, "FrustraMPNN comparison not found")
+    total = int((await session.execute(
+        select(func.count()).select_from(FrustraMPNNComparisonRow).where(
+            FrustraMPNNComparisonRow.comparison_id == comparison_id,
+        )
+    )).scalar_one())
+    rows = (await session.execute(
+        select(FrustraMPNNComparisonRow)
+        .where(FrustraMPNNComparisonRow.comparison_id == comparison_id)
+        .order_by(FrustraMPNNComparisonRow.row_index.asc())
+        .offset(offset)
+        .limit(limit)
+    )).scalars().all()
+    return {
+        "comparison_id": comparison_id,
+        "items": [dict(row.row_json) for row in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "next_offset": offset + len(rows) if offset + len(rows) < total else None,
+    }
+
+
+@router.post("/guidance", status_code=status.HTTP_201_CREATED)
+async def create_guidance(
+    body: GuidanceCreateRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        source_result = await _scoped_result(body.source_invocation_id, body.source_job_id, session)
+        landscape = await load_persisted_landscape(session, source_result)
+        guidance_id = body.guidance_id or "gdp-" + canonical_sha256({
+            "source_landscape_sha256": landscape["landscape_sha256"],
+            "region": body.region,
+            "objective": body.objective,
+            "constraints": body.constraints,
+            "ranking": body.ranking,
+            "rationale": body.rationale,
+        })[:32]
+        payload = build_guidance_plan(
+            landscape=landscape,
+            region=body.region,
+            objective=body.objective,
+            constraints=body.constraints,
+            ranking=body.ranking,
+            rationale=body.rationale,
+            guidance_id=guidance_id,
+        )
+        stored = await persist_guidance_plan(session, payload, source_result=source_result)
+        await session.commit()
+        return _guidance_payload(stored)
+    except (GuidanceValidationError, DerivedPersistenceError) as exc:
+        await session.rollback()
+        code = 409 if "conflict" in str(exc).lower() else 422
+        raise HTTPException(code, str(exc)) from exc
+
+
+@router.get("/guidance/{guidance_id}")
+async def get_guidance(guidance_id: str, session: AsyncSession = Depends(get_session)):
+    model = await session.get(FrustraMPNNGuidancePlan, guidance_id)
+    if model is None:
+        raise HTTPException(404, "FrustraMPNN guidance plan not found")
+    return _guidance_payload(model)
 
 
 @router.get("/results/{invocation_id}")

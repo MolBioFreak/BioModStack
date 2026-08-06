@@ -118,6 +118,11 @@ def _retarget_bundle(
 async def db(tmp_path: Path):
     database_path = tmp_path / "persistence.db"
     engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _enable_foreign_keys(dbapi_connection, _connection_record) -> None:
+        dbapi_connection.execute("PRAGMA foreign_keys=ON")
+
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
@@ -227,7 +232,7 @@ async def test_complete_manifest_bundle_persists_exact_authority_and_rows(
 
 
 @pytest.mark.asyncio
-async def test_identical_replay_returns_existing_without_rewriting_rows_or_projection(
+async def test_identical_replay_returns_existing_and_repairs_canonical_summary_projection(
     tmp_path: Path, db
 ) -> None:
     module = _persistence()
@@ -243,9 +248,12 @@ async def test_identical_replay_returns_existing_without_rewriting_rows_or_proje
         created_at = first.created_at
         counts = await _counts(session)
         design = await session.get(Design, "design-1")
-        assert design.frustration_high_count is None
-        assert design.frustration_min_count is None
-        assert design.frustration_pct_high is None
+        summary = first.summary_json
+        assert design.frustration_high_count == summary["native_slot_counts"]["high"]
+        assert design.frustration_min_count == summary["native_slot_counts"]["minimal"]
+        assert design.frustration_pct_high == pytest.approx(
+            summary["native_slot_fractions"]["high"] * 100.0
+        )
         assert design.frustration_residues is None
         assert design.frustration_csv_path is None
         assert design.frustrampnn_contract_version == "1.0"
@@ -265,7 +273,11 @@ async def test_identical_replay_returns_existing_without_rewriting_rows_or_proje
         assert replay.invocation_id == first.invocation_id
         assert replay.created_at == created_at
         assert await _counts(session) == counts == (1, 10, 20)
-        assert design.frustration_high_count == 99
+        assert design.frustration_high_count == summary["native_slot_counts"]["high"]
+        assert design.frustration_min_count == summary["native_slot_counts"]["minimal"]
+        assert design.frustration_pct_high == pytest.approx(
+            summary["native_slot_fractions"]["high"] * 100.0
+        )
 
 
 @pytest.mark.asyncio
@@ -525,7 +537,7 @@ async def test_exact_source_id_without_matching_physical_hash_fails_without_writ
 
 
 @pytest.mark.asyncio
-async def test_exact_authoritative_design_link_gets_canonical_projection_without_legacy_writes(
+async def test_exact_authoritative_design_link_gets_canonical_summary_projection_without_legacy_rows(
     tmp_path: Path, db
 ) -> None:
     module = _persistence()
@@ -540,9 +552,12 @@ async def test_exact_authoritative_design_link_gets_canonical_projection_without
         )
         design = await session.get(Design, "design-1")
         assert result.design_id == "design-1"
-        assert design.frustration_high_count is None
-        assert design.frustration_min_count is None
-        assert design.frustration_pct_high is None
+        summary = result.summary_json
+        assert design.frustration_high_count == summary["native_slot_counts"]["high"]
+        assert design.frustration_min_count == summary["native_slot_counts"]["minimal"]
+        assert design.frustration_pct_high == pytest.approx(
+            summary["native_slot_fractions"]["high"] * 100.0
+        )
         assert design.frustration_csv_path is None
         assert design.frustration_residues is None
         assert design.frustrampnn_contract_version == "1.0"

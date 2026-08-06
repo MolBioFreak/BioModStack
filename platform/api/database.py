@@ -590,12 +590,17 @@ class Design(Base):
     # ═══════════════════════════════════════════════════════════════════════════
     # FRUSTRATION ANALYSIS (FrustraMPNN)
     # ═══════════════════════════════════════════════════════════════════════════
-    frustration_high_count = Column(Integer, nullable=True)    # Residues with frust <= -1.0
-    frustration_min_count = Column(Integer, nullable=True)     # Residues with frust >= 0.58
-    frustration_pct_high = Column(Float, nullable=True)        # Percent highly frustrated
+    # Canonical summary projection used by shared Design analytics. Numerical
+    # thresholds and classifications remain owned by the persisted backend
+    # threshold policy; these columns do not reclassify scores.
+    frustration_high_count = Column(Integer, nullable=True)
+    frustration_min_count = Column(Integer, nullable=True)
+    frustration_pct_high = Column(Float, nullable=True)        # 0..100 percentage
     frustration_residues = Column(JSON, nullable=True)         # Historical read-only per-residue projection
     frustration_csv_path = Column(String(500), nullable=True)  # Historical read-only CSV path
-    # Canonical manifest-first FrustraMPNN projection. New ingestion writes only these fields.
+    # Canonical manifest-first FrustraMPNN authority fields. The three scalar
+    # columns above are deterministic summary projections; these retain the
+    # immutable contract/artifact lineage needed to interpret them.
     frustrampnn_contract_version = Column(String(32), nullable=True)
     frustrampnn_status = Column(String(32), nullable=True)
     frustrampnn_source_sha256 = Column(String(64), nullable=True)
@@ -814,6 +819,86 @@ class FrustraMPNNLandscapeRow(Base):
     reason = Column(Text, nullable=True)
     row_json = Column(JSON, nullable=False)
     provenance_json = Column(JSON, nullable=False)
+
+
+class FrustraMPNNComparison(Base):
+    """Immutable residue-aligned comparison derived from two persisted landscapes."""
+
+    __tablename__ = "frustrampnn_comparisons"
+    __table_args__ = (
+        UniqueConstraint("comparison_sha256", name="uq_frustrampnn_comparison_sha256"),
+        Index("ix_frustrampnn_comparison_sources", "reference_parent_job_id", "target_parent_job_id"),
+    )
+
+    comparison_id = Column(String(96), primary_key=True)
+    reference_parent_job_id = Column(String(36), nullable=False, index=True)
+    reference_invocation_id = Column(String(128), nullable=False)
+    target_parent_job_id = Column(String(36), nullable=False, index=True)
+    target_invocation_id = Column(String(128), nullable=False)
+    reference_landscape_sha256 = Column(String(64), nullable=False, index=True)
+    target_landscape_sha256 = Column(String(64), nullable=False, index=True)
+    configuration_id = Column(String(128), nullable=True)
+    configuration_sha256 = Column(String(64), nullable=True)
+    status = Column(String(32), nullable=False, index=True)
+    comparison_sha256 = Column(String(64), nullable=False)
+    payload_json = Column(JSON, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class FrustraMPNNComparisonRow(Base):
+    """Immutable row-level evidence for one comparison."""
+
+    __tablename__ = "frustrampnn_comparison_rows"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["comparison_id"], ["frustrampnn_comparisons.comparison_id"],
+            name="fk_frustrampnn_comparison_rows_comparison",
+        ),
+        UniqueConstraint("comparison_id", "row_index", name="uq_frustrampnn_comparison_row_index"),
+        Index("ix_frustrampnn_comparison_row_identity", "comparison_id", "auth_asym_id", "auth_seq_id", "mutation_aa"),
+    )
+
+    id = Column(String(96), primary_key=True)
+    comparison_id = Column(String(96), nullable=False, index=True)
+    row_index = Column(Integer, nullable=False)
+    entity_instance_id = Column(String(128), nullable=False)
+    auth_asym_id = Column(String(128), nullable=False)
+    auth_seq_id = Column(String(64), nullable=False)
+    insertion_code = Column(String(16), nullable=False, default="")
+    sequence_index = Column(Integer, nullable=True)
+    mutation_aa = Column(String(1), nullable=False)
+    mapping_state = Column(String(32), nullable=False, index=True)
+    missingness_state = Column(String(32), nullable=False, index=True)
+    biological_status = Column(String(32), nullable=False, index=True)
+    reference_score = Column(Float, nullable=True)
+    target_score = Column(Float, nullable=True)
+    raw_score_delta = Column(Float, nullable=True)
+    reference_class = Column(String(32), nullable=True)
+    target_class = Column(String(32), nullable=True)
+    classification_transition = Column(String(64), nullable=True)
+    row_json = Column(JSON, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class FrustraMPNNGuidancePlan(Base):
+    """Immutable decision-support guidance derived from a landscape/comparison."""
+
+    __tablename__ = "frustrampnn_guidance_plans"
+    __table_args__ = (
+        UniqueConstraint("guidance_sha256", name="uq_frustrampnn_guidance_sha256"),
+        Index("ix_frustrampnn_guidance_source", "source_landscape_sha256"),
+    )
+
+    guidance_id = Column(String(96), primary_key=True)
+    source_landscape_sha256 = Column(String(64), nullable=False, index=True)
+    source_comparison_id = Column(String(96), nullable=True, index=True)
+    source_parent_job_id = Column(String(36), nullable=True, index=True)
+    source_invocation_id = Column(String(128), nullable=True)
+    configuration_id = Column(String(128), nullable=True)
+    configuration_sha256 = Column(String(64), nullable=True)
+    guidance_sha256 = Column(String(64), nullable=False)
+    payload_json = Column(JSON, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class ConformationalMappingRequest(Base):
@@ -1325,8 +1410,46 @@ async def _ensure_schema(conn):
     await _ensure_table_columns(conn, "conformational_mapping_state_landscape_analysis_rows", ConformationalMappingStateLandscapeAnalysisRow.__table__.columns)
     await _ensure_table_columns(conn, "nucleotide_sequences", NucleotideSequence.__table__.columns)
     await _ensure_table_columns(conn, "primers", Primer.__table__.columns)
+    await _backfill_frustrampnn_summary_projections(conn)
     await _backfill_design_review_contracts(conn)
     await _ensure_sqlite_indexes(conn)
+
+
+async def _backfill_frustrampnn_summary_projections(conn):
+    """Repair shared Design analytics from validated immutable summaries."""
+    from services.frustrampnn.contracts import validate_schema
+
+    result = await conn.execute(text(
+        "SELECT d.id AS design_id, r.invocation_id, r.summary_json "
+        "FROM designs d JOIN frustrampnn_results r ON r.design_id = d.id "
+        "WHERE d.frustrampnn_status = 'succeeded' AND ("
+        "d.frustration_high_count IS NULL OR d.frustration_min_count IS NULL "
+        "OR d.frustration_pct_high IS NULL) "
+        "ORDER BY d.id, r.created_at DESC, r.invocation_id DESC"
+    ))
+    projected: set[str] = set()
+    for row in result.mappings().all():
+        design_id = str(row["design_id"])
+        if design_id in projected:
+            continue
+        summary = row["summary_json"]
+        if isinstance(summary, str):
+            summary = json.loads(summary)
+        validate_schema("frustrampnn_summary_v1", summary)
+        await conn.execute(
+            text(
+                "UPDATE designs SET frustration_high_count = :high_count, "
+                "frustration_min_count = :minimal_count, "
+                "frustration_pct_high = :high_percent WHERE id = :design_id"
+            ),
+            {
+                "design_id": design_id,
+                "high_count": int(summary["native_slot_counts"]["high"]),
+                "minimal_count": int(summary["native_slot_counts"]["minimal"]),
+                "high_percent": float(summary["native_slot_fractions"]["high"]) * 100.0,
+            },
+        )
+        projected.add(design_id)
 
 
 async def _backfill_design_review_contracts(conn):

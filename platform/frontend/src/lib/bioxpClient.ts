@@ -14,12 +14,12 @@ export interface BioXpConnectionSnapshot {
     hardware_fresh: boolean | null;
     hardware_stale: boolean;
     hardware_evidence_error: string | null;
+    automatic_snapshot_refresh: Record<string, unknown> | null;
     capabilities: string[];
     observed_at: string | null;
-    freshness_budget_seconds: number;
+    freshness_budget_seconds: number | null;
     fresh: boolean | null;
     last_error: string | null;
-    command_active: boolean;
     startup_lifecycle: BioXpStartupLifecycle | null;
     maintenance_state: BioXpMaintenanceState | null;
     ownership: BioXpOwnership | null;
@@ -65,14 +65,6 @@ export interface BioXpStartupLifecycle {
 
 export interface BioXpStatusResponse {
     connection: BioXpConnectionSnapshot;
-    available_commands: string[];
-    available_controls: string[];
-    unavailable_commands: Record<string, string>;
-    emergency_stop: {
-        delivery_available: boolean;
-        physical_effect_verifiable: false;
-        reason?: string;
-    };
     startup_warnings: string[];
     connection_access?: {
         enabled: boolean;
@@ -118,23 +110,6 @@ export const BIOXP_CAMERA_ENDPOINTS = Object.freeze({
     snapshot: '/api/bioxp/camera/snapshot',
 });
 
-export interface BioXpCommandRecord {
-    command_id: string;
-    command: string;
-    idempotency_key: string;
-    generation: number;
-    status: 'queued' | 'acknowledged' | 'delivered_unacknowledged' | 'delivery_failed';
-    started_at: string;
-    finished_at: string;
-    remote_acknowledged: boolean;
-    physical_effect_verified: false;
-    detail: string;
-    handler_response: Record<string, unknown> | null;
-}
-
-export interface BioXpCommandHistoryResponse {
-    commands: BioXpCommandRecord[];
-}
 
 export type BioXpOperatorActionKind = 'primitive' | 'meta';
 export type BioXpOperatorSafetyClass = 'read_only' | 'service' | 'motion' | 'stop' | 'emergency';
@@ -153,8 +128,17 @@ export interface BioXpOperatorDashboardAxis {
     speed_steps_s: number | null;
     run_current: number | null;
     standby_current: number | null;
+    left_switch_state: number | null;
+    right_switch_state: number | null;
+    left_switch_raw_active: boolean | null;
+    right_switch_raw_active: boolean | null;
     left_switch_active: boolean | null;
     right_switch_active: boolean | null;
+    left_switch_disabled: boolean | null;
+    right_switch_disabled: boolean | null;
+    coordinate_contract: string | null;
+    min_steps: number | null;
+    max_steps: number | null;
     motor_temperature_c: number | null;
     motor_temperature_available: boolean;
 }
@@ -167,6 +151,23 @@ export interface BioXpOperatorDashboard {
     operation: { state: string | null; reason: string | null };
     enclosure: { door_closed: boolean | null; latch_closed: boolean | null };
     axes: BioXpOperatorDashboardAxis[];
+    z_axis: {
+        status: BioXpOperatorDashboardAxis | null;
+        provider: {
+            bound?: boolean;
+            state?: string;
+            expected_startup_stage?: string | null;
+            startup_terminal_state?: string | null;
+            reference_state?: string;
+            awaiting_observation_receipt_id?: string | null;
+            last_failure?: unknown;
+        };
+        snapshot_freshness: Record<string, unknown>;
+        last_failure: unknown;
+        authority: string;
+        board: number;
+        motor: number;
+    };
     temperatures: Array<{ sensor: string; label: string; unit: '°C'; temperature_c: number | null; available: boolean }>;
     pipettes: { ok?: boolean; channels?: Array<Record<string, unknown>>; error?: string };
     snapshot: { snapshot_id: string | null; freshness: { state?: string; age_s?: number | null; fresh_for_s?: number | null }; collection_triggered: false };
@@ -240,20 +241,22 @@ export interface BioXpOperatorActionReceipt {
     action_id: string;
     kind: BioXpOperatorActionKind;
     safety_class: BioXpOperatorSafetyClass;
-    status: 'acknowledged' | 'queued' | 'completed' | 'failed' | 'blocked';
+    status: 'acknowledged' | 'admission_pending' | 'queued' | 'completed' | 'failed' | 'blocked' | 'rejected';
     idempotency_key: string;
     ownership_generation: number;
     started_at: string;
     finished_at: string | null;
     duration_ms: number | null;
     remote_acknowledged: boolean;
-    physical_effect_verified: false;
+    controller_acknowledged: boolean;
+    physical_effect_verified: boolean;
     machine_assessment: 'pass' | 'fail' | 'unverified';
     operator_assessment: 'pass' | 'fail' | null;
     operator_note: string | null;
     operator_assessment_idempotency_key?: string | null;
     operator_assessed_at?: number | null;
     inputs: Record<string, unknown>;
+    requested_inputs?: Record<string, unknown> | null;
     response: Record<string, unknown> | null;
     error: string | null;
     stage_receipts: Record<string, unknown>[];
@@ -280,68 +283,13 @@ export function bioXpOperatorGenerationPayload(
     };
 }
 
-export type BioXpCommandName =
-    | 'activate_usb_for_service'
-    | 'collect_hardware_snapshot'
-    | 'initialize_oem_environment'
-    | 'initialize_motors'
-    | 'run_oem_motor_stage'
-    | 'record_oem_motor_stage_observation'
-    | 'collect_axis_diagnostics'
-    | 'run_axis_diagnostic'
-    | 'stop_axis_diagnostic'
-    | 'recover_motion_non_homing'
-    | 'start_job'
-    | 'pause_job'
-    | 'resume_job'
-    | 'stop_job'
-    | 'recover_runtime';
-
-export type BioXpActiveCommandName =
-    | 'activate_usb_for_service'
-    | 'collect_hardware_snapshot'
-    | 'collect_axis_diagnostics'
-    | 'run_axis_diagnostic'
-    | 'stop_axis_diagnostic'
-    | 'recover_motion_non_homing';
-
-export type BioXpCommandPayload =
-    | {
-        command: 'activate_usb_for_service';
-        expected_generation: number;
-        idempotency_key: string;
-    }
-    | {
-        command: 'recover_motion_non_homing';
-        expected_generation: number;
-        idempotency_key: string;
-    }
-    | {
-        command: 'run_axis_diagnostic';
-        expected_generation: number;
-        idempotency_key: string;
-        axis: 'x' | 'y' | 'z' | 'g' | 'door';
-        operation:
-            | 'move-negative'
-            | 'move-positive'
-            | 'home'
-            | 'commission-home'
-            | 'close'
-            | 'open'
-            | 'open-wide';
-    }
-    | {
-        command: 'stop_axis_diagnostic';
-        expected_generation: number;
-        idempotency_key: string;
-        axis: 'x' | 'y' | 'z' | 'g' | 'door';
-    };
 
 export interface BioXpProfileView {
     configured: boolean;
     valid: boolean;
     display_name: string | null;
     target_url: string | null;
+    freshness_budget_seconds: number | null;
     detail?: string;
 }
 
@@ -349,6 +297,7 @@ export interface BioXpProfileWrite {
     schema_version?: 1;
     display_name: string;
     api_url: string;
+    freshness_budget_seconds?: number | null;
 }
 
 export type BioXpProtocolStep =
@@ -398,15 +347,6 @@ export interface BioXpProtocolSubmissionResponse {
     robot_compatible: null;
 }
 
-export interface BioXpEmergencyResult {
-    idempotency_key: string;
-    generation: number;
-    attempted_at: string;
-    delivery_attempted: boolean;
-    remote_acknowledged: boolean;
-    physical_effect_verified: false;
-    detail: string;
-}
 
 export interface BioXpOemFullLifecycleProvider {
     source_contract: boolean;
@@ -471,7 +411,7 @@ export interface BioXpOemFullLifecycleRun {
 }
 
 const statusKey = ['bioxp', 'status'] as const;
-const commandHistoryKey = ['bioxp', 'commands'] as const;
+
 const profileKey = ['bioxp', 'profile'] as const;
 const jobsKey = ['bioxp', 'jobs'] as const;
 const fullLifecycleContractKey = ['bioxp', 'oem-full-lifecycle', 'contract'] as const;
@@ -499,7 +439,7 @@ function cameraImageFromResponse(response: {
     return { blob: response.data, etag, sha256, connectionGeneration };
 }
 const OPERATOR_DETAIL_LIMIT = 2_048;
-const COMMAND_RECORD_TEXT_LIMIT = 4_096;
+
 const TRUNCATED_SUFFIX = '…[truncated]';
 
 function boundedOperatorText(value: string, limit = OPERATOR_DETAIL_LIMIT): string {
@@ -537,12 +477,6 @@ function nestedOperatorDetail(value: unknown, depth = 0): string | null {
     return null;
 }
 
-export function bioXpCommandRecordText(record: BioXpCommandRecord): string {
-    const detail = boundedOperatorText(record.detail, COMMAND_RECORD_TEXT_LIMIT);
-    const upstream = nestedOperatorDetail(record.handler_response);
-    const combined = upstream && upstream !== detail ? `${detail} — ${upstream}` : detail;
-    return boundedOperatorText(combined, COMMAND_RECORD_TEXT_LIMIT);
-}
 
 export function bioXpErrorText(error: unknown): string {
     if (error && typeof error === 'object') {
@@ -564,13 +498,6 @@ export const useBioXpStatus = (enabled = true) => useQuery({
     retry: false,
 });
 
-export const useBioXpCommandHistory = (enabled = true) => useQuery({
-    queryKey: commandHistoryKey,
-    queryFn: async () => (await api.get<BioXpCommandHistoryResponse>('/api/bioxp/commands')).data,
-    enabled,
-    refetchInterval: enabled ? 2_000 : false,
-    retry: false,
-});
 
 export const useBioXpOperatorControlCatalog = (enabled = true) => useQuery({
     queryKey: operatorCatalogKey,
@@ -578,7 +505,8 @@ export const useBioXpOperatorControlCatalog = (enabled = true) => useQuery({
         await api.get<BioXpOperatorControlCatalog>('/api/bioxp/operator-controls/catalog')
     ).data,
     enabled,
-    refetchInterval: enabled ? 5_000 : false,
+    refetchInterval: enabled ? 15_000 : false,
+    refetchIntervalInBackground: false,
     retry: false,
 });
 
@@ -588,7 +516,8 @@ export const useBioXpOperatorDashboard = (enabled = true) => useQuery({
         await api.get<BioXpOperatorDashboard>('/api/bioxp/operator-controls/dashboard')
     ).data,
     enabled,
-    refetchInterval: enabled ? 5_000 : false,
+    refetchInterval: enabled ? 15_000 : false,
+    refetchIntervalInBackground: false,
     retry: false,
 });
 
@@ -610,7 +539,6 @@ export const useBioXpOperatorActionAdmission = (
         )
     ).data,
     enabled: enabled && Boolean(actionId) && connectionGeneration > 0 && ownershipGeneration > 0 && inputs !== null,
-    refetchInterval: enabled ? 5_000 : false,
     retry: false,
 });
 
@@ -620,7 +548,6 @@ export const useBioXpOperatorActionHistory = (enabled = true) => useQuery({
         await api.get<BioXpOperatorActionHistory>('/api/bioxp/operator-controls/history')
     ).data,
     enabled,
-    refetchInterval: enabled ? 2_000 : false,
     retry: false,
 });
 
@@ -636,7 +563,7 @@ export const useBioXpCameraStatus = (
         })).data;
     },
     enabled: enabled && connectionGeneration !== null,
-    refetchInterval: enabled ? 1_000 : false,
+    refetchInterval: enabled ? 5_000 : false,
     refetchIntervalInBackground: false,
     retry: false,
 });
@@ -664,7 +591,8 @@ export const useBioXpOemFullLifecycleContract = (enabled = true) => useQuery({
         await api.get<BioXpOemFullLifecycleContract>('/api/bioxp/oem-full-lifecycle/contract')
     ).data,
     enabled,
-    refetchInterval: enabled ? 10_000 : false,
+    refetchInterval: enabled ? 30_000 : false,
+    refetchIntervalInBackground: false,
     retry: false,
 });
 
@@ -700,10 +628,10 @@ const useRefreshMutation = <TVariables, TData>(
     const queryClient = useQueryClient();
     return useMutation({
         mutationFn,
-        onSuccess: async () => {
-            await Promise.all([
+        onSuccess: () => {
+            void Promise.all([
                 queryClient.invalidateQueries({ queryKey: statusKey }),
-                queryClient.invalidateQueries({ queryKey: commandHistoryKey }),
+
                 queryClient.invalidateQueries({ queryKey: profileKey }),
                 queryClient.invalidateQueries({ queryKey: jobsKey }),
                 queryClient.invalidateQueries({ queryKey: fullLifecycleContractKey }),
@@ -737,6 +665,23 @@ export const useProbeBioXp = () => useRefreshMutation(
     async () => (await api.post<BioXpConnectionSnapshot>('/api/bioxp/connection/probe')).data,
 );
 
+export const useUpdateBioXpFreshness = () => useRefreshMutation(
+    async (freshnessBudgetSeconds: number | null) => (
+        await api.put<BioXpConnectionSnapshot>('/api/bioxp/settings/freshness', {
+            freshness_budget_seconds: freshnessBudgetSeconds,
+        })
+    ).data,
+);
+
+export const useRecoverBioXpMotion = () => useRefreshMutation(
+    async ({ generation, reason }: { generation: number; reason: string }) => (
+        await api.post<Record<string, unknown>>('/api/bioxp/connection/recover-motion-non-homing', {
+            expected_generation: generation,
+            operator_reason: reason,
+        })
+    ).data,
+);
+
 export const useCompileBioXpProtocol = () => useMutation({
     mutationFn: async (protocol: BioXpProtocol) => (
         await api.post<BioXpCompiledProtocol>('/api/bioxp/protocols/compile', protocol)
@@ -755,29 +700,37 @@ export const useSubmitBioXpProtocol = () => useRefreshMutation(
     ).data,
 );
 
-export const useBioXpCommand = () => useRefreshMutation(
-    async (payload: BioXpCommandPayload) => (
-        await api.post<BioXpCommandRecord>('/api/bioxp/commands', payload)
-    ).data,
-);
 
-export const useInvokeBioXpOperatorAction = () => useRefreshMutation(
-    async ({ actionId, connectionGeneration, ownershipGeneration, inputs }: {
-        actionId: string;
-        connectionGeneration: number;
-        ownershipGeneration: number;
-        inputs: Record<string, unknown>;
-    }) => (
-        await api.post<BioXpOperatorActionReceipt>(
-            `/api/bioxp/operator-controls/actions/${encodeURIComponent(actionId)}`,
-            {
-                ...bioXpOperatorGenerationPayload(connectionGeneration, ownershipGeneration),
-                idempotency_key: crypto.randomUUID(),
-                inputs,
-            },
-        )
-    ).data,
-);
+export const useInvokeBioXpOperatorAction = () => {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: async ({ actionId, connectionGeneration, ownershipGeneration, inputs }: {
+            actionId: string;
+            connectionGeneration: number;
+            ownershipGeneration: number;
+            inputs: Record<string, unknown>;
+        }) => (
+            await api.post<BioXpOperatorActionReceipt>(
+                `/api/bioxp/operator-controls/actions/${encodeURIComponent(actionId)}`,
+                {
+                    ...bioXpOperatorGenerationPayload(connectionGeneration, ownershipGeneration),
+                    idempotency_key: crypto.randomUUID(),
+                    inputs,
+                },
+            )
+        ).data,
+        onSuccess: (receipt) => {
+            queryClient.setQueryData<BioXpOperatorActionHistory>(operatorHistoryKey, (current) => ({
+                schema_version: 'bioxp.operator_action_history.v1',
+                receipts: [
+                    receipt,
+                    ...(current?.receipts ?? []).filter((row) => row.command_id !== receipt.command_id),
+                ].slice(0, 100),
+            }));
+            void queryClient.invalidateQueries({ queryKey: statusKey });
+        },
+    });
+};
 
 export const useAssessBioXpOperatorAction = () => useRefreshMutation(
     async ({ commandId, connectionGeneration, ownershipGeneration, verdict, note }: {
@@ -833,14 +786,5 @@ export const useCancelBioXpOemFullLifecycle = () => useRefreshMutation(
                 expected_evidence_lock_sha256: evidenceLockSha256,
             },
         )
-    ).data,
-);
-
-export const useBioXpEmergencyStop = () => useRefreshMutation(
-    async ({ generation }: { generation: number }) => (
-        await api.post<BioXpEmergencyResult>('/api/bioxp/emergency-stop', {
-            expected_generation: generation,
-            idempotency_key: crypto.randomUUID(),
-        })
     ).data,
 );

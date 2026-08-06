@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
@@ -19,6 +19,73 @@ from services.shape_resources import _publish
 
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_PROFILE_REGISTRY_PATH = Path(__file__).resolve().parents[3] / "config" / "shape_blueprint" / "rfd3_profiles.json"
+_ACTIVE_PROFILE_IDS = ("rfd3_unguided_control_v1", "rfd3_ca_shape_transfer_control_v1")
+_BATCH_POLICY_REGISTRY_PATH = Path(__file__).resolve().parents[3] / "config" / "shape_blueprint" / "rfd3_batch_policies.json"
+
+
+def _canonical_json(value: object) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+
+
+def _load_profile_registry() -> tuple[dict[str, dict[str, object]], str]:
+    if _PROFILE_REGISTRY_PATH.is_symlink() or not _PROFILE_REGISTRY_PATH.is_file():
+        raise RuntimeError(f"RFD3 profile registry is unavailable: {_PROFILE_REGISTRY_PATH}")
+    registry = json.loads(_PROFILE_REGISTRY_PATH.read_text(encoding="utf-8"))
+    if not isinstance(registry, dict) or registry.get("schema") != "bms_rfd3_profile_registry_v1":
+        raise RuntimeError("RFD3 profile registry schema is invalid")
+    profiles = registry.get("profiles")
+    if not isinstance(profiles, dict):
+        raise RuntimeError("RFD3 profile registry has no profiles")
+    normalized = {str(profile_id): dict(profile) for profile_id, profile in profiles.items() if isinstance(profile, dict)}
+    if set(_ACTIVE_PROFILE_IDS) - set(normalized):
+        raise RuntimeError("RFD3 profile registry is missing an active profile")
+    registry_sha256 = hashlib.sha256(_canonical_json(registry)).hexdigest()
+    return normalized, registry_sha256
+
+
+RFD3_PROFILE_REGISTRY, RFD3_PROFILE_REGISTRY_SHA256 = _load_profile_registry()
+
+
+def _allocation_policy_sha256(policy_id: str) -> str:
+    if _BATCH_POLICY_REGISTRY_PATH.is_symlink() or not _BATCH_POLICY_REGISTRY_PATH.is_file():
+        raise RuntimeError("RFD3 batch policy registry is unavailable")
+    registry = json.loads(_BATCH_POLICY_REGISTRY_PATH.read_text(encoding="utf-8"))
+    policies = registry.get("allocation_policies") if isinstance(registry, dict) else None
+    policy = policies.get(policy_id) if isinstance(policies, dict) else None
+    if not isinstance(policy, dict):
+        raise ShapeRequestError("allocation_policy_unavailable", f"RFD3 allocation policy is unavailable: {policy_id}")
+    return hashlib.sha256(_canonical_json(policy)).hexdigest()
+
+
+def _profile_for_request(profile_id: str) -> dict[str, object]:
+    profile = RFD3_PROFILE_REGISTRY.get(profile_id)
+    if profile is None or profile.get("status") != "active_control":
+        raise ShapeRequestError("guidance_profile_unavailable", f"RFD3 guidance profile is unavailable: {profile_id}")
+    return dict(profile)
+
+
+class ShapeLengthPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["fixed", "uniform_integer_range", "deterministic_range"] = "fixed"
+    min: int = Field(ge=40, le=600)
+    max: int = Field(ge=40, le=600)
+    allocation_policy_id: Literal["fixed_length_v1", "balanced_bucket_v1"] | None = None
+    allocation_policy_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def validate_range(self) -> "ShapeLengthPolicy":
+        if self.mode == "fixed" and self.min != self.max:
+            raise ValueError("fixed Shape length policy requires min == max")
+        if self.mode != "fixed" and self.min > self.max:
+            raise ValueError("Shape length policy requires min <= max")
+        expected_policy = "fixed_length_v1" if self.mode == "fixed" else "balanced_bucket_v1"
+        if self.allocation_policy_id is None:
+            self.allocation_policy_id = expected_policy
+        elif self.allocation_policy_id != expected_policy:
+            raise ValueError("Shape length policy allocation policy does not match its mode")
+        return self
 
 
 class ShapeRequestError(ValueError):
@@ -36,13 +103,48 @@ class SubmittedShapeRequest(BaseModel):
     expected_geometry_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     expected_geometry_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     expected_point_pool_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    target_length: int = Field(ge=40, le=600)
-    num_backbones: int = Field(default=4, ge=1, le=32)
-    sequences_per_backbone: int = Field(default=2, ge=1, le=8)
+    target_length: int | None = Field(default=None, ge=40, le=600)
+    length_policy: ShapeLengthPolicy | None = None
+    num_backbones: int = Field(default=4, ge=1, le=200)
+    sequences_per_backbone: int = Field(default=0, ge=0, le=8)
     seed: int = Field(default=0, ge=0, le=2_147_483_647)
     generator: Literal["rfd3"] = "rfd3"
-    sequence_engines: tuple[Literal["proteinmpnn", "fampnn"], ...] = ("proteinmpnn", "fampnn")
+    sequence_policy: Literal["auto", "skip", "external"] = "auto"
+    sequence_engine: Literal["proteinmpnn", "fampnn"] | None = None
+    sequence_engines: tuple[Literal["proteinmpnn", "fampnn"], ...] = ()
     predictor: Literal["esmfold2"] = "esmfold2"
+    validator_suite: tuple[Literal["boltz2", "esmfold2", "protenix_v2"], ...] = (
+        "boltz2",
+        "esmfold2",
+        "protenix_v2",
+    )
+    guidance_profile: Literal["rfd3_unguided_control_v1", "rfd3_ca_shape_transfer_control_v1"] = (
+        "rfd3_ca_shape_transfer_control_v1"
+    )
+
+    @model_validator(mode="after")
+    def normalize_contract(self) -> "SubmittedShapeRequest":
+        if self.length_policy is None:
+            if self.target_length is None:
+                raise ValueError("target_length or length_policy is required")
+            self.length_policy = ShapeLengthPolicy(mode="fixed", min=self.target_length, max=self.target_length)
+        elif self.target_length is not None and (
+            self.length_policy.mode != "fixed"
+            or self.length_policy.min != self.target_length
+            or self.length_policy.max != self.target_length
+        ):
+            raise ValueError("target_length conflicts with length_policy")
+        if self.sequence_policy == "external" and self.sequence_engine is None:
+            raise ValueError("sequence_engine is required when sequence_policy is external")
+        if self.sequence_policy != "external" and self.sequence_engine is not None:
+            raise ValueError("sequence_engine is only valid with sequence_policy=external")
+        if self.sequence_policy == "skip" and self.sequences_per_backbone != 0:
+            raise ValueError("sequence_policy=skip requires sequences_per_backbone=0")
+        if self.sequence_policy == "external" and self.sequences_per_backbone == 0:
+            raise ValueError("sequence_policy=external requires sequences_per_backbone > 0")
+        if any(engine not in {"proteinmpnn", "fampnn"} for engine in self.sequence_engines):
+            raise ValueError("only ProteinMPNN and FAMPNN are supported for Shape sequence design")
+        return self
 
 
 @dataclass(frozen=True)
@@ -56,10 +158,6 @@ class StagedShapeRequest:
     launch_params: dict[str, object]
 
 
-def _canonical_json(value: object) -> bytes:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
-
-
 def _checked_artifact(root: Path, relative: str, expected_sha256: str) -> tuple[Path, bytes]:
     path = (root / relative).resolve()
     if not path.is_relative_to(root) or not path.is_file() or path.is_symlink() or path.stat().st_nlink != 1:
@@ -71,11 +169,8 @@ def _checked_artifact(root: Path, relative: str, expected_sha256: str) -> tuple[
 
 
 def _validate_sequence_engines(engines: tuple[str, ...]) -> None:
-    if tuple(engines) != ("proteinmpnn", "fampnn"):
-        raise ShapeRequestError(
-            "sequence_lanes_required",
-            "V1 requires exactly ProteinMPNN and FAMPNN in that order",
-        )
+    if len(set(engines)) != len(engines):
+        raise ShapeRequestError("sequence_engines_duplicate", "sequence engines must be unique")
 
 
 def _cleanup_new_stage(stage: Path, created: list[Path]) -> None:
@@ -123,8 +218,17 @@ async def materialize_shape_request(
             "Shape geometry lacks the canonical positive-inside 48^3 SDF",
         )
 
+    profile = _profile_for_request(submitted.guidance_profile)
+    if submitted.length_policy is None:
+        raise ShapeRequestError("length_policy_missing", "normalized Shape length policy is missing")
+    length_policy = submitted.length_policy.model_dump(mode="json")
+    allocation_policy_id = str(length_policy["allocation_policy_id"])
+    allocation_policy_sha256 = _allocation_policy_sha256(allocation_policy_id)
+    if length_policy.get("allocation_policy_sha256") not in {None, allocation_policy_sha256}:
+        raise ShapeRequestError("allocation_policy_hash_mismatch", "Shape allocation policy hash does not match the canonical registry")
+    length_policy["allocation_policy_sha256"] = allocation_policy_sha256
     spec = {
-        "schema": "bms_shape_design_request_v1",
+        "schema": "bms_shape_design_request_v2",
         "request_id": f"shape_{submitted.client_request_id}",
         "geometry_id": geometry.geometry_id,
         "geometry_sha256": geometry.geometry_sha256,
@@ -133,13 +237,23 @@ async def materialize_shape_request(
         "sdf_sha256": sdf_sha256,
         "sdf_sign": sdf_sign,
         "sdf_grid_shape": sdf_grid_shape,
-        "target_length": submitted.target_length,
+        "length_policy": length_policy,
+        "target_length": length_policy["min"] if length_policy["mode"] == "fixed" else None,
+        "candidate_count_total": submitted.num_backbones,
+        "child_batch_limit": 32,
+        "seed_root": submitted.seed,
         "num_backbones": submitted.num_backbones,
+        "candidate_batch_size": min(32, submitted.num_backbones),
         "sequences_per_backbone": submitted.sequences_per_backbone,
         "seed": submitted.seed,
         "generator": submitted.generator,
+        "sequence_policy": submitted.sequence_policy,
+        "sequence_engine": submitted.sequence_engine,
         "sequence_engines": list(submitted.sequence_engines),
         "predictor": submitted.predictor,
+        "validator_suite": list(submitted.validator_suite),
+        "guidance_profile": profile,
+        "guidance_profile_registry_sha256": RFD3_PROFILE_REGISTRY_SHA256,
     }
     request_sha256 = hashlib.sha256(_canonical_json(spec)).hexdigest()
     request_id = str(spec["request_id"])
@@ -237,13 +351,20 @@ def _staged(row: ShapeDesignRequest, *, data_root: Path, name: str) -> StagedSha
         "shape_geometry_id": row.geometry_id,
         "shape_geometry_sha256": row.request_spec["geometry_sha256"],
         "shape_point_pool_sha256": row.request_spec["point_pool_sha256"],
-        "shape_target_length": row.request_spec["target_length"],
+        "shape_length_policy": json.dumps(row.request_spec["length_policy"], sort_keys=True, separators=(",", ":")),
+        "shape_target_length": row.request_spec.get("target_length") or row.request_spec["length_policy"]["min"],
         "shape_num_backbones": row.request_spec["num_backbones"],
+        "shape_candidate_batch_size": row.request_spec["candidate_batch_size"],
         "shape_sequences_per_backbone": row.request_spec["sequences_per_backbone"],
+        "shape_sequence_policy": row.request_spec["sequence_policy"],
+        "shape_sequence_engine": row.request_spec.get("sequence_engine"),
+        "shape_validator_suite": ",".join(row.request_spec["validator_suite"]),
         "shape_seed": row.request_spec["seed"],
         "shape_generator": "rfd3",
-        "shape_sequence_engines": "proteinmpnn,fampnn",
+        "shape_sequence_engines": ",".join(row.request_spec.get("sequence_engines", [])),
         "shape_predictor": "esmfold2",
+        "shape_guidance_profile": row.request_spec["guidance_profile"]["id"],
+        "shape_guidance_profile_registry_sha256": row.request_spec["guidance_profile_registry_sha256"],
         "msa_provider": "local",
     }
     return StagedShapeRequest(

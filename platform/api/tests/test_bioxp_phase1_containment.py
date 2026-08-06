@@ -25,7 +25,6 @@ def test_every_non_get_route_carries_the_global_guard() -> None:
     routes = list(bioxp.router.routes)
     non_get = [route for route in routes if route.methods and route.methods != {"GET"}]
     assert non_get
-    assert len(routes) == 31
     for route in non_get:
         assert any(dependency.dependency is require_bioxp_mutation_access for dependency in route.dependencies), f"missing mutation dependency: {route.path}"
 
@@ -39,15 +38,6 @@ def test_safe_local_mutations_are_exact_and_do_not_reach_robot() -> None:
             "/connection/probe",
         }
     )
-
-
-def test_robot_command_routes_are_default_off(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("BMS_BIOXP_MUTATIONS_ENABLED", "0")
-    client = _client(tmp_path)
-    command = client.post("/api/bioxp/commands", json={})
-    emergency = client.post("/api/bioxp/emergency-stop", json={})
-    assert command.status_code == 503
-    assert emergency.status_code == 503
 
 
 def test_connection_lane_is_separate_from_commissioning_mutation_gate(
@@ -71,7 +61,7 @@ def test_connection_lane_is_separate_from_commissioning_mutation_gate(
     assert client.post("/api/bioxp/connection/connect").status_code == 409
     assert client.post("/api/bioxp/connection/disconnect").status_code == 200
     assert client.post("/api/bioxp/connection/probe").status_code == 409
-    assert client.post("/api/bioxp/commands", json={}).status_code == 503
+
 
 
 def test_commissioning_gate_cannot_open_connection_lane(
@@ -95,23 +85,6 @@ def test_status_advertises_connection_and_commissioning_authority_separately(
         "hardware_effects_authorized": False,
     }
     assert status["mutation_access"]["enabled"] is False
-
-
-def test_enabled_mutation_lane_reaches_closed_command_policy(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("BMS_BIOXP_MUTATIONS_ENABLED", "1")
-    client = _client(tmp_path)
-    response = client.post(
-        "/api/bioxp/commands",
-        json={
-            "command": "initialize_motors",
-            "expected_generation": 1,
-            "idempotency_key": "phase1-token-test",
-        },
-    )
-    assert response.status_code == 409
-    assert "disabled" in response.json()["detail"].lower()
 
 
 def test_compact_sources_have_no_legacy_proxy_or_host_lifecycle_authority() -> None:

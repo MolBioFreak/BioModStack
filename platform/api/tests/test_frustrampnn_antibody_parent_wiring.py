@@ -124,3 +124,10 @@ def test_antibody_enabled_results_follow_actual_publisher_outputs() -> None:
     assert "marker['result']" in reporter
     assert "marker['manifest']" in reporter
     assert "marker['source']" in reporter
+    assert "Path('${workflow.launchDir}')" in reporter
+    assert "relative_to(job_root)" in reporter
+    assert "parts = raw_value.split('/')" in reporter
+    assert "any(part in {'', '.', '..'} for part in parts)" in reporter
+    assert "or '\\\\\\\\' in raw_value" in reporter
+    assert "cursor.is_symlink()" in reporter
+    assert "result_path = resolve_job_output(marker['result'])" in reporter

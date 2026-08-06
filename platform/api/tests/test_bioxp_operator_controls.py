@@ -7,7 +7,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from routers import bioxp
-from services.bioxp.errors import ConnectionStateError
+from routers.bioxp.operator_controls import _translate_robot_error
+from services.bioxp.errors import ConnectionStateError, RobotResponseError
 from services.bioxp.operator_semantic_quarantine import OPERATOR_SEMANTIC_QUARANTINE_BY_PATH
 from services.bioxp.robot_client import DEFAULT_ROBOT_ROUTES
 
@@ -23,7 +24,16 @@ def catalog():
         "motion": {"enabled": False, "reason": "Motion is inactive."},
         "operation": {"state": "stopped", "reason": "ready"},
         "enclosure": {"door_closed": True, "latch_closed": True},
-        "axes": [{"axis": "x", "reference": "referenced", "position_steps": 123, "speed_steps_s": 0, "run_current": 31, "standby_current": 8, "left_switch_active": False, "right_switch_active": True, "motor_temperature_c": None, "motor_temperature_available": False}],
+        "axes": [{"axis": "x", "reference": "referenced", "position_steps": 123, "speed_steps_s": 0, "run_current": 31, "standby_current": 8, "left_switch_raw_active": False, "right_switch_raw_active": True, "left_switch_active": False, "right_switch_active": True, "motor_temperature_c": None, "motor_temperature_available": False}],
+        "z_axis": {
+            "status": None,
+            "provider": {"bound": True, "state": "prepared_unreferenced"},
+            "snapshot_freshness": {"state": "fresh"},
+            "last_failure": None,
+            "authority": "Serial206OemInitializationProvider",
+            "board": 4,
+            "motor": 1,
+        },
         "temperatures": [{"sensor": "tc_temp_c", "label": "Thermal cycler block", "unit": "°C", "temperature_c": 37.0, "available": True}],
         "pipettes": {"ok": True, "channels": [{"channel": 0, "available": True}]},
         "snapshot": {"snapshot_id": "snap-1", "freshness": {"state": "fresh", "age_s": 1.0, "fresh_for_s": 30.0}, "collection_triggered": False},
@@ -84,12 +94,18 @@ def receipt(*, action_id="motion.home_xy", key="invoke-12345678", command_id="cm
         "finished_at": "2026-07-30T18:00:01Z",
         "duration_ms": 1000,
         "remote_acknowledged": True,
+        "controller_acknowledged": True,
+        "controller_terminal_state_verified": True,
         "physical_effect_verified": False,
         "machine_assessment": "unverified",
         "operator_assessment": None,
         "operator_note": None,
         "inputs": {},
         "response": {"controller_acknowledged": True},
+        "authority_receipt_id": "authority-command-1",
+        "authority_receipt_status": "completed",
+        "observation_receipt_id": None,
+        "observes_command_id": None,
         "error": None,
         "stage_receipts": [],
     }
@@ -131,6 +147,7 @@ class FakeConnection:
     def __init__(self):
         self.client = FakeRobotClient()
         self.value = FakeSnapshot()
+        self.safety_interrupt_calls = []
 
     def snapshot(self):
         return self.value
@@ -141,6 +158,22 @@ class FakeConnection:
                 f"BioXP connection generation changed: expected {expected_generation}, current {self.value.generation}"
             )
         assert require_fresh is True
+        return await self.client.request(route_name, **kwargs)
+
+    async def request_active_query(self, route_name, *, expected_generation, require_fresh=True, **kwargs):
+        return await self.request_active(
+            route_name,
+            expected_generation=expected_generation,
+            require_fresh=require_fresh,
+            **kwargs,
+        )
+
+    async def request_active_safety_interrupt(self, route_name, *, expected_generation, **kwargs):
+        if expected_generation != self.value.generation:
+            raise ConnectionStateError(
+                f"BioXP connection generation changed: expected {expected_generation}, current {self.value.generation}"
+            )
+        self.safety_interrupt_calls.append((route_name, kwargs))
         return await self.client.request(route_name, **kwargs)
 
 
@@ -154,6 +187,17 @@ def make_client(monkeypatch, *, mutations=True):
     app.state.bioxp_runtime = runtime
     app.include_router(bioxp.router, prefix="/api/bioxp")
     return TestClient(app), runtime
+
+
+def test_robot_409_translation_preserves_structured_detail():
+    detail = {"error": "action_unavailable", "reason": {"key": "z_switch_masks_clear", "met": False}}
+    translated = _translate_robot_error(RobotResponseError(409, detail))
+    assert translated.status_code == 409
+    assert translated.detail == {
+        "error": "bioxp_robot_response_error",
+        "robot_status": 409,
+        "robot_detail": detail,
+    }
 
 
 def test_robot_client_uses_fixed_operator_routes_only():
@@ -198,6 +242,8 @@ def test_dashboard_and_input_admission_are_robot_owned(monkeypatch):
     })
     assert dashboard.status_code == 200, dashboard.text
     assert dashboard.json()["motion"]["enabled"] is False
+    assert dashboard.json()["axes"][0]["left_switch_raw_active"] is False
+    assert dashboard.json()["axes"][0]["right_switch_raw_active"] is True
     assert dashboard.json()["axes"][0]["motor_temperature_available"] is False
     assert dashboard.json()["temperatures"][0]["label"] == "Thermal cycler block"
     assert dashboard.json()["temperatures"][0]["unit"] == "°C"
@@ -221,7 +267,6 @@ def test_one_invocation_maps_to_one_action_id_not_a_browser_path(monkeypatch):
     assert response.status_code == 200
     assert response.json()["physical_effect_verified"] is False
     assert runtime.connection.client.calls == [
-        ("operator_control_catalog", {}),
         (
             "invoke_operator_action",
         {
@@ -233,6 +278,78 @@ def test_one_invocation_maps_to_one_action_id_not_a_browser_path(monkeypatch):
             },
         },
     )]
+
+
+def test_z_stop_invocation_skips_catalog_preflight_but_keeps_generation_contract(monkeypatch):
+    client, runtime = make_client(monkeypatch)
+    runtime.connection.client.responses["invoke_operator_action"] = receipt(
+        action_id="oem.z.stop",
+        key="z-stop-12345678",
+        command_id="z-stop-command-1",
+    )
+
+    response = client.post("/api/bioxp/operator-controls/actions/oem.z.stop", json={
+        "expected_connection_generation": 77,
+        "expected_ownership_generation": 7,
+        "idempotency_key": "z-stop-12345678",
+        "inputs": {},
+    })
+
+    assert response.status_code == 200, response.text
+    assert response.json()["action_id"] == "oem.z.stop"
+    assert runtime.connection.safety_interrupt_calls == [(
+        "invoke_operator_action",
+        {
+            "path_params": {"action_id": "oem.z.stop"},
+            "json_data": {
+                "expected_generation": 7,
+                "idempotency_key": "z-stop-12345678",
+                "inputs": {},
+            },
+        },
+    )]
+    assert runtime.connection.client.calls == [(
+        "invoke_operator_action",
+        {
+            "path_params": {"action_id": "oem.z.stop"},
+            "json_data": {
+                "expected_generation": 7,
+                "idempotency_key": "z-stop-12345678",
+                "inputs": {},
+            },
+        },
+    )]
+
+    runtime.connection.client.calls.clear()
+    stale = client.post("/api/bioxp/operator-controls/actions/oem.z.stop", json={
+        "expected_connection_generation": 999,
+        "expected_ownership_generation": 7,
+        "idempotency_key": "z-stop-stale-12345678",
+        "inputs": {},
+    })
+    assert stale.status_code == 409
+    assert "connection generation changed" in stale.json()["detail"].lower()
+    assert runtime.connection.client.calls == []
+
+
+def test_z_abort_invocation_uses_independent_interrupt_lane(monkeypatch):
+    client, runtime = make_client(monkeypatch)
+    runtime.connection.client.responses["invoke_operator_action"] = receipt(
+        action_id="oem.z.abort",
+        key="z-abort-12345678",
+        command_id="z-abort-command-1",
+    )
+
+    response = client.post("/api/bioxp/operator-controls/actions/oem.z.abort", json={
+        "expected_connection_generation": 77,
+        "expected_ownership_generation": 7,
+        "idempotency_key": "z-abort-12345678",
+        "inputs": {},
+    })
+
+    assert response.status_code == 200, response.text
+    assert response.json()["action_id"] == "oem.z.abort"
+    assert runtime.connection.safety_interrupt_calls[0][1]["path_params"] == {"action_id": "oem.z.abort"}
 
 
 def test_receipt_identity_mismatch_fails_closed(monkeypatch):
@@ -381,7 +498,7 @@ def test_semantically_unproven_operator_paths_are_visible_but_never_mutation_rel
 
     assert runtime.connection.client.calls == [
         ("operator_control_catalog", {})
-        for _ in range(len(_FIXED_QUARANTINE_CASES) * 2)
+        for _ in range(len(_FIXED_QUARANTINE_CASES))
     ]
 
 

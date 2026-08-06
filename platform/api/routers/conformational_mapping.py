@@ -35,6 +35,7 @@ from paths import (
     get_results_dir,
     get_container_dir,
     get_weights_root,
+    get_work_dir,
 )
 from services.conformational_mapping.contracts import candidate_id, canonical_sha256, validate_schema
 from services.conformational_mapping.import_stager import (
@@ -224,6 +225,66 @@ def _server_confornets_identity() -> dict[str, str]:
         "feature_identity_sha256": canonical_sha256({"coordinate_emission": "write_time_v1"}),
         "repo_path": "/opt/confornets",
     }
+
+
+async def _ensure_managed_confornets_checkpoint(
+    session: AsyncSession,
+) -> ConformationalMappingSource | None:
+    """Expose one server-owned checkpoint identity without accepting a host path."""
+    checkpoint = get_weights_root() / "openfold3" / "of3-p2-155k.pt"
+    if not checkpoint.is_file() or checkpoint.is_symlink():
+        return None
+    digest = _sha256_path(checkpoint)
+    size = checkpoint.stat().st_size
+    existing_by_digest = (
+        await session.execute(
+            select(ConformationalMappingSource).where(
+                ConformationalMappingSource.source_kind == "confornets_checkpoint",
+                ConformationalMappingSource.content_sha256 == digest,
+                ConformationalMappingSource.immutable.is_(True),
+            )
+        )
+    ).scalars().all()
+    if len(existing_by_digest) == 1:
+        existing = existing_by_digest[0]
+        if existing.size_bytes != size or existing.principal_id != _PERSONAL_WORKFLOW_PRINCIPAL:
+            raise HTTPException(status_code=503, detail="managed ConforNets checkpoint identity conflicts")
+        return existing
+    if len(existing_by_digest) > 1:
+        raise HTTPException(status_code=503, detail="managed ConforNets checkpoint identity is ambiguous")
+    source_id = f"cm_src_server_confornets_checkpoint_{digest[:32]}"
+    existing = await session.get(ConformationalMappingSource, source_id)
+    if existing is not None:
+        if (
+            existing.source_kind != "confornets_checkpoint"
+            or existing.content_sha256 != digest
+            or existing.size_bytes != size
+            or existing.storage_root != str(get_weights_root())
+            or existing.relative_path != "openfold3/of3-p2-155k.pt"
+            or not existing.immutable
+        ):
+            raise HTTPException(status_code=503, detail="managed ConforNets checkpoint identity conflicts")
+        return existing
+    managed = ConformationalMappingSource(
+        source_id=source_id,
+        principal_id=_PERSONAL_WORKFLOW_PRINCIPAL,
+        source_kind="confornets_checkpoint",
+        storage_root=str(get_weights_root()),
+        relative_path="openfold3/of3-p2-155k.pt",
+        content_sha256=digest,
+        size_bytes=size,
+        metadata_json={
+            "managed": True,
+            "asset_id": "confornets.of3p2.checkpoint",
+            "model_id": "of3-p2-155k",
+            "provenance": "server-owned immutable runtime asset",
+        },
+        immutable=True,
+        created_at=datetime.utcnow(),
+    )
+    session.add(managed)
+    await session.flush()
+    return managed
 
 
 def _runtime_registry(backend: str) -> dict[str, Any]:
@@ -606,6 +667,7 @@ async def submit_request(
     session: AsyncSession = Depends(get_session),
 ):
     principal_id = _mutation_principal(request)
+    await _ensure_managed_confornets_checkpoint(session)
     params: dict[str, Any] = {
         "backend": body.backend,
         "ordered_seeds": body.ordered_seeds,
@@ -640,6 +702,7 @@ async def submit_request(
             or len({snapshot.get("target_id") for snapshot in snapshots}) != len(snapshots)
         ):
             raise HTTPException(status_code=422, detail="registered snapshot order or target identity is invalid")
+        snapshot_payload = snapshots
         params["targets"] = [
             {"target_id": snapshot["target_id"], "target_order": index}
             for index, snapshot in enumerate(snapshots)
@@ -755,7 +818,11 @@ async def submit_request(
                 [_registered(snapshot_source)], principal_id=principal_id,
                 destination_root=root / "registered_snapshot",
             )[snapshot_source.source_id]
-            (root / "cm_complex_snapshots_v1.json").write_bytes(staged_snapshot.read_bytes())
+            snapshot_payload = snapshots if isinstance(snapshots, list) else [snapshots]
+            (root / "cm_complex_snapshots_v1.json").write_text(
+                json.dumps(snapshot_payload, sort_keys=True, separators=(",", ":")),
+                encoding="utf-8",
+            )
         if confor_sources:
             staged_assets = stage_registered_assets(
                 [_registered(source) for source in confor_sources],
@@ -880,7 +947,7 @@ async def request_status(
     job = await session.get(Job, record.job_id)
     status = record.status
     progress = record.progress_json
-    failure_receipt = record.failure_receipt_json
+    failure_receipt = record.failure_receipt_json if status == "failed" else None
     if job is not None and record.status not in {"completed", "failed", "cancelled"}:
         job_state = str(job.status or job.queue_status or "").lower()
         if job_state == "running" and record.status == "queued":
@@ -1188,6 +1255,9 @@ async def retry_request(
     job.completed_at = None
     job.nextflow_run_id = None
     job.retry_count = int(job.retry_count or 0) + 1
+    retry_params = dict(job.params or {})
+    retry_params["resume_work_dir"] = str(get_work_dir())
+    job.params = retry_params
     await transition_request(
         session, record, status="queued",
         progress={"phase": "queued", "completed_coordinates": 0},

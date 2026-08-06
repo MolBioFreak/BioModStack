@@ -92,22 +92,21 @@ Current capabilities include:
 - explicit profile save/forget with masked readback
 - process-local connect, disconnect, and bounded readiness probe
 - orthogonal configured/active/reachable/runtime/hardware/freshness evidence
+- robot-owned operator catalog, admission, invocation, and durable receipts
+- typed non-homing recovery relay with robot-owned completion authority
+- physical aggregate emergency stop through the robot operator plane
 - deterministic offline protocol validation
 - persistent local jobs with append-only transition events
-- server-advertised typed command admission with default mappings disabled
-- emergency-stop delivery evidence without a physical-effect claim
 
 Current operational caveats:
 
-- BMS exposes a bounded control plane, not an arbitrary robot proxy. The compact
-  API owns one saved profile, one process-local connection, local protocol
-  validation, persistent local job truth, bounded command admission, and
-  emergency-stop delivery evidence.
-- Startup always remains disconnected, even when a profile is saved. An operator
-  must explicitly connect, and stale or unknown readiness never authorizes a
-  normal command.
-- Normal OEM command mappings remain disabled until their online robot contract
-  is verified. Offline protocol validation does not claim compatibility or
+- BMS is a typed presentation and connection layer, not an arbitrary robot proxy
+  or a second BioXP command authority.
+- Production BioXP linkage is intentionally disabled; current work uses the
+  Development `test` environment and selected robot runtime only.
+- Stale or unknown connection/ownership generations never authorize a mutation.
+  The robot decides action readiness and admission.
+- Offline protocol validation does not claim robot compatibility or
   executability.
 - Repeated camera/UVC control-query failures and the historical Novo USB/CAN
   reset pattern should be documented as unresolved transport/recovery

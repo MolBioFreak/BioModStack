@@ -561,6 +561,14 @@ async def _assert_identical_replay(
 
 def _apply_canonical_projection(design: Design, bundle: ValidatedResultBundle) -> None:
     result = bundle.terminal_result
+    summary = bundle.summary
+    # These compact scalar columns are the shared Design/AnalyticsDashboard
+    # projection of the immutable canonical summary. Per-residue authority
+    # remains exclusively in FrustraMPNNLandscapeRow and is never synthesized
+    # into the historical JSON/CSV fields.
+    design.frustration_high_count = int(summary["native_slot_counts"]["high"])
+    design.frustration_min_count = int(summary["native_slot_counts"]["minimal"])
+    design.frustration_pct_high = float(summary["native_slot_fractions"]["high"]) * 100.0
     design.frustrampnn_contract_version = str(result["component_contract_version"])
     design.frustrampnn_status = result["status"]
     design.frustrampnn_source_sha256 = bundle.request["source_artifact"]["sha256"]
@@ -631,6 +639,11 @@ async def ingest_result_bundle(
                 artifact_values,
                 landscape_values,
             )
+            if design is not None:
+                _apply_canonical_projection(design, bundle)
+                await session.flush()
+                if commit:
+                    await session.commit()
             return existing
 
         result_values = _result_values(
@@ -639,6 +652,10 @@ async def ingest_result_bundle(
 
         result = FrustraMPNNResult(**result_values)
         session.add(result)
+        # SQLite enforces the composite child foreign keys in production. Flush
+        # the immutable parent authority before adding artifacts and landscape
+        # rows; ORM add order alone does not establish that dependency here.
+        await session.flush()
         session.add_all(FrustraMPNNArtifact(**values) for values in artifact_values)
         session.add_all(
             FrustraMPNNLandscapeRow(**values) for values in landscape_values

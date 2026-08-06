@@ -391,14 +391,16 @@ def _validate_native_tree(native_root: Path) -> list[str]:
         by_basename[PurePosixPath(relative).name].append(relative)
     collisions: list[str] = []
     for basename, relatives in by_basename.items():
-        if len(relatives) < 2:
+        if len(relatives) < 2 or basename not in _LEGACY_REQUIRED:
             continue
         hashes = {_sha256_file(native_root / relative) for relative in relatives}
         copied_raw_pair = any(relative.startswith("raw/") for relative in relatives)
         if len(hashes) != 1 or not copied_raw_pair:
             collisions.append(basename)
     if collisions:
-        raise FinalizationError(f"native hierarchy contains basename collision: {sorted(collisions)}")
+        raise FinalizationError(
+            f"native hierarchy contains protected control basename collision: {sorted(collisions)}"
+        )
     return files
 
 
@@ -559,11 +561,18 @@ def _validate_single_chain(
         raise FinalizationError("native settings do not match canonical settings")
     if legacy_request.get("backend_identity") != settings["backend_identity"]:
         raise FinalizationError("native backend identity does not match canonical settings")
-    if legacy_request.get("canonical_binding") != {
+    expected_binding = {
         "request_sha256": request["request_sha256"],
         "coordinate_plan_sha256": plan["coordinate_plan_sha256"],
         "target_id": request["targets"][0]["target_id"],
-    }:
+    }
+    mapped_binding = {
+        **expected_binding,
+        "coordinate_mapping": {
+            "target_id": {"constant": request["targets"][0]["target_id"]},
+        },
+    }
+    if legacy_request.get("canonical_binding") not in (expected_binding, mapped_binding):
         raise FinalizationError("native request canonical binding mismatch")
     return legacy_request
 

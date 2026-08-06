@@ -132,6 +132,73 @@ async def test_retry_never_downgrades_completed_request_from_stale_failed_job(mo
     assert record.status == "completed"
 
 
+@pytest.mark.asyncio
+async def test_retry_uses_authoritative_nextflow_work_dir_for_resume(monkeypatch, tmp_path) -> None:
+    record = SimpleNamespace(status="failed", job_id="job-1")
+    job = SimpleNamespace(
+        id="job-1", status="failed", queue_status="failed", error_message="failed",
+        started_at=datetime.utcnow(), completed_at=datetime.utcnow(), nextflow_run_id="123",
+        retry_count=1, params={"cm_request_path": "/results/request.json"},
+    )
+
+    async def authorized(*_args, **_kwargs):
+        return record
+
+    async def transition(_session, target, *, status, progress, **_kwargs):
+        target.status = status
+        target.progress_json = progress
+
+    class Session:
+        async def get(self, *_args, **_kwargs):
+            return job
+
+        async def commit(self):
+            return None
+
+    work_dir = tmp_path / "work"
+    monkeypatch.setattr(cm_router, "_authorized_record", authorized)
+    monkeypatch.setattr(cm_router, "transition_request", transition)
+    monkeypatch.setattr(cm_router, "get_work_dir", lambda: work_dir)
+
+    result = await retry_request(
+        "request-1", _http_request(client_host="127.0.0.1"), Session()
+    )
+
+    assert result == {
+        "request_id": "request-1", "job_id": "job-1", "status": "queued", "retry_count": 2,
+    }
+    assert job.params == {
+        "cm_request_path": "/results/request.json", "resume_work_dir": str(work_dir),
+    }
+    assert job.nextflow_run_id is None
+    assert record.status == "queued"
+
+
+@pytest.mark.asyncio
+async def test_completed_request_does_not_project_historical_failure_as_current(monkeypatch) -> None:
+    record = SimpleNamespace(
+        request_id="request-1", job_id="job-1", backend="confornets",
+        status="completed", progress_json={"phase": "completed"},
+        failure_receipt_json={"terminal_state": "failed", "message": "historical"},
+        result_contract_id="conformational_mapping_confornets_v1",
+    )
+    job = SimpleNamespace(status="completed")
+
+    async def authorized(*_args, **_kwargs):
+        return record
+
+    class ReadOnlySession:
+        async def get(self, *_args, **_kwargs):
+            return job
+
+    monkeypatch.setattr(cm_router, "_authorized_record", authorized)
+    result = await request_status(
+        "request-1", _http_request(client_host="127.0.0.1"), ReadOnlySession()
+    )
+    assert result["status"] == "completed"
+    assert result["failure_receipt"] is None
+
+
 def test_cm11_api_typed_submission_rejects_unknown_fields() -> None:
     SubmitRequest.model_validate(_body())
     with pytest.raises(ValidationError):
@@ -195,6 +262,9 @@ async def test_cm11_api_lifecycle_survives_session_restart(tmp_path: Path) -> No
         receipt = {"schema_name": "cm_failure_receipt", "schema_version": 1, "request_id": "r", "message": "bounded failure"}
         await transition_request(session, restored, status="failed", failure_receipt=receipt)
         await session.commit()
+        assert await session.scalar(select(ConformationalMappingRecord).where(ConformationalMappingRecord.record_type == "failure_receipt"))
+        await transition_request(session, restored, status="queued", progress={"phase": "queued"})
+        assert restored.failure_receipt_json is None
         assert await session.scalar(select(ConformationalMappingRecord).where(ConformationalMappingRecord.record_type == "failure_receipt"))
     await engine.dispose()
 

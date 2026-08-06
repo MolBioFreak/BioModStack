@@ -53,7 +53,7 @@ export UV_CACHE_DIR="${UV_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/biomodstack
 mkdir -p "$UV_CACHE_DIR"
 
 API_MODE_RAW="${BMS_API_MODE:-dev}"
-API_RELOAD_RAW="${BMS_API_RELOAD:-1}"
+API_RELOAD_RAW="${BMS_API_RELOAD:-0}"
 CPU_POWER_STRICT_RAW="${BMS_CPU_POWER_STRICT:-1}"
 RAPL_ENERGY_PATH="${BMS_CPU_POWER_RAPL_PATH:-/sys/class/powercap/intel-rapl:0/energy_uj}"
 

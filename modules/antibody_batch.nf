@@ -22,11 +22,7 @@ process BatchBoltzValidation {
     label 'gpu'
     container "${params.container_dir}/boltz2.sif"
 
-    // CRITICAL: Publish validated structures and confidence scores to output directory
-    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "predictions/*.pdb"
-    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "predictions/*.cif"
-    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "predictions/*.json"
-    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "predictions/*.npz"
+    // Stage raw Boltz artifacts; alignment runs in the dedicated PyRosetta container below.
     publishDir "${params.out_dir}/run/boltz", mode: 'copy', pattern: "*.log"
 
     input:
@@ -35,9 +31,10 @@ process BatchBoltzValidation {
     path msa
 
     output:
-    path "predictions/*.pdb", emit: pdbs
-    path "predictions/*.json", emit: scores
-    path "predictions/*.npz", emit: aligned_error, optional: true
+    path "*_boltzpred.pdb", emit: raw_pdbs
+    path "*_boltzpred.json", emit: raw_scores
+    path "*_boltzpred.pae.npz", emit: raw_aligned_error
+    path "original_designs/*.pdb", emit: original_designs
     path "boltz_batch.log"
 
     script:
@@ -51,6 +48,7 @@ process BatchBoltzValidation {
     def boltzAnchorArgs = anchor_target ? "--anchor_target --target_chains \"${resolvedTargetChains}\" --template_manifest target_templates/manifest.json" : ""
     def boltzBatchCache = shellQuote(params.get('boltz_models', '') ?: '')
     def boltzBatchCacheFallback = shellQuote("${params.get('data_root', '') ?: params.get('code_root', '.')}/cache/boltz")
+    def boltzHomeFallback = shellQuote("${params.get('data_root', '') ?: params.get('code_root', '.')}/cache/boltz/home")
     """
     set -euo pipefail
     shopt -s nullglob
@@ -79,16 +77,26 @@ process BatchBoltzValidation {
     # This loads the model ONCE and processes all sequences.
     # Keep heavyweight Boltz checkpoints in the shared BMS model/cache path;
     # never let Boltz repopulate HOME/.boltz inside each Nextflow task work dir.
+    # The shared model cache may be read-only in Apptainer; keep only HOME writable.
     BOLTZ_SHARED_CACHE=${boltzBatchCache}
     if [ -z "\$BOLTZ_SHARED_CACHE" ]; then
         BOLTZ_SHARED_CACHE=${boltzBatchCacheFallback}
+    fi
+    # The managed container binds the host Boltz model directory at /boltzcache.
+    if [ -d /boltzcache ]; then
+        BOLTZ_SHARED_CACHE=/boltzcache
     fi
     export BOLTZ_CACHE_DIR="\$BOLTZ_SHARED_CACHE"
     export BOLTZ_CACHE="\$BOLTZ_SHARED_CACHE"
     export NUMBA_CACHE_DIR="\$(pwd)/.numba_cache"
     export XDG_CACHE_HOME="\$(pwd)/.cache_home"
     export HOME="\$BOLTZ_SHARED_CACHE/home"
-    mkdir -p "\$BOLTZ_CACHE_DIR" "\$NUMBA_CACHE_DIR" "\$XDG_CACHE_HOME" "\$HOME"
+    mkdir -p "\$BOLTZ_CACHE_DIR" "\$NUMBA_CACHE_DIR" "\$XDG_CACHE_HOME"
+    if ! mkdir -p "\$HOME" 2>/dev/null; then
+        BOLTZ_HOME_FALLBACK=${boltzHomeFallback}
+        mkdir -p "\$BOLTZ_HOME_FALLBACK"
+        export HOME="\$BOLTZ_HOME_FALLBACK"
+    fi
     
     boltz predict yamls/ \\
         --cache "\$BOLTZ_CACHE_DIR" \\
@@ -152,18 +160,49 @@ process BatchBoltzValidation {
     # We need access to the original un-repacked templates to calculate RMSD
     # The originals are in 'pdbs' (the input chunk).
     mkdir -p original_designs
-    cp \${pdbs} original_designs/
+    cp ${pdbs} original_designs/
     original_design_count=\$(find original_designs -maxdepth 1 -name '*.pdb' | wc -l)
     if [ "\$original_design_count" -eq 0 ]; then
         echo "[BatchBoltzValidation] ERROR: No original design PDBs were staged for RMSD alignment" >&2
         exit 1
     fi
+    """
+}
 
-    export MAMBA_ROOT_PREFIX=/opt/conda/
-    eval "\$(micromamba shell hook --shell bash)"
-    micromamba activate pyrosetta
+process AlignBoltzValidation {
+    label 'pyrosetta_tools'
 
-    # Run alignment script
+    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "predictions/*.pdb"
+    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "predictions/*.json"
+    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "predictions/*.npz"
+    publishDir "${params.out_dir}/run/boltz", mode: 'copy', pattern: "alignment_batch.log"
+
+    input:
+    path raw_pdbs
+    path raw_scores
+    path raw_aligned_error
+    path original_designs
+
+    output:
+    path "predictions/*.pdb", emit: pdbs
+    path "predictions/*.json", emit: scores
+    path "predictions/*.npz", emit: aligned_error
+    path "alignment_batch.log"
+
+    script:
+    def resolvedBinderChains = params.antibody_chains ?: params.binder_chains ?: 'H,L'
+    def resolvedTargetChains = params.antigen_chains ?: params.target_chains ?: 'T'
+    def anchor_target = (params.boltz_anchor_target == true || params.boltz_anchor_target == 'true')
+    def geometryMode = params.boltz_target_geometry_mode ?: (anchor_target ? 'conditioned' : 'flexible')
+    def anchor_strict = (params.boltz_anchor_strict == true || params.boltz_anchor_strict == 'true')
+    def anchor_target_rmsd = params.boltz_anchor_target_max_rmsd ?: 1.5
+    def boltzStrictArgs = (anchor_target && anchor_strict) ? "--strict_target_rmsd ${anchor_target_rmsd}" : ""
+    """
+    set -euo pipefail
+
+    mkdir -p original_designs predictions
+    cp ${original_designs} original_designs/
+
     python3 ${params.code_root}/scripts/align_boltz.py \\
         --design_dir ./original_designs \\
         --boltz_dir ./ \\
@@ -177,9 +216,10 @@ process BatchBoltzValidation {
 
     aligned_pdb_count=\$(find predictions -maxdepth 1 -name '*.pdb' | wc -l)
     aligned_json_count=\$(find predictions -maxdepth 1 -name '*.json' | wc -l)
-    echo "[BatchBoltzValidation] Alignment outputs: pdb=\$aligned_pdb_count json=\$aligned_json_count"
-    if [ "\$aligned_pdb_count" -eq 0 ] || [ "\$aligned_json_count" -eq 0 ]; then
-        echo "[BatchBoltzValidation] ERROR: RMSD alignment produced no usable PDB/JSON outputs" >&2
+    aligned_pae_count=\$(find predictions -maxdepth 1 -name '*.npz' | wc -l)
+    echo "[AlignBoltzValidation] Alignment outputs: pdb=\$aligned_pdb_count json=\$aligned_json_count pae=\$aligned_pae_count"
+    if [ "\$aligned_pdb_count" -eq 0 ] || [ "\$aligned_json_count" -eq 0 ] || [ "\$aligned_pae_count" -eq 0 ]; then
+        echo "[AlignBoltzValidation] ERROR: alignment produced incomplete PDB/JSON/PAE outputs" >&2
         exit 1
     fi
     """

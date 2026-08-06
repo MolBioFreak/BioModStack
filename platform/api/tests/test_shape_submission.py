@@ -101,6 +101,23 @@ async def test_shape_request_materializes_closed_hash_bound_bundle(tmp_path: Pat
             assert persisted is not None
             assert persisted.request_sha256 == staged.request_sha256
             assert persisted.job_id is None
+            profile = persisted.request_spec["guidance_profile"]
+            assert profile["id"] == "rfd3_ca_shape_transfer_control_v1"
+            assert profile["source_paper_doi"] == "10.64898/2026.07.22.740177"
+            assert profile["source_shape_controller_commit"] == "e1a518b61e216d3c597a46e5a151b9e24756e33e"
+            assert profile["source_shape_weight"] == 0.75
+            assert profile["source_guide_scale"] == 2.0
+            assert profile["outside_weight"] == 1.0
+            assert profile["chamfer_weight"] == 1.0
+            assert profile["target_point_count"] == 800
+            assert profile["target_sampling"] == "seeded_subset_of_immutable_uniform_interior_pool_v1"
+            assert profile["rfd3_transfer_coefficient"] == 0.13333333333333333
+            assert profile["connectivity_weight"] == 0.0
+            assert persisted.request_spec["schema"] == "bms_shape_design_request_v2"
+            assert persisted.request_spec["sequence_policy"] == "auto"
+            assert persisted.request_spec["sequence_engine"] is None
+            assert persisted.request_spec["validator_suite"] == ["boltz2", "esmfold2", "protenix_v2"]
+            assert staged.launch_params["shape_guidance_profile"] == "rfd3_ca_shape_transfer_control_v1"
     finally:
         await engine.dispose()
 
@@ -510,16 +527,53 @@ def test_shape_workflow_supplies_typed_esmfold2_input_tuple() -> None:
     )
 
     assert (
-        "tuple([producer_method: engine, producer_artifact_id: name], sequence, name, source)"
+        "tuple([\n            producer_method: engine,\n            producer_artifact_id: name,\n            source_backbone_sha256: sourceSha,\n        ], sequence, name, source)"
         in workflow
     )
     assert (
-        "ESMFold2Predict(shape_sequences.map { producer_meta, sequence, name, _source -> "
+        "ESMFold2Predict(shape_sequences.map { producer_meta, sequence, name, source -> "
         "tuple(producer_meta, sequence, name) })"
         in workflow
     )
     assert (
-        "sequence_sources = shape_sequences.map { _producer_meta, _sequence, name, source -> "
-        "tuple(name, source) }"
+        "shapeSequences.map { producerMeta, sequence, name, source -> tuple(name, source) }"
         in workflow
     )
+    assert "AdmitRFD3InitialCandidate" in workflow
+    assert "evaluate_rfd3_initial_candidate.py" in (Path(__file__).parents[3] / "modules" / "shape_blueprint.nf").read_text(
+        encoding="utf-8"
+    )
+    assert "status == 'accepted'" in workflow
+    assert "PlanRFD3Batches" in workflow
+    assert "PlanRFD3Batches.out.batch_requests" in workflow
+    assert "RunShapeRFD3(\n        PlanRFD3Batches.out.batch_requests" in workflow
+    assert "BuildRFD3Aggregate" in workflow
+    assert "initial_admission_records" in workflow
+    assert "sequencePolicy != 'skip'" in workflow
+    assert "sequenceEngine == 'proteinmpnn'" in workflow
+    assert "sequenceEngine == 'fampnn'" in workflow
+    assert "sequenceEnabled" in workflow
+
+
+def test_shape_request_v2_accepts_range_length_and_conditional_sequence_policy() -> None:
+    requests = importlib.import_module("services.shape_requests")
+    assert hasattr(requests, "ShapeLengthPolicy"), "request-v2 length policy is required"
+    submitted = requests.SubmittedShapeRequest(
+        client_request_id="11111111-2222-4222-8222-333333333333",
+        name="range-run",
+        geometry_id="geom_" + "a" * 32,
+        expected_geometry_sha256="b" * 64,
+        expected_geometry_manifest_sha256="c" * 64,
+        expected_point_pool_sha256="d" * 64,
+        length_policy={"mode": "uniform_integer_range", "min": 350, "max": 450},
+        num_backbones=100,
+        sequence_policy="auto",
+        sequence_engine=None,
+        guidance_profile="rfd3_ca_shape_transfer_control_v1",
+    )
+    assert submitted.length_policy.mode == "uniform_integer_range"
+    assert submitted.length_policy.min == 350
+    assert submitted.length_policy.max == 450
+    assert submitted.sequence_policy == "auto"
+    assert submitted.sequence_engine is None
+    assert submitted.guidance_profile == "rfd3_ca_shape_transfer_control_v1"

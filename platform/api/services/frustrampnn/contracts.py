@@ -44,6 +44,9 @@ SCHEMA_FILENAMES = {
     "frustrampnn_summary_v1": "frustrampnn_summary_v1.schema.json",
     "frustrampnn_execution_receipt_v1": "frustrampnn_execution_receipt_v1.schema.json",
     "frustrampnn_result_manifest_v1": "frustrampnn_result_manifest_v1.schema.json",
+    "frustrampnn_comparison_v1": "frustrampnn_comparison_v1.schema.json",
+    "frustrampnn_guidance_v1": "frustrampnn_guidance_v1.schema.json",
+    "frustrampnn_multistate_comparison_v1": "frustrampnn_multistate_comparison_v1.schema.json",
 }
 _SCHEMA_ROOT = Path(__file__).resolve().parents[4] / "schemas" / "frustrampnn"
 
@@ -189,6 +192,20 @@ def _validate_request(instance: Mapping[str, Any]) -> None:
     validate_relative_path(instance["source_artifact"]["relative_path"])
     if tuple(instance["requested_outputs"]) != CANONICAL_REQUESTED_OUTPUTS:
         raise ContractValidationError("requested outputs must be the exact canonical ordered set")
+    parameters = instance["parameters"]
+    configuration_fields = {"configuration_id", "configuration_sha256"}
+    supplied_configuration_fields = configuration_fields & set(parameters)
+    if supplied_configuration_fields and supplied_configuration_fields != configuration_fields:
+        raise ContractValidationError("configuration identity must include configuration_id and configuration_sha256")
+    if supplied_configuration_fields == configuration_fields:
+        from .configuration import global_configuration
+
+        expected = global_configuration()
+        if (
+            parameters["configuration_id"] != expected["configuration_id"]
+            or parameters["configuration_sha256"] != expected["configuration_sha256"]
+        ):
+            raise ContractValidationError("request configuration identity does not match the global configuration")
     if instance["protein_selection"]["mode"] == "explicit":
         entities = instance["protein_selection"]["entities"]
         identities = [entity["entity_instance_id"] for entity in entities]

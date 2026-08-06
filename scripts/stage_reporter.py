@@ -37,8 +37,27 @@ def normalize_output_path(path: str) -> str:
     return str(resolved)
 
 
+def normalize_job_root_relative_output(path: str) -> str:
+    """Preserve an explicitly job-root-relative POSIX output path fail closed."""
+    raw = str(path)
+    parts = raw.split("/")
+    if (
+        not raw
+        or raw.startswith("/")
+        or "\\" in raw
+        or any(part in {"", ".", ".."} for part in parts)
+    ):
+        raise ValueError("unsafe job-root-relative output")
+    return "/".join(parts)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Report workflow stage status")
+    parser.add_argument(
+        "--job-root-relative",
+        action="store_true",
+        help="preserve already validated job-root-relative output paths",
+    )
     parser.add_argument("job_id", help="UUID of the job")
     parser.add_argument("stage", help="Name of the stage (e.g., rfantibody)")
     parser.add_argument(
@@ -49,7 +68,12 @@ def main() -> None:
     parser.add_argument("outputs", nargs="*", help="List of output file paths")
 
     args = parser.parse_args()
-    cleaned_outputs = [normalize_output_path(p) for p in args.outputs]
+    normalizer = (
+        normalize_job_root_relative_output
+        if args.job_root_relative
+        else normalize_output_path
+    )
+    cleaned_outputs = [normalizer(p) for p in args.outputs]
     if not STAGE_REPORT_TOKEN:
         print("Failed to report stage: missing launch-scoped stage credential", file=sys.stderr)
         sys.exit(1)

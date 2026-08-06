@@ -95,6 +95,9 @@ def extract_metrics(designs: List[Design]) -> Dict[str, List[float]]:
         "maturation_nonselected_rmsd": [],
         "ppiflow_objective_score": [],
         "ppiflow_primary_loop_rmsd": [],
+        "frustration_high_count": [],
+        "frustration_min_count": [],
+        "frustration_pct_high": [],
     }
     
     for d in designs:
@@ -127,6 +130,9 @@ def extract_metrics(designs: List[Design]) -> Dict[str, List[float]]:
         if has_ppiflow and d.maturation_nonselected_rmsd is not None: metrics["maturation_nonselected_rmsd"].append(d.maturation_nonselected_rmsd)
         if has_ppiflow and d.ppiflow_objective_score is not None: metrics["ppiflow_objective_score"].append(d.ppiflow_objective_score)
         if has_ppiflow and d.ppiflow_primary_loop_rmsd is not None: metrics["ppiflow_primary_loop_rmsd"].append(d.ppiflow_primary_loop_rmsd)
+        if d.frustration_high_count is not None: metrics["frustration_high_count"].append(float(d.frustration_high_count))
+        if d.frustration_min_count is not None: metrics["frustration_min_count"].append(float(d.frustration_min_count))
+        if d.frustration_pct_high is not None: metrics["frustration_pct_high"].append(d.frustration_pct_high)
             
     return metrics
 
@@ -231,6 +237,17 @@ async def get_job_design_metrics(
                     if "sequence_design_metrics" in resolve_result_contract(
                         review_profile_id=d.review_profile_id,
                     ).viewer_capabilities
+                    else {}
+                ),
+                **(
+                    {
+                        "frustration_high_count": float(d.frustration_high_count),
+                        "frustration_min_count": float(d.frustration_min_count),
+                        "frustration_pct_high": d.frustration_pct_high,
+                    }
+                    if d.frustration_high_count is not None
+                    and d.frustration_min_count is not None
+                    and d.frustration_pct_high is not None
                     else {}
                 ),
                 **(

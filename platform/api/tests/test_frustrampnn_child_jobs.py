@@ -92,6 +92,8 @@ async def test_child_creation_commits_immutable_authority_and_builds_scheduler_h
         assert hashlib.sha256(source_path.read_bytes()).hexdigest() == record["source_sha256"]
         request = json.loads(request_path.read_text(encoding="utf-8"))
         assert request["source_artifact"]["sha256"] == record["source_sha256"]
+        assert request["parameters"]["configuration_id"] == "frustrampnn_global_v1"
+        assert len(request["parameters"]["configuration_sha256"]) == 64
 
         monkeypatch.setattr(nextflow_service, "resolve_nextflow_executable", lambda: "/opt/nextflow-25.10.1")
         command = nextflow_service.build_nextflow_command(

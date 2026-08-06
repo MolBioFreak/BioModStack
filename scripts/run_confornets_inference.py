@@ -150,7 +150,12 @@ def _build_run_command(request: dict[str, Any], assets_dir: Path, raw_dir: Path)
     scripts = repo_path / "scripts"
 
     if task == "diversity":
-        cmd = [sys.executable, str(scripts / "run_diversity.py"), *common]
+        diversity_script = scripts / "run_diversity.py"
+        if int(params.get("k_confornets", 2)) >= 5:
+            memory_safe_script = Path(__file__).with_name("run_diversity_memory_safe.py")
+            if memory_safe_script.is_file():
+                diversity_script = memory_safe_script
+        cmd = [sys.executable, str(diversity_script), *common]
         cmd.extend([
             "--k-confornets",
             str(params.get("k_confornets", 2)),
@@ -662,6 +667,7 @@ def main() -> None:
             "request_sha256": canonical_binding["request_sha256"],
             "coordinate_plan_sha256": canonical_binding["coordinate_plan_sha256"],
             "target_id": canonical_binding["target_id"],
+            "coordinate_mapping": canonical_binding["coordinate_mapping"],
             "native_root": str(raw_dir),
             "runtime_identity": identity["runtime_identity"],
             "container_digest": identity["container_digest"],

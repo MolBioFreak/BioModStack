@@ -56,6 +56,24 @@ def _lstat_owned(path: Path, *, owner_uid: int, label: str) -> os.stat_result:
     return metadata
 
 
+def _resolved_request_root(request_root: Path) -> tuple[Path, os.stat_result]:
+    try:
+        resolved = request_root.resolve(strict=True)
+    except OSError as exc:
+        raise CanonicalPrepError(f"request root is not resolvable: {exc}") from exc
+    allowed_root = Path(
+        os.environ.get("BMS_RESULTS_ROOT", "/home/dalab/.biomodstack-dev/bms_results")
+    ).resolve()
+    try:
+        resolved.relative_to(allowed_root)
+    except ValueError as exc:
+        raise CanonicalPrepError("request root is outside the server-owned results root") from exc
+    metadata = resolved.stat()
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise CanonicalPrepError("request root is not a directory")
+    return resolved, metadata
+
+
 def _request_owned_path(
     request_root: Path,
     value: str,
@@ -68,17 +86,15 @@ def _request_owned_path(
     relative = Path(value)
     if (
         relative.is_absolute()
-        or "\\" in value
+        or "\\\\" in value
         or relative.as_posix() != value
         or any(part in {"", ".", ".."} for part in relative.parts)
     ):
         raise CanonicalPrepError(f"{label} path escapes or is not canonical under the request root")
 
-    root_metadata = request_root.lstat()
-    if stat.S_ISLNK(root_metadata.st_mode) or not stat.S_ISDIR(root_metadata.st_mode):
-        raise CanonicalPrepError("request root must be a real directory, not a symlink")
+    resolved_root, root_metadata = _resolved_request_root(request_root)
     owner_uid = root_metadata.st_uid
-    current = request_root
+    current = resolved_root
     final_metadata = root_metadata
     for index, component in enumerate(relative.parts):
         current = current / component
@@ -95,7 +111,7 @@ def _request_owned_path(
 
     resolved = current.resolve(strict=True)
     try:
-        resolved.relative_to(request_root.resolve(strict=True))
+        resolved.relative_to(resolved_root)
     except ValueError as exc:
         raise CanonicalPrepError(f"{label} path escapes the request root") from exc
     return resolved
@@ -105,7 +121,8 @@ def _validate_owned_tree(request_root: Path, relative_value: str, *, label: str)
     root = _request_owned_path(
         request_root, relative_value, label=label, expect_directory=True
     )
-    owner_uid = request_root.lstat().st_uid
+    _, root_metadata = _resolved_request_root(request_root)
+    owner_uid = root_metadata.st_uid
     pending = [root]
     while pending:
         directory = pending.pop()
@@ -135,9 +152,7 @@ def prepare(request_path: Path, plan_path: Path, assets_dir: Path, output: Path)
     request_path = Path(os.path.abspath(request_path))
     plan_path = Path(os.path.abspath(plan_path))
     request_root = request_path.parent
-    root_metadata = request_root.lstat()
-    if stat.S_ISLNK(root_metadata.st_mode) or not stat.S_ISDIR(root_metadata.st_mode):
-        raise CanonicalPrepError("request root must be a real directory, not a symlink")
+    _, root_metadata = _resolved_request_root(request_root)
     owner_uid = root_metadata.st_uid
     request_metadata = _lstat_owned(
         request_path, owner_uid=owner_uid, label="canonical request"
@@ -338,6 +353,9 @@ def prepare(request_path: Path, plan_path: Path, assets_dir: Path, output: Path)
             "request_sha256": request["request_sha256"],
             "coordinate_plan_sha256": plan["coordinate_plan_sha256"],
             "target_id": target["target_id"],
+            "coordinate_mapping": {
+                "target_id": {"constant": target["target_id"]},
+            },
         },
     }
     output.parent.mkdir(parents=True, exist_ok=True)

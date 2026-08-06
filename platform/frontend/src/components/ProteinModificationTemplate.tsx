@@ -116,7 +116,7 @@ export function ProteinModificationTemplate({ onBack, initialValues }: ProteinMo
                         className="rounded-xl border border-violet-500/40 bg-violet-500/10 p-5 text-left hover:border-violet-300"
                     >
                         <div className="font-semibold text-violet-100">Shape Blueprint</div>
-                        <div className="mt-2 text-sm text-slate-400">Immutable geometry → Shape-guided RFD3 → ProteinMPNN/FAMPNN → mandatory ESMFold2.</div>
+                        <div className="mt-2 text-sm text-slate-400">Immutable geometry → RFD3 Cα shape-transfer → conditional sequence design → validator review.</div>
                     </button>
                 </div>
                 <ModelDocumentationLinks

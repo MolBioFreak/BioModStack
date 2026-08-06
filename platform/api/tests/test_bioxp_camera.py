@@ -56,7 +56,7 @@ class FakeConnection:
         self.lease_entries: list[tuple[int, bool]] = []
 
     @asynccontextmanager
-    async def active_request_lease(self, *, expected_generation: int, require_fresh: bool = True):
+    async def active_query_lease(self, *, expected_generation: int, require_fresh: bool = True):
         if not self.active or self.client is None:
             raise ConnectionStateError("BioXP saved profile is not actively connected")
         if expected_generation != self.generation:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
@@ -17,6 +18,7 @@ FIXTURE_ROOT = (
     API_ROOT / "tests" / "fixtures" / "conformational_mapping" / "confornets" / "complete"
 )
 FINALIZER = REPO_ROOT / "scripts" / "finalize_confornets_conformational_mapping.py"
+BINDER = REPO_ROOT / "scripts" / "bind_confornets_output_ledger.py"
 
 if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
@@ -35,6 +37,89 @@ from services.conformational_mapping.structure_normalizer import (  # noqa: E402
     StructureMapError,
     validate_coordinate_mmcif,
 )
+
+
+def test_upstream_ledger_accepts_instrumented_runtime_coordinates() -> None:
+    spec = importlib.util.spec_from_file_location("bind_confornets_output_ledger", BINDER)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    entry = {
+        "coordinates": {"backend": "confornets", "target_id": "target"},
+        "runtime_coordinates": {
+            "target_id": "case", "task": "mse", "test_case_id": "case",
+            "reference_id": "reference", "run_index": 0, "confornet_index": 0,
+            "saved_step": 1, "sample_index": 0,
+        },
+        "source_relative_path": "case/run_0/sample_0.cif", "bytes": 1,
+        "sha256": "a" * 64, "request_sha256": "b" * 64,
+        "coordinate_plan_sha256": "c" * 64,
+        "runtime_identity": "runtime", "container_digest": "sha256:" + "d" * 64,
+        "checkpoint_sha256": "e" * 64,
+    }
+    module._validate_upstream_entry_shape(entry)
+    entry.pop("runtime_coordinates")
+    with pytest.raises(module.LedgerError, match="row is malformed"):
+        module._validate_upstream_entry_shape(entry)
+
+
+def test_mse_multirun_job_ordinal_maps_to_single_requested_confornet_axis() -> None:
+    spec = importlib.util.spec_from_file_location("bind_confornets_output_ledger", BINDER)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    planned = {
+        "backend": "confornets", "target_id": "registered-target", "task": "mse",
+        "test_case_id": "case", "reference_id": "reference", "run_index": 1,
+        "confornet_index": 0, "saved_step": 300, "sample_index": 4,
+    }
+    observed = {**planned, "confornet_index": 1}
+    entry = {
+        "coordinates": observed,
+        "runtime_coordinates": {
+            key: value for key, value in observed.items() if key != "backend"
+        } | {"target_id": "native-target"},
+    }
+
+    assert module._canonicalize_mse_run_coordinate(entry, [planned]) == planned
+
+
+def test_mse_multirun_mapping_rejects_ambiguous_confornet_plan() -> None:
+    spec = importlib.util.spec_from_file_location("bind_confornets_output_ledger", BINDER)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    planned = {
+        "backend": "confornets", "target_id": "registered-target", "task": "mse",
+        "test_case_id": "case", "reference_id": "reference", "run_index": 1,
+        "confornet_index": 0, "saved_step": 300, "sample_index": 4,
+    }
+    observed = {**planned, "confornet_index": 1}
+    entry = {
+        "coordinates": observed,
+        "runtime_coordinates": {
+            key: value for key, value in observed.items() if key != "backend"
+        } | {"target_id": "native-target"},
+    }
+
+    with pytest.raises(module.LedgerError, match="does not map uniquely"):
+        module._canonicalize_mse_run_coordinate(
+            entry, [planned, {**planned, "confornet_index": 1}]
+        )
+
+
+def test_canonical_runtime_maps_native_target_to_registered_target() -> None:
+    prep = (REPO_ROOT / "scripts" / "prep_canonical_confornets_request.py").read_text(
+        encoding="utf-8"
+    )
+    runner = (REPO_ROOT / "scripts" / "run_confornets_inference.py").read_text(
+        encoding="utf-8"
+    )
+    finalizer = FINALIZER.read_text(encoding="utf-8")
+    assert '"coordinate_mapping": {' in prep
+    assert '"target_id": {"constant": target["target_id"]}' in prep
+    assert '"coordinate_mapping": canonical_binding["coordinate_mapping"]' in runner
+    assert "mapped_binding" in finalizer
 
 
 def _fixture_settings(**overrides: object) -> dict[str, object]:
@@ -410,6 +495,32 @@ def test_cm4_006_missing_or_extra_coordinate_fails(tmp_path: Path) -> None:
     result, _ = _run_finalizer(tmp_path / "collision-run", fixture_root=collision)
     assert result.returncode != 0
     assert "basename collision" in result.stderr.lower()
+
+
+def test_native_tree_allows_distinct_run_scoped_artifacts_with_shared_basenames(
+    tmp_path: Path,
+) -> None:
+    spec = importlib.util.spec_from_file_location(
+        "finalize_confornets_conformational_mapping", FINALIZER
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    native = tmp_path / "native"
+    native.mkdir()
+    for required in module._LEGACY_REQUIRED:
+        (native / required).write_bytes(b"{}")
+    for run_index, payload in ((0, b"run-zero"), (1, b"run-one")):
+        run_dir = native / "raw" / f"run_{run_index}"
+        run_dir.mkdir(parents=True)
+        (run_dir / "sample_0.cif").write_bytes(payload)
+        (run_dir / "training_loss.csv").write_bytes(payload)
+
+    files = module._validate_native_tree(native)
+    assert "raw/run_0/sample_0.cif" in files
+    assert "raw/run_1/sample_0.cif" in files
+
 
 
 def test_cm4_007_placeholder_bfactor_not_confidence(tmp_path: Path) -> None:

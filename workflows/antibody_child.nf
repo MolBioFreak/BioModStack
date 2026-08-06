@@ -63,8 +63,14 @@ workflow ANTIBODY_CHILD {
         validation_scores_ch = BatchProtenixValidation.out.scores
     } else {
         BatchBoltzValidation(pdb_files, msa_file)
-        validated_pdbs_ch = BatchBoltzValidation.out.pdbs
-        validation_scores_ch = BatchBoltzValidation.out.scores
+        AlignBoltzValidation(
+            BatchBoltzValidation.out.raw_pdbs.flatten().collect(),
+            BatchBoltzValidation.out.raw_scores.flatten().collect(),
+            BatchBoltzValidation.out.raw_aligned_error.flatten().collect(),
+            BatchBoltzValidation.out.original_designs.flatten().collect()
+        )
+        validated_pdbs_ch = AlignBoltzValidation.out.pdbs
+        validation_scores_ch = AlignBoltzValidation.out.scores
     }
 
     // =========================================================================

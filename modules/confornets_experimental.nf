@@ -121,7 +121,7 @@ process RunConforNets {
 }
 
 process FinalizeConforNetsOutputs {
-    label 'ConforNets'
+    label 'local_cpu'
 
     publishDir "${params.out_dir}/final/confornets", mode: 'copy', pattern: 'final_confornets_results/**/*', saveAs: { filename -> filename.replace('final_confornets_results/', '') }
     publishDir "${params.out_dir}/run/confornets", mode: 'copy', pattern: '*.log'

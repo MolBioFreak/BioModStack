@@ -74,6 +74,34 @@ process AggregateAndReportAntibodyFrustraMPNN {
 import json
 from pathlib import Path
 
+launch_root = Path('${workflow.launchDir}')
+out_dir = Path('${params.out_dir}')
+job_root = (out_dir if out_dir.is_absolute() else launch_root / out_dir).absolute()
+if not job_root.is_dir() or job_root.is_symlink():
+    raise SystemExit('antibody_denovo:frustrampnn_invalid_job_root')
+
+def resolve_job_output(value):
+    raw_value = str(value)
+    parts = raw_value.split('/')
+    if (
+        not raw_value
+        or raw_value.startswith('/')
+        or '\\\\' in raw_value
+        or any(part in {'', '.', '..'} for part in parts)
+    ):
+        raise SystemExit('antibody_denovo:frustrampnn_unsafe_publication_path')
+    relative = Path(*parts)
+    candidate = job_root / relative
+    candidate.relative_to(job_root)
+    cursor = job_root
+    for part in relative.parts:
+        cursor = cursor / part
+        if cursor.is_symlink():
+            raise SystemExit('antibody_denovo:frustrampnn_symlink_publication_path')
+    if not candidate.is_file():
+        raise SystemExit('antibody_denovo:frustrampnn_missing_publication_path')
+    return candidate
+
 markers = sorted(Path('.').glob('published_*.json'))
 if not markers:
     raise SystemExit('antibody_denovo:frustrampnn_missing_publication')
@@ -84,7 +112,7 @@ for marker_path in markers:
     marker = json.loads(marker_path.read_text(encoding='utf-8'))
     if set(marker) != {'manifest', 'result', 'source'}:
         raise SystemExit('antibody_denovo:frustrampnn_ambiguous_publication')
-    result_path = Path(marker['result'])
+    result_path = resolve_job_output(marker['result'])
     result = json.loads(result_path.read_text(encoding='utf-8'))
     if result.get('status') != 'succeeded':
         raise SystemExit('antibody_denovo:frustrampnn_required_candidate_failed')
@@ -120,7 +148,7 @@ Path('frustrampnn_report_outputs.txt').write_text('\n'.join(outputs) + '\n', enc
 PY
     mapfile -t outputs < frustrampnn_report_outputs.txt
     test "\${#outputs[@]}" -gt 0
-    '${params.api_python}' '${params.code_root}/scripts/stage_reporter.py' \
+    '${params.api_python}' '${params.code_root}/scripts/stage_reporter.py' --job-root-relative \
       '${params.job_id}' frustrampnn complete "\${outputs[@]}"
     : > frustrampnn_complete.reported
     """

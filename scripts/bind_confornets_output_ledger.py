@@ -15,6 +15,25 @@ class LedgerError(ValueError):
     pass
 
 
+_UPSTREAM_LEDGER_FIELDS = {
+    "coordinates", "runtime_coordinates", "source_relative_path", "bytes", "sha256",
+    "request_sha256", "coordinate_plan_sha256", "runtime_identity",
+    "container_digest", "checkpoint_sha256",
+}
+_RUNTIME_COORDINATE_FIELDS = {
+    "target_id", "task", "test_case_id", "reference_id", "run_index",
+    "confornet_index", "saved_step", "sample_index",
+}
+
+
+def _validate_upstream_entry_shape(entry: object) -> None:
+    if not isinstance(entry, dict) or set(entry) != _UPSTREAM_LEDGER_FIELDS:
+        raise LedgerError("upstream coordinate ledger row is malformed")
+    runtime_coordinates = entry.get("runtime_coordinates")
+    if not isinstance(runtime_coordinates, dict) or set(runtime_coordinates) != _RUNTIME_COORDINATE_FIELDS:
+        raise LedgerError("upstream runtime coordinates are malformed")
+
+
 def _canonical_bytes(value: Any) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
 
@@ -34,6 +53,51 @@ def _relative(value: object) -> str:
     if path.is_absolute() or str(path) != value or any(part in {"", ".", ".."} for part in path.parts) or "\\" in value:
         raise LedgerError(f"non-canonical ledger path: {value!r}")
     return value
+
+
+def _canonicalize_mse_run_coordinate(
+    entry: dict[str, Any], plan_coordinates: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Map upstream MSE job ordinals onto the requested ConforNet axis.
+
+    Upstream MSE numbers each independently trained run as ``confornet_index=job_idx``.
+    The public request contract represents those independent executions with
+    ``run_index`` and reserves ``confornet_index`` for the requested ConforNet axis
+    (which is one for MSE).  Bind by every authoritative coordinate except that
+    redundant upstream job ordinal and require a unique canonical match.
+    """
+
+    observed = entry.get("coordinates")
+    runtime = entry.get("runtime_coordinates")
+    if not isinstance(observed, dict) or not isinstance(runtime, dict):
+        raise LedgerError("upstream coordinate mapping is malformed")
+    if observed.get("task") != "mse":
+        return observed
+    observed_without_net = {
+        key: value for key, value in observed.items() if key != "confornet_index"
+    }
+    matches = [
+        coordinate
+        for coordinate in plan_coordinates
+        if {
+            key: value for key, value in coordinate.items() if key != "confornet_index"
+        }
+        == observed_without_net
+    ]
+    if len(matches) != 1:
+        raise LedgerError("upstream MSE run does not map uniquely to the canonical plan")
+    for key in _RUNTIME_COORDINATE_FIELDS - {"target_id", "confornet_index"}:
+        if runtime.get(key) != observed.get(key):
+            raise LedgerError("upstream MSE runtime coordinates contradict mapped coordinates")
+    runtime_index = runtime.get("confornet_index")
+    if (
+        isinstance(runtime_index, bool)
+        or not isinstance(runtime_index, int)
+        or runtime_index < 0
+        or runtime_index != observed.get("confornet_index")
+    ):
+        raise LedgerError("upstream MSE job ordinal is invalid")
+    return matches[0]
 
 
 def bind(request_path: Path, plan_path: Path, native_root: Path, output: Path) -> None:
@@ -104,14 +168,10 @@ def bind(request_path: Path, plan_path: Path, native_root: Path, output: Path) -
         if not isinstance(source["sha256"], str) or len(source["sha256"]) != 64:
             raise LedgerError("runtime attestation source hash is invalid")
 
+    plan_coordinates = plan["coordinates"]
     by_source: dict[str, dict[str, Any]] = {}
     for entry in upstream_entries:
-        if not isinstance(entry, dict) or set(entry) != {
-            "coordinates", "source_relative_path", "bytes", "sha256",
-            "request_sha256", "coordinate_plan_sha256", "runtime_identity",
-            "container_digest", "checkpoint_sha256",
-        }:
-            raise LedgerError("upstream coordinate ledger row is malformed")
+        _validate_upstream_entry_shape(entry)
         if entry.get("request_sha256") != request["request_sha256"]:
             raise LedgerError("upstream ledger request binding mismatch")
         if entry.get("coordinate_plan_sha256") != plan["coordinate_plan_sha256"]:
@@ -125,8 +185,10 @@ def bind(request_path: Path, plan_path: Path, native_root: Path, output: Path) -
         source_path = _relative(entry.get("source_relative_path"))
         if source_path in by_source:
             raise LedgerError("duplicate upstream source path")
+        entry = dict(entry)
+        entry["coordinates"] = _canonicalize_mse_run_coordinate(entry, plan_coordinates)
         by_source[source_path] = entry
-    expected_coordinates = {_canonical_bytes(value) for value in plan["coordinates"]}
+    expected_coordinates = {_canonical_bytes(value) for value in plan_coordinates}
     observed_coordinates = [_canonical_bytes(entry.get("coordinates")) for entry in by_source.values()]
     if len(observed_coordinates) != len(set(observed_coordinates)) or set(observed_coordinates) != expected_coordinates:
         raise LedgerError("upstream ledger coordinates do not equal canonical plan")

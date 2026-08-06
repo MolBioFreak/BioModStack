@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, Stri
 ActionKind = Literal["primitive", "meta"]
 ActionSafety = Literal["read_only", "service", "motion", "stop", "emergency"]
 ActionAssessment = Literal["pass", "fail", "unverified"]
-ActionStatus = Literal["acknowledged", "queued", "completed", "failed", "blocked"]
+ActionStatus = Literal["acknowledged", "admission_pending", "queued", "completed", "failed", "blocked", "rejected"]
 
 
 class OperatorInputSpec(BaseModel):
@@ -44,8 +44,17 @@ class OperatorDashboardAxis(BaseModel):
     speed_steps_s: StrictInt | None = None
     run_current: StrictInt | None = None
     standby_current: StrictInt | None = None
+    left_switch_state: StrictInt | None = None
+    right_switch_state: StrictInt | None = None
+    left_switch_raw_active: StrictBool | None = None
+    right_switch_raw_active: StrictBool | None = None
     left_switch_active: StrictBool | None = None
     right_switch_active: StrictBool | None = None
+    left_switch_disabled: StrictBool | None = None
+    right_switch_disabled: StrictBool | None = None
+    coordinate_contract: str | None = Field(default=None, max_length=80)
+    min_steps: StrictInt | None = None
+    max_steps: StrictInt | None = None
     motor_temperature_c: StrictFloat | StrictInt | None = None
     motor_temperature_available: StrictBool
 
@@ -68,6 +77,7 @@ class OperatorDashboard(BaseModel):
     operation: dict[str, Any]
     enclosure: dict[str, Any]
     axes: list[OperatorDashboardAxis] = Field(max_length=16)
+    z_axis: dict[str, Any]
     temperatures: list[OperatorDashboardTemperature] = Field(max_length=32)
     pipettes: dict[str, Any]
     snapshot: dict[str, Any]
@@ -174,7 +184,9 @@ class OperatorActionReceipt(BaseModel):
     finished_at: str | None = Field(default=None, max_length=80)
     duration_ms: StrictInt | StrictFloat | None = Field(default=None, ge=0)
     remote_acknowledged: StrictBool
-    physical_effect_verified: Literal[False]
+    controller_acknowledged: StrictBool = False
+    controller_terminal_state_verified: StrictBool = False
+    physical_effect_verified: StrictBool
     machine_assessment: ActionAssessment
     operator_assessment: Literal["pass", "fail"] | None = None
     operator_note: str | None = Field(default=None, max_length=4000)
@@ -186,7 +198,12 @@ class OperatorActionReceipt(BaseModel):
     )
     operator_assessed_at: StrictFloat | StrictInt | None = Field(default=None, ge=0)
     inputs: dict[str, Any] = Field(default_factory=dict, max_length=64)
+    requested_inputs: dict[str, Any] | None = Field(default=None, max_length=64)
     response: dict[str, Any] | None = None
+    authority_receipt_id: str | None = Field(default=None, max_length=128)
+    authority_receipt_status: str | dict[str, Any] | None = None
+    observation_receipt_id: str | None = Field(default=None, max_length=128)
+    observes_command_id: str | None = Field(default=None, max_length=128)
     error: str | None = Field(default=None, max_length=4000)
     stage_receipts: list[dict[str, Any]] = Field(default_factory=list, max_length=256)
 

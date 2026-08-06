@@ -16,7 +16,10 @@ from services.bioxp.operator_models import (
     OperatorControlCatalog,
     OperatorDashboard,
 )
-from services.bioxp.operator_semantic_quarantine import OPERATOR_SEMANTIC_QUARANTINE_BY_PATH
+from services.bioxp.operator_semantic_quarantine import (
+    OPERATOR_SEMANTIC_QUARANTINE_BY_ACTION_ID,
+    OPERATOR_SEMANTIC_QUARANTINE_BY_PATH,
+)
 from services.bioxp.runtime import BioXpRuntime
 
 from .dependencies import get_bioxp_runtime, require_bioxp_mutation_access
@@ -77,8 +80,14 @@ async def _resolve_action_quarantine(
     expected_connection_generation: int,
     expected_ownership_generation: int,
 ) -> str | None:
+    # Safety interrupts must not wait for a fresh full catalog while a motion
+    # transaction is still holding the robot's provider-state lock. The robot
+    # invocation still enforces the connection and ownership generations and
+    # dispatches only the finite oem.z.stop/oem.z.abort actions.
+    if action_id in {"oem.z.stop", "oem.z.abort"}:
+        return None
     try:
-        payload = await runtime.connection.request_active(
+        payload = await runtime.connection.request_active_query(
             "operator_control_catalog",
             expected_generation=expected_connection_generation,
             require_fresh=True,
@@ -103,7 +112,14 @@ async def _resolve_action_quarantine(
 def _translate_robot_error(exc: Exception) -> HTTPException:
     if isinstance(exc, RobotResponseError):
         status = exc.status_code if 400 <= exc.status_code < 500 else 502
-        return HTTPException(status_code=status, detail=str(exc))
+        return HTTPException(
+            status_code=status,
+            detail={
+                "error": "bioxp_robot_response_error",
+                "robot_status": exc.status_code,
+                "robot_detail": exc.detail,
+            },
+        )
     if isinstance(exc, ConnectionStateError):
         return HTTPException(status_code=409, detail=str(exc))
     return HTTPException(status_code=502, detail=str(exc) or exc.__class__.__name__)
@@ -122,7 +138,7 @@ async def operator_control_catalog(
 ) -> OperatorControlCatalog:
     snapshot = runtime.connection.snapshot()
     try:
-        payload = await runtime.connection.request_active(
+        payload = await runtime.connection.request_active_query(
             "operator_control_catalog",
             expected_generation=snapshot.generation,
             require_fresh=True,
@@ -138,7 +154,7 @@ async def operator_dashboard(
 ) -> OperatorDashboard:
     snapshot = runtime.connection.snapshot()
     try:
-        payload = await runtime.connection.request_active(
+        payload = await runtime.connection.request_active_query(
             "operator_dashboard",
             expected_generation=snapshot.generation,
             require_fresh=True,
@@ -171,7 +187,7 @@ async def operator_action_admission(
             quarantine_reason,
         )
     try:
-        payload = await runtime.connection.request_active(
+        payload = await runtime.connection.request_active_query(
             "operator_action_admission",
             expected_generation=request.expected_connection_generation,
             require_fresh=True,
@@ -196,26 +212,30 @@ async def invoke_operator_action(
     request: OperatorActionInvokeRequest,
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> OperatorActionReceipt:
-    quarantine_reason = await _resolve_action_quarantine(
-        runtime,
-        action_id=action_id,
-        expected_connection_generation=request.expected_connection_generation,
-        expected_ownership_generation=request.expected_ownership_generation,
-    )
+    quarantine_reason = OPERATOR_SEMANTIC_QUARANTINE_BY_ACTION_ID.get(action_id)
     if quarantine_reason is not None:
         raise HTTPException(status_code=409, detail=quarantine_reason)
+    action_payload = {
+        "expected_generation": request.expected_ownership_generation,
+        "idempotency_key": request.idempotency_key,
+        "inputs": request.inputs,
+    }
     try:
-        payload = await runtime.connection.request_active(
-            "invoke_operator_action",
-            expected_generation=request.expected_connection_generation,
-            require_fresh=True,
-            path_params={"action_id": action_id},
-            json_data={
-                "expected_generation": request.expected_ownership_generation,
-                "idempotency_key": request.idempotency_key,
-                "inputs": request.inputs,
-            },
-        )
+        if action_id in {"oem.z.stop", "oem.z.abort"}:
+            payload = await runtime.connection.request_active_safety_interrupt(
+                "invoke_operator_action",
+                expected_generation=request.expected_connection_generation,
+                path_params={"action_id": action_id},
+                json_data=action_payload,
+            )
+        else:
+            payload = await runtime.connection.request_active(
+                "invoke_operator_action",
+                expected_generation=request.expected_connection_generation,
+                require_fresh=True,
+                path_params={"action_id": action_id},
+                json_data=action_payload,
+            )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
     receipt = _validate(OperatorActionReceipt, payload)
@@ -230,7 +250,7 @@ async def operator_action_history(
 ) -> OperatorActionHistory:
     snapshot = runtime.connection.snapshot()
     try:
-        payload = await runtime.connection.request_active(
+        payload = await runtime.connection.request_active_query(
             "operator_action_history",
             expected_generation=snapshot.generation,
             require_fresh=True,
@@ -247,7 +267,7 @@ async def operator_action_receipt(
 ) -> OperatorActionReceipt:
     snapshot = runtime.connection.snapshot()
     try:
-        payload = await runtime.connection.request_active(
+        payload = await runtime.connection.request_active_query(
             "operator_action_receipt",
             expected_generation=snapshot.generation,
             require_fresh=True,

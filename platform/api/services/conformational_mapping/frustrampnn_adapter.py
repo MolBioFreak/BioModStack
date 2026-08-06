@@ -38,7 +38,7 @@ CM_THRESHOLD_POLICY_ADAPTER_ID = "frustrampnn_class_v1"
 
 def bind_cm_candidate_snapshot_bytes(
     snapshot: Mapping[str, Any], *, candidate_id: str,
-    source_bytes: bytes, source_suffix: str,
+    source_bytes: bytes, source_suffix: str, source_relative_path: str | None = None,
 ) -> dict[str, Any]:
     """Bind candidate hierarchy from the exact no-follow source generation."""
 
@@ -80,6 +80,9 @@ def bind_cm_candidate_snapshot_bytes(
             raise FrustraMPNNAdapterError("candidate structure format is unsupported")
 
         bound = copy.deepcopy(dict(snapshot))
+        bound["original_source_sha256"] = hashlib.sha256(source_bytes).hexdigest()
+        if source_relative_path is not None:
+            bound["original_source_path"] = source_relative_path
         entity_by_source = {item["source_entity_id"]: item for item in bound["entities"]}
         unique_mappings: list[dict[str, Any]] = []
         seen_source_keys: set[tuple[str, str]] = set()
