@@ -118,8 +118,14 @@ process FastqPlasmidQC {
     if [[ "\${total_bases}" -gt 0 ]]; then
         n50_read_length=\$(awk 'NR > 1 {print \$2}' read_lengths.tsv | LC_ALL=C sort -nr | awk -v half="\${total_bases}" '
             BEGIN { threshold = half / 2.0 }
-            { cumulative += \$1; if (cumulative >= threshold) { print \$1; found = 1; exit } }
-            END { if (!found) print 0 }
+            {
+                cumulative += \$1
+                if (!found && cumulative >= threshold) {
+                    value = \$1
+                    found = 1
+                }
+            }
+            END { if (found) print value; else print 0 }
         ')
     else
         n50_read_length=0
