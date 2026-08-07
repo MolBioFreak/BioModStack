@@ -232,7 +232,7 @@ process FastqPlasmidQC {
                 cat mpileup.regions.tsv | xargs -r -P "\${mpileup_concurrency}" -n 2 "\${mpileup_worker}"
             else
                 # xargs unavailable: fall back to ordered serial execution.
-                while IFS=$'\t' read -r chunk_start chunk_end; do
+                while IFS=\$(printf '\t') read -r chunk_start chunk_end; do
                     "\${mpileup_worker}" "\${chunk_start}" "\${chunk_end}"
                 done < mpileup.regions.tsv
             fi
