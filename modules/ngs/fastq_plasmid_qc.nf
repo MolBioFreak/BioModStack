@@ -197,7 +197,12 @@ process FastqPlasmidQC {
         if [[ -f "${codeRoot}/scripts/mpileup_majority_consensus.awk" ]]; then
             # samtools mpileup has no worker-thread option. Split the one
             # reference into ordered indexed regions so this fallback can use
-            # the CPU allocation assigned to this process.
+            # the CPU allocation assigned to this process, then run the region
+            # workers through a bounded pool. Unbounded background forks put
+            # the whole workflow tree inside one service cgroup and stall on
+            # memory throttling, so cap concurrent workers here. The 44-CPU
+            # ceiling stays the scheduling limit for this process; 8 workers
+            # is the safe concurrency for the host samtools/apptainer path.
             mpileup_workers=${task.cpus}
             if [[ "\${mpileup_workers}" -gt "\${reference_length}" ]]; then
                 mpileup_workers="\${reference_length}"
@@ -207,25 +212,34 @@ process FastqPlasmidQC {
             fi
             mpileup_chunk_bp=\$(( (reference_length + mpileup_workers - 1) / mpileup_workers ))
             rm -f mpileup.chunk.*
-            declare -a mpileup_pids=()
-            chunk_index=0
+            : > mpileup.regions.tsv
             for ((chunk_start = 1; chunk_start <= reference_length; chunk_start += mpileup_chunk_bp)); do
                 chunk_end=\$((chunk_start + mpileup_chunk_bp - 1))
                 if [[ "\${chunk_end}" -gt "\${reference_length}" ]]; then
                     chunk_end="\${reference_length}"
                 fi
-                chunk_file=\$(printf 'mpileup.chunk.%04d' "\${chunk_index}")
-                (
+                printf '%s\t%s\n' "\${chunk_start}" "\${chunk_end}" >> mpileup.regions.tsv
+            done
+            if command -v xargs >/dev/null 2>&1; then
+                mpileup_concurrency=8
+                export SAMTOOLS_CMD reference_name reference_qc_fasta="\${bam}"
+                cat mpileup.regions.tsv | xargs -r -P "\${mpileup_concurrency}" -n 2 bash -c '
+                    chunk_start="$1"
+                    chunk_end="$2"
+                    chunk_file=$(printf "mpileup.chunk.%04d" "$((chunk_start - 1))")
                     "\${SAMTOOLS_CMD[@]}" mpileup -aa -A -d 1000000 -f reference_qc.fasta \
-                        -r "\${reference_name}:\${chunk_start}-\${chunk_end}" "${bam}" \
+                        -r "\${reference_name}:\${chunk_start}-\${chunk_end}" "\${reference_qc_fasta}" \
                         2>> fastq_consensus.log > "\${chunk_file}"
-                ) &
-                mpileup_pids+=("\$!")
-                chunk_index=\$((chunk_index + 1))
-            done
-            for mpileup_pid in "\${mpileup_pids[@]}"; do
-                wait "\${mpileup_pid}"
-            done
+                ' _
+            else
+                # xargs unavailable: fall back to ordered serial execution.
+                while IFS=$'\t' read -r chunk_start chunk_end; do
+                    chunk_file=$(printf 'mpileup.chunk.%04d' "$((chunk_start - 1))")
+                    "\${SAMTOOLS_CMD[@]}" mpileup -aa -A -d 1000000 -f reference_qc.fasta \
+                        -r "\${reference_name}:\${chunk_start}-\${chunk_end}" "\${bam}" \
+                        2>> fastq_consensus.log > "\${chunk_file}"
+                done < mpileup.regions.tsv
+            fi
             cat mpileup.chunk.* | awk -f "${codeRoot}/scripts/mpileup_majority_consensus.awk" > fastq_consensus.fasta.tmp
         fi
         if [[ -s fastq_consensus.fasta.tmp ]] && \
