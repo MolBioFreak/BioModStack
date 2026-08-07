@@ -9,7 +9,7 @@ def shellQuote(value) {
 }
 
 process FastqPlasmidQC {
-    label 'local_cpu'
+    label 'fastq_qc_cpu'
     publishDir "${params.out_dir}/fastq_qc", mode: 'copy'
     tag "fastq_qc"
 
@@ -188,10 +188,41 @@ process FastqPlasmidQC {
         consensus_status="ok"
     else
         echo "samtools consensus unavailable, failed, or contained no called A/C/G/T bases; attempting mpileup-majority fallback" >> fastq_consensus.log
-        if [[ -f "${codeRoot}/scripts/mpileup_majority_consensus.awk" ]] && \
-           "\${SAMTOOLS_CMD[@]}" mpileup -aa -A -d 1000000 -f reference_qc.fasta "${bam}" 2>> fastq_consensus.log | \
-           awk -f "${codeRoot}/scripts/mpileup_majority_consensus.awk" > fastq_consensus.fasta.tmp && \
-           [[ -s fastq_consensus.fasta.tmp ]] && \
+        if [[ -f "${codeRoot}/scripts/mpileup_majority_consensus.awk" ]]; then
+            # samtools mpileup has no worker-thread option. Split the one
+            # reference into ordered indexed regions so this fallback can use
+            # the CPU allocation assigned to this process.
+            mpileup_workers=${task.cpus}
+            if [[ "\${mpileup_workers}" -gt "\${reference_length}" ]]; then
+                mpileup_workers="\${reference_length}"
+            fi
+            if [[ "\${mpileup_workers}" -lt 1 ]]; then
+                mpileup_workers=1
+            fi
+            mpileup_chunk_bp=\$(( (reference_length + mpileup_workers - 1) / mpileup_workers ))
+            rm -f mpileup.chunk.*
+            declare -a mpileup_pids=()
+            chunk_index=0
+            for ((chunk_start = 1; chunk_start <= reference_length; chunk_start += mpileup_chunk_bp)); do
+                chunk_end=\$((chunk_start + mpileup_chunk_bp - 1))
+                if [[ "\${chunk_end}" -gt "\${reference_length}" ]]; then
+                    chunk_end="\${reference_length}"
+                fi
+                chunk_file=\$(printf 'mpileup.chunk.%04d' "\${chunk_index}")
+                (
+                    "\${SAMTOOLS_CMD[@]}" mpileup -aa -A -d 1000000 -f reference_qc.fasta \
+                        -r "\${reference_name}:\${chunk_start}-\${chunk_end}" "${bam}" \
+                        2>> fastq_consensus.log > "\${chunk_file}"
+                ) &
+                mpileup_pids+=("\$!")
+                chunk_index=\$((chunk_index + 1))
+            done
+            for mpileup_pid in "\${mpileup_pids[@]}"; do
+                wait "\${mpileup_pid}"
+            done
+            cat mpileup.chunk.* | awk -f "${codeRoot}/scripts/mpileup_majority_consensus.awk" > fastq_consensus.fasta.tmp
+        fi
+        if [[ -s fastq_consensus.fasta.tmp ]] && \
            has_called_consensus_base fastq_consensus.fasta.tmp; then
             mv fastq_consensus.fasta.tmp fastq_consensus.fasta
             consensus_status="pileup_majority_fallback"
