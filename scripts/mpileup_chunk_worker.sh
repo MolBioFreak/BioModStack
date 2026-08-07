@@ -13,7 +13,7 @@ set -euo pipefail
 chunk_start="${1:?chunk start required}"
 chunk_end="${2:?chunk end required}"
 
-read -r -a samtools_cmd <<< "${SAMTOOLS_CMD:?SAMTOOLS_CMD required}"
+read -r -a samtools_cmd <<< "${SAMTOOLS_CMD_STR:?SAMTOOLS_CMD_STR required}"
 chunk_file=$(printf 'mpileup.chunk.%04d' "$((chunk_start - 1))")
 
 "${samtools_cmd[@]}" mpileup -aa -A -d 1000000 \
