@@ -229,11 +229,11 @@ process FastqPlasmidQC {
             fi
             if command -v xargs >/dev/null 2>&1; then
                 mpileup_concurrency=8
-                cat mpileup.regions.tsv | xargs -r -P "\${mpileup_concurrency}" -n 2 "\${mpileup_worker}"
+                cat mpileup.regions.tsv | xargs -r -P "\${mpileup_concurrency}" -n 2 bash "\${mpileup_worker}"
             else
                 # xargs unavailable: fall back to ordered serial execution.
                 while IFS=\$(printf '\t') read -r chunk_start chunk_end; do
-                    "\${mpileup_worker}" "\${chunk_start}" "\${chunk_end}"
+                    bash "\${mpileup_worker}" "\${chunk_start}" "\${chunk_end}"
                 done < mpileup.regions.tsv
             fi
             cat mpileup.chunk.* | awk -f "${codeRoot}/scripts/mpileup_majority_consensus.awk" > fastq_consensus.fasta.tmp
