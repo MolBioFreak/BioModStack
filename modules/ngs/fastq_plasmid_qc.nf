@@ -220,8 +220,8 @@ process FastqPlasmidQC {
                 fi
                 printf '%s\t%s\n' "\${chunk_start}" "\${chunk_end}" >> mpileup.regions.tsv
             done
-            export SAMTOOLS_CMD reference_name reference_qc_fasta="\${bam}"
-            export REFERENCE_QC_FASTA="reference_qc.fasta" REFERENCE_QC_NAME="\${reference_name}" MPILEUP_QC_BAM="\${bam}"
+            export SAMTOOLS_CMD reference_name reference_qc_fasta="aligned.bam"
+            export REFERENCE_QC_FASTA="reference_qc.fasta" REFERENCE_QC_NAME="\${reference_name}" MPILEUP_QC_BAM="aligned.bam"
             mpileup_worker="\${codeRoot}/scripts/mpileup_chunk_worker.sh"
             if [[ ! -f "\${mpileup_worker}" ]]; then
                 echo "Missing mpileup worker script: \${mpileup_worker}" >&2
