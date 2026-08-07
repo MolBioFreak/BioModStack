@@ -220,24 +220,25 @@ process FastqPlasmidQC {
                 fi
                 printf '%s\t%s\n' "\${chunk_start}" "\${chunk_end}" >> mpileup.regions.tsv
             done
+            export SAMTOOLS_CMD reference_name reference_qc_fasta="\${bam}"
+            cat > mpileup_worker.sh <<'MPILEUP_WORKER_EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+chunk_start="$1"
+chunk_end="$2"
+chunk_file=$(printf 'mpileup.chunk.%04d' "$((chunk_start - 1))")
+"${SAMTOOLS_CMD[@]}" mpileup -aa -A -d 1000000 -f reference_qc.fasta \
+    -r "${reference_name}:${chunk_start}-${chunk_end}" "${reference_qc_fasta}" \
+    2>> fastq_consensus.log > "${chunk_file}"
+MPILEUP_WORKER_EOF
+            chmod +x mpileup_worker.sh
             if command -v xargs >/dev/null 2>&1; then
                 mpileup_concurrency=8
-                export SAMTOOLS_CMD reference_name reference_qc_fasta="\${bam}"
-                cat mpileup.regions.tsv | xargs -r -P "\${mpileup_concurrency}" -n 2 bash -c '
-                    chunk_start="$1"
-                    chunk_end="$2"
-                    chunk_file=$(printf "mpileup.chunk.%04d" "$((chunk_start - 1))")
-                    "\${SAMTOOLS_CMD[@]}" mpileup -aa -A -d 1000000 -f reference_qc.fasta \
-                        -r "\${reference_name}:\${chunk_start}-\${chunk_end}" "\${reference_qc_fasta}" \
-                        2>> fastq_consensus.log > "\${chunk_file}"
-                ' _
+                cat mpileup.regions.tsv | xargs -r -P "\${mpileup_concurrency}" -n 2 ./mpileup_worker.sh
             else
                 # xargs unavailable: fall back to ordered serial execution.
                 while IFS=$'\t' read -r chunk_start chunk_end; do
-                    chunk_file=$(printf 'mpileup.chunk.%04d' "$((chunk_start - 1))")
-                    "\${SAMTOOLS_CMD[@]}" mpileup -aa -A -d 1000000 -f reference_qc.fasta \
-                        -r "\${reference_name}:\${chunk_start}-\${chunk_end}" "\${bam}" \
-                        2>> fastq_consensus.log > "\${chunk_file}"
+                    ./mpileup_worker.sh "\${chunk_start}" "\${chunk_end}"
                 done < mpileup.regions.tsv
             fi
             cat mpileup.chunk.* | awk -f "${codeRoot}/scripts/mpileup_majority_consensus.awk" > fastq_consensus.fasta.tmp
