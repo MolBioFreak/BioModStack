@@ -54,6 +54,8 @@ export interface Job {
     completed_stages?: string[] | null;
     all_stages?: string[] | null;
     stage_outputs?: Record<string, string[]> | null;
+    files?: unknown;
+    results?: unknown;
     awaiting_input?: boolean | null;
     awaiting_stage?: string | null;
     awaiting_payload?: Record<string, UntypedApiValue> | null;
@@ -660,9 +662,31 @@ export interface OntNgsSubmitRequest {
 export const submitOntNgsJob = (workflowId: string, request: OntNgsSubmitRequest) =>
     api.post<Job>(`/api/ont/ngs/${workflowId}/submit`, request);
 
+export interface MolBioNgsReceiptRequest {
+    revision_id: string;
+}
+
+export interface MolBioNgsReceipt {
+    receipt_id: string;
+    sequence_id: string;
+    revision_id: string;
+    revision_sha256?: string;
+    reference_snapshot_sha256?: string;
+    expires_at?: string;
+}
+
+export const issueMolBioNgsReceipt = (
+    sequenceId: string,
+    request: MolBioNgsReceiptRequest,
+) => api.post<MolBioNgsReceipt>(
+    `/api/molbio/sequences/${encodeURIComponent(sequenceId)}/ngs-receipts`,
+    request,
+);
+
 export interface OntBarcodeUnit {
     schema: 'biomodstack.ont_barcode_resubmission_unit.v1';
     unit_id: string;
+    sample_alias?: string | null;
     bam_path: string;
     bam_sha256: string;
     read_count: number;
@@ -675,17 +699,127 @@ export const fetchOntBarcodeUnits = (jobId: string) =>
         `/api/jobs/${encodeURIComponent(jobId)}/barcode-units`,
     );
 
-export const submitOntBarcodeUnit = (
-    jobId: string,
-    unitId: string,
-    request: {
-        target_workflow: 'ont_plasmid_qc' | 'ont_construct_screening';
-        reference_fasta: string;
-        name?: string;
-        pinned_gpu?: number | null;
-    },
-) => api.post<Job>(
-    `/api/jobs/${encodeURIComponent(jobId)}/barcode-units/${encodeURIComponent(unitId)}/submit`,
+export interface OntBarcodeBatchMapping {
+    unit_id: string;
+    sample_alias: string | null;
+    molbio_ngs_receipt_id: string;
+}
+
+export interface OntBarcodeBatchSubmitRequest {
+    idempotency_key: string;
+    target_workflow: 'ont_plasmid_qc' | 'ont_construct_screening';
+    name_prefix?: string;
+    pinned_gpu?: number | null;
+    mappings: OntBarcodeBatchMapping[];
+}
+
+export interface OntBarcodeBatchSubmitResponse {
+    reference_set_id: string;
+    manifest_sha256: string;
+    child_job_ids: string[];
+}
+
+export const submitOntBarcodeBatch = (
+    sourceJobId: string,
+    request: OntBarcodeBatchSubmitRequest,
+) => api.post<OntBarcodeBatchSubmitResponse>(
+    `/api/jobs/${encodeURIComponent(sourceJobId)}/barcode-batches`,
+    request,
+);
+
+export interface PooledReferenceAssignmentTarget {
+    target_id: string;
+    label: string;
+    indistinguishable_group?: string;
+    molbio_ngs_receipt_id: string;
+}
+
+export interface PooledReferenceAssignmentSubmitRequest {
+    idempotency_key: string;
+    fastq_path: string;
+    targets: PooledReferenceAssignmentTarget[];
+    min_mapq: number;
+    min_alignment_score_margin: number;
+}
+
+export interface PooledReferenceAssignmentSubmitResponse {
+    schema: 'bms.ngs.reference-set.v1';
+    assignment_job_id: string;
+    reference_set_id: string;
+    manifest_sha256: string;
+    scientific_status: 'REVIEW';
+    release_state: 'awaiting_operator_release';
+}
+
+export const submitPooledReferenceAssignment = (
+    request: PooledReferenceAssignmentSubmitRequest,
+) => api.post<PooledReferenceAssignmentSubmitResponse>('/api/ont/ngs/pooled-reference-assignment/submit', request);
+
+export type PooledAssignmentTargetWorkflow = 'ont_plasmid_qc' | 'ont_construct_screening';
+
+export interface PooledAssignmentManifest {
+    schema?: string;
+    mode?: string;
+    assignment_job_id: string;
+    reference_set_id: string;
+    manifest_id: string;
+    manifest_sha256: string;
+    scientific_status?: 'REVIEW';
+    execution_status?: string | null;
+    execution?: { status?: string | null } | null;
+}
+
+export interface PooledAssignmentTarget {
+    target_id: string;
+    label: string;
+    sequence_id: string;
+    revision_id: string;
+    revision_sha256: string;
+    revision_digest?: string | null;
+    indistinguishable_group?: string | null;
+    selectable?: boolean;
+    disposition?: string | null;
+    status?: string | null;
+}
+
+export interface PooledAssignmentManifestResponse extends PooledAssignmentManifest {
+    manifest?: PooledAssignmentManifest | null;
+}
+
+export interface PooledAssignmentTargetsResponse {
+    assignment_job_id: string;
+    reference_set_id: string;
+    targets: PooledAssignmentTarget[];
+}
+
+export interface PooledAssignmentReleaseRequest {
+    idempotency_key: string;
+    target_workflow: PooledAssignmentTargetWorkflow;
+    name_prefix?: string;
+    pinned_gpu?: number;
+    target_ids: string[];
+}
+
+export interface PooledAssignmentReleaseResponse {
+    release_id: string;
+    assignment_job_id: string;
+    reference_set_id: string;
+    child_job_ids: string[];
+}
+
+export const fetchPooledAssignmentManifest = (assignmentJobId: string) => api.get<PooledAssignmentManifestResponse>(
+    `/api/jobs/${encodeURIComponent(assignmentJobId)}/pooled-assignment/manifest`,
+);
+
+export const fetchPooledAssignmentTargets = (assignmentJobId: string) => api.get<PooledAssignmentTargetsResponse>(
+    `/api/jobs/${encodeURIComponent(assignmentJobId)}/pooled-assignment/targets`,
+);
+
+export const releasePooledAssignment = (
+    assignmentJobId: string,
+    request: PooledAssignmentReleaseRequest,
+) => api.post<PooledAssignmentReleaseResponse>(
+    `/api/jobs/${encodeURIComponent(assignmentJobId)}/pooled-assignment/release`,
     request,
 );
 
@@ -2442,6 +2576,78 @@ export interface FetchNucleotideSequencesParams {
 
 export const fetchNucleotideSequences = (params: FetchNucleotideSequencesParams = {}) =>
     api.get<NucleotideSequenceListItem[]>('/api/sequences/', { params });
+
+export interface MolBioSequenceRevision {
+    id: string;
+    revision_id: string;
+    sequence_id: string;
+    revision_number: number;
+    change_kind: string;
+    content_sha256: string;
+    content_length: number;
+    topology: 'circular' | 'linear';
+    created_at: string;
+    created_by?: string | null;
+    is_current: boolean;
+}
+
+export const fetchMolBioSequenceRevisions = (sequenceId: string) =>
+    api.get<MolBioSequenceRevision[]>(
+        `/api/molbio/sequences/${encodeURIComponent(sequenceId)}/revisions`,
+    );
+
+export interface MolBioRawDnaImportRow {
+    name: string;
+    sequence: string;
+    topology: 'circular' | 'linear';
+}
+
+export interface MolBioSequenceImportPayload {
+    source_format: 'fasta' | 'genbank' | 'raw_dna';
+    source_text?: string;
+    raw_rows?: MolBioRawDnaImportRow[];
+    topology_default: 'circular' | 'linear';
+    topology_overrides?: Record<number, 'circular' | 'linear'>;
+    idempotency_key: string;
+}
+
+export interface MolBioSequenceImportPreviewRecord {
+    record_ordinal: number;
+    source_name: string;
+    name: string;
+    canonical_digest: string;
+    content_sha256: string;
+    topology: 'circular' | 'linear';
+    length: number;
+    exact_duplicate_of?: number | null;
+}
+
+export interface MolBioSequenceImportError {
+    record_ordinal?: number | null;
+    code: string;
+    field?: string | null;
+    message: string;
+}
+
+export interface MolBioSequenceImportPreviewResponse {
+    valid: boolean;
+    records: MolBioSequenceImportPreviewRecord[];
+    errors: MolBioSequenceImportError[];
+}
+
+export interface MolBioSequenceImportCommitResponse {
+    records: Array<{
+        sequence_id: string;
+        name: string;
+        revision_id?: string;
+    }>;
+}
+
+export const previewMolBioSequenceImport = (payload: MolBioSequenceImportPayload) =>
+    api.post<MolBioSequenceImportPreviewResponse>('/api/molbio/sequences/import/preview', payload);
+
+export const commitMolBioSequenceImport = (payload: MolBioSequenceImportPayload) =>
+    api.post<MolBioSequenceImportCommitResponse>('/api/molbio/sequences/import/commit', payload);
 
 export const fetchSavedGibsonWorkups = () =>
     api.get<SavedGibsonWorkupListItem[]>('/api/sequences/assembly-workups');
