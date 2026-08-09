@@ -15,7 +15,6 @@ import { StructurePredictionTemplate } from './StructurePredictionTemplate';
 
 import { OligoDesignerTemplate } from './OligoDesignerTemplate';
 import { ProteinModificationTemplate } from './ProteinModificationTemplate';
-import { ProteinLocalRedesignTemplate } from './ProteinLocalRedesignTemplate';
 
 import { MolecularDynamicsTemplate } from './MolecularDynamicsTemplate';
 import { ConformationalMappingLauncher } from './conformationalMapping/ConformationalMappingLauncher';
@@ -696,7 +695,10 @@ export function JobSubmission() {
 
     // Read template from URL, allows page refresh and bookmarking
     const urlTemplate = searchParams.get('template');
-    const [selectedTemplateId, setSelectedTemplateIdInternal] = useState<string | null>(urlTemplate);
+    const initialTemplateId = urlTemplate === 'protein_local_redesign'
+        ? 'protein_modification_experimental'
+        : urlTemplate;
+    const [selectedTemplateId, setSelectedTemplateIdInternal] = useState<string | null>(initialTemplateId);
 
     // Wrapper to sync state with URL
     const setSelectedTemplateId = useCallback((id: string | null) => {
@@ -824,6 +826,16 @@ export function JobSubmission() {
                     });
                     setJobName(data.name || 'Conformational mapping');
                 }
+                else if (data.model_id === 'protein_local_redesign' || data.params?.template_model_id === 'protein_local_redesign') {
+                    setWizardMode('experimental');
+                    setSelectedTemplateId('protein_modification_experimental');
+                    setClonedValues({
+                        ...data.params,
+                        name: data.name,
+                        modification_mode: 'rfd3_local_redesign',
+                        template_model_id: 'protein_local_redesign',
+                    });
+                }
                 // 7. Manual Mode
                 else {
                     setWizardMode('manual');
@@ -856,7 +868,7 @@ export function JobSubmission() {
         boltzgen: 'antibody_denovo',
 
         protein_modification_experimental: 'protein_modification_experimental',
-        protein_local_redesign: 'protein_local_redesign',
+        protein_local_redesign: 'protein_modification_experimental',
         protein_cad_experimental: 'protein_modification_experimental',
         boltz_cp_experimental: 'boltz_cp_experimental',
         conformational_mapping: 'conformational_mapping',
@@ -920,20 +932,7 @@ export function JobSubmission() {
                 { tool: 'Boltz-2 (Opt.)' },
             ],
         },
-        {
-            id: 'protein_local_redesign',
-            name: 'RFD3 Local Redesign',
-            description: 'Preserve the source sequence while redesigning selected coordinates or adding a minimal native-contig insertion.',
-            icon: 'cube',
-            color: '#10B981',
-            experimental: true,
-            stages: [
-                { tool: 'Native RFD3 Partial Diffusion' },
-                { tool: 'Optional Minimal Insertion' },
-                { tool: 'Typed RFD3 Result Manifest' },
-                { tool: 'Assembly and State Acceptance' },
-            ],
-        },
+
     ], []);
     const visibleApiTemplates = useMemo(() => {
         const templates = templatesData?.data ?? [];
@@ -999,6 +998,9 @@ export function JobSubmission() {
                 name: loadedJobName,
                 job_name: loadedJobName,
                 template_model_id: isLegacyEsmfold2 || isLegacyBoltzGen ? undefined : templateModelId,
+                modification_mode: templateModelId === 'protein_local_redesign'
+                    ? 'rfd3_local_redesign'
+                    : template.params?.modification_mode,
                 ...(isLegacyEsmfold2 ? { pred_method: 'esmfold2' } : {}),
                 ...(isLegacyBoltzGen ? { denovo_generator: 'boltzgen' } : {}),
                 structure_launch_variant: dedicatedTemplateId === 'boltz_cp_experimental'
@@ -1584,14 +1586,6 @@ export function JobSubmission() {
                                 <OligoDesignerTemplate
                                     onBack={handleDedicatedTemplateBack}
                                     initialValues={clonedValues}
-                                />
-                            ) : selectedTemplateId === 'protein_local_redesign' ? (
-                                <ProteinLocalRedesignTemplate
-                                    key={`protein_local_redesign:${dedicatedTemplateVersion}`}
-                                    onBack={handleDedicatedTemplateBack}
-                                    initialValues={clonedValues}
-                                    submissionModelId="protein_local_redesign"
-                                    submissionMode="local_redesign"
                                 />
                             ) : selectedTemplateId === 'protein_modification_experimental' ? (
                                 <ProteinModificationTemplate

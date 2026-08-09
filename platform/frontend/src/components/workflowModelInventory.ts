@@ -64,22 +64,14 @@ export const WORKFLOW_MODEL_INVENTORY: WorkflowModelInventoryEntry[] = [
         modelTopics: ['laproteina', 'disco', 'rfdiffusion', 'fampnn', 'proteinmpnn', 'boltz2'],
         sourceFiles: [
             'platform/api/config/models/protein_modification_experimental.yaml',
+            'platform/api/config/models/protein_local_redesign.yaml',
             'platform/frontend/src/components/ProteinModificationTemplate.tsx',
             'platform/frontend/src/components/ProteinLocalRedesignTemplate.tsx',
+            'platform/frontend/src/components/RFD3LocalRedesignResultsPane.tsx',
             'workflows/protein_cad_experimental.nf',
             'workflows/protein_local_redesign.nf',
-            'nextflow.config',
-        ],
-    },
-    {
-        workflowId: 'protein_local_redesign',
-        label: 'RFD3 Local Redesign',
-        modelTopics: ['rfdiffusion', 'proteinmpnn', 'ligandmpnn', 'boltz2'],
-        sourceFiles: [
-            'platform/api/config/models/protein_local_redesign.yaml',
-            'platform/frontend/src/components/ProteinLocalRedesignTemplate.tsx',
-            'workflows/protein_local_redesign.nf',
             'modules/rfd3.nf',
+            'nextflow.config',
         ],
     },
     {
@@ -144,7 +136,7 @@ export const getWorkflowModelTopics = (workflowId: string | null | undefined): M
         : workflowId === 'protein_cad_experimental'
             ? 'protein_modification_experimental'
             : workflowId === 'protein_local_redesign'
-                ? 'protein_local_redesign'
+                ? 'protein_modification_experimental'
             : workflowId === 'confornets_experimental'
                 ? 'conformational_mapping'
                 : workflowId;

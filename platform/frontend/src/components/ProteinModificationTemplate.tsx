@@ -5,13 +5,13 @@ import { submitJob, type Job } from '../lib/api';
 import { ModelDocumentationLinks } from './ModelDocumentationLinks';
 import { ProteinLocalRedesignTemplate } from './ProteinLocalRedesignTemplate';
 import ShapeBlueprintTemplate from './ShapeBlueprintTemplate';
+import { DE_NOVO_MODIFICATION_MODE_CARDS, type ModificationMode } from './proteinModificationModes';
 
 interface ProteinModificationTemplateProps {
     onBack: () => void;
     initialValues?: Record<string, unknown>;
 }
 
-type ModificationMode = 'de_novo_design' | 'region_redesign' | 'shape_blueprint';
 type DeNovoBackend = 'disco' | 'laproteina';
 
 const fieldClass = 'w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100';
@@ -32,7 +32,12 @@ export function ProteinModificationTemplate({ onBack, initialValues }: ProteinMo
     const queryClient = useQueryClient();
     const initialMode = initialValues?.modification_mode;
     const [mode, setMode] = useState<ModificationMode | null>(
-        initialMode === 'de_novo_design' || initialMode === 'region_redesign' || initialMode === 'shape_blueprint' ? initialMode : null,
+        initialMode === 'de_novo_design'
+            || initialMode === 'rfd3_local_redesign'
+            || initialMode === 'region_redesign'
+            || initialMode === 'shape_blueprint'
+            ? initialMode
+            : null,
     );
     const [jobName, setJobName] = useState(initialString(initialValues, 'job_name', 'protein_modification'));
     const [backend, setBackend] = useState<DeNovoBackend>(
@@ -62,6 +67,17 @@ export function ProteinModificationTemplate({ onBack, initialValues }: ProteinMo
         },
         onError: (err: Error) => setError(err.message || 'Failed to submit protein modification job'),
     });
+
+    if (mode === 'rfd3_local_redesign') {
+        return (
+            <ProteinLocalRedesignTemplate
+                onBack={() => setMode(null)}
+                initialValues={initialValues}
+                submissionModelId="protein_local_redesign"
+                submissionMode="local_redesign"
+            />
+        );
+    }
 
     if (mode === 'region_redesign') {
         return (
@@ -97,27 +113,16 @@ export function ProteinModificationTemplate({ onBack, initialValues }: ProteinMo
                     Choose whether to create a new protein candidate or modify selected regions of an existing structure. These modes share one product boundary but retain distinct scientific contracts.
                 </p>
                 <div className="grid gap-4 md:grid-cols-3">
-                    <button
-                        onClick={() => setMode('de_novo_design')}
-                        className="rounded-xl border border-cyan-500/40 bg-cyan-500/10 p-5 text-left hover:border-cyan-300"
-                    >
-                        <div className="font-semibold text-cyan-100">De Novo Design</div>
-                        <div className="mt-2 text-sm text-slate-400">Generate new candidates with DISCO or La-Proteina.</div>
-                    </button>
-                    <button
-                        onClick={() => setMode('region_redesign')}
-                        className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-5 text-left hover:border-emerald-300"
-                    >
-                        <div className="font-semibold text-emerald-100">Region Redesign</div>
-                        <div className="mt-2 text-sm text-slate-400">Select and remodel regions while preserving structural context.</div>
-                    </button>
-                    <button
-                        onClick={() => setMode('shape_blueprint')}
-                        className="rounded-xl border border-violet-500/40 bg-violet-500/10 p-5 text-left hover:border-violet-300"
-                    >
-                        <div className="font-semibold text-violet-100">Shape Blueprint</div>
-                        <div className="mt-2 text-sm text-slate-400">Immutable geometry → RFD3 Cα shape-transfer → conditional sequence design → validator review.</div>
-                    </button>
+                    {DE_NOVO_MODIFICATION_MODE_CARDS.map((card) => (
+                        <button
+                            key={card.id}
+                            onClick={() => setMode(card.id)}
+                            className={`rounded-xl border p-5 text-left ${card.cardClassName}`}
+                        >
+                            <div className={`font-semibold ${card.labelClassName}`}>{card.label}</div>
+                            <div className="mt-2 text-sm text-slate-400">{card.description}</div>
+                        </button>
+                    ))}
                 </div>
                 <ModelDocumentationLinks
                     topics={['laproteina', 'disco', 'rfdiffusion', 'fampnn', 'proteinmpnn', 'boltz2']}

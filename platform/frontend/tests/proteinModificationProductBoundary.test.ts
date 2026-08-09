@@ -11,11 +11,13 @@ describe('De Novo Design product boundary', () => {
     it('offers explicit modes under one parent launcher', () => {
         const template = src('components/ProteinModificationTemplate.tsx');
 
-        assert.equal(template.includes("type ModificationMode = 'de_novo_design' | 'region_redesign'"), true);
+        assert.equal(template.includes("import { DE_NOVO_MODIFICATION_MODE_CARDS"), true);
         assert.equal(template.includes("model_id: 'protein_modification_experimental'"), true);
         assert.equal(template.includes("mode: 'de_novo_design'"), true);
         assert.equal(template.includes('submissionModelId="protein_modification_experimental"'), true);
         assert.equal(template.includes('submissionMode="region_redesign"'), true);
+        assert.equal(template.includes('submissionModelId="protein_local_redesign"'), true);
+        assert.equal(template.includes('submissionMode="local_redesign"'), true);
         assert.equal(template.includes('Protein Hunter'), false);
         assert.equal(template.includes('Iterative Binder Design'), false);
     });
@@ -25,7 +27,7 @@ describe('De Novo Design product boundary', () => {
 
         assert.equal(submission.includes("protein_local_redesign: 'protein_modification_experimental'"), true);
         assert.equal(submission.includes("protein_cad_experimental: 'protein_modification_experimental'"), true);
-        assert.equal(submission.includes("id: 'protein_local_redesign'"), false);
+        assert.equal(submission.includes("\n            id: 'protein_local_redesign'"), false);
         assert.equal(submission.includes("selectedTemplateId === 'protein_local_redesign'"), false);
         assert.equal(submission.includes('!LEGACY_PROTEIN_MODIFICATION_TEMPLATE_IDS.has(t.id)'), true);
     });
