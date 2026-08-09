@@ -5,6 +5,7 @@ export const DEDICATED_LAUNCHER_TEMPLATE_IDS = [
     'boltz_cp_experimental',
     'oligo_design',
     'protein_modification_experimental',
+    'protein_local_redesign',
 
     'molecular_dynamics',
     'conformational_mapping',

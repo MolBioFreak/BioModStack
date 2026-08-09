@@ -79,6 +79,48 @@ export interface MDArtifact {
     content_url: string;
 }
 
+export interface RFD3LocalRedesignReadModel {
+    schema: 'bms.rfd3.local-redesign.read-model.v1';
+    job_id: string;
+    request: {
+        request_id: string;
+        schema_version: number;
+        request_sha256: string;
+        profile_id: string;
+        profile_registry_sha256: string;
+        redesign_mode: string;
+        sequence_policy: string;
+        status: string;
+        request: Record<string, UntypedApiValue>;
+        preparation_receipt?: Record<string, UntypedApiValue> | null;
+        runtime_identity?: Record<string, UntypedApiValue> | null;
+        result_manifest_sha256?: string | null;
+        failure_receipt?: Record<string, UntypedApiValue> | null;
+        created_at?: string | null;
+        updated_at?: string | null;
+        terminal_at?: string | null;
+    };
+    candidates: Array<{
+        candidate_id: string;
+        result_set: string;
+        stage: string;
+        status: string;
+        artifact_manifest_sha256: string;
+        metrics: Record<string, UntypedApiValue>;
+        metadata: Record<string, UntypedApiValue>;
+    }>;
+    artifacts: Array<{
+        artifact_id: string;
+        candidate_id?: string | null;
+        role: string;
+        relative_path: string;
+        storage_path: string;
+        sha256: string;
+        bytes: number;
+        media_type: string;
+        metadata: Record<string, UntypedApiValue>;
+    }>;
+}
 export interface MDSummary {
     schema: 'bms.md.summary.v1';
     job_id: string;
@@ -375,6 +417,7 @@ export const fetchBoltzCpShardPlans = () => api.get<BoltzCpShardPlanCatalog>('/a
 // occupy the shared collector and suppress its recovery/backoff loop.
 export const fetchSystemStatus = () => api.get<SystemStatus>('/api/gpu/status', { timeout: 10_000 });
 export const fetchJobById = (id: string) => api.get<Job>(`/api/jobs/${id}`);
+export const fetchRFD3LocalRedesign = (id: string) => api.get<RFD3LocalRedesignReadModel>(`/api/jobs/${id}/rfd3-local-redesign`);
 export const fetchDesignById = (id: string) => api.get<Design>(`/api/designs/${id}`);
 export interface ProteinBaseBundleImportRequest {
     bundle_path: string;

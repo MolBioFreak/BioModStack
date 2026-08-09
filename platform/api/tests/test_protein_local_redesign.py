@@ -15,13 +15,17 @@ if str(API_ROOT) not in sys.path:
 from services.nextflow import build_nextflow_command
 
 
-def test_protein_local_redesign_is_internal_mode_of_protein_modification_product() -> None:
+def test_protein_local_redesign_is_first_class_native_model() -> None:
     frontend_text = (REPO_ROOT / "platform" / "frontend" / "src" / "components" / "JobSubmission.tsx").read_text(encoding="utf-8")
+    results_text = (REPO_ROOT / "platform" / "frontend" / "src" / "components" / "ResultsViewer.tsx").read_text(encoding="utf-8")
     workflow_text = (REPO_ROOT / "workflows" / "protein_local_redesign.nf").read_text(encoding="utf-8")
+    model_text = (REPO_ROOT / "platform" / "api" / "config" / "models" / "protein_local_redesign.yaml").read_text(encoding="utf-8")
 
     assert "id: 'protein_modification_experimental'" in frontend_text
-    assert "name: 'De Novo Design'" in frontend_text
-    assert "id: 'protein_local_redesign'" not in frontend_text
+    assert "id: 'protein_local_redesign'" in frontend_text
+    assert "name: 'RFD3 Local Redesign'" in frontend_text
+    assert "RFD3LocalRedesignResultsPane" in results_text
+    assert "id: protein_local_redesign" in model_text
     assert "workflow PROTEIN_LOCAL_REDESIGN" in workflow_text
     assert "workflow {" in workflow_text
     assert "PROTEIN_LOCAL_REDESIGN()" in workflow_text

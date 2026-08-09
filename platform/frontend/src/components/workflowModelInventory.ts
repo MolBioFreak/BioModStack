@@ -72,6 +72,17 @@ export const WORKFLOW_MODEL_INVENTORY: WorkflowModelInventoryEntry[] = [
         ],
     },
     {
+        workflowId: 'protein_local_redesign',
+        label: 'RFD3 Local Redesign',
+        modelTopics: ['rfdiffusion', 'proteinmpnn', 'ligandmpnn', 'boltz2'],
+        sourceFiles: [
+            'platform/api/config/models/protein_local_redesign.yaml',
+            'platform/frontend/src/components/ProteinLocalRedesignTemplate.tsx',
+            'workflows/protein_local_redesign.nf',
+            'modules/rfd3.nf',
+        ],
+    },
+    {
         workflowId: 'boltz_cp_experimental',
         label: 'Fold-CP Experimental',
         modelTopics: ['fold_cp', 'boltz2'],
@@ -130,8 +141,10 @@ export const getWorkflowModelTopics = (workflowId: string | null | undefined): M
     if (!workflowId) return [];
     const canonicalWorkflowId = workflowId === 'esmfold2_experimental' || workflowId === 'esmfold2'
         ? 'structure_prediction'
-        : workflowId === 'protein_cad_experimental' || workflowId === 'protein_local_redesign'
+        : workflowId === 'protein_cad_experimental'
             ? 'protein_modification_experimental'
+            : workflowId === 'protein_local_redesign'
+                ? 'protein_local_redesign'
             : workflowId === 'confornets_experimental'
                 ? 'conformational_mapping'
                 : workflowId;

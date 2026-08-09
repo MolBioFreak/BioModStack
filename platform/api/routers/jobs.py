@@ -3,6 +3,7 @@ Jobs API router - Create, list, cancel pipeline jobs.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, Body, Request, Response
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, update
 from sqlalchemy.exc import OperationalError
@@ -36,7 +37,7 @@ from antibody_pipeline_contract import (
     normalize_antibody_artifact_class,
     normalize_antibody_pipeline_contract_version,
 )
-from database import get_session, Job, Design
+from database import get_session, Job, Design, RFD3LocalRedesignRequest, RFD3LocalRedesignCandidate, RFD3LocalRedesignArtifact
 from services.result_contracts import build_review_artifact_manifest, resolve_result_contract
 from paths import (
     get_code_root,
@@ -46,6 +47,7 @@ from paths import (
     get_results_dir,
     get_work_dir,
     resolve_allowed_path,
+    resolve_runtime_data_path,
     to_allowed_relative,
 )
 from runtime_policy import workflow_launch_block_detail, workflow_launches_allowed
@@ -59,6 +61,11 @@ from services.md.launch_contract import MDLaunchError, materialize_md_job_spec, 
 from services.md.results import expected_analysis_implementation_sha256
 from services.md.state import MdStateError, create_md_run, create_replica_attempt
 from services.proteinbase_importer import import_proteinbase_bundle
+from services.rfd3_local_redesign import (
+    normalize_local_redesign_params,
+    materialize_local_redesign_request,
+)
+from scripts.rfd3_local_redesign.contract import ContractError, request_sha256
 
 from model_registry import get_registry
 from services.stage_review import (
@@ -5219,6 +5226,16 @@ async def create_job(
         job_data.params = _normalize_boltz_no_msa_quality_params(job_data.model_id, job_data.mode, job_data.params)
         job_data.params = _normalize_antibody_job_params(job_data.params)
 
+        if normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign":
+            try:
+                normalized_local_params, _local_request, _local_digest = normalize_local_redesign_params(
+                    job_data.params,
+                    job_name=job_data.name,
+                )
+            except ContractError as exc:
+                raise HTTPException(status_code=422, detail={"local_redesign_contract_error": str(exc)}) from exc
+            job_data.params = normalized_local_params
+
         if job_data.model_id == "molecular_dynamics" and job_data.mode == "simulate":
             try:
                 # Validate the caller-owned request without replacing it with the
@@ -5672,6 +5689,20 @@ async def create_job(
                 _raise_md_launch_http_error(exc)
             job_params["job_name"] = job_name
 
+        if normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign":
+            try:
+                job_params, _local_request, _local_digest, _local_request_path = materialize_local_redesign_request(
+                    job_params,
+                    output_dir=output_dir,
+                    job_id=job_id,
+                )
+            except ContractError as exc:
+                _cleanup_call_owned_md_output(
+                    Path(base_output_dir),
+                    created=md_output_dir_created,
+                )
+                raise HTTPException(status_code=422, detail={"local_redesign_contract_error": str(exc)}) from exc
+
         if isinstance(job_params, dict):
             job_params = _ensure_job_resume_identity(
                 job_name=job_name,
@@ -5841,6 +5872,25 @@ async def create_job(
             job_phase='inference',
         )
         session.add(job)
+        if normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign":
+            local_request = job_params.get("rfd3_request") if isinstance(job_params, dict) else None
+            local_request_id = job_params.get("rfd3_request_id") if isinstance(job_params, dict) else None
+            if not isinstance(local_request, dict) or not local_request_id:
+                raise HTTPException(status_code=500, detail="materialized local-redesign request is incomplete")
+            session.add(
+                RFD3LocalRedesignRequest(
+                    request_id=str(local_request_id),
+                    job_id=job.id,
+                    schema_version=int(local_request.get("schema_version", 1)),
+                    request_sha256=str(job_params.get("rfd3_request_sha256")),
+                    profile_id=str(local_request.get("profile_id")),
+                    profile_registry_sha256=str(local_request.get("profile_registry_sha256")),
+                    redesign_mode=str(local_request.get("redesign_mode")),
+                    sequence_policy=str(local_request.get("sequence_policy")),
+                    status="prepared",
+                    request_json=local_request,
+                )
+            )
         if is_md_launch and job_params.get("md_job_spec", {}).get("schema") == "bms.md.job.v2":
             await create_md_run(
                 session,
@@ -6148,6 +6198,139 @@ async def launch_manual_mutagenesis_from_designs(
         selected_design_count=len(ordered_designs),
         variant_count=variant_count,
         launched_job=launched_job,
+    )
+
+
+@router.get("/{job_id}/rfd3-local-redesign")
+async def get_rfd3_local_redesign_result(job_id: str, session: AsyncSession = Depends(get_session)):
+    """Return the typed local-redesign request and result projection."""
+    job = (await session.execute(select(Job).where(Job.id == job_id))).scalar_one_or_none()
+    if job is None or str(job.model_id or "").strip().lower() != "protein_local_redesign":
+        raise HTTPException(status_code=404, detail="RFD3 local-redesign job not found")
+    request = (
+        await session.execute(select(RFD3LocalRedesignRequest).where(RFD3LocalRedesignRequest.job_id == job_id))
+    ).scalar_one_or_none()
+    if request is None:
+        raise HTTPException(status_code=404, detail="RFD3 local-redesign request is not available")
+    candidates = (
+        await session.execute(
+            select(RFD3LocalRedesignCandidate)
+            .where(RFD3LocalRedesignCandidate.request_id == request.request_id)
+            .order_by(RFD3LocalRedesignCandidate.candidate_id)
+        )
+    ).scalars().all()
+    artifacts = (
+        await session.execute(
+            select(RFD3LocalRedesignArtifact)
+            .where(RFD3LocalRedesignArtifact.request_id == request.request_id)
+            .order_by(RFD3LocalRedesignArtifact.relative_path)
+        )
+    ).scalars().all()
+    return {
+        "schema": "bms.rfd3.local-redesign.read-model.v1",
+        "job_id": str(job.id),
+        "request": {
+            "request_id": request.request_id,
+            "schema_version": request.schema_version,
+            "request_sha256": request.request_sha256,
+            "profile_id": request.profile_id,
+            "profile_registry_sha256": request.profile_registry_sha256,
+            "redesign_mode": request.redesign_mode,
+            "sequence_policy": request.sequence_policy,
+            "status": request.status,
+            "request": request.request_json,
+            "preparation_receipt": request.preparation_receipt_json,
+            "runtime_identity": request.runtime_identity_json,
+            "result_manifest_sha256": request.result_manifest_sha256,
+            "failure_receipt": request.failure_receipt_json,
+            "created_at": request.created_at.isoformat() if request.created_at else None,
+            "updated_at": request.updated_at.isoformat() if request.updated_at else None,
+            "terminal_at": request.terminal_at.isoformat() if request.terminal_at else None,
+        },
+        "candidates": [
+            {
+                "candidate_id": row.candidate_id,
+                "result_set": row.result_set,
+                "stage": row.stage,
+                "status": row.status,
+                "artifact_manifest_sha256": row.artifact_manifest_sha256,
+                "metrics": row.metrics_json,
+                "metadata": row.metadata_json,
+            }
+            for row in candidates
+        ],
+        "artifacts": [
+            {
+                "artifact_id": row.artifact_id,
+                "candidate_id": row.candidate_id,
+                "role": row.role,
+                "relative_path": row.relative_path,
+                "storage_path": row.storage_path,
+                "sha256": row.content_sha256,
+                "bytes": row.size_bytes,
+                "media_type": row.media_type,
+                "metadata": row.metadata_json,
+            }
+            for row in artifacts
+        ],
+    }
+
+
+@router.get("/{job_id}/rfd3-local-redesign/artifacts/{artifact_id}")
+async def get_rfd3_local_redesign_artifact(
+    job_id: str,
+    artifact_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Stream one hash-checked local-redesign artifact."""
+    job = (await session.execute(select(Job).where(Job.id == job_id))).scalar_one_or_none()
+    if job is None or str(job.model_id or "").strip().lower() != "protein_local_redesign":
+        raise HTTPException(status_code=404, detail="RFD3 local-redesign job not found")
+    artifact = (
+        await session.execute(
+            select(RFD3LocalRedesignArtifact).where(
+                RFD3LocalRedesignArtifact.artifact_id == artifact_id,
+                RFD3LocalRedesignArtifact.request_id.in_(
+                    select(RFD3LocalRedesignRequest.request_id).where(RFD3LocalRedesignRequest.job_id == job_id)
+                ),
+            )
+        )
+    ).scalar_one_or_none()
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="RFD3 local-redesign artifact not found")
+
+    if artifact.role == "source_structure":
+        path = resolve_runtime_data_path(artifact.storage_path)
+    else:
+        output_root = resolve_runtime_data_path(str(job.output_dir or ""))
+        relative = Path(artifact.relative_path)
+        if (
+            relative.is_absolute()
+            or relative.as_posix() != artifact.relative_path
+            or any(part in {"", ".", ".."} for part in relative.parts)
+            or "\\" in artifact.relative_path
+        ):
+            raise HTTPException(status_code=409, detail="RFD3 local-redesign artifact path is unsafe")
+        current = output_root
+        for part in relative.parts:
+            current = current / part
+            if current.is_symlink():
+                raise HTTPException(status_code=409, detail="RFD3 local-redesign artifact path contains a symlink")
+        path = current.resolve()
+        if not path.is_relative_to(output_root.resolve()) or path != Path(artifact.storage_path).resolve():
+            raise HTTPException(status_code=409, detail="RFD3 local-redesign artifact path binding is invalid")
+
+    if not path.is_file() or path.is_symlink() or path.stat().st_size != artifact.size_bytes:
+        raise HTTPException(status_code=410, detail="RFD3 local-redesign artifact is unavailable")
+    if hashlib.sha256(path.read_bytes()).hexdigest() != artifact.content_sha256:
+        raise HTTPException(status_code=409, detail="RFD3 local-redesign artifact hash mismatch")
+    response_media_type = "chemical/x-mmcif" if path.name.endswith(".cif.gz") else artifact.media_type
+    response_headers = {"Content-Encoding": "gzip"} if path.name.endswith(".cif.gz") else None
+    return FileResponse(
+        str(path),
+        media_type=response_media_type,
+        filename=path.name,
+        headers=response_headers,
     )
 
 

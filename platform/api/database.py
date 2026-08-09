@@ -1535,6 +1535,79 @@ class JobArtifact(Base):
     created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
 
 
+class RFD3LocalRedesignRequest(Base):
+    """Immutable canonical request and lifecycle projection for local redesign."""
+
+    __tablename__ = "rfd3_local_redesign_requests"
+
+    request_id = Column(String(36), primary_key=True)
+    job_id = Column(String(36), ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    schema_version = Column(Integer, nullable=False, default=1)
+    request_sha256 = Column(String(64), nullable=False, index=True)
+    profile_id = Column(String(128), nullable=False, index=True)
+    profile_registry_sha256 = Column(String(64), nullable=False, index=True)
+    redesign_mode = Column(String(64), nullable=False, index=True)
+    sequence_policy = Column(String(64), nullable=False)
+    status = Column(String(32), nullable=False, default="prepared", index=True)
+    request_json = Column(JSON, nullable=False)
+    preparation_receipt_json = Column(JSON, nullable=True)
+    runtime_identity_json = Column(JSON, nullable=True)
+    result_manifest_sha256 = Column(String(64), nullable=True, index=True)
+    failure_receipt_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    terminal_at = Column(DateTime, nullable=True)
+
+
+class RFD3LocalRedesignCandidate(Base):
+    """Typed candidate projection backed by one native RFD3 result manifest."""
+
+    __tablename__ = "rfd3_local_redesign_candidates"
+    __table_args__ = (
+        UniqueConstraint("request_id", "candidate_id", name="uq_rfd3_local_redesign_candidate"),
+        Index("ix_rfd3_local_redesign_candidate_status", "request_id", "status"),
+    )
+
+    id = Column(String(96), primary_key=True)
+    request_id = Column(
+        String(36), ForeignKey("rfd3_local_redesign_requests.request_id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    candidate_id = Column(String(128), nullable=False)
+    result_set = Column(String(128), nullable=False, default="rfd3_local_redesign_candidates")
+    stage = Column(String(64), nullable=False, default="backbone")
+    status = Column(String(32), nullable=False, index=True)
+    artifact_manifest_sha256 = Column(String(64), nullable=False, index=True)
+    metrics_json = Column(JSON, nullable=False, default=dict)
+    metadata_json = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class RFD3LocalRedesignArtifact(Base):
+    """One exact native or derived artifact for a local-redesign candidate."""
+
+    __tablename__ = "rfd3_local_redesign_artifacts"
+    __table_args__ = (
+        UniqueConstraint("request_id", "relative_path", name="uq_rfd3_local_redesign_artifact_path"),
+        Index("ix_rfd3_local_redesign_artifact_role", "request_id", "role"),
+    )
+
+    artifact_id = Column(String(96), primary_key=True)
+    request_id = Column(
+        String(36), ForeignKey("rfd3_local_redesign_requests.request_id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    candidate_id = Column(String(128), nullable=True, index=True)
+    role = Column(String(96), nullable=False, index=True)
+    relative_path = Column(String(1000), nullable=False)
+    storage_path = Column(String(2000), nullable=False)
+    content_sha256 = Column(String(64), nullable=False, index=True)
+    size_bytes = Column(Integer, nullable=False)
+    media_type = Column(String(128), nullable=False)
+    metadata_json = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class MdEvent(Base):
     __tablename__ = "md_events"
     __table_args__ = (UniqueConstraint("idempotency_key", name="uq_md_event_idempotency"),)
@@ -1585,6 +1658,9 @@ async def _ensure_schema(conn):
     await _ensure_table_columns(conn, "conformational_mapping_state_landscape_analysis_headers", ConformationalMappingStateLandscapeAnalysisHeader.__table__.columns)
     await _ensure_table_columns(conn, "conformational_mapping_state_landscape_analysis_pairs", ConformationalMappingStateLandscapeAnalysisPair.__table__.columns)
     await _ensure_table_columns(conn, "conformational_mapping_state_landscape_analysis_rows", ConformationalMappingStateLandscapeAnalysisRow.__table__.columns)
+    await _ensure_table_columns(conn, "rfd3_local_redesign_requests", RFD3LocalRedesignRequest.__table__.columns)
+    await _ensure_table_columns(conn, "rfd3_local_redesign_candidates", RFD3LocalRedesignCandidate.__table__.columns)
+    await _ensure_table_columns(conn, "rfd3_local_redesign_artifacts", RFD3LocalRedesignArtifact.__table__.columns)
     await _ensure_table_columns(conn, "nucleotide_sequences", NucleotideSequence.__table__.columns)
     await _ensure_table_columns(conn, "primers", Primer.__table__.columns)
     await _backfill_frustrampnn_summary_projections(conn)

@@ -388,6 +388,7 @@ MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
     ("rfantibody_child", "antibody_backbone"): "workflows/rfantibody_backbone.nf",
     ("fampnn_child", "sequence_design"): "workflows/fampnn_child.nf",
     ("frustrampnn", "analyze"): "workflows/frustrampnn_analysis.nf",
+    ("protein_local_redesign", "local_redesign"): "workflows/protein_local_redesign.nf",
     ("protein_modification_experimental", "de_novo_design"): "workflows/protein_cad_experimental.nf",
     ("protein_modification_experimental", "shape_blueprint"): "workflows/shape_blueprint_design.nf",
     ("protein_modification_experimental", "region_redesign"): "workflows/protein_local_redesign.nf",
@@ -1922,6 +1923,17 @@ async def launch_nextflow_job(
         if job.status != JobStatus.RUNNING.value or job.started_at is None:
             job.status = JobStatus.RUNNING.value
             job.started_at = datetime.utcnow()
+            if str(job.model_id or "").strip().lower() == "protein_local_redesign":
+                from database import RFD3LocalRedesignRequest
+
+                local_request_row = (
+                    await session.execute(
+                        select(RFD3LocalRedesignRequest).where(RFD3LocalRedesignRequest.job_id == str(job.id))
+                    )
+                ).scalar_one_or_none()
+                if local_request_row is not None:
+                    local_request_row.status = "running"
+                    local_request_row.updated_at = datetime.utcnow()
             await session.commit()
         
         # Re-check cancellation status right before spawning (minimize race window)
@@ -2597,6 +2609,28 @@ async def launch_nextflow_job(
                         # Log last few lines
                         if job.status == JobStatus.FAILED.value:
                             logger.error(f"Tail of log:\n{''.join(full_log.tail(20))}")
+                if str(job.model_id or "").strip().lower() == "protein_local_redesign":
+                    from database import RFD3LocalRedesignRequest
+
+                    local_request_row = (
+                        await session.execute(
+                            select(RFD3LocalRedesignRequest).where(RFD3LocalRedesignRequest.job_id == str(job.id))
+                        )
+                    ).scalar_one_or_none()
+                    if local_request_row is not None:
+                        if job.status in {JobStatus.FAILED.value, JobStatus.CANCELLED.value}:
+                            local_request_row.status = "failed" if job.status == JobStatus.FAILED.value else "cancelled"
+                            local_request_row.failure_receipt_json = {
+                                "schema": "bms.rfd3.local-redesign.failure-receipt.v1",
+                                "job_id": str(job.id),
+                                "status": job.status,
+                                "error_message": job.error_message,
+                                "exit_code": exit_code,
+                            }
+                        elif job.status == JobStatus.AWAITING_INPUT.value:
+                            local_request_row.status = "awaiting_input"
+                        local_request_row.updated_at = datetime.utcnow()
+
                 md_analysis_parent_id = (
                     str(job.parent_job_id)
                     if job.model_id == "molecular_dynamics" and job.mode == "analyze" and job.parent_job_id
@@ -3535,7 +3569,9 @@ def build_nextflow_command(
         model_id == 'protein_modification_experimental' and mode == 'region_redesign'
     ):
         protein_local_mappings = {
+            'input_structure': 'plr_input_pdb',
             'input_pdb': 'plr_input_pdb',
+            'input_cif': 'plr_input_pdb',
             'model_number': 'plr_model_number',
             'design_chains': 'plr_design_chains',
             'context_chains': 'plr_context_chains',
@@ -3547,6 +3583,25 @@ def build_nextflow_command(
             'seq_method': 'plr_seq_method',
             'fix_fixed_sidechains': 'plr_fix_fixed_sidechains',
             'run_boltz_validation': 'plr_run_boltz_validation',
+            'redesign_mode': 'plr_redesign_mode',
+            'select_fixed_atoms': 'plr_select_fixed_atoms',
+            'contig': 'plr_contig',
+            'select_unfixed_sequence': 'plr_select_unfixed_sequence',
+            'partial_t': 'plr_partial_t',
+            'ligand': 'plr_ligand',
+            'select_buried': 'plr_select_buried',
+            'select_exposed': 'plr_select_exposed',
+            'select_partially_buried': 'plr_select_partially_buried',
+            'select_hbond_donor': 'plr_select_hbond_donor',
+            'select_hbond_acceptor': 'plr_select_hbond_acceptor',
+            'select_hotspots': 'plr_select_hotspots',
+            'ori_token': 'plr_ori_token',
+            'unindex': 'plr_unindex',
+            'length': 'plr_length',
+            'seed': 'plr_seed',
+            'dump_trajectories': 'plr_dump_trajectories',
+            'evaluation_states': 'plr_evaluation_states',
+            'profile_id': 'plr_profile_id',
             'interactive_gating': 'interactive_gating',
             'interactive_gate_stage': 'interactive_gate_stage',
             'interactive_gate_continue': 'interactive_gate_continue',
@@ -3566,6 +3621,8 @@ def build_nextflow_command(
 
         if 'plr_num_designs' in params and 'rfd_num_designs' not in params:
             params['rfd_num_designs'] = params['plr_num_designs']
+        if model_id == 'protein_local_redesign' and 'rfd3_batches_per_design' not in params:
+            params['rfd3_batches_per_design'] = params.get('plr_num_designs', 1)
         if 'plr_seq_method' in params and 'seq_method' not in params:
             params['seq_method'] = params['plr_seq_method']
         if not params.get('rfd_mode'):

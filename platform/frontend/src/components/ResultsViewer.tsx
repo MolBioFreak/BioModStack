@@ -56,6 +56,7 @@ import { DataViewerLanding } from './DataViewerLanding';
 import { AnalyticsDashboard } from './AnalyticsDashboard';
 import StructureViewerPane from './StructureViewerPane';
 import MDResultsPane from './MDResultsPane';
+import RFD3LocalRedesignResultsPane from './RFD3LocalRedesignResultsPane';
 import { ConformationalMappingViewer } from './conformationalMapping/ConformationalMappingViewer';
 import FrustraMpnnAnalysisControls from './FrustraMpnnAnalysisControls';
 import FrustraMpnnResultsViewer from './FrustraMpnnResultsViewer';
@@ -5192,7 +5193,9 @@ export function ResultsViewer() {
                 )}
 
                 {activeJob && (
-                    activeJob.model_id === 'molecular_dynamics' ? (
+                    activeJob.model_id === 'protein_local_redesign' ? (
+                        <RFD3LocalRedesignResultsPane key={activeJob.id} jobId={activeJob.id} />
+                    ) : activeJob.model_id === 'molecular_dynamics' ? (
                         <MDResultsPane key={activeJob.id} jobId={activeJob.id} />
                     ) : (
                     <>

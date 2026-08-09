@@ -133,6 +133,59 @@ process PrepProteinLocalRFD3Input {
     """
 }
 
+process PrepareProteinLocalNativeRFD3Input {
+    label 'pyrosetta_tools'
+
+    publishDir "${params.out_dir}/collected/protein_local_redesign", mode: 'copy', pattern: 'rfd3_preparation_receipt.json'
+
+    input:
+    path input_structure
+    path request_json
+
+    output:
+    tuple val('protein_local_redesign_0'), path('rfd3_input_protein_local_redesign_0.json'), emit: input_json
+    path 'rfd3_preparation_receipt.json', emit: receipt
+
+    script:
+    """
+    python3 ${params.code_root}/scripts/rfd3_local_redesign/prepare_native_input.py \\
+        --request ${request_json} \\
+        --input-structure ${input_structure} \\
+        --design-id protein_local_redesign_0 \\
+        --output-native rfd3_input_protein_local_redesign_0.json \\
+        --output-receipt rfd3_preparation_receipt.json
+    """
+}
+
+process BuildProteinLocalRFD3ResultManifest {
+    label 'process_low'
+
+    publishDir "${params.out_dir}/collected/protein_local_redesign", mode: 'copy', pattern: 'rfd3_result_manifest.json'
+
+    input:
+    tuple path(cif_files), path(json_files)
+    path request_json
+    path source_structure
+
+    output:
+    path 'rfd3_result_manifest.json', emit: manifest
+
+    script:
+    def cifArgs = cif_files.collect { path -> "--cif-file ${path}" }.join(' ')
+    def jsonArgs = json_files.collect { path -> "--json-file ${path}" }.join(' ')
+    """
+    python3 ${params.code_root}/scripts/rfd3_local_redesign/build_result_manifest.py \\
+        --request ${request_json} \\
+        ${cifArgs} \\
+        ${jsonArgs} \\
+        --storage-root "${params.out_dir}/run/rfd3" \\
+        --request-storage-path "${params.rfd3_request_path}" \\
+        --source-file ${source_structure} \\
+        --source-storage-path "${params.plr_input_pdb}" \\
+        --output rfd3_result_manifest.json
+    """
+}
+
 process MergeProteinLocalComplexes {
     label 'pyrosetta_tools'
 
@@ -266,13 +319,15 @@ workflow PROTEIN_LOCAL_REDESIGN {
     if (!params.containsKey('interactive_gate_stage') || !params.interactive_gate_stage) params.interactive_gate_stage = 'post_structure_validation'
     if (!params.containsKey('interactive_gate_continue')) params.interactive_gate_continue = false
 
-    if (!params.plr_input_pdb) {
-        error('Missing required parameter: plr_input_pdb')
+    def nativeRfd3Request = params.rfd3_request_path && params.plr_redesign_mode
+    def nativeSequenceMethod = params.plr_seq_method ?: (nativeRfd3Request ? 'skip' : 'fampnn')
+    if (!params.plr_input_pdb && !nativeRfd3Request) {
+        error('Missing required parameter: plr_input_pdb or rfd3_request_path')
     }
-    if (!params.plr_design_chains) {
+    if (!nativeRfd3Request && !params.plr_design_chains) {
         error('Missing required parameter: plr_design_chains')
     }
-    if ((params.plr_region_mode ?: 'manual_ranges') == 'manual_ranges' && !params.plr_redesign_ranges) {
+    if (!nativeRfd3Request && (params.plr_region_mode ?: 'manual_ranges') == 'manual_ranges' && !params.plr_redesign_ranges) {
         error('manual_ranges mode requires plr_redesign_ranges')
     }
 
@@ -281,8 +336,9 @@ workflow PROTEIN_LOCAL_REDESIGN {
     def resumeFromSequences = !resumeFromValidation && params.plr_sequence_input_pdbs ? true : false
     def resumeFromBackbones = !resumeFromValidation && !resumeFromSequences && params.plr_backbone_input_pdbs ? true : false
 
-    def inputPdbForResolve = Channel.of(file(params.plr_input_pdb))
-    def inputPdbForMerge = Channel.of(file(params.plr_input_pdb))
+    def inputPdbForResolve = params.plr_input_pdb ? Channel.of(file(params.plr_input_pdb)) : Channel.empty()
+    def inputPdbForMerge = params.plr_input_pdb ? Channel.of(file(params.plr_input_pdb)) : Channel.empty()
+    def inputPdbForNative = params.plr_input_pdb ? Channel.of(file(params.plr_input_pdb)) : Channel.empty()
 
     def mergedBackboneArtifacts
     def manifestChannel
@@ -294,6 +350,29 @@ workflow PROTEIN_LOCAL_REDESIGN {
         manifestChannel = Channel.of(file(params.plr_region_manifest))
     } else if (resumeFromSequences || resumeFromValidation) {
         manifestChannel = Channel.empty()
+    } else if (nativeRfd3Request) {
+        if (!params.plr_input_pdb) {
+            error('Native local redesign requires plr_input_pdb for the staged source structure')
+        }
+        PrepareProteinLocalNativeRFD3Input(
+            inputPdbForNative,
+            Channel.of(file(params.rfd3_request_path))
+        )
+        RunRFD3(PrepareProteinLocalNativeRFD3Input.out.input_json)
+        BuildProteinLocalRFD3ResultManifest(
+            RunRFD3.out.structures_metadata,
+            Channel.of(file(params.rfd3_request_path)),
+            Channel.of(file(params.plr_input_pdb))
+        )
+        if (nativeSequenceMethod != 'skip') {
+            FilterRFD3(RunRFD3.out.structures_metadata)
+            mergedBackboneArtifacts = FilterRFD3.out.structures_metadata
+        } else {
+            mergedBackboneArtifacts = RunRFD3.out.structures_metadata
+        }
+        manifestChannel = params.plr_region_manifest
+            ? Channel.of(file(params.plr_region_manifest))
+            : Channel.empty()
     } else {
         ResolveProteinLocalRegion(inputPdbForResolve)
         manifestChannel = ResolveProteinLocalRegion.out.manifest
@@ -334,6 +413,12 @@ workflow PROTEIN_LOCAL_REDESIGN {
         return
     }
 
+    def sequenceMethod = params.plr_seq_method ?: (nativeRfd3Request ? 'skip' : 'fampnn')
+    if (nativeRfd3Request && sequenceMethod == 'skip') {
+        println('Native RFD3 local-redesign backbone stage complete; sequence design is explicitly skipped')
+        return
+    }
+
     def finalDesignPdbs
     def rawSequenceDir = null
     def filteredSequenceDir = null
@@ -341,7 +426,7 @@ workflow PROTEIN_LOCAL_REDESIGN {
     if (resumeFromSequences || resumeFromValidation) {
         finalDesignPdbs = loadProteinLocalPdbCollection(params.plr_sequence_input_pdbs ?: params.plr_validation_input_pdbs)
         rawSequenceDir = params.plr_sequence_input_pdbs ?: params.plr_validation_input_pdbs
-    } else if ((params.plr_seq_method ?: 'fampnn') == 'mpnn') {
+    } else if (sequenceMethod == 'mpnn') {
         PrepProteinLocalMPNN(mergedBackboneArtifacts, manifestChannel)
 
         if ((params.mpnn_relax_max_cycles ?: 0) > 0) {
@@ -460,18 +545,19 @@ workflow PROTEIN_LOCAL_REDESIGN {
 }
 
 workflow {
-    println("Running Protein Local Redesign (RFD3 + constrained sequence design)")
-    println("* Input PDB: ${params.plr_input_pdb}")
-    println("* Design chain: ${params.plr_design_chains}")
-    println("* Region mode: ${params.plr_region_mode ?: 'manual_ranges'}")
-    println("* Sequence method: ${params.plr_seq_method ?: 'fampnn'}")
+    def nativeRfd3Request = params.rfd3_request_path && params.plr_redesign_mode
+    println("Running Protein Local Redesign (native RFD3 local-redesign contract)")
+    println("* Input structure: ${params.plr_input_pdb ?: params.input_structure}")
+    println("* Redesign mode: ${params.plr_redesign_mode ?: 'legacy_region_redesign'}")
+    println("* Design chain: ${params.plr_design_chains ?: 'native request selection'}")
+    println("* Sequence method: ${params.plr_seq_method ?: (nativeRfd3Request ? 'skip' : 'fampnn')}")
     println("* Boltz validation: ${params.plr_run_boltz_validation != false}")
 
-    if (!params.plr_input_pdb) {
-        error("Input PDB required for protein_local_redesign mode")
+    if (!params.plr_input_pdb && !params.rfd3_request_path) {
+        error("Input structure required for protein_local_redesign mode")
     }
-    if (!params.plr_design_chains) {
-        error("Design chain required for protein_local_redesign mode")
+    if (!params.plr_design_chains && !params.rfd3_request_path) {
+        error("Design chain or canonical RFD3 request required for protein_local_redesign mode")
     }
 
     PROTEIN_LOCAL_REDESIGN()

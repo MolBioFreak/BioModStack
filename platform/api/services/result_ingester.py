@@ -36,6 +36,9 @@ from database import (
     Job,
     ShapeDesignGeometry,
     ShapeDesignRequest,
+    RFD3LocalRedesignRequest,
+    RFD3LocalRedesignCandidate,
+    RFD3LocalRedesignArtifact,
 )
 from paths import get_data_root, resolve_runtime_data_path
 from services.rfantibody_metadata import load_rfantibody_trb_summary
@@ -2779,6 +2782,285 @@ async def _ingest_shape_result_manifest(
     return created
 
 
+def _local_redesign_canonical_sha(payload: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _local_redesign_safe_job_artifact(output_root: Path, relative_path: str) -> Path:
+    relative = Path(relative_path)
+    if (
+        relative.is_absolute()
+        or relative.as_posix() != relative_path
+        or any(part in {"", ".", ".."} for part in relative.parts)
+        or "\\" in relative_path
+    ):
+        raise RuntimeError("RFD3 local-redesign artifact path is unsafe")
+    current = output_root
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise RuntimeError("RFD3 local-redesign artifact path contains a symlink")
+    resolved = current.resolve()
+    if not resolved.is_relative_to(output_root.resolve()) or not resolved.is_file():
+        raise RuntimeError("RFD3 local-redesign artifact is missing or outside the job output root")
+    if resolved.stat().st_nlink != 1:
+        raise RuntimeError("RFD3 local-redesign artifact must not be hard-linked")
+    return resolved
+
+
+def _local_redesign_external_source(path_value: str) -> Path:
+    source = resolve_runtime_data_path(path_value)
+    if not source.is_file() or source.is_symlink():
+        raise RuntimeError("RFD3 local-redesign source structure is missing or unsafe")
+    return source.resolve()
+
+
+def _local_redesign_validate_artifact(
+    descriptor: Mapping[str, Any],
+    *,
+    output_root: Path,
+    source_path: Path,
+) -> Path:
+    role = str(descriptor.get("role") or "").strip()
+    relative = descriptor.get("relative_path")
+    storage = descriptor.get("storage_path")
+    expected_sha = descriptor.get("sha256")
+    expected_bytes = descriptor.get("bytes")
+    if not role or not isinstance(relative, str) or not isinstance(storage, str):
+        raise RuntimeError("RFD3 local-redesign artifact descriptor is incomplete")
+    if not isinstance(expected_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_sha):
+        raise RuntimeError(f"RFD3 local-redesign artifact has an invalid SHA-256: {role}")
+    if not isinstance(expected_bytes, int) or expected_bytes < 0:
+        raise RuntimeError(f"RFD3 local-redesign artifact has an invalid byte count: {role}")
+    if role == "source_structure":
+        resolved = _local_redesign_external_source(storage)
+        if resolved != source_path:
+            raise RuntimeError("RFD3 local-redesign source artifact path does not match the request")
+    else:
+        resolved = _local_redesign_safe_job_artifact(output_root, relative)
+        if resolved != Path(storage).expanduser().resolve():
+            raise RuntimeError(f"RFD3 local-redesign artifact storage path mismatch: {role}")
+    actual_sha = hashlib.sha256(resolved.read_bytes()).hexdigest()
+    if actual_sha != expected_sha or resolved.stat().st_size != expected_bytes:
+        raise RuntimeError(f"RFD3 local-redesign artifact identity mismatch: {role}")
+    return resolved
+
+
+async def _ingest_rfd3_local_redesign_manifest(
+    job: Job,
+    output_root: Path,
+    session: AsyncSession,
+    *,
+    commit: bool,
+) -> int:
+    manifest_path = output_root / "collected" / "protein_local_redesign" / "rfd3_result_manifest.json"
+    manifest = None
+    if not manifest_path.is_file() or manifest_path.is_symlink():
+        raise RuntimeError("RFD3 local-redesign result manifest is absent or unsafe")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"RFD3 local-redesign result manifest is malformed: {exc}") from exc
+    if not isinstance(manifest, dict) or manifest.get("schema") != "bms.rfd3.local-redesign.result.v1":
+        raise RuntimeError("RFD3 local-redesign result manifest schema is invalid")
+    unsigned = dict(manifest)
+    claimed_manifest_sha = unsigned.pop("manifest_sha256", None)
+    if not isinstance(claimed_manifest_sha, str) or _local_redesign_canonical_sha(unsigned) != claimed_manifest_sha:
+        raise RuntimeError("RFD3 local-redesign result manifest SHA-256 is invalid")
+
+    request = (
+        await session.execute(select(RFD3LocalRedesignRequest).where(RFD3LocalRedesignRequest.job_id == str(job.id)))
+    ).scalar_one_or_none()
+    if request is None:
+        raise RuntimeError("RFD3 local-redesign job has no immutable request row")
+    request_payload = request.request_json
+    if not isinstance(request_payload, dict):
+        raise RuntimeError("RFD3 local-redesign request JSON is invalid")
+    if request.request_sha256 != _local_redesign_canonical_sha(request_payload):
+        raise RuntimeError("RFD3 local-redesign request SHA-256 is invalid")
+    if request.profile_registry_sha256 != request_payload.get("profile_registry_sha256"):
+        raise RuntimeError("RFD3 local-redesign profile registry hash is invalid")
+    if manifest.get("request_sha256") != request.request_sha256:
+        raise RuntimeError("RFD3 local-redesign result does not bind to the immutable request")
+    if manifest.get("result_contract_id") != "rfd3_local_redesign_v1":
+        raise RuntimeError("RFD3 local-redesign result contract is unsupported")
+    if (
+        manifest.get("profile_id") != request_payload.get("profile_id")
+        or manifest.get("profile_registry_sha256") != request_payload.get("profile_registry_sha256")
+        or manifest.get("profile") != request_payload.get("profile")
+    ):
+        raise RuntimeError("RFD3 local-redesign result profile binding is invalid")
+    source_binding = request_payload.get("input")
+    if not isinstance(source_binding, dict) or not isinstance(source_binding.get("path"), str):
+        raise RuntimeError("RFD3 local-redesign request has no source input")
+    source_request = source_binding["path"]
+    source_path = _local_redesign_external_source(source_request)
+    if source_binding.get("sha256") != hashlib.sha256(source_path.read_bytes()).hexdigest():
+        raise RuntimeError("RFD3 local-redesign source hash is invalid")
+
+    manifest_artifacts = manifest.get("artifacts")
+    candidates = manifest.get("candidates")
+    if not isinstance(manifest_artifacts, list) or not isinstance(candidates, list) or not candidates:
+        raise RuntimeError("RFD3 local-redesign result lacks declared artifacts or candidates")
+    descriptor_by_path: dict[str, dict[str, Any]] = {}
+    for descriptor in manifest_artifacts:
+        if not isinstance(descriptor, dict):
+            raise RuntimeError("RFD3 local-redesign artifact entry is malformed")
+        relative_path = descriptor.get("relative_path")
+        if not isinstance(relative_path, str) or relative_path in descriptor_by_path:
+            raise RuntimeError("RFD3 local-redesign artifact paths must be unique")
+        _local_redesign_validate_artifact(descriptor, output_root=output_root, source_path=source_path)
+        descriptor_by_path[relative_path] = descriptor
+
+    roles = {str(descriptor.get("role") or "") for descriptor in descriptor_by_path.values()}
+    if not {"source_structure", "native_request"}.issubset(roles):
+        raise RuntimeError("RFD3 local-redesign result lacks source or native request artifact")
+
+    seen_candidates: set[str] = set()
+    seen_artifacts: set[str] = set()
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            raise RuntimeError("RFD3 local-redesign candidate entry is malformed")
+        candidate_id = candidate.get("candidate_id")
+        candidate_artifacts = candidate.get("artifacts")
+        if not isinstance(candidate_id, str) or not candidate_id or candidate_id in seen_candidates:
+            raise RuntimeError("RFD3 local-redesign candidate IDs must be unique")
+        if not isinstance(candidate_artifacts, list) or not candidate_artifacts:
+            raise RuntimeError(f"RFD3 local-redesign candidate lacks artifacts: {candidate_id}")
+        candidate_artifact_sha = _local_redesign_canonical_sha(candidate_artifacts)
+        if candidate.get("artifact_manifest_sha256") != candidate_artifact_sha:
+            raise RuntimeError(f"RFD3 local-redesign candidate artifact hash is invalid: {candidate_id}")
+        candidate_roles = {str(item.get("role") or "") for item in candidate_artifacts if isinstance(item, dict)}
+        if "structure" not in candidate_roles or "native_prediction_metadata" not in candidate_roles:
+            raise RuntimeError(f"RFD3 local-redesign candidate lacks native structure metadata: {candidate_id}")
+        for descriptor in candidate_artifacts:
+            if not isinstance(descriptor, dict):
+                raise RuntimeError(f"RFD3 local-redesign candidate artifact is malformed: {candidate_id}")
+            relative_path = descriptor.get("relative_path")
+            if relative_path not in descriptor_by_path or descriptor_by_path[relative_path] != descriptor:
+                raise RuntimeError(f"RFD3 local-redesign candidate artifact is undeclared: {candidate_id}")
+            seen_artifacts.add(str(relative_path))
+        seen_candidates.add(candidate_id)
+
+    runtime_records = [
+        candidate.get("metrics", {}).get("inference_metadata")
+        for candidate in candidates
+        if isinstance(candidate.get("metrics"), dict) and candidate.get("metrics", {}).get("inference_metadata") is not None
+    ]
+    if runtime_records:
+        request.runtime_identity_json = {
+            "source": "native_rfd3_prediction_metadata",
+            "records": runtime_records,
+        }
+
+    receipt_path = output_root / "collected" / "protein_local_redesign" / "rfd3_preparation_receipt.json"
+    if receipt_path.is_file() and not receipt_path.is_symlink():
+        try:
+            preparation_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError("RFD3 local-redesign preparation receipt is malformed") from exc
+        if (
+            not isinstance(preparation_receipt, dict)
+            or preparation_receipt.get("schema") != "bms.rfd3.local-redesign.preparation-receipt.v1"
+            or preparation_receipt.get("request_sha256") != request.request_sha256
+        ):
+            raise RuntimeError("RFD3 local-redesign preparation receipt binding is invalid")
+        request.preparation_receipt_json = preparation_receipt
+
+    request.result_manifest_sha256 = claimed_manifest_sha
+    request.status = "completed"
+    request.updated_at = datetime.utcnow()
+    request.terminal_at = datetime.utcnow()
+
+    manifest_descriptor = {
+        "role": "rfd3_result_manifest",
+        "relative_path": "collected/protein_local_redesign/rfd3_result_manifest.json",
+        "storage_path": str(manifest_path.resolve()),
+        "sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        "bytes": manifest_path.stat().st_size,
+        "media_type": "application/json",
+    }
+    all_descriptors = [*descriptor_by_path.values(), manifest_descriptor]
+    for descriptor in all_descriptors:
+        relative_path = str(descriptor["relative_path"])
+        artifact_id = hashlib.sha256(f"{request.request_id}:{relative_path}".encode("utf-8")).hexdigest()
+        candidate_id = None
+        for candidate in candidates:
+            if any(item.get("relative_path") == relative_path for item in candidate.get("artifacts", [])):
+                candidate_id = candidate.get("candidate_id")
+                break
+        existing = (
+            await session.execute(
+                select(RFD3LocalRedesignArtifact).where(
+                    RFD3LocalRedesignArtifact.request_id == request.request_id,
+                    RFD3LocalRedesignArtifact.relative_path == relative_path,
+                )
+            )
+        ).scalar_one_or_none()
+        values = {
+            "artifact_id": artifact_id,
+            "request_id": request.request_id,
+            "candidate_id": candidate_id,
+            "role": descriptor["role"],
+            "relative_path": relative_path,
+            "storage_path": descriptor["storage_path"],
+            "content_sha256": descriptor["sha256"],
+            "size_bytes": descriptor["bytes"],
+            "media_type": descriptor.get("media_type") or "application/octet-stream",
+            "metadata_json": {"request_sha256": request.request_sha256},
+        }
+        if existing is not None:
+            if any(getattr(existing, key) != value for key, value in values.items() if key not in {"artifact_id", "metadata_json"}):
+                raise RuntimeError(f"RFD3 local-redesign artifact replay conflicts: {relative_path}")
+        else:
+            session.add(RFD3LocalRedesignArtifact(**values))
+
+    for candidate in candidates:
+        candidate_id = str(candidate["candidate_id"])
+        row_id = hashlib.sha256(f"{request.request_id}:{candidate_id}".encode("utf-8")).hexdigest()
+        values = {
+            "id": row_id,
+            "request_id": request.request_id,
+            "candidate_id": candidate_id,
+            "result_set": candidate.get("result_set") or "rfd3_local_redesign_candidates",
+            "stage": "backbone",
+            "status": candidate.get("status") or "generated",
+            "artifact_manifest_sha256": candidate["artifact_manifest_sha256"],
+            "metrics_json": candidate.get("metrics") if isinstance(candidate.get("metrics"), dict) else {},
+            "metadata_json": {
+                "request_sha256": request.request_sha256,
+                "profile_id": manifest.get("profile_id"),
+                "redesign_mode": manifest.get("redesign_mode"),
+            },
+        }
+        existing = (
+            await session.execute(
+                select(RFD3LocalRedesignCandidate).where(
+                    RFD3LocalRedesignCandidate.request_id == request.request_id,
+                    RFD3LocalRedesignCandidate.candidate_id == candidate_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            if any(getattr(existing, key) != value for key, value in values.items() if key not in {"id", "created_at"}):
+                raise RuntimeError(f"RFD3 local-redesign candidate replay conflicts: {candidate_id}")
+        else:
+            session.add(RFD3LocalRedesignCandidate(**values))
+
+    await session.flush()
+    if commit:
+        await session.commit()
+    return len(candidates)
+
+
 _FRUSTRAMPNN_TERMINAL_STAGES = frozenset({"frustrampnn", "canonical_frustrampnn"})
 _FRUSTRAMPNN_TERMINAL_RESULT = "workflow_component_result_v1.json"
 
@@ -3675,6 +3957,8 @@ async def ingest_job_results(
         and str(current_job.mode or "").strip().lower() == "shape_blueprint"
     ):
         return await _ingest_shape_result_manifest(current_job, output_path, session, commit=commit)
+    if current_job and str(current_job.model_id or "").strip().lower() == "protein_local_redesign":
+        return await _ingest_rfd3_local_redesign_manifest(current_job, output_path, session, commit=commit)
     if current_job and str(current_job.model_id or "") == "conformational_mapping":
         cm_request = await get_cm_request(session, job_id)
         if cm_request is None:
