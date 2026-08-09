@@ -57,7 +57,10 @@ if [ -z "${BMS_MICROMAMBA_BIN:-}" ]; then
 fi
 if [ -n "${BMS_MICROMAMBA_BIN:-}" ] && [ -z "${BMS_MICROMAMBA_ROOT_PREFIX:-}" ]; then
     micromamba_root="$("$BMS_MICROMAMBA_BIN" info --base 2>/dev/null || true)"
-    if [ -n "$micromamba_root" ]; then
+    micromamba_root="${micromamba_root#"${micromamba_root%%[![:space:]]*}"}"
+    micromamba_root="${micromamba_root#base environment : }"
+    micromamba_root="${micromamba_root%"${micromamba_root##*[![:space:]]}"}"
+    if [[ "$micromamba_root" == /* ]]; then
         export BMS_MICROMAMBA_ROOT_PREFIX="$micromamba_root"
     fi
 fi
