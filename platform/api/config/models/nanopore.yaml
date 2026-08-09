@@ -25,6 +25,7 @@ workflow_family:
     - ont_construct_screening
     - ont_methylation_analysis
     - ont_fastq_qc
+    - ont_pooled_reference_assignment
     - wf_clone_validation
 
 quality_modes:
@@ -58,6 +59,7 @@ inputs:
   - bam
   - fastq
   - fasta
+  - reference_set_manifest
 outputs:
   - bam
   - bed
@@ -193,6 +195,15 @@ modes:
       - single_ref_split_min_segment_bp
       - single_ref_split_max_query_gap_bp
 
+  - id: pooled_reference_assignment
+    name: ONT Pooled Reference Assignment
+    description: Strict competitive assignment of one FASTQ against a server-staged immutable pooled reference set; ends at operator review.
+    params:
+      - fastq_path
+      - reference_set_manifest
+      - pooled_assignment_min_mapq
+      - pooled_assignment_min_alignment_score_margin
+
   - id: methylation_analysis
     name: Methylation Analysis
     description: POD5/BAM methylation analysis with modkit
@@ -282,6 +293,27 @@ params:
     description: Optional reference FASTA; required for modkit pileup BED output and optional BAM force-realignment
     required: false
     file_type: fasta
+
+  - name: reference_set_manifest
+    type: file
+    description: Server-staged immutable bms.ngs.reference-set.v1 manifest for pooled assignment
+    required: false
+    file_type: json
+
+  - name: pooled_assignment_min_mapq
+    type: integer
+    description: Minimum MAPQ retained as competitive pooled-assignment evidence
+    required: false
+    default: 20
+    minimum: 0
+    maximum: 255
+
+  - name: pooled_assignment_min_alignment_score_margin
+    type: integer
+    description: Inclusive alignment-score margin within which competitors remain ambiguous
+    required: false
+    default: 10
+    minimum: 0
 
   - name: dorado_model
     type: string
