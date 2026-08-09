@@ -1,5 +1,5 @@
 import {
-    parseFrustraMpnnRequestedSettings,
+    buildFrustraMpnnLaunchParams,
     type FrustraMpnnRequestedSettings,
 } from './frustrampnn/frustraMpnnSettingsState.js';
 
@@ -431,19 +431,10 @@ export type StructureFrustraMpnnSubmitParams =
 export const buildStructureFrustraMpnnSubmitParams = (
     enabled: boolean | undefined,
     settings: FrustraMpnnRequestedSettings,
-): StructureFrustraMpnnSubmitParams => {
-    if (enabled === false) {
-        return {
-            run_frustrampnn: false,
-            frustrampnn_requiredness: 'required',
-        };
-    }
-    return {
-        run_frustrampnn: true,
-        frustrampnn_requiredness: 'required',
-        frustrampnn_settings: parseFrustraMpnnRequestedSettings(settings),
-    };
-};
+): StructureFrustraMpnnSubmitParams => ({
+    ...buildFrustraMpnnLaunchParams(enabled !== false, settings),
+    frustrampnn_requiredness: 'required',
+});
 
 export const buildStructureMsaSubmitParams = ({
     provider,

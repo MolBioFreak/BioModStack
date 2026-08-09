@@ -1,8 +1,5 @@
 nextflow.enable.dsl = 2
 
-import groovy.json.JsonOutput
-import groovy.json.JsonSlurper
-
 process CanonicalFrustraMPNNTask {
     tag "frustrampnn:${component_request_meta.parent_job_id}:${component_request_meta.candidate_id}"
     label 'frustrampnn_gpu'
@@ -42,7 +39,7 @@ process CanonicalFrustraMPNNTask {
             'CanonicalFrustraMPNN requires explicit scheduler-assigned frustrampnn_physical_gpu_id'
         )
     }
-    def request_base64 = JsonOutput.toJson(component_request_meta)
+    def request_base64 = groovy.json.JsonOutput.toJson(component_request_meta)
         .getBytes('UTF-8').encodeBase64().toString()
     def apptainer_bin = params.get('apptainer_bin') ?: 'apptainer'
 
@@ -65,7 +62,7 @@ process CanonicalFrustraMPNNTask {
             'CanonicalFrustraMPNN requires explicit scheduler-assigned frustrampnn_physical_gpu_id'
         )
     }
-    def stub_result = JsonOutput.toJson(component_request_meta + [status: 'succeeded'])
+    def stub_result = groovy.json.JsonOutput.toJson(component_request_meta + [status: 'succeeded'])
     """
     mkdir -p candidate_bundle
     printf '%s\n' '${stub_result}' > candidate_bundle/workflow_component_result_v1.json
@@ -81,13 +78,13 @@ workflow CanonicalFrustraMPNN {
     normalized_requests = requests.map { request_or_meta, source_structure ->
         def component_request_meta = request_or_meta instanceof Map
             ? request_or_meta
-            : new JsonSlurper().parse(request_or_meta)
+            : new groovy.json.JsonSlurper().parse(request_or_meta)
         tuple(component_request_meta, source_structure)
     }
     CanonicalFrustraMPNNTask(normalized_requests)
     terminal_results = CanonicalFrustraMPNNTask.out.result.map {
         result_path, candidate_bundle, result_manifest ->
-        def component_result_meta = new JsonSlurper().parse(result_path)
+        def component_result_meta = new groovy.json.JsonSlurper().parse(result_path)
         tuple(component_result_meta, candidate_bundle, result_manifest)
     }
 
@@ -140,9 +137,26 @@ process CanonicalFrustraMPNNV2Task {
     }
     """
     mkdir -p candidate_bundle
-    printf '%s\n' '{"candidate_id":"stub-v2","invocation_id":"stub-v2","status":"succeeded"}' \
-      > candidate_bundle/workflow_component_result_v2.json
-    printf '{}\n' > candidate_bundle/frustrampnn_result_manifest_v2.json
+    '${params.api_python}' - '${component_request}' <<'PY'
+import json
+import pathlib
+import sys
+
+request = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8'))
+result = {
+    'candidate_id': request['candidate_id'],
+    'invocation_id': request['invocation_id'],
+    'status': 'succeeded',
+}
+pathlib.Path('candidate_bundle/workflow_component_result_v2.json').write_text(
+    json.dumps(result, sort_keys=True, separators=(',', ':')) + '\\n',
+    encoding='utf-8',
+)
+pathlib.Path('candidate_bundle/frustrampnn_result_manifest_v2.json').write_text(
+    json.dumps({'candidate_id': request['candidate_id']}, sort_keys=True, separators=(',', ':')) + '\\n',
+    encoding='utf-8',
+)
+PY
     """
 }
 
@@ -154,7 +168,7 @@ workflow CanonicalFrustraMPNNV2 {
     CanonicalFrustraMPNNV2Task(requests)
     terminal_results = CanonicalFrustraMPNNV2Task.out.result.map {
         result_path, candidate_bundle, result_manifest ->
-        def component_result_meta = new JsonSlurper().parse(result_path)
+        def component_result_meta = new groovy.json.JsonSlurper().parse(result_path)
         tuple(component_result_meta, candidate_bundle, result_manifest)
     }
 

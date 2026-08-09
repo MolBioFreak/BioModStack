@@ -3,6 +3,69 @@ nextflow.enable.dsl = 2
 
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
+import java.util.Arrays
+
+params.frustrampnn_settings_value_origin = params.frustrampnn_settings_value_origin ?: null
+
+def FRUSTRAMPNN_SETTINGS_MAX_BYTES = 64 * 1024
+
+def requireExactSettingsObject(value, Set<String> expectedKeys, String location) {
+    if (!(value instanceof Map)) throw new IllegalArgumentException("${location} must be an object")
+    def keys = value.keySet().collect { key ->
+        if (!(key instanceof CharSequence)) throw new IllegalArgumentException("${location} keys must be strings")
+        key.toString()
+    } as Set
+    if (keys != expectedKeys) {
+        throw new IllegalArgumentException(
+            "${location} fields are not exact; missing=${(expectedKeys - keys).sort()}, unknown=${(keys - expectedKeys).sort()}"
+        )
+    }
+}
+
+def requireCompleteFrustraMPNNSettings(value) {
+    requireExactSettingsObject(value, ['schema_name', 'schema_version', 'protein_selection', 'source_structure', 'classification_policy'] as Set, 'frustrampnn_settings')
+    requireExactSettingsObject(value.protein_selection, ['mode', 'entities', 'residues'] as Set, 'frustrampnn_settings.protein_selection')
+    requireExactSettingsObject(value.source_structure, ['selected_model_number', 'preferred_altloc'] as Set, 'frustrampnn_settings.source_structure')
+    requireExactSettingsObject(value.classification_policy, ['mode', 'high_max', 'minimal_min'] as Set, 'frustrampnn_settings.classification_policy')
+    if (!(value.protein_selection.entities instanceof Collection) || !(value.protein_selection.residues instanceof Collection)) {
+        throw new IllegalArgumentException('frustrampnn_settings protein selectors must be arrays')
+    }
+    value.protein_selection.entities.eachWithIndex { selector, index ->
+        requireExactSettingsObject(selector, ['entity_instance_id', 'source_entity_id', 'label_asym_id', 'auth_asym_id'] as Set, "frustrampnn_settings.protein_selection.entities[${index}]")
+    }
+    value.protein_selection.residues.eachWithIndex { selector, index ->
+        requireExactSettingsObject(selector, ['entity_instance_id', 'source_entity_id', 'label_asym_id', 'auth_asym_id', 'auth_seq_id', 'insertion_code', 'sequence_index'] as Set, "frustrampnn_settings.protein_selection.residues[${index}]")
+    }
+    return value
+}
+
+def canonicalJsonValue(value) {
+    if (value instanceof Map) {
+        def ordered = new TreeMap<String, Object>()
+        value.each { key, item ->
+            if (!(key instanceof CharSequence)) throw new IllegalArgumentException('FrustraMPNN settings keys must be strings')
+            ordered[key.toString()] = canonicalJsonValue(item)
+        }
+        return ordered
+    }
+    if (value instanceof Collection) return value.collect { item -> canonicalJsonValue(item) }
+    if (value == null || value instanceof CharSequence || value instanceof Boolean) return value
+    if (value instanceof Number) {
+        if ((value instanceof Double || value instanceof Float) && !Double.isFinite(value.doubleValue())) {
+            throw new IllegalArgumentException('FrustraMPNN settings numbers must be finite')
+        }
+        return value
+    }
+    throw new IllegalArgumentException("FrustraMPNN settings contain unsupported value type ${value.getClass().getName()}")
+}
+
+def canonicalJsonBytes(value) { JsonOutput.toJson(canonicalJsonValue(value)).getBytes('UTF-8') }
+
+def sha256Hex(byte[] payload) {
+    def digest = java.security.MessageDigest.getInstance('SHA-256')
+    digest.update(payload)
+    digest.digest().encodeHex().toString()
+}
 
 
 def extractSequenceFromPDB(pdb_file) {
@@ -171,9 +234,9 @@ def buildValidationArtifactManifestJson(Map<String, ?> artifacts) {
 def antibodySha256(rawPath) {
     def digest = java.security.MessageDigest.getInstance('SHA-256')
     rawPath.toFile().withInputStream { stream ->
-        byte[] buffer = new byte[1024 * 1024]
-        int count
-        while ((count = stream.read(buffer)) != -1) digest.update(buffer, 0, count)
+        stream.eachByte(1024 * 1024) { buffer, count ->
+            digest.update(buffer, 0, count as int)
+        }
     }
     return digest.digest().encodeHex().toString()
 }
@@ -412,7 +475,7 @@ include { PrepBoltz ; PrepBoltzWithMSA ; RunBoltz } from '../modules/boltz'
 include { BoltzFromSequence } from '../modules/structure_prediction'
 include { ANARCII } from '../modules/utils/anarci'
 include { PredictTargetComplex } from '../modules/predict_target_complex'
-include { CanonicalFrustraMPNN } from '../modules/frustrampnn'
+include { CanonicalFrustraMPNNV2 } from '../modules/frustrampnn'
 include { BatchBoltzValidation ; BatchProtenixValidation ; BatchESMFold2Validation } from '../modules/antibody_batch'
 include { PrepareAntibodyFrustraMPNNCandidate ; PublishAntibodyFrustraMPNNCandidate ; AggregateAndReportAntibodyFrustraMPNN ; ReportAntibodyFrustraMPNNNotRequested } from '../modules/antibody_frustrampnn_parent'
 include { FinalizeSequentialValidationOutputs ; FinalizeTerminalAntibodyOutputs } from '../modules/antibody_output_finalization'
@@ -3190,6 +3253,34 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
         if (requiredness != 'required') {
             error('antibody_denovo:frustrampnn_requiredness_must_be_required')
         }
+        if (!(params.frustrampnn_settings instanceof CharSequence)) {
+            error('Enabled FrustraMPNN requires complete typed --frustrampnn_settings')
+        }
+        if (!(params.frustrampnn_settings_value_origin instanceof CharSequence) ||
+            !(params.frustrampnn_settings_value_origin.toString() in ['bms_default', 'operator_request'])) {
+            error('Enabled FrustraMPNN requires canonical --frustrampnn_settings_value_origin')
+        }
+        def settingsValueOrigin = params.frustrampnn_settings_value_origin.toString()
+        def settingsBytes = params.frustrampnn_settings.toString().getBytes('UTF-8')
+        if (settingsBytes.length > FRUSTRAMPNN_SETTINGS_MAX_BYTES) {
+            error("frustrampnn_settings exceeds ${FRUSTRAMPNN_SETTINGS_MAX_BYTES} byte limit")
+        }
+        def rawSettings
+        try {
+            rawSettings = new JsonSlurper().parseText(params.frustrampnn_settings.toString())
+            requireCompleteFrustraMPNNSettings(rawSettings)
+        } catch (Exception exc) {
+            error("Enabled FrustraMPNN requires complete typed --frustrampnn_settings: ${exc.message}")
+        }
+        def canonicalSettingsBytes = canonicalJsonBytes(rawSettings)
+        if (!Arrays.equals(settingsBytes, canonicalSettingsBytes)) {
+            error('frustrampnn_settings must be exact compact canonical JSON')
+        }
+        def settingsBase64 = settingsBytes.encodeBase64().toString()
+        def settingsWithOrigin = new TreeMap<String, Object>()
+        settingsWithOrigin.putAll(rawSettings)
+        settingsWithOrigin['settings_value_origin'] = settingsValueOrigin
+        def settingsSha256 = sha256Hex(canonicalJsonBytes(settingsWithOrigin))
         log.info("Step 4.x: Running canonical FrustraMPNN on final antibody candidates...")
         typed_terminal_candidates = final_designs.flatMap { candidate_meta, structure_or_structures ->
             def structures = structure_or_structures instanceof Collection
@@ -3198,14 +3289,15 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
             if (structures.size() != 1) {
                 error('antibody_denovo:ambiguous_terminal_candidate_metadata: every final structure requires its own producer metadata tuple')
             }
-            [antibodyTerminalCandidate(candidate_meta, structures[0], terminalStage, terminalMethod)]
+            def preparedCandidate = antibodyTerminalCandidate(candidate_meta, structures[0], terminalStage, terminalMethod)
+            [tuple(preparedCandidate[0], preparedCandidate[1], settingsBase64, settingsSha256, settingsValueOrigin)]
         }
         def frustrampnn_candidate_count = typed_terminal_candidates.map { _candidate -> 1 }.count()
         CheckFrustraYield(frustrampnn_candidate_count)
 
         PrepareAntibodyFrustraMPNNCandidate(typed_terminal_candidates)
-        CanonicalFrustraMPNN(PrepareAntibodyFrustraMPNNCandidate.out.prepared)
-        PublishAntibodyFrustraMPNNCandidate(CanonicalFrustraMPNN.out.result)
+        CanonicalFrustraMPNNV2(PrepareAntibodyFrustraMPNNCandidate.out.prepared)
+        PublishAntibodyFrustraMPNNCandidate(CanonicalFrustraMPNNV2.out.result)
         frustrampnn_results = PublishAntibodyFrustraMPNNCandidate.out.published
         AggregateAndReportAntibodyFrustraMPNN(
             PublishAntibodyFrustraMPNNCandidate.out.published

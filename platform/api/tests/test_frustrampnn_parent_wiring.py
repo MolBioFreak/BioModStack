@@ -291,6 +291,7 @@ def test_stage_reporter_main_sends_job_root_relative_output_unchanged(
         calls.append({"url": url, **kwargs})
         return Response()
 
+    setattr(reporter, "API_BASE_URL", "http://localhost:8000")
     setattr(reporter, "STAGE_REPORT_TOKEN", "launch-scoped-test-token")
     monkeypatch.setattr(reporter.requests, "post", fake_post)
     monkeypatch.setattr(
@@ -340,6 +341,27 @@ def test_enabled_frustrampnn_reporters_request_job_root_relative_outputs() -> No
         assert "stage_reporter.py' --job-root-relative" in source, path
 
 
+def test_every_active_workflow_consumer_is_v2_only_for_new_writes() -> None:
+    consumers = {
+        "structure_prediction": REPO_ROOT / "workflows" / "structure_prediction.nf",
+        "protein_design": REPO_ROOT / "workflows" / "protein_design.nf",
+        "complex_prediction": REPO_ROOT / "workflows" / "complex_prediction.nf",
+        "antibody_denovo": REPO_ROOT / "workflows" / "antibody_denovo.nf",
+        "frustrampnn_analysis": REPO_ROOT / "workflows" / "frustrampnn_analysis.nf",
+    }
+    for consumer, path in consumers.items():
+        source = path.read_text(encoding="utf-8")
+        assert "CanonicalFrustraMPNNV2" in source, consumer
+        assert "CanonicalFrustraMPNN(" not in source, consumer
+        assert "workflow_component_request_v1.json" not in source, consumer
+
+    antibody_parent = (
+        REPO_ROOT / "modules" / "antibody_frustrampnn_parent.nf"
+    ).read_text(encoding="utf-8")
+    assert "workflow_component_request_v2.json" in antibody_parent
+    assert "workflow_component_request_v1.json" not in antibody_parent
+
+
 @pytest.mark.parametrize("status", ["failed", "not_requested"])
 def test_stage_reporter_routes_non_success_terminal_states(
     status: str, monkeypatch: pytest.MonkeyPatch
@@ -359,6 +381,7 @@ def test_stage_reporter_routes_non_success_terminal_states(
         calls.append((url, params))
         return Response()
 
+    setattr(reporter, "API_BASE_URL", "http://localhost:8000")
     setattr(reporter, "STAGE_REPORT_TOKEN", "launch-scoped-test-token")
     monkeypatch.setattr(reporter.requests, "post", fake_post)
     monkeypatch.setattr(sys, "argv", [str(reporter_path), "job-1", "frustrampnn", status])

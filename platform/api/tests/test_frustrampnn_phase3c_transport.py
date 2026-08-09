@@ -373,7 +373,7 @@ def test_v2_nextflow_stub_accepts_exact_three_file_tuple(tmp_path: Path) -> None
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert (
-        "PHASE3C_RESULT=stub-v2|candidate_bundle|frustrampnn_result_manifest_v2.json"
+        "PHASE3C_RESULT=standalone-v2-candidate|candidate_bundle|frustrampnn_result_manifest_v2.json"
         in completed.stdout
     )
 

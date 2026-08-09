@@ -238,3 +238,56 @@ def test_structure_prediction_template_declares_one_consumable_nested_settings_c
     assert nested.condition == {"param": "run_frustrampnn", "values": [True]}
     assert "FrustraMPNNRequestedSettings" in nested.description
     assert "schema version 1" in nested.description
+
+
+@pytest.mark.parametrize(
+    ("model_id", "mode"),
+    [
+        ("boltz2", "predict"),
+        ("boltz2", "complex"),
+        ("rfdiffusion", "binder_denovo"),
+        ("antibody_denovo", "antibody_denovo"),
+    ],
+)
+def test_every_enabled_parent_normalizes_complete_settings_and_durable_origin(
+    model_id: str,
+    mode: str,
+) -> None:
+    normalized = jobs_router._normalize_frustrampnn_settings(
+        model_id,
+        mode,
+        {"run_frustrampnn": True, "frustrampnn_settings": _custom_settings()},
+    )
+
+    assert normalized["frustrampnn_requiredness"] == "required"
+    assert normalized["frustrampnn_settings"] == {
+        **_custom_settings(),
+        "settings_value_origin": "operator_request",
+    }
+
+
+@pytest.mark.parametrize(
+    ("model_id", "mode"),
+    [
+        ("boltz2", "complex"),
+        ("rfdiffusion", "binder_denovo"),
+        ("antibody_denovo", "antibody_denovo"),
+    ],
+)
+def test_every_non_structure_enabled_parent_rejects_partial_settings_before_queueing(
+    model_id: str,
+    mode: str,
+) -> None:
+    with pytest.raises(HTTPException) as error:
+        jobs_router._normalize_frustrampnn_settings(
+            model_id,
+            mode,
+            {
+                "run_frustrampnn": True,
+                "frustrampnn_settings": {
+                    "schema_name": "frustrampnn_settings",
+                    "schema_version": 1,
+                },
+            },
+        )
+    assert error.value.status_code == 422

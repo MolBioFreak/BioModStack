@@ -10,6 +10,9 @@ from pathlib import Path
 
 import pytest
 
+from services.frustrampnn.contracts import canonical_json_bytes
+from services.frustrampnn.settings import default_settings
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 NEXTFLOW_IMAGE = "nextflow/nextflow:25.10.1"
@@ -70,7 +73,7 @@ if script == 'stage_reporter.py':
 if script == 'publish_frustrampnn_bundle.py':
     marker=pathlib.Path(args[args.index('--marker')+1])
     dest=args[args.index('--destination')+1]
-    marker.write_text(json.dumps({{'manifest':dest+'/frustrampnn_result_manifest_v1.json','result':dest+'/workflow_component_result_v1.json','source':dest+'/source.pdb'}},sort_keys=True)+'\\n')
+    marker.write_text(json.dumps({{'manifest':dest+'/frustrampnn_result_manifest_v2.json','result':dest+'/workflow_component_result_v2.json','source':dest+'/source.pdb'}},sort_keys=True)+'\\n')
     raise SystemExit(0)
 os.execv({str(API_RUNTIME)!r}, [{str(API_RUNTIME)!r}, *args])
 """,
@@ -152,8 +155,7 @@ env.PYTHONPATH='/probe/fakepy'
 """,
         encoding="utf-8",
     )
-    completed = subprocess.run(
-        [
+    command = [
             "docker", "run", "--rm", "--network", "none",
             "-e", "NXF_OFFLINE=true", "-e", "NXF_DISABLE_CHECK_LATEST=true",
             "-v", f"{REPO_ROOT}:/workspace:ro", "-v", f"{root}:/probe:rw",
@@ -167,7 +169,25 @@ env.PYTHONPATH='/probe/fakepy'
             "--pred_method", "boltz", "--boltz_use_msa", "false",
             "--sequence_batch_json_path", "/run/batch.json",
             "--run_frustrampnn", str(enabled).lower(),
-        ],
+        ]
+    if enabled:
+        settings_json = canonical_json_bytes(
+            default_settings().model_dump(
+                mode="json",
+                exclude_none=False,
+                exclude={"settings_value_origin"},
+            )
+        ).decode("utf-8")
+        command.extend(
+            [
+                "--frustrampnn_settings",
+                settings_json,
+                "--frustrampnn_settings_value_origin",
+                "bms_default",
+            ]
+        )
+    completed = subprocess.run(
+        command,
         text=True,
         capture_output=True,
         check=False,
@@ -179,13 +199,13 @@ env.PYTHONPATH='/probe/fakepy'
         rows = list(csv.DictReader(handle))
     requests = {
         json.loads(path.read_text(encoding="utf-8"))["candidate_id"]
-        for path in (run / "work").rglob("workflow_component_request_v1.json")
+        for path in (run / "work").rglob("workflow_component_request_v2.json")
     }
     trace = (run / "trace.txt").read_text(encoding="utf-8")
     return {
         "rows": rows,
         "requests": requests,
-        "canonical_tasks": len(re.findall(r"CanonicalFrustraMPNNTask", trace)),
+        "canonical_tasks": len(re.findall(r"CanonicalFrustraMPNNV2Task", trace)),
     }
 
 

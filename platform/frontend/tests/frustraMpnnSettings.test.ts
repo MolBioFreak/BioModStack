@@ -186,6 +186,94 @@ test('canonical FrustraMPNN settings hydrate as a complete closed v1 object', ()
     assert.notStrictEqual(hydrateFrustraMpnnSettings(undefined), hydrateFrustraMpnnSettings(undefined));
 });
 
+test('persisted settings hydrate through Structure Prediction and antibody clone state without exposing server origin', () => {
+    for (const settingsValueOrigin of ['bms_default', 'operator_request'] as const) {
+        const persisted = {
+            ...customSettings(),
+            settings_value_origin: settingsValueOrigin,
+        };
+        const hydrated = hydrateFrustraMpnnSettings(persisted);
+        assert.deepEqual(hydrated, parseFrustraMpnnRequestedSettings(customSettings()));
+        assert.equal('settings_value_origin' in hydrated, false);
+    }
+
+    assert.throws(
+        () => hydrateFrustraMpnnSettings({
+            ...customSettings(),
+            settings_value_origin: 'operator_forged',
+        }),
+        /settings_value_origin/i,
+    );
+    assert.throws(
+        () => hydrateFrustraMpnnSettings({
+            ...customSettings(),
+            settings_value_origin: 'operator_request',
+            command: 'frustrampnn --forged',
+        }),
+        /unknown|keys/i,
+    );
+});
+
+test('global workflow launch params normalize complete settings only when FrustraMPNN is enabled', async () => {
+    const settingsState = await import('../src/components/frustrampnn/frustraMpnnSettingsState.js');
+    const buildLaunchParams = (settingsState as Record<string, unknown>).buildFrustraMpnnLaunchParams;
+    assert.equal(typeof buildLaunchParams, 'function');
+
+    const build = buildLaunchParams as (
+        enabled: boolean,
+        settings: FrustraMpnnRequestedSettings,
+    ) => Record<string, unknown>;
+    assert.deepEqual(build(true, customSettings()), {
+        run_frustrampnn: true,
+        frustrampnn_requiredness: 'required',
+        frustrampnn_settings: parseFrustraMpnnRequestedSettings(customSettings()),
+    });
+    assert.deepEqual(build(false, customSettings()), {
+        run_frustrampnn: false,
+    });
+});
+
+test('generic launch resolution and parameter merge preserve the governed FrustraMPNN contract', async () => {
+    const settingsState = await import('../src/components/frustrampnn/frustraMpnnSettingsState.js');
+    const resolveWorkflow = (settingsState as Record<string, unknown>).resolveFrustraMpnnWorkflowId;
+    const mergeLaunchParams = (settingsState as Record<string, unknown>).mergeFrustraMpnnLaunchParams;
+    assert.equal(typeof resolveWorkflow, 'function');
+    assert.equal(typeof mergeLaunchParams, 'function');
+
+    const resolve = resolveWorkflow as (modelId: unknown, modeId: unknown) => string | null;
+    assert.equal(resolve('rfdiffusion', 'binder_denovo'), 'protein_design');
+    assert.equal(resolve('rfdiffusion', 'monomer_partialdiff'), 'protein_design');
+    assert.equal(resolve('boltz2', 'complex'), 'complex_prediction');
+    assert.equal(resolve('boltz2', 'predict'), null);
+    assert.equal(resolve('proteinmpnn', 'design'), null);
+
+    const merge = mergeLaunchParams as (
+        params: Record<string, unknown>,
+        enabled: boolean,
+        settings: FrustraMpnnRequestedSettings,
+    ) => Record<string, unknown>;
+    const forgedBase = {
+        sequence: 'ACDE',
+        run_frustrampnn: false,
+        frustrampnn_requiredness: 'optional',
+        frustrampnn_settings: {
+            ...customSettings(),
+            settings_value_origin: 'operator_request',
+        },
+        frustrampnn_settings_value_origin: 'operator_request',
+    };
+    assert.deepEqual(merge(forgedBase, true, customSettings()), {
+        sequence: 'ACDE',
+        run_frustrampnn: true,
+        frustrampnn_requiredness: 'required',
+        frustrampnn_settings: parseFrustraMpnnRequestedSettings(customSettings()),
+    });
+    assert.deepEqual(merge(forgedBase, false, customSettings()), {
+        sequence: 'ACDE',
+        run_frustrampnn: false,
+    });
+});
+
 test('strict settings parsing preserves custom thresholds and canonicalizes stable selector order', () => {
     const parsed = parseFrustraMpnnRequestedSettings(customSettings());
     assert.deepEqual(parsed.classification_policy, {
@@ -416,4 +504,42 @@ test('Structure Prediction owns one typed panel and never adds raw JSON or runti
     assert.match(apiSource, /\/api\/frustrampnn\/settings\/validate/);
     assert.match(apiSource, /\/api\/frustrampnn\/sources\/inspect/);
     assert.doesNotMatch(panelSource, /textarea|raw json|command|runtime|scheduler|storage|gpu/i);
+});
+
+test('every current Antibody workflow FrustraMPNN control uses one shared panel state and complete launch contract', () => {
+    const antibodySource = readFileSync('src/components/AntibodyDenovoTemplate.tsx', 'utf8');
+
+    assert.equal((antibodySource.match(/<FrustraMpnnSettingsPanel/g) || []).length, 1);
+    assert.match(antibodySource, /hydrateFrustraMpnnSettings\(initialValues\?\.frustrampnn_settings\)/);
+    assert.match(antibodySource, /setFrustrampnnSettings\(hydrateFrustraMpnnSettings\(initialValues\.frustrampnn_settings\)\)/);
+    assert.match(antibodySource, /setFrustrampnnSettings\(hydrateFrustraMpnnSettings\(p\.frustrampnn_settings\)\)/);
+    assert.equal((antibodySource.match(/settingsControl=\{frustrampnnSettingsControl\}/g) || []).length, 2);
+    assert.match(antibodySource, /\{!isRefinementMode && showQcPanels && \(\s*<div[^>]*>[\s\S]*?<ModelIntegrationControl/);
+    assert.match(antibodySource, /buildFrustraMpnnLaunchParams\(effectiveRunFrustrampnn, frustrampnnSettings\)/);
+    assert.match(antibodySource, /buildFrustraMpnnLaunchParams\(runFrustrampnn, frustrampnnSettings\)/);
+    assert.doesNotMatch(antibodySource, /frustrampnn_(?:settings|config).*JSON|JSON.*frustrampnn_(?:settings|config)/i);
+});
+
+test('generic JobSubmission composes one governed FrustraMPNN control for supported resolved workflows', () => {
+    const submissionSource = readFileSync('src/components/JobSubmission.tsx', 'utf8');
+
+    assert.match(submissionSource, /useModelIntegrationConfig\('frustrampnn'\)/);
+    assert.match(submissionSource, /resolveFrustraMpnnWorkflowId/);
+    assert.match(submissionSource, /frustrampnnIntegrationQuery\.data\?\.workflows\?\.\[resolvedFrustrampnnWorkflowId\]/);
+    assert.equal((submissionSource.match(/<FrustraMpnnSettingsPanel/g) || []).length, 1);
+    assert.equal((submissionSource.match(/data-job-submission-frustrampnn/g) || []).length, 1);
+    assert.match(submissionSource, /workflowId=\{resolvedFrustrampnnWorkflowId\}/);
+    assert.match(submissionSource, /hydrateFrustraMpnnSettings\(params\.frustrampnn_settings\)/);
+    assert.match(submissionSource, /setClonedValues\(data\.params\);/);
+    assert.match(submissionSource, /const nextParams = \{ \.\.\.defaults, \.\.\.\(clonedValues \|\| \{\}\) \};\s*setParams\(nextParams\);/);
+    assert.match(submissionSource, /\}, \[selectedModel, selectedModelId, clonedValues\]\);/);
+    assert.match(submissionSource, /mergeFrustraMpnnLaunchParams\(mergedParams, runFrustrampnn, frustrampnnSettings\)/);
+    assert.match(submissionSource, /mergeFrustraMpnnLaunchParams\(filteredParams, runFrustrampnn, frustrampnnSettings\)/);
+    assert.match(submissionSource, /const templateManagerParams[\s\S]*mergeFrustraMpnnLaunchParams\(/);
+    assert.match(submissionSource, /const frustrampnnConfigurationReady = !resolvedFrustrampnnWorkflowId \|\| \(\s*!frustrampnnIntegrationQuery\.isFetching\s*&& !frustrampnnIntegrationQuery\.isError\s*&& configuredFrustrampnnWorkflow !== undefined\s*\);/);
+    assert.match(submissionSource, /const isReady = frustrampnnConfigurationReady && Boolean\(/);
+    assert.match(submissionSource, /FrustraMPNN integration configuration is unavailable\. Launch is blocked\./);
+    assert.match(submissionSource, /const governedMergedParams = resolvedFrustrampnnWorkflowId\s*\? mergeFrustraMpnnLaunchParams/);
+    assert.match(submissionSource, /const governedFilteredParams = resolvedFrustrampnnWorkflowId\s*\? mergeFrustraMpnnLaunchParams/);
+    assert.doesNotMatch(submissionSource, /selectedTemplateId === ['"](?:structure_prediction|antibody_denovo)['"][\s\S]{0,500}data-job-submission-frustrampnn/);
 });

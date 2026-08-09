@@ -1589,27 +1589,28 @@ def _frustrampnn_param_error(
     )
 
 
-def _normalize_structure_prediction_frustrampnn_settings(
+def _normalize_frustrampnn_settings(
     model_id: str,
     mode: str,
     params: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    """Normalize the typed FrustraMPNN sub-contract before Job persistence."""
+    """Normalize the global typed FrustraMPNN contract before Job persistence."""
 
     normalized = {} if params is None else dict(params)
     fields = {
         "run_frustrampnn",
         "frustrampnn_requiredness",
         "frustrampnn_settings",
+        "frustrampnn_settings_value_origin",
     }
     if not fields.intersection(normalized):
         return normalized
-    normalized_mode = str(mode or "").strip().lower()
-    normalized_model_id = str(model_id or "").strip().lower()
-    structure_modes = {"predict", "structure_prediction", "structure_validation"}
-    structure_models = {"boltz2", "protenix", "rf3", "template_structure_prediction"}
-    if normalized_mode not in structure_modes and normalized_model_id not in structure_models:
-        return normalized
+    if "frustrampnn_settings_value_origin" in normalized:
+        raise _frustrampnn_param_error(
+            "frustrampnn_settings_value_origin",
+            "frustrampnn_settings_value_origin is server-authored",
+            error_type="value_error.frustrampnn_origin",
+        )
 
     enabled = normalized.get("run_frustrampnn", False)
     if type(enabled) is not bool:
@@ -5329,7 +5330,7 @@ async def create_job(
             job_data.mode,
             job_data.params,
         )
-        job_data.params = _normalize_structure_prediction_frustrampnn_settings(
+        job_data.params = _normalize_frustrampnn_settings(
             job_data.model_id,
             job_data.mode,
             job_data.params,

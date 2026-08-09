@@ -197,7 +197,11 @@ def test_esmfold2_structure_prediction_preview_uses_parent_workflow(tmp_path: Pa
         work_dir.mkdir()
         out_dir.mkdir()
         settings_json = canonical_json_bytes(
-            default_settings().model_dump(mode="json", exclude_none=False)
+            default_settings().model_dump(
+                mode="json",
+                exclude_none=False,
+                exclude={"settings_value_origin"},
+            )
         ).decode("utf-8")
 
         result = _run_nextflow(
@@ -219,6 +223,8 @@ def test_esmfold2_structure_prediction_preview_uses_parent_workflow(tmp_path: Pa
             "true",
             "--frustrampnn_settings",
             settings_json,
+            "--frustrampnn_settings_value_origin",
+            "bms_default",
             "--frustrampnn_physical_gpu_id",
             "3",
             "--job_id",

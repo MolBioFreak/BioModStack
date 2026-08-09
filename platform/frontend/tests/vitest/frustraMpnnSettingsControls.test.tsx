@@ -196,6 +196,7 @@ describe('typed FrustraMPNN settings controls', () => {
         }
 
         await act(async () => root.render(<IntegrationHarness />));
+        expect(container.querySelectorAll('[data-frustrampnn-settings-panel]')).toHaveLength(1);
         const mode = container.querySelector<HTMLSelectElement>('[data-frustrampnn-classification-mode]');
         await act(async () => dispatchChange(mode!, 'custom'));
         const highMax = container.querySelector<HTMLInputElement>('[data-frustrampnn-high-max]');
@@ -206,6 +207,7 @@ describe('typed FrustraMPNN settings controls', () => {
         expect(container.querySelector('[data-frustrampnn-settings-panel]')).toBeNull();
 
         await act(async () => enabledToggle!.click());
+        expect(container.querySelectorAll('[data-frustrampnn-settings-panel]')).toHaveLength(1);
         expect(container.querySelector<HTMLSelectElement>('[data-frustrampnn-classification-mode]')?.value).toBe('custom');
         expect(container.querySelector<HTMLInputElement>('[data-frustrampnn-high-max]')?.value).toBe('-0.75');
 

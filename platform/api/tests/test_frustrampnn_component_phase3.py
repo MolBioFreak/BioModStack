@@ -332,7 +332,7 @@ def test_phase3_cli_and_module_future_contract_exists() -> None:
     assert "process CanonicalFrustraMPNNTask" in module
     assert "workflow CanonicalFrustraMPNN" in module
     assert "tuple val(component_request_meta), path(source_structure)" in module
-    assert "def component_result_meta = new JsonSlurper().parse(result_path)" in module
+    assert "def component_result_meta = new groovy.json.JsonSlurper().parse(result_path)" in module
     assert "tuple(component_result_meta, candidate_bundle, result_manifest)" in module
     output_block = module.split("output:", 1)[1].split("script:", 1)[0]
     assert "val(component_request_meta)" not in output_block

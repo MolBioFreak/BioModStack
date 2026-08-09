@@ -330,9 +330,78 @@ export const CANONICAL_FRUSTRAMPNN_SETTINGS: FrustraMpnnRequestedSettings = Obje
     }),
 );
 
-export const hydrateFrustraMpnnSettings = (value: unknown): FrustraMpnnRequestedSettings => (
-    parseFrustraMpnnRequestedSettings(value === undefined ? CANONICAL_FRUSTRAMPNN_SETTINGS : value)
-);
+export const hydrateFrustraMpnnSettings = (value: unknown): FrustraMpnnRequestedSettings => {
+    if (value === undefined) return parseFrustraMpnnRequestedSettings(CANONICAL_FRUSTRAMPNN_SETTINGS);
+
+    const persisted = requireRecord(value, 'persisted frustrampnn_settings');
+    if (!Object.prototype.hasOwnProperty.call(persisted, 'settings_value_origin')) {
+        return parseFrustraMpnnRequestedSettings(persisted);
+    }
+    requireExactKeys(
+        persisted,
+        [...SETTINGS_KEYS, 'settings_value_origin'],
+        'persisted frustrampnn_settings',
+    );
+    if (persisted.settings_value_origin !== 'bms_default' && persisted.settings_value_origin !== 'operator_request') {
+        throw new Error('persisted frustrampnn_settings.settings_value_origin is invalid');
+    }
+    return parseFrustraMpnnRequestedSettings(
+        Object.fromEntries(SETTINGS_KEYS.map((key) => [key, persisted[key]])),
+    );
+};
+
+export type FrustraMpnnLaunchParams =
+    | {
+        run_frustrampnn: true;
+        frustrampnn_requiredness: 'required';
+        frustrampnn_settings: FrustraMpnnRequestedSettings;
+    }
+    | {
+        run_frustrampnn: false;
+    };
+
+export const buildFrustraMpnnLaunchParams = (
+    enabled: boolean,
+    settings: FrustraMpnnRequestedSettings,
+): FrustraMpnnLaunchParams => {
+    if (!enabled) return { run_frustrampnn: false };
+    return {
+        run_frustrampnn: true,
+        frustrampnn_requiredness: 'required',
+        frustrampnn_settings: parseFrustraMpnnRequestedSettings(settings),
+    };
+};
+
+export const resolveFrustraMpnnWorkflowId = (
+    modelId: unknown,
+    modeId: unknown,
+): 'protein_design' | 'complex_prediction' | null => {
+    const normalizedModelId = typeof modelId === 'string' ? modelId.trim().toLowerCase() : '';
+    const normalizedModeId = typeof modeId === 'string' ? modeId.trim().toLowerCase() : '';
+    if (normalizedModelId === 'rfdiffusion' && normalizedModeId.length > 0) return 'protein_design';
+    if (normalizedModelId === 'boltz2' && normalizedModeId === 'complex') return 'complex_prediction';
+    return null;
+};
+
+const FRUSTRAMPNN_LAUNCH_KEYS = [
+    'run_frustrampnn',
+    'frustrampnn_requiredness',
+    'frustrampnn_settings',
+    'frustrampnn_settings_value_origin',
+] as const;
+
+export const mergeFrustraMpnnLaunchParams = <T extends Record<string, unknown>>(
+    params: T,
+    enabled: boolean,
+    settings: FrustraMpnnRequestedSettings,
+): Omit<T, typeof FRUSTRAMPNN_LAUNCH_KEYS[number]> & FrustraMpnnLaunchParams => {
+    const normalized = { ...params };
+    for (const key of FRUSTRAMPNN_LAUNCH_KEYS) delete normalized[key];
+    return {
+        ...normalized,
+        ...buildFrustraMpnnLaunchParams(enabled, settings),
+    };
+};
 
 export const getFrustraMpnnSelectionModeOptions = (
     inspection?: FrustraMpnnSourceInspection | null,

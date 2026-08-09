@@ -3,9 +3,72 @@ nextflow.enable.dsl = 2
 
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
+import java.util.Arrays
+
+params.frustrampnn_settings_value_origin = params.frustrampnn_settings_value_origin ?: null
+
+def FRUSTRAMPNN_SETTINGS_MAX_BYTES = 64 * 1024
+
+def requireExactSettingsObject(value, Set<String> expectedKeys, String location) {
+    if (!(value instanceof Map)) throw new IllegalArgumentException("${location} must be an object")
+    def keys = value.keySet().collect { key ->
+        if (!(key instanceof CharSequence)) throw new IllegalArgumentException("${location} keys must be strings")
+        key.toString()
+    } as Set
+    if (keys != expectedKeys) {
+        throw new IllegalArgumentException(
+            "${location} fields are not exact; missing=${expectedKeys - keys}, unknown=${keys - expectedKeys}"
+        )
+    }
+}
+
+def requireCompleteFrustraMPNNSettings(value) {
+    requireExactSettingsObject(value, ['schema_name', 'schema_version', 'protein_selection', 'source_structure', 'classification_policy'] as Set, 'frustrampnn_settings')
+    requireExactSettingsObject(value.protein_selection, ['mode', 'entities', 'residues'] as Set, 'frustrampnn_settings.protein_selection')
+    requireExactSettingsObject(value.source_structure, ['selected_model_number', 'preferred_altloc'] as Set, 'frustrampnn_settings.source_structure')
+    requireExactSettingsObject(value.classification_policy, ['mode', 'high_max', 'minimal_min'] as Set, 'frustrampnn_settings.classification_policy')
+    if (!(value.protein_selection.entities instanceof Collection) || !(value.protein_selection.residues instanceof Collection)) {
+        throw new IllegalArgumentException('frustrampnn_settings protein selectors must be arrays')
+    }
+    value.protein_selection.entities.eachWithIndex { selector, index ->
+        requireExactSettingsObject(selector, ['entity_instance_id', 'source_entity_id', 'label_asym_id', 'auth_asym_id'] as Set, "frustrampnn_settings.protein_selection.entities[${index}]")
+    }
+    value.protein_selection.residues.eachWithIndex { selector, index ->
+        requireExactSettingsObject(selector, ['entity_instance_id', 'source_entity_id', 'label_asym_id', 'auth_asym_id', 'auth_seq_id', 'insertion_code', 'sequence_index'] as Set, "frustrampnn_settings.protein_selection.residues[${index}]")
+    }
+    return value
+}
+
+def canonicalJsonValue(value) {
+    if (value instanceof Map) {
+        def ordered = new TreeMap<String, Object>()
+        value.each { key, item ->
+            if (!(key instanceof CharSequence)) throw new IllegalArgumentException('FrustraMPNN settings keys must be strings')
+            ordered[key.toString()] = canonicalJsonValue(item)
+        }
+        return ordered
+    }
+    if (value instanceof Collection) return value.collect { item -> canonicalJsonValue(item) }
+    if (value == null || value instanceof CharSequence || value instanceof Boolean) return value
+    if (value instanceof Number) {
+        if ((value instanceof Double || value instanceof Float) && !Double.isFinite(value.doubleValue())) {
+            throw new IllegalArgumentException('FrustraMPNN settings numbers must be finite')
+        }
+        return value
+    }
+    throw new IllegalArgumentException("FrustraMPNN settings contain unsupported value type ${value.getClass().getName()}")
+}
+
+def canonicalJsonBytes(value) { JsonOutput.toJson(canonicalJsonValue(value)).getBytes('UTF-8') }
+
+def sha256Hex(byte[] payload) {
+    def digest = java.security.MessageDigest.getInstance('SHA-256')
+    digest.update(payload)
+    digest.digest().encodeHex().toString()
+}
 
 include { complex_prediction_wf } from '../modules/structure_prediction.nf'
-include { CanonicalFrustraMPNN } from '../modules/frustrampnn.nf'
+include { CanonicalFrustraMPNNV2 } from '../modules/frustrampnn.nf'
 
 def parseJsonFile(rawPath) {
     return new JsonSlurper().parse(file(rawPath))
@@ -14,10 +77,8 @@ def parseJsonFile(rawPath) {
 def sha256File(rawPath) {
     def digest = java.security.MessageDigest.getInstance('SHA-256')
     rawPath.toFile().withInputStream { stream ->
-        byte[] buffer = new byte[1024 * 1024]
-        int count
-        while ((count = stream.read(buffer)) != -1) {
-            digest.update(buffer, 0, count)
+        stream.eachByte(1024 * 1024) { buffer, count ->
+            digest.update(buffer, 0, count as int)
         }
     }
     return digest.digest().encodeHex().toString()
@@ -58,10 +119,12 @@ process PrepareComplexPredictionFrustraMPNNCandidate {
     stageInMode 'copy'
 
     input:
-    tuple val(candidate_meta), path(predicted_structure)
+    tuple val(candidate_meta), path(predicted_structure), val(settings_base64), \
+        val(settings_sha256), val(settings_value_origin)
 
     output:
-    tuple val(candidate_meta), path('prepared_request.json'), path('prepared_source.pdb'), emit: prepared
+    tuple val(candidate_meta), path('prepared_request.json'), path('prepared_source.pdb'), \
+        path('prepared_structure_map.json'), emit: prepared
 
     script:
     def requestMetadata = [
@@ -70,7 +133,6 @@ process PrepareComplexPredictionFrustraMPNNCandidate {
         producer_stage: candidate_meta.producer_stage,
         producer_candidate_key: candidate_meta.producer_candidate_key,
         requiredness: candidate_meta.requiredness,
-        checkpoint_id: candidate_meta.checkpoint_id,
         producer_method: candidate_meta.producer_method,
         producer_sample: candidate_meta.producer_sample,
         producer_rank: candidate_meta.producer_rank,
@@ -86,7 +148,12 @@ process PrepareComplexPredictionFrustraMPNNCandidate {
       --source '${predicted_structure}' \
       --output-pdb prepared_source.pdb \
       --request prepared_request.json \
-      --metadata-base64 '${metadataBase64}'
+      --metadata-base64 '${metadataBase64}' \
+      --request-version 2 \
+      --structure-map prepared_structure_map.json \
+      --settings-base64 '${settings_base64}' \
+      --settings-sha256 '${settings_sha256}' \
+      --settings-value-origin '${settings_value_origin}'
     """
 }
 
@@ -97,16 +164,18 @@ process MaterializeComplexPredictionFrustraMPNNCandidate {
         mode: 'copy', pattern: 'canonical_source.pdb', saveAs: { new File(candidate_meta.producer_candidate_key.toString()).name }
 
     input:
-    tuple val(candidate_meta), path(prepared_request), path(prepared_source)
+    tuple val(candidate_meta), path(prepared_request), path(prepared_source), path(prepared_structure_map)
 
     output:
-    tuple path('workflow_component_request_v1.json'), path('canonical_source.pdb'), emit: prepared
+    tuple path('workflow_component_request_v2.json'), path('canonical_source.pdb'), \
+        path('frustrampnn_structure_map_v1.json'), emit: prepared
 
     script:
     """
     set -euo pipefail
-    cp -L '${prepared_request}' workflow_component_request_v1.json
+    cp -L '${prepared_request}' workflow_component_request_v2.json
     cp -L '${prepared_source}' canonical_source.pdb
+    cp -L '${prepared_structure_map}' frustrampnn_structure_map_v1.json
     """
 }
 
@@ -260,6 +329,34 @@ workflow COMPLEX_PREDICTION {
                 error('frustrampnn_requiredness must be required')
             }
             if (!params.job_id) error('Canonical FrustraMPNN parent execution requires --job_id')
+            if (!(params.frustrampnn_settings instanceof CharSequence)) {
+                error('Enabled FrustraMPNN requires complete typed --frustrampnn_settings')
+            }
+            if (!(params.frustrampnn_settings_value_origin instanceof CharSequence) ||
+                !(params.frustrampnn_settings_value_origin.toString() in ['bms_default', 'operator_request'])) {
+                error('Enabled FrustraMPNN requires canonical --frustrampnn_settings_value_origin')
+            }
+            def settingsValueOrigin = params.frustrampnn_settings_value_origin.toString()
+            def settingsBytes = params.frustrampnn_settings.toString().getBytes('UTF-8')
+            if (settingsBytes.length > FRUSTRAMPNN_SETTINGS_MAX_BYTES) {
+                error("frustrampnn_settings exceeds ${FRUSTRAMPNN_SETTINGS_MAX_BYTES} byte limit")
+            }
+            def rawSettings
+            try {
+                rawSettings = new JsonSlurper().parseText(params.frustrampnn_settings.toString())
+                requireCompleteFrustraMPNNSettings(rawSettings)
+            } catch (Exception exc) {
+                error("Enabled FrustraMPNN requires complete typed --frustrampnn_settings: ${exc.message}")
+            }
+            def canonicalSettingsBytes = canonicalJsonBytes(rawSettings)
+            if (!Arrays.equals(settingsBytes, canonicalSettingsBytes)) {
+                error('frustrampnn_settings must be exact compact canonical JSON')
+            }
+            def settingsBase64 = settingsBytes.encodeBase64().toString()
+            def settingsWithOrigin = new TreeMap<String, Object>()
+            settingsWithOrigin.putAll(rawSettings)
+            settingsWithOrigin['settings_value_origin'] = settingsValueOrigin
+            def settingsSha256 = sha256Hex(canonicalJsonBytes(settingsWithOrigin))
             println("Running canonical FrustraMPNN on final complex candidates")
             println("FrustraMPNN scope: protein entities only; ligand/nucleic-acid context is not analyzed")
 
@@ -319,20 +416,20 @@ workflow COMPLEX_PREDICTION {
                     analysis_scope: 'protein_only',
                     requiredness: requiredness,
                     checkpoint_id: 'megascale.ckpt',
-                ], predicted)
+                ], predicted, settingsBase64, settingsSha256, settingsValueOrigin)
             }
             PrepareComplexPredictionFrustraMPNNCandidate(raw_candidates)
 
             // Deduplicate representations only inside one explicit producer identity and
             // one normalized-byte equivalence class. Distinct methods/samples/ranks survive.
             deduplicated_candidates = PrepareComplexPredictionFrustraMPNNCandidate.out.prepared
-                .map { candidate_meta, prepared_request, prepared_source ->
+                .map { candidate_meta, prepared_request, prepared_source, prepared_structure_map ->
                     def normalized_sha = sha256File(prepared_source)
                     tuple(candidate_meta.producer_identity_sha256, normalized_sha,
-                        candidate_meta, prepared_request, prepared_source)
+                        candidate_meta, prepared_request, prepared_source, prepared_structure_map)
                 }
                 .groupTuple(by: [0, 1])
-                .map { producer_identity_sha, normalized_sha, candidate_metas, prepared_requests, prepared_sources ->
+                .map { producer_identity_sha, normalized_sha, candidate_metas, prepared_requests, prepared_sources, prepared_structure_maps ->
                     int preferredIndex = 0
                     candidate_metas.eachWithIndex { candidate_meta, index ->
                         def current = candidate_metas[preferredIndex]
@@ -340,12 +437,12 @@ workflow COMPLEX_PREDICTION {
                         def currentPreference = "${current.source_format == 'mmcif' ? '0' : '1'}:${current.producer_artifact_sha256}"
                         if (candidatePreference < currentPreference) preferredIndex = index
                     }
-                    tuple(candidate_metas[preferredIndex], prepared_requests[preferredIndex], prepared_sources[preferredIndex])
+                    tuple(candidate_metas[preferredIndex], prepared_requests[preferredIndex], prepared_sources[preferredIndex], prepared_structure_maps[preferredIndex])
                 }
             MaterializeComplexPredictionFrustraMPNNCandidate(deduplicated_candidates)
-            CanonicalFrustraMPNN(MaterializeComplexPredictionFrustraMPNNCandidate.out.prepared)
-            frustrampnn_results = CanonicalFrustraMPNN.out.result
-            PublishComplexPredictionFrustraMPNNCandidate(CanonicalFrustraMPNN.out.result)
+            CanonicalFrustraMPNNV2(MaterializeComplexPredictionFrustraMPNNCandidate.out.prepared)
+            frustrampnn_results = CanonicalFrustraMPNNV2.out.result
+            PublishComplexPredictionFrustraMPNNCandidate(CanonicalFrustraMPNNV2.out.result)
             ReportComplexPredictionFrustraMPNNComplete(
                 PublishComplexPredictionFrustraMPNNCandidate.out.marker.collect()
             )

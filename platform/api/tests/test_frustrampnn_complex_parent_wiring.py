@@ -298,8 +298,9 @@ def test_complex_module_exposes_typed_canonical_candidate_channel() -> None:
 def test_complex_prediction_uses_one_canonical_component_for_actual_candidates() -> None:
     workflow = _workflow()
 
-    assert "include { CanonicalFrustraMPNN } from '../modules/frustrampnn.nf'" in workflow
-    assert workflow.count("CanonicalFrustraMPNN(") == 1
+    assert "include { CanonicalFrustraMPNNV2 } from '../modules/frustrampnn.nf'" in workflow
+    assert workflow.count("CanonicalFrustraMPNNV2(") == 1
+    assert "CanonicalFrustraMPNN(" not in workflow
     assert "FrustrampnnQC" not in workflow
     assert "AggregateFrustrationReports" not in workflow
     assert "placeholder.pdb" not in workflow
@@ -307,7 +308,7 @@ def test_complex_prediction_uses_one_canonical_component_for_actual_candidates()
     assert "complex_prediction_wf.out.structures.flatten()" in workflow
     assert "PrepareComplexPredictionFrustraMPNNCandidate" in workflow
     assert "MaterializeComplexPredictionFrustraMPNNCandidate" in workflow
-    assert "CanonicalFrustraMPNN.out.result" in workflow
+    assert "CanonicalFrustraMPNNV2.out.result" in workflow
     assert re.search(r"emit:\s+structures\s+frustrampnn_results", workflow)
 
 
@@ -345,8 +346,28 @@ def test_complex_candidate_preparation_materializes_exact_pdb_before_component()
     assert "path('prepared_source.pdb')" in prepare_block
     assert "path('prepared_request.json')" in prepare_block
     assert "canonical_source.pdb" in materialize_block
-    assert "workflow_component_request_v1.json" in materialize_block
-    assert "CanonicalFrustraMPNN(MaterializeComplexPredictionFrustraMPNNCandidate.out.prepared)" in workflow
+    assert "workflow_component_request_v2.json" in materialize_block
+    assert "frustrampnn_structure_map_v1.json" in materialize_block
+    assert "workflow_component_request_v1.json" not in materialize_block
+    assert "CanonicalFrustraMPNNV2(MaterializeComplexPredictionFrustraMPNNCandidate.out.prepared)" in workflow
+
+
+def test_complex_prediction_transports_complete_bounded_typed_v2_settings() -> None:
+    workflow = _workflow()
+    prepare_block = workflow.split("process PrepareComplexPredictionFrustraMPNNCandidate", 1)[1]
+    prepare_block = prepare_block.split("process MaterializeComplexPredictionFrustraMPNNCandidate", 1)[0]
+    enabled = workflow.split("if (params.run_frustrampnn == true)", 1)[1].split("} else {", 1)[0]
+
+    assert "FRUSTRAMPNN_SETTINGS_MAX_BYTES" in workflow
+    assert "requireCompleteFrustraMPNNSettings" in workflow
+    assert "frustrampnn_settings_value_origin" in enabled
+    assert "canonicalJsonBytes(rawSettings)" in enabled
+    assert "Arrays.equals(settingsBytes, canonicalSettingsBytes)" in enabled
+    assert "--request-version 2" in prepare_block
+    assert "--structure-map prepared_structure_map.json" in prepare_block
+    assert "--settings-base64" in prepare_block
+    assert "--settings-sha256" in prepare_block
+    assert "--settings-value-origin" in prepare_block
 
 
 def test_complex_prediction_reports_terminal_states_and_protein_only_scope() -> None:

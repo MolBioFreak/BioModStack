@@ -1,7 +1,5 @@
 nextflow.enable.dsl = 2
 
-import groovy.json.JsonOutput
-
 process PrepareAntibodyFrustraMPNNCandidate {
     tag "frustrampnn-antibody:${candidate_meta.candidate_id}"
     label 'CPU'
@@ -10,26 +8,33 @@ process PrepareAntibodyFrustraMPNNCandidate {
         mode: 'copy', pattern: 'canonical_source.pdb', saveAs: { new File(candidate_meta.producer_candidate_key.toString()).name }
 
     input:
-    tuple val(candidate_meta), path(terminal_structure)
+    tuple val(candidate_meta), path(terminal_structure), val(settings_base64), \
+        val(settings_sha256), val(settings_value_origin)
 
     output:
-    tuple path('workflow_component_request_v1.json'), path('canonical_source.pdb'), emit: prepared
+    tuple path('workflow_component_request_v2.json'), path('canonical_source.pdb'), \
+        path('frustrampnn_structure_map_v1.json'), emit: prepared
 
     script:
     def requestMetadata = candidate_meta.subMap([
         'parent_job_id', 'parent_workflow_id', 'producer_stage', 'producer_candidate_key',
-        'requiredness', 'checkpoint_id', 'producer_method', 'producer_sample',
+        'requiredness', 'producer_method', 'producer_sample',
         'producer_rank', 'producer_output_key', 'producer_identity_sha256',
         'producer_artifact_sha256', 'source_format', 'candidate_id'
     ])
-    def metadataBase64 = JsonOutput.toJson(requestMetadata).getBytes('UTF-8').encodeBase64().toString()
+    def metadataBase64 = groovy.json.JsonOutput.toJson(requestMetadata).getBytes('UTF-8').encodeBase64().toString()
     """
     set -euo pipefail
     '${params.api_python}' '${params.code_root}/scripts/prepare_frustrampnn_candidate.py' \
       --source '${terminal_structure}' \
       --output-pdb canonical_source.pdb \
-      --request workflow_component_request_v1.json \
-      --metadata-base64 '${metadataBase64}'
+      --request workflow_component_request_v2.json \
+      --metadata-base64 '${metadataBase64}' \
+      --request-version 2 \
+      --structure-map frustrampnn_structure_map_v1.json \
+      --settings-base64 '${settings_base64}' \
+      --settings-sha256 '${settings_sha256}' \
+      --settings-value-origin '${settings_value_origin}'
     """
 }
 
@@ -172,7 +177,7 @@ process ReportAntibodyFrustraMPNNNotRequested {
         status: 'not_requested',
         requiredness: 'not_requested',
     ]
-    def payload = JsonOutput.toJson([
+    def payload = groovy.json.JsonOutput.toJson([
         schema_name: 'antibody_denovo_frustrampnn_terminal_manifest',
         schema_version: 1,
         parent_job_id: params.job_id.toString(),
