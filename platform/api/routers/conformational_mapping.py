@@ -78,6 +78,11 @@ from services.conformational_mapping.request_builder import (
     materialize_trusted_internal_request,
     validate_request_params,
 )
+from services.conformational_mapping.rcsb_source import (
+    RcsbSourceError,
+    discover_rcsb_contexts,
+    resolve_and_materialize_rcsb_selection,
+)
 from services.job_control import cancel_job_lineage
 from services.frustrampnn import runtime as _frustrampnn_runtime
 
@@ -332,10 +337,24 @@ def _validate_source_authority_payload(
         if not re.fullmatch(r"[A-Z0-9]{4}", accession):
             raise ValueError("RCSB receipt accession is invalid")
         selection = payload.get("selection")
-        if selection is not None:
-            selected = RcsbSelection.model_validate(selection)
-            if selected.accession and selected.accession != accession:
-                raise ValueError("RCSB receipt selection accession does not match its source")
+        selected = RcsbSelection.model_validate(selection)
+        if selected.accession != accession:
+            raise ValueError("RCSB receipt selection accession does not match its source")
+        if (
+            selected.model_id is None
+            or selected.sample_id != "asymmetric-unit"
+            or len(selected.chain_ids) != 1
+            or len(selected.entity_ids) != 1
+        ):
+            raise ValueError("RCSB receipt selection is not fully resolved")
+        source_sha256 = str(payload.get("source_sha256") or "")
+        download_sha256 = str(payload.get("download_sha256") or "")
+        if source_sha256 != source.content_sha256:
+            raise ValueError("RCSB receipt source digest disagrees with registered bytes")
+        if not re.fullmatch(r"[0-9a-f]{64}", download_sha256):
+            raise ValueError("RCSB receipt download digest is invalid")
+        if payload.get("materialization") != "selected_asymmetric_unit_context_v1":
+            raise ValueError("RCSB receipt materialization identity is invalid")
     elif authority_kind == "complex_snapshot_normalization":
         chain_ids = payload.get("chain_ids")
         if not isinstance(chain_ids, list) or any(
@@ -923,6 +942,9 @@ def _existing_rcsb_authority_matches(
         and str(existing_payload.get("accession") or "").upper()
         == str(payload.get("accession") or "").upper()
         and existing_payload.get("selection", {}) == payload.get("selection", {})
+        and existing_payload.get("source_sha256") == payload.get("source_sha256")
+        and existing_payload.get("download_sha256") == payload.get("download_sha256")
+        and existing_payload.get("materialization") == payload.get("materialization")
     )
 
 
@@ -1117,46 +1139,35 @@ def _rcsb_http_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(timeout=httpx.Timeout(30.0), follow_redirects=False)
 
 
-@router.post("/sources/rcsb/{pdb_id}")
-async def register_rcsb_mmcif_source(
-    pdb_id: str,
-    request: Request,
-    session: AsyncSession = Depends(get_session),
-    selection: RcsbSelection | None = None,
-):
-    """Stream a public RCSB mmCIF into bounded storage, then register it immutably."""
-    accession = pdb_id.strip().upper()
-    if not re.fullmatch(r"[A-Z0-9]{4}", accession):
-        raise HTTPException(status_code=422, detail="RCSB accession must be exactly four letters or digits")
-    if selection is None:
-        selection = RcsbSelection(accession=accession)
-    elif selection.accession and selection.accession != accession:
-        raise HTTPException(status_code=422, detail="RCSB selection accession does not match the URL accession")
-    else:
-        selection = selection.model_copy(update={"accession": accession})
+async def _download_rcsb_mmcif(accession: str) -> bytes:
+    """Download one deposited asymmetric-unit mmCIF under the CM source limit."""
+
     maximum_bytes = _SOURCE_MAX_BYTES["structure_upload"]
-    spool = tempfile.SpooledTemporaryFile(max_size=min(maximum_bytes, 8 * 1024 * 1024), mode="w+b")
+    spool = tempfile.SpooledTemporaryFile(
+        max_size=min(maximum_bytes, 8 * 1024 * 1024), mode="w+b"
+    )
     prefix = bytearray()
     size = 0
-    retrieved_at = datetime.now(timezone.utc).isoformat()
-    authority_payload = {
-        "provider": "RCSB",
-        "accession": accession,
-        "retrieved_at": retrieved_at,
-        "selection": selection.model_dump(mode="json", exclude_none=True),
-    }
     try:
         try:
             async with _rcsb_http_client() as client:
-                async with client.stream("GET", f"https://files.rcsb.org/download/{accession}.cif") as response:
+                async with client.stream(
+                    "GET", f"https://files.rcsb.org/download/{accession}.cif"
+                ) as response:
                     if response.status_code == 404:
                         raise HTTPException(status_code=404, detail="RCSB accession was not found")
                     if response.status_code != 200:
-                        raise HTTPException(status_code=502, detail="RCSB mmCIF download returned an unexpected status")
+                        raise HTTPException(
+                            status_code=502,
+                            detail="RCSB mmCIF download returned an unexpected status",
+                        )
                     async for chunk in response.aiter_bytes():
                         size += len(chunk)
                         if size > maximum_bytes:
-                            raise HTTPException(status_code=413, detail="RCSB mmCIF exceeds the registered-source limit")
+                            raise HTTPException(
+                                status_code=413,
+                                detail="RCSB mmCIF exceeds the registered-source limit",
+                            )
                         if len(prefix) < 4096:
                             prefix.extend(chunk[: 4096 - len(prefix)])
                         spool.write(chunk)
@@ -1169,6 +1180,64 @@ async def register_rcsb_mmcif_source(
         if not bytes(prefix).lstrip().startswith(b"data_"):
             raise HTTPException(status_code=502, detail="RCSB response is not raw mmCIF")
         spool.seek(0)
+        return spool.read(maximum_bytes + 1)
+    finally:
+        spool.close()
+
+
+@router.post("/sources/rcsb/{pdb_id}")
+async def register_rcsb_mmcif_source(
+    pdb_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+    selection: RcsbSelection | None = None,
+):
+    """Register exact server-resolved RCSB model/chain/entity mmCIF bytes."""
+
+    accession = pdb_id.strip().upper()
+    if not re.fullmatch(r"[A-Z0-9]{4}", accession):
+        raise HTTPException(status_code=422, detail="RCSB accession must be exactly four letters or digits")
+    if selection is None:
+        selection = RcsbSelection(accession=accession)
+    elif selection.accession and selection.accession != accession:
+        raise HTTPException(status_code=422, detail="RCSB selection accession does not match the URL accession")
+    else:
+        selection = selection.model_copy(update={"accession": accession})
+
+    downloaded = await _download_rcsb_mmcif(accession)
+    try:
+        discovery, resolved_selection, materialized = resolve_and_materialize_rcsb_selection(
+            accession,
+            downloaded,
+            selection.model_dump(mode="json", exclude_none=True),
+        )
+    except RcsbSourceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    source_sha256 = hashlib.sha256(materialized).hexdigest()
+    authority_payload = {
+        "provider": "RCSB",
+        "accession": accession,
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
+        "selection": resolved_selection,
+        "source_sha256": source_sha256,
+        "download_sha256": hashlib.sha256(downloaded).hexdigest(),
+        "materialization": "selected_asymmetric_unit_context_v1",
+    }
+    metadata = {
+        "name": f"RCSB {accession}",
+        "rcsb_entry": {
+            "accession": accession,
+            "title": f"RCSB entry {accession}",
+            **discovery,
+        },
+        **resolved_selection,
+    }
+    spool = tempfile.SpooledTemporaryFile(
+        max_size=min(len(materialized), 8 * 1024 * 1024), mode="w+b"
+    )
+    try:
+        spool.write(materialized)
+        spool.seek(0)
         upload = UploadFile(filename=f"{accession}.cif", file=cast(BinaryIO, spool))
         request.state._cm_source_authority = {
             "authority_kind": "rcsb_download",
@@ -1178,7 +1247,7 @@ async def register_rcsb_mmcif_source(
             registration = await register_source(
                 request=request,
                 source_kind="structure_upload",
-                metadata_json=json.dumps({"name": f"RCSB {accession}"}),
+                metadata_json=json.dumps(metadata),
                 file=upload,
                 session=session,
             )
@@ -1191,9 +1260,7 @@ async def register_rcsb_mmcif_source(
         if source is None:
             raise HTTPException(status_code=500, detail="registered RCSB source authority is unavailable")
         authority_receipt = registration.get("authority_receipt") or _read_source_authority(source)
-        # The fallback is only for in-process compatibility wrappers around the
-        # normal registration function.  The real registration path publishes
-        # this receipt before its database commit.
+        # Compatibility wrappers may bypass the normal transactional publisher.
         if authority_receipt is None:
             authority_receipt = _publish_source_authority(
                 source, authority_kind="rcsb_download", payload=authority_payload
@@ -1205,21 +1272,34 @@ async def register_rcsb_mmcif_source(
 
 def _rcsb_human_metadata(accession: str, payload: Mapping[str, Any] | None) -> dict[str, Any]:
     value = payload if isinstance(payload, Mapping) else {}
-    struct = value.get("struct") if isinstance(value.get("struct"), Mapping) else {}
-    entry_info = value.get("rcsb_entry_info") if isinstance(value.get("rcsb_entry_info"), Mapping) else {}
+    struct_value = value.get("struct")
+    struct: Mapping[str, Any] = struct_value if isinstance(struct_value, Mapping) else {}
+    entry_info_value = value.get("rcsb_entry_info")
+    entry_info: Mapping[str, Any] = (
+        entry_info_value if isinstance(entry_info_value, Mapping) else {}
+    )
+    accession_info_value = value.get("rcsb_accession_info")
+    accession_info: Mapping[str, Any] = (
+        accession_info_value if isinstance(accession_info_value, Mapping) else {}
+    )
     experimental = value.get("exptl")
     methods = [
         str(item.get("method"))
         for item in experimental
         if isinstance(item, Mapping) and item.get("method")
     ] if isinstance(experimental, list) else []
+    resolution_values = entry_info.get("resolution_combined")
+    resolution = (
+        resolution_values[0]
+        if isinstance(resolution_values, list) and resolution_values
+        else resolution_values
+    )
     return {
         "accession": accession,
         "title": str(struct.get("title") or value.get("name") or f"RCSB entry {accession}"),
         "experimental_methods": methods,
-        "resolution": entry_info.get("resolution_combined"),
-        "deposition_date": value.get("rcsb_accession_info", {}).get("deposit_date")
-        if isinstance(value.get("rcsb_accession_info"), Mapping) else None,
+        "resolution": resolution,
+        "deposition_date": accession_info.get("deposit_date"),
         "entity_count": entry_info.get("polymer_entity_count"),
         "assembly_count": entry_info.get("assembly_count"),
     }
@@ -1243,7 +1323,12 @@ async def _rcsb_entry_metadata(accession: str) -> dict[str, Any]:
         raise HTTPException(status_code=502, detail="RCSB metadata was not valid JSON") from exc
     if not isinstance(payload, Mapping):
         raise HTTPException(status_code=502, detail="RCSB metadata was not an object")
-    return _rcsb_human_metadata(accession, payload)
+    downloaded = await _download_rcsb_mmcif(accession)
+    try:
+        discovery = discover_rcsb_contexts(accession, downloaded)
+    except RcsbSourceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {**_rcsb_human_metadata(accession, payload), **discovery}
 
 
 async def _cached_rcsb_entries(
@@ -1268,7 +1353,10 @@ async def _cached_rcsb_entries(
         accession = str(payload.get("accession") or "").upper()
         if not re.fullmatch(r"[A-Z0-9]{4}", accession):
             continue
+        stored_entry = source.metadata_json.get("rcsb_entry")
         entry = _rcsb_human_metadata(accession, source.metadata_json)
+        if isinstance(stored_entry, Mapping):
+            entry.update(stored_entry)
         entry.update({
             "source_id": source.source_id,
             "source_kind": source.source_kind,
@@ -1353,7 +1441,12 @@ async def search_rcsb_sources(
         candidate = str(item.get("identifier") or "").upper()
         if not re.fullmatch(r"[A-Z0-9]{4}", candidate):
             continue
-        metadata = await _rcsb_entry_metadata(candidate)
+        try:
+            metadata = await _rcsb_entry_metadata(candidate)
+        except HTTPException as exc:
+            if exc.status_code == 422:
+                continue
+            raise
         metadata["score"] = item.get("score")
         entries.append(metadata)
     return {"query": normalized_keyword, "entries": entries, "cached": False}
