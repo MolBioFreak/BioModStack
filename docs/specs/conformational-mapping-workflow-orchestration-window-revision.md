@@ -1,12 +1,12 @@
 # Conformational Mapping Workflow-Orchestration Window Revision
 
-**Status:** Implemented and verified in the isolated worktree
+**Status:** Canonical implementation on the governed `test` branch; release verification records the exact candidate SHA and tree.
 
 **Owner:** Christian
 
 **Specification date:** 2026-08-08
 
-**Source baseline:** `origin/test` at `8112bed622740b890e25b69c2bcf29ebebeaf3d6`
+**Source authority:** Current `origin/test`. This specification does not identify an obsolete isolated worktree or frozen implementation baseline.
 
 **Implementation authority:** Authorized by Christian on 2026-08-08: “ok get it done.”
 

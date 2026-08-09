@@ -318,6 +318,8 @@ test('mounted canonical viewer navigation and lifecycle controls use typed CM ro
 
 test('mounted /jobs/:id routes a CM job to the canonical viewer without generic cancellation', async () => {
     const originalFetch = globalThis.fetch;
+    const originalAdapter = api.defaults.adapter;
+    api.defaults.adapter = async () => { throw new Error('typed viewer data is intentionally unavailable in this routing test'); };
     globalThis.fetch = (async (input: RequestInfo | URL) => {
         if (String(input).endsWith('/api/jobs/cm-route')) {
             return new Response(JSON.stringify({
@@ -339,6 +341,7 @@ test('mounted /jobs/:id routes a CM job to the canonical viewer without generic 
     } finally {
         await act(async () => renderer?.unmount());
         queryClient.clear();
+        api.defaults.adapter = originalAdapter;
         globalThis.fetch = originalFetch;
     }
 });
