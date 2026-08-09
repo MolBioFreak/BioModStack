@@ -406,8 +406,8 @@ def test_cm3_002_launcher_exposes_only_typed_contract_controls() -> None:
         "ordered_seeds",
         "samples_per_seed",
         "runtime_policy",
-        "analysis_policy",
     }
+    assert "analysis_policy" not in launcher_controls
     assert launcher_controls.isdisjoint(
         {"source", "created_by", "path", "staged_path", "runtime_identity"}
     )
@@ -892,7 +892,7 @@ async def test_cm3_004dc_submit_route_persists_state_comparison_authority(
     session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)()
     try:
         session.add(ConformationalMappingSource(
-            source_id="snapshot", principal_id=cm_router._PERSONAL_WORKFLOW_PRINCIPAL, source_kind="complex_snapshot",
+            source_id="snapshot", principal_id="alice", source_kind="complex_snapshot",
             storage_root=str(source_root), relative_path="snapshot.json",
             content_sha256=hashlib.sha256(snapshot_bytes).hexdigest(), size_bytes=len(snapshot_bytes),
             metadata_json={}, immutable=True,

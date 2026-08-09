@@ -46,7 +46,9 @@ _GENERATOR_ADAPTERS = {
     "bms.cm.protenix_v2.adapter.v1": "protenix_v2_ensemble",
     "bms.cm.confornets.adapter.v1": "confornets",
 }
-EXECUTABLE_CM_ADAPTERS = frozenset(WORKFLOW_ADAPTER_REGISTRY["conformational_mapping"])
+EXECUTABLE_CM_ADAPTERS = frozenset(_GENERATOR_ADAPTERS)
+if WORKFLOW_ADAPTER_REGISTRY["conformational_mapping"] != set(EXECUTABLE_CM_ADAPTERS):
+    raise RuntimeError("registered CM global adapters must have executable materializers")
 
 
 def _seal_confornets_snapshot(snapshot: Mapping[str, Any]) -> dict[str, Any]:

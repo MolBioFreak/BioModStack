@@ -101,8 +101,6 @@ WORKFLOW_ADAPTER_REGISTRY: dict[str, set[str]] = {
     "conformational_mapping": {
         "bms.cm.protenix_v2.adapter.v1",
         "bms.cm.confornets.adapter.v1",
-        "bms.cm.frustrampnn.adapter.v1",
-        "bms.cm.comparison.adapter.v1",
     },
 }
 
@@ -126,9 +124,9 @@ def _validate_workflow_payload(payload: dict[str, Any]) -> None:
         stage_by_adapter = {
             "bms.cm.protenix_v2.adapter.v1": ("protenix_v2_sampling", "protenix_v2_ensemble"),
             "bms.cm.confornets.adapter.v1": ("confornets_sampling", "confornets"),
-            "bms.cm.frustrampnn.adapter.v1": ("frustrampnn_analysis", "frustrampnn"),
-            "bms.cm.comparison.adapter.v1": ("cross_ensemble_comparison", "comparison"),
         }
+        if adapter_id not in stage_by_adapter:
+            raise ValidationFailure(f"CM workflow adapter has no executable materializer: {adapter_id}")
         expected_stage, expected_backend = stage_by_adapter[adapter_id]
         if stage != expected_stage or payload.get("backend") != expected_backend:
             raise ValidationFailure("CM workflow stage, backend, and adapter identity disagree")
@@ -143,8 +141,7 @@ def _validate_workflow_payload(payload: dict[str, Any]) -> None:
         dependencies = payload.get("depends_on", [])
         if not isinstance(dependencies, list) or any(not isinstance(value, str) or not value for value in dependencies):
             raise ValidationFailure("CM workflow depends_on must be an ordered ID list")
-        if adapter_id in {"bms.cm.frustrampnn.adapter.v1", "bms.cm.comparison.adapter.v1"} and not dependencies:
-            raise ValidationFailure("CM analysis/comparison stages require explicit dependencies")
+
     nodes = payload["nodes"]
     edges = payload["edges"]
     if not isinstance(nodes, list) or not nodes:

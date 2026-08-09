@@ -33,5 +33,4 @@ user_params:
   - {name: registered_transfer_id, label: Registered transfer-state ID, type: string, required: false}
   - {name: feature_policy, label: Feature policy, type: text, required: true, description: Versioned JSON object with explicit protein-MSA, template and RNA-MSA booleans for Protenix.}
   - {name: runtime_policy, label: Runtime policy, type: text, required: true, description: JSON object selecting defaults or explicit positive cycle and step values.}
-  - {name: analysis_policy, label: Analysis policy, type: text, required: true, description: JSON object containing detector identity and every support, sign, clash and rank threshold.}
   - {name: confornets, label: ConforNets controls, type: text, required: false, description: JSON object containing task, run, saved-step, network, sample, diffusion, optimization, confidence and evaluation controls; chain, test case, benchmark, source paths and runtime identity are server-owned.}

@@ -77,7 +77,12 @@ def test_external_import_contract_is_singular() -> None:
 
 
 def test_registered_global_cm_adapters_equal_executable_materializers() -> None:
-    assert set(global_adapter.EXECUTABLE_CM_ADAPTERS) == WORKFLOW_ADAPTER_REGISTRY["conformational_mapping"]
+    expected = {
+        "bms.cm.protenix_v2.adapter.v1",
+        "bms.cm.confornets.adapter.v1",
+    }
+    assert set(global_adapter.EXECUTABLE_CM_ADAPTERS) == expected
+    assert WORKFLOW_ADAPTER_REGISTRY["conformational_mapping"] == expected
 
 
 def test_confornets_snapshot_identity_binds_full_normalized_snapshot() -> None:

@@ -1423,15 +1423,8 @@ async def _authorized_state_analysis_summary_record(
     request: Request,
     session: AsyncSession,
 ):
-    """Authorize compact summaries for authenticated principals or request capabilities."""
+    """Apply the same owner or capability authority as every CM read route."""
 
-    record = await get_request(session, request_id)
-    if record is None:
-        _principal(request)
-        raise HTTPException(status_code=404, detail="conformational-mapping request not found")
-    if getattr(request.state, "authenticated_principal", None) is not None:
-        _principal(request)
-        return record
     return await _authorized_record(request_id, request, session)
 
 
@@ -1446,10 +1439,7 @@ async def _source(
     source = await session.get(ConformationalMappingSource, source_id)
     if (
         source is None
-        or (
-            source.principal_id != principal_id
-            and source.principal_id != _PERSONAL_WORKFLOW_PRINCIPAL
-        )
+        or source.principal_id != principal_id
         or source.source_kind not in allowed_kinds
         or not source.immutable
     ):
