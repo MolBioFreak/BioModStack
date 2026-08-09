@@ -234,19 +234,31 @@ type CmSourceIdentityContext = {
     sample: unknown;
     chains: unknown;
     entities: unknown;
+    coordinate: unknown;
 };
 
-const sourceIdentityContext = (source: CmSource): CmSourceIdentityContext => {
+const sourceIdentityContext = (source: CmSource): CmSourceIdentityContext | null => {
     const receipt = source.authority_receipt;
-    const payload = receipt
-        && receipt.source_id === source.source_id
-        && receipt.source_kind === source.source_kind
-        && receipt.content_sha256 === source.sha256
-        ? receipt.payload
-        : {};
-    const selection = asObject(payload.selection) || {};
-    const normalizedMetadata = asObject(source.metadata.normalized_metadata) || {};
-    const scopes = [selection, payload, normalizedMetadata, source.metadata];
+    if (!receipt
+        || receipt.schema_name !== 'cm_source_authority_receipt'
+        || receipt.schema_version !== 1
+        || receipt.source_id !== source.source_id
+        || receipt.source_kind !== source.source_kind
+        || receipt.content_sha256 !== source.sha256
+        || !/^[0-9a-f]{64}$/.test(receipt.content_sha256)
+        || !/^[0-9a-f]{64}$/.test(receipt.receipt_sha256)) return null;
+    const payload = asObject(receipt.payload);
+    if (!payload) return null;
+    const selection = asObject(payload.selection);
+    if (receipt.authority_kind === 'rcsb_download') {
+        if (source.source_kind !== 'structure_upload'
+            || payload.provider !== 'RCSB'
+            || typeof payload.accession !== 'string'
+            || !/^[A-Z0-9]{4}$/.test(payload.accession)
+            || !selection
+            || selection.accession !== payload.accession) return null;
+    }
+    const scopes = selection ? [selection, payload] : [payload];
     const pick = (...keys: string[]): unknown => {
         for (const scope of scopes) {
             for (const key of keys) {
@@ -262,6 +274,7 @@ const sourceIdentityContext = (source: CmSource): CmSourceIdentityContext => {
         sample: pick('sample_id', 'sample_ids'),
         chains: pick('chain_ids', 'chain_id'),
         entities: pick('entity_ids', 'entity_id'),
+        coordinate: pick('backend_coordinates'),
     };
 };
 
@@ -595,25 +608,7 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
         mutationFn: async ({ run, artifact }: { run: CmReusableRun; artifact: CmReusableRun['artifacts'][number] }) => {
             const runId = run.request_id || run.run_id;
             if (!runId) throw new Error('The reusable run has no request identity.');
-            const source = await (services?.registerRunArtifact || registerCmRunArtifact)(runId, artifact.artifact_id);
-            const sourceWithContext: CmSource = {
-                ...source,
-                source_kind: 'structure_artifact',
-                format: source.format || 'mmcif',
-                metadata: {
-                    ...source.metadata,
-                    name: source.metadata.name || `${run.name || run.run_name || runId} / ${artifact.name || artifact.candidate_id || artifact.artifact_id}`,
-                    run_id: runId,
-                    job_id: run.job_id,
-                    artifact_id: artifact.artifact_id,
-                    candidate_id: artifact.candidate_id || null,
-                    model_id: artifact.model_id || null,
-                    sample_id: artifact.sample_id || null,
-                    chain_ids: artifact.chain_ids || [],
-                    entity_ids: artifact.entity_ids || [],
-                },
-            };
-            return sourceWithContext;
+            return (services?.registerRunArtifact || registerCmRunArtifact)(runId, artifact.artifact_id);
         },
         onSuccess: async (source) => {
             setError(null);
@@ -655,26 +650,10 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
         },
         onSuccess: async (source) => {
             setError(null);
-            const entry = selectedRcsbEntry;
-            const contextSource: CmSource = {
-                ...source,
-                source_kind: 'structure_upload',
-                format: source.format || 'mmcif',
-                metadata: {
-                    ...source.metadata,
-                    name: source.metadata.name || `RCSB ${entry?.accession || ''}`.trim(),
-                    provider: 'RCSB',
-                    accession: entry?.accession,
-                    model_id: rcsbModelId || null,
-                    sample_id: rcsbSampleId || null,
-                    chain_ids: rcsbChainId ? [rcsbChainId] : [],
-                    entity_ids: rcsbEntityId ? [rcsbEntityId] : [],
-                },
-            };
-            setRegisteredSources((current) => [...current.filter((item) => item.source_id !== contextSource.source_id), contextSource]);
-            if (form.backend === 'external_import') update('importIds', [contextSource.source_id]);
+            setRegisteredSources((current) => [...current.filter((item) => item.source_id !== source.source_id), source]);
+            if (form.backend === 'external_import') update('importIds', [source.source_id]);
             if (form.backend === 'confornets' && form.task === 'mse') {
-                update('referenceIds', [contextSource.source_id]);
+                update('referenceIds', [source.source_id]);
             }
             await queryClient.invalidateQueries({ queryKey: ['cm-sources'] });
         },
@@ -682,12 +661,11 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
     });
 
     const selectRcsbEntry = (entry: CmRcsbEntry) => {
-        const required = new Set(entry.required_selection);
         setSelectedRcsbEntry(entry);
-        setRcsbModelId(required.has('model_id') ? '' : entry.models[0]?.model_id || '');
-        setRcsbSampleId(required.has('sample_id') ? '' : entry.samples[0]?.sample_id || '');
-        setRcsbChainId(required.has('chain_ids') ? '' : entry.chains[0]?.chain_id || '');
-        setRcsbEntityId(required.has('entity_ids') ? '' : entry.entities[0]?.entity_id || entry.chains[0]?.entity_id || '');
+        setRcsbModelId('');
+        setRcsbSampleId('');
+        setRcsbChainId('');
+        setRcsbEntityId('');
         setError(null);
     };
 
@@ -901,13 +879,15 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
         selectSourceTab(nextTab);
         requestAnimationFrame(() => document.getElementById(`cm-source-tab-${nextTab}`)?.focus());
     };
-    const rcsbSelectionReady = Boolean(selectedRcsbEntry)
-        && selectedRcsbEntry!.required_selection.every((requirement) => (
-            requirement === 'model_id' ? Boolean(rcsbModelId)
-                : requirement === 'sample_id' ? Boolean(rcsbSampleId)
-                    : requirement === 'chain_ids' ? Boolean(rcsbChainId)
-                        : Boolean(rcsbEntityId)
-        ));
+    const selectedRcsbChain = selectedRcsbEntry?.chains.find((chain) => chain.chain_id === rcsbChainId);
+    const rcsbSelectionReady = Boolean(
+        selectedRcsbEntry
+        && selectedRcsbEntry.models.some((model) => model.model_id === rcsbModelId)
+        && selectedRcsbEntry.samples.some((sample) => sample.sample_id === rcsbSampleId)
+        && selectedRcsbChain
+        && selectedRcsbEntry.entities.some((entity) => entity.entity_id === rcsbEntityId)
+        && selectedRcsbChain.entity_id === rcsbEntityId,
+    );
     const rcsbSelectionSummary = selectedRcsbEntry
         ? `${selectedRcsbEntry.accession} · model ${rcsbModelId || 'unresolved'} · sample ${rcsbSampleId || 'unresolved'} · chain ${rcsbChainId || 'unresolved'} · entity ${rcsbEntityId || 'unresolved'}`
         : null;
@@ -921,8 +901,8 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
         `sample ${metadataText(selectedInputIdentity.sample)}`,
         `chains ${metadataText(selectedInputIdentity.chains)}`,
         `entities ${metadataText(selectedInputIdentity.entities)}`,
-        `coordinate ${metadataText(selectedSource?.metadata.backend_coordinates)}`,
-    ].filter((item) => !item.endsWith('—')).join(' · ') : 'No model/sample/chain/entity context is selected.';
+        `coordinate ${metadataText(selectedInputIdentity.coordinate)}`,
+    ].filter((item) => !item.endsWith('—')).join(' · ') : 'Server-owned source identity unavailable.';
     const hasSelectedInputContext = Boolean(selectedInputIdentity && [
         selectedInputIdentity.provider,
         selectedInputIdentity.accession,

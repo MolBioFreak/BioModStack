@@ -175,6 +175,14 @@ test('run notes and general CM source paths are typed without unrelated metadata
     assert.doesNotMatch(launcher, /SAbDab|project|campaign/i);
 });
 
+test('launcher does not promote browser-augmented metadata into server-owned source identity', () => {
+    const launcher = source('conformationalMapping/ConformationalMappingLauncher.tsx');
+    const api = source('conformationalMapping/conformationalMappingApi.ts');
+    assert.doesNotMatch(launcher, /const contextSource: CmSource|const sourceWithContext: CmSource/);
+    assert.doesNotMatch(launcher, /normalizedMetadata|source\.metadata\]/);
+    assert.doesNotMatch(api, /defaultRcsbModel|defaultRcsbSample/);
+});
+
 test('ConforNets starts with one explicit seed and server-derived chain authority', () => {
     const launcher = source('conformationalMapping/ConformationalMappingLauncher.tsx');
     assert.match(launcher, /seeds: '101'/);

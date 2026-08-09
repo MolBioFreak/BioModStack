@@ -1994,6 +1994,7 @@ async def submit_request(
         (root / "cm_runtime_registry_v1.json").write_bytes(
             json.dumps(_runtime_registry(body.backend), sort_keys=True, separators=(",", ":")).encode("utf-8")
         )
+        retry_authority = _build_retry_authority(root)
         # The producer binds installed runtime/container/checkpoint bytes into the
         # full descriptor. Persistence locks that descriptor atomically at first
         # successful ingestion; no partial output is resumable before then.
@@ -2009,6 +2010,7 @@ async def submit_request(
                 "cm_coordinate_plan_sha256": coordinate_plan["coordinate_plan_sha256"],
                 "cm_principal_id": principal_id,
                 "cm_submission_sha256": submission_sha256,
+                "cm_retry_authority_v1": retry_authority,
             },
         )
         cm_record = await register_prepared_request(
@@ -2313,6 +2315,7 @@ async def launch_resampling(
             json.dumps(_runtime_registry("protenix_v2_ensemble"), sort_keys=True, separators=(",", ":")),
             encoding="utf-8",
         )
+        retry_authority = _build_retry_authority(root)
         request_payload = json.loads(materialized.request_path.read_text(encoding="utf-8"))
         plan = json.loads(materialized.coordinate_plan_path.read_text(encoding="utf-8"))
         token, token_digest = issue_request_capability()
@@ -2323,7 +2326,11 @@ async def launch_resampling(
             **_cm_job_admission("protenix_v2_ensemble", request_payload),
             parent_job_id=source_job.id, lineage_root_job_id=source_job.lineage_root_job_id or source_job.id,
             stage_family="conformational_mapping", stage_mode="resampling",
-            provenance={"cm_pair_id": pair["pair_id"], "cm_handoff_key": body.handoff_key},
+            provenance={
+                "cm_pair_id": pair["pair_id"],
+                "cm_handoff_key": body.handoff_key,
+                "cm_retry_authority_v1": retry_authority,
+            },
         )
         child = await register_prepared_request(
             session, job=job, principal_id=principal_id, request=request_payload,
@@ -2447,12 +2454,179 @@ def _verified_retry_documents(record: ConformationalMappingRequest) -> tuple[dic
     return request_payload, coordinate_plan
 
 
+_RETRY_REQUIRED_SIDECARS = frozenset({
+    "cm_runtime_registry_v1.json",
+    "cm_complex_snapshots_v1.json",
+})
+_RETRY_OPTIONAL_SIDECARS = frozenset({"cm_resampling_pair_request_v1.json"})
+_RETRY_REGISTERED_DIRECTORIES = frozenset({
+    "registered_snapshot",
+    "registered",
+    "registered_import",
+})
+
+
+def _stable_file_identity(path: Path) -> tuple[str, int]:
+    """Hash one no-follow regular file while proving its opened identity stayed stable."""
+
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise OSError("retry authority entry is not a regular file")
+        digest = hashlib.sha256()
+        size = 0
+        while chunk := os.read(descriptor, 1024 * 1024):
+            digest.update(chunk)
+            size += len(chunk)
+        after = os.fstat(descriptor)
+        if (
+            before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns
+        ) != (
+            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
+        ) or size != before.st_size:
+            raise OSError("retry authority entry changed while hashing")
+        return digest.hexdigest(), size
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _retry_authority_paths(root: Path) -> dict[str, Path]:
+    """Enumerate only pre-launch sidecars and registered source bytes."""
+
+    paths: dict[str, Path] = {}
+    for name in sorted(_RETRY_REQUIRED_SIDECARS | _RETRY_OPTIONAL_SIDECARS):
+        path = root / name
+        if path.exists() or path.is_symlink():
+            if path.is_symlink() or not path.is_file():
+                raise OSError(f"unsafe retry authority sidecar: {name}")
+            paths[name] = path
+    if not _RETRY_REQUIRED_SIDECARS.issubset(paths):
+        raise OSError("required retry authority sidecars are unavailable")
+    for name in sorted(_RETRY_REGISTERED_DIRECTORIES):
+        directory = root / name
+        if not directory.exists() and not directory.is_symlink():
+            continue
+        if directory.is_symlink() or not directory.is_dir():
+            raise OSError(f"unsafe retry authority directory: {name}")
+        for path in sorted(directory.rglob("*")):
+            if path.is_symlink():
+                raise OSError(f"unsafe retry authority path: {path}")
+            if path.is_dir():
+                continue
+            if not path.is_file():
+                raise OSError(f"retry authority path is not a regular file: {path}")
+            relative_path = path.relative_to(root).as_posix()
+            paths[relative_path] = path
+    return paths
+
+
+def _build_retry_authority(root: Path) -> dict[str, Any]:
+    """Seal every retry-copied sidecar/source byte before the first launch."""
+
+    try:
+        files = {
+            relative_path: {"sha256": digest, "size_bytes": size}
+            for relative_path, path in _retry_authority_paths(root).items()
+            for digest, size in [_stable_file_identity(path)]
+        }
+    except OSError as exc:
+        raise HTTPException(status_code=409, detail="persisted CM retry authority could not be sealed") from exc
+    unsigned = {
+        "schema_name": "cm_retry_authority",
+        "schema_version": 1,
+        "files": files,
+    }
+    return {**unsigned, "authority_sha256": canonical_sha256(unsigned)}
+
+
+def _validated_retry_authority(authority: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
+    if not isinstance(authority, Mapping) or set(authority) != {
+        "schema_name", "schema_version", "files", "authority_sha256",
+    }:
+        raise HTTPException(status_code=409, detail="persisted CM retry authority is unavailable")
+    unsigned = {key: value for key, value in authority.items() if key != "authority_sha256"}
+    if (
+        authority.get("schema_name") != "cm_retry_authority"
+        or authority.get("schema_version") != 1
+        or authority.get("authority_sha256") != canonical_sha256(unsigned)
+        or not isinstance(authority.get("files"), Mapping)
+    ):
+        raise HTTPException(status_code=409, detail="persisted CM retry authority is invalid")
+    files: dict[str, dict[str, Any]] = {}
+    for raw_relative_path, raw_identity in authority["files"].items():
+        relative_path = str(raw_relative_path)
+        path = Path(relative_path)
+        if (
+            not relative_path
+            or path.is_absolute()
+            or "\\" in relative_path
+            or any(part in {"", ".", ".."} for part in path.parts)
+            or not isinstance(raw_identity, Mapping)
+            or set(raw_identity) != {"sha256", "size_bytes"}
+            or not re.fullmatch(r"[0-9a-f]{64}", str(raw_identity.get("sha256") or ""))
+            or not isinstance(raw_identity.get("size_bytes"), int)
+            or raw_identity["size_bytes"] < 0
+        ):
+            raise HTTPException(status_code=409, detail="persisted CM retry authority contains an invalid file identity")
+        if (
+            relative_path not in _RETRY_REQUIRED_SIDECARS | _RETRY_OPTIONAL_SIDECARS
+            and path.parts[0] not in _RETRY_REGISTERED_DIRECTORIES
+        ):
+            raise HTTPException(status_code=409, detail="persisted CM retry authority contains an ungoverned path")
+        files[relative_path] = {
+            "sha256": str(raw_identity["sha256"]),
+            "size_bytes": int(raw_identity["size_bytes"]),
+        }
+    if not _RETRY_REQUIRED_SIDECARS.issubset(files):
+        raise HTTPException(status_code=409, detail="persisted CM retry authority is missing required sidecars")
+    return files
+
+
+def _copy_verified_retry_file(source: Path, destination: Path, identity: Mapping[str, Any]) -> None:
+    source_descriptor: int | None = None
+    destination_descriptor: int | None = None
+    try:
+        source_descriptor = os.open(source, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        before = os.fstat(source_descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_size != identity["size_bytes"]:
+            raise OSError("retry authority file size changed")
+        destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        destination_descriptor = os.open(
+            destination,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        digest = hashlib.sha256()
+        size = 0
+        while chunk := os.read(source_descriptor, 1024 * 1024):
+            digest.update(chunk)
+            size += len(chunk)
+            _write_all(destination_descriptor, chunk)
+        os.fsync(destination_descriptor)
+        after = os.fstat(source_descriptor)
+        if (
+            before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns
+        ) != (
+            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
+        ) or size != identity["size_bytes"] or digest.hexdigest() != identity["sha256"]:
+            raise OSError("retry authority file digest changed")
+    finally:
+        if destination_descriptor is not None:
+            os.close(destination_descriptor)
+        if source_descriptor is not None:
+            os.close(source_descriptor)
+
+
 def _copy_clean_retry_authority(
     *,
     source_root: Path,
     attempt_root: Path,
     request_payload: Mapping[str, Any],
     coordinate_plan: Mapping[str, Any],
+    persisted_authority: Mapping[str, Any] | None,
 ) -> None:
     if attempt_root.exists():
         raise HTTPException(status_code=409, detail="clean retry attempt root already exists")
@@ -2474,38 +2648,54 @@ def _copy_clean_retry_authority(
     if on_disk_request != request_payload or on_disk_plan != coordinate_plan:
         raise HTTPException(status_code=409, detail="retry input files disagree with persisted CM authority")
 
+    expected_files = _validated_retry_authority(persisted_authority)
+    try:
+        source_files = _retry_authority_paths(source_root)
+    except OSError as exc:
+        raise HTTPException(status_code=409, detail="persisted CM retry authority contains unsafe source paths") from exc
+    if set(source_files) != set(expected_files):
+        raise HTTPException(status_code=409, detail="persisted CM retry authority does not match registered source files")
+
     attempt_root.mkdir(parents=True, mode=0o700)
     try:
-        shutil.copyfile(request_path, attempt_root / "cm_request_v1.json", follow_symlinks=False)
-        shutil.copyfile(plan_path, attempt_root / "cm_coordinate_plan_v1.json", follow_symlinks=False)
-        for name in ("cm_runtime_registry_v1.json", "cm_complex_snapshots_v1.json"):
-            source = source_root / name
-            if not source.is_file() or source.is_symlink():
-                raise HTTPException(status_code=409, detail=f"clean retry authority is missing {name}")
-            try:
-                payload = json.loads(source.read_text(encoding="utf-8"))
-            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-                raise HTTPException(status_code=409, detail=f"clean retry authority has unreadable {name}") from exc
-            if name == "cm_runtime_registry_v1.json":
-                if not isinstance(payload, Mapping):
-                    raise HTTPException(status_code=409, detail="clean retry runtime registry is not an object")
-            else:
-                snapshot_bundle = payload if isinstance(payload, list) else [payload]
-                if not snapshot_bundle or any(not isinstance(snapshot, Mapping) for snapshot in snapshot_bundle):
-                    raise HTTPException(status_code=409, detail="clean retry snapshot authority is invalid")
-                try:
-                    for snapshot in snapshot_bundle:
-                        validate_schema("cm_complex_snapshot_v1", snapshot)
-                except (TypeError, ValueError, KeyError) as exc:
-                    raise HTTPException(status_code=409, detail="clean retry snapshot authority is not schema-valid") from exc
-            shutil.copyfile(source, attempt_root / name, follow_symlinks=False)
-        for name in ("registered_snapshot", "registered", "registered_import"):
-            source = source_root / name
-            if not source.exists():
-                continue
-            if source.is_symlink() or not source.is_dir() or any(path.is_symlink() for path in source.rglob("*")):
-                raise HTTPException(status_code=409, detail=f"clean retry authority contains unsafe {name} paths")
-            shutil.copytree(source, attempt_root / name, copy_function=shutil.copyfile)
+        # Reconstruct the two schema-governed documents from their already verified
+        # persisted rows instead of reusing mutable source-path bytes after the check.
+        (attempt_root / "cm_request_v1.json").write_text(
+            json.dumps(request_payload, sort_keys=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        (attempt_root / "cm_coordinate_plan_v1.json").write_text(
+            json.dumps(coordinate_plan, sort_keys=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        for relative_path, source in source_files.items():
+            _copy_verified_retry_file(
+                source,
+                attempt_root / relative_path,
+                expected_files[relative_path],
+            )
+        try:
+            runtime_registry = json.loads(
+                (attempt_root / "cm_runtime_registry_v1.json").read_text(encoding="utf-8")
+            )
+            snapshots = json.loads(
+                (attempt_root / "cm_complex_snapshots_v1.json").read_text(encoding="utf-8")
+            )
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=409, detail="persisted CM retry authority sidecars are unreadable") from exc
+        if not isinstance(runtime_registry, Mapping):
+            raise HTTPException(status_code=409, detail="persisted CM retry authority runtime registry is invalid")
+        snapshot_bundle = snapshots if isinstance(snapshots, list) else [snapshots]
+        if not snapshot_bundle or any(not isinstance(snapshot, Mapping) for snapshot in snapshot_bundle):
+            raise HTTPException(status_code=409, detail="persisted CM retry authority snapshot bundle is invalid")
+        try:
+            for snapshot in snapshot_bundle:
+                validate_schema("cm_complex_snapshot_v1", snapshot)
+        except (TypeError, ValueError, KeyError) as exc:
+            raise HTTPException(status_code=409, detail="persisted CM retry authority snapshot bundle is not schema-valid") from exc
+    except OSError as exc:
+        shutil.rmtree(attempt_root, ignore_errors=True)
+        raise HTTPException(status_code=409, detail="persisted CM retry authority byte identity is unavailable") from exc
     except Exception:
         shutil.rmtree(attempt_root, ignore_errors=True)
         raise
@@ -2538,6 +2728,7 @@ async def retry_request(
             attempt_root=attempt_root,
             request_payload=request_payload,
             coordinate_plan=coordinate_plan,
+            persisted_authority=(job.provenance or {}).get("cm_retry_authority_v1"),
         )
         attempt_root_created = True
         retry_params = _clean_retry_launch_params(dict(job.params or {}), attempt_root=attempt_root)

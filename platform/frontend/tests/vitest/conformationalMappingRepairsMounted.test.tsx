@@ -177,7 +177,7 @@ test('mounted Your Runs discovers reusable artifacts and registers only an expli
     mounted.client.clear();
 });
 
-test('mounted selected-input preview and summary show server-owned receipt and normalized identity', async () => {
+test('mounted selected-input preview and summary show only digest-bound receipt identity', async () => {
     const authoritativeSource: CmSource = {
         source_id: 'rcsb-authoritative',
         source_kind: 'structure_upload',
@@ -185,10 +185,14 @@ test('mounted selected-input preview and summary show server-owned receipt and n
         sha256: sha('9'),
         bytes: 4096,
         metadata: {
-            name: 'Server-normalized RCSB import',
-            sample_id: 'asymmetric-unit',
-            chain_ids: ['A'],
-            entity_ids: ['1'],
+            name: 'Caller-controlled display label',
+            provider: 'ATTACKER',
+            accession: 'EVIL',
+            model_id: 'attacker-model',
+            sample_id: 'attacker-sample',
+            chain_ids: ['Z'],
+            entity_ids: ['999'],
+            normalized_metadata: { accession: 'FAKE', chain_ids: ['Y'] },
         },
         authority_receipt: {
             schema_name: 'cm_source_authority_receipt',
@@ -201,7 +205,10 @@ test('mounted selected-input preview and summary show server-owned receipt and n
             payload: {
                 provider: 'RCSB',
                 accession: '1UBQ',
-                selection: { model_id: '1' },
+                selection: {
+                    accession: '1UBQ', model_id: '1', sample_id: 'asymmetric-unit',
+                    chain_ids: ['A'], entity_ids: ['1'],
+                },
             },
         },
     };
@@ -220,7 +227,42 @@ test('mounted selected-input preview and summary show server-owned receipt and n
         assert.match(surfaceText, /sample asymmetric-unit/i);
         assert.match(surfaceText, /chains? A/i);
         assert.match(surfaceText, /entities? 1/i);
+        assert.doesNotMatch(surfaceText, /ATTACKER|EVIL|FAKE|attacker-model|attacker-sample|chains? Z|chains? Y|entities? 999/i);
         assert.doesNotMatch(surfaceText, /Model, sample, and chain context resolve at server normalization/i);
+    }
+
+    await act(async () => mounted.renderer.unmount());
+    mounted.client.clear();
+});
+
+test('mounted selected-input identity is unavailable when receipt binding mismatches despite attacker metadata', async () => {
+    const taintedSource: CmSource = {
+        source_id: 'rcsb-tainted', source_kind: 'structure_upload', format: 'mmcif', sha256: sha('4'), bytes: 4096,
+        metadata: {
+            name: 'Untrusted source label', provider: 'ATTACKER', accession: 'EVIL', model_id: 'browser-model',
+            sample_id: 'browser-sample', chain_ids: ['Z'], entity_ids: ['999'],
+            normalized_metadata: { provider: 'FAKE', accession: 'FAKE', chain_ids: ['Y'] },
+        },
+        authority_receipt: {
+            schema_name: 'cm_source_authority_receipt', schema_version: 1,
+            source_id: 'rcsb-tainted', source_kind: 'structure_upload', content_sha256: sha('5'),
+            authority_kind: 'rcsb_download', receipt_sha256: sha('6'),
+            payload: {
+                provider: 'RCSB', accession: '1UBQ',
+                selection: { accession: '1UBQ', model_id: '1', sample_id: 'asymmetric-unit', chain_ids: ['A'], entity_ids: ['1'] },
+            },
+        },
+    };
+    const mounted = await mountLauncher({ listSources: async () => [taintedSource] }, {
+        backend: 'external_import', name: 'Fail-closed identity', registered_artifact_ids: [taintedSource.source_id],
+    });
+
+    const preview = mounted.renderer.root.findByProps({ 'aria-labelledby': 'cm-preview-heading' });
+    const summary = mounted.renderer.root.findByProps({ 'aria-labelledby': 'cm-summary-heading' });
+    for (const surface of [preview, summary]) {
+        const surfaceText = text(surface);
+        assert.match(surfaceText, /source identity unavailable|server-owned source identity unavailable/i);
+        assert.doesNotMatch(surfaceText, /provider ATTACKER|accession EVIL|accession FAKE|model browser-model|sample browser-sample|chains? Z|chains? Y|entities? 999|accession 1UBQ/i);
     }
 
     await act(async () => mounted.renderer.unmount());
@@ -296,6 +338,35 @@ test('mounted RCSB source path supports keyword search, entry metadata, and expl
     assert.match(text(mounted.renderer.root), /4HHB.*model 2.*sample-a.*chain B.*entity 2/i);
     await act(async () => mounted.renderer.unmount());
     mounted.client.clear();
+});
+
+test('mounted RCSB search rejects incomplete server entries without rendering fabricated selectors', async () => {
+    const originalAdapter = api.defaults.adapter;
+    api.defaults.adapter = async (config) => ({
+        data: {
+            query: '4HHB', cached: false,
+            entries: [{
+                accession: '4HHB', title: 'Incomplete haemoglobin',
+                chains: [], entities: [], required_selection: ['model_id'],
+            }],
+        },
+        status: 200, statusText: 'OK', headers: {}, config,
+    });
+    const mounted = await mountLauncher({ listSources: async () => [] }, { backend: 'external_import', name: 'Reject incomplete RCSB' });
+    try {
+        await clickButton(mounted.renderer, /^RCSB$/i);
+        const searchInput = mounted.renderer.root.findAllByType('input').find((item) => item.props['aria-label'] === 'RCSB accession or keyword');
+        assert.ok(searchInput);
+        await act(async () => searchInput.props.onChange({ target: { value: '4HHB' } }));
+        await clickButton(mounted.renderer, /Search RCSB/i);
+        assert.match(text(mounted.renderer.root), /RCSB search contract error/i);
+        assert.doesNotMatch(text(mounted.renderer.root), /Incomplete haemoglobin|Model 1|Asymmetric unit/i);
+        assert.equal(mounted.renderer.root.findAllByType('select').some((item) => item.props['aria-label'] === 'RCSB model'), false);
+    } finally {
+        await act(async () => mounted.renderer.unmount());
+        mounted.client.clear();
+        api.defaults.adapter = originalAdapter;
+    }
 });
 
 const mountViewer = async (
@@ -528,7 +599,14 @@ test('typed RCSB search calls the CM authority endpoint with accession or keywor
     api.defaults.adapter = async (config) => {
         requests.push({ url: config.url, params: config.params });
         return {
-            data: { query: '4HHB', entries: [{ accession: '4HHB', title: 'Haemoglobin' }], cached: false },
+            data: { query: '4HHB', entries: [{
+                accession: '4HHB', title: 'Haemoglobin',
+                models: [{ model_id: '1', label: 'Model 1' }],
+                samples: [{ sample_id: 'asymmetric-unit', label: 'Deposited asymmetric unit' }],
+                chains: [{ chain_id: 'A', label: 'Author chain A', entity_id: '1', entity_type: 'protein', residue_count: 141 }],
+                entities: [{ entity_id: '1', label: 'Protein entity 1', entity_type: 'protein', residue_count: 141 }],
+                required_selection: ['model_id', 'sample_id', 'chain_ids', 'entity_ids'],
+            }], cached: false },
             status: 200,
             statusText: 'OK',
             headers: {},
@@ -547,6 +625,39 @@ test('typed RCSB search calls the CM authority endpoint with accession or keywor
             url: '/api/conformational-mapping/sources/rcsb/search',
             params: { keyword: 'kinase domain' },
         });
+    } finally {
+        api.defaults.adapter = originalAdapter;
+    }
+});
+
+test('typed RCSB search rejects missing, reduced, and internally inconsistent selection authority', async () => {
+    const originalAdapter = api.defaults.adapter;
+    const valid = {
+        accession: '4HHB', title: 'Haemoglobin',
+        models: [{ model_id: '1', label: 'Model 1' }],
+        samples: [{ sample_id: 'asymmetric-unit', label: 'Deposited asymmetric unit' }],
+        chains: [{ chain_id: 'A', label: 'Author chain A', entity_id: '1', entity_type: 'protein', residue_count: 141 }],
+        entities: [{ entity_id: '1', label: 'Protein entity 1', entity_type: 'protein', residue_count: 141 }],
+        required_selection: ['model_id', 'sample_id', 'chain_ids', 'entity_ids'],
+    };
+    const malformed = [
+        { ...valid, models: undefined },
+        { ...valid, samples: [] },
+        { ...valid, chains: [] },
+        { ...valid, entities: undefined },
+        { ...valid, required_selection: ['model_id'] },
+        { ...valid, chains: [{ ...valid.chains[0], entity_id: 'missing' }] },
+        { ...valid, chains: [{ ...valid.chains[0], residue_count: 140 }] },
+    ];
+    let index = 0;
+    api.defaults.adapter = async (config) => ({
+        data: { query: '4HHB', entries: [malformed[index++]], cached: false },
+        status: 200, statusText: 'OK', headers: {}, config,
+    });
+    try {
+        for (let attempt = 0; attempt < malformed.length; attempt += 1) {
+            await assert.rejects(searchCmRcsb('4HHB'), /RCSB search contract error/i);
+        }
     } finally {
         api.defaults.adapter = originalAdapter;
     }

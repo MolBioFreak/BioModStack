@@ -119,6 +119,30 @@ def test_ca_rmsd_performs_kabsch_for_rigid_rotation_and_translation(tmp_path: Pa
     assert runner._ca_rmsd(first, transformed) == pytest.approx(0.0, abs=1e-6)
 
 
+@pytest.mark.parametrize(
+    "atoms",
+    [
+        _base_atoms()[:1],
+        _base_atoms()[:2],
+        [
+            ("A", "ALA", 1, (0.0, 0.0, 0.0)),
+            ("A", "GLY", 2, (1.0, 1.0, 1.0)),
+            ("A", "SER", 3, (2.0, 2.0, 2.0)),
+        ],
+    ],
+    ids=["one-point", "two-points", "collinear-points"],
+)
+def test_ca_rmsd_rejects_underdetermined_kabsch_geometry(tmp_path: Path, atoms) -> None:
+    runner = _load_runner()
+    first = tmp_path / "first.pdb"
+    second = tmp_path / "second.pdb"
+    _write_pdb(first, atoms)
+    _write_pdb(second, atoms)
+
+    with pytest.raises(runner.CoordinateIdentityError, match="at least three non-collinear"):
+        runner._ca_rmsd(first, second)
+
+
 def test_ca_rmsd_parses_mmcif_atom_site_by_column_name_not_column_order(tmp_path: Path) -> None:
     runner = _load_runner()
     canonical = tmp_path / "canonical.cif"

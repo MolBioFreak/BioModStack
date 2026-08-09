@@ -145,6 +145,75 @@ async def _source(
     return source
 
 
+def _verify_existing_attempt_authority(
+    *,
+    existing_job: Job,
+    existing_request: ConformationalMappingRequest,
+    attempt_id: str,
+    scheduler: Mapping[str, Any],
+    scheduler_sha256: str,
+    adapter_id: str,
+    backend: str,
+    submission_sha256: str,
+    run_group_id: str,
+) -> None:
+    """Fail closed unless a recovered core attempt matches the incoming authority."""
+
+    provenance = existing_job.provenance
+    request_json = existing_request.request_json
+    coordinate_plan_json = existing_request.coordinate_plan_json
+    if not all(isinstance(value, Mapping) for value in (provenance, request_json, coordinate_plan_json)):
+        raise DispatchFailure("CM existing-attempt recovery authority is incomplete")
+    assert isinstance(provenance, Mapping)
+    assert isinstance(request_json, Mapping)
+    assert isinstance(coordinate_plan_json, Mapping)
+    try:
+        persisted_request_sha256 = canonical_sha256(
+            {key: value for key, value in request_json.items() if key != "request_sha256"}
+        )
+        persisted_coordinate_plan_sha256 = canonical_sha256(
+            {key: value for key, value in coordinate_plan_json.items() if key != "coordinate_plan_sha256"}
+        )
+    except (TypeError, ValueError) as exc:
+        raise DispatchFailure("CM existing-attempt recovery authority contains invalid canonical provenance") from exc
+
+    created_by = request_json.get("created_by")
+    expected_bindings = (
+        existing_job.id == attempt_id,
+        existing_job.model_id == scheduler.get("model_id") == "conformational_mapping",
+        existing_job.mode == scheduler.get("mode") == "map",
+        existing_job.batch_id == run_group_id,
+        existing_job.lineage_root_job_id == attempt_id,
+        existing_job.stage_family == "conformational_mapping",
+        existing_job.stage_mode == backend,
+        existing_request.request_id == attempt_id,
+        existing_request.job_id == attempt_id,
+        existing_request.principal_id == _PERSONAL_WORKFLOW_PRINCIPAL,
+        existing_request.backend == backend,
+        provenance.get("cm_principal_id") == _PERSONAL_WORKFLOW_PRINCIPAL,
+        provenance.get("cm_workflow_adapter") == adapter_id,
+        provenance.get("cm_scheduler_sha256") == scheduler_sha256,
+        provenance.get("cm_submission_sha256") == submission_sha256,
+        provenance.get("global_run_group_id") == run_group_id,
+        provenance.get("global_attempt_id") == attempt_id,
+        provenance.get("cm_request_sha256") == existing_request.request_sha256,
+        provenance.get("cm_coordinate_plan_sha256") == existing_request.coordinate_plan_sha256,
+        request_json.get("request_id") == existing_request.request_id,
+        request_json.get("backend") == backend,
+        request_json.get("request_sha256") == existing_request.request_sha256 == persisted_request_sha256,
+        isinstance(created_by, Mapping)
+        and created_by.get("principal_id") == _PERSONAL_WORKFLOW_PRINCIPAL,
+        coordinate_plan_json.get("request_id") == existing_request.request_id,
+        coordinate_plan_json.get("backend") == backend,
+        coordinate_plan_json.get("request_sha256") == existing_request.request_sha256,
+        coordinate_plan_json.get("coordinate_plan_sha256")
+        == existing_request.coordinate_plan_sha256
+        == persisted_coordinate_plan_sha256,
+    )
+    if not all(expected_bindings):
+        raise DispatchFailure("CM existing-attempt recovery authority conflicts with persisted provenance")
+
+
 async def _materialize_preallocated_cm_job(
     core_session: AsyncSession,
     *,
@@ -153,16 +222,22 @@ async def _materialize_preallocated_cm_job(
     run_group_id: str,
 ) -> dict[str, Any]:
     """Materialize one global attempt through the canonical CM request contract."""
+    try:
+        scheduler = copy.deepcopy(dict(scheduler))
+    except (TypeError, ValueError) as exc:
+        raise DispatchFailure("CM scheduler payload cannot be defensively bound") from exc
     params = scheduler.get("params")
     if not isinstance(params, dict):
         raise DispatchFailure("CM scheduler payload params are incomplete")
-    adapter_id = params.get("workflow_adapter")
-    backend = _GENERATOR_ADAPTERS.get(str(adapter_id))
+    adapter_id = str(params.get("workflow_adapter") or "")
+    backend = _GENERATOR_ADAPTERS.get(adapter_id)
     submission = params.get("cm_submission")
     if backend is None or not isinstance(submission, dict):
         raise DispatchFailure("global CM adapter requires a typed generator submission")
     if str(submission.get("backend")) != backend:
         raise DispatchFailure("CM adapter/backend identity disagrees")
+    scheduler_sha256 = sha256_text(canonical_json(scheduler))
+    submission_sha256 = sha256_text(canonical_json(submission))
     receipt_ids = params.get("cm_source_receipt_ids")
     if not isinstance(receipt_ids, list) or any(
         not isinstance(value, str) or not value for value in receipt_ids
@@ -184,6 +259,17 @@ async def _materialize_preallocated_cm_job(
         ).scalar_one_or_none()
         if existing_request is None:
             raise DispatchFailure("preallocated CM job exists without its canonical request")
+        _verify_existing_attempt_authority(
+            existing_job=existing_job,
+            existing_request=existing_request,
+            attempt_id=attempt_id,
+            scheduler=scheduler,
+            scheduler_sha256=scheduler_sha256,
+            adapter_id=adapter_id,
+            backend=backend,
+            submission_sha256=submission_sha256,
+            run_group_id=run_group_id,
+        )
         return {
             "scheduler_job_id": attempt_id,
             "request_id": existing_request.request_id,
@@ -368,7 +454,9 @@ async def _materialize_preallocated_cm_job(
             "cm_request_sha256": request_payload["request_sha256"],
             "cm_coordinate_plan_sha256": coordinate_plan["coordinate_plan_sha256"],
             "cm_principal_id": _PERSONAL_WORKFLOW_PRINCIPAL,
-            "cm_submission_sha256": sha256_text(canonical_json(submission)),
+            "cm_workflow_adapter": adapter_id,
+            "cm_scheduler_sha256": scheduler_sha256,
+            "cm_submission_sha256": submission_sha256,
             "global_run_group_id": run_group_id,
             "global_attempt_id": attempt_id,
         },

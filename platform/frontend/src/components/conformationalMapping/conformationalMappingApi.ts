@@ -409,25 +409,13 @@ export const registerCmSource = async (
     return (await api.post<CmSource>('/api/conformational-mapping/sources', body)).data;
 };
 
-const normalizeCmSource = (value: CmSource, fallback: Partial<CmSource> = {}): CmSource => ({
-    ...fallback,
-    ...value,
-    source_id: value.source_id,
-    source_kind: value.source_kind,
-    format: value.format || fallback.format || 'mmcif',
-    sha256: value.sha256,
-    bytes: value.bytes,
-    metadata: value.metadata || fallback.metadata || {},
-    authority_receipt: value.authority_receipt ?? fallback.authority_receipt ?? null,
-});
-
 export const registerCmRcsbSelection = async (selection: CmRcsbSelection): Promise<CmSource> => {
     const accession = selection.accession.trim().toUpperCase();
     const response = await api.post<CmSource>(
         `/api/conformational-mapping/sources/rcsb/${encodeURIComponent(accession)}`,
         { ...selection, accession },
     );
-    return normalizeCmSource(response.data, { format: 'mmcif', metadata: { name: `RCSB ${accession}` } });
+    return response.data;
 };
 
 /** Compatibility entry point for callers that only have an accession. */
@@ -440,15 +428,128 @@ export const registerCmRunArtifact = async (runId: string, artifactId: string): 
     const response = await api.post<CmSource>(
         `/api/conformational-mapping/runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifactId)}/sources`,
     );
-    return normalizeCmSource(response.data, { format: 'mmcif', source_kind: 'structure_artifact', metadata: {} });
+    return response.data;
 };
 
-const defaultRcsbModel = { model_id: '1', label: 'Model 1' };
-const defaultRcsbSample = { sample_id: 'asymmetric-unit', label: 'Asymmetric unit' };
-type CmRcsbServerEntry = Partial<CmRcsbEntry> & {
-    pdb_id?: string;
-    experimental_methods?: string[];
-    deposition_date?: string | null;
+const RCSB_REQUIRED_SELECTION = ['model_id', 'sample_id', 'chain_ids', 'entity_ids'] as const;
+
+const rcsbContractError = (detail: string): Error =>
+    new Error(`RCSB search contract error: ${detail}`);
+
+const rcsbObject = (value: unknown, detail: string): Record<string, unknown> => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw rcsbContractError(detail);
+    return value as Record<string, unknown>;
+};
+
+const rcsbString = (value: unknown, detail: string): string => {
+    if (typeof value !== 'string' || !value.trim()) throw rcsbContractError(detail);
+    return value;
+};
+
+const rcsbCollection = <T>(
+    value: unknown,
+    name: string,
+    parse: (item: Record<string, unknown>, index: number) => T,
+): T[] => {
+    if (!Array.isArray(value) || value.length === 0) {
+        throw rcsbContractError(`${name} must be a non-empty server-defined collection`);
+    }
+    return value.map((item, index) => parse(rcsbObject(item, `${name}[${index}] must be an object`), index));
+};
+
+const uniqueRcsbIds = (values: string[], name: string): void => {
+    if (new Set(values).size !== values.length) throw rcsbContractError(`${name} identities must be unique`);
+};
+
+const parseCmRcsbEntry = (value: unknown): CmRcsbEntry => {
+    const entry = rcsbObject(value, 'each entry must be an object');
+    const accession = rcsbString(entry.accession, 'entry accession is required').toUpperCase();
+    if (!/^[A-Z0-9]{4}$/.test(accession)) throw rcsbContractError('entry accession must be four letters or digits');
+    const title = rcsbString(entry.title, `entry ${accession} title is required`);
+    const models = rcsbCollection(entry.models, `entry ${accession} models`, (item, index) => ({
+        model_id: rcsbString(item.model_id, `entry ${accession} models[${index}].model_id is required`),
+        label: rcsbString(item.label, `entry ${accession} models[${index}].label is required`),
+    }));
+    const samples = rcsbCollection(entry.samples, `entry ${accession} samples`, (item, index) => ({
+        sample_id: rcsbString(item.sample_id, `entry ${accession} samples[${index}].sample_id is required`),
+        label: rcsbString(item.label, `entry ${accession} samples[${index}].label is required`),
+    }));
+    const entities = rcsbCollection(entry.entities, `entry ${accession} entities`, (item, index) => {
+        const residueCount = item.residue_count;
+        if (!Number.isInteger(residueCount) || Number(residueCount) < 1) {
+            throw rcsbContractError(`entry ${accession} entities[${index}].residue_count must be a positive integer`);
+        }
+        return {
+            entity_id: rcsbString(item.entity_id, `entry ${accession} entities[${index}].entity_id is required`),
+            label: rcsbString(item.label, `entry ${accession} entities[${index}].label is required`),
+            entity_type: rcsbString(item.entity_type, `entry ${accession} entities[${index}].entity_type is required`),
+            residue_count: Number(residueCount),
+        };
+    });
+    const chains = rcsbCollection(entry.chains, `entry ${accession} chains`, (item, index) => {
+        const residueCount = item.residue_count;
+        if (!Number.isInteger(residueCount) || Number(residueCount) < 1) {
+            throw rcsbContractError(`entry ${accession} chains[${index}].residue_count must be a positive integer`);
+        }
+        return {
+            chain_id: rcsbString(item.chain_id, `entry ${accession} chains[${index}].chain_id is required`),
+            label: rcsbString(item.label, `entry ${accession} chains[${index}].label is required`),
+            entity_id: rcsbString(item.entity_id, `entry ${accession} chains[${index}].entity_id is required`),
+            entity_type: rcsbString(item.entity_type, `entry ${accession} chains[${index}].entity_type is required`),
+            residue_count: Number(residueCount),
+        };
+    });
+    uniqueRcsbIds(models.map((item) => item.model_id), `entry ${accession} model`);
+    uniqueRcsbIds(samples.map((item) => item.sample_id), `entry ${accession} sample`);
+    uniqueRcsbIds(chains.map((item) => item.chain_id), `entry ${accession} chain`);
+    uniqueRcsbIds(entities.map((item) => item.entity_id), `entry ${accession} entity`);
+    const entityById = new Map(entities.map((item) => [item.entity_id, item]));
+    const entityIds = new Set(entityById.keys());
+    const chainEntityIds = new Set(chains.map((item) => item.entity_id));
+    if (chains.some((chain) => {
+        const entity = entityById.get(chain.entity_id);
+        return !entity
+            || entity.entity_type !== chain.entity_type
+            || entity.residue_count !== chain.residue_count;
+    })
+        || entityIds.size !== chainEntityIds.size
+        || [...entityIds].some((entityId) => !chainEntityIds.has(entityId))) {
+        throw rcsbContractError(`entry ${accession} chain/entity collections are inconsistent`);
+    }
+    const requiredSelection = entry.required_selection;
+    if (!Array.isArray(requiredSelection)
+        || requiredSelection.some((requirement) => typeof requirement !== 'string')
+        || requiredSelection.length !== RCSB_REQUIRED_SELECTION.length
+        || new Set(requiredSelection).size !== RCSB_REQUIRED_SELECTION.length
+        || RCSB_REQUIRED_SELECTION.some((requirement) => !requiredSelection.includes(requirement))) {
+        throw rcsbContractError(`entry ${accession} required_selection must explicitly require model, sample, chain, and entity`);
+    }
+    const resolution = entry.resolution;
+    if (resolution != null && (typeof resolution !== 'number' || !Number.isFinite(resolution) || resolution <= 0)) {
+        throw rcsbContractError(`entry ${accession} resolution must be a positive finite number or null`);
+    }
+    const optionalString = (field: string, raw: unknown): string | null => {
+        if (raw == null) return null;
+        if (typeof raw !== 'string') throw rcsbContractError(`entry ${accession} ${field} must be a string or null`);
+        return raw;
+    };
+    const methods = entry.experimental_methods;
+    if (methods != null && (!Array.isArray(methods) || methods.some((method) => typeof method !== 'string' || !method))) {
+        throw rcsbContractError(`entry ${accession} experimental_methods must contain source-defined strings`);
+    }
+    return {
+        accession,
+        title,
+        method: optionalString('method', entry.method ?? (Array.isArray(methods) ? methods[0] : null)),
+        resolution: resolution == null ? null : resolution,
+        organism: optionalString('organism', entry.organism),
+        release_date: optionalString('release_date', entry.release_date ?? entry.deposition_date),
+        models,
+        samples,
+        chains,
+        entities,
+        required_selection: [...RCSB_REQUIRED_SELECTION],
+    };
 };
 
 export const searchCmRcsb = async (query: string): Promise<CmRcsbSearchResponse> => {
@@ -456,37 +557,15 @@ export const searchCmRcsb = async (query: string): Promise<CmRcsbSearchResponse>
     const params = /^[A-Za-z0-9]{4}$/.test(normalized)
         ? { accession: normalized.toUpperCase() }
         : { keyword: normalized };
-    const response = await api.get<{
-        query: string;
-        entries: CmRcsbServerEntry[];
-        cached: boolean;
-    }>('/api/conformational-mapping/sources/rcsb/search', { params });
-    const entries = response.data.entries || [];
+    const response = await api.get<unknown>('/api/conformational-mapping/sources/rcsb/search', { params });
+    const body = rcsbObject(response.data, 'response must be an object');
+    const responseQuery = rcsbString(body.query, 'response query is required');
+    if (!Array.isArray(body.entries)) throw rcsbContractError('response entries must be an array');
+    const entries = body.entries.map(parseCmRcsbEntry);
     return {
-        query: response.data.query || normalized,
+        query: responseQuery,
         total_count: entries.length,
-        results: entries.map((entry) => {
-            const chains = entry.chains || [];
-            const entities = entry.entities?.length ? entry.entities : Array.from(new Map(chains.map((chain) => [chain.entity_id, {
-                entity_id: chain.entity_id,
-                label: chain.entity_id,
-                entity_type: chain.entity_type,
-                residue_count: chain.residue_count,
-            }])).values());
-            return {
-                accession: String(entry.accession || entry.pdb_id || '').toUpperCase(),
-                title: String(entry.title || entry.accession || entry.pdb_id || 'RCSB entry'),
-                method: entry.method ?? entry.experimental_methods?.[0] ?? null,
-                resolution: entry.resolution ?? null,
-                organism: entry.organism ?? null,
-                release_date: entry.release_date ?? entry.deposition_date ?? null,
-                models: entry.models?.length ? entry.models : [defaultRcsbModel],
-                samples: entry.samples?.length ? entry.samples : [defaultRcsbSample],
-                chains,
-                entities,
-                required_selection: entry.required_selection?.length ? entry.required_selection : ['model_id'],
-            };
-        }),
+        results: entries,
     };
 };
 

@@ -145,6 +145,257 @@ def test_global_cm_source_receipts_exactly_bind_submitted_sources() -> None:
         _validate_workflow_payload(_global_cm_payload(submission, ["sequence", "checkpoint"]))
 
 
+def test_global_cm_outer_adapter_rejects_nested_adapter_substitution_without_mutation() -> None:
+    submission: dict[str, object] = {
+        "backend": "protenix_v2_ensemble",
+        "registered_snapshot_id": "snapshot",
+    }
+    payload = _global_cm_payload(submission, ["snapshot"])
+    scheduler = payload["scheduler"]
+    assert isinstance(scheduler, dict)
+    params = scheduler["params"]
+    assert isinstance(params, dict)
+    params["workflow_adapter"] = "bms.cm.confornets.adapter.v1"
+    submitted_payload = json.loads(json.dumps(payload))
+
+    with pytest.raises(ValidationFailure, match="nested workflow adapter"):
+        _validate_workflow_payload(payload)
+
+    assert payload == submitted_payload
+
+
+def test_global_cm_outer_backend_rejects_nested_submission_substitution_without_mutation() -> None:
+    submission: dict[str, object] = {
+        "backend": "protenix_v2_ensemble",
+        "registered_snapshot_id": "snapshot",
+    }
+    payload = _global_cm_payload(submission, ["snapshot"])
+    scheduler = payload["scheduler"]
+    assert isinstance(scheduler, dict)
+    params = scheduler["params"]
+    assert isinstance(params, dict)
+    nested_submission = params["cm_submission"]
+    assert isinstance(nested_submission, dict)
+    nested_submission["backend"] = "confornets"
+    submitted_payload = json.loads(json.dumps(payload))
+
+    with pytest.raises(ValidationFailure, match="nested submission backend"):
+        _validate_workflow_payload(payload)
+
+    assert payload == submitted_payload
+
+
+def _recovery_scheduler() -> dict[str, object]:
+    return {
+        "name": "global CM",
+        "model_id": "conformational_mapping",
+        "mode": "map",
+        "params": {
+            "workflow_adapter": "bms.cm.protenix_v2.adapter.v1",
+            "cm_source_receipt_ids": ["snapshot"],
+            "cm_submission": {
+                "name": "authoritative submission",
+                "backend": "protenix_v2_ensemble",
+                "registered_snapshot_id": "snapshot",
+                "ordered_seeds": [101],
+            },
+        },
+    }
+
+
+async def _persist_recoverable_cm_attempt(
+    session: AsyncSession,
+    *,
+    scheduler: dict[str, object],
+    attempt_id: str = "attempt",
+    run_group_id: str = "group",
+) -> tuple[Job, ConformationalMappingRequest]:
+    params = scheduler["params"]
+    assert isinstance(params, dict)
+    submission = params["cm_submission"]
+    assert isinstance(submission, dict)
+    request_without_hash = {
+        "request_id": attempt_id,
+        "backend": "protenix_v2_ensemble",
+        "created_by": {"principal_id": global_adapter._PERSONAL_WORKFLOW_PRINCIPAL},
+    }
+    request_sha256 = global_adapter.canonical_sha256(request_without_hash)
+    request_json = {**request_without_hash, "request_sha256": request_sha256}
+    plan_without_hash = {
+        "request_id": attempt_id,
+        "backend": "protenix_v2_ensemble",
+        "request_sha256": request_sha256,
+        "expected_cardinality": 1,
+    }
+    coordinate_plan_sha256 = global_adapter.canonical_sha256(plan_without_hash)
+    coordinate_plan_json = {
+        **plan_without_hash,
+        "coordinate_plan_sha256": coordinate_plan_sha256,
+    }
+    job = Job(
+        id=attempt_id,
+        name=str(scheduler["name"]),
+        status="queued",
+        model_id="conformational_mapping",
+        mode="map",
+        params={"cm_request_path": f"/trusted/{attempt_id}/cm_request_v1.json"},
+        batch_id=run_group_id,
+        lineage_root_job_id=attempt_id,
+        stage_family="conformational_mapping",
+        stage_mode="protenix_v2_ensemble",
+        provenance={
+            "cm_request_sha256": request_sha256,
+            "cm_coordinate_plan_sha256": coordinate_plan_sha256,
+            "cm_principal_id": global_adapter._PERSONAL_WORKFLOW_PRINCIPAL,
+            "cm_workflow_adapter": params["workflow_adapter"],
+            "cm_scheduler_sha256": global_adapter.sha256_text(global_adapter.canonical_json(scheduler)),
+            "cm_submission_sha256": global_adapter.sha256_text(global_adapter.canonical_json(submission)),
+            "global_run_group_id": run_group_id,
+            "global_attempt_id": attempt_id,
+        },
+    )
+    session.add(job)
+    await session.flush()
+    request = ConformationalMappingRequest(
+        request_id=attempt_id,
+        job_id=attempt_id,
+        principal_id=global_adapter._PERSONAL_WORKFLOW_PRINCIPAL,
+        backend="protenix_v2_ensemble",
+        status="queued",
+        request_sha256=request_sha256,
+        coordinate_plan_sha256=coordinate_plan_sha256,
+        resume_key="0" * 64,
+        result_contract_id="conformational_mapping_ensemble_v1",
+        request_json=request_json,
+        coordinate_plan_json=coordinate_plan_json,
+        progress_json={},
+    )
+    session.add(request)
+    await session.commit()
+    return job, request
+
+
+@pytest.mark.asyncio
+async def test_global_cm_existing_attempt_recovery_accepts_exact_authoritative_provenance(
+    tmp_path: Path,
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'recovery-exact.db'}")
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        scheduler = _recovery_scheduler()
+        submitted_scheduler = json.loads(json.dumps(scheduler))
+        async with factory() as session:
+            await _persist_recoverable_cm_attempt(session, scheduler=scheduler)
+            receipt = await global_adapter.materialize_preallocated_cm_job(
+                session,
+                attempt_id="attempt",
+                scheduler=scheduler,
+                run_group_id="group",
+            )
+
+        assert receipt["recovered_existing"] is True
+        assert receipt["scheduler_job_id"] == "attempt"
+        assert scheduler == submitted_scheduler
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "substitution",
+    ["scheduler_model", "scheduler_mode", "submission", "backend", "run_group"],
+)
+async def test_global_cm_existing_attempt_recovery_rejects_incoming_authority_substitution(
+    tmp_path: Path,
+    substitution: str,
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / f'recovery-{substitution}.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    scheduler = _recovery_scheduler()
+    async with factory() as session:
+        await _persist_recoverable_cm_attempt(session, scheduler=scheduler)
+        incoming = json.loads(json.dumps(scheduler))
+        run_group_id = "group"
+        params = incoming["params"]
+        assert isinstance(params, dict)
+        submission = params["cm_submission"]
+        assert isinstance(submission, dict)
+        if substitution == "scheduler_model":
+            incoming["model_id"] = "other_model"
+        elif substitution == "scheduler_mode":
+            incoming["mode"] = "other_mode"
+        elif substitution == "submission":
+            submission["ordered_seeds"] = [202]
+        elif substitution == "backend":
+            params["workflow_adapter"] = "bms.cm.confornets.adapter.v1"
+            params["cm_source_receipt_ids"] = ["sequence", "checkpoint"]
+            params["cm_submission"] = {
+                "name": "substituted submission",
+                "backend": "confornets",
+                "registered_sequence_id": "sequence",
+                "registered_checkpoint_id": "checkpoint",
+                "registered_reference_ids": [],
+                "ordered_seeds": [101],
+            }
+        else:
+            run_group_id = "other-group"
+
+        with pytest.raises(DispatchFailure, match="recovery authority"):
+            await global_adapter.materialize_preallocated_cm_job(
+                session,
+                attempt_id="attempt",
+                scheduler=incoming,
+                run_group_id=run_group_id,
+            )
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "persisted_substitution",
+    ["attempt", "scheduler_digest", "submission_digest", "request_digest", "coordinate_digest"],
+)
+async def test_global_cm_existing_attempt_recovery_rejects_inconsistent_persisted_provenance(
+    tmp_path: Path,
+    persisted_substitution: str,
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / f'provenance-{persisted_substitution}.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    scheduler = _recovery_scheduler()
+    async with factory() as session:
+        job, request = await _persist_recoverable_cm_attempt(session, scheduler=scheduler)
+        provenance = dict(job.provenance)
+        if persisted_substitution == "attempt":
+            provenance["global_attempt_id"] = "other-attempt"
+        elif persisted_substitution == "scheduler_digest":
+            provenance["cm_scheduler_sha256"] = "1" * 64
+        elif persisted_substitution == "submission_digest":
+            provenance["cm_submission_sha256"] = "2" * 64
+        elif persisted_substitution == "request_digest":
+            provenance["cm_request_sha256"] = "3" * 64
+        else:
+            request.coordinate_plan_sha256 = "4" * 64
+        job.provenance = provenance
+        await session.commit()
+
+        with pytest.raises(DispatchFailure, match="recovery authority"):
+            await global_adapter.materialize_preallocated_cm_job(
+                session,
+                attempt_id="attempt",
+                scheduler=scheduler,
+                run_group_id="group",
+            )
+
+    await engine.dispose()
+
+
 @pytest.mark.asyncio
 async def test_global_cm_materializer_rolls_back_core_state_and_removes_failed_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,

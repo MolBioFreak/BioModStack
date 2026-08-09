@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import inspect
 from datetime import datetime
@@ -181,6 +182,125 @@ async def test_retry_rejects_missing_authority_without_mutating_terminal_job(mon
     assert job.status == "failed"
     assert job.nextflow_run_id == "123"
     assert record.status == "failed"
+
+
+def _retry_authority_tree(root: Path) -> tuple[dict, dict]:
+    request_payload = {"request": "persisted"}
+    coordinate_plan = {"plan": "persisted"}
+    root.mkdir()
+    (root / "cm_request_v1.json").write_text(json.dumps(request_payload), encoding="utf-8")
+    (root / "cm_coordinate_plan_v1.json").write_text(json.dumps(coordinate_plan), encoding="utf-8")
+    (root / "cm_runtime_registry_v1.json").write_text(
+        json.dumps({"schema_name": "cm_runtime_registry", "schema_version": 1, "runtime": "original"}),
+        encoding="utf-8",
+    )
+    (root / "cm_complex_snapshots_v1.json").write_text(
+        json.dumps([{"schema_name": "cm_complex_snapshot", "schema_version": 1, "target_id": "target"}]),
+        encoding="utf-8",
+    )
+    registered = root / "registered"
+    registered.mkdir()
+    (registered / "checkpoint.pt").write_bytes(b"original-checkpoint")
+    return request_payload, coordinate_plan
+
+
+def _retry_authority_manifest(root: Path) -> dict:
+    files = {}
+    for relative_path in (
+        "cm_runtime_registry_v1.json",
+        "cm_complex_snapshots_v1.json",
+        "registered/checkpoint.pt",
+    ):
+        payload = (root / relative_path).read_bytes()
+        files[relative_path] = {
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "size_bytes": len(payload),
+        }
+    unsigned = {
+        "schema_name": "cm_retry_authority",
+        "schema_version": 1,
+        "files": files,
+    }
+    return {**unsigned, "authority_sha256": cm_router.canonical_sha256(unsigned)}
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "replacement"),
+    [
+        ("cm_runtime_registry_v1.json", b'{"schema_name":"cm_runtime_registry","schema_version":1,"runtime":"tampered"}'),
+        ("cm_complex_snapshots_v1.json", b'[{"schema_name":"cm_complex_snapshot","schema_version":1,"target_id":"other"}]'),
+        ("registered/checkpoint.pt", b"tampered-checkpoint"),
+    ],
+)
+def test_clean_retry_rejects_sidecar_or_registered_source_bytes_outside_persisted_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    relative_path: str,
+    replacement: bytes,
+) -> None:
+    source_root = tmp_path / "source"
+    request_payload, coordinate_plan = _retry_authority_tree(source_root)
+    authority = _retry_authority_manifest(source_root)
+    (source_root / relative_path).write_bytes(replacement)
+    monkeypatch.setattr(cm_router, "validate_schema", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(HTTPException, match="persisted CM retry authority") as denied:
+        cm_router._copy_clean_retry_authority(
+            source_root=source_root,
+            attempt_root=tmp_path / "attempt",
+            request_payload=request_payload,
+            coordinate_plan=coordinate_plan,
+            persisted_authority=authority,
+        )
+    assert denied.value.status_code == 409
+    assert not (tmp_path / "attempt").exists()
+
+
+def test_clean_retry_rejects_unregistered_execution_source_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = tmp_path / "source"
+    request_payload, coordinate_plan = _retry_authority_tree(source_root)
+    authority = _retry_authority_manifest(source_root)
+    (source_root / "registered" / "unregistered.bin").write_bytes(b"not-authoritative")
+    monkeypatch.setattr(cm_router, "validate_schema", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(HTTPException, match="persisted CM retry authority"):
+        cm_router._copy_clean_retry_authority(
+            source_root=source_root,
+            attempt_root=tmp_path / "attempt",
+            request_payload=request_payload,
+            coordinate_plan=coordinate_plan,
+            persisted_authority=authority,
+        )
+    assert not (tmp_path / "attempt").exists()
+
+
+def test_clean_retry_reconstructs_documents_and_copies_exact_authoritative_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = tmp_path / "source"
+    request_payload, coordinate_plan = _retry_authority_tree(source_root)
+    authority = cm_router._build_retry_authority(source_root)
+    monkeypatch.setattr(cm_router, "validate_schema", lambda *_args, **_kwargs: None)
+    attempt_root = tmp_path / "attempt"
+
+    cm_router._copy_clean_retry_authority(
+        source_root=source_root,
+        attempt_root=attempt_root,
+        request_payload=request_payload,
+        coordinate_plan=coordinate_plan,
+        persisted_authority=authority,
+    )
+
+    assert json.loads((attempt_root / "cm_request_v1.json").read_text()) == request_payload
+    assert json.loads((attempt_root / "cm_coordinate_plan_v1.json").read_text()) == coordinate_plan
+    for relative_path, identity in authority["files"].items():
+        copied = (attempt_root / relative_path).read_bytes()
+        assert hashlib.sha256(copied).hexdigest() == identity["sha256"]
+        assert len(copied) == identity["size_bytes"]
 
 
 @pytest.mark.asyncio

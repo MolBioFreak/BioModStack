@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+import os
+import secrets
+from typing import Any, Mapping
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +15,7 @@ from database import get_session as get_core_session
 from experiment_database import get_experiment_session
 from experiment_models import (
     ExperimentAggregateHead,
+    ExperimentAuditEvent,
     ExperimentResource,
     ExperimentRevision,
     ExperimentRunGroup,
@@ -40,6 +43,7 @@ from experiment_services import (
     NotFound,
     RevisionConflict,
     ValidationFailure,
+    add_audit_event,
     create_dataset,
     create_experiment,
     create_experiment_workspace,
@@ -58,6 +62,64 @@ from experiment_services import (
 
 
 router = APIRouter(prefix="/api/experiment-workspaces", tags=["experiment-workspaces"])
+_APPLICATION_PROXY_HEADER = "X-BMS-CM-Proxy-Secret"
+
+
+def _mutation_principal(request: Request) -> str:
+    """Resolve the authenticated global-CM actor at the existing application boundary."""
+
+    principal = getattr(request.state, "authenticated_principal", None)
+    if principal is None:
+        configured = os.getenv("BMS_CM_TRUSTED_PROXY_SECRET", "")
+        supplied = request.headers.get(_APPLICATION_PROXY_HEADER, "")
+        if configured and supplied and secrets.compare_digest(configured, supplied):
+            return "local-application-operator"
+        raise HTTPException(status_code=401, detail="authenticated global CM principal required")
+    if isinstance(principal, Mapping):
+        actor = principal.get("id") or principal.get("subject")
+        roles = principal.get("roles") or []
+    else:
+        actor = getattr(principal, "id", None) or getattr(principal, "subject", None)
+        roles = getattr(principal, "roles", [])
+    normalized_roles = {str(role).strip().lower() for role in roles}
+    if not actor or not normalized_roles.intersection({"scientist", "operator", "admin"}):
+        raise HTTPException(status_code=403, detail="global CM scientist/operator role required")
+    return str(actor)
+
+
+async def _require_mutation_owner(
+    request: Request,
+    session: AsyncSession,
+    *,
+    resource_id: str,
+) -> str:
+    """Require the persisted owner binding for the target resource's workspace."""
+
+    principal_id = _mutation_principal(request)
+    resource = await session.get(ExperimentResource, resource_id)
+    if resource is None:
+        raise HTTPException(status_code=404, detail="global CM mutation target not found")
+    workspace_id = resource.id if resource.kind == "workspace" else resource.workspace_id
+    if not workspace_id:
+        raise HTTPException(status_code=404, detail="global CM mutation target not found")
+    owner_events = (
+        await session.execute(
+            select(ExperimentAuditEvent).where(
+                ExperimentAuditEvent.workspace_id == workspace_id,
+                ExperimentAuditEvent.resource_id == workspace_id,
+                ExperimentAuditEvent.event_type == "workspace_owner_bound",
+            )
+        )
+    ).scalars().all()
+    if len(owner_events) != 1:
+        raise HTTPException(status_code=404, detail="global CM mutation target not found")
+    try:
+        owner_payload = json.loads(owner_events[0].payload_json)
+    except (TypeError, json.JSONDecodeError):
+        raise HTTPException(status_code=404, detail="global CM mutation target not found")
+    if not isinstance(owner_payload, dict) or owner_payload.get("principal_id") != principal_id:
+        raise HTTPException(status_code=404, detail="global CM mutation target not found")
+    return principal_id
 
 
 class StrictRequestModel(BaseModel):
@@ -223,15 +285,28 @@ async def list_workspaces(
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_workspace(
     payload: WorkspaceCreateRequest,
+    request: Request,
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict[str, Any]:
     try:
+        principal_id = _mutation_principal(request)
         head = await create_experiment_workspace(session, payload.name, payload.description)
+        add_audit_event(
+            session,
+            workspace_id=head.aggregate_id,
+            resource_id=head.aggregate_id,
+            event_type="workspace_owner_bound",
+            generation=0,
+            payload={"principal_id": principal_id},
+        )
         await session.commit()
         return _head_json(head)
     except ExperimentServiceError as exc:
         await session.rollback()
         raise _error(exc) from exc
+    except Exception:
+        await session.rollback()
+        raise
 
 
 @router.get("/{workspace_id}")
@@ -254,9 +329,11 @@ async def archive_workspace_aggregate(
     workspace_id: str,
     aggregate_id: str,
     payload: ArchiveRequest,
+    request: Request,
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict[str, Any]:
     try:
+        await _require_mutation_owner(request, session, resource_id=aggregate_id)
         head = await session.get(ExperimentAggregateHead, aggregate_id)
         if head is None or head.workspace_id != workspace_id:
             raise NotFound(f"aggregate not found: {aggregate_id}")
@@ -327,9 +404,11 @@ async def create_workspace_experiment(
 async def create_workspace_workflow(
     workspace_id: str,
     payload: WorkflowCreateRequest,
+    request: Request,
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict[str, Any]:
     try:
+        await _require_mutation_owner(request, session, resource_id=workspace_id)
         head = await create_workflow(
             session,
             workspace_id,
@@ -349,9 +428,11 @@ async def save_workflow_draft_route(
     workspace_id: str,
     workflow_id: str,
     payload: DraftSaveRequest,
+    request: Request,
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict[str, Any]:
     try:
+        await _require_mutation_owner(request, session, resource_id=workflow_id)
         head = await session.get(ExperimentAggregateHead, workflow_id)
         if head is None or head.workspace_id != workspace_id:
             raise NotFound(f"workflow not found: {workflow_id}")
@@ -379,9 +460,11 @@ async def save_workflow_revision_route(
     workspace_id: str,
     workflow_id: str,
     payload: RevisionSaveRequest,
+    request: Request,
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict[str, Any]:
     try:
+        await _require_mutation_owner(request, session, resource_id=workflow_id)
         head = await session.get(ExperimentAggregateHead, workflow_id)
         if head is None or head.workspace_id != workspace_id:
             raise NotFound(f"workflow not found: {workflow_id}")
@@ -402,9 +485,11 @@ async def clone_workspace_workflow(
     workspace_id: str,
     workflow_id: str,
     payload: CloneRequest,
+    request: Request,
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict[str, Any]:
     try:
+        await _require_mutation_owner(request, session, resource_id=workflow_id)
         source = await session.get(ExperimentAggregateHead, workflow_id)
         if source is None or source.workspace_id != workspace_id or source.aggregate_kind != "workflow":
             raise NotFound(f"workflow not found: {workflow_id}")
@@ -505,6 +590,7 @@ async def prepare_workspace_workflow(
     workspace_id: str,
     payload: PrepareRequest,
     workflow_revision_id: str,
+    request: Request,
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict[str, Any]:
     try:
@@ -514,6 +600,7 @@ async def prepare_workspace_workflow(
         subject = await session.get(ExperimentResource, revision.subject_id)
         if subject is None or subject.workspace_id != workspace_id:
             raise NotFound(f"workflow revision not found: {workflow_revision_id}")
+        await _require_mutation_owner(request, session, resource_id=subject.id)
         preparation = await prepare_workflow(
             session,
             workflow_revision_id,
@@ -585,9 +672,11 @@ async def get_workspace_validation(
 async def create_workspace_run_group(
     workspace_id: str,
     payload: RunGroupCreateRequest,
+    request: Request,
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict[str, Any]:
     try:
+        await _require_mutation_owner(request, session, resource_id=workspace_id)
         group = await create_run_group(
             session,
             workspace_id,
@@ -670,10 +759,12 @@ async def get_workspace_run_group(
 async def reconcile_workspace_run_group(
     workspace_id: str,
     run_group_id: str,
+    request: Request,
     session: AsyncSession = Depends(get_experiment_session),
     core_session: AsyncSession = Depends(get_core_session),
 ) -> dict[str, Any]:
     try:
+        await _require_mutation_owner(request, session, resource_id=run_group_id)
         group = await reconcile_run_group(session, core_session, workspace_id, run_group_id)
         await session.commit()
         return {"id": group.resource_id, "state": group.state, "generation": group.generation}
@@ -687,9 +778,11 @@ async def retry_workspace_run_group(
     workspace_id: str,
     run_group_id: str,
     payload: RetryRunGroupRequest,
+    request: Request,
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict[str, Any]:
     try:
+        await _require_mutation_owner(request, session, resource_id=run_group_id)
         group = await retry_failed_run_group(
             session,
             workspace_id,

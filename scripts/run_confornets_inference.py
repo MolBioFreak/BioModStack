@@ -483,6 +483,11 @@ def _ca_rmsd(path_a: Path, path_b: Path) -> float:
             f"missing_from_second={missing}, unexpected_in_second={unexpected}"
         )
     identities = sorted(identities_a)
+    if len(identities) < 3:
+        raise CoordinateIdentityError(
+            "proper-rotation Kabsch RMSD requires at least three non-collinear "
+            "matched C-alpha points"
+        )
     coords_a = [by_identity_a[identity] for identity in identities]
     coords_b = [by_identity_b[identity] for identity in identities]
     try:
@@ -494,8 +499,17 @@ def _ca_rmsd(path_a: Path, path_b: Path) -> float:
 
     p = np.asarray(coords_a, dtype=float)
     q = np.asarray(coords_b, dtype=float)
+    if not bool(np.isfinite(p).all()) or not bool(np.isfinite(q).all()):
+        raise CoordinateIdentityError(
+            "proper-rotation Kabsch RMSD requires finite matched C-alpha coordinates"
+        )
     p_centered = p - p.mean(axis=0)
     q_centered = q - q.mean(axis=0)
+    if int(np.linalg.matrix_rank(p_centered)) < 2 or int(np.linalg.matrix_rank(q_centered)) < 2:
+        raise CoordinateIdentityError(
+            "proper-rotation Kabsch RMSD requires at least three non-collinear "
+            "matched C-alpha points"
+        )
     covariance = p_centered.T @ q_centered
     left, _singular_values, right_t = np.linalg.svd(covariance)
     correction = np.eye(3)

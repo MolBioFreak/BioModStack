@@ -162,9 +162,15 @@ def _validate_workflow_payload(payload: dict[str, Any]) -> None:
             raise ValidationFailure("CM workflow requires explicit source receipt IDs")
         scheduler = payload.get("scheduler")
         params = scheduler.get("params") if isinstance(scheduler, dict) else None
-        submission = params.get("cm_submission") if isinstance(params, dict) else None
+        if not isinstance(params, dict):
+            raise ValidationFailure("CM workflow requires typed scheduler params")
+        if params.get("workflow_adapter") != adapter_id:
+            raise ValidationFailure("CM nested workflow adapter disagrees with its authoritative outer adapter")
+        submission = params.get("cm_submission")
         if not isinstance(submission, dict):
             raise ValidationFailure("CM workflow requires one typed generator submission")
+        if submission.get("backend") != expected_backend:
+            raise ValidationFailure("CM nested submission backend disagrees with its authoritative outer backend")
         if receipt_ids != _cm_submission_source_ids(submission):
             raise ValidationFailure("CM workflow source receipt IDs do not bind its submitted sources")
         cardinality = payload.get("expected_cardinality")
