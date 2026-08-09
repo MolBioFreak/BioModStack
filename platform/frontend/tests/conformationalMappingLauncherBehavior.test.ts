@@ -33,9 +33,20 @@ const source = (id: string, format: string): CmSource => ({
     source_id: id,
     source_kind: 'structure_upload',
     format,
-    sha256: id.padEnd(64, 'a').slice(0, 64),
+    sha256: 'a'.repeat(64),
     bytes: 1024,
     metadata: { target_id: id },
+    created_at: '2026-08-09T12:00:00Z',
+    authority_receipt: {
+        schema_name: 'cm_source_authority_receipt',
+        schema_version: 1,
+        source_id: id,
+        source_kind: 'structure_upload',
+        content_sha256: 'a'.repeat(64),
+        authority_kind: 'complex_snapshot_normalization',
+        payload: { request_id: `request-${id}` },
+        receipt_sha256: 'b'.repeat(64),
+    },
 });
 
 const containsOption = (node: ReactTestInstance, text: string): boolean =>

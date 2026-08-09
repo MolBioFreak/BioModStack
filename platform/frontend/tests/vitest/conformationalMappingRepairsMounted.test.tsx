@@ -214,7 +214,19 @@ test('mounted selected-input preview and summary show only digest-bound receipt 
             },
         },
     };
-    const mounted = await mountLauncher({ listSources: async () => [authoritativeSource] }, {
+    const mismatchedSource: CmSource = {
+        ...authoritativeSource,
+        source_id: 'rcsb-mismatched',
+        sha256: sha('7'),
+        metadata: { name: 'MISMATCHED RECEIPT ATTACKER LABEL' },
+        authority_receipt: {
+            ...authoritativeSource.authority_receipt!,
+            source_id: 'different-source-id',
+            content_sha256: sha('7'),
+            receipt_sha256: sha('6'),
+        },
+    };
+    const mounted = await mountLauncher({ listSources: async () => [authoritativeSource, mismatchedSource] }, {
         backend: 'external_import',
         name: 'Authoritative preview',
         registered_artifact_ids: [authoritativeSource.source_id],
@@ -231,6 +243,8 @@ test('mounted selected-input preview and summary show only digest-bound receipt 
         assert.match(browserText, /registered 2026-08-09T12:00:00Z/i);
         assert.match(browserText, /available/i);
         assert.doesNotMatch(browserText, /ATTACKER SELECTED INPUT LABEL|attacker-target-id|provider ATTACKER|accession EVIL/i);
+        assert.doesNotMatch(browserText, /rcsb-mismatched|MISMATCHED RECEIPT ATTACKER LABEL|receipt 666666666666/i);
+        assert.doesNotMatch(browserText, /9999999999999999999999999999999999999999999999999999999999999999|structure_upload|4096 bytes/i);
     }
 
     const preview = mounted.renderer.root.findByProps({ 'aria-labelledby': 'cm-preview-heading' });
