@@ -34,13 +34,15 @@ def workflow_adapter_base_url() -> str | None:
     if raw_value is None:
         return None
     normalized = raw_value.strip().rstrip("/")
+    if not normalized:
+        return None
     lane = workflow_adapter_lane(required=False)
     if lane is not None:
         try:
             normalized = validate_adapter_url_for_lane(normalized, lane)
         except LaneMismatchError:
             raise
-    return normalized or None
+    return normalized
 
 
 def workflow_adapter_lane(*, required: bool = False) -> str | None:
