@@ -13,6 +13,7 @@ import {
     useInvokeBioXpOperatorAction,
     useRecoverBioXpMotion,
 } from '../lib/bioxpClient';
+import { bioXpReceiptTimestampText } from '../lib/bioxpReceiptTimestamp';
 import { BioXpCameraPanel } from './BioXpCameraPanel';
 import { BioXpOperatorControlTabs } from './BioXpOperatorControlTabs';
 import { BioXpQuickDashboard } from './BioXpQuickDashboard';
@@ -618,7 +619,7 @@ export function BioXpCockpit() {
                                 <div className="flex flex-wrap items-center justify-between gap-2">
                                     <strong className="font-mono text-slate-100">{record.action_id}</strong>
                                     <span className={record.status === 'failed' || record.status === 'blocked' ? 'text-red-300' : 'text-slate-300'}>
-                                        {record.status.replaceAll('_', ' ')} · {record.finished_at ? new Date(record.finished_at).toLocaleString() : 'in progress'}
+                                        {record.status.replaceAll('_', ' ')} · {bioXpReceiptTimestampText(record.finished_at)}
                                     </span>
                                 </div>
                                 <p className="mt-1 whitespace-pre-wrap break-words text-slate-200">{record.error ?? record.machine_assessment}</p>
