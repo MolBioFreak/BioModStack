@@ -616,6 +616,7 @@ def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path, mo
 
     assert set(units) == {
         services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE,
+        services.WORKFLOW_PARENT_SLICE,
         services.WORKFLOW_ROOT_SLICE,
         services.DEVELOPMENT_WORKFLOW_SLICE,
         services.API_SERVICE,
@@ -685,6 +686,7 @@ def test_render_user_units_support_container_runtime_mode(tmp_path: Path) -> Non
 
     assert set(units) == {
         services.WORKFLOW_ADAPTER_SERVICE,
+        services.WORKFLOW_PARENT_SLICE,
         services.WORKFLOW_ROOT_SLICE,
         services.PRODUCTION_WORKFLOW_SLICE,
         services.CORE_RUNTIME_SERVICE,
@@ -739,6 +741,7 @@ def test_install_user_units_writes_expected_files(tmp_path: Path) -> None:
 
     assert {path.name for path in written} == {
         services.WORKFLOW_ADAPTER_SERVICE,
+        services.WORKFLOW_PARENT_SLICE,
         services.WORKFLOW_ROOT_SLICE,
         services.PRODUCTION_WORKFLOW_SLICE,
         services.CORE_RUNTIME_SERVICE,

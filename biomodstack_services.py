@@ -44,6 +44,7 @@ PROD_WORKFLOW_ADAPTER_SERVICE = PRODUCTION_WORKFLOW_ADAPTER_SERVICE
 # Compatibility alias for code that refers to the stable/core adapter without
 # selecting a lane. New service rendering always uses the explicit name.
 WORKFLOW_ADAPTER_SERVICE = PRODUCTION_WORKFLOW_ADAPTER_SERVICE
+WORKFLOW_PARENT_SLICE = "biomodstack.slice"
 WORKFLOW_ROOT_SLICE = "biomodstack-workflows.slice"
 DEVELOPMENT_WORKFLOW_SLICE = "biomodstack-workflows-development.slice"
 PRODUCTION_WORKFLOW_SLICE = "biomodstack-workflows-production.slice"
@@ -1069,6 +1070,21 @@ def git_build_identity(project_root: Path) -> dict[str, str]:
     }
 
 
+def render_workflow_parent_slice() -> str:
+    return dedent(
+        """\
+        [Unit]
+        Description=BioModStack managed service parent slice
+
+        [Slice]
+        CPUAccounting=true
+        CPUWeight=100
+        MemoryAccounting=true
+        TasksAccounting=true
+        """
+    )
+
+
 def render_workflow_root_slice() -> str:
     return dedent(
         """\
@@ -1230,6 +1246,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
 
         return {
             PRODUCTION_WORKFLOW_ADAPTER_SERVICE: workflow_adapter_unit,
+            WORKFLOW_PARENT_SLICE: render_workflow_parent_slice(),
             WORKFLOW_ROOT_SLICE: workflow_root_slice,
             PRODUCTION_WORKFLOW_SLICE: production_workflow_slice,
             CORE_RUNTIME_SERVICE: core_runtime_unit,
@@ -1435,6 +1452,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
 
     return {
         DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE: development_workflow_adapter_unit,
+        WORKFLOW_PARENT_SLICE: render_workflow_parent_slice(),
         WORKFLOW_ROOT_SLICE: workflow_root_slice,
         DEVELOPMENT_WORKFLOW_SLICE: development_workflow_slice,
         API_SERVICE: api_unit,
