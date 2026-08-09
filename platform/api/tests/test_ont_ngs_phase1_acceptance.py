@@ -812,6 +812,7 @@ def test_nanopore_registry_has_exactly_one_authoritative_definition_per_mode() -
         "plasmid_qc",
         "construct_screening",
         "fastq_qc",
+        "pooled_reference_assignment",
         "methylation_analysis",
         "clone_validation",
     ]

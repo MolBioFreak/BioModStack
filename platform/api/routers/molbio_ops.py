@@ -258,12 +258,17 @@ async def commit_sequence_import_route(
 
 
 def _revision_summary(revision: MolecularRevision, *, current_revision_id: str | None) -> dict[str, Any]:
-    topology = str((revision.snapshot or {}).get("topology") or "").strip().lower()
+    snapshot = revision.snapshot if isinstance(revision.snapshot, dict) else {}
+    topology = str(snapshot.get("topology") or "").strip().lower()
     if topology not in {"circular", "linear"}:
-        raise HTTPException(
-            status_code=409,
-            detail="Immutable molecular revision is missing a valid topology",
-        )
+        is_circular = snapshot.get("is_circular")
+        if isinstance(is_circular, bool):
+            topology = "circular" if is_circular else "linear"
+        else:
+            raise HTTPException(
+                status_code=409,
+                detail="Immutable molecular revision is missing a valid topology",
+            )
     return {
         "id": revision.id,
         "revision_id": revision.id,
