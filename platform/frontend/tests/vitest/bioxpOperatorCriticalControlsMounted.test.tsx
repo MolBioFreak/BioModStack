@@ -58,6 +58,7 @@ vi.mock('../../src/lib/bioxpClient', () => ({
         error: null,
         isPending: false,
         mutate: (payload: Record<string, unknown>) => state.invokeCalls.push(payload),
+        reset: vi.fn(),
     }),
     useAssessBioXpOperatorAction: () => ({ data: undefined, error: null, isPending: false, mutate: vi.fn() }),
     bioXpErrorText: (error: unknown) => String(error),

@@ -12,30 +12,40 @@ function hookBody(name: string, nextName: string): string {
     return source.slice(start, end);
 }
 
-test('operator command completion refreshes only Z state without awaiting it', () => {
+test('operator command completion refreshes all dependent state without awaiting it', () => {
     const body = hookBody('useInvokeBioXpOperatorAction', 'useAssessBioXpOperatorAction');
     assert.doesNotMatch(body, /useRefreshMutation/);
     assert.doesNotMatch(body, /onSuccess: async/);
-    assert.match(body, /variables\.actionId === 'meta\.activate_motion'/);
-    assert.match(body, /variables\.actionId\.startsWith\('oem\.z\.'\)/);
+    assert.doesNotMatch(body, /variables\.actionId/);
+    assert.match(body, /invalidateQueries\(\{ queryKey: operatorAdmissionKey/);
     assert.match(body, /invalidateQueries\(\{ queryKey: operatorCatalogKey/);
     assert.match(body, /invalidateQueries\(\{ queryKey: operatorDashboardKey/);
     assert.match(body, /setQueryData<BioXpOperatorActionHistory>/);
     assert.match(body, /queryKey: statusKey/);
 });
 
-test('operator telemetry stays live without high-frequency robot polling', () => {
+test('operator assessment completion upserts history and refreshes admission dependencies', () => {
+    const body = hookBody('useAssessBioXpOperatorAction', 'usePlanBioXpOemFullLifecycle');
+    assert.doesNotMatch(body, /useRefreshMutation/);
+    assert.doesNotMatch(body, /onSuccess: async/);
+    assert.match(body, /setQueryData<BioXpOperatorActionHistory>/);
+    assert.match(body, /invalidateQueries\(\{ queryKey: operatorAdmissionKey/);
+    assert.match(body, /invalidateQueries\(\{ queryKey: operatorCatalogKey/);
+    assert.match(body, /invalidateQueries\(\{ queryKey: operatorDashboardKey/);
+});
+
+test('operator polling budget retains only bounded dashboard freshness', () => {
     const catalog = hookBody('useBioXpOperatorControlCatalog', 'useBioXpOperatorDashboard');
     const dashboard = hookBody('useBioXpOperatorDashboard', 'useBioXpOperatorActionAdmission');
     const admission = hookBody('useBioXpOperatorActionAdmission', 'useBioXpOperatorActionHistory');
     const history = hookBody('useBioXpOperatorActionHistory', 'useBioXpCameraStatus');
     const camera = hookBody('useBioXpCameraStatus', 'export async function fetchBioXpCameraFrame');
 
-    assert.match(catalog, /refetchInterval: enabled \? 15_000 : false/);
-    assert.match(dashboard, /refetchInterval: enabled \? 15_000 : false/);
+    assert.doesNotMatch(catalog, /refetchInterval:/);
+    assert.match(dashboard, /refetchInterval: enabled && connectionGeneration > 0 \? 15_000 : false/);
     assert.doesNotMatch(admission, /refetchInterval:/);
     assert.doesNotMatch(history, /refetchInterval:/);
-    assert.match(camera, /refetchInterval: enabled \? 5_000 : false/);
+    assert.doesNotMatch(camera, /refetchInterval:/);
 });
 
 test('generic mutation refresh no longer extends pending state', () => {

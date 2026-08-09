@@ -7,7 +7,16 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, Stri
 ActionKind = Literal["primitive", "meta"]
 ActionSafety = Literal["read_only", "service", "motion", "stop", "emergency"]
 ActionAssessment = Literal["pass", "fail", "unverified"]
-ActionStatus = Literal["acknowledged", "admission_pending", "queued", "completed", "failed", "blocked", "rejected"]
+ActionStatus = Literal[
+    "acknowledged",
+    "admission_pending",
+    "queued",
+    "completed",
+    "failed",
+    "blocked",
+    "rejected",
+    "reconciliation_required",
+]
 
 
 class OperatorInputSpec(BaseModel):
@@ -180,14 +189,24 @@ class OperatorActionReceipt(BaseModel):
     safety_class: ActionSafety
     status: ActionStatus
     idempotency_key: str = Field(min_length=8, max_length=128)
+    idempotency_replay_enabled: StrictBool = True
     ownership_generation: StrictInt = Field(ge=0)
     started_at: str = Field(min_length=1, max_length=80)
     finished_at: str | None = Field(default=None, max_length=80)
     duration_ms: StrictInt | StrictFloat | None = Field(default=None, ge=0)
+    request_received_at: StrictFloat | None = Field(default=None, ge=0)
+    lock_acquired_at: StrictFloat | None = Field(default=None, ge=0)
+    admission_completed_at: StrictFloat | None = Field(default=None, ge=0)
+    provider_entry_at: StrictFloat | None = Field(default=None, ge=0)
+    provider_returned_at: StrictFloat | None = Field(default=None, ge=0)
+    receipt_persist_started_at: StrictFloat | None = Field(default=None, ge=0)
     remote_acknowledged: StrictBool
     controller_acknowledged: StrictBool = False
     controller_terminal_state_verified: StrictBool = False
     physical_effect_verified: StrictBool
+    automatic_retry: StrictBool | None = None
+    physical_outcome: str | None = Field(default=None, max_length=80)
+    persistence_fallback: dict[str, Any] | None = None
     machine_assessment: ActionAssessment
     operator_assessment: Literal["pass", "fail"] | None = None
     operator_note: str | None = Field(default=None, max_length=4000)

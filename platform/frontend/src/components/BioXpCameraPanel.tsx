@@ -9,6 +9,7 @@ import {
 import {
     type CameraObjectUrlOwner,
     createCameraObjectUrlOwner,
+    deriveBioXpCameraPresentation,
 } from './bioxpCameraState';
 
 interface BioXpCameraPanelProps {
@@ -23,11 +24,17 @@ export function BioXpCameraPanel({
     mutationEnabled,
 }: BioXpCameraPanelProps) {
     const statusQuery = useBioXpCameraStatus(connectionGeneration, connected);
+    const refetchStatus = statusQuery.refetch;
     const ownerRef = useRef<CameraObjectUrlOwner | null>(null);
     const mountedRef = useRef(false);
+    const statusReceivedAtRef = useRef(Date.now());
+    const lastSequenceRef = useRef<number | null>(null);
+    const lastSequenceAdvanceAtRef = useRef(Date.now());
     const [imageUrl, setImageUrl] = useState<string | null>(null);
     const [imageError, setImageError] = useState<string | null>(null);
     const [pendingAction, setPendingAction] = useState<'latest' | 'snapshot' | null>(null);
+    const [presentationNowMs, setPresentationNowMs] = useState(() => Date.now());
+    const [, bumpPresentationRevision] = useState(0);
 
     useEffect(() => {
         mountedRef.current = true;
@@ -45,7 +52,25 @@ export function BioXpCameraPanel({
         setImageUrl(null);
         setImageError(null);
         setPendingAction(null);
+        const now = Date.now();
+        statusReceivedAtRef.current = now;
+        lastSequenceRef.current = null;
+        lastSequenceAdvanceAtRef.current = now;
+        setPresentationNowMs(now);
+        bumpPresentationRevision((revision) => revision + 1);
     }, [connectionGeneration]);
+
+    useEffect(() => {
+        if (!statusQuery.data) return;
+        const receivedAt = statusQuery.dataUpdatedAt || Date.now();
+        statusReceivedAtRef.current = receivedAt;
+        if (statusQuery.data.frame_sequence !== lastSequenceRef.current) {
+            lastSequenceRef.current = statusQuery.data.frame_sequence;
+            lastSequenceAdvanceAtRef.current = receivedAt;
+        }
+        setPresentationNowMs(Date.now());
+        bumpPresentationRevision((revision) => revision + 1);
+    }, [statusQuery.data, statusQuery.dataUpdatedAt]);
 
     const loadImage = useCallback(async (source: 'latest' | 'snapshot') => {
         const owner = ownerRef.current;
@@ -65,14 +90,48 @@ export function BioXpCameraPanel({
         } catch (error) {
             if (owner.isCurrent(token) && mountedRef.current) setImageError(bioXpErrorText(error));
         } finally {
-            if (owner.isCurrent(token) && mountedRef.current) setPendingAction(null);
+            if (owner.isCurrent(token) && mountedRef.current) {
+                await refetchStatus().catch(() => undefined);
+                if (owner.isCurrent(token) && mountedRef.current) setPendingAction(null);
+            }
         }
-    }, [connected, connectionGeneration]);
+    }, [connected, connectionGeneration, refetchStatus]);
 
     const cameraStatus = statusQuery.isError ? undefined : statusQuery.data;
+    useEffect(() => {
+        if (!connected
+            || !cameraStatus
+            || !cameraStatus.available
+            || cameraStatus.state !== 'live'
+            || cameraStatus.frame_age_seconds === null) return;
+        const budgetMs = cameraStatus.freshness_budget_seconds * 1_000;
+        const effectiveAgeMs = cameraStatus.frame_age_seconds * 1_000
+            + Math.max(0, presentationNowMs - statusReceivedAtRef.current);
+        const frameRemainingMs = budgetMs - effectiveAgeMs;
+        const sequenceRemainingMs = budgetMs
+            - Math.max(0, presentationNowMs - lastSequenceAdvanceAtRef.current);
+        const expiryDelayMs = Math.min(frameRemainingMs, sequenceRemainingMs);
+        if (expiryDelayMs <= 0) return;
+        const timer = window.setTimeout(
+            () => {
+                setPresentationNowMs(Date.now());
+                bumpPresentationRevision((revision) => revision + 1);
+            },
+            Math.ceil(expiryDelayMs) + 1,
+        );
+        return () => window.clearTimeout(timer);
+    }, [cameraStatus, connected, presentationNowMs]);
+    const presentation = deriveBioXpCameraPresentation({
+        status: cameraStatus ?? null,
+        statusReceivedAtMs: statusReceivedAtRef.current,
+        lastSequenceAdvanceAtMs: lastSequenceAdvanceAtRef.current,
+        nowMs: presentationNowMs,
+        error: statusQuery.isError ? bioXpErrorText(statusQuery.error) : null,
+    });
     const cameraState = !connected
         ? 'Disconnected'
-        : cameraStatus?.available ? 'Ready' : 'Unavailable';
+        : presentation.label === 'LIVE' ? 'Ready'
+            : presentation.label === 'STALE' ? 'Stale' : 'Unavailable';
 
     return (
         <section className="rounded-xl border border-sky-800/70 bg-sky-950/20 p-4">

@@ -95,9 +95,10 @@ function ReceiptCard({ receipt }: { receipt: BioXpOperatorActionReceipt }) {
 }
 
 export function BioXpOperatorControlTabs({ generation, connected }: { generation: number; connected: boolean }) {
-    const catalogQuery = useBioXpOperatorControlCatalog(connected);
-    const historyQuery = useBioXpOperatorActionHistory(connected);
+    const catalogQuery = useBioXpOperatorControlCatalog(generation, connected);
+    const historyQuery = useBioXpOperatorActionHistory(generation, connected);
     const invoke = useInvokeBioXpOperatorAction();
+    const resetInvoke = invoke.reset;
 
     const [pane, setPane] = useState<Pane>('primitive');
     const [subsystemFilter, setSubsystemFilter] = useState<PrimitiveGroup>('all');
@@ -108,9 +109,11 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
     const [localError, setLocalError] = useState<string | null>(null);
 
 
+    const authoritativeCatalog = !connected || catalogQuery.error ? undefined : catalogQuery.data;
+    const authoritativeHistory = !connected || historyQuery.error ? undefined : historyQuery.data;
     const primitiveActions = useMemo(
-        () => (catalogQuery.error ? [] : (catalogQuery.data?.actions ?? [])).filter((action) => action.kind === 'primitive'),
-        [catalogQuery.data?.actions, catalogQuery.error],
+        () => (authoritativeCatalog?.actions ?? []).filter((action) => action.kind === 'primitive'),
+        [authoritativeCatalog?.actions],
     );
     const subsystemOptions = useMemo(
         () => [...new Set(primitiveActions.map((action) => action.subsystem))].sort(),
@@ -136,7 +139,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
         [browseActions],
     );
     const paneActions = pane === 'meta'
-        ? (catalogQuery.data?.actions ?? []).filter((action) => action.kind === pane)
+        ? (authoritativeCatalog?.actions ?? []).filter((action) => action.kind === pane)
         : pane === 'primitive' ? primitiveActions : [];
     const selected = paneActions.find((action) => action.action_id === selectedId) ?? paneActions[0];
     const normalizedForAdmission = useMemo(() => {
@@ -150,17 +153,22 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
     const admission = useBioXpOperatorActionAdmission(
         selected?.action_id ?? null,
         generation,
-        catalogQuery.data?.ownership_generation ?? 0,
+        authoritativeCatalog?.ownership_generation ?? 0,
         normalizedForAdmission,
         connected,
     );
     const actionEnabled = admission.error ? false : (admission.data?.enabled ?? (selected ? selected.enabled : false));
     const disabledReason = admission.data?.disabled_reason ?? (selected ? selected.disabled_reason : null) ?? 'Robot did not admit this action.';
     const dependencies = admission.data?.dependencies ?? (selected ? selected.dependencies : []);
-    const latestReceipt = invoke.data ?? historyQuery.data?.receipts[0];
+    const latestReceipt = connected && authoritativeCatalog && authoritativeHistory
+        ? invoke.data ?? authoritativeHistory.receipts[0]
+        : undefined;
     const isSafetyInterrupt = selected?.safety_class === 'stop' || selected?.safety_class === 'emergency';
-    const sourceAuthorityAllowsAction = catalogQuery.data?.source_authority_verified === true || isSafetyInterrupt;
+    const sourceAuthorityAllowsAction = authoritativeCatalog?.source_authority_verified === true || isSafetyInterrupt;
 
+    useEffect(() => {
+        resetInvoke();
+    }, [connected, generation, resetInvoke]);
     useEffect(() => {
         if (selected && selected.action_id !== selectedId) setSelectedId(selected.action_id);
     }, [selected, selectedId]);
@@ -180,7 +188,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
             invoke.mutate({
                 actionId: selected.action_id,
                 connectionGeneration: generation,
-                ownershipGeneration: catalogQuery.data?.ownership_generation ?? 0,
+                ownershipGeneration: authoritativeCatalog?.ownership_generation ?? 0,
                 inputs: normalized,
             });
         } catch (error) {
@@ -205,12 +213,12 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
                 </div>
             </div>
 
-            {catalogQuery.data && (
+            {authoritativeCatalog && (
                 <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2 xl:grid-cols-5">
-                    <div><dt className="text-slate-500">machine</dt><dd>{catalogQuery.data.machine_serial}</dd></div>
-                    <div><dt className="text-slate-500">actions</dt><dd>{catalogQuery.data.actions.length}</dd></div>
-                    <div><dt className="text-slate-500">source authority</dt><dd>{String(catalogQuery.data.source_authority_verified)}</dd></div>
-                    <div><dt className="text-slate-500">ownership generation</dt><dd>{catalogQuery.data.ownership_generation}</dd></div>
+                    <div><dt className="text-slate-500">machine</dt><dd>{authoritativeCatalog.machine_serial}</dd></div>
+                    <div><dt className="text-slate-500">actions</dt><dd>{authoritativeCatalog.actions.length}</dd></div>
+                    <div><dt className="text-slate-500">source authority</dt><dd>{String(authoritativeCatalog.source_authority_verified)}</dd></div>
+                    <div><dt className="text-slate-500">ownership generation</dt><dd>{authoritativeCatalog.ownership_generation}</dd></div>
                     <div><dt className="text-slate-500">BMS generation</dt><dd>{generation}</dd></div>
                 </dl>
             )}
@@ -218,8 +226,8 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
 
             {pane === 'logs' ? (
                 <div className="mt-4 space-y-2">
-                    {(historyQuery.data?.receipts ?? []).map((receipt) => <ReceiptCard key={receipt.command_id} receipt={receipt} />)}
-                    {historyQuery.data?.receipts.length === 0 && <p className="text-sm text-slate-400">No robot-owned action receipts yet.</p>}
+                    {(authoritativeHistory?.receipts ?? []).map((receipt) => <ReceiptCard key={receipt.command_id} receipt={receipt} />)}
+                    {authoritativeHistory?.receipts.length === 0 && <p className="text-sm text-slate-400">No robot-owned action receipts yet.</p>}
                 </div>
             ) : (
                 <>

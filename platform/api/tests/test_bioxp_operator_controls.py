@@ -434,6 +434,27 @@ def test_history_and_operator_assessment_are_robot_authoritative(monkeypatch):
     ]
 
 
+def test_history_accepts_robot_startup_reconciliation_receipts(monkeypatch):
+    client, runtime = make_client(monkeypatch)
+    reconciled = {
+        **receipt(command_id="crash-queued"),
+        "status": "reconciliation_required",
+        "remote_acknowledged": False,
+        "controller_acknowledged": False,
+        "automatic_retry": False,
+        "physical_outcome": "ambiguous",
+    }
+    runtime.connection.client.responses["operator_action_history"] = {
+        "schema_version": "bioxp.operator_action_history.v1",
+        "receipts": [reconciled],
+    }
+
+    response = client.get("/api/bioxp/operator-controls/history")
+
+    assert response.status_code == 200
+    assert response.json()["receipts"][0]["status"] == "reconciliation_required"
+
+
 _FIXED_QUARANTINE_CASES = (
     ("route.motion_power_diag", "/motion/power/diag"),
     ("route.runtime_emergency_stop", "/oem/runtime/emergency_stop"),

@@ -1,7 +1,10 @@
-import { useBioXpOperatorDashboard } from '../lib/bioxpClient.js';
+import type { BioXpOperatorDashboard } from '../lib/bioxpClient.js';
 
 interface BioXpQuickDashboardProps {
     connected: boolean;
+    data: BioXpOperatorDashboard | undefined;
+    isLoading: boolean;
+    error: unknown;
 }
 
 const panelStyle = {
@@ -19,10 +22,7 @@ const yesNoUnknown = (candidate: boolean | null | undefined) => (
     candidate === true ? 'Yes' : candidate === false ? 'No' : 'Not reported'
 );
 
-export function BioXpQuickDashboard({ connected }: BioXpQuickDashboardProps) {
-    const dashboard = useBioXpOperatorDashboard(connected);
-    const data = dashboard.error ? undefined : dashboard.data;
-
+export function BioXpQuickDashboard({ connected, data, isLoading, error }: BioXpQuickDashboardProps) {
     return (
         <section aria-label="Live Robot Dashboard" style={{ marginTop: 12 }}>
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
@@ -32,11 +32,11 @@ export function BioXpQuickDashboard({ connected }: BioXpQuickDashboardProps) {
                 </span>
             </div>
             {!connected && <div style={panelStyle}>Connect to view robot state.</div>}
-            {connected && dashboard.isLoading && <div style={panelStyle}>Loading live state…</div>}
-            {connected && dashboard.error && (
-                <div style={{ ...panelStyle, color: '#fca5a5' }}>Dashboard unavailable: {String(dashboard.error)}</div>
+            {connected && isLoading && <div style={panelStyle}>Loading live state…</div>}
+            {connected && error !== null && error !== undefined && (
+                <div style={{ ...panelStyle, color: '#fca5a5' }}>Dashboard unavailable: {String(error)}</div>
             )}
-            {data && (
+            {connected && data && (
                 <>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 8 }}>
                         <div style={panelStyle}>

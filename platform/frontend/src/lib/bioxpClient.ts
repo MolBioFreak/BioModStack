@@ -241,23 +241,38 @@ export interface BioXpOperatorActionReceipt {
     action_id: string;
     kind: BioXpOperatorActionKind;
     safety_class: BioXpOperatorSafetyClass;
-    status: 'acknowledged' | 'admission_pending' | 'queued' | 'completed' | 'failed' | 'blocked' | 'rejected';
+    status: 'acknowledged' | 'admission_pending' | 'queued' | 'completed' | 'failed' | 'blocked' | 'rejected' | 'reconciliation_required';
     idempotency_key: string;
+    idempotency_replay_enabled: boolean;
     ownership_generation: number;
     started_at: string;
     finished_at: string | null;
     duration_ms: number | null;
+    request_received_at: number | null;
+    lock_acquired_at: number | null;
+    admission_completed_at: number | null;
+    provider_entry_at: number | null;
+    provider_returned_at: number | null;
+    receipt_persist_started_at: number | null;
     remote_acknowledged: boolean;
     controller_acknowledged: boolean;
+    controller_terminal_state_verified: boolean;
     physical_effect_verified: boolean;
+    automatic_retry: boolean | null;
+    physical_outcome: string | null;
+    persistence_fallback: Record<string, unknown> | null;
     machine_assessment: 'pass' | 'fail' | 'unverified';
     operator_assessment: 'pass' | 'fail' | null;
     operator_note: string | null;
-    operator_assessment_idempotency_key?: string | null;
-    operator_assessed_at?: number | null;
+    operator_assessment_idempotency_key: string | null;
+    operator_assessed_at: number | null;
     inputs: Record<string, unknown>;
-    requested_inputs?: Record<string, unknown> | null;
+    requested_inputs: Record<string, unknown> | null;
     response: Record<string, unknown> | null;
+    authority_receipt_id: string | null;
+    authority_receipt_status: string | Record<string, unknown> | null;
+    observation_receipt_id: string | null;
+    observes_command_id: string | null;
     error: string | null;
     stage_receipts: Record<string, unknown>[];
 }
@@ -418,6 +433,7 @@ const fullLifecycleContractKey = ['bioxp', 'oem-full-lifecycle', 'contract'] as 
 const operatorCatalogKey = ['bioxp', 'operator-controls', 'catalog'] as const;
 const operatorDashboardKey = ['bioxp', 'operator-controls', 'dashboard'] as const;
 const operatorHistoryKey = ['bioxp', 'operator-controls', 'history'] as const;
+const operatorAdmissionKey = ['bioxp', 'operator-controls', 'admission'] as const;
 
 function cameraImageFromResponse(response: {
     data: Blob;
@@ -494,29 +510,29 @@ export const useBioXpStatus = (enabled = true) => useQuery({
     queryKey: statusKey,
     queryFn: async () => (await api.get<BioXpStatusResponse>('/api/bioxp/status')).data,
     enabled,
-    refetchInterval: enabled ? 5_000 : false,
+    refetchInterval: enabled ? 10_000 : false,
     retry: false,
 });
 
 
-export const useBioXpOperatorControlCatalog = (enabled = true) => useQuery({
-    queryKey: operatorCatalogKey,
+export const useBioXpOperatorControlCatalog = (connectionGeneration: number, enabled = true) => useQuery({
+    queryKey: [...operatorCatalogKey, connectionGeneration, enabled],
     queryFn: async () => (
         await api.get<BioXpOperatorControlCatalog>('/api/bioxp/operator-controls/catalog')
     ).data,
-    enabled,
-    refetchInterval: enabled ? 15_000 : false,
-    refetchIntervalInBackground: false,
+    enabled: enabled && connectionGeneration > 0,
+    gcTime: 0,
     retry: false,
 });
 
-export const useBioXpOperatorDashboard = (enabled = true) => useQuery({
-    queryKey: operatorDashboardKey,
+export const useBioXpOperatorDashboard = (connectionGeneration: number, enabled = true) => useQuery({
+    queryKey: [...operatorDashboardKey, connectionGeneration, enabled],
     queryFn: async () => (
         await api.get<BioXpOperatorDashboard>('/api/bioxp/operator-controls/dashboard')
     ).data,
-    enabled,
-    refetchInterval: enabled ? 15_000 : false,
+    enabled: enabled && connectionGeneration > 0,
+    gcTime: 0,
+    refetchInterval: enabled && connectionGeneration > 0 ? 15_000 : false,
     refetchIntervalInBackground: false,
     retry: false,
 });
@@ -542,12 +558,13 @@ export const useBioXpOperatorActionAdmission = (
     retry: false,
 });
 
-export const useBioXpOperatorActionHistory = (enabled = true) => useQuery({
-    queryKey: operatorHistoryKey,
+export const useBioXpOperatorActionHistory = (connectionGeneration: number, enabled = true) => useQuery({
+    queryKey: [...operatorHistoryKey, connectionGeneration, enabled],
     queryFn: async () => (
         await api.get<BioXpOperatorActionHistory>('/api/bioxp/operator-controls/history')
     ).data,
-    enabled,
+    enabled: enabled && connectionGeneration > 0,
+    gcTime: 0,
     retry: false,
 });
 
@@ -563,8 +580,6 @@ export const useBioXpCameraStatus = (
         })).data;
     },
     enabled: enabled && connectionGeneration !== null,
-    refetchInterval: enabled ? 5_000 : false,
-    refetchIntervalInBackground: false,
     retry: false,
 });
 
@@ -591,8 +606,6 @@ export const useBioXpOemFullLifecycleContract = (enabled = true) => useQuery({
         await api.get<BioXpOemFullLifecycleContract>('/api/bioxp/oem-full-lifecycle/contract')
     ).data,
     enabled,
-    refetchInterval: enabled ? 30_000 : false,
-    refetchIntervalInBackground: false,
     retry: false,
 });
 
@@ -719,42 +732,75 @@ export const useInvokeBioXpOperatorAction = () => {
                 },
             )
         ).data,
+        onMutate: async () => {
+            await queryClient.cancelQueries({ queryKey: operatorHistoryKey });
+        },
         onSuccess: (receipt, variables) => {
-            queryClient.setQueryData<BioXpOperatorActionHistory>(operatorHistoryKey, (current) => ({
-                schema_version: 'bioxp.operator_action_history.v1',
-                receipts: [
-                    receipt,
-                    ...(current?.receipts ?? []).filter((row) => row.command_id !== receipt.command_id),
-                ].slice(0, 100),
-            }));
-            void queryClient.invalidateQueries({ queryKey: statusKey });
-            if (variables.actionId === 'meta.activate_motion' || variables.actionId.startsWith('oem.z.')) {
-                void queryClient.invalidateQueries({ queryKey: operatorCatalogKey });
-                void queryClient.invalidateQueries({ queryKey: operatorDashboardKey });
-            }
+            queryClient.setQueryData<BioXpOperatorActionHistory>(
+                [...operatorHistoryKey, variables.connectionGeneration, true],
+                (current) => ({
+                    schema_version: 'bioxp.operator_action_history.v1',
+                    receipts: [
+                        receipt,
+                        ...(current?.receipts ?? []).filter((row) => row.command_id !== receipt.command_id),
+                    ].slice(0, 100),
+                }),
+            );
+            void Promise.all([
+                queryClient.invalidateQueries({ queryKey: statusKey }),
+                queryClient.invalidateQueries({ queryKey: operatorAdmissionKey }),
+                queryClient.invalidateQueries({ queryKey: operatorCatalogKey }),
+                queryClient.invalidateQueries({ queryKey: operatorDashboardKey }),
+                queryClient.invalidateQueries({ queryKey: operatorHistoryKey }),
+            ]);
         },
     });
 };
 
-export const useAssessBioXpOperatorAction = () => useRefreshMutation(
-    async ({ commandId, connectionGeneration, ownershipGeneration, verdict, note }: {
-        commandId: string;
-        connectionGeneration: number;
-        ownershipGeneration: number;
-        verdict: 'pass' | 'fail';
-        note: string;
-    }) => (
-        await api.post<BioXpOperatorActionReceipt>(
-            `/api/bioxp/operator-controls/receipts/${encodeURIComponent(commandId)}/assessment`,
-            {
-                ...bioXpOperatorGenerationPayload(connectionGeneration, ownershipGeneration),
-                idempotency_key: crypto.randomUUID(),
-                verdict,
-                note,
-            },
-        )
-    ).data,
-);
+export const useAssessBioXpOperatorAction = () => {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: async ({ commandId, connectionGeneration, ownershipGeneration, verdict, note }: {
+            commandId: string;
+            connectionGeneration: number;
+            ownershipGeneration: number;
+            verdict: 'pass' | 'fail';
+            note: string;
+        }) => (
+            await api.post<BioXpOperatorActionReceipt>(
+                `/api/bioxp/operator-controls/receipts/${encodeURIComponent(commandId)}/assessment`,
+                {
+                    ...bioXpOperatorGenerationPayload(connectionGeneration, ownershipGeneration),
+                    idempotency_key: crypto.randomUUID(),
+                    verdict,
+                    note,
+                },
+            )
+        ).data,
+        onMutate: async () => {
+            await queryClient.cancelQueries({ queryKey: operatorHistoryKey });
+        },
+        onSuccess: (receipt, variables) => {
+            queryClient.setQueryData<BioXpOperatorActionHistory>(
+                [...operatorHistoryKey, variables.connectionGeneration, true],
+                (current) => ({
+                    schema_version: 'bioxp.operator_action_history.v1',
+                    receipts: [
+                        receipt,
+                        ...(current?.receipts ?? []).filter((row) => row.command_id !== receipt.command_id),
+                    ].slice(0, 100),
+                }),
+            );
+            void Promise.all([
+                queryClient.invalidateQueries({ queryKey: statusKey }),
+                queryClient.invalidateQueries({ queryKey: operatorAdmissionKey }),
+                queryClient.invalidateQueries({ queryKey: operatorCatalogKey }),
+                queryClient.invalidateQueries({ queryKey: operatorDashboardKey }),
+                queryClient.invalidateQueries({ queryKey: operatorHistoryKey }),
+            ]);
+        },
+    });
+};
 
 export const usePlanBioXpOemFullLifecycle = () => useRefreshMutation(
     async ({ generation, machineSerial, registrySha256, evidenceLockSha256 }: {
