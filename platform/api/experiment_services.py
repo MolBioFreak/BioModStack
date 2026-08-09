@@ -1,6 +1,7 @@
 """Business services for global experiment/workspace persistence and dispatch."""
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import uuid
@@ -110,6 +111,30 @@ def register_workflow_adapter(workflow_family: str, adapter_id: str) -> None:
     WORKFLOW_ADAPTER_REGISTRY.setdefault(workflow_family, set()).add(adapter_id)
 
 
+def _cm_submission_source_ids(submission: dict[str, Any]) -> list[str]:
+    backend = submission.get("backend")
+    if backend == "protenix_v2_ensemble":
+        values = [submission.get("registered_snapshot_id")]
+    elif backend == "confornets":
+        values = [
+            submission.get("registered_sequence_id"),
+            submission.get("registered_checkpoint_id"),
+            *(submission.get("registered_reference_ids") or []),
+        ]
+        if submission.get("registered_config_id"):
+            values.append(submission["registered_config_id"])
+        if submission.get("registered_transfer_id"):
+            values.append(submission["registered_transfer_id"])
+    else:
+        raise ValidationFailure("CM global workflow backend has no materializer")
+    if any(not isinstance(value, str) or not value for value in values):
+        raise ValidationFailure("CM global workflow source identities are incomplete")
+    source_ids = [str(value) for value in values]
+    if len(source_ids) != len(set(source_ids)):
+        raise ValidationFailure("CM global workflow source identities must be unique")
+    return source_ids
+
+
 def _validate_workflow_payload(payload: dict[str, Any]) -> None:
     required = ("schema", "workflow_family", "contract_version", "adapter_id", "nodes", "edges")
     missing = [field for field in required if field not in payload]
@@ -135,6 +160,13 @@ def _validate_workflow_payload(payload: dict[str, Any]) -> None:
             not isinstance(value, str) or not value for value in receipt_ids
         ):
             raise ValidationFailure("CM workflow requires explicit source receipt IDs")
+        scheduler = payload.get("scheduler")
+        params = scheduler.get("params") if isinstance(scheduler, dict) else None
+        submission = params.get("cm_submission") if isinstance(params, dict) else None
+        if not isinstance(submission, dict):
+            raise ValidationFailure("CM workflow requires one typed generator submission")
+        if receipt_ids != _cm_submission_source_ids(submission):
+            raise ValidationFailure("CM workflow source receipt IDs do not bind its submitted sources")
         cardinality = payload.get("expected_cardinality")
         if isinstance(cardinality, bool) or not isinstance(cardinality, int) or cardinality < 1:
             raise ValidationFailure("CM workflow expected_cardinality must be a positive integer")
@@ -664,11 +696,16 @@ async def prepare_workflow(
         scheduler_payload = {}
         reasons.append("workflow revision has no scheduler payload")
     else:
+        scheduler_payload = copy.deepcopy(scheduler_payload)
         for field in ("name", "model_id", "mode", "params"):
             if field not in scheduler_payload:
                 reasons.append(f"scheduler payload missing {field}")
         if not isinstance(scheduler_payload.get("params", {}), dict):
             reasons.append("scheduler params must be an object")
+        elif payload.get("workflow_family") == "conformational_mapping":
+            scheduler_payload["params"]["cm_source_receipt_ids"] = list(
+                payload.get("source_receipt_ids") or []
+            )
     normalized = {
         "workflow_revision_id": workflow_revision_id,
         "input_dataset_revision_ids": [str(value) for value in dataset_revision_ids],

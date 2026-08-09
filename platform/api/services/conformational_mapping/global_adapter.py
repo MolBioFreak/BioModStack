@@ -37,7 +37,9 @@ from services.conformational_mapping.request_builder import (
 )
 from experiment_services import (
     DispatchFailure,
+    ValidationFailure,
     WORKFLOW_ADAPTER_REGISTRY,
+    _cm_submission_source_ids,
     canonical_json,
     sha256_text,
 )
@@ -129,9 +131,14 @@ def _registered(source: ConformationalMappingSource) -> RegisteredArtifact:
     )
 
 
-async def _source(session: AsyncSession, source_id: str, expected_kind: str) -> ConformationalMappingSource:
+async def _source(
+    session: AsyncSession,
+    source_id: str,
+    expected_kind: str | frozenset[str],
+) -> ConformationalMappingSource:
     source = await session.get(ConformationalMappingSource, source_id)
-    if source is None or source.source_kind != expected_kind or not source.immutable:
+    expected_kinds = frozenset({expected_kind}) if isinstance(expected_kind, str) else expected_kind
+    if source is None or source.source_kind not in expected_kinds or not source.immutable:
         raise DispatchFailure(f"CM global adapter source is unavailable: {expected_kind}/{source_id}")
     if source.principal_id != _PERSONAL_WORKFLOW_PRINCIPAL:
         raise DispatchFailure("CM global adapter source belongs to an unexpected principal")
@@ -156,6 +163,17 @@ async def _materialize_preallocated_cm_job(
         raise DispatchFailure("global CM adapter requires a typed generator submission")
     if str(submission.get("backend")) != backend:
         raise DispatchFailure("CM adapter/backend identity disagrees")
+    receipt_ids = params.get("cm_source_receipt_ids")
+    if not isinstance(receipt_ids, list) or any(
+        not isinstance(value, str) or not value for value in receipt_ids
+    ):
+        raise DispatchFailure("CM global adapter source receipt binding is unavailable")
+    try:
+        expected_source_ids = _cm_submission_source_ids(submission)
+    except ValidationFailure as exc:
+        raise DispatchFailure(str(exc)) from exc
+    if receipt_ids != expected_source_ids:
+        raise DispatchFailure("CM global adapter receipts do not bind the submitted source identities")
 
     existing_job = await core_session.get(Job, attempt_id)
     if existing_job is not None:
@@ -225,8 +243,29 @@ async def _materialize_preallocated_cm_job(
             )
         except HTTPException as exc:
             raise DispatchFailure(str(exc.detail)) from exc
+        references = [
+            await _source(
+                core_session,
+                str(source_id),
+                frozenset({"structure_upload", "structure_artifact"}),
+            )
+            for source_id in submission.get("registered_reference_ids", [])
+        ]
+        config_source = (
+            await _source(core_session, str(submission["registered_config_id"]), "confornets_config")
+            if submission.get("registered_config_id") else None
+        )
+        transfer_source = (
+            await _source(core_session, str(submission["registered_transfer_id"]), "confornets_state")
+            if submission.get("registered_transfer_id") else None
+        )
+        confor_sources = [sequence_source, checkpoint_source, *references]
+        if config_source is not None:
+            confor_sources.append(config_source)
+        if transfer_source is not None:
+            confor_sources.append(transfer_source)
         staged_assets = stage_registered_assets(
-            [_registered(sequence_source), _registered(checkpoint_source)],
+            [_registered(source) for source in confor_sources],
             principal_id=_PERSONAL_WORKFLOW_PRINCIPAL,
             destination_root=output_root / "registered",
         )
@@ -245,9 +284,26 @@ async def _materialize_preallocated_cm_job(
                     "path": staged_assets[checkpoint_source.source_id].relative_to(output_root).as_posix(),
                     "sha256": checkpoint_source.content_sha256,
                 },
-                "config": None,
-                "references": [],
-                "transfer_source": None,
+                "config": None if config_source is None else {
+                    "path": staged_assets[config_source.source_id].relative_to(output_root).as_posix(),
+                    "sha256": config_source.content_sha256,
+                },
+                "references": [
+                    {
+                        "reference_id": source.source_id,
+                        "staged_path": staged_assets[source.source_id].relative_to(output_root).as_posix(),
+                        "content_sha256": source.content_sha256,
+                        "state": str(source.metadata_json.get("state") or "reference"),
+                        "source": "registered_artifact",
+                    }
+                    for source in references
+                ],
+                "transfer_source": None if transfer_source is None else {
+                    "kind": str(transfer_source.metadata_json.get("kind") or "confornet_state"),
+                    "staged_path": staged_assets[transfer_source.source_id].relative_to(output_root).as_posix(),
+                    "content_sha256": transfer_source.content_sha256,
+                    "source_test_cases": str(transfer_source.metadata_json.get("source_test_cases") or ""),
+                },
                 "backend_identity": _server_confornets_identity(),
             }
         )
@@ -367,6 +423,7 @@ async def materialize_preallocated_cm_job(
             run_group_id=run_group_id,
         )
     except Exception:
+        await core_session.rollback()
         if (not existed or preexisting_empty_directory) and output_root.exists():
             shutil.rmtree(output_root, ignore_errors=True)
         raise
