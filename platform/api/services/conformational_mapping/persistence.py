@@ -565,7 +565,8 @@ async def ingest_result_bundle(
             if key in {"cm_request_v1", "cm_complex_snapshot_v1", "cm_native_artifacts_v1",
                        "cm_ensemble_v1", "cm_structure_map_v1",
                        "cm_frustration_landscape_v1", "cm_analysis_v1",
-                       "cm_mutagenesis_handoff_v1"}
+                       "cm_mutagenesis_handoff_v1", "cm_runtime_image_receipt_v1",
+                       "cm_protenix_execution_snapshot_v1", "cm_protenix_runtime_attestation_v1"}
         }
         allowed_extensions = {
             "cm_structure_maps", "cm_frustration_landscapes", "cm_mutagenesis_handoffs",
@@ -577,6 +578,13 @@ async def ingest_result_bundle(
             raise ConformationalPersistenceError(
                 f"unknown canonical result bundle members: {sorted(unknown)}"
             )
+        requested_state_analysis = "state_landscape_comparison" in record.request_json
+        state_analysis_value = bundle.get("cm_state_landscape_analyses")
+        if requested_state_analysis and (
+            state_analysis_value is None
+            or (isinstance(state_analysis_value, list) and not state_analysis_value)
+        ):
+            raise ConformationalPersistenceError("requested state landscape analysis is missing")
         validate_contract_bundle(core_bundle)
     except (ContractValidationError, KeyError, TypeError) as exc:
         raise ConformationalPersistenceError(str(exc)) from exc

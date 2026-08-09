@@ -1387,27 +1387,52 @@ async def _authorized_record(
     *,
     mutation: bool = False,
 ):
-    principal_id = _principal(request)
     record = await get_request(session, request_id)
     if record is None:
+        _principal(request)
         raise HTTPException(status_code=404, detail="conformational-mapping request not found")
-    if record.principal_id != principal_id:
-        supplied = ""
-        authorization = request.headers.get("authorization", "")
-        if authorization.lower().startswith("bearer "):
-            supplied = authorization[7:].strip()
-        if not supplied:
-            supplied = request.cookies.get(_capability_cookie_name(request_id), "")
-        progress = record.progress_json or {}
-        expected = str(
-            progress.get("request_capability_sha256")
-            or progress.get("capability_sha256")
-            or ""
+    principal = getattr(request.state, "authenticated_principal", None)
+    supplied = ""
+    authorization = request.headers.get("authorization", "")
+    if authorization.lower().startswith("bearer "):
+        supplied = authorization[7:].strip()
+    if not supplied:
+        supplied = request.cookies.get(_capability_cookie_name(request_id), "")
+    progress = record.progress_json or {}
+    expected = str(
+        progress.get("request_capability_sha256")
+        or progress.get("capability_sha256")
+        or ""
+    )
+    capability_matches_record = bool(
+        expected
+        and supplied
+        and secrets.compare_digest(
+            expected, hashlib.sha256(supplied.encode("utf-8")).hexdigest()
         )
-        actual = hashlib.sha256(supplied.encode("utf-8")).hexdigest() if supplied else ""
-        if not expected or not actual or not secrets.compare_digest(expected, actual):
+    )
+    principal_id = record.principal_id if principal is None and capability_matches_record else _principal(request)
+    if record.principal_id != principal_id:
+        if not capability_matches_record:
             raise HTTPException(status_code=404, detail="conformational-mapping request not found")
     return record
+
+
+async def _authorized_state_analysis_summary_record(
+    request_id: str,
+    request: Request,
+    session: AsyncSession,
+):
+    """Authorize compact summaries for authenticated principals or request capabilities."""
+
+    record = await get_request(session, request_id)
+    if record is None:
+        _principal(request)
+        raise HTTPException(status_code=404, detail="conformational-mapping request not found")
+    if getattr(request.state, "authenticated_principal", None) is not None:
+        _principal(request)
+        return record
+    return await _authorized_record(request_id, request, session)
 
 
 async def _source(
@@ -1421,7 +1446,10 @@ async def _source(
     source = await session.get(ConformationalMappingSource, source_id)
     if (
         source is None
-        or source.principal_id != principal_id
+        or (
+            source.principal_id != principal_id
+            and source.principal_id != _PERSONAL_WORKFLOW_PRINCIPAL
+        )
         or source.source_kind not in allowed_kinds
         or not source.immutable
     ):
@@ -2564,7 +2592,7 @@ async def state_landscape_analysis_summary(
 ):
     """Expose one compact, request-governed state-analysis header without canonical payload reads."""
 
-    await _authorized_record(request_id, request, session)
+    await _authorized_state_analysis_summary_record(request_id, request, session)
     try:
         header = await resolve_state_landscape_analysis_projection(
             session, request_id, analysis_id=analysis_id,

@@ -353,6 +353,19 @@ class FrustraMPNNInvocation:
     physical_gpu_id: int
     task_visible_gpu_id: int = 0
 
+    def __iter__(self):
+        return iter(self.argv)
+
+    def __len__(self) -> int:
+        return len(self.argv)
+
+    def __getitem__(self, index):
+        value = self.argv[index]
+        return list(value) if isinstance(index, slice) else value
+
+    def index(self, value: str, start: int = 0, stop: int | None = None) -> int:
+        return self.argv.index(value, start) if stop is None else self.argv.index(value, start, stop)
+
     @property
     def receipt_metadata(self) -> dict[str, int]:
         return {

@@ -18,6 +18,15 @@ class CanonicalPrepError(ValueError):
     pass
 
 
+_CANONICAL_CONFORNETS_REPO = Path("/opt/confornets")
+
+
+def _instrumented_confornets_runtime_available() -> bool:
+    return (
+        _CANONICAL_CONFORNETS_REPO / "confornet/utils/cm_coordinate_ledger.py"
+    ).is_file()
+
+
 def _canonical_bytes(value: Any) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
 
@@ -151,6 +160,8 @@ def _resolve_authenticated(
 def prepare(request_path: Path, plan_path: Path, assets_dir: Path, output: Path) -> None:
     request_path = Path(os.path.abspath(request_path))
     plan_path = Path(os.path.abspath(plan_path))
+    if not _instrumented_confornets_runtime_available():
+        raise CanonicalPrepError("canonical instrumented ConforNets runtime is unavailable")
     request_root = request_path.parent
     _, root_metadata = _resolved_request_root(request_root)
     owner_uid = root_metadata.st_uid
@@ -195,7 +206,7 @@ def prepare(request_path: Path, plan_path: Path, assets_dir: Path, output: Path)
         "checkpoint",
     )
     repo_path = Path(settings["backend_identity"]["repo_path"])
-    if repo_path != Path("/opt/confornets") or not (repo_path / "confornet/utils/cm_coordinate_ledger.py").is_file():
+    if repo_path != _CANONICAL_CONFORNETS_REPO or not _instrumented_confornets_runtime_available():
         raise CanonicalPrepError("canonical instrumented ConforNets runtime is unavailable")
     registry = _load(request_root / "cm_runtime_registry_v1.json", "runtime registry")
     for field in (
