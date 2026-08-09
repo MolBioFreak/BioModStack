@@ -507,24 +507,10 @@ export function BioXpCockpit() {
                                                 className={actionClass}
                                             >Go absolute</button>
                                         </div>
-                                        {axis === 'z' && (
-                                            <div className="mt-2 flex flex-wrap gap-1" aria-label="Z clear reference presets">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setAbsoluteTargets((current) => ({ ...current, z: 500 }))}
-                                                    className={`rounded px-2 py-1 text-xs ${absoluteTargets.z === 500 ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
-                                                >Tips loaded · 500</button>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setAbsoluteTargets((current) => ({ ...current, z: 65000 }))}
-                                                    className={`rounded px-2 py-1 text-xs ${absoluteTargets.z === 65000 ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
-                                                >No tips · 65,000</button>
-                                            </div>
-                                        )}
                                     </label>
                                     {axis === 'z' && (
                                         <div className="rounded border border-cyan-800/70 bg-cyan-950/20 p-3 text-xs text-cyan-100">
-                                            <p><strong>Robot-owned PSUDO_Z_HOME:</strong> derived from durable tip/plate state; browser selection is disabled.</p>
+                                            <p><strong>Robot-owned PSUDO_Z_HOME:</strong> The robot owns the current OEM PSUDO_Z_HOME. Requests below that value are clamped by the OEM moveZ contract.</p>
                                             <p className="mt-1"><strong>Position:</strong> {dashboard?.z_axis.status?.position_steps ?? 'unknown'} · <strong>Reference:</strong> {dashboard?.z_axis.status?.reference ?? 'unknown'} · <strong>Authority state:</strong> {dashboard?.z_axis.provider.state ?? 'unknown'}</p>
                                             <p className="mt-1"><strong>GAP9/10:</strong> {dashboard?.z_axis.status?.left_switch_state ?? 'unknown'} / {dashboard?.z_axis.status?.right_switch_state ?? 'unknown'} · <strong>Disable GAP13/12:</strong> {String(dashboard?.z_axis.status?.left_switch_disabled ?? 'unknown')} / {String(dashboard?.z_axis.status?.right_switch_disabled ?? 'unknown')}</p>
                                             <div className="mt-2 flex flex-wrap gap-2">

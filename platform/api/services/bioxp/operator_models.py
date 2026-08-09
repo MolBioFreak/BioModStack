@@ -222,6 +222,12 @@ class OperatorActionReceipt(BaseModel):
     response: dict[str, Any] | None = None
     authority_receipt_id: str | None = Field(default=None, max_length=128)
     authority_receipt_status: str | dict[str, Any] | None = None
+    authority_fingerprint: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
     observation_receipt_id: str | None = Field(default=None, max_length=128)
     observes_command_id: str | None = Field(default=None, max_length=128)
     error: str | None = Field(default=None, max_length=4000)

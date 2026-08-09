@@ -68,7 +68,7 @@ test('operator receipt type strictly exposes startup reconciliation and durable 
         'admission_completed_at', 'provider_entry_at', 'provider_returned_at',
         'receipt_persist_started_at', 'controller_terminal_state_verified',
         'automatic_retry', 'physical_outcome', 'persistence_fallback',
-        'authority_receipt_id', 'authority_receipt_status', 'observation_receipt_id',
+        'authority_receipt_id', 'authority_receipt_status', 'authority_fingerprint', 'observation_receipt_id',
         'observes_command_id',
     ]) {
         assert.match(client, new RegExp(`\\n\\s*${field}:`));
