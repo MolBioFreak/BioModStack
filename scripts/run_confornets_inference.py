@@ -301,71 +301,232 @@ def _sample_lookup_keys(sample: dict[str, Any]) -> set[str]:
     return {key for key in keys if key and key != "sample_None"}
 
 
-def _parse_ca_coordinates(path: Path) -> list[tuple[float, float, float]]:
-    coords: list[tuple[float, float, float]] = []
-    try:
-        for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-            if not line.startswith(("ATOM", "HETATM")):
-                continue
-            # PDB fixed-column format.
-            if len(line) >= 54 and line[12:16].strip() == "CA":
-                try:
-                    coords.append((float(line[30:38]), float(line[38:46]), float(line[46:54])))
-                    continue
-                except ValueError:
-                    pass
-            # Minimal mmCIF rows in tests/upstream text exports.
-            tokens = shlex.split(line)
-            if "CA" not in tokens[:8]:
-                continue
-            for offset in ((-4, -3, -2), (-3, -2, -1), (6, 7, 8), (10, 11, 12)):
-                try:
-                    coords.append((float(tokens[offset[0]]), float(tokens[offset[1]]), float(tokens[offset[2]])))
+class CoordinateIdentityError(ValueError):
+    """Authoritative C-alpha atom identities are absent, ambiguous, or unequal."""
+
+
+CaIdentity = tuple[str, str, str, str, str, str]
+CaCoordinate = tuple[float, float, float]
+
+
+def _record_ca(
+    coordinates: dict[CaIdentity, CaCoordinate],
+    *,
+    identity: CaIdentity,
+    coordinate: CaCoordinate,
+    path: Path,
+) -> None:
+    if not all(math.isfinite(value) for value in coordinate):
+        raise CoordinateIdentityError(f"non-finite C-alpha coordinate in {path}")
+    if identity in coordinates:
+        raise CoordinateIdentityError(
+            f"duplicate authoritative C-alpha identity {identity!r} in {path}"
+        )
+    coordinates[identity] = coordinate
+
+
+def _atom_site_rows(lines: list[str], path: Path) -> list[dict[str, str]]:
+    """Return atom_site rows by declared tag, independent of mmCIF column order."""
+
+    rows: list[dict[str, str]] = []
+    line_index = 0
+    while line_index < len(lines):
+        if lines[line_index].strip().lower() != "loop_":
+            line_index += 1
+            continue
+        line_index += 1
+        tags: list[str] = []
+        while line_index < len(lines) and lines[line_index].lstrip().startswith("_"):
+            tags.append(lines[line_index].strip().split()[0])
+            line_index += 1
+        if not tags or not all(tag.startswith("_atom_site.") for tag in tags):
+            continue
+        names = [tag.removeprefix("_atom_site.") for tag in tags]
+        tokens: list[str] = []
+        while line_index < len(lines):
+            stripped = lines[line_index].strip()
+            if not stripped or stripped.startswith("#"):
+                line_index += 1
+                if stripped.startswith("#"):
                     break
-                except (IndexError, ValueError):
-                    continue
-    except Exception:
-        return []
-    return coords
+                continue
+            if stripped.lower() in {"loop_", "stop_"} or stripped.startswith(("_", "data_", "save_")):
+                break
+            try:
+                tokens.extend(shlex.split(stripped, posix=True))
+            except ValueError as exc:
+                raise CoordinateIdentityError(f"invalid mmCIF quoting in {path}") from exc
+            while len(tokens) >= len(names):
+                values, tokens = tokens[: len(names)], tokens[len(names) :]
+                rows.append(dict(zip(names, values)))
+            line_index += 1
+        if tokens:
+            raise CoordinateIdentityError(f"incomplete atom_site row in {path}")
+    return rows
 
 
-def _ca_rmsd(path_a: Path, path_b: Path) -> float | None:
-    coords_a = _parse_ca_coordinates(path_a)
-    coords_b = _parse_ca_coordinates(path_b)
-    n = min(len(coords_a), len(coords_b))
-    if n <= 0:
-        return None
-    coords_a = coords_a[:n]
-    coords_b = coords_b[:n]
+def _parse_ca_coordinates(path: Path) -> dict[CaIdentity, CaCoordinate]:
+    """Parse C-alpha coordinates by exact model/auth residue/atom identity."""
+
+    coordinates: dict[CaIdentity, CaCoordinate] = {}
+    try:
+        lines = path.read_text(encoding="utf-8", errors="strict").splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise CoordinateIdentityError(f"cannot read coordinate file {path}: {exc}") from exc
+
+    atom_site_rows = _atom_site_rows(lines, path)
+    if atom_site_rows:
+        required = {
+            "label_atom_id", "auth_atom_id", "label_alt_id", "auth_asym_id",
+            "auth_seq_id", "auth_comp_id", "pdbx_PDB_ins_code", "Cartn_x",
+            "Cartn_y", "Cartn_z",
+        }
+        for row in atom_site_rows:
+            missing_fields = required - set(row)
+            if missing_fields:
+                raise CoordinateIdentityError(
+                    f"mmCIF atom_site identity/coordinate columns are missing in {path}: "
+                    f"{sorted(missing_fields)}"
+                )
+            label_atom = row["label_atom_id"]
+            auth_atom = row["auth_atom_id"]
+            if label_atom != "CA" and auth_atom != "CA":
+                continue
+            if label_atom != "CA" or auth_atom != "CA":
+                raise CoordinateIdentityError(
+                    f"mismatched label/auth C-alpha atom identity in {path}"
+                )
+            if row["label_alt_id"] not in {"", "."}:
+                raise CoordinateIdentityError(
+                    f"alternate-location C-alpha identity is ambiguous in {path}"
+                )
+            model = row.get("pdbx_PDB_model_num", "1")
+            if row["pdbx_PDB_ins_code"] == "?":
+                raise CoordinateIdentityError(
+                    f"unknown insertion identity for C-alpha in {path}"
+                )
+            if model == "?":
+                raise CoordinateIdentityError(
+                    f"unknown model identity for C-alpha in {path}"
+                )
+            insertion = "" if row["pdbx_PDB_ins_code"] == "." else row["pdbx_PDB_ins_code"]
+            identity = (
+                model,
+                row["auth_asym_id"],
+                row["auth_seq_id"],
+                insertion,
+                row["auth_comp_id"],
+                auth_atom,
+            )
+            if any(value in {"", ".", "?"} for value in (model, identity[1], identity[2], identity[4])):
+                raise CoordinateIdentityError(
+                    f"incomplete authoritative mmCIF C-alpha identity in {path}"
+                )
+            try:
+                coordinate = (float(row["Cartn_x"]), float(row["Cartn_y"]), float(row["Cartn_z"]))
+            except ValueError as exc:
+                raise CoordinateIdentityError(f"invalid mmCIF C-alpha coordinate in {path}") from exc
+            _record_ca(coordinates, identity=identity, coordinate=coordinate, path=path)
+    else:
+        current_model = "1"
+        for line in lines:
+            if line.startswith("MODEL"):
+                current_model = line[10:14].strip() or line[5:].strip()
+                if not current_model:
+                    raise CoordinateIdentityError(f"PDB MODEL has no identity in {path}")
+                continue
+            if not line.startswith(("ATOM", "HETATM")) or len(line) < 54:
+                continue
+            if line[12:16].strip() != "CA":
+                continue
+            altloc = line[16:17].strip()
+            if altloc not in {"", "."}:
+                raise CoordinateIdentityError(
+                    f"alternate-location C-alpha identity is ambiguous in {path}"
+                )
+            identity = (
+                current_model,
+                line[21:22].strip(),
+                line[22:26].strip(),
+                line[26:27].strip(),
+                line[17:20].strip(),
+                line[12:16].strip(),
+            )
+            if not identity[1] or not identity[2] or not identity[4]:
+                raise CoordinateIdentityError(
+                    f"incomplete authoritative PDB C-alpha identity in {path}"
+                )
+            try:
+                coordinate = (
+                    float(line[30:38]),
+                    float(line[38:46]),
+                    float(line[46:54]),
+                )
+            except ValueError as exc:
+                raise CoordinateIdentityError(f"invalid PDB C-alpha coordinate in {path}") from exc
+            _record_ca(coordinates, identity=identity, coordinate=coordinate, path=path)
+    if not coordinates:
+        raise CoordinateIdentityError(f"no authoritative C-alpha identities in {path}")
+    return coordinates
+
+
+def _ca_rmsd(path_a: Path, path_b: Path) -> float:
+    by_identity_a = _parse_ca_coordinates(path_a)
+    by_identity_b = _parse_ca_coordinates(path_b)
+    identities_a = set(by_identity_a)
+    identities_b = set(by_identity_b)
+    if identities_a != identities_b:
+        missing = sorted(identities_a - identities_b)
+        unexpected = sorted(identities_b - identities_a)
+        raise CoordinateIdentityError(
+            "authoritative C-alpha identity sets differ: "
+            f"missing_from_second={missing}, unexpected_in_second={unexpected}"
+        )
+    identities = sorted(identities_a)
+    coords_a = [by_identity_a[identity] for identity in identities]
+    coords_b = [by_identity_b[identity] for identity in identities]
     try:
         import numpy as np  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError(
+            "Kabsch RMSD requires numpy; refusing center-only or truncated fallback"
+        ) from exc
 
-        p = np.asarray(coords_a, dtype=float)
-        q = np.asarray(coords_b, dtype=float)
-        p_centered = p - p.mean(axis=0)
-        q_centered = q - q.mean(axis=0)
-        covariance = p_centered.T @ q_centered
-        v, _s, wt = np.linalg.svd(covariance)
-        handedness = np.sign(np.linalg.det(v @ wt))
-        correction = np.diag([1.0, 1.0, float(handedness) if handedness else 1.0])
-        aligned = p_centered @ v @ correction @ wt
-        rmsd = float(np.sqrt(np.mean(np.sum((aligned - q_centered) ** 2, axis=1))))
-        return round(rmsd, 6)
-    except Exception:
-        centroid_a = tuple(sum(axis) / n for axis in zip(*coords_a))
-        centroid_b = tuple(sum(axis) / n for axis in zip(*coords_b))
-        total = 0.0
-        for ca, cb in zip(coords_a, coords_b):
-            centered_a = tuple(ca[idx] - centroid_a[idx] for idx in range(3))
-            centered_b = tuple(cb[idx] - centroid_b[idx] for idx in range(3))
-            total += sum((centered_a[idx] - centered_b[idx]) ** 2 for idx in range(3))
-        return round(math.sqrt(total / n), 6)
+    p = np.asarray(coords_a, dtype=float)
+    q = np.asarray(coords_b, dtype=float)
+    p_centered = p - p.mean(axis=0)
+    q_centered = q - q.mean(axis=0)
+    covariance = p_centered.T @ q_centered
+    left, _singular_values, right_t = np.linalg.svd(covariance)
+    correction = np.eye(3)
+    if float(np.linalg.det(left @ right_t)) < 0.0:
+        correction[-1, -1] = -1.0
+    rotation = left @ correction @ right_t
+    aligned = p_centered @ rotation
+    rmsd = float(np.sqrt(np.mean(np.sum((aligned - q_centered) ** 2, axis=1))))
+    if not math.isfinite(rmsd):
+        raise RuntimeError("Kabsch RMSD produced a non-finite value")
+    return rmsd
 
 
 def _mds_coordinates(distance_matrix: list[list[float]]) -> list[dict[str, float]]:
     n = len(distance_matrix)
     if n == 0:
         return []
+    if any(len(row) != n for row in distance_matrix):
+        raise ValueError("classical metric MDS requires a square distance matrix")
+    for row_index, row in enumerate(distance_matrix):
+        for column_index, value in enumerate(row):
+            if value is None:
+                raise ValueError("classical metric MDS cannot impute a missing distance")
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError("classical metric MDS distances must be numeric")
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError("classical metric MDS requires finite nonnegative distances")
+            if row_index == column_index and value != 0.0:
+                raise ValueError("classical metric MDS requires a zero diagonal")
+            if not math.isclose(value, distance_matrix[column_index][row_index], rel_tol=0.0, abs_tol=1e-9):
+                raise ValueError("classical metric MDS requires a symmetric distance matrix")
     if n == 1:
         return [{"x": 0.0, "y": 0.0}]
     if n == 2:
@@ -373,20 +534,34 @@ def _mds_coordinates(distance_matrix: list[list[float]]) -> list[dict[str, float
         return [{"x": round(-distance / 2.0, 6), "y": 0.0}, {"x": round(distance / 2.0, 6), "y": 0.0}]
     try:
         import numpy as np  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError(
+            "classical metric MDS requires numpy; refusing index-position fallback"
+        ) from exc
 
-        d = np.asarray(distance_matrix, dtype=float)
-        j = np.eye(n) - np.ones((n, n)) / n
-        b = -0.5 * j @ (d ** 2) @ j
-        values, vectors = np.linalg.eigh(b)
-        order = np.argsort(values)[::-1]
-        coords = np.zeros((n, 2), dtype=float)
-        for out_idx, eig_idx in enumerate(order[:2]):
-            eig_value = max(float(values[eig_idx]), 0.0)
-            coords[:, out_idx] = vectors[:, eig_idx] * math.sqrt(eig_value)
-        return [{"x": round(float(x), 6), "y": round(float(y), 6)} for x, y in coords]
-    except Exception:
-        midpoint = (n - 1) / 2.0
-        return [{"x": round(idx - midpoint, 6), "y": 0.0} for idx in range(n)]
+    d = np.asarray(distance_matrix, dtype=float)
+    j = np.eye(n) - np.ones((n, n)) / n
+    gram = -0.5 * j @ (d ** 2) @ j
+    values, vectors = np.linalg.eigh(gram)
+    order = np.argsort(values)[::-1]
+    coords = np.zeros((n, 2), dtype=float)
+    for out_idx, eig_idx in enumerate(order[:2]):
+        eig_value = max(float(values[eig_idx]), 0.0)
+        coords[:, out_idx] = vectors[:, eig_idx] * math.sqrt(eig_value)
+    # Eigenvectors are sign-ambiguous and equal eigenvalues admit arbitrary
+    # rotations. Canonicalize the 2-D frame from sample order so repeated runs
+    # do not change serialized coordinates while preserving all distances.
+    anchor = int(np.argmax(np.sum(coords * coords, axis=1)))
+    angle = math.atan2(float(coords[anchor, 1]), float(coords[anchor, 0]))
+    cosine, sine = math.cos(angle), math.sin(angle)
+    canonical = np.empty_like(coords)
+    canonical[:, 0] = coords[:, 0] * cosine + coords[:, 1] * sine
+    canonical[:, 1] = -coords[:, 0] * sine + coords[:, 1] * cosine
+    handedness_anchor = int(np.argmax(np.abs(canonical[:, 1])))
+    if float(canonical[handedness_anchor, 1]) < 0.0:
+        canonical[:, 1] *= -1.0
+    canonical[np.abs(canonical) < 5e-13] = 0.0
+    return [{"x": round(float(x), 6), "y": round(float(y), 6)} for x, y in canonical]
 
 
 def _normalize_outputs(request: dict[str, Any], raw_dir: Path, output_dir: Path) -> list[dict[str, Any]]:
@@ -474,7 +649,10 @@ def _normalize_outputs(request: dict[str, Any], raw_dir: Path, output_dir: Path)
         )
 
     references = [ref for ref in request.get("references", []) if isinstance(ref, dict) and ref.get("staged_path")]
-    rmsd_threshold = _safe_float((request.get("params") or {}).get("rmsd_threshold")) or 3.0
+    configured_threshold = _safe_float((request.get("params") or {}).get("rmsd_threshold"))
+    if configured_threshold is not None and configured_threshold < 0.0:
+        raise ValueError("rmsd_threshold must be nonnegative")
+    rmsd_threshold = 3.0 if configured_threshold is None else configured_threshold
     compute_evaluation = _bool((request.get("params") or {}).get("compute_evaluation", True))
     evaluation_summary_path = evaluation_dir / "evaluation_summary.json"
     reference_rmsd_path = evaluation_dir / "reference_rmsd.csv"
@@ -486,16 +664,14 @@ def _normalize_outputs(request: dict[str, Any], raw_dir: Path, output_dir: Path)
     pairwise_matrix = [[0.0 for _ in samples] for _ in samples]
     for i, path_i in enumerate(sample_paths):
         for j in range(i + 1, len(sample_paths)):
-            rmsd = _ca_rmsd(path_i, sample_paths[j])
-            value = float(rmsd) if rmsd is not None else float("nan")
+            value = _ca_rmsd(path_i, sample_paths[j])
             pairwise_matrix[i][j] = value
             pairwise_matrix[j][i] = value
-            if math.isfinite(value):
-                pairwise_values.append(value)
+            pairwise_values.append(value)
 
     if compute_evaluation and references:
         reference_names = [str(ref.get("name") or Path(str(ref.get("staged_path"))).stem) for ref in references]
-        landscape_points = _mds_coordinates([[0.0 if not math.isfinite(value) else value for value in row] for row in pairwise_matrix])
+        landscape_points = _mds_coordinates(pairwise_matrix)
         with reference_rmsd_path.open("w", newline="", encoding="utf-8") as handle:
             fieldnames = ["sample_id", "frame_index", *reference_names, "nearest_reference", "min_reference_rmsd", "success_at_1"]
             writer = csv.DictWriter(handle, fieldnames=fieldnames)
@@ -503,18 +679,33 @@ def _normalize_outputs(request: dict[str, Any], raw_dir: Path, output_dir: Path)
             for index, (sample, sample_path) in enumerate(zip(samples, sample_paths)):
                 rmsd_to_references: dict[str, float] = {}
                 for ref, ref_name in zip(references, reference_names):
-                    rmsd = _ca_rmsd(sample_path, Path(str(ref["staged_path"])))
-                    if rmsd is not None:
-                        rmsd_to_references[ref_name] = float(rmsd)
+                    rmsd_to_references[ref_name] = _ca_rmsd(
+                        sample_path, Path(str(ref["staged_path"]))
+                    )
                 nearest_reference = min(rmsd_to_references, key=rmsd_to_references.get) if rmsd_to_references else None
                 min_reference_rmsd = rmsd_to_references[nearest_reference] if nearest_reference else None
                 success_at_1 = bool(min_reference_rmsd is not None and min_reference_rmsd <= rmsd_threshold)
-                finite_pairwise = [value for value in pairwise_matrix[index] if math.isfinite(value) and value > 0.0]
-                pairwise_diversity = {
-                    "min_pairwise_rmsd": min(finite_pairwise) if finite_pairwise else 0.0,
-                    "mean_pairwise_rmsd": round(sum(finite_pairwise) / len(finite_pairwise), 6) if finite_pairwise else 0.0,
-                    "max_pairwise_rmsd": max(finite_pairwise) if finite_pairwise else 0.0,
-                }
+                finite_pairwise = [
+                    value for other_index, value in enumerate(pairwise_matrix[index])
+                    if other_index != index and math.isfinite(value)
+                ]
+                pairwise_diversity = (
+                    {
+                        "status": "available",
+                        "reason": None,
+                        "min_pairwise_rmsd": round(min(finite_pairwise), 6),
+                        "mean_pairwise_rmsd": round(sum(finite_pairwise) / len(finite_pairwise), 6),
+                        "max_pairwise_rmsd": round(max(finite_pairwise), 6),
+                    }
+                    if finite_pairwise
+                    else {
+                        "status": "unavailable",
+                        "reason": "fewer_than_two_generated_samples",
+                        "min_pairwise_rmsd": None,
+                        "mean_pairwise_rmsd": None,
+                        "max_pairwise_rmsd": None,
+                    }
+                )
                 landscape_point = landscape_points[index] if index < len(landscape_points) else {"x": 0.0, "y": 0.0}
                 sample_eval = {
                     "sample_id": sample["sample_id"],
@@ -553,7 +744,22 @@ def _normalize_outputs(request: dict[str, Any], raw_dir: Path, output_dir: Path)
         evaluation_payload = {
             "schema_version": 1,
             "status": "computed",
-            "method": "ca_kabsch_rmsd_mds",
+            "method": "authoritative_identity_ca_kabsch_rmsd+classical_metric_mds",
+            "rmsd_method": {
+                "atom_selection": "CA",
+                "identity": "model+auth_chain+auth_residue_number+insertion_code+auth_residue_name+auth_atom_name",
+                "correspondence": "exact_identity_set",
+                "alignment": "proper_rotation_kabsch_svd",
+                "unit": "angstrom",
+                "missingness": "identity mismatch, ambiguity, nonfinite coordinates, and absent atoms abort evaluation; no row-order matching or imputation",
+            },
+            "embedding_method": {
+                "name": "classical_metric_mds_eigendecomposition",
+                "distance_transform": "double_centered_squared_kabsch_rmsd",
+                "negative_eigenvalue_policy": "discard_nonpositive_components",
+                "orientation": "sample_order_canonicalized_rigid_frame",
+                "missingness": "missing or nonfinite distances abort embedding; no zero fill or index fallback",
+            },
             "rmsd_threshold": rmsd_threshold,
             "sample_count": len(samples),
             "reference_count": len(references),
@@ -571,7 +777,22 @@ def _normalize_outputs(request: dict[str, Any], raw_dir: Path, output_dir: Path)
             "schema_version": 1,
             "workflow": "confornets_experimental",
             "status": "computed",
-            "method": "ca_kabsch_rmsd_mds",
+            "method": "authoritative_identity_ca_kabsch_rmsd+classical_metric_mds",
+            "rmsd_method": {
+                "atom_selection": "CA",
+                "identity": "model+auth_chain+auth_residue_number+insertion_code+auth_residue_name+auth_atom_name",
+                "correspondence": "exact_identity_set",
+                "alignment": "proper_rotation_kabsch_svd",
+                "unit": "angstrom",
+                "missingness": "identity mismatch, ambiguity, nonfinite coordinates, and absent atoms abort evaluation; no row-order matching or imputation",
+            },
+            "embedding_method": {
+                "name": "classical_metric_mds_eigendecomposition",
+                "distance_transform": "double_centered_squared_kabsch_rmsd",
+                "negative_eigenvalue_policy": "discard_nonpositive_components",
+                "orientation": "sample_order_canonicalized_rigid_frame",
+                "missingness": "missing or nonfinite distances abort embedding; no zero fill or index fallback",
+            },
             "sample_count": len(samples),
             "reference_count": len(references),
             "coordinates": evaluation_samples,

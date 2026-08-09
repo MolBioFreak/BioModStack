@@ -9,7 +9,7 @@
     "schema_name": {"const": "cm_ensemble"}, "schema_version": {"const": 1},
     "request_id": {"type": "string", "format": "uuid"}, "request_sha256": {"$ref": "#/$defs/sha256"}, "source_snapshot_sha256": {"$ref": "#/$defs/sha256"},
     "backend": {"enum": ["protenix_v2_ensemble", "confornets", "external_import"]}, "runtime_identity": {"type": "string", "minLength": 1},
-    "container_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, "checkpoint_sha256": {"$ref": "#/$defs/sha256"}, "feature_policy_sha256": {"$ref": "#/$defs/sha256"},
+    "container_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, "checkpoint_sha256": {"$ref": "#/$defs/sha256"}, "runtime_attestation_sha256": {"$ref": "#/$defs/sha256"}, "feature_policy_sha256": {"$ref": "#/$defs/sha256"},
     "expected_cardinality": {"type": "integer", "minimum": 1}, "expected_coordinates": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/coordinates"}},
     "candidates": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/candidate"}},
     "native_manifest_path": {"$ref": "#/$defs/relative_path"}, "native_manifest_sha256": {"$ref": "#/$defs/sha256"},
