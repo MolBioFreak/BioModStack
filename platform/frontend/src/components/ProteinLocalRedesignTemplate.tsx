@@ -10,6 +10,7 @@ import { LigandSelector, type LigandEntry } from './LigandSelector';
 import { componentIdFromIndex } from './ligandSelectorData';
 import { ModelDocumentationLinks } from './ModelDocumentationLinks';
 import { getModelByNumber, parseStructureFile, type Chain, type ParsedPDB } from '../utils/pdbUtils';
+import { getProteinLocalRedesignUiState } from './proteinLocalRedesignUiState';
 
 interface ProteinLocalRedesignTemplateProps {
     onBack: () => void;
@@ -360,6 +361,10 @@ export function ProteinLocalRedesignTemplate({
     const [interactiveGateStage, setInteractiveGateStage] = useState<ReviewPauseStage>('post_structure_validation');
     const [showStructureViewer, setShowStructureViewer] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const proteinLocalRedesignUiState = getProteinLocalRedesignUiState(isNativeLocalRedesign, seqMethod);
+    const workflowSteps = isNativeLocalRedesign
+        ? ['Source Complex', 'Visual Region Pick', 'Native RFD3', 'Optional Sequence Design']
+        : ['Source Complex', 'Visual Region Pick', 'Sequence Redesign', 'Boltz Validation'];
 
     useEffect(() => {
         if (!initialValues) return;
@@ -944,7 +949,7 @@ export function ProteinLocalRedesignTemplate({
                         </span>
                     </div>
                     <div className="flex flex-wrap gap-2 text-xs">
-                        {['Source Complex', 'Visual Region Pick', 'Sequence Redesign', 'Boltz Validation'].map((step, index) => (
+                        {workflowSteps.map((step, index) => (
                             <span
                                 key={step}
                                 className="rounded-full border px-2.5 py-1"
@@ -1575,9 +1580,11 @@ export function ProteinLocalRedesignTemplate({
                 <div className="space-y-6">
                     <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
                         <div>
-                            <h2 className="text-lg font-semibold">Sequence Redesign</h2>
+                            <h2 className="text-lg font-semibold">{proteinLocalRedesignUiState.sequenceSectionLabel}</h2>
                             <p className="mt-1 text-sm text-[var(--text-secondary)]">
-                                Choose the redesign backend and sampling depth for the remodeled backbones.
+                                {isNativeLocalRedesign
+                                    ? 'Native RFD3 preserves the supplied sequence. Keep Skip selected for the first round, or explicitly add a sequence-design stage.'
+                                    : 'Choose the redesign backend and sampling depth for the remodeled backbones.'}
                             </p>
                         </div>
 
@@ -1590,12 +1597,13 @@ export function ProteinLocalRedesignTemplate({
                                     className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
                                     style={themedInputStyle}
                                 >
+                                    {isNativeLocalRedesign && <option value="skip">Skip sequence redesign</option>}
                                     <option value="fampnn">FA-MPNN</option>
                                     <option value="mpnn">ProteinMPNN</option>
                                 </select>
                             </div>
 
-                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                            {proteinLocalRedesignUiState.showSequenceSampling && <div className="rounded-lg border p-3" style={themedInsetStyle}>
                                 <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Backbone Designs</label>
                                 <input
                                     type="number"
@@ -1606,9 +1614,9 @@ export function ProteinLocalRedesignTemplate({
                                     className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
                                     style={themedInputStyle}
                                 />
-                            </div>
+                            </div>}
 
-                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                            {proteinLocalRedesignUiState.showSequenceSampling && <div className="rounded-lg border p-3" style={themedInsetStyle}>
                                 <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Sequences Per Backbone</label>
                                 <input
                                     type="number"
@@ -1619,9 +1627,9 @@ export function ProteinLocalRedesignTemplate({
                                     className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
                                     style={themedInputStyle}
                                 />
-                            </div>
+                            </div>}
 
-                            <label className="flex items-start gap-3 rounded-lg border p-3 text-sm" style={themedInsetStyle}>
+                            {proteinLocalRedesignUiState.showSequenceSampling && <label className="flex items-start gap-3 rounded-lg border p-3 text-sm" style={themedInsetStyle}>
                                 <input
                                     type="checkbox"
                                     checked={fixFixedSidechains}
@@ -1629,10 +1637,17 @@ export function ProteinLocalRedesignTemplate({
                                     className="mt-0.5"
                                 />
                                 <span>Keep sidechains fixed outside the editable region during FA-MPNN redesign.</span>
-                            </label>
+                            </label>}
+
+                            {!proteinLocalRedesignUiState.showSequenceSampling && (
+                                <div className="rounded-lg border p-3 text-sm text-[var(--text-secondary)]" style={themedMutedInsetStyle}>
+                                    Sequence redesign is not requested. Native RFD3 candidates keep the source amino-acid identities.
+                                </div>
+                            )}
                         </div>
                     </section>
 
+                    {proteinLocalRedesignUiState.showLegacyOptionalStages && (
                     <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
                         <div>
                             <h2 className="text-lg font-semibold">Review Gates</h2>
@@ -1675,6 +1690,7 @@ export function ProteinLocalRedesignTemplate({
                             </div>
                         </div>
                     </section>
+                    )}
 
                     <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
                         <div>
@@ -1712,6 +1728,7 @@ export function ProteinLocalRedesignTemplate({
                         </div>
                     </section>
 
+                    {proteinLocalRedesignUiState.showLegacyOptionalStages && (
                     <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
                         <div>
                             <h2 className="text-lg font-semibold">Backbone Filters</h2>
@@ -1755,7 +1772,9 @@ export function ProteinLocalRedesignTemplate({
                             </div>
                         </div>
                     </section>
+                    )}
 
+                    {proteinLocalRedesignUiState.showLegacyOptionalStages && (
                     <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
                         <div>
                             <h2 className="text-lg font-semibold">Validation</h2>
@@ -1804,6 +1823,7 @@ export function ProteinLocalRedesignTemplate({
                             </div>
                         </div>
                     </section>
+                    )}
 
                     <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
                         <h2 className="text-lg font-semibold">Execution Summary</h2>
@@ -1842,11 +1862,17 @@ export function ProteinLocalRedesignTemplate({
                             </div>
                             <div className="flex items-start justify-between gap-4">
                                 <dt className="text-[var(--text-secondary)]">Redesign</dt>
-                                <dd className="text-right">{numDesigns} backbones × {seqsPerDesign} seqs</dd>
+                                <dd className="text-right">
+                                    {proteinLocalRedesignUiState.sequenceDesignEnabled
+                                        ? `${numDesigns} backbones × ${seqsPerDesign} seqs`
+                                        : `${numDesigns} native RFD3 candidates`}
+                                </dd>
                             </div>
                             <div className="flex items-start justify-between gap-4">
                                 <dt className="text-[var(--text-secondary)]">Backend</dt>
-                                <dd className="text-right">{seqMethod === 'fampnn' ? 'FA-MPNN' : 'ProteinMPNN'}</dd>
+                                <dd className="text-right">
+                                    {seqMethod === 'skip' ? 'Sequence redesign skipped' : seqMethod === 'fampnn' ? 'FA-MPNN' : 'ProteinMPNN'}
+                                </dd>
                             </div>
                             <div className="flex items-start justify-between gap-4">
                                 <dt className="text-[var(--text-secondary)]">RFD3</dt>
@@ -1854,12 +1880,16 @@ export function ProteinLocalRedesignTemplate({
                             </div>
                             <div className="flex items-start justify-between gap-4">
                                 <dt className="text-[var(--text-secondary)]">Validation</dt>
-                                <dd className="text-right">{runBoltzValidation ? 'Boltz-2 enabled' : 'Skipped'}</dd>
+                                <dd className="text-right">
+                                    {isNativeLocalRedesign ? 'Not in native contract' : runBoltzValidation ? 'Boltz-2 enabled' : 'Skipped'}
+                                </dd>
                             </div>
                             <div className="flex items-start justify-between gap-4">
                                 <dt className="text-[var(--text-secondary)]">Pause</dt>
                                 <dd className="text-right">
-                                    {!interactiveGating
+                                    {isNativeLocalRedesign
+                                        ? 'Not configured'
+                                        : !interactiveGating
                                         ? 'No pause'
                                         : interactiveGateStage === 'post_rfantibody'
                                             ? 'After remodel'
