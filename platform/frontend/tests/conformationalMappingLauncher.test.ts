@@ -122,11 +122,11 @@ test('server-owned policy and singular external artifact contracts stay out of e
     const launcher = source('conformationalMapping/ConformationalMappingLauncher.tsx');
     const state = source('jobSubmissionTemplateState.ts');
     const template = readFileSync(resolve(process.cwd(), '../api/config/templates/conformational_mapping.yaml'), 'utf8');
-    assert.match(launcher, /registered_artifact_id/);
+    assert.match(launcher, /registered_artifact_ids/);
     assert.doesNotMatch(launcher, /form\.analysis/);
     assert.doesNotMatch(state, /analysis_policy|chain_id:|test_case_id:|benchmark_name:/);
-    assert.match(template, /registered_artifact_id/);
-    assert.doesNotMatch(template, /registered_artifact_ids|name: analysis_policy/);
+    assert.match(template, /registered_artifact_ids/);
+    assert.doesNotMatch(template, /name: registered_artifact_id,|name: analysis_policy/);
 });
 
 test('launcher is a full-width card-grid run workspace with one backend authority', () => {

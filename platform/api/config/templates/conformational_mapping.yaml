@@ -25,7 +25,7 @@ user_params:
   - {name: ordered_seeds, label: Ordered seeds, type: text, required: true, default: "101,202,303,404,505", description: Protenix-only sampling axis. The dedicated launcher emits the fixed non-Protenix sentinel required by the typed API.}
   - {name: samples_per_seed, label: Samples per seed, type: number, required: true, default: 5, min: 1, max: 100, description: Protenix-only sampling axis. ConforNets uses its typed samples control and external import has one admitted structure.}
   - {name: registered_snapshot_id, label: Registered complex snapshot ID, type: string, required: false, description: Server registry ID only; host paths are not accepted.}
-  - {name: registered_artifact_id, label: Registered import ID, type: string, required: false, description: One explicitly registered immutable mmCIF artifact for external import.}
+  - {name: registered_artifact_ids, label: Registered import IDs, type: text, required: false, description: JSON array containing exactly one explicitly registered immutable mmCIF artifact for external import.}
   - {name: registered_sequence_id, label: Registered sequence ID, type: string, required: false, description: ConforNets protein-sequence registry ID.}
   - {name: registered_reference_ids, label: Registered reference IDs, type: text, required: false, description: JSON array of at most two ConforNets structure registry IDs.}
   - {name: registered_checkpoint_id, label: Registered checkpoint ID, type: string, required: false}

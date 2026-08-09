@@ -90,7 +90,7 @@ test('rendered external import refresh clears stale IDs, filters formats, become
                         name: 'Imported structure',
                         notes: 'Preserve the imported state.',
                         backend: 'external_import',
-                        registered_artifact_id: 'stale-source',
+                        registered_artifact_ids: ['stale-source'],
                         analysis_policy: {
                             sign_zero_epsilon: 0.002,
                             clash_detector_id: 'bms_clash',
@@ -148,7 +148,7 @@ test('rendered external import refresh clears stale IDs, filters formats, become
     });
 
     assert.equal(submissions.length, 1);
-    assert.equal(submissions[0].registered_artifact_id, 'valid-mmcif');
+    assert.deepEqual(submissions[0].registered_artifact_ids, ['valid-mmcif']);
     assert.equal(submissions[0].notes, 'Preserve the imported state.');
     assert.deepEqual(submissions[0].ordered_seeds, [0]);
     assert.equal(submissions[0].samples_per_seed, 1);

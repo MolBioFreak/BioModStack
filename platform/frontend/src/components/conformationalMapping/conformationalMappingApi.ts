@@ -109,8 +109,8 @@ export interface CmSubmitRequest {
     analysis_policy: CmAnalysisPolicy;
     state_landscape_comparison?: CmStateLandscapeComparison;
     registered_snapshot_id?: string;
-    /** Exactly one explicitly registered completed-run or uploaded mmCIF source. */
-    registered_artifact_id?: string;
+    /** Bounded wire collection containing exactly one completed-run or uploaded mmCIF source. */
+    registered_artifact_ids?: [string];
     registered_sequence_id?: string;
     registered_reference_ids?: string[];
     registered_checkpoint_id?: string;
@@ -135,6 +135,7 @@ export interface CmReusableArtifact {
     media_type?: string; candidate_id?: string | null;
     sha256: string; bytes: number; available?: boolean;
     model_id?: string | null; sample_id?: string | null; chain_ids?: string[]; entity_ids?: string[];
+    backend_coordinates?: CmBackendCoordinates | null;
 }
 export interface CmReusableRun {
     run_id?: string; request_id?: string; job_id: string; run_name?: string; name?: string;

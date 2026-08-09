@@ -131,11 +131,19 @@ async def test_your_runs_lists_only_owned_completed_verified_reusable_artifacts(
             session.add(ConformationalMappingArtifact(
                 artifact_id=f"artifact-{request_id}", request_id=request_id, candidate_id="candidate", role="authoritative_cif",
                 relative_path=path.name, storage_path=str(path), content_sha256=digest, size_bytes=path.stat().st_size,
-                media_type="chemical/x-mmcif", metadata_json={},
+                media_type="chemical/x-mmcif", metadata_json={"backend_coordinates": {
+                    "backend": "external_import", "target_id": "target", "staged_index": 0,
+                    "source_content_sha256": digest, "staged_receipt_sha256": "d" * 64,
+                }},
             ))
         await session.commit()
         listed = await cm.list_reusable_runs(_request(principal="alice"), session)
         assert [item["request_id"] for item in listed["runs"]] == ["owned"]
+        artifact = listed["runs"][0]["artifacts"][0]
+        assert artifact["available"] is True
+        assert artifact["role"] == "authoritative_cif"
+        assert artifact["media_type"] == "chemical/x-mmcif"
+        assert artifact["backend_coordinates"]["staged_index"] == 0
     await engine.dispose()
 
 

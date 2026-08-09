@@ -114,26 +114,27 @@ test('mounted launcher round-trips reference state-landscape authority into the 
 
 test('mounted Your Runs discovers reusable artifacts and registers only an explicit authoritative choice', async () => {
     const runs: CmReusableRun[] = [{
-        run_id: 'run-1', job_id: 'job-1', run_name: 'Completed kinase fold', workflow: 'structure_prediction',
+        request_id: 'run-1', job_id: 'job-1', name: 'Completed kinase fold', workflow: 'conformational_mapping',
         status: 'completed', completed_at: '2026-08-08T12:00:00Z',
         artifacts: [{
-            artifact_id: 'artifact-a', name: 'model 1', role: 'authoritative_structure', format: 'mmcif',
+            artifact_id: 'artifact-a', candidate_id: 'model-1', name: 'model-1', role: 'authoritative_cif', artifact_type: 'authoritative_cif', format: 'mmcif',
             media_type: 'chemical/x-mmcif', sha256: sha('e'), bytes: 4096, available: true,
-            model_id: 'model-1', sample_id: 'sample-1', chain_ids: ['A'], entity_ids: ['entity-1'],
+            backend_coordinates: { backend: 'external_import', target_id: 'target-a', staged_index: 0, source_content_sha256: sha('e'), staged_receipt_sha256: sha('a') },
         }, {
-            artifact_id: 'artifact-b', name: 'model 2', role: 'authoritative_structure', format: 'mmcif',
+            artifact_id: 'artifact-b', candidate_id: 'model-2', name: 'model-2', role: 'authoritative_cif', artifact_type: 'authoritative_cif', format: 'mmcif',
             media_type: 'chemical/x-mmcif', sha256: sha('f'), bytes: 8192, available: true,
-            model_id: 'model-2', sample_id: 'sample-2', chain_ids: ['B'], entity_ids: ['entity-2'],
+            backend_coordinates: { backend: 'external_import', target_id: 'target-b', staged_index: 0, source_content_sha256: sha('f'), staged_receipt_sha256: sha('b') },
         }],
     }];
     const registrations: Array<[string, string]> = [];
+    const submissions: CmSubmitRequest[] = [];
     const runSource: CmSource = {
         source_id: 'registered-run-artifact', source_kind: 'structure_artifact', format: 'mmcif', sha256: sha('f'), bytes: 8192,
-        metadata: { name: 'Completed kinase fold / model 2' },
+        metadata: { name: 'Completed kinase fold / model 2', producer_backend: 'external_import', candidate_id: 'model-2', backend_coordinates: { backend: 'external_import', target_id: 'target-b', staged_index: 0 } },
         authority_receipt: {
             schema_name: 'cm_source_authority_receipt', schema_version: 1, source_id: 'registered-run-artifact',
-            source_kind: 'structure_artifact', content_sha256: sha('f'), authority_kind: 'run_artifact', receipt_sha256: sha('0'),
-            payload: { run_id: 'run-1', job_id: 'job-1', artifact_id: 'artifact-b', model_id: 'model-2', sample_id: 'sample-2', chain_ids: ['B'], entity_ids: ['entity-2'] },
+            source_kind: 'structure_artifact', content_sha256: sha('f'), authority_kind: 'completed_run_artifact', receipt_sha256: sha('0'),
+            payload: { request_id: 'run-1', job_id: 'job-1', artifact_id: 'artifact-b', candidate_id: 'model-2', content_sha256: sha('f'), backend_coordinates: { backend: 'external_import', target_id: 'target-b', staged_index: 0 } },
         },
     };
     const mounted = await mountLauncher({
@@ -143,16 +144,26 @@ test('mounted Your Runs discovers reusable artifacts and registers only an expli
             registrations.push([runId, artifactId]);
             return runSource;
         },
+        submitRequest: async (payload: CmSubmitRequest) => {
+            submissions.push(payload);
+            return {
+                request_id: 'request-import', job_id: 'request-import', status: 'queued',
+                backend: payload.backend, request_sha256: sha('1'), coordinate_plan_sha256: sha('2'), expected_cardinality: 1,
+            };
+        },
     }, { backend: 'external_import', name: 'Reuse run' });
 
     await clickButton(mounted.renderer, /^Your Runs$/i);
     assert.match(text(mounted.renderer.root), /Completed kinase fold/);
-    assert.match(text(mounted.renderer.root), /model 1/);
-    assert.match(text(mounted.renderer.root), /model 2/);
+    assert.match(text(mounted.renderer.root), /model-1/);
+    assert.match(text(mounted.renderer.root), /model-2/);
     assert.equal(registrations.length, 0, 'opening a run must not silently choose an artifact');
-    await clickButton(mounted.renderer, /Use model 2/i);
+    await clickButton(mounted.renderer, /Use model-2/i);
     assert.deepEqual(registrations, [['run-1', 'artifact-b']]);
-    assert.match(text(mounted.renderer.root), new RegExp(`${sha('f')}.*model-2.*sample-2|model-2.*sample-2.*${sha('f')}`, 'i'));
+    assert.match(text(mounted.renderer.root), new RegExp(`${sha('f')}.*target-b|target-b.*${sha('f')}`, 'i'));
+    await clickButton(mounted.renderer, /Launch conformational mapping/i);
+    assert.deepEqual(submissions[0]?.registered_artifact_ids, ['registered-run-artifact']);
+    assert.equal(Object.hasOwn(submissions[0] || {}, 'registered_artifact_id'), false);
 
     const sourceKind = mounted.renderer.root.findAllByType('select').find((item) => {
         const options = item.findAllByType('option').map(text);

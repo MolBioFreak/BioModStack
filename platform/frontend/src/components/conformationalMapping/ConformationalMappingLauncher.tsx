@@ -169,9 +169,11 @@ const hydrateState = (values?: Record<string, unknown>): LauncherState => {
         configId: String(merged.registered_config_id || merged.configId || ''),
         transferId: String(merged.registered_transfer_id || merged.transferId || ''),
         referenceIds: asStringArray(merged.registered_reference_ids || merged.referenceIds),
-        importIds: typeof merged.registered_artifact_id === 'string'
-            ? [merged.registered_artifact_id]
-            : asStringArray(merged.importIds),
+        importIds: asStringArray(
+            merged.registered_artifact_ids
+            || (typeof merged.registered_artifact_id === 'string' ? [merged.registered_artifact_id] : undefined)
+            || merged.importIds,
+        ).slice(0, 1),
 
         seeds: backend === 'confornets' && /^-?\d+$/.test(firstSeed) ? firstSeed : hydratedSeeds,
         samples: finite(merged.samples_per_seed ?? merged.samples, DEFAULT_STATE.samples),
@@ -218,9 +220,12 @@ const sourceLabel = (source: CmSource): string => {
     return `${String(metadataLabel || source.source_id)} · ${(source.bytes / 1024).toFixed(1)} KiB · ${source.sha256.slice(0, 12)}`;
 };
 
-const metadataText = (value: unknown): string => Array.isArray(value)
-    ? value.map((item) => String(item)).join(', ')
-    : value == null || value === '' ? '—' : String(value);
+const metadataText = (value: unknown): string => {
+    if (Array.isArray(value)) return value.map((item) => metadataText(item)).join(', ');
+    if (value == null || value === '') return '—';
+    if (typeof value === 'object') return JSON.stringify(value);
+    return String(value);
+};
 
 const integerList = (value: string): number[] | null => {
     const parts = value.split(',').map((item) => item.trim());
@@ -700,7 +705,7 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
             }
         }
         if (form.backend === 'external_import') {
-            payload.registered_artifact_id = form.importIds[0];
+            payload.registered_artifact_ids = [form.importIds[0]];
         }
         if (form.backend === 'confornets') {
             payload.registered_sequence_id = form.sequenceId;
@@ -873,6 +878,7 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
         `sample ${metadataText(selectedSource.metadata.sample_id)}`,
         `chain ${metadataText(selectedSource.metadata.chain_ids)}`,
         `entity ${metadataText(selectedSource.metadata.entity_ids)}`,
+        `coordinate ${metadataText(selectedSource.metadata.backend_coordinates)}`,
     ].filter((item) => !item.endsWith('—')).join(' · ') : 'No model/sample/chain/entity context is selected.';
     const comparisonControls = form.backend === 'external_import' ? (
         <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950/30 p-3 text-xs text-slate-500">State-landscape comparison is unavailable for a single imported coordinate. Register one immutable structure and compare it in the canonical results viewer.</div>

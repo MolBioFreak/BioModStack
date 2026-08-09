@@ -766,15 +766,21 @@ async def list_reusable_runs(
             "name": job.name,
             "status": "completed",
             "backend": record.backend,
+            "completed_at": record.terminal_at.isoformat() + "Z" if record.terminal_at else None,
             "artifacts": [],
         })
         run["artifacts"].append({
             "artifact_id": artifact.artifact_id,
             "candidate_id": artifact.candidate_id,
+            "name": artifact.candidate_id or artifact.artifact_id,
+            "role": artifact.role,
             "artifact_type": artifact.role,
             "format": "mmcif",
+            "media_type": artifact.media_type,
             "sha256": artifact.content_sha256,
             "bytes": artifact.size_bytes,
+            "available": True,
+            "backend_coordinates": (artifact.metadata_json or {}).get("backend_coordinates"),
         })
     return {"runs": list(grouped.values())}
 
@@ -827,7 +833,8 @@ async def register_reusable_run_artifact(
             raise HTTPException(status_code=409, detail="run artifact source authority is unavailable")
         return {"source_id": existing.source_id, "source_kind": existing.source_kind,
                 "sha256": existing.content_sha256, "bytes": existing.size_bytes,
-                "authority_receipt": authority}
+                "format": _registered_source_format(existing.relative_path),
+                "metadata": existing.metadata_json, "authority_receipt": authority}
     try:
         root = Path(job.output_dir).resolve(strict=True)
         path = Path(artifact.storage_path).resolve(strict=True)
@@ -842,7 +849,12 @@ async def register_reusable_run_artifact(
         relative_path=relative,
         content_sha256=artifact.content_sha256,
         size_bytes=artifact.size_bytes,
-        metadata_json={"name": f"{job.name}: {artifact.candidate_id or artifact.artifact_id}"},
+        metadata_json={
+            "name": f"{job.name}: {artifact.candidate_id or artifact.artifact_id}",
+            "producer_backend": record.backend,
+            "candidate_id": artifact.candidate_id,
+            "backend_coordinates": (artifact.metadata_json or {}).get("backend_coordinates"),
+        },
         immutable=True,
         created_at=datetime.utcnow(),
     )
@@ -859,6 +871,7 @@ async def register_reusable_run_artifact(
                 "artifact_id": artifact.artifact_id,
                 "candidate_id": artifact.candidate_id,
                 "content_sha256": artifact.content_sha256,
+                "backend_coordinates": (artifact.metadata_json or {}).get("backend_coordinates"),
             },
         )
         await session.commit()
@@ -868,6 +881,7 @@ async def register_reusable_run_artifact(
         raise
     return {"source_id": source_id, "source_kind": "structure_artifact",
             "sha256": artifact.content_sha256, "bytes": artifact.size_bytes,
+            "format": "mmcif", "metadata": source.metadata_json,
             "authority_receipt": authority}
 
 
