@@ -31,6 +31,13 @@ operate, test, and support current BMS behavior:
 - supported desktop/mobile wrapper source and approved release assets;
 - concise operational guidance in [`AGENTS.md`](AGENTS.md).
 
+All scientific model integrations follow the mandatory
+[`Model configuration, operator control, and agent parity policy`](docs/Model_Configuration_Operator_Control_and_Agent_Parity.md).
+Every relevant model setting must be available through suitable browser controls
+and the same typed API used by AI agents. A model is incomplete until its full
+parameter, execution, data, analysis, visualization, capture, and result surface
+has passed live acceptance.
+
 Generated output, model weights, caches, databases, results, local logs,
 credentials, installation-specific configuration, and historical planning
 material do not belong in the repository.

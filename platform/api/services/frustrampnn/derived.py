@@ -16,7 +16,7 @@ from database import (
     FrustraMPNNResult,
 )
 
-from .contracts import canonical_sha256
+from .contracts import canonical_sha256, validate_schema
 
 
 class DerivedPersistenceError(ValueError):
@@ -27,22 +27,56 @@ def _result_landscape_metadata(result: FrustraMPNNResult, first_row: FrustraMPNN
     summary = dict(result.summary_json or {})
     provenance = dict(first_row.provenance_json or {})
     policy = provenance.get("threshold_policy") or summary.get("threshold_policy")
-    if isinstance(policy, dict) and "policy_id" in policy and "id" not in policy:
-        policy = {"id": policy["policy_id"], **{key: value for key, value in policy.items() if key != "policy_id"}}
-    return {
+    schema_version = 2 if summary.get("schema_version") == 2 else 1
+    common = {
         "schema_name": "frustrampnn_landscape",
-        "schema_version": 1,
-        "configuration_id": summary.get("configuration_id"),
-        "configuration_sha256": summary.get("configuration_sha256"),
+        "schema_version": schema_version,
         "target_id": first_row.target_id,
         "parent_job_id": result.parent_job_id,
         "candidate_id": result.candidate_id,
-        "structure_map_sha256": provenance.get("structure_map_sha256"),
-        "normalized_pdb_sha256": provenance.get("normalized_pdb_sha256"),
-        "model_ready_sequence_sha256": summary.get("model_ready_sequence_sha256"),
+        "structure_map_sha256": (
+            summary.get("structure_map_sha256")
+            or provenance.get("structure_map_sha256")
+        ),
+        "normalized_pdb_sha256": (
+            summary.get("normalized_pdb_sha256")
+            or provenance.get("normalized_pdb_sha256")
+        ),
         "raw_csv_sha256": provenance.get("raw_csv_sha256"),
         "threshold_policy": policy,
-        "threshold_policy_sha256": provenance.get("threshold_policy_sha256") or summary.get("threshold_policy_sha256"),
+        "threshold_policy_sha256": (
+            summary.get("threshold_policy_sha256")
+            or provenance.get("threshold_policy_sha256")
+        ),
+    }
+    if schema_version == 2:
+        return {
+            **common,
+            "execution_configuration_id": summary.get(
+                "execution_configuration_id"
+            ),
+            "execution_configuration_sha256": summary.get(
+                "execution_configuration_sha256"
+            ),
+            "requested_settings_sha256": summary.get("requested_settings_sha256"),
+            "effective_settings_sha256": summary.get("effective_settings_sha256"),
+            "runtime_identity_sha256": summary.get("runtime_identity_sha256"),
+            "source_artifact_sha256": (
+                summary.get("source_artifact_sha256")
+                or result.source_artifact_sha256
+            ),
+            "threshold_policy_id": summary.get("threshold_policy_id"),
+        }
+    if isinstance(policy, dict) and "policy_id" in policy and "id" not in policy:
+        common["threshold_policy"] = {
+            "id": policy["policy_id"],
+            **{key: value for key, value in policy.items() if key != "policy_id"},
+        }
+    return {
+        **common,
+        "configuration_id": summary.get("configuration_id"),
+        "configuration_sha256": summary.get("configuration_sha256"),
+        "model_ready_sequence_sha256": summary.get("model_ready_sequence_sha256"),
     }
 
 
@@ -104,7 +138,25 @@ async def load_persisted_landscape(session: AsyncSession, result: FrustraMPNNRes
         slot.setdefault("native", row.mutation_aa == row.wt)
         grouped[key]["slots"].append(slot)
     landscape = {**metadata, "residues": list(grouped.values())}
-    landscape["landscape_sha256"] = canonical_sha256(landscape)
+    persisted_hashes = {
+        str(value)
+        for row in rows
+        if (
+            value := dict(row.provenance_json or {}).get("landscape_sha256")
+        )
+    }
+    summary_hash = dict(result.summary_json or {}).get("landscape_sha256")
+    if summary_hash:
+        persisted_hashes.add(str(summary_hash))
+    if len(persisted_hashes) > 1:
+        raise DerivedPersistenceError(
+            "persisted FrustraMPNN landscape identity is inconsistent"
+        )
+    landscape["landscape_sha256"] = (
+        next(iter(persisted_hashes))
+        if persisted_hashes
+        else canonical_sha256(landscape)
+    )
     return landscape
 
 
@@ -124,6 +176,136 @@ def _content_hash(payload: Mapping[str, Any], field: str) -> str:
     return observed
 
 
+def _validate_multistate_persistence(
+    payload: Mapping[str, Any],
+    *,
+    reference_result: FrustraMPNNResult,
+    target_result: FrustraMPNNResult,
+) -> None:
+    """Enforce target-parallel cardinality, order, and persisted identities."""
+
+    try:
+        validate_schema("frustrampnn_multistate_comparison_v1", payload)
+    except Exception as exc:
+        raise DerivedPersistenceError(
+            f"multistate comparison schema validation failed: {exc}"
+        ) from exc
+
+    def parallel(name: str, target_count: int) -> list[Any]:
+        value = payload.get(name)
+        if not isinstance(value, list) or len(value) != target_count:
+            raise DerivedPersistenceError(
+                f"multistate target cardinality mismatch for {name}"
+            )
+        return value
+
+    comparability = payload.get("comparability")
+    summary = payload.get("summary")
+    if not isinstance(comparability, Mapping) or not isinstance(summary, Mapping):
+        raise DerivedPersistenceError("multistate comparison cardinality authority is missing")
+    target_count = comparability.get("target_count")
+    if (
+        isinstance(target_count, bool)
+        or not isinstance(target_count, int)
+        or not 1 <= target_count <= 8
+        or summary.get("target_count") != target_count
+    ):
+        raise DerivedPersistenceError(
+            "multistate target_count must be 1..8 and equal in comparability and summary"
+        )
+
+    target_labels = parallel("target_labels", target_count)
+    expected_labels = [f"target-{index:04d}" for index in range(1, target_count + 1)]
+    if target_labels != expected_labels:
+        raise DerivedPersistenceError("multistate target label order is not canonical")
+    target_landscapes = parallel("target_landscape_sha256s", target_count)
+    target_configurations = parallel("target_configuration_sha256s", target_count)
+    pair_compatibility = parallel("pair_compatibility", target_count)
+    comparability_pairs = comparability.get("pair_compatibility")
+    if not isinstance(comparability_pairs, list) or comparability_pairs != pair_compatibility:
+        raise DerivedPersistenceError(
+            "multistate pair compatibility cardinality/order is inconsistent"
+        )
+    if payload.get("target_landscape_sha256") != target_landscapes[0]:
+        raise DerivedPersistenceError(
+            "multistate first target landscape does not match target_landscape_sha256"
+        )
+    for index, pair in enumerate(pair_compatibility):
+        if not isinstance(pair, Mapping) or (
+            pair.get("target_label") != target_labels[index]
+            or pair.get("target_landscape_sha256") != target_landscapes[index]
+            or pair.get("target_configuration_sha256") != target_configurations[index]
+        ):
+            raise DerivedPersistenceError(
+                "multistate pair compatibility target order/binding is inconsistent"
+            )
+
+    references = payload.get("source_result_references")
+    if not isinstance(references, list) or len(references) != target_count + 1:
+        raise DerivedPersistenceError(
+            "multistate target reference cardinality must equal target_count plus reference"
+        )
+    reference = references[0]
+    if not isinstance(reference, Mapping) or (
+        reference.get("role") != "reference"
+        or reference.get("target_label") is not None
+        or reference.get("parent_job_id") != reference_result.parent_job_id
+        or reference.get("invocation_id") != reference_result.invocation_id
+        or reference.get("landscape_sha256") != payload.get("reference_landscape_sha256")
+        or reference.get("configuration_sha256")
+        != payload.get("reference_configuration_sha256")
+    ):
+        raise DerivedPersistenceError(
+            "multistate reference identity/order does not match persisted reference authority"
+        )
+    reference_identity = (reference.get("parent_job_id"), reference.get("invocation_id"))
+    target_identities: list[tuple[Any, Any]] = []
+    for index, target_reference in enumerate(references[1:]):
+        if not isinstance(target_reference, Mapping) or (
+            target_reference.get("role") != "target"
+            or target_reference.get("target_label") != target_labels[index]
+            or target_reference.get("landscape_sha256") != target_landscapes[index]
+            or target_reference.get("configuration_sha256") != target_configurations[index]
+        ):
+            raise DerivedPersistenceError(
+                "multistate target reference order/binding is inconsistent"
+            )
+        identity = (
+            target_reference.get("parent_job_id"),
+            target_reference.get("invocation_id"),
+        )
+        if identity == reference_identity:
+            raise DerivedPersistenceError("multistate target must not equal its reference")
+        target_identities.append(identity)
+    if len(target_identities) != len(set(target_identities)):
+        raise DerivedPersistenceError("multistate target references contain duplicates")
+    if target_identities[0] != (
+        target_result.parent_job_id,
+        target_result.invocation_id,
+    ):
+        raise DerivedPersistenceError(
+            "multistate first target identity does not match persistence target authority"
+        )
+
+    rows = payload.get("rows")
+    if not isinstance(rows, list):
+        raise DerivedPersistenceError("multistate rows are missing")
+    for row_index, row in enumerate(rows):
+        if not isinstance(row, Mapping):
+            raise DerivedPersistenceError(f"multistate row {row_index} is not an object")
+        for field in (
+            "targets",
+            "raw_score_deltas",
+            "classification_transitions",
+            "missingness_by_target",
+        ):
+            value = row.get(field)
+            if not isinstance(value, list) or len(value) != target_count:
+                raise DerivedPersistenceError(
+                    f"multistate row {row_index} target cardinality mismatch for {field}"
+                )
+
+
 async def persist_comparison(
     session: AsyncSession,
     payload: Mapping[str, Any],
@@ -131,6 +313,12 @@ async def persist_comparison(
     reference_result: FrustraMPNNResult,
     target_result: FrustraMPNNResult,
 ) -> FrustraMPNNComparison:
+    if payload.get("comparison_mode") == "multi_state":
+        _validate_multistate_persistence(
+            payload,
+            reference_result=reference_result,
+            target_result=target_result,
+        )
     comparison_id = _require_id(payload, "comparison_id")
     comparison_sha256 = _content_hash(payload, "comparison_sha256")
     existing = await session.get(FrustraMPNNComparison, comparison_id)

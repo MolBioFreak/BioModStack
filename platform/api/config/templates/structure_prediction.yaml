@@ -44,6 +44,32 @@ user_params:
     type: string
     default: predicted
     description: Name for output structure files
+
+  - name: run_frustrampnn
+    label: Run FrustraMPNN Analysis
+    type: boolean
+    default: true
+    description: Run FrustraMPNN analysis after structure prediction.
+
+  - name: frustrampnn_requiredness
+    label: FrustraMPNN Requiredness
+    type: enum
+    enum: [required]
+    default: required
+    description: FrustraMPNN is fail-closed when enabled and must remain required.
+    condition:
+      param: run_frustrampnn
+      values: [true]
+
+  - name: frustrampnn_settings
+    label: FrustraMPNN Settings
+    type: object
+    ui_control: frustrampnn_settings
+    default_source: frustrampnn.canonical_defaults
+    description: Complete nested FrustraMPNNRequestedSettings contract, schema version 1.
+    condition:
+      param: run_frustrampnn
+      values: [true]
     
   # === Boltz-2 Parameters ===
   - name: boltz_use_msa

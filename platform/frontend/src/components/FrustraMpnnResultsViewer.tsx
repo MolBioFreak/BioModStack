@@ -6,13 +6,15 @@ import {
     fetchFrustraMpnnReceipt,
     fetchFrustraMpnnResult,
     fetchFrustraMpnnStructureMap,
-    frustraMpnnArtifactUrl,
     listFrustraMpnnArtifacts,
     listFrustraMpnnResults,
     reanalyzeFrustraMpnn,
+    selectFrustraMpnnArtifactByIdentity,
+    validateFrustraMpnnOwnedSettings,
     type FrustraMpnnClassCounts,
     type FrustraMpnnClassFractions,
     type FrustraMpnnLandscapeFilters,
+    type FrustraMpnnRequestedSettings,
 } from '../lib/frustraMpnnApi.js';
 import MolstarViewer from './MolstarViewer.js';
 import {
@@ -28,9 +30,12 @@ import { getFrustraMpnnResultContext } from './frustraMpnnResultSurface.js';
 import FrustraMpnnLandscapeOverview from './FrustraMpnnLandscapeOverview.js';
 import FrustraMpnnPlotlyAnalytics from './FrustraMpnnPlotlyAnalytics.js';
 import FrustraMpnnCrossDatasetExplorer from './FrustraMpnnCrossDatasetExplorer.js';
-import FrustraMpnnComparisonSurface from './FrustraMpnnComparisonSurface.js';
+import FrustraMpnnComparisonWorkbench from './FrustraMpnnComparisonWorkbench.js';
 import FrustraMpnnCandidateHandoffPanel from './FrustraMpnnCandidateHandoffPanel.js';
 import { buildFrustraMpnnCoverageReadiness } from './frustraMpnnCoverageModel.js';
+import { FrustraMpnnSettingsPanel } from './frustrampnn/FrustraMpnnSettingsPanel.js';
+import { CANONICAL_FRUSTRAMPNN_SETTINGS } from './frustrampnn/frustraMpnnSettingsState.js';
+import { FrustraMpnnResultAuthoritySurface } from './FrustraMpnnResultAuthoritySurface.js';
 
 const PAGE_SIZE = 500;
 const terminalJob = new Set(['completed', 'failed', 'cancelled']);
@@ -38,7 +43,7 @@ const fmt = (value: number | null) => value == null ? '—' : Number(value).toFi
 const pct = (value: number) => `${(value * 100).toFixed(1)}%`;
 const shortHash = (value: string) => `${value.slice(0, 10)}…${value.slice(-8)}`;
 const errorMessage = (value: unknown, fallback: string): string => value instanceof Error && value.message ? value.message : fallback;
-const json = (value: unknown) => JSON.stringify(value, null, 2);
+
 
 const classStyle = (value: string | null): string => {
     if (value === 'high') return 'border-red-500/30 bg-red-500/10 text-red-100';
@@ -86,8 +91,7 @@ export default function FrustraMpnnResultsViewer({
     const [slotStatus, setSlotStatus] = useState<'' | 'ok' | 'missing'>('');
     const [mutationFilter, setMutationFilter] = useState('');
     const [selectedResidue, setSelectedResidue] = useState<ResidueRef | null>(null);
-    const [comparisonTargetJobId, setComparisonTargetJobId] = useState(job.id);
-    const [comparisonTargetInvocationId, setComparisonTargetInvocationId] = useState('');
+    const [frustrampnnSettings, setFrustrampnnSettings] = useState<FrustraMpnnRequestedSettings>(CANONICAL_FRUSTRAMPNN_SETTINGS);
 
     const receipt = useQuery({
         queryKey: ['frustrampnn-receipt', job.id],
@@ -121,14 +125,33 @@ export default function FrustraMpnnResultsViewer({
         queryFn: ({ signal }) => fetchFrustraMpnnResult(job.id, selectedInvocation!, signal),
         enabled: Boolean(selectedInvocation),
     });
+    useEffect(() => {
+        const persisted = detail.data?.effective_settings_json?.requested_settings;
+        if (persisted) setFrustrampnnSettings(persisted);
+    }, [detail.data?.invocation_id]);
     const artifacts = useQuery({
         queryKey: ['frustrampnn-artifacts', job.id, selectedInvocation],
         queryFn: ({ signal }) => listFrustraMpnnArtifacts(job.id, selectedInvocation!, signal),
         enabled: Boolean(selectedInvocation),
     });
-    const structureMapArtifact = artifacts.data?.items.find((item) => item.role === 'structure_map');
-    const structureArtifact = artifacts.data?.items.find((item) => item.role === 'normalized_input');
-    const identityAuthorityArtifact = artifacts.data?.items.find((item) => item.role === 'identity_authority');
+    const structureMapArtifact = selectFrustraMpnnArtifactByIdentity(artifacts.data?.items ?? [], {
+        role: 'structure_map',
+        schema_name: 'frustrampnn_structure_map',
+        schema_version: 1,
+        media_type: 'application/json',
+    });
+    const structureArtifact = selectFrustraMpnnArtifactByIdentity(artifacts.data?.items ?? [], {
+        role: 'normalized_input',
+        schema_name: null,
+        schema_version: null,
+        media_type: 'chemical/x-pdb',
+    });
+    const identityAuthorityArtifact = selectFrustraMpnnArtifactByIdentity(artifacts.data?.items ?? [], {
+        role: 'identity_authority',
+        schema_name: 'producer_manifest',
+        schema_version: 1,
+        media_type: 'application/json',
+    });
     const canonicalSucceeded = Boolean(
         detail.data
         && detail.data.status === 'succeeded'
@@ -145,7 +168,7 @@ export default function FrustraMpnnResultsViewer({
         : null;
     const structureMap = useQuery({
         queryKey: ['frustrampnn-structure-map', job.id, selectedInvocation, structureMapArtifact?.artifact_id],
-        queryFn: ({ signal }) => fetchFrustraMpnnStructureMap(job.id, structureMapArtifact!.artifact_id, signal),
+        queryFn: ({ signal }) => fetchFrustraMpnnStructureMap(structureMapArtifact!.download_url, signal),
         enabled: Boolean(canonicalSucceeded && structureMapArtifact),
     });
     const filters: FrustraMpnnLandscapeFilters = {
@@ -186,7 +209,7 @@ export default function FrustraMpnnResultsViewer({
             if (detail.data.source_artifact_sha256 !== structureMap.data.source_sha256) {
                 throw new Error('source_hash_conflict: result source SHA-256 does not match structure-map source authority.');
             }
-            if (terminalResult.source_artifact.sha256 !== detail.data.source_artifact_sha256) {
+            if (!terminalResult.source_artifact || terminalResult.source_artifact.sha256 !== detail.data.source_artifact_sha256) {
                 throw new Error('terminal_source_hash_conflict: result and terminal source SHA-256 authorities disagree.');
             }
             const sourceIsIdentityAuthority = structureMap.data.identity_authority === 'pdb_self_identity_v1'
@@ -230,7 +253,16 @@ export default function FrustraMpnnResultsViewer({
         detail.data.summary.slot_support,
         detail.data.summary.missingness_by_reason,
     ) : null;
-    const reanalysis = useMutation({ mutationFn: () => reanalyzeFrustraMpnn(job.id) });
+    const reanalysis = useMutation({
+        mutationFn: async () => {
+            if (!selectedInvocation) throw new Error('A governed FrustraMPNN invocation is required for reanalysis.');
+            await validateFrustraMpnnOwnedSettings(frustrampnnSettings, {
+                job_id: job.id,
+                invocation_id: selectedInvocation,
+            });
+            return reanalyzeFrustraMpnn(job.id, frustrampnnSettings);
+        },
+    });
     const newChildId = reanalysis.data?.child_job_id ?? null;
     const nextReceipt = useQuery({
         queryKey: ['frustrampnn-reanalysis-receipt', newChildId],
@@ -242,12 +274,14 @@ export default function FrustraMpnnResultsViewer({
         },
     });
     const state = resultContext.usesChildReceipt ? (receipt.data?.status ?? job.status) : job.status;
-    const assignedGpu = detail.data?.assigned_gpu;
+    const assignedGpu = detail.data?.gpu_provenance
+        ?? receipt.data?.results.find((item) => item.invocation_id === selectedInvocation)?.gpu_provenance
+        ?? null;
     const assignedGpuLabel = assignedGpu
-        ? assignedGpu.physical_device_id == null
-            ? assignedGpu.task_visible_device_index == null ? 'unassigned' : `visible GPU ${assignedGpu.task_visible_device_index}`
-            : `GPU ${assignedGpu.physical_device_id}`
-        : receipt.data?.assigned_gpu == null ? 'unassigned' : `GPU ${receipt.data.assigned_gpu}`;
+        ? assignedGpu.task_visible_device_index == null
+            ? `GPU ${assignedGpu.physical_device_id}`
+            : `GPU ${assignedGpu.physical_device_id} · visible ${assignedGpu.task_visible_device_index}`
+        : 'unassigned';
     const nextResultJobId = nextReceipt.data?.result_job_id ?? null;
     const explicitState = state === 'queued'
         ? 'queued'
@@ -276,7 +310,7 @@ export default function FrustraMpnnResultsViewer({
                     </div>
                     <div className="flex items-center gap-2">
                         <span role="status" aria-live="polite" className="rounded-full border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs">{explicitState}</span>
-                        {resultContext.canReanalyzePersistedInputs && <button type="button" disabled={state === 'queued' || state === 'running' || reanalysis.isPending} onClick={() => reanalysis.mutate()} className="rounded-lg border border-cyan-500/50 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-100 hover:bg-cyan-500/20 disabled:opacity-40">
+                        {resultContext.canReanalyzePersistedInputs && <button type="button" disabled={!selectedInvocation || state === 'queued' || state === 'running' || reanalysis.isPending} onClick={() => reanalysis.mutate()} className="rounded-lg border border-cyan-500/50 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-100 hover:bg-cyan-500/20 disabled:opacity-40">
                             {reanalysis.isPending ? 'Queueing…' : 'Reanalyze persisted inputs'}
                         </button>}
                     </div>
@@ -297,7 +331,22 @@ export default function FrustraMpnnResultsViewer({
                         ['Failure class', detail.data?.failure_class ?? (canonicalSucceeded ? 'none' : state === 'failed' ? 'scheduler_failure' : 'none')],
                     ].map(([label, value]) => <div key={label} className="rounded-xl border border-slate-800 bg-slate-900/60 p-3"><div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{label}</div><div className="mt-1 break-words text-sm text-slate-200">{value}</div></div>)}
                 </section>
-                {(detail.data?.diagnostic || receipt.data?.error_message) && <div role="alert" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100"><span className="font-semibold">Diagnostic:</span> {detail.data?.diagnostic || receipt.data?.error_message}</div>}
+                {detail.data?.failure_class && <div role="alert" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100"><span className="font-semibold">Failure class persisted:</span> {detail.data.failure_class}. Unsafe runtime internals are not exposed by this response.</div>}
+
+                {detail.data && <FrustraMpnnResultAuthoritySurface detail={detail.data} />}
+
+                {detail.data && <section aria-label="FrustraMPNN reanalysis settings" className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+                    <h2 className="font-semibold">Reanalysis settings</h2>
+                    <p className="mt-1 text-xs text-slate-500">Edit a complete requested-settings document for the next governed child.</p>
+                    <FrustraMpnnSettingsPanel
+                        value={frustrampnnSettings}
+                        onChange={setFrustrampnnSettings}
+                        governedSource={selectedInvocation ? {
+                            kind: 'owned',
+                            reference: { job_id: job.id, invocation_id: selectedInvocation },
+                        } : undefined}
+                    />
+                </section>}
 
                 {results.data && results.data.items.length > 1 && (
                     <label className="block rounded-xl border border-slate-800 bg-slate-900/60 p-3 text-xs text-slate-300">Persisted invocation
@@ -330,18 +379,10 @@ export default function FrustraMpnnResultsViewer({
 
                         <FrustraMpnnCrossDatasetExplorer currentDatasetId={job.id} />
 
-                        <section className="rounded-xl border border-indigo-500/30 bg-indigo-950/5 p-4">
-                            <div className="flex flex-wrap items-start justify-between gap-3">
-                                <div><h2 className="font-semibold">Compare this result with another persisted landscape</h2><p className="mt-1 text-xs text-slate-500">The selected invocation is the explicit reference. Enter a target job and invocation; numeric joins are suppressed if configuration, mapping, or threshold identity is incompatible.</p></div>
-                                <span className="rounded-full border border-indigo-400/30 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-indigo-200">Residue identity required</span>
-                            </div>
-                            <div className="mt-3 grid gap-3 md:grid-cols-3 text-xs">
-                                <label className="text-slate-400">Reference invocation<input value={`${job.id} · ${selectedInvocation ?? ''}`} readOnly className="mt-1 w-full rounded border border-slate-800 bg-slate-950 px-2 py-1.5 font-mono text-slate-500" /></label>
-                                <label className="text-slate-400">Target job ID<input value={comparisonTargetJobId} onChange={(event) => setComparisonTargetJobId(event.target.value)} className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1.5 font-mono text-slate-200" /></label>
-                                <label className="text-slate-400">Target invocation ID<input value={comparisonTargetInvocationId} onChange={(event) => setComparisonTargetInvocationId(event.target.value)} placeholder="frustrampnn:…" className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1.5 font-mono text-slate-200" /></label>
-                            </div>
-                            {selectedInvocation && comparisonTargetJobId.trim() && comparisonTargetInvocationId.trim() && <div className="mt-4"><FrustraMpnnComparisonSurface referenceJobId={job.id} referenceInvocationId={selectedInvocation} targetJobId={comparisonTargetJobId.trim()} targetInvocationId={comparisonTargetInvocationId.trim()} /></div>}
-                        </section>
+                        {selectedInvocation && <FrustraMpnnComparisonWorkbench
+                            referenceJobId={job.id}
+                            referenceInvocationId={selectedInvocation}
+                        />}
 
                         {selectedInvocation && <FrustraMpnnCandidateHandoffPanel
                             parentJobId={job.id}
@@ -353,7 +394,9 @@ export default function FrustraMpnnResultsViewer({
                             residues={allResidues}
                             highMax={detail.data.summary.threshold_policy.high_max}
                             minimalMin={detail.data.summary.threshold_policy.minimal_min}
-                            thresholdPolicyId={detail.data.summary.threshold_policy.id}
+                            thresholdPolicyId={detail.data.summary.schema_version === 2
+                                ? detail.data.summary.threshold_policy_id
+                                : detail.data.summary.threshold_policy.id}
                             sourceSha256={detail.data.source_artifact_sha256}
                         />}
 
@@ -362,7 +405,7 @@ export default function FrustraMpnnResultsViewer({
                             {metricResult.error && <div role="alert" className="m-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">Typed mapping missingness: {metricResult.error}</div>}
                             {completeLandscape.isError && <div role="alert" className="m-3 rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-100">{errorMessage(completeLandscape.error, 'Complete bounded landscape could not be validated.')}</div>}
                             {structureArtifact && selectedInvocation ? <MolstarViewer
-                                structureUrl={frustraMpnnArtifactUrl(job.id, structureArtifact.artifact_id)}
+                                structureUrl={structureArtifact.download_url}
                                 format="pdb"
                                 height={440}
                                 label={detail.data.candidate_id}
@@ -393,7 +436,7 @@ export default function FrustraMpnnResultsViewer({
                                 }}
                             /> : completeLandscape.isLoading ? <div role="status" className="border-b border-slate-800 p-4 text-sm text-slate-400">Loading the complete persisted landscape…</div> : null}
                             <aside aria-label="Planned frustration-guided mutation workflow" className="m-3 rounded-xl border border-violet-500/30 bg-violet-500/5 p-3">
-                                <div className="flex flex-wrap items-start justify-between gap-2"><div><h3 className="text-sm font-semibold text-violet-100">Future: frustration-guided mutation reorchestration</h3><p className="mt-1 max-w-5xl text-xs text-slate-400">Planned workflow: select exact persisted residue/mutation evidence from this map, create an explicit mutation set, and submit a new lineage-linked sample through the single scheduler for fresh structure and FrustraMPNN analysis. FrustraMPNN remains the analysis authority; it will not silently redesign or overwrite the source Design.</p></div><span className="rounded-full border border-violet-400/30 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-violet-200">Planned · not active</span></div>
+                                <div className="flex flex-wrap items-start justify-between gap-2"><div><h3 className="text-sm font-semibold text-violet-100">Future: frustration-guided mutation reorchestration</h3><p className="mt-1 max-w-5xl text-xs text-slate-400">Planned workflow: select exact persisted residue/mutation evidence from this map, create an explicit mutation set, and submit a new provenance-linked sample through the single scheduler for fresh structure and FrustraMPNN analysis. FrustraMPNN remains the analysis authority; it will not silently redesign or overwrite the source Design.</p></div><span className="rounded-full border border-violet-400/30 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-violet-200">Planned · not active</span></div>
                             </aside>
                             {landscape.isError && <div role="alert" className="m-3 rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-100">{errorMessage(landscape.error, 'Landscape page unavailable.')}</div>}
                             {pageResidues.length > 0 ? (
@@ -407,9 +450,7 @@ export default function FrustraMpnnResultsViewer({
                             <div className="flex items-center justify-between border-t border-slate-800 p-3 text-xs"><span>{landscape.data ? (landscape.data.rows.length > 0 ? `${offset + 1}–${offset + landscape.data.rows.length} of ${landscape.data.total}` : `0 of ${landscape.data.total}`) : 'loading'} persisted slots</span><div className="flex gap-2"><button type="button" disabled={offset === 0 || landscape.isFetching} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))} className="rounded border border-slate-700 px-3 py-1.5 disabled:opacity-30">Previous</button><button type="button" disabled={landscape.data?.next_offset == null || landscape.isFetching} onClick={() => setOffset(landscape.data!.next_offset!)} className="rounded border border-slate-700 px-3 py-1.5 disabled:opacity-30">Next</button></div></div>
                         </section>
 
-                        <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4"><h2 className="font-semibold">Governed artifacts</h2><p className="mt-1 text-xs text-slate-500">Authenticated content-addressed download routes; runtime filesystem paths are not exposed.</p><div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{artifacts.data?.items.map((artifact) => <a key={artifact.artifact_id} href={frustraMpnnArtifactUrl(job.id, artifact.artifact_id)} className="rounded-lg border border-slate-800 p-3 text-xs hover:border-cyan-500 focus:border-cyan-400"><div className="font-medium text-slate-200">{artifact.relative_path}</div><div className="mt-1 text-slate-500">{artifact.role} · {artifact.size_bytes.toLocaleString()} bytes</div><div className="mt-1 font-mono text-[10px] text-slate-600" title={artifact.content_sha256}>{shortHash(artifact.content_sha256)}</div></a>)}</div></section>
-
-                        <details className="rounded-xl border border-slate-800 bg-slate-900/60 p-3"><summary className="cursor-pointer text-sm font-medium">Persisted runtime and lineage identity</summary><pre className="mt-3 overflow-auto text-[10px] text-slate-400">{json({ runtime_identity: detail.data.runtime_identity, assigned_gpu: detail.data.assigned_gpu, lineage: receipt.data?.lineage })}</pre></details>
+                        <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4"><h2 className="font-semibold">Governed artifacts</h2><p className="mt-1 text-xs text-slate-500">Authenticated content-addressed downloads. Runtime filesystem paths and storage topology are not exposed.</p><div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{artifacts.data?.items.map((artifact) => <a key={artifact.artifact_id} href={artifact.download_url} className="rounded-lg border border-slate-800 p-3 text-xs hover:border-cyan-500 focus:border-cyan-400"><div className="font-medium text-slate-200">{artifact.role.replaceAll('_', ' ')}</div><div className="mt-1 text-slate-500">{artifact.media_type} · {artifact.size_bytes.toLocaleString()} bytes</div><div className="mt-1 font-mono text-[10px] text-slate-600" title={artifact.content_sha256}>{shortHash(artifact.content_sha256)}</div></a>)}</div></section>
                     </>
                 )}
                 {detail.data && !canonicalSucceeded && <div role={canonicalAuthorityError ? 'alert' : 'status'} className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-5 text-sm text-amber-100">{detail.data.status === 'failed' ? 'Failed: the selected persisted invocation has no canonical result matrix.' : detail.data.status === 'not_run' ? 'Not run: the selected invocation was explicitly skipped and has no canonical result matrix.' : `Typed result missingness: ${canonicalAuthorityError ?? 'canonical_result_unavailable'}`}</div>}

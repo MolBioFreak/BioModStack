@@ -3,7 +3,7 @@ nextflow.enable.dsl = 2
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 
-include { CanonicalFrustraMPNN } from '../modules/frustrampnn'
+include { CanonicalFrustraMPNNV2 } from '../modules/frustrampnn'
 
 process PreparePersistedFrustraMPNNCandidate {
     tag 'frustrampnn-prepare-persisted'
@@ -13,10 +13,11 @@ process PreparePersistedFrustraMPNNCandidate {
     maxRetries 0
 
     input:
-    tuple val(record_base64), path(request_snapshot), path(source_snapshot)
+    tuple val(record_base64), path(request_snapshot), path(source_snapshot), path(structure_map_snapshot)
 
     output:
-    tuple path('workflow_component_request_v1.json'), path('canonical_source.pdb'), emit: prepared
+    tuple path('workflow_component_request_v2.json'), path('canonical_source.pdb'), \
+        path('frustrampnn_structure_map_v1.json'), emit: prepared
 
     script:
     """
@@ -25,8 +26,10 @@ process PreparePersistedFrustraMPNNCandidate {
       --record-base64 '${record_base64}' \
       --request '${request_snapshot}' \
       --source '${source_snapshot}' \
-      --output-request workflow_component_request_v1.json \
-      --output-source canonical_source.pdb
+      --structure-map '${structure_map_snapshot}' \
+      --output-request workflow_component_request_v2.json \
+      --output-source canonical_source.pdb \
+      --output-structure-map frustrampnn_structure_map_v1.json
     """
 }
 
@@ -60,6 +63,7 @@ process PublishPersistedFrustraMPNNChildBundle {
 
 process ReportPersistedFrustraMPNNComplete {
     label 'CPU'
+    stageInMode 'copy'
     errorStrategy 'terminate'
     maxRetries 0
 
@@ -72,17 +76,10 @@ process ReportPersistedFrustraMPNNComplete {
     script:
     """
     set -euo pipefail
-    mapfile -t outputs < <('${params.api_python}' - <<'PY'
-import json, pathlib
-for marker in sorted(pathlib.Path('.').glob('published_*.json')):
-    payload = json.loads(marker.read_text(encoding='utf-8'))
-    if set(payload) != {'manifest', 'result', 'source'}:
-        raise SystemExit('invalid FrustraMPNN publication marker')
-    print(payload['result'])
-    print(payload['manifest'])
-    print(payload['source'])
-PY
-    )
+    mapfile -t outputs < <('${params.api_python}' \
+      '${params.code_root}/scripts/validate_frustrampnn_publication_markers.py' \
+      --job-root '${params.out_dir}' \
+      published_*.json)
     test \"\${#outputs[@]}\" -gt 0
     '${params.api_python}' '${params.code_root}/scripts/stage_reporter.py' --job-root-relative \
       '${params.job_id}' frustrampnn complete \"\${outputs[@]}\"
@@ -101,7 +98,7 @@ workflow {
     def batch = new JsonSlurper().parse(manifestPath)
     if (
         batch.schema_name != 'bms_frustrampnn_scheduler_batch' ||
-        batch.schema_version != 1 ||
+        batch.schema_version != 2 ||
         batch.execution_owner_job_id?.toString() != params.job_id.toString() ||
         !(batch.records instanceof List) ||
         batch.records.isEmpty()
@@ -109,19 +106,41 @@ workflow {
         throw new IllegalArgumentException('invalid persisted FrustraMPNN scheduler batch manifest')
     }
     def authorityRoot = manifestPath.parent.parent
+    def recordKeys = [
+        'record_schema_name', 'record_schema_version', 'ordinal', 'candidate_id',
+        'invocation_id', 'request_relative_path', 'request_sha256',
+        'request_size_bytes', 'source_relative_path', 'source_sha256',
+        'source_size_bytes', 'structure_map_relative_path',
+        'structure_map_sha256', 'structure_map_size_bytes'
+    ] as Set
     def persisted = batch.records.collect { record ->
+        if (
+            !(record instanceof Map) ||
+            (record.keySet() as Set) != recordKeys ||
+            record.record_schema_name != 'bms_frustrampnn_scheduler_record' ||
+            record.record_schema_version != 2
+        ) {
+            throw new IllegalArgumentException('invalid persisted FrustraMPNN v2 scheduler record')
+        }
         def requestRelative = record.request_relative_path?.toString()
         def sourceRelative = record.source_relative_path?.toString()
-        if (!(requestRelative ==~ /inputs\/requests\/[A-Za-z0-9._-]+/) ||
-            !(sourceRelative ==~ /inputs\/sources\/[A-Za-z0-9._-]+/)) {
+        def structureMapRelative = record.structure_map_relative_path?.toString()
+        if (!(requestRelative ==~ /inputs\/requests\/[A-Za-z0-9._-]+\/workflow_component_request_v2\.json/) ||
+            !(sourceRelative ==~ /inputs\/sources\/[A-Za-z0-9._-]+\/canonical_source\.pdb/) ||
+            !(structureMapRelative ==~ /inputs\/maps\/[A-Za-z0-9._-]+\/frustrampnn_structure_map_v1\.json/)) {
             throw new IllegalArgumentException('invalid persisted FrustraMPNN snapshot path')
         }
         def encoded = JsonOutput.toJson(record).getBytes('UTF-8').encodeBase64().toString()
-        tuple(encoded, file(authorityRoot.resolve(requestRelative)), file(authorityRoot.resolve(sourceRelative)))
+        tuple(
+            encoded,
+            file(authorityRoot.resolve(requestRelative)),
+            file(authorityRoot.resolve(sourceRelative)),
+            file(authorityRoot.resolve(structureMapRelative))
+        )
     }
     preparedInputs = Channel.fromList(persisted)
     PreparePersistedFrustraMPNNCandidate(preparedInputs)
-    CanonicalFrustraMPNN(PreparePersistedFrustraMPNNCandidate.out.prepared)
-    PublishPersistedFrustraMPNNChildBundle(CanonicalFrustraMPNN.out.result)
+    CanonicalFrustraMPNNV2(PreparePersistedFrustraMPNNCandidate.out.prepared)
+    PublishPersistedFrustraMPNNChildBundle(CanonicalFrustraMPNNV2.out.result)
     ReportPersistedFrustraMPNNComplete(PublishPersistedFrustraMPNNChildBundle.out.marker.collect())
 }

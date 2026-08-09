@@ -18,6 +18,10 @@ export default defineConfig({
             './tests/vitest/ontInstrumentPanel.test.tsx',
             './tests/vitest/pooledAssignmentReviewPanel.test.tsx',
             './tests/vitest/conformationalMappingViewerBehavior.test.tsx',
+            './tests/vitest/frustraMpnnSettingsControls.test.tsx',
+            './tests/vitest/frustraMpnnOperatorSurfaces.test.tsx',
+            './tests/vitest/frustraMpnnGovernedLaunches.test.tsx',
+            './tests/vitest/frustraMpnnUploadAnalysis.test.tsx',
         ],
     },
 });

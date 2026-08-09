@@ -94,3 +94,70 @@ workflow CanonicalFrustraMPNN {
     emit:
     result = terminal_results
 }
+
+process CanonicalFrustraMPNNV2Task {
+    tag 'frustrampnn:v2'
+    label 'frustrampnn_gpu'
+    errorStrategy 'terminate'
+    maxRetries 0
+    stageInMode 'copy'
+
+    input:
+    tuple path(component_request), path(source_structure), path(structure_map)
+
+    output:
+    tuple path('candidate_bundle/workflow_component_result_v2.json'), \
+        path('candidate_bundle'), \
+        path('candidate_bundle/frustrampnn_result_manifest_v2.json'), emit: result
+
+    script:
+    def assigned_gpu = params.frustrampnn_physical_gpu_id?.toString()
+    if (!(assigned_gpu ==~ /(?:0|[1-9][0-9]*)/)) {
+        throw new IllegalArgumentException(
+            'CanonicalFrustraMPNNV2 requires explicit scheduler-assigned frustrampnn_physical_gpu_id'
+        )
+    }
+    def apptainer_bin = params.get('apptainer_bin') ?: 'apptainer'
+    """
+    set -euo pipefail
+    export CUDA_VISIBLE_DEVICES='${assigned_gpu}'
+    '${params.api_python}' '${params.code_root}/scripts/run_frustrampnn_component.py' \
+      --request '${component_request}' \
+      --structure '${source_structure}' \
+      --structure-map '${structure_map}' \
+      --container '${params.container_dir}/frustrampnn.sif' \
+      --apptainer '${apptainer_bin}' \
+      --physical-gpu-id '${assigned_gpu}' \
+      --output-dir candidate_bundle
+    """
+
+    stub:
+    def stub_assigned_gpu = params.frustrampnn_physical_gpu_id?.toString()
+    if (!(stub_assigned_gpu ==~ /(?:0|[1-9][0-9]*)/)) {
+        throw new IllegalArgumentException(
+            'CanonicalFrustraMPNNV2 requires explicit scheduler-assigned frustrampnn_physical_gpu_id'
+        )
+    }
+    """
+    mkdir -p candidate_bundle
+    printf '%s\n' '{"candidate_id":"stub-v2","invocation_id":"stub-v2","status":"succeeded"}' \
+      > candidate_bundle/workflow_component_result_v2.json
+    printf '{}\n' > candidate_bundle/frustrampnn_result_manifest_v2.json
+    """
+}
+
+workflow CanonicalFrustraMPNNV2 {
+    take:
+    requests
+
+    main:
+    CanonicalFrustraMPNNV2Task(requests)
+    terminal_results = CanonicalFrustraMPNNV2Task.out.result.map {
+        result_path, candidate_bundle, result_manifest ->
+        def component_result_meta = new JsonSlurper().parse(result_path)
+        tuple(component_result_meta, candidate_bundle, result_manifest)
+    }
+
+    emit:
+    result = terminal_results
+}

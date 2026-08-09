@@ -7,6 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from services.frustrampnn.contracts import canonical_json_bytes
+from services.frustrampnn.settings import default_settings
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 NEXTFLOW_BIN = Path("/usr/local/bin/nextflow")
@@ -193,6 +196,9 @@ def test_esmfold2_structure_prediction_preview_uses_parent_workflow(tmp_path: Pa
         nextflow_home.mkdir()
         work_dir.mkdir()
         out_dir.mkdir()
+        settings_json = canonical_json_bytes(
+            default_settings().model_dump(mode="json", exclude_none=False)
+        ).decode("utf-8")
 
         result = _run_nextflow(
             "run",
@@ -209,6 +215,14 @@ def test_esmfold2_structure_prediction_preview_uses_parent_workflow(tmp_path: Pa
             "esmfold2_parent_preview",
             "--pred_method",
             "esmfold2",
+            "--run_frustrampnn",
+            "true",
+            "--frustrampnn_settings",
+            settings_json,
+            "--frustrampnn_physical_gpu_id",
+            "3",
+            "--job_id",
+            "esmfold2-parent-preview",
             "--code_root",
             str(REPO_ROOT),
             "--out_dir",

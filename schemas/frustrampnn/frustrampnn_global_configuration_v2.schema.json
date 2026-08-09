@@ -1,0 +1,6 @@
+{
+  "$id": "https://biomodstack.local/schemas/frustrampnn/frustrampnn_global_configuration_v2.schema.json",
+  "$ref": "execution_configuration_v2.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "strict alias for execution_configuration_v2.schema.json"
+}

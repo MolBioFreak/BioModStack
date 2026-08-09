@@ -13,9 +13,22 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "platform" / "api"))
 
-from services.frustrampnn.configuration import request_parameters  # noqa: E402
-from services.frustrampnn.contracts import canonical_json_bytes, validate_schema  # noqa: E402
+from services.frustrampnn.configuration import (  # noqa: E402
+    execution_configuration,
+    request_parameters,
+)
+from services.frustrampnn.contracts import (  # noqa: E402
+    canonical_json_bytes,
+    canonical_json_loads,
+    canonical_sha256,
+    validate_schema,
+)
 from services.frustrampnn.identity import deterministic_candidate_id  # noqa: E402
+from services.frustrampnn.settings import (  # noqa: E402
+    requested_settings_sha256,
+    resolve_effective_settings,
+    validate_persisted_requested_settings,
+)
 from services.frustrampnn.structure import (  # noqa: E402
     derive_mmcif_atom_site_authority,
     normalize_structure,
@@ -126,21 +139,28 @@ def _verify_producer_metadata(payload: dict[str, Any], source: Path) -> None:
         raise ValueError("producer_artifact_sha256 does not match physical source bytes")
 
 
-def _decode_metadata(encoded: str, *, source: Path | None = None) -> dict[str, Any]:
+def _decode_metadata(
+    encoded: str,
+    *,
+    source: Path | None = None,
+    request_version: int = 1,
+) -> dict[str, Any]:
     try:
         payload = json.loads(base64.b64decode(encoded, validate=True))
     except (ValueError, json.JSONDecodeError) as exc:
         raise ValueError("candidate metadata is not canonical base64 JSON") from exc
     if not isinstance(payload, dict):
         raise ValueError("candidate metadata must be an object")
-    required = {
+    common_required = {
         "parent_job_id",
         "parent_workflow_id",
         "producer_stage",
         "producer_candidate_key",
         "requiredness",
-        "checkpoint_id",
     }
+    if request_version not in {1, 2}:
+        raise ValueError("request_version must be 1 or 2")
+    required = common_required | ({"checkpoint_id"} if request_version == 1 else set())
     producer_fields = {
         "producer_method",
         "producer_sample",
@@ -178,9 +198,203 @@ def _decode_metadata(encoded: str, *, source: Path | None = None) -> dict[str, A
     return payload
 
 
-def prepare_candidate(
-    *, source: Path, output_pdb: Path, request_path: Path, metadata: dict[str, Any]
+def _decode_v2_settings(
+    payload: bytes,
+    claimed_sha256: str,
+    settings_value_origin: str | None,
+):
+    if not isinstance(payload, bytes) or not payload:
+        raise ValueError("v2 requested settings bytes are required")
+    if settings_value_origin not in {"bms_default", "operator_request"}:
+        raise ValueError("v2 settings value origin must be bms_default or operator_request")
+    parsed = canonical_json_loads(payload)
+    if not isinstance(parsed, dict) or canonical_json_bytes(parsed) != payload:
+        raise ValueError("requested settings must be exact canonical JSON bytes")
+    if "settings_value_origin" in parsed:
+        raise ValueError("requested settings bytes must not duplicate settings value origin")
+    requested = validate_persisted_requested_settings(
+        {**parsed, "settings_value_origin": settings_value_origin}
+    )
+    if requested_settings_sha256(requested) != claimed_sha256:
+        raise ValueError("requested settings SHA-256 does not bind settings value origin")
+    return requested
+
+
+def _source_identity_authority(source: Path, source_bytes: bytes) -> tuple[dict[str, Any], str]:
+    source_sha = hashlib.sha256(source_bytes).hexdigest()
+    suffix = source.suffix.lower()
+    if suffix in {".cif", ".mmcif"}:
+        return derive_mmcif_atom_site_authority(source_bytes), "mmcif_atom_site"
+    if suffix in {".pdb", ".ent"}:
+        return {
+            "kind": "pdb_self_identity_v1",
+            "identity_domain": "candidate_local",
+            "authority_artifact_sha256": source_sha,
+        }, "pdb_coordinates"
+    raise ValueError("candidate source must be PDB or mmCIF")
+
+
+def _prepare_candidate_v2(
+    *,
+    source: Path,
+    output_pdb: Path,
+    structure_map_path: Path,
+    request_path: Path,
+    metadata: dict[str, Any],
+    settings_payload: bytes,
+    settings_sha256: str,
+    settings_value_origin: str,
 ) -> dict[str, Any]:
+    requested = _decode_v2_settings(
+        settings_payload,
+        settings_sha256,
+        settings_value_origin,
+    )
+    source_bytes = source.read_bytes()
+    source_sha = hashlib.sha256(source_bytes).hexdigest()
+    identity_authority, request_identity_authority = _source_identity_authority(
+        source, source_bytes
+    )
+    candidate_id = str(metadata["candidate_id"])
+    try:
+        structure_map = normalize_structure(
+            input_path=source,
+            output_pdb_path=output_pdb,
+            map_path=structure_map_path,
+            target_id=str(metadata["parent_job_id"]),
+            parent_job_id=str(metadata["parent_job_id"]),
+            candidate_id=candidate_id,
+            identity_authority=identity_authority,
+            protein_selection={"mode": "all_protein_entities"},
+            selected_model=requested.source_structure.selected_model_number,
+            altloc_policy=(
+                "blank_or_explicit:"
+                + (requested.source_structure.preferred_altloc or "<blank>")
+            ),
+        )
+        effective = resolve_effective_settings(requested, structure_map)
+        configuration = execution_configuration(effective)
+        normalized_sha = hashlib.sha256(output_pdb.read_bytes()).hexdigest()
+        structure_map_sha = canonical_sha256(structure_map)
+        if structure_map_path.read_bytes() != canonical_json_bytes(structure_map):
+            raise ValueError("normalizer emitted a noncanonical structure map")
+        if (
+            normalized_sha != effective.resolution_identity.normalized_pdb_sha256
+            or structure_map_sha != effective.resolution_identity.structure_map_sha256
+        ):
+            raise ValueError("normalized artifacts disagree with effective settings authority")
+        requested_payload = requested.model_dump(mode="json", exclude_none=False)
+        effective_payload = effective.model_dump(mode="json", exclude_none=False)
+        configuration_payload = configuration.model_dump(mode="json", exclude_none=False)
+        request = {
+            "schema_name": "workflow_component_request",
+            "schema_version": 2,
+            "component_id": "frustrampnn",
+            "component_contract_version": "2.0",
+            "invocation_id": f"frustrampnn:{candidate_id}",
+            "parent_job_id": str(metadata["parent_job_id"]),
+            "parent_workflow_id": str(metadata["parent_workflow_id"]),
+            "candidate_id": candidate_id,
+            "source_artifact": {
+                "relative_path": str(metadata["producer_candidate_key"]),
+                "sha256": source_sha,
+                "media_type": (
+                    "chemical/x-mmcif"
+                    if source.suffix.lower() in {".cif", ".mmcif"}
+                    else "chemical/x-pdb"
+                ),
+                "producer_stage": str(metadata["producer_stage"]),
+                "artifact_id": candidate_id,
+            },
+            "requiredness": str(metadata["requiredness"]),
+            "identity_authority": request_identity_authority,
+            "settings_value_origin": requested.settings_value_origin,
+            "requested_settings": requested_payload,
+            "requested_settings_sha256": settings_sha256,
+            "effective_settings": effective_payload,
+            "effective_settings_sha256": effective.effective_settings_sha256,
+            "classification_policy_sha256": effective.threshold_policy_sha256,
+            "capability_inventory_byte_sha256": effective.capability_inventory_byte_sha256,
+            "runtime_identity_sha256": configuration.runtime_identity_sha256,
+            "structure_map_sha256": structure_map_sha,
+            "normalized_pdb_sha256": normalized_sha,
+            "execution_configuration": configuration_payload,
+            "execution_configuration_sha256": configuration.configuration_sha256,
+            "requested_outputs": [
+                "structure_map",
+                "raw_csv",
+                "landscape",
+                "summary",
+                "execution_receipt",
+            ],
+        }
+        producer_fields = {
+            "producer_method",
+            "producer_sample",
+            "producer_rank",
+            "producer_output_key",
+            "producer_identity_sha256",
+            "producer_artifact_sha256",
+            "source_format",
+        }
+        if producer_fields <= set(metadata):
+            request["producer_provenance"] = {
+                "producer_method": metadata["producer_method"],
+                "producer_sample": metadata["producer_sample"],
+                "producer_rank": metadata["producer_rank"],
+                "producer_output_key": metadata["producer_output_key"],
+                "producer_identity_sha256": metadata["producer_identity_sha256"],
+                "original_source_format": metadata["source_format"],
+                "original_source_sha256": source_sha,
+                "source_to_normalized_binding": {
+                    "kind": "sha256_pair_v1",
+                    "source_sha256": source_sha,
+                    "normalized_pdb_sha256": normalized_sha,
+                },
+            }
+        validate_schema("workflow_component_request_v2", request)
+        request_path.write_bytes(canonical_json_bytes(request))
+        return request
+    except Exception:
+        request_path.unlink(missing_ok=True)
+        output_pdb.unlink(missing_ok=True)
+        structure_map_path.unlink(missing_ok=True)
+        raise
+
+
+def prepare_candidate(
+    *,
+    source: Path,
+    output_pdb: Path,
+    request_path: Path,
+    metadata: dict[str, Any],
+    request_version: int = 1,
+    structure_map_path: Path | None = None,
+    settings_payload: bytes | None = None,
+    settings_sha256: str | None = None,
+    settings_value_origin: str | None = None,
+) -> dict[str, Any]:
+    if request_version == 2:
+        if settings_value_origin not in {"bms_default", "operator_request"}:
+            raise ValueError(
+                "v2 preparation requires a canonical settings value origin"
+            )
+        if structure_map_path is None or settings_payload is None or settings_sha256 is None:
+            raise ValueError(
+                "v2 preparation requires structure map and exact settings bytes/hash"
+            )
+        return _prepare_candidate_v2(
+            source=source,
+            output_pdb=output_pdb,
+            structure_map_path=structure_map_path,
+            request_path=request_path,
+            metadata=metadata,
+            settings_payload=settings_payload,
+            settings_sha256=settings_sha256,
+            settings_value_origin=settings_value_origin,
+        )
+    if request_version != 1:
+        raise ValueError("request_version must be 1 or 2")
     producer_fields = {
         "producer_method",
         "producer_sample",
@@ -279,14 +493,33 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-pdb", required=True, type=Path)
     parser.add_argument("--request", required=True, type=Path)
     parser.add_argument("--metadata-base64", required=True)
+    parser.add_argument("--request-version", type=int, choices=(1, 2), default=1)
+    parser.add_argument("--structure-map", type=Path)
+    parser.add_argument("--settings-base64")
+    parser.add_argument("--settings-sha256")
+    parser.add_argument("--settings-value-origin")
     args = parser.parse_args(argv)
     try:
-        metadata = _decode_metadata(args.metadata_base64, source=args.source)
+        metadata = _decode_metadata(
+            args.metadata_base64,
+            source=args.source,
+            request_version=args.request_version,
+        )
+        settings_payload = (
+            base64.b64decode(args.settings_base64, validate=True)
+            if args.settings_base64 is not None
+            else None
+        )
         prepare_candidate(
             source=args.source,
             output_pdb=args.output_pdb,
             request_path=args.request,
             metadata=metadata,
+            request_version=args.request_version,
+            structure_map_path=args.structure_map,
+            settings_payload=settings_payload,
+            settings_sha256=args.settings_sha256,
+            settings_value_origin=args.settings_value_origin,
         )
     except Exception as exc:
         print(f"frustrampnn_candidate_preparation_error:{exc}", file=sys.stderr)

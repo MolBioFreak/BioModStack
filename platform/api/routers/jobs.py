@@ -21,7 +21,7 @@ import random
 import re
 from datetime import datetime
 from pathlib import Path
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from jsonschema.exceptions import SchemaError
 
 logger = logging.getLogger(__name__)
@@ -66,6 +66,12 @@ from services.rfd3_local_redesign import (
     materialize_local_redesign_request,
 )
 from scripts.rfd3_local_redesign.contract import ContractError, request_sha256
+from services.frustrampnn.settings import (
+    FrustraMPNNRequestedSettings,
+    RequestedSettingsPayloadError,
+    default_settings as default_frustrampnn_settings,
+    validate_complete_requested_settings,
+)
 
 from model_registry import get_registry
 from services.stage_review import (
@@ -798,6 +804,17 @@ class AntibodyIterationLaunchRequest(BaseModel):
     param_overrides: Dict[str, Any] = Field(default_factory=dict)
     cdr_indel_config: Optional[AntibodyCdrIndelConfig] = None
     manual_mutagenesis_config: Optional[ManualMutagenesisConfig] = None
+    frustrampnn_settings: Optional[FrustraMPNNRequestedSettings] = None
+
+    @field_validator("frustrampnn_settings", mode="before")
+    @classmethod
+    def _complete_frustrampnn_settings(
+        cls,
+        value: Any,
+    ) -> Optional[FrustraMPNNRequestedSettings]:
+        if value is None:
+            return None
+        return validate_complete_requested_settings(value)
 
 
 class AntibodyIterationLaunchResponse(BaseModel):
@@ -1550,6 +1567,100 @@ def _normalize_structure_prediction_pred_method(
         return normalized
 
     normalized["pred_method"] = requested_pred_method
+    return normalized
+
+
+def _frustrampnn_param_error(
+    field: str,
+    message: str,
+    *,
+    error_type: str,
+    suffix: tuple[str | int, ...] = (),
+) -> HTTPException:
+    return HTTPException(
+        status_code=422,
+        detail=[
+            {
+                "type": error_type,
+                "loc": ["body", "params", field, *suffix],
+                "msg": message,
+            }
+        ],
+    )
+
+
+def _normalize_structure_prediction_frustrampnn_settings(
+    model_id: str,
+    mode: str,
+    params: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Normalize the typed FrustraMPNN sub-contract before Job persistence."""
+
+    normalized = {} if params is None else dict(params)
+    fields = {
+        "run_frustrampnn",
+        "frustrampnn_requiredness",
+        "frustrampnn_settings",
+    }
+    if not fields.intersection(normalized):
+        return normalized
+    normalized_mode = str(mode or "").strip().lower()
+    normalized_model_id = str(model_id or "").strip().lower()
+    structure_modes = {"predict", "structure_prediction", "structure_validation"}
+    structure_models = {"boltz2", "protenix", "rf3", "template_structure_prediction"}
+    if normalized_mode not in structure_modes and normalized_model_id not in structure_models:
+        return normalized
+
+    enabled = normalized.get("run_frustrampnn", False)
+    if type(enabled) is not bool:
+        raise _frustrampnn_param_error(
+            "run_frustrampnn",
+            "run_frustrampnn must be a boolean",
+            error_type="bool_type",
+        )
+    normalized["run_frustrampnn"] = enabled
+    requiredness = normalized.get("frustrampnn_requiredness", "required")
+    if requiredness != "required":
+        raise _frustrampnn_param_error(
+            "frustrampnn_requiredness",
+            "frustrampnn_requiredness must remain required",
+            error_type="literal_error",
+        )
+    normalized["frustrampnn_requiredness"] = "required"
+    supplied = "frustrampnn_settings" in normalized
+    if not enabled:
+        if supplied:
+            raise _frustrampnn_param_error(
+                "frustrampnn_settings",
+                "frustrampnn_settings requires run_frustrampnn=true",
+                error_type="value_error.frustrampnn_disabled",
+            )
+        return normalized
+    if not supplied:
+        settings = default_frustrampnn_settings()
+    else:
+        try:
+            settings = validate_complete_requested_settings(
+                normalized["frustrampnn_settings"]
+            )
+        except RequestedSettingsPayloadError as exc:
+            raise _frustrampnn_param_error(
+                "frustrampnn_settings",
+                str(exc),
+                error_type="value_error.frustrampnn_settings",
+                suffix=exc.location,
+            ) from exc
+        except ValidationError as exc:
+            error = exc.errors(include_url=False, include_context=False)[0]
+            raise _frustrampnn_param_error(
+                "frustrampnn_settings",
+                str(error["msg"]),
+                error_type=str(error["type"]),
+                suffix=tuple(error["loc"]),
+            ) from exc
+    normalized["frustrampnn_settings"] = settings.model_dump(
+        mode="json", exclude_none=False
+    )
     return normalized
 
 
@@ -5218,6 +5329,11 @@ async def create_job(
             job_data.mode,
             job_data.params,
         )
+        job_data.params = _normalize_structure_prediction_frustrampnn_settings(
+            job_data.model_id,
+            job_data.mode,
+            job_data.params,
+        )
         # Convert browse-alias paths (e.g. downloads/...) to host absolute paths for runtime.
         job_data.params = _normalize_nanopore_runtime_paths(job_data.model_id, job_data.params)
         job_data.params = _normalize_antibody_runtime_paths(job_data.model_id, job_data.params)
@@ -6035,6 +6151,9 @@ async def launch_antibody_iteration_from_designs(
                 selections=selections,
                 source_parent=source_job,
                 trigger="antibody_iteration",
+                requested_settings=(
+                    request.frustrampnn_settings or default_frustrampnn_settings()
+                ),
             )
         except FrustraMPNNChildError as exc:
             await session.rollback()

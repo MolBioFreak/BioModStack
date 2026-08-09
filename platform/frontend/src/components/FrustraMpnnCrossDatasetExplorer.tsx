@@ -4,22 +4,35 @@ import Plot from 'react-plotly.js';
 import type { Data, Layout } from 'plotly.js';
 import { fetchFrustraMpnnMultidimensionalPoints } from '../lib/frustraMpnnApi.js';
 import { buildFrustraMpnn3dModel } from './frustraMpnnMultidimensionalModel.js';
+import type { FrustraMpnnResultPoint } from './frustraMpnnMultidimensionalModel.js';
 import { useThemePlotlyLayout } from './useThemeColors.js';
 
 interface Props {
     currentDatasetId: string;
 }
 
-const FALLBACK_METRICS = ['mean_score', 'high_fraction', 'minimal_fraction', 'scoreable_fraction'];
+type ResultMetricId = keyof FrustraMpnnResultPoint['metrics'];
+
+const FALLBACK_METRICS: ResultMetricId[] = ['mean_score', 'high_fraction', 'minimal_fraction', 'scoreable_fraction'];
+const RESULT_METRICS = new Set<ResultMetricId>([
+    'mean_score',
+    'native_score',
+    'high_fraction',
+    'minimal_fraction',
+    'scoreable_fraction',
+    'slot_count',
+    'residue_count',
+]);
+const isResultMetric = (value: string): value is ResultMetricId => RESULT_METRICS.has(value as ResultMetricId);
 const PLOT_CONFIG = { responsive: true, displaylogo: false, scrollZoom: true, toImageButtonOptions: { format: 'png' as const, filename: 'frustrampnn_cross_dataset' } };
 
 export default function FrustraMpnnCrossDatasetExplorer({ currentDatasetId }: Props) {
     const baseLayout = useThemePlotlyLayout();
     const [scope, setScope] = useState<'all' | 'current'>('all');
-    const [xMetric, setXMetric] = useState(FALLBACK_METRICS[0]);
-    const [yMetric, setYMetric] = useState(FALLBACK_METRICS[1]);
-    const [zMetric, setZMetric] = useState(FALLBACK_METRICS[2]);
-    const [colorMetric, setColorMetric] = useState(FALLBACK_METRICS[3]);
+    const [xMetric, setXMetric] = useState<ResultMetricId>(FALLBACK_METRICS[0]!);
+    const [yMetric, setYMetric] = useState<ResultMetricId>(FALLBACK_METRICS[1]!);
+    const [zMetric, setZMetric] = useState<ResultMetricId>(FALLBACK_METRICS[2]!);
+    const [colorMetric, setColorMetric] = useState<ResultMetricId>(FALLBACK_METRICS[3]!);
     const query = useQuery({
         queryKey: ['frustrampnn', 'multidimensional', scope, currentDatasetId],
         queryFn: ({ signal }) => fetchFrustraMpnnMultidimensionalPoints(scope === 'current' ? [currentDatasetId] : [], 1000, signal),
@@ -79,7 +92,7 @@ export default function FrustraMpnnCrossDatasetExplorer({ currentDatasetId }: Pr
                 {page.next_offset != null && <div role="alert" className="mb-3 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-100">Showing the first {page.items.length.toLocaleString()} of {page.total.toLocaleString()} ordered results. Filter to explicit datasets before drawing conclusions from omitted points.</div>}
                 <div className="grid gap-2 md:grid-cols-4">
                     {([['X', xMetric, setXMetric], ['Y', yMetric, setYMetric], ['Z', zMetric, setZMetric], ['Color', colorMetric, setColorMetric]] as const).map(([label, value, setter]) => <label key={label} className="text-xs text-slate-400">{label} dimension
-                        <select value={value} onChange={(event) => setter(event.target.value)} className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-slate-200">
+                        <select value={value} onChange={(event) => { if (isResultMetric(event.target.value)) setter(event.target.value); }} className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-slate-200">
                             {numericDimensions.map((dimension) => <option key={dimension.id} value={dimension.id}>{metricLabel(dimension.id)}</option>)}
                         </select>
                     </label>)}

@@ -10,16 +10,29 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 EXPECTED_SCHEMAS = {
+    "capability_inventory_v1.schema.json",
+    "effective_settings_v1.schema.json",
+    "execution_configuration_v2.schema.json",
+    "frustrampnn_global_configuration_v2.schema.json",
     "workflow_component_request_v1.schema.json",
+    "workflow_component_request_v2.schema.json",
     "workflow_component_result_v1.schema.json",
+    "workflow_component_result_v2.schema.json",
     "frustrampnn_structure_map_v1.schema.json",
     "frustrampnn_landscape_v1.schema.json",
+    "frustrampnn_landscape_v2.schema.json",
     "frustrampnn_summary_v1.schema.json",
+    "frustrampnn_summary_v2.schema.json",
     "frustrampnn_execution_receipt_v1.schema.json",
+    "frustrampnn_execution_receipt_v2.schema.json",
     "frustrampnn_result_manifest_v1.schema.json",
+    "frustrampnn_result_manifest_v2.schema.json",
     "frustrampnn_comparison_v1.schema.json",
     "frustrampnn_guidance_v1.schema.json",
     "frustrampnn_multistate_comparison_v1.schema.json",
+    "frustrampnn_settings_v1.schema.json",
+    "frustrampnn_statistics_v1.schema.json",
+    "settings_v1.schema.json",
 }
 
 
@@ -130,8 +143,12 @@ def test_all_frustrampnn_schemas_are_draft_2020_12_fail_closed() -> None:
     for name in sorted(paths):
         schema = json.loads((directory / name).read_text(encoding="utf-8"))
         assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
-        assert schema["type"] == "object"
-        assert schema["additionalProperties"] is False
+        if "$ref" in schema:
+            assert set(schema) == {"$id", "$ref", "$schema", "title"}
+            assert Path(schema["$ref"]).name in paths
+        else:
+            assert schema["type"] == "object"
+            assert schema["additionalProperties"] is False
 
 
 def test_canonical_json_is_deterministic_and_rejects_duplicate_and_nonfinite_values() -> None:

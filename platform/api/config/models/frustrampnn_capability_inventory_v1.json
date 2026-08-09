@@ -1,0 +1,265 @@
+{
+  "schema_name": "frustrampnn_capability_inventory",
+  "schema_version": 1,
+  "content_hash_semantics": "sha256(rfc8785(document_without_top_level_content_sha256))",
+  "content_sha256": "2d8325aab53098fae160890c5e40b76e2be88674ed2b5f86626720accaeb2af1",
+  "runtime_identity": {
+    "image_path": "/mnt/BioModStack/apptainer/frustrampnn.sif",
+    "image_sha256": "c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da",
+    "executable_path": "/opt/venv/bin/frustrampnn",
+    "executable_sha256": "32089d959f619c08a550c0e7d0fc7b66b508d009ec3179d007f13773a170212f",
+    "checkpoint_id": "megascale.ckpt",
+    "checkpoint_path": "/opt/frustrampnn_weights/megascale.ckpt",
+    "checkpoint_sha256": "eaee71adb7eec366fc672d2aadef87f2c51243042a4518cd897634784dc2da3b",
+    "package_version": "1.0.0",
+    "source_commit": "bbae1d03edf33dbe6f645d45c5604eb4464962ca"
+  },
+  "evidence": [
+    {
+      "evidence_id": "pinned_sif_predict_help",
+      "evidence_kind": "pinned_sif_cli_help",
+      "source": "Exact predict help from the digest-pinned SIF",
+      "image_sha256": "c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da",
+      "command": [
+        "apptainer",
+        "exec",
+        "/mnt/BioModStack/apptainer/frustrampnn.sif",
+        "/opt/venv/bin/frustrampnn",
+        "predict",
+        "--help"
+      ],
+      "observed_option_keys": [
+        "pdb",
+        "checkpoint",
+        "output",
+        "chains",
+        "positions",
+        "device",
+        "config",
+        "quiet",
+        "help"
+      ],
+      "observation": "The pinned predict command exposes exactly nine option keys: pdb, checkpoint, output, chains, positions, device, config, quiet, and help."
+    },
+    {
+      "evidence_id": "pinned_sif_cli_version",
+      "evidence_kind": "pinned_sif_cli_version",
+      "source": "Exact CLI version from the digest-pinned SIF",
+      "image_sha256": "c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da",
+      "command": [
+        "apptainer",
+        "exec",
+        "/mnt/BioModStack/apptainer/frustrampnn.sif",
+        "/opt/venv/bin/frustrampnn",
+        "--version"
+      ],
+      "observation": "frustrampnn, version 1.0.0"
+    },
+    {
+      "evidence_id": "authoritative_runtime_registry",
+      "evidence_kind": "authoritative_runtime_registry",
+      "source": "platform/api/services/frustrampnn/runtime.py at source baseline 2431ac3775abc5688159bec1c91b92a957a83f9f",
+      "image_sha256": "c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da",
+      "observation": "FRUSTRAMPNN_RUNTIME_IDENTITY pins the image, executable, MegaScale checkpoint, package version, source commit, and their SHA-256 identities."
+    }
+  ],
+  "predict_options": [
+    {
+      "option_key": "pdb",
+      "cli_forms": [
+        "-p",
+        "--pdb"
+      ],
+      "value_contract": "Required input PDB file",
+      "ownership_class": "workflow_source",
+      "scientific_or_inference_setting": true,
+      "product_control": {
+        "status": "typed_product_control",
+        "control_kind": "governed_source_selector_or_upload",
+        "api_type": "governed_artifact_reference"
+      },
+      "model_native_default": null,
+      "default_source": "The owning workflow or governed upload supplies an immutable source artifact; BMS resolves it to a snapshot rather than accepting a host path.",
+      "validation_evidence": [
+        "pinned_sif_predict_help",
+        "authoritative_runtime_registry"
+      ],
+      "disposition": "governed_input",
+      "disposition_reason": "The model requires a structure, while BMS owns path resolution, snapshotting, and source hashing."
+    },
+    {
+      "option_key": "checkpoint",
+      "cli_forms": [
+        "-c",
+        "--checkpoint"
+      ],
+      "value_contract": "Required model checkpoint file ending in .ckpt",
+      "ownership_class": "system_runtime",
+      "scientific_or_inference_setting": true,
+      "product_control": {
+        "status": "no_product_control",
+        "control_kind": null,
+        "api_type": null
+      },
+      "model_native_default": null,
+      "default_source": "FRUSTRAMPNN_RUNTIME_IDENTITY.checkpoint_path",
+      "validation_evidence": [
+        "pinned_sif_predict_help",
+        "authoritative_runtime_registry"
+      ],
+      "disposition": "system_pinned",
+      "disposition_reason": "BMS authenticates and fixes megascale.ckpt; an operator-supplied checkpoint would break the pinned capability identity."
+    },
+    {
+      "option_key": "output",
+      "cli_forms": [
+        "-o",
+        "--output"
+      ],
+      "value_contract": "Output CSV file; model-native default is frustration_predictions.csv",
+      "ownership_class": "system_storage",
+      "scientific_or_inference_setting": false,
+      "product_control": {
+        "status": "no_product_control",
+        "control_kind": null,
+        "api_type": null
+      },
+      "model_native_default": "frustration_predictions.csv",
+      "default_source": "The scheduler allocates a path below the job-owned output root.",
+      "validation_evidence": [
+        "pinned_sif_predict_help"
+      ],
+      "disposition": "scheduler_allocated",
+      "disposition_reason": "Output placement is storage and security policy, not a scientific control."
+    },
+    {
+      "option_key": "chains",
+      "cli_forms": [
+        "--chains"
+      ],
+      "value_contract": "Comma-separated chain IDs; model-native default is all chains",
+      "ownership_class": "scientific_operator",
+      "scientific_or_inference_setting": true,
+      "product_control": {
+        "status": "typed_product_control",
+        "control_kind": "entity_or_chain_multi_selector",
+        "api_type": "array_of_stable_entity_or_chain_references"
+      },
+      "model_native_default": "all chains",
+      "default_source": "All protein entities unless a complete typed source-backed selection is supplied.",
+      "validation_evidence": [
+        "pinned_sif_predict_help"
+      ],
+      "disposition": "operator_exposed",
+      "disposition_reason": "Chain selection changes which residues are scored and therefore requires typed human and agent control."
+    },
+    {
+      "option_key": "positions",
+      "cli_forms": [
+        "--positions"
+      ],
+      "value_contract": "Comma-separated zero-based positions; model-native default is all positions",
+      "ownership_class": "scientific_operator",
+      "scientific_or_inference_setting": true,
+      "product_control": {
+        "status": "typed_product_control",
+        "control_kind": "residue_multi_selector",
+        "api_type": "array_of_stable_residue_references"
+      },
+      "model_native_default": "all positions",
+      "default_source": "All scoreable positions unless source-authoritative residue references are selected and resolved to zero-based model positions.",
+      "validation_evidence": [
+        "pinned_sif_predict_help"
+      ],
+      "disposition": "operator_exposed",
+      "disposition_reason": "Position selection changes which residues are scored and therefore requires a typed residue selector rather than free text."
+    },
+    {
+      "option_key": "device",
+      "cli_forms": [
+        "--device"
+      ],
+      "value_contract": "Closed choice cuda or cpu; model-native default is auto-detect",
+      "ownership_class": "scheduler_runtime",
+      "scientific_or_inference_setting": true,
+      "product_control": {
+        "status": "no_product_control",
+        "control_kind": null,
+        "api_type": null
+      },
+      "model_native_default": "auto-detect",
+      "default_source": "The scheduler assigns a physical GPU and the runtime compiler uses task-visible cuda device 0.",
+      "validation_evidence": [
+        "pinned_sif_predict_help",
+        "authoritative_runtime_registry"
+      ],
+      "disposition": "scheduler_assigned",
+      "disposition_reason": "Physical resource assignment is scheduler-owned; the product must not permit operators to select host device IDs or CPU fallback."
+    },
+    {
+      "option_key": "config",
+      "cli_forms": [
+        "--config"
+      ],
+      "value_contract": "Optional config file for old-format checkpoints",
+      "ownership_class": "system_compatibility",
+      "scientific_or_inference_setting": true,
+      "product_control": {
+        "status": "no_product_control",
+        "control_kind": null,
+        "api_type": null
+      },
+      "model_native_default": null,
+      "default_source": "Absent for the pinned MegaScale checkpoint.",
+      "validation_evidence": [
+        "pinned_sif_predict_help",
+        "authoritative_runtime_registry"
+      ],
+      "disposition": "not_applicable_to_pinned_checkpoint",
+      "disposition_reason": "Pinned help limits this option to old-format checkpoints, while the authenticated MegaScale checkpoint does not require it."
+    },
+    {
+      "option_key": "quiet",
+      "cli_forms": [
+        "-q",
+        "--quiet"
+      ],
+      "value_contract": "Boolean flag that suppresses the progress bar",
+      "ownership_class": "system_diagnostics",
+      "scientific_or_inference_setting": false,
+      "product_control": {
+        "status": "no_product_control",
+        "control_kind": null,
+        "api_type": null
+      },
+      "model_native_default": "false",
+      "default_source": "BMS runtime compiler fixed policy: omitted (false).",
+      "validation_evidence": [
+        "pinned_sif_predict_help"
+      ],
+      "disposition": "system_fixed",
+      "disposition_reason": "Progress presentation does not alter scientific output and remains a fixed diagnostics policy."
+    },
+    {
+      "option_key": "help",
+      "cli_forms": [
+        "--help"
+      ],
+      "value_contract": "Boolean CLI documentation flag that prints help and exits",
+      "ownership_class": "cli_diagnostics",
+      "scientific_or_inference_setting": false,
+      "product_control": {
+        "status": "no_product_control",
+        "control_kind": null,
+        "api_type": null
+      },
+      "model_native_default": null,
+      "default_source": "CLI framework behavior only; never part of a model execution request.",
+      "validation_evidence": [
+        "pinned_sif_predict_help"
+      ],
+      "disposition": "documentation_only",
+      "disposition_reason": "The flag exists only to display command documentation and terminate without inference."
+    }
+  ]
+}

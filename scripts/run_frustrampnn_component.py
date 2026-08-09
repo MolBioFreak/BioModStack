@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import argparse
 import base64
+import csv
 import hashlib
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -15,14 +17,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+import rfc8785
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "platform" / "api"))
 
 from services.frustrampnn import runtime as _runtime  # noqa: E402
+from services.frustrampnn import settings as _settings  # noqa: E402
 from services.frustrampnn.analysis import (  # noqa: E402
     LandscapeValidationError,
     finalize_landscape,
+    finalize_landscape_v2,
     summarize_landscape,
 )
+from services.frustrampnn.analytics import build_statistics_receipt  # noqa: E402
 from services.frustrampnn.contracts import (  # noqa: E402
     AUTHORITY_ARTIFACT_PATH,
     ContractValidationError,
@@ -34,9 +41,12 @@ from services.frustrampnn.contracts import (  # noqa: E402
 )
 from services.frustrampnn.manifests import (  # noqa: E402
     MANIFEST_PATH,
+    V2_MANIFEST_PATH,
     ManifestValidationError,
     build_result_manifest,
+    summarize_landscape_v2,
     validate_result_manifest,
+    validate_v2_input_closure,
 )
 from services.frustrampnn.structure import (  # noqa: E402
     NORMALIZER_VERSION,
@@ -49,6 +59,12 @@ ADAPTER_VERSION = "run_frustrampnn_component_v1"
 FINALIZER_VERSION = "frustrampnn_landscape_finalizer_v1"
 DEFAULT_TIMEOUT_SECONDS = 3600.0
 MAX_AUTHORITY_ARTIFACT_BYTES = 16 * 1024 * 1024
+MAX_RUNTIME_LOG_BYTES = 4 * 1024 * 1024
+MAX_COMPONENT_REQUEST_BYTES = 16 * 1024 * 1024
+MAX_SOURCE_STRUCTURE_BYTES = 64 * 1024 * 1024
+MAX_STRUCTURE_MAP_BYTES = 64 * 1024 * 1024
+MAX_RAW_SHARD_BYTES = 256 * 1024 * 1024
+_READ_CHUNK_BYTES = 1024 * 1024
 
 
 class ComponentRunError(RuntimeError):
@@ -96,17 +112,60 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
-def _read_regular(path: Path | str, *, label: str) -> bytes:
-    """Read one regular file through the runtime's lexical no-follow primitive."""
+def _file_generation(metadata: os.stat_result) -> tuple[int, ...]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_nlink,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _read_regular(path: Path | str, *, label: str, max_bytes: int) -> bytes:
+    """Read a role-bounded regular file without following links or races."""
+
+    if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 0:
+        raise ValueError("regular-file read bound must be a non-negative integer")
 
     descriptor = _runtime.open_regular_no_follow(path, label=label)
     try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ComponentRunError("request_invalid", f"{label} is not a regular file")
+        if metadata.st_size > max_bytes:
+            raise ComponentRunError(
+                "artifact_too_large",
+                f"{label} size {metadata.st_size} exceeds its {max_bytes}-byte read limit",
+            )
+        generation = _file_generation(metadata)
         chunks: list[bytes] = []
         offset = 0
-        while chunk := os.pread(descriptor, 1024 * 1024, offset):
+        while offset < metadata.st_size:
+            count = min(_READ_CHUNK_BYTES, metadata.st_size - offset)
+            chunk = os.pread(descriptor, count, offset)
+            if not chunk:
+                raise ComponentRunError(
+                    "artifact_changed",
+                    f"{label} changed size or identity during bounded read",
+                )
             chunks.append(chunk)
             offset += len(chunk)
-        return b"".join(chunks)
+        metadata_after = os.fstat(descriptor)
+        if offset != metadata.st_size or _file_generation(metadata_after) != generation:
+            raise ComponentRunError(
+                "artifact_changed",
+                f"{label} changed size or identity during bounded read",
+            )
+        payload = b"".join(chunks)
+        if len(payload) != metadata.st_size:
+            raise ComponentRunError(
+                "artifact_changed",
+                f"{label} changed size or identity during bounded read",
+            )
+        return payload
     finally:
         os.close(descriptor)
 
@@ -116,7 +175,12 @@ def _load_request_payload(payload: bytes) -> dict[str, Any]:
         request = canonical_json_loads(payload)
         if not isinstance(request, dict):
             raise ContractValidationError("request must be an object")
-        validate_schema("workflow_component_request_v1", request)
+        version = request.get("schema_version")
+        if version not in {1, 2}:
+            raise ContractValidationError("request schema generation is unsupported")
+        validate_schema(f"workflow_component_request_v{version}", request)
+        if version == 2 and payload != canonical_json_bytes(request):
+            raise ContractValidationError("v2 request file must be exact canonical JSON")
     except Exception as exc:
         raise ComponentRunError("request_invalid", str(exc)) from exc
     return request
@@ -370,7 +434,7 @@ def _raw_failure_class(exc: LandscapeValidationError) -> str:
     return "raw_output_invalid"
 
 
-def run_component(
+def _run_component_v1(
     *,
     request: Mapping[str, Any],
     source_structure: Path | str,
@@ -538,7 +602,7 @@ def run_component(
             (stdout_log, "frustrampnn_stdout.log"),
             (stderr_log, "frustrampnn_stderr.log"),
         ):
-            if source_log.stat().st_size > 4 * 1024 * 1024:
+            if source_log.stat().st_size > MAX_RUNTIME_LOG_BYTES:
                 raise ComponentRunError(
                     "runtime_log_too_large",
                     f"{published_name} exceeds the 4 MiB result-closure limit",
@@ -672,12 +736,368 @@ def run_component(
         shutil.rmtree(work_root, ignore_errors=True)
 
 
+def _raw_row_count(payload: bytes, *, label: str) -> int:
+    try:
+        text = payload.decode("utf-8")
+        reader = csv.DictReader(text.splitlines())
+        if reader.fieldnames != [
+            "frustration_pred", "position", "wildtype", "mutation", "chain", "pdb",
+        ]:
+            raise ValueError("header is not exact")
+        count = sum(1 for row in reader if None not in row and None not in row.values())
+    except Exception as exc:
+        raise ComponentRunError("raw_output_invalid", f"{label} CSV is invalid: {exc}") from exc
+    if count <= 0:
+        raise ComponentRunError("raw_output_invalid", f"{label} CSV contains no rows")
+    return count
+
+
+def _run_component_v2(
+    *,
+    request: Mapping[str, Any],
+    request_payload: bytes,
+    source_structure: Path | str,
+    structure_map_path: Path | str,
+    output_dir: Path | str,
+    container: Path | str,
+    physical_gpu_id: int,
+    apptainer: Path | str,
+    timeout_seconds: float,
+    runtime_identity: _runtime.FrustraMPNNRuntimeIdentity,
+) -> dict[str, Any]:
+    if request_payload != canonical_json_bytes(dict(request)):
+        raise ComponentRunError("request_invalid", "v2 request file is not exact canonical JSON")
+    try:
+        normalized_payload = _read_regular(
+            source_structure,
+            label="normalized PDB",
+            max_bytes=MAX_SOURCE_STRUCTURE_BYTES,
+        )
+        structure_map_payload = _read_regular(
+            structure_map_path,
+            label="structure map",
+            max_bytes=MAX_STRUCTURE_MAP_BYTES,
+        )
+        structure, effective, configuration = validate_v2_input_closure(
+            request, normalized_payload, structure_map_payload
+        )
+    except (OSError, _runtime.RuntimeValidationError, ManifestValidationError) as exc:
+        raise ComponentRunError("request_invalid", str(exc)) from exc
+    if _runtime.runtime_identity_dict(runtime_identity) != configuration.runtime.model_dump(
+        mode="json", exclude_none=False
+    ):
+        raise ComponentRunError(
+            "runtime_identity_mismatch",
+            "v2 execution configuration runtime does not match the selected runtime identity",
+        )
+    if not isinstance(timeout_seconds, (int, float)) or timeout_seconds <= 0:
+        raise ComponentRunError("request_invalid", "timeout must be positive")
+    if isinstance(physical_gpu_id, bool) or not isinstance(physical_gpu_id, int) or physical_gpu_id < 0:
+        raise ComponentRunError("gpu_unavailable", "physical GPU ID must be non-negative")
+
+    output = Path(output_dir)
+    output_parent = output.parent
+    if output.exists() or output.is_symlink():
+        raise ComponentRunError("publication_failed", "output directory already exists")
+    output_parent.mkdir(parents=True, exist_ok=True)
+    work_root = Path(tempfile.mkdtemp(prefix=f".{output.name}.phase3b-", dir=output_parent))
+    staging = work_root / "bundle"
+    staging.mkdir(mode=0o700)
+    normalized = work_root / "normalized.pdb"
+    normalized.write_bytes(normalized_payload)
+    pinned: _runtime.PinnedContainer | None = None
+    published = False
+    try:
+        _write_json(staging / "workflow_component_request_v2.json", request)
+        (staging / "normalized_input.pdb").write_bytes(normalized_payload)
+        (staging / "frustrampnn_structure_map_v1.json").write_bytes(structure_map_payload)
+        (staging / "frustrampnn_stdout.log").write_bytes(b"")
+        (staging / "frustrampnn_stderr.log").write_bytes(b"")
+        try:
+            plan = _runtime.compile_frustrampnn_command_plan(effective)
+            configured_container = _runtime.validate_configured_container_path(
+                container, identity=runtime_identity
+            )
+            pinned = _runtime.open_verified_container(configured_container, identity=runtime_identity)
+            assets = _runtime.verify_container_assets(
+                apptainer, pinned, identity=runtime_identity
+            )
+        except _runtime.RuntimeValidationError as exc:
+            raise ComponentRunError("runtime_identity_mismatch", str(exc)) from exc
+        if (
+            assets["executable_sha256"] != configuration.runtime.executable_sha256
+            or assets["checkpoint_sha256"] != configuration.runtime.checkpoint_sha256
+        ):
+            raise ComponentRunError(
+                "runtime_identity_mismatch", "authenticated runtime assets disagree with v2 configuration"
+            )
+
+        commands: list[dict[str, Any]] = []
+        shard_payloads: list[bytes] = []
+        overall_started = _utc_now()
+        with (staging / "frustrampnn_stdout.log").open("ab") as stdout_handle, (
+            staging / "frustrampnn_stderr.log"
+        ).open("ab") as stderr_handle:
+            for entry in plan.entries:
+                raw = staging / entry.shard_relative_path
+                try:
+                    invocation = _runtime.build_frustrampnn_command(
+                        apptainer=apptainer,
+                        container=pinned.proc_path,
+                        normalized=normalized,
+                        raw=raw,
+                        output_root=staging,
+                        physical_gpu_id=physical_gpu_id,
+                        tool=runtime_identity.executable_path,
+                        checkpoint=runtime_identity.checkpoint_path,
+                        chains=entry.chains,
+                        positions=entry.positions,
+                    )
+                    started = _utc_now()
+                    completed = _runtime.execute_frustrampnn(
+                        invocation,
+                        pinned,
+                        stdout=stdout_handle,
+                        stderr=stderr_handle,
+                        timeout=float(timeout_seconds),
+                        check=False,
+                    )
+                    ended = _utc_now()
+                except subprocess.TimeoutExpired as exc:
+                    raise ComponentRunError("timeout", "FrustraMPNN shard exceeded timeout") from exc
+                except (OSError, _runtime.RuntimeValidationError) as exc:
+                    raise ComponentRunError("inference_failed", str(exc)) from exc
+                if completed.returncode != 0:
+                    raise ComponentRunError(
+                        "inference_failed",
+                        f"FrustraMPNN shard {entry.ordinal} returned nonzero exit {completed.returncode}",
+                    )
+                try:
+                    shard_payload = _read_regular(
+                        raw,
+                        label=f"shard {entry.ordinal}",
+                        max_bytes=MAX_RAW_SHARD_BYTES,
+                    )
+                except (_runtime.RuntimeValidationError, OSError) as exc:
+                    raise ComponentRunError(
+                        "raw_output_invalid", f"FrustraMPNN shard {entry.ordinal} is missing"
+                    ) from exc
+                row_count = _raw_row_count(shard_payload, label=f"shard {entry.ordinal}")
+                shard_payloads.append(shard_payload)
+                commands.append({
+                    **entry.canonical_payload(),
+                    "argv": list(invocation.argv),
+                    "argv_sha256": invocation.argv_sha256,
+                    "status": "succeeded",
+                    "exit_code": completed.returncode,
+                    "shard_sha256": _sha256(shard_payload),
+                    "shard_row_count": row_count,
+                    "started_at": _timestamp(started),
+                    "ended_at": _timestamp(ended),
+                    "duration_seconds": max(0.0, (ended - started).total_seconds()),
+                })
+        for log_name in ("frustrampnn_stdout.log", "frustrampnn_stderr.log"):
+            if (staging / log_name).stat().st_size > MAX_RUNTIME_LOG_BYTES:
+                raise ComponentRunError(
+                    "runtime_log_too_large",
+                    f"{log_name} exceeds the 4 MiB result-closure limit",
+                )
+        overall_ended = _utc_now()
+
+        try:
+            merged_raw, landscape = finalize_landscape_v2(
+                tuple(shard_payloads),
+                effective,
+                execution_configuration=configuration,
+                target_id=structure["target_id"],
+                parent_job_id=request["parent_job_id"],
+                candidate_id=request["candidate_id"],
+            )
+            summary = summarize_landscape_v2(landscape, effective)
+        except (LandscapeValidationError, ManifestValidationError) as exc:
+            raise ComponentRunError("raw_output_invalid", str(exc)) from exc
+        for entry in plan.entries:
+            (staging / entry.shard_relative_path).unlink()
+        (staging / "raw_frustrampnn.csv").write_bytes(merged_raw)
+        _write_json(staging / "frustrampnn_landscape_v2.json", landscape)
+        _write_json(staging / "frustrampnn_summary_v2.json", summary)
+        receipt = {
+            "schema_name": "frustrampnn_execution_receipt",
+            "schema_version": 2,
+            "invocation_id": request["invocation_id"],
+            "execution_configuration_sha256": request["execution_configuration_sha256"],
+            "requested_settings_sha256": request["requested_settings_sha256"],
+            "effective_settings_sha256": request["effective_settings_sha256"],
+            "runtime_identity_sha256": request["runtime_identity_sha256"],
+            "source_artifact_sha256": request["source_artifact"]["sha256"],
+            "structure_map_sha256": request["structure_map_sha256"],
+            "normalized_pdb_sha256": request["normalized_pdb_sha256"],
+            "command_plan": {
+                "entries": [entry.canonical_payload() for entry in plan.entries],
+                "plan_sha256": plan.plan_sha256,
+            },
+            "command_count": len(commands),
+            "commands": commands,
+            "merged_raw_csv_sha256": _sha256(merged_raw),
+            "landscape_sha256": canonical_sha256(landscape),
+            "summary_sha256": canonical_sha256(summary),
+            "assigned_physical_gpu_id": str(physical_gpu_id),
+            "task_visible_device_index": 0,
+            "stdout_artifact": "frustrampnn_stdout.log",
+            "stderr_artifact": "frustrampnn_stderr.log",
+            "started_at": _timestamp(overall_started),
+            "ended_at": _timestamp(overall_ended),
+            "duration_seconds": max(0.0, (overall_ended - overall_started).total_seconds()),
+        }
+        try:
+            validate_schema("frustrampnn_execution_receipt_v2", receipt)
+        except Exception as exc:
+            raise ComponentRunError("manifest_invalid", str(exc)) from exc
+        _write_json(staging / "frustrampnn_execution_receipt_v2.json", receipt)
+
+        try:
+            capability_inventory, inventory_sha256 = (
+                _settings.load_capability_inventory()
+            )
+            capability_inventory_bytes = _read_regular(
+                _settings._CAPABILITY_INVENTORY_PATH,
+                label="canonical capability inventory",
+                max_bytes=MAX_AUTHORITY_ARTIFACT_BYTES,
+            )
+            if (
+                _sha256(capability_inventory_bytes) != inventory_sha256
+                or inventory_sha256 != request["capability_inventory_byte_sha256"]
+            ):
+                raise ContractValidationError(
+                    "installed capability inventory bytes disagree with v2 request authority"
+                )
+            statistics = build_statistics_receipt(
+                request=request,
+                execution_receipt=receipt,
+                landscape=landscape,
+                structure_map=structure,
+                capability_inventory=capability_inventory,
+                capability_inventory_bytes=capability_inventory_bytes,
+            )
+            statistics_payload = rfc8785.dumps(statistics)
+            (staging / "frustrampnn_statistics_v1.json").write_bytes(
+                statistics_payload
+            )
+        except (OSError, ContractValidationError, rfc8785.CanonicalizationError) as exc:
+            raise ComponentRunError("manifest_invalid", str(exc)) from exc
+
+        try:
+            manifest = build_result_manifest(staging)
+            _write_json(staging / V2_MANIFEST_PATH, manifest)
+            result = {
+                "schema_name": "workflow_component_result",
+                "schema_version": 2,
+                "component_id": "frustrampnn",
+                "component_contract_version": "2.0",
+                "request_sha256": request_sha256(request),
+                "invocation_id": request["invocation_id"],
+                "parent_job_id": request["parent_job_id"],
+                "parent_workflow_id": request["parent_workflow_id"],
+                "candidate_id": request["candidate_id"],
+                "status": "succeeded",
+                "failure_class": None,
+                "diagnostic": None,
+                "result_manifest": {
+                    "relative_path": V2_MANIFEST_PATH,
+                    "sha256": canonical_sha256(manifest),
+                },
+                "result_payload": {
+                    "relative_path": "frustrampnn_summary_v2.json",
+                    "schema_name": "frustrampnn_summary",
+                    "schema_version": 2,
+                    "sha256": canonical_sha256(summary),
+                },
+            }
+            validate_schema("workflow_component_result_v2", result)
+            _write_json(staging / "workflow_component_result_v2.json", result)
+            validate_result_manifest(staging, manifest)
+        except (ManifestValidationError, ContractValidationError) as exc:
+            raise ComponentRunError("manifest_invalid", str(exc)) from exc
+
+        try:
+            for artifact_path in sorted(staging.iterdir(), key=lambda path: path.name):
+                _fsync_regular(artifact_path)
+            _fsync_directory(staging)
+            os.replace(staging, output)
+            _fsync_directory(output_parent)
+        except (OSError, _runtime.RuntimeValidationError) as exc:
+            if output.is_dir() and not output.is_symlink():
+                shutil.rmtree(output)
+            raise ComponentRunError(
+                "publication_failed", "FrustraMPNN v2 bundle was not durably published"
+            ) from exc
+        published = True
+        return manifest
+    finally:
+        if pinned is not None:
+            pinned.close()
+        shutil.rmtree(work_root, ignore_errors=True)
+
+
+def run_component(
+    *,
+    request: Mapping[str, Any],
+    source_structure: Path | str,
+    output_dir: Path | str,
+    container: Path | str,
+    physical_gpu_id: int,
+    structure_map: Path | str | None = None,
+    request_payload: bytes | None = None,
+    apptainer: Path | str = "apptainer",
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    runtime_identity: _runtime.FrustraMPNNRuntimeIdentity = _runtime.FRUSTRAMPNN_RUNTIME_IDENTITY,
+) -> dict[str, Any]:
+    version = request.get("schema_version") if isinstance(request, Mapping) else None
+    if version == 1:
+        if structure_map is not None:
+            raise ComponentRunError(
+                "request_invalid", "v1 rejects the v2 --structure-map argument as ambiguous"
+            )
+        return _run_component_v1(
+            request=request,
+            source_structure=source_structure,
+            output_dir=output_dir,
+            container=container,
+            physical_gpu_id=physical_gpu_id,
+            apptainer=apptainer,
+            timeout_seconds=timeout_seconds,
+            runtime_identity=runtime_identity,
+        )
+    if version == 2:
+        if structure_map is None:
+            raise ComponentRunError("request_invalid", "v2 requires exact --structure-map input")
+        exact_request = (
+            canonical_json_bytes(dict(request))
+            if request_payload is None
+            else request_payload
+        )
+        return _run_component_v2(
+            request=request,
+            request_payload=exact_request,
+            source_structure=source_structure,
+            structure_map_path=structure_map,
+            output_dir=output_dir,
+            container=container,
+            physical_gpu_id=physical_gpu_id,
+            apptainer=apptainer,
+            timeout_seconds=timeout_seconds,
+            runtime_identity=runtime_identity,
+        )
+    raise ComponentRunError("request_invalid", "unsupported component request schema generation")
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     request_group = parser.add_mutually_exclusive_group()
     request_group.add_argument("--request", type=Path)
     request_group.add_argument("--request-base64")
     parser.add_argument("--structure", type=Path)
+    parser.add_argument("--structure-map", type=Path)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--container", type=Path, required=True)
     parser.add_argument("--apptainer", default="apptainer")
@@ -695,7 +1115,11 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         if args.preflight_only:
-            if args.request is not None or args.request_base64 is not None:
+            if (
+                args.request is not None
+                or args.request_base64 is not None
+                or args.structure_map is not None
+            ):
                 raise ComponentRunError(
                     "request_invalid", "preflight-only does not accept a component request"
                 )
@@ -710,20 +1134,33 @@ def main(argv: list[str] | None = None) -> int:
                 "normal execution requires --structure, --output-dir, and --physical-gpu-id",
             )
         if args.request is not None:
-            payload = _read_regular(args.request, label="component request")
+            payload = _read_regular(
+                args.request,
+                label="component request",
+                max_bytes=MAX_COMPONENT_REQUEST_BYTES,
+            )
         elif args.request_base64 is not None:
             try:
                 payload = base64.b64decode(args.request_base64, validate=True)
-            except ValueError as exc:
+            except Exception as exc:
                 raise ComponentRunError("request_invalid", "request base64 is invalid") from exc
+            if len(payload) > MAX_COMPONENT_REQUEST_BYTES:
+                raise ComponentRunError(
+                    "artifact_too_large",
+                    "component request exceeds its 16 MiB read limit",
+                )
         else:
             raise ComponentRunError(
                 "request_invalid", "normal execution requires exactly one request input"
             )
         request = _load_request_payload(payload)
+        if request["schema_version"] == 2 and args.request is None:
+            raise ComponentRunError("request_invalid", "v2 requires an exact --request file")
         run_component(
             request=request,
             source_structure=args.structure,
+            structure_map=args.structure_map,
+            request_payload=payload,
             output_dir=args.output_dir,
             container=args.container,
             physical_gpu_id=args.physical_gpu_id,

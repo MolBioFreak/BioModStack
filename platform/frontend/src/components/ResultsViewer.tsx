@@ -59,6 +59,7 @@ import MDResultsPane from './MDResultsPane';
 import RFD3LocalRedesignResultsPane from './RFD3LocalRedesignResultsPane';
 import { ConformationalMappingViewer } from './conformationalMapping/ConformationalMappingViewer';
 import FrustraMpnnAnalysisControls from './FrustraMpnnAnalysisControls';
+import FrustraMpnnUploadAnalysisPanel from './FrustraMpnnUploadAnalysisPanel';
 import FrustraMpnnResultsViewer from './FrustraMpnnResultsViewer';
 import { hasFrustraMpnnResultSurface } from './frustraMpnnResultSurface';
 import { ModelIntegrationControl, useModelIntegrationConfig } from './ModelIntegrationControl';
@@ -5349,6 +5350,10 @@ export function ResultsViewer() {
                             <div role="alert" className="mb-4 rounded-lg border border-amber-500/50 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
                                 {clientDerivedResultsPolicy.message}
                             </div>
+                        )}
+
+                        {activeJob && (
+                            <FrustraMpnnUploadAnalysisPanel onOpenJob={handleSelectJob} />
                         )}
 
                         {activeJob && selectedFrustraMpnnDesigns.length > 0 && (

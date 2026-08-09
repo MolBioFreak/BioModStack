@@ -29,11 +29,20 @@ import {
     buildStructureFrustraMpnnSubmitParams,
     resolveTargetPreviewSource,
 } from '../src/components/structurePredictionUiState.js';
+import { CANONICAL_FRUSTRAMPNN_SETTINGS } from '../src/components/frustrampnn/frustraMpnnSettingsState.js';
 
 test('structure workflow cards request canonical FrustraMPNN by default and preserve an explicit operator opt-out', () => {
-    assert.deepEqual(buildStructureFrustraMpnnSubmitParams(undefined), { run_frustrampnn: true });
-    assert.deepEqual(buildStructureFrustraMpnnSubmitParams(true), { run_frustrampnn: true });
-    assert.deepEqual(buildStructureFrustraMpnnSubmitParams(false), { run_frustrampnn: false });
+    const enabled = {
+        run_frustrampnn: true,
+        frustrampnn_requiredness: 'required',
+        frustrampnn_settings: CANONICAL_FRUSTRAMPNN_SETTINGS,
+    };
+    assert.deepEqual(buildStructureFrustraMpnnSubmitParams(undefined, CANONICAL_FRUSTRAMPNN_SETTINGS), enabled);
+    assert.deepEqual(buildStructureFrustraMpnnSubmitParams(true, CANONICAL_FRUSTRAMPNN_SETTINGS), enabled);
+    assert.deepEqual(buildStructureFrustraMpnnSubmitParams(false, CANONICAL_FRUSTRAMPNN_SETTINGS), {
+        run_frustrampnn: false,
+        frustrampnn_requiredness: 'required',
+    });
 });
 
 test('structure prediction defaults new MSA submissions to the ColabFold server', () => {

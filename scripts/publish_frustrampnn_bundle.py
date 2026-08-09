@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -17,6 +18,8 @@ from services.frustrampnn.contracts import canonical_json_bytes, canonical_json_
 from services.frustrampnn.manifests import (  # noqa: E402
     MANIFEST_PATH,
     _read_regular,
+    load_result_manifest,
+    result_manifest_path,
     validate_result_manifest,
 )
 
@@ -76,10 +79,15 @@ def _publish_source(*, payload: bytes, allowed_root: Path, relative_path: str) -
 
 
 def publish(*, source_bundle: Path, allowed_root: Path, destination: Path, marker: Path) -> dict[str, str]:
+    manifest_name = result_manifest_path(source_bundle)
+    manifest = load_result_manifest(source_bundle)
     payloads = validate_result_manifest(
         source_bundle,
-        canonical_json_loads(_read_regular(source_bundle, MANIFEST_PATH)),
+        manifest,
     )
+    generation = manifest["schema_version"]
+    request_name = f"workflow_component_request_v{generation}.json"
+    result_name = f"workflow_component_result_v{generation}.json"
     root, destination = _contained_destination(allowed_root, destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     _contained_destination(root, destination)
@@ -94,7 +102,7 @@ def publish(*, source_bundle: Path, allowed_root: Path, destination: Path, marke
                 raise ValueError("existing destination is not a regular directory")
             existing = validate_result_manifest(
                 destination,
-                canonical_json_loads(_read_regular(destination, MANIFEST_PATH)),
+                load_result_manifest(destination),
             )
             if not _same_payloads(payloads, existing):
                 raise ValueError("existing published bundle contradicts immutable candidate authority")
@@ -108,7 +116,7 @@ def publish(*, source_bundle: Path, allowed_root: Path, destination: Path, marke
                     target.chmod(stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
                 copied = validate_result_manifest(
                     temporary,
-                    canonical_json_loads(_read_regular(temporary, MANIFEST_PATH)),
+                    load_result_manifest(temporary),
                 )
                 if not _same_payloads(payloads, copied):
                     raise ValueError("published snapshot differs from retained validated bytes")
@@ -118,22 +126,35 @@ def publish(*, source_bundle: Path, allowed_root: Path, destination: Path, marke
                 if temporary.exists():
                     shutil.rmtree(temporary)
 
-        request = canonical_json_loads(payloads["workflow_component_request_v1.json"])
-        source_target, source_created = _publish_source(
-            payload=payloads["normalized_input.pdb"],
-            allowed_root=root,
-            relative_path=request["source_artifact"]["relative_path"],
-        )
+        request = canonical_json_loads(payloads[request_name])
+        source_relative = request["source_artifact"]["relative_path"]
+        if generation == 1:
+            source_target, source_created = _publish_source(
+                payload=payloads["normalized_input.pdb"],
+                allowed_root=root,
+                relative_path=source_relative,
+            )
+        else:
+            source_target = root / source_relative
+            _contained_destination(root, source_target)
+            if hashlib.sha256(_read_regular(root, source_relative)).hexdigest() != request[
+                "source_artifact"
+            ]["sha256"]:
+                raise ValueError("existing canonical v2 source contradicts source authority")
         result = {
             # Stage-report authority is always relative to the exact job root.
             # This remains stable whether Nextflow passed an absolute out_dir or
             # a data-root-relative one and lets ingestion reject path escapes.
             "result": (
-                destination / "workflow_component_result_v1.json"
+                destination / result_name
             ).relative_to(root).as_posix(),
-            "manifest": (destination / MANIFEST_PATH).relative_to(root).as_posix(),
+            "manifest": (destination / manifest_name).relative_to(root).as_posix(),
             "source": source_target.relative_to(root).as_posix(),
         }
+        if generation == 2:
+            result["statistics"] = (
+                destination / "frustrampnn_statistics_v1.json"
+            ).relative_to(root).as_posix()
         marker.parent.mkdir(parents=True, exist_ok=True)
         descriptor, marker_name = tempfile.mkstemp(prefix=f".{marker.name}.tmp-", dir=marker.parent)
         marker_temporary = Path(marker_name)
@@ -147,7 +168,9 @@ def publish(*, source_bundle: Path, allowed_root: Path, destination: Path, marke
     except Exception:
         if source_created and source_target is not None and source_target.exists():
             source_relative = source_target.relative_to(root).as_posix()
-            if _read_regular(root, source_relative) == payloads["normalized_input.pdb"]:
+            if generation == 1 and _read_regular(root, source_relative) == payloads[
+                "normalized_input.pdb"
+            ]:
                 source_target.unlink()
         if destination_created and destination.exists():
             shutil.rmtree(destination)

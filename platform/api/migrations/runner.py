@@ -41,6 +41,7 @@ from migrations.sqlite_sha256 import register_sqlite_sha256
 from migrations.add_frustrampnn_persistence import migrate as migrate_frustrampnn_persistence
 from migrations.add_ngs_reference_sets import migrate as migrate_ngs_reference_sets
 from migrations.add_pooled_ont_reference_assignment import migrate as migrate_pooled_ont_reference_assignment
+from migrations.add_frustrampnn_statistics import migrate as migrate_frustrampnn_statistics
 from run_migration import migrate as migrate_stage_tracking
 
 
@@ -85,6 +86,7 @@ MIGRATIONS: List[Migration] = [
     Migration(23, "add_frustrampnn_persistence", migrate_frustrampnn_persistence),
     Migration(24, "add_ngs_reference_sets", migrate_ngs_reference_sets),
     Migration(25, "add_pooled_ont_reference_assignment", migrate_pooled_ont_reference_assignment),
+    Migration(26, "add_frustrampnn_statistics", migrate_frustrampnn_statistics),
 ]
 
 

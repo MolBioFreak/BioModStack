@@ -1,6 +1,13 @@
 # Frustration-guided mutation reorchestration — future workflow contract
 
-Status: planned; not implemented or exposed as an executable control.
+Status: planned consumer tranche; not implemented or exposed as an executable control.
+
+Prerequisite: the canonical
+`docs/specs/frustrampnn-global-configuration-analysis-workbench.md` tranche must
+reach 100%. Mutation reorchestration shall reuse its complete settings schema,
+agent API, data plane, statistics, visualization, capture, persistence, and
+result workbench. It shall not create a separate FrustraMPNN configuration or
+reduced analysis surface.
 
 ## Scientific intent
 

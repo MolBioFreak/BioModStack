@@ -10,7 +10,7 @@ import os
 import stat
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from .configuration import global_configuration
 from .contracts import AA_ORDER, canonical_sha256, validate_schema
@@ -86,6 +86,232 @@ def _raw_rows(raw_bytes: bytes) -> list[dict[str, str]]:
     if not rows:
         raise LandscapeValidationError("raw CSV has no data rows")
     return rows
+
+
+def _validated_effective_settings(effective_settings: Any):
+    from .settings import (
+        FrustraMPNNEffectiveSettings,
+        classification_policy_sha256,
+        effective_settings_sha256,
+    )
+
+    if not isinstance(effective_settings, FrustraMPNNEffectiveSettings):
+        raise LandscapeValidationError(
+            "selected finalization requires validated FrustraMPNN effective settings"
+        )
+    policy = effective_settings.requested_settings.classification_policy
+    if effective_settings.threshold_policy_sha256 != classification_policy_sha256(policy):
+        raise LandscapeValidationError("effective classification policy hash mismatch")
+    if effective_settings.effective_settings_sha256 != effective_settings_sha256(
+        effective_settings
+    ):
+        raise LandscapeValidationError("effective settings content/hash mismatch")
+    return effective_settings
+
+
+def merge_raw_frustrampnn_shards(
+    shard_payloads: Sequence[bytes],
+    effective_settings: Any,
+) -> bytes:
+    """Validate and deterministically merge exact vendor shards for one selection."""
+
+    effective = _validated_effective_settings(effective_settings)
+    if not isinstance(shard_payloads, tuple) or not shard_payloads:
+        raise LandscapeValidationError("raw shard set must be a non-empty tuple of bytes")
+    if any(not isinstance(payload, bytes) or not payload for payload in shard_payloads):
+        raise LandscapeValidationError("every raw shard must contain exact non-empty bytes")
+
+    selected = {
+        residue.normalized_key(): residue
+        for chain in effective.resolved_chains
+        for residue in chain.residues
+    }
+    if not selected:
+        raise LandscapeValidationError("effective selection has no scoreable residues")
+    observed: dict[tuple[str, int, str], dict[str, str]] = {}
+    for shard_ordinal, payload in enumerate(shard_payloads):
+        for line_number, row in enumerate(_raw_rows(payload), start=2):
+            location = f"shard {shard_ordinal} line {line_number}"
+            if not row["pdb"].strip():
+                raise LandscapeValidationError(f"raw PDB metadata is empty at {location}")
+            chain = row["chain"].strip()
+            try:
+                position = int(row["position"])
+            except ValueError as exc:
+                raise LandscapeValidationError(
+                    f"malformed raw position at {location}"
+                ) from exc
+            if position < 0:
+                raise LandscapeValidationError(
+                    f"raw position must be zero-based and nonnegative at {location}"
+                )
+            mapping = selected.get((chain, position))
+            if mapping is None:
+                raise LandscapeValidationError(
+                    f"raw row is outside the selected effective residues at {location}"
+                )
+            wt = row["wildtype"].strip().upper()
+            mutation = row["mutation"].strip().upper()
+            if len(wt) != 1 or wt not in AA_ORDER:
+                raise LandscapeValidationError(f"malformed raw WT at {location}")
+            if wt != mapping.wt:
+                raise LandscapeValidationError(
+                    f"raw WT disagreement at {(chain, position)}: {wt} != {mapping.wt}"
+                )
+            if len(mutation) != 1 or mutation not in AA_ORDER:
+                raise LandscapeValidationError(
+                    f"malformed raw substitution amino acid at {location}"
+                )
+            score_text = row["frustration_pred"].strip()
+            try:
+                score = float(score_text)
+            except ValueError as exc:
+                raise LandscapeValidationError(
+                    f"malformed raw score at {location}"
+                ) from exc
+            if not math.isfinite(score):
+                raise LandscapeValidationError(f"nonfinite raw score at {location}")
+            key = (chain, position, mutation)
+            if key in observed:
+                raise LandscapeValidationError(f"duplicate raw substitution row: {key}")
+            observed[key] = {
+                "frustration_pred": score_text,
+                "position": str(position),
+                "wildtype": mapping.wt,
+                "mutation": mutation,
+                "chain": chain,
+                "pdb": row["pdb"].strip(),
+            }
+
+    expected = {
+        (chain, position, mutation)
+        for chain, position in selected
+        for mutation in AA_ORDER
+    }
+    if set(observed) != expected or len(observed) != len(selected) * len(AA_ORDER):
+        missing = sorted(expected - set(observed))
+        extra = sorted(set(observed) - expected)
+        raise LandscapeValidationError(
+            f"selected landscape incomplete: missing substitutions={missing[:10]}, "
+            f"extra substitutions={extra[:10]}"
+        )
+
+    handle = io.StringIO(newline="")
+    fieldnames = ["frustration_pred", "position", "wildtype", "mutation", "chain", "pdb"]
+    writer = csv.DictWriter(handle, fieldnames=fieldnames, lineterminator="\n")
+    writer.writeheader()
+    for chain, position in sorted(selected):
+        for mutation in AA_ORDER:
+            writer.writerow(observed[(chain, position, mutation)])
+    return handle.getvalue().encode("utf-8")
+
+
+def _score_class_for_policy(score: float, *, high_max: float, minimal_min: float) -> str:
+    if not math.isfinite(score):
+        raise LandscapeValidationError("score must be finite")
+    if score <= high_max:
+        return "high"
+    if score >= minimal_min:
+        return "minimal"
+    return "neutral"
+
+
+def finalize_landscape_v2(
+    shard_payloads: Sequence[bytes],
+    effective_settings: Any,
+    *,
+    execution_configuration: Any,
+    target_id: str,
+    parent_job_id: str,
+    candidate_id: str,
+) -> tuple[bytes, dict[str, Any]]:
+    """Build the selected v2 landscape after a complete canonical shard merge."""
+
+    from .configuration import (
+        FrustraMPNNExecutionConfigurationV2,
+        validate_configuration,
+    )
+
+    effective = _validated_effective_settings(effective_settings)
+    if not isinstance(execution_configuration, FrustraMPNNExecutionConfigurationV2):
+        raise LandscapeValidationError("v2 finalization requires typed execution configuration")
+    try:
+        validate_configuration(execution_configuration.model_dump(mode="json"))
+    except Exception as exc:
+        raise LandscapeValidationError(f"invalid execution configuration: {exc}") from exc
+    if execution_configuration.effective_settings != effective:
+        raise LandscapeValidationError(
+            "execution configuration does not bind the exact effective settings"
+        )
+    if any(not isinstance(value, str) or not value for value in (
+        target_id, parent_job_id, candidate_id,
+    )):
+        raise LandscapeValidationError("v2 landscape identities must be non-empty strings")
+
+    merged = merge_raw_frustrampnn_shards(tuple(shard_payloads), effective)
+    rows = _raw_rows(merged)
+    scores = {
+        (row["chain"], int(row["position"]), row["mutation"]): float(
+            row["frustration_pred"]
+        )
+        for row in rows
+    }
+    policy_model = effective.requested_settings.classification_policy
+    policy = policy_model.model_dump(mode="json")
+    residues = []
+    resolved_residues = sorted(
+        (
+            residue
+            for chain in effective.resolved_chains
+            for residue in chain.residues
+        ),
+        key=lambda residue: residue.normalized_key(),
+    )
+    for residue in resolved_residues:
+        chain, position = residue.normalized_key()
+        slots = []
+        for mutation in AA_ORDER:
+            score = scores[(chain, position, mutation)]
+            slots.append({
+                "mutation_aa": mutation,
+                "score": score,
+                "class": _score_class_for_policy(
+                    score,
+                    high_max=policy_model.high_max,
+                    minimal_min=policy_model.minimal_min,
+                ),
+                "scoreable": True,
+                "status": "ok",
+                "reason": None,
+                "native": mutation == residue.wt,
+            })
+        residues.append({
+            **residue.model_dump(mode="json", exclude_none=False),
+            "slots": slots,
+        })
+    resolution = effective.resolution_identity
+    landscape = {
+        "schema_name": "frustrampnn_landscape",
+        "schema_version": 2,
+        "execution_configuration_id": execution_configuration.configuration_id,
+        "execution_configuration_sha256": execution_configuration.configuration_sha256,
+        "requested_settings_sha256": effective.settings_sha256,
+        "effective_settings_sha256": effective.effective_settings_sha256,
+        "runtime_identity_sha256": execution_configuration.runtime_identity_sha256,
+        "target_id": target_id,
+        "parent_job_id": parent_job_id,
+        "candidate_id": candidate_id,
+        "source_artifact_sha256": resolution.source_artifact_sha256,
+        "structure_map_sha256": resolution.structure_map_sha256,
+        "normalized_pdb_sha256": resolution.normalized_pdb_sha256,
+        "raw_csv_sha256": hashlib.sha256(merged).hexdigest(),
+        "threshold_policy_id": effective.threshold_policy_id,
+        "threshold_policy": policy,
+        "threshold_policy_sha256": effective.threshold_policy_sha256,
+        "residues": residues,
+    }
+    validate_schema("frustrampnn_landscape_v2", landscape)
+    return merged, landscape
 
 
 def finalize_landscape(
@@ -351,5 +577,6 @@ def summarize_landscape(
 
 __all__ = [
     "LandscapeValidationError", "THRESHOLD_POLICY", "canonical_sha256",
-    "finalize_landscape", "score_class", "summarize_landscape",
+    "finalize_landscape", "finalize_landscape_v2", "merge_raw_frustrampnn_shards",
+    "score_class", "summarize_landscape",
 ]

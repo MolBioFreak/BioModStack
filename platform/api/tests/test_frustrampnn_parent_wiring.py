@@ -49,12 +49,12 @@ def test_parent_candidate_identity_is_deterministic_and_domain_separated() -> No
     )
 
 
-def test_structure_prediction_has_one_canonical_manifest_first_cutover() -> None:
+def test_structure_prediction_has_one_canonical_v2_manifest_cutover() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     prediction_module = (REPO_ROOT / "modules" / "structure_prediction.nf").read_text(encoding="utf-8")
 
-    assert "include { CanonicalFrustraMPNN } from '../modules/frustrampnn.nf'" in workflow
-    assert "CanonicalFrustraMPNN(" in workflow
+    assert "include { CanonicalFrustraMPNNV2 } from '../modules/frustrampnn.nf'" in workflow
+    assert "CanonicalFrustraMPNNV2(" in workflow
     assert "FrustrampnnQC" not in workflow
     assert "placeholder.pdb" not in workflow
     assert "structure_prediction_wf.out.canonical_structures" in workflow
@@ -63,7 +63,11 @@ def test_structure_prediction_has_one_canonical_manifest_first_cutover() -> None
     assert "PrepareStructurePredictionFrustraMPNNCandidate" in workflow
     assert "frustrampnn_requiredness ?: 'required'" in workflow
     assert "frustrampnn_requiredness must be required" in workflow
-    assert "CanonicalFrustraMPNN.out.result" in workflow
+    assert "CanonicalFrustraMPNNV2.out.result" in workflow
+    assert "workflow_component_request_v2.json" in workflow
+    assert "frustrampnn_structure_map_v1.json" in workflow
+    assert "workflow_component_request_v1.json" not in workflow
+    assert "checkpoint_id" not in workflow
     assert ".subscribe" not in workflow
     assert "frustrampnn" in workflow
     assert "frustrampnn not_requested" in workflow

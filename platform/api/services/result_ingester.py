@@ -53,7 +53,7 @@ from .conformational_mapping.persistence import (
 )
 from .frustrampnn.contracts import canonical_json_bytes, canonical_json_loads
 from .frustrampnn.identity import deterministic_candidate_id
-from .frustrampnn.manifests import MANIFEST_PATH
+from .frustrampnn.manifests import MANIFEST_PATH, V2_MANIFEST_PATH
 from .frustrampnn.structure import StructureNormalizationError, read_structure_bytes
 from .frustrampnn.persistence import (
     FrustraMPNNPersistenceError,
@@ -3063,6 +3063,14 @@ async def _ingest_rfd3_local_redesign_manifest(
 
 _FRUSTRAMPNN_TERMINAL_STAGES = frozenset({"frustrampnn", "canonical_frustrampnn"})
 _FRUSTRAMPNN_TERMINAL_RESULT = "workflow_component_result_v1.json"
+_FRUSTRAMPNN_TERMINAL_RESULTS = frozenset(
+    {_FRUSTRAMPNN_TERMINAL_RESULT, "workflow_component_result_v2.json"}
+)
+_FRUSTRAMPNN_RESULT_MANIFESTS = frozenset({MANIFEST_PATH, V2_MANIFEST_PATH})
+_FRUSTRAMPNN_RESULT_PAIRS = {
+    MANIFEST_PATH: _FRUSTRAMPNN_TERMINAL_RESULT,
+    V2_MANIFEST_PATH: "workflow_component_result_v2.json",
+}
 
 
 def _explicit_stage_paths(value: Any) -> list[str]:
@@ -3137,15 +3145,22 @@ def _stage_path(path: str, output_path: Path) -> Path:
     return candidate
 
 
-def _read_explicit_terminal_envelope(bundle_root: Path) -> dict[str, Any]:
+def _read_explicit_terminal_envelope(
+    bundle_root: Path, terminal_result_name: str = _FRUSTRAMPNN_TERMINAL_RESULT
+) -> dict[str, Any]:
     """Read the exact terminal child without following root or leaf symlinks."""
+
+    if terminal_result_name not in _FRUSTRAMPNN_TERMINAL_RESULTS:
+        raise FrustraMPNNPersistenceError(
+            "FrustraMPNN explicit terminal result generation is unsupported"
+        )
 
     leaf_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     root_fd = -1
     terminal_fd = -1
     try:
         root_fd = _open_absolute_no_symlinks(bundle_root, directory=True)
-        terminal_fd = os.open(_FRUSTRAMPNN_TERMINAL_RESULT, leaf_flags, dir_fd=root_fd)
+        terminal_fd = os.open(terminal_result_name, leaf_flags, dir_fd=root_fd)
         metadata = os.fstat(terminal_fd)
         if not stat.S_ISREG(metadata.st_mode):
             raise FrustraMPNNPersistenceError(
@@ -3661,9 +3676,9 @@ async def _ingest_explicit_frustrampnn_results(
         return None
 
     paths = [_stage_path(path, output_path) for path in explicit]
-    manifests = [path for path in paths if path.name == MANIFEST_PATH]
+    manifests = [path for path in paths if path.name in _FRUSTRAMPNN_RESULT_MANIFESTS]
     terminal_paths = [
-        path for path in paths if path.name == _FRUSTRAMPNN_TERMINAL_RESULT
+        path for path in paths if path.name in _FRUSTRAMPNN_TERMINAL_RESULTS
     ]
     if not manifests:
         raise FrustraMPNNPersistenceError(
@@ -3703,8 +3718,17 @@ async def _ingest_explicit_frustrampnn_results(
     parent_designs: list[tuple[str, str, Path, Any]] = []
     invocation_roots: dict[str, Path] = {}
     candidate_roots: dict[str, Path] = {}
+    terminal_paths_by_root = {
+        os.fspath(path.parent.absolute()): path for path in terminal_paths
+    }
     for root in roots:
-        terminal = _read_explicit_terminal_envelope(root)
+        terminal_path = terminal_paths_by_root[os.fspath(root)]
+        manifest_path = next(path for path in manifests if path.parent.absolute() == root)
+        if _FRUSTRAMPNN_RESULT_PAIRS[manifest_path.name] != terminal_path.name:
+            raise FrustraMPNNPersistenceError(
+                "FrustraMPNN canonical manifest and terminal result generations are mixed"
+            )
+        terminal = _read_explicit_terminal_envelope(root, terminal_path.name)
         bundle = validate_frustrampnn_result_bundle(
             root,
             expected_parent_job_id=str(current_job.id),

@@ -6,6 +6,7 @@ import {
     fetchFrustraMpnnComparisonRows,
     type FrustraMpnnClass,
     type FrustraMpnnGuidancePlan,
+    type FrustraMpnnPairComparison,
 } from '../lib/frustraMpnnApi.js';
 
 interface FrustraMpnnComparisonSurfaceProps {
@@ -29,6 +30,30 @@ const displayClass = (value: FrustraMpnnClass | null, status: string): FrustraMp
     return value ?? 'missing';
 };
 
+export function FrustraMpnnComparisonCompatibility({ comparison }: { comparison: FrustraMpnnPairComparison }) {
+    return <>
+        <div className="grid gap-2 lg:grid-cols-3" aria-label="Comparison compatibility domains">
+            <div className={`rounded border p-3 text-xs ${comparison.compatibility_domains.raw_score.status === 'compatible' ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-100' : 'border-amber-500/40 bg-amber-500/10 text-amber-100'}`}>
+                <div className="font-semibold">Raw-score compatibility: {comparison.compatibility_domains.raw_score.status}</div>
+                <div className="mt-1">{comparison.compatibility_domains.raw_score.status === 'compatible' ? 'Raw score deltas may be interpreted for scoreable aligned slots.' : 'Raw score deltas are unsafe and remain null.'}</div>
+                {comparison.compatibility_domains.raw_score.reasons.length > 0 && <div className="mt-1 text-slate-400">Reasons: {comparison.compatibility_domains.raw_score.reasons.join(', ')}</div>}
+            </div>
+            <div className={`rounded border p-3 text-xs ${comparison.compatibility_domains.classification.status === 'compatible' ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-100' : 'border-amber-500/40 bg-amber-500/10 text-amber-100'}`}>
+                <div className="font-semibold">Classification compatibility: {comparison.compatibility_domains.classification.status}</div>
+                <div className="mt-1">{comparison.compatibility_domains.classification.status === 'compatible' && comparison.compatibility_domains.raw_score.status === 'compatible' ? 'Class transitions may be interpreted for biologically scored slots.' : 'Classification transitions are unsafe and remain null.'}</div>
+                {comparison.compatibility_domains.classification.reasons.length > 0 && <div className="mt-1 text-slate-400">Reasons: {comparison.compatibility_domains.classification.reasons.join(', ')}</div>}
+            </div>
+            <div className={`rounded border p-3 text-xs ${comparison.compatibility_domains.identity_alignment.status === 'exact' ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-100' : 'border-purple-500/40 bg-purple-500/10 text-purple-100'}`}>
+                <div className="font-semibold">Identity alignment: {comparison.compatibility_domains.identity_alignment.status}</div>
+                <div className="mt-1">{comparison.compatibility_domains.identity_alignment.aligned_identity_count} aligned of {comparison.compatibility_domains.identity_alignment.reference_identity_count} reference and {comparison.compatibility_domains.identity_alignment.target_identity_count} target identities.</div>
+                {comparison.compatibility_domains.identity_alignment.reasons.length > 0 && <div className="mt-1 text-slate-400">Reasons: {comparison.compatibility_domains.identity_alignment.reasons.join(', ')}</div>}
+            </div>
+        </div>
+        {comparison.comparability.status !== 'comparable' && <div role="alert" className="rounded border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-100">Biological comparison is incompatible: {comparison.comparability.reasons.join(', ') || 'unspecified incompatibility'}. Unsafe numeric and classification evidence remains null.</div>}
+        {comparison.override_used && <div role="status" className="rounded border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-100">A compatibility override was recorded for persistence only. It does not authorize raw-score deltas or classification transitions; unsafe values remain null.</div>}
+    </>;
+}
+
 export default function FrustraMpnnComparisonSurface({
     referenceJobId,
     referenceInvocationId,
@@ -41,7 +66,7 @@ export default function FrustraMpnnComparisonSurface({
     const [rationale, setRationale] = useState('');
     const comparisonQuery = useQuery({
         queryKey: ['frustrampnn', 'comparison', referenceJobId, referenceInvocationId, targetJobId, targetInvocationId],
-        queryFn: ({ signal }) => fetchFrustraMpnnComparison(referenceJobId, referenceInvocationId, targetJobId, targetInvocationId, signal),
+        queryFn: ({ signal }) => fetchFrustraMpnnComparison(referenceJobId, referenceInvocationId, targetJobId, targetInvocationId, false, signal),
         staleTime: 30_000,
     });
     const comparison = comparisonQuery.data;
@@ -51,7 +76,7 @@ export default function FrustraMpnnComparisonSurface({
         enabled: Boolean(comparison?.comparison_id),
         staleTime: 30_000,
     });
-    const rows = rowsQuery.data?.items ?? [];
+    const rows = (rowsQuery.data?.items ?? []).filter((row) => row.kind === 'pair');
     const sequence = useMemo(() => {
         const byIndex = new Map<number, { sequenceIndex: number; wt: string; authAsymId: string; authSeqId: number; insertionCode: string }>();
         for (const row of rows) {
@@ -107,10 +132,20 @@ export default function FrustraMpnnComparisonSurface({
             </header>
             {comparisonQuery.isLoading && <div role="status" className="p-4 text-sm text-slate-400">Preparing persisted comparison…</div>}
             {comparisonQuery.isError && <div role="alert" className="p-4 text-sm text-red-300">Comparison unavailable: {comparisonQuery.error instanceof Error ? comparisonQuery.error.message : 'request failed'}</div>}
-            {comparison && <div className="space-y-4 p-4">
-                {comparison.comparability.status !== 'comparable' && <div role="alert" className="rounded border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-100">Numeric deltas are suppressed because the landscapes are incompatible: {comparison.comparability.reasons.join(', ') || 'unspecified incompatibility'}.</div>}
+            {comparison && comparison.schema_name !== 'frustrampnn_comparison' && <div role="alert" className="p-4 text-sm text-red-300">Pair comparison endpoint returned an unexpected multi-state contract.</div>}
+            {comparison?.schema_name === 'frustrampnn_comparison' && <div className="space-y-4 p-4">
+                <FrustraMpnnComparisonCompatibility comparison={comparison} />
                 <div className="grid gap-2 sm:grid-cols-4">
-                    {Object.entries(comparison.summary).map(([key, value]) => <div key={key} className="rounded border border-slate-800 bg-slate-950/40 p-2"><div className="text-[10px] uppercase tracking-wide text-slate-500">{key.replaceAll('_', ' ')}</div><div className="font-mono text-lg text-slate-100">{value}</div></div>)}
+                    {([
+                        ['Total rows', comparison.summary.total_rows],
+                        ['Biologically scored', comparison.summary.biologically_scored],
+                        ['Incompatible', comparison.summary.incompatible],
+                        ['Unmapped', comparison.summary.unmapped],
+                        ['Missing reference', comparison.summary.missing_reference],
+                        ['Missing target', comparison.summary.missing_target],
+                        ['Missing both', comparison.summary.missing_both],
+                        ['Transitions', comparison.summary.transitions],
+                    ] as const).map(([label, value]) => <div key={label} className="rounded border border-slate-800 bg-slate-950/40 p-2"><div className="text-[10px] uppercase tracking-wide text-slate-500">{label}</div><div className="font-mono text-lg text-slate-100">{value}</div></div>)}
                 </div>
                 {rowsQuery.isError && <div role="alert" className="text-sm text-red-300">Comparison rows unavailable.</div>}
                 {rowsQuery.data?.next_offset != null && <div role="alert" className="rounded border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-100">Only the first {rows.length.toLocaleString()} of {rowsQuery.data.total.toLocaleString()} rows are loaded; filter or page before making a complete claim.</div>}

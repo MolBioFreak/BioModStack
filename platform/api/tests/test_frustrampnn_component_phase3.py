@@ -10,9 +10,16 @@ import shutil
 import subprocess
 
 import pytest
+import rfc8785
 
-from services.frustrampnn.contracts import AA_ORDER, canonical_json_bytes
+from services.frustrampnn.configuration import execution_configuration
+from services.frustrampnn.contracts import AA_ORDER, canonical_json_bytes, canonical_sha256
 from services.frustrampnn.runtime import FRUSTRAMPNN_RUNTIME_IDENTITY, FrustraMPNNRuntimeIdentity
+from services.frustrampnn.settings import (
+    FrustraMPNNRequestedSettings,
+    resolve_effective_settings,
+)
+from services.frustrampnn.structure import normalize_structure
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -39,6 +46,176 @@ def _one_residue_pdb() -> bytes:
             f"{1.0:6.2f}{20.0:6.2f}          {element:>2}  \n"
         )
     return "".join(lines).encode("ascii") + b"END\n"
+
+
+def _multi_residue_pdb(residues: list[tuple[str, int]]) -> bytes:
+    lines: list[str] = []
+    serial = 1
+    for chain, residue_id in residues:
+        for atom, element in (("N", "N"), ("CA", "C"), ("C", "C"), ("O", "O")):
+            atom_field = f" {atom:<3}"
+            lines.append(
+                f"ATOM  {serial:5d} {atom_field} GLY {chain}{residue_id:4d}    "
+                f"{serial:8.3f}{serial + 1:8.3f}{serial + 2:8.3f}"
+                f"{1.0:6.2f}{20.0:6.2f}          {element:>2}  \n"
+            )
+            serial += 1
+    return "".join(lines).encode("ascii") + b"END\n"
+
+
+def _v2_inputs(
+    tmp_path: Path,
+    *,
+    residues: list[tuple[str, int]],
+    selected: list[tuple[str, int]],
+    thresholds: tuple[float, float] = (-0.5, 0.5),
+) -> tuple[dict[str, object], Path, Path, dict[str, object]]:
+    source = tmp_path / "source.pdb"
+    source.write_bytes(_multi_residue_pdb(residues))
+    normalized = tmp_path / "normalized_input.pdb"
+    structure_map_path = tmp_path / "frustrampnn_structure_map_v1.json"
+    structure_map = normalize_structure(
+        input_path=source,
+        output_pdb_path=normalized,
+        map_path=structure_map_path,
+        target_id="target-v2",
+        parent_job_id="job-v2",
+        candidate_id="candidate-v2",
+        identity_authority={
+            "kind": "pdb_self_identity_v1",
+            "identity_domain": "candidate_local",
+            "authority_artifact_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        },
+        protein_selection={"mode": "all_protein_entities"},
+        selected_model=1,
+        altloc_policy="blank_or_explicit:<blank>",
+    )
+    by_normalized = {
+        (row["pdb_chain_id"], row["model_position"]): row
+        for row in structure_map["rows"]
+        if row["status"] == "mapped"
+    }
+    selectors = []
+    for key in selected:
+        row = by_normalized[key]
+        selectors.append({
+            field: row[field]
+            for field in (
+                "entity_instance_id", "source_entity_id", "label_asym_id", "auth_asym_id",
+                "auth_seq_id", "insertion_code", "sequence_index",
+            )
+        })
+    requested = FrustraMPNNRequestedSettings.model_validate({
+        "protein_selection": {
+            "mode": "selected_residues",
+            "entities": [],
+            "residues": selectors,
+        },
+        "source_structure": {"selected_model_number": 1, "preferred_altloc": ""},
+        "classification_policy": {
+            "mode": "custom",
+            "high_max": thresholds[0],
+            "minimal_min": thresholds[1],
+        },
+    })
+    effective = resolve_effective_settings(requested, structure_map)
+    configuration = execution_configuration(effective)
+    request: dict[str, object] = {
+        "schema_name": "workflow_component_request",
+        "schema_version": 2,
+        "component_id": "frustrampnn",
+        "component_contract_version": "2.0",
+        "invocation_id": "invoke-v2",
+        "parent_job_id": "job-v2",
+        "parent_workflow_id": "structure_prediction",
+        "candidate_id": "candidate-v2",
+        "source_artifact": {
+            "relative_path": "inputs/original.pdb",
+            "sha256": structure_map["source_sha256"],
+            "media_type": "chemical/x-pdb",
+            "producer_stage": "prediction",
+            "artifact_id": None,
+        },
+        "requiredness": "required",
+        "identity_authority": "pdb_coordinates",
+        "settings_value_origin": requested.settings_value_origin,
+        "requested_settings": requested.model_dump(mode="json", exclude_none=False),
+        "requested_settings_sha256": effective.settings_sha256,
+        "effective_settings": effective.model_dump(mode="json", exclude_none=False),
+        "effective_settings_sha256": effective.effective_settings_sha256,
+        "classification_policy_sha256": effective.threshold_policy_sha256,
+        "capability_inventory_byte_sha256": effective.capability_inventory_byte_sha256,
+        "runtime_identity_sha256": configuration.runtime_identity_sha256,
+        "structure_map_sha256": canonical_sha256(structure_map),
+        "normalized_pdb_sha256": hashlib.sha256(normalized.read_bytes()).hexdigest(),
+        "execution_configuration": configuration.model_dump(mode="json", exclude_none=False),
+        "execution_configuration_sha256": configuration.configuration_sha256,
+        "requested_outputs": [
+            "structure_map", "raw_csv", "landscape", "summary", "execution_receipt",
+        ],
+    }
+    return request, normalized, structure_map_path, structure_map
+
+
+def _mock_v2_runtime(
+    component,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    scores: dict[str, float] | None = None,
+    fail_ordinal: int | None = None,
+) -> list[list[str]]:
+    runtime = importlib.import_module("services.frustrampnn.runtime")
+    container = tmp_path / "mock.sif"
+    container.write_bytes(b"mock")
+    calls: list[list[str]] = []
+    monkeypatch.setattr(runtime, "validate_configured_container_path", lambda *_args, **_kwargs: str(container))
+
+    def open_container(*_args, **_kwargs):
+        return runtime.PinnedContainer(
+            os.open(container, os.O_RDONLY),
+            FRUSTRAMPNN_RUNTIME_IDENTITY.sif_sha256,
+        )
+
+    monkeypatch.setattr(runtime, "open_verified_container", open_container)
+    monkeypatch.setattr(runtime, "verify_container_assets", lambda *_args, **_kwargs: {
+        "executable_sha256": FRUSTRAMPNN_RUNTIME_IDENTITY.executable_sha256,
+        "checkpoint_sha256": FRUSTRAMPNN_RUNTIME_IDENTITY.checkpoint_sha256,
+    })
+
+    def execute(invocation, _pinned, **_kwargs):
+        argv = list(invocation.argv)
+        calls.append(argv)
+        ordinal = len(calls) - 1
+        if fail_ordinal == ordinal:
+            return subprocess.CompletedProcess(argv, 17)
+        binds = [argv[index + 1] for index, token in enumerate(argv) if token == "--bind"]
+        output_root = Path(next(value.split(":", 1)[0] for value in binds if value.endswith(":/bms/output:rw")))
+        output_name = Path(argv[argv.index("--output") + 1]).name
+        chains = argv[argv.index("--chains") + 1].split(",")
+        positions = [int(value) for value in argv[argv.index("--positions") + 1].split(",")]
+        with (output_root / output_name).open("w", encoding="utf-8", newline="") as handle:
+            writer = __import__("csv").DictWriter(
+                handle,
+                fieldnames=["frustration_pred", "position", "wildtype", "mutation", "chain", "pdb"],
+                lineterminator="\n",
+            )
+            writer.writeheader()
+            for chain in chains:
+                for position in positions:
+                    for mutation in AA_ORDER:
+                        writer.writerow({
+                            "frustration_pred": (scores or {}).get(mutation, 0.0),
+                            "position": position,
+                            "wildtype": "G",
+                            "mutation": mutation,
+                            "chain": chain,
+                            "pdb": "normalized",
+                        })
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(runtime, "execute_frustrampnn", execute)
+    return calls
 
 
 def _request(source: Path, **updates: object) -> dict[str, object]:
@@ -401,6 +578,314 @@ def test_external_authority_bytes_are_request_bound_and_published_exactly(
     validate_result_manifest(output, manifest)
 
 
+@pytest.mark.parametrize("tamper", ["normalized", "structure_map"])
+def test_v2_physical_input_tamper_fails_before_any_subprocess(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tamper: str,
+) -> None:
+    component = _component()
+    request, normalized, structure_map_path, _ = _v2_inputs(
+        tmp_path,
+        residues=[("A", 1)],
+        selected=[("A", 0)],
+    )
+    calls = _mock_v2_runtime(component, monkeypatch, tmp_path)
+    target = normalized if tamper == "normalized" else structure_map_path
+    target.write_bytes(target.read_bytes() + b"tampered\n")
+
+    with pytest.raises(component.ComponentRunError, match="normalized|map|hash|tamper"):
+        component.run_component(
+            request=request,
+            source_structure=normalized,
+            structure_map=structure_map_path,
+            output_dir=tmp_path / "candidate_bundle",
+            container=tmp_path / "mock.sif",
+            physical_gpu_id=3,
+        )
+
+    assert calls == []
+    assert not (tmp_path / "candidate_bundle").exists()
+
+
+@pytest.mark.parametrize(
+    ("selected", "expected"),
+    [
+        (
+            [("A", 0), ("B", 0)],
+            [("A,B", "0")],
+        ),
+        (
+            [("A", 0), ("A", 1), ("B", 0)],
+            [("B", "0"), ("A", "0,1")],
+        ),
+    ],
+)
+def test_v2_exact_invocations_group_only_identical_position_tuples(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    selected: list[tuple[str, int]],
+    expected: list[tuple[str, str]],
+) -> None:
+    component = _component()
+    request, normalized, structure_map_path, _ = _v2_inputs(
+        tmp_path,
+        residues=[("A", 1), ("A", 2), ("B", 1), ("B", 2)],
+        selected=selected,
+    )
+    calls = _mock_v2_runtime(component, monkeypatch, tmp_path)
+
+    component.run_component(
+        request=request,
+        source_structure=normalized,
+        structure_map=structure_map_path,
+        output_dir=tmp_path / "candidate_bundle",
+        container=tmp_path / "mock.sif",
+        physical_gpu_id=3,
+    )
+
+    assert [
+        (argv[argv.index("--chains") + 1], argv[argv.index("--positions") + 1])
+        for argv in calls
+    ] == expected
+    receipt = json.loads(
+        (tmp_path / "candidate_bundle/frustrampnn_execution_receipt_v2.json").read_text()
+    )
+    assert [record["argv"] for record in receipt["commands"]] == calls
+    assert all(record["argv_sha256"] == canonical_sha256(record["argv"]) for record in receipt["commands"])
+
+
+def test_v2_shard_failure_publishes_no_partial_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    component = _component()
+    request, normalized, structure_map_path, _ = _v2_inputs(
+        tmp_path,
+        residues=[("A", 1), ("A", 2), ("B", 1)],
+        selected=[("A", 0), ("A", 1), ("B", 0)],
+    )
+    calls = _mock_v2_runtime(component, monkeypatch, tmp_path, fail_ordinal=1)
+
+    with pytest.raises(component.ComponentRunError, match="nonzero|shard|inference"):
+        component.run_component(
+            request=request,
+            source_structure=normalized,
+            structure_map=structure_map_path,
+            output_dir=tmp_path / "candidate_bundle",
+            container=tmp_path / "mock.sif",
+            physical_gpu_id=3,
+        )
+
+    assert len(calls) == 2
+    assert not (tmp_path / "candidate_bundle").exists()
+    assert not list(tmp_path.rglob("frustrampnn_result_manifest_v2.json"))
+    assert not list(tmp_path.rglob("frustrampnn_statistics_v1.json"))
+
+
+def test_v2_complete_bundle_classifies_custom_threshold_boundaries_and_closes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    component = _component()
+    request, normalized, structure_map_path, _ = _v2_inputs(
+        tmp_path,
+        residues=[("A", 1)],
+        selected=[("A", 0)],
+        thresholds=(-0.5, 0.5),
+    )
+    calls = _mock_v2_runtime(
+        component,
+        monkeypatch,
+        tmp_path,
+        scores={"A": -0.5, "C": 0.5},
+    )
+    output = tmp_path / "candidate_bundle"
+
+    manifest = component.run_component(
+        request=request,
+        source_structure=normalized,
+        structure_map=structure_map_path,
+        output_dir=output,
+        container=tmp_path / "mock.sif",
+        physical_gpu_id=3,
+    )
+
+    from services.frustrampnn.manifests import (
+        V2_CANONICAL_ARTIFACT_PATHS,
+        V2_MANIFEST_PATH,
+        validate_result_manifest,
+    )
+
+    assert len(calls) == 1
+    assert sorted(path.name for path in output.iterdir()) == sorted(
+        (*V2_CANONICAL_ARTIFACT_PATHS, V2_MANIFEST_PATH)
+    )
+    assert (output / "frustrampnn_structure_map_v1.json").is_file()
+    assert not {
+        "workflow_component_request_v1.json",
+        "frustrampnn_landscape_v1.json",
+        "frustrampnn_summary_v1.json",
+        "frustrampnn_execution_receipt_v1.json",
+        "workflow_component_result_v1.json",
+        "frustrampnn_result_manifest_v1.json",
+    }.intersection(path.name for path in output.iterdir())
+    landscape = json.loads((output / "frustrampnn_landscape_v2.json").read_text())
+    classes = {slot["mutation_aa"]: slot["class"] for slot in landscape["residues"][0]["slots"]}
+    assert classes["A"] == "high"
+    assert classes["C"] == "minimal"
+    validate_result_manifest(output, manifest)
+
+
+def test_v2_successful_bundle_emits_valid_attested_statistics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services.frustrampnn.analytics import (
+        comparison_compatibility_id,
+        validate_statistics_receipt,
+    )
+
+    component = _component()
+    request, normalized, structure_map_path, structure_map = _v2_inputs(
+        tmp_path,
+        residues=[("A", 1)],
+        selected=[("A", 0)],
+    )
+    _mock_v2_runtime(component, monkeypatch, tmp_path)
+    output = tmp_path / "candidate_bundle"
+
+    manifest = component.run_component(
+        request=request,
+        request_payload=canonical_json_bytes(request),
+        source_structure=normalized,
+        structure_map=structure_map_path,
+        output_dir=output,
+        container=tmp_path / "mock.sif",
+        physical_gpu_id=3,
+    )
+
+    statistics_path = output / "frustrampnn_statistics_v1.json"
+    statistics_bytes = statistics_path.read_bytes()
+    statistics = json.loads(statistics_bytes)
+    validate_statistics_receipt(statistics)
+    assert statistics_bytes == rfc8785.dumps(statistics)
+    without_self_hash = {
+        key: value for key, value in statistics.items() if key != "statistics_sha256"
+    }
+    assert statistics["statistics_sha256"] == hashlib.sha256(
+        rfc8785.dumps(without_self_hash)
+    ).hexdigest()
+    assert statistics["comparison_compatibility_id"] == comparison_compatibility_id(
+        statistics["comparison_compatibility_basis"]
+    )
+    assert statistics["source_artifact_sha256"] == request["source_artifact"]["sha256"]
+    assert statistics["structure_map"]["sha256"] == canonical_sha256(structure_map)
+
+    records = {
+        record["relative_path"]: record for record in manifest["artifacts"]
+    }
+    assert records["frustrampnn_statistics_v1.json"] == {
+        "relative_path": "frustrampnn_statistics_v1.json",
+        "schema_name": "frustrampnn_statistics",
+        "schema_version": 1,
+        "sha256": hashlib.sha256(statistics_bytes).hexdigest(),
+        "bytes": len(statistics_bytes),
+        "cardinality": {"kind": "records", "count": 1},
+    }
+    assert manifest["statistics_sha256"] == statistics["statistics_sha256"]
+    assert manifest["comparison_compatibility_id"] == statistics[
+        "comparison_compatibility_id"
+    ]
+
+
+def test_v1_rejects_v2_structure_map_argument_before_runtime(
+    tmp_path: Path,
+    stub_runtime,
+) -> None:
+    component = _component()
+    apptainer, container, identity = stub_runtime
+    source = tmp_path / "candidate.pdb"
+    source.write_bytes(_one_residue_pdb())
+    structure_map = tmp_path / "frustrampnn_structure_map_v1.json"
+    structure_map.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(component.ComponentRunError, match="structure.map|v1|ambiguous"):
+        component.run_component(
+            request=_request(source),
+            source_structure=source,
+            structure_map=structure_map,
+            output_dir=tmp_path / "candidate_bundle",
+            container=container,
+            apptainer=apptainer,
+            physical_gpu_id=3,
+            runtime_identity=identity,
+        )
+
+    assert not (tmp_path / "candidate_bundle").exists()
+
+
+def test_v2_rejects_empty_request_payload_before_any_subprocess(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    component = _component()
+    request, normalized, structure_map, _ = _v2_inputs(
+        tmp_path,
+        residues=[("A", 1)],
+        selected=[("A", 0)],
+    )
+    calls = _mock_v2_runtime(component, monkeypatch, tmp_path)
+
+    with pytest.raises(component.ComponentRunError, match="request_invalid|canonical JSON"):
+        component.run_component(
+            request=request,
+            request_payload=b"",
+            source_structure=normalized,
+            structure_map=structure_map,
+            output_dir=tmp_path / "candidate_bundle",
+            container=tmp_path / "mock.sif",
+            physical_gpu_id=3,
+        )
+
+    assert calls == []
+    assert not (tmp_path / "candidate_bundle").exists()
+
+
+def test_v2_oversized_runtime_log_publishes_no_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    component = _component()
+    request, normalized, structure_map, _ = _v2_inputs(
+        tmp_path,
+        residues=[("A", 1)],
+        selected=[("A", 0)],
+    )
+    _mock_v2_runtime(component, monkeypatch, tmp_path)
+    runtime = importlib.import_module("services.frustrampnn.runtime")
+    execute = runtime.execute_frustrampnn
+
+    def execute_with_oversized_log(invocation, pinned, **kwargs):
+        kwargs["stdout"].write(b"x" * (4 * 1024 * 1024 + 1))
+        return execute(invocation, pinned, **kwargs)
+
+    monkeypatch.setattr(runtime, "execute_frustrampnn", execute_with_oversized_log)
+    output = tmp_path / "candidate_bundle"
+
+    with pytest.raises(component.ComponentRunError, match="runtime_log_too_large"):
+        component.run_component(
+            request=request,
+            source_structure=normalized,
+            structure_map=structure_map,
+            output_dir=output,
+            container=tmp_path / "mock.sif",
+            physical_gpu_id=3,
+        )
+
+    assert not output.exists()
+
+
 @pytest.mark.parametrize(
     "mutation", [
         "digest", "noncanonical", "duplicate_key", "source", "self_extra", "self_null",
@@ -569,3 +1054,51 @@ def test_preflight_uses_provisioned_api_python_without_model_inference() -> None
         "sif_sha256": FRUSTRAMPNN_RUNTIME_IDENTITY.sif_sha256,
         "status": "ready",
     }
+
+
+def test_component_regular_reader_rejects_by_role_limit_before_reading(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    component = _component()
+    oversized = tmp_path / "oversized.bin"
+    oversized.write_bytes(b"x" * 9)
+    pread_calls: list[tuple[int, int]] = []
+    real_pread = component.os.pread
+
+    def recording_pread(descriptor: int, count: int, offset: int) -> bytes:
+        pread_calls.append((count, offset))
+        return real_pread(descriptor, count, offset)
+
+    monkeypatch.setattr(component.os, "pread", recording_pread)
+
+    with pytest.raises(component.ComponentRunError, match="too.large|read limit|9"):
+        component._read_regular(oversized, label="raw shard", max_bytes=8)
+
+    assert pread_calls == []
+
+
+def test_component_regular_reader_detects_growth_without_allocating_limit_plus_one(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    component = _component()
+    path = tmp_path / "growing.bin"
+    path.write_bytes(b"1234")
+    real_pread = component.os.pread
+    requested: list[int] = []
+
+    def growing_pread(descriptor: int, count: int, offset: int) -> bytes:
+        requested.append(count)
+        payload = real_pread(descriptor, count, offset)
+        if offset == 0:
+            with path.open("ab") as handle:
+                handle.write(b"5")
+        return payload
+
+    monkeypatch.setattr(component.os, "pread", growing_pread)
+
+    with pytest.raises(component.ComponentRunError, match="changed|grew|identity"):
+        component._read_regular(path, label="component request", max_bytes=4)
+
+    assert max(requested) <= 4

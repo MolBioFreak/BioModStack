@@ -8,9 +8,11 @@ import importlib
 import importlib.util
 import inspect
 import io
+import os
 from pathlib import Path
 
 import pytest
+import rfc8785
 
 from services.frustrampnn.contracts import (
     AA_ORDER,
@@ -232,6 +234,29 @@ def _build(root: Path):
     return _manifests().build_result_manifest(root)
 
 
+def _v2_bundle(root: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[dict, Path]:
+    from test_frustrampnn_component_phase3 import _mock_v2_runtime, _v2_inputs
+
+    component = importlib.import_module("scripts.run_frustrampnn_component")
+    inputs = root.parent / f"{root.name}-inputs"
+    inputs.mkdir()
+    request, normalized, structure_map, _ = _v2_inputs(
+        inputs,
+        residues=[("A", 1)],
+        selected=[("A", 0)],
+    )
+    _mock_v2_runtime(component, monkeypatch, inputs)
+    manifest = component.run_component(
+        request=request,
+        source_structure=normalized,
+        structure_map=structure_map,
+        output_dir=root,
+        container=inputs / "mock.sif",
+        physical_gpu_id=3,
+    )
+    return manifest, inputs / "source.pdb"
+
+
 def _rehash_bundle(root: Path) -> None:
     """Rebind all cryptographic links after a hostile physical/semantic mutation."""
     from services.frustrampnn.contracts import canonical_json_loads
@@ -295,6 +320,9 @@ def test_atomic_publisher_replays_exact_bundle_and_rejects_contradiction(tmp_pat
     }
     assert all(not Path(value).is_absolute() for value in first.values())
     assert (allowed / first["source"]).read_bytes() == (source / "normalized_input.pdb").read_bytes()
+    assert (allowed / first["manifest"]).read_bytes() == (
+        source / publisher.MANIFEST_PATH
+    ).read_bytes()
     publisher.publish(
         source_bundle=source, allowed_root=allowed, destination=destination, marker=marker,
     )
@@ -314,6 +342,227 @@ def test_atomic_publisher_replays_exact_bundle_and_rejects_contradiction(tmp_pat
             destination=destination,
             marker=tmp_path / "contradictory-marker.json",
         )
+
+
+def test_v1_and_v2_manifests_validate_complete_exact_generations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _manifests()
+    v1 = tmp_path / "v1"
+    v1.mkdir()
+    _bundle(v1)
+    v1_manifest = module.build_result_manifest(v1)
+    (v1 / module.MANIFEST_PATH).write_bytes(canonical_json_bytes(v1_manifest))
+    assert module.load_result_manifest(v1) == v1_manifest
+    module.validate_result_manifest(v1, v1_manifest)
+
+    v2 = tmp_path / "v2"
+    v2_manifest, _ = _v2_bundle(v2, monkeypatch)
+    assert v2_manifest["schema_version"] == 2
+    assert module.result_manifest_path(v2) == module.V2_MANIFEST_PATH
+    assert module.load_result_manifest(v2) == v2_manifest
+    module.validate_result_manifest(v2, v2_manifest)
+
+
+def test_v2_manifest_rejects_mixed_v1_filename_even_when_bytes_are_valid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _manifests()
+    v2 = tmp_path / "v2"
+    manifest, _ = _v2_bundle(v2, monkeypatch)
+    (v2 / "frustrampnn_summary_v1.json").write_bytes(
+        (v2 / "frustrampnn_summary_v2.json").read_bytes()
+    )
+
+    with pytest.raises(module.ManifestValidationError, match="mixed|generation|path set|unmanifested"):
+        module.validate_result_manifest(v2, manifest)
+
+
+def test_v2_manifest_rejects_fully_rehashed_unsafe_receipt_bind_host(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services.frustrampnn.contracts import canonical_json_loads
+
+    module = _manifests()
+    v2 = tmp_path / "v2"
+    _v2_bundle(v2, monkeypatch)
+    (v2 / module.V2_MANIFEST_PATH).unlink()
+    (v2 / "workflow_component_result_v2.json").unlink()
+    receipt_path = v2 / "frustrampnn_execution_receipt_v2.json"
+    receipt = canonical_json_loads(receipt_path.read_bytes())
+    command = receipt["commands"][0]
+    bind_index = command["argv"].index("--bind") + 1
+    command["argv"][bind_index] = "/safe/../escape:/bms/input/normalized.pdb:ro"
+    command["argv_sha256"] = canonical_sha256(command["argv"])
+    receipt_path.write_bytes(canonical_json_bytes(receipt))
+
+    with pytest.raises(module.ManifestValidationError, match="bind|unsafe|lexical"):
+        module.build_result_manifest(v2)
+
+
+def test_atomic_publisher_accepts_complete_v2_and_preserves_original_source_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services.frustrampnn.contracts import canonical_json_loads
+
+    source_bundle = tmp_path / "v2-source"
+    _, original_source = _v2_bundle(source_bundle, monkeypatch)
+    publisher_path = REPO_ROOT / "scripts" / "publish_frustrampnn_bundle.py"
+    spec = importlib.util.spec_from_file_location("publish_frustrampnn_bundle_v2", publisher_path)
+    assert spec is not None and spec.loader is not None
+    publisher = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(publisher)
+    allowed = tmp_path / "published"
+    canonical_source = allowed / "inputs/original.pdb"
+    canonical_source.parent.mkdir(parents=True)
+    canonical_source.write_bytes(original_source.read_bytes())
+    destination = allowed / "frustrampnn/results/candidate-v2"
+    marker = tmp_path / "v2-published.json"
+
+    result = publisher.publish(
+        source_bundle=source_bundle,
+        allowed_root=allowed,
+        destination=destination,
+        marker=marker,
+    )
+
+    assert result == {
+        "result": "frustrampnn/results/candidate-v2/workflow_component_result_v2.json",
+        "manifest": "frustrampnn/results/candidate-v2/frustrampnn_result_manifest_v2.json",
+        "source": "inputs/original.pdb",
+        "statistics": "frustrampnn/results/candidate-v2/frustrampnn_statistics_v1.json",
+    }
+    assert canonical_source.read_bytes() == original_source.read_bytes()
+    assert canonical_json_loads(marker.read_bytes()) == result
+    manifest_bytes = (source_bundle / "frustrampnn_result_manifest_v2.json").read_bytes()
+    assert (allowed / result["manifest"]).read_bytes() == manifest_bytes
+    published_result = canonical_json_loads((allowed / result["result"]).read_bytes())
+    assert published_result["result_manifest"]["sha256"] == hashlib.sha256(
+        manifest_bytes
+    ).hexdigest()
+
+
+@pytest.mark.parametrize(
+    "mutation", ["incomplete", "mixed", "missing_statistics", "extra_statistics"]
+)
+def test_atomic_publisher_rejects_incomplete_or_mixed_v2_bundle(
+    mutation: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_bundle = tmp_path / "v2-source"
+    _, original_source = _v2_bundle(source_bundle, monkeypatch)
+    if mutation == "incomplete":
+        (source_bundle / "frustrampnn_summary_v2.json").unlink()
+    elif mutation == "missing_statistics":
+        (source_bundle / "frustrampnn_statistics_v1.json").unlink()
+    elif mutation == "extra_statistics":
+        (source_bundle / "frustrampnn_statistics_v2.json").write_bytes(
+            (source_bundle / "frustrampnn_statistics_v1.json").read_bytes()
+        )
+    else:
+        (source_bundle / "frustrampnn_summary_v1.json").write_bytes(
+            (source_bundle / "frustrampnn_summary_v2.json").read_bytes()
+        )
+
+    publisher_path = REPO_ROOT / "scripts" / "publish_frustrampnn_bundle.py"
+    spec = importlib.util.spec_from_file_location(
+        f"publish_frustrampnn_bundle_v2_{mutation}", publisher_path
+    )
+    assert spec is not None and spec.loader is not None
+    publisher = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(publisher)
+    allowed = tmp_path / "published"
+    canonical_source = allowed / "inputs/original.pdb"
+    canonical_source.parent.mkdir(parents=True)
+    canonical_source.write_bytes(original_source.read_bytes())
+    destination = allowed / "frustrampnn/results/candidate-v2"
+    marker = tmp_path / "must-not-exist.json"
+
+    with pytest.raises(ValueError, match="missing|unmanifested|generation|path set"):
+        publisher.publish(
+            source_bundle=source_bundle,
+            allowed_root=allowed,
+            destination=destination,
+            marker=marker,
+        )
+
+    assert not destination.exists()
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("mutation", ["physical_tamper", "self_consistency_broken"])
+def test_atomic_publisher_rejects_tampered_or_rehashed_inconsistent_v2_statistics(
+    mutation: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services.frustrampnn.contracts import canonical_json_loads
+
+    source_bundle = tmp_path / "v2-source"
+    _, original_source = _v2_bundle(source_bundle, monkeypatch)
+    statistics_path = source_bundle / "frustrampnn_statistics_v1.json"
+    statistics = canonical_json_loads(statistics_path.read_bytes())
+    statistics["support"]["selected_residue_count"] += 1
+    if mutation == "self_consistency_broken":
+        statistics.pop("statistics_sha256")
+        statistics["statistics_sha256"] = hashlib.sha256(
+            rfc8785.dumps(statistics)
+        ).hexdigest()
+    statistics_bytes = rfc8785.dumps(statistics)
+    statistics_path.write_bytes(statistics_bytes)
+
+    if mutation == "self_consistency_broken":
+        manifest_path = source_bundle / "frustrampnn_result_manifest_v2.json"
+        manifest = canonical_json_loads(manifest_path.read_bytes())
+        manifest["statistics_sha256"] = statistics["statistics_sha256"]
+        manifest["comparison_compatibility_id"] = statistics[
+            "comparison_compatibility_id"
+        ]
+        record = next(
+            item
+            for item in manifest["artifacts"]
+            if item["relative_path"] == "frustrampnn_statistics_v1.json"
+        )
+        record["sha256"] = hashlib.sha256(statistics_bytes).hexdigest()
+        record["bytes"] = len(statistics_bytes)
+        manifest_bytes = canonical_json_bytes(manifest)
+        manifest_path.write_bytes(manifest_bytes)
+        result_path = source_bundle / "workflow_component_result_v2.json"
+        result = canonical_json_loads(result_path.read_bytes())
+        result["result_manifest"]["sha256"] = hashlib.sha256(
+            manifest_bytes
+        ).hexdigest()
+        result_path.write_bytes(canonical_json_bytes(result))
+
+    publisher_path = REPO_ROOT / "scripts" / "publish_frustrampnn_bundle.py"
+    spec = importlib.util.spec_from_file_location(
+        f"publish_frustrampnn_bundle_v2_stats_{mutation}", publisher_path
+    )
+    assert spec is not None and spec.loader is not None
+    publisher = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(publisher)
+    allowed = tmp_path / "published"
+    canonical_source = allowed / "inputs/original.pdb"
+    canonical_source.parent.mkdir(parents=True)
+    canonical_source.write_bytes(original_source.read_bytes())
+    destination = allowed / "frustrampnn/results/candidate-v2"
+    marker = tmp_path / "must-not-exist.json"
+
+    with pytest.raises(ValueError, match="statistics|hash|recompute|authority"):
+        publisher.publish(
+            source_bundle=source_bundle,
+            allowed_root=allowed,
+            destination=destination,
+            marker=marker,
+        )
+
+    assert not destination.exists()
+    assert not marker.exists()
 
 
 def test_atomic_publisher_removes_new_bundle_when_source_conflicts(tmp_path: Path) -> None:
@@ -807,9 +1056,9 @@ def test_manifest_reads_each_artifact_once_for_build_and_validation(
     original_read = module._read_regular
     reads: dict[str, int] = {}
 
-    def counted_read(root, relative: str) -> bytes:
+    def counted_read(root, relative: str, **kwargs) -> bytes:
         reads[relative] = reads.get(relative, 0) + 1
-        return original_read(root, relative)
+        return original_read(root, relative, **kwargs)
 
     monkeypatch.setattr(module, "_read_regular", counted_read)
     manifest = module.build_result_manifest(tmp_path)
@@ -831,14 +1080,14 @@ def test_manifest_rejects_transient_path_set_mutation_after_initial_scandir(
     original_read = module._read_regular
     mutated = False
 
-    def mutate_directory_generation(root, relative: str) -> bytes:
+    def mutate_directory_generation(root, relative: str, **kwargs) -> bytes:
         nonlocal mutated
         if not mutated:
             mutated = True
             transient = tmp_path / "unmanifested-during-read.txt"
             transient.write_text("hostile", encoding="utf-8")
             transient.unlink()
-        return original_read(root, relative)
+        return original_read(root, relative, **kwargs)
 
     monkeypatch.setattr(module, "_read_regular", mutate_directory_generation)
     with pytest.raises(module.ManifestValidationError, match="generation|path set|mutat"):
@@ -1082,3 +1331,117 @@ def test_manifest_rejects_symlinked_parent_component(tmp_path: Path) -> None:
     linked = tmp_path / "linked"; linked.symlink_to(real, target_is_directory=True)
     with pytest.raises(module.ManifestValidationError, match="symlink|follow|root"):
         _build(linked)
+
+
+def test_bounded_reader_rejects_oversize_from_fstat_before_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _manifests()
+    oversized = tmp_path / "oversized.bin"
+    with oversized.open("wb") as handle:
+        handle.truncate(65)
+
+    def forbidden_fdopen(*_args, **_kwargs):
+        raise AssertionError("oversized file reached allocation/read")
+
+    monkeypatch.setattr(module.os, "fdopen", forbidden_fdopen)
+    with pytest.raises(module.ManifestValidationError, match="size|limit|large"):
+        module._read_regular(tmp_path, oversized.name, max_bytes=64)
+
+
+def test_bounded_reader_rejects_file_growth_during_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _manifests()
+    artifact = tmp_path / "artifact.bin"
+    artifact.write_bytes(b"abc")
+    real_fstat = module.os.fstat
+    regular_calls = 0
+
+    class ChangedSize:
+        def __init__(self, original: os.stat_result) -> None:
+            self._original = original
+            self.st_size = original.st_size + 1
+
+        def __getattr__(self, name: str):
+            return getattr(self._original, name)
+
+    def growing_fstat(descriptor: int):
+        nonlocal regular_calls
+        metadata = real_fstat(descriptor)
+        if metadata.st_size == 3:
+            regular_calls += 1
+            if regular_calls == 2:
+                return ChangedSize(metadata)
+        return metadata
+
+    monkeypatch.setattr(module.os, "fstat", growing_fstat)
+    with pytest.raises(module.ManifestValidationError, match="grew|changed|mutated|size"):
+        module._read_regular(tmp_path, artifact.name, max_bytes=64)
+
+
+def test_manifest_loader_rejects_oversized_manifest_before_json_parse(tmp_path: Path) -> None:
+    module = _manifests()
+    manifest = tmp_path / module.V2_MANIFEST_PATH
+    with manifest.open("wb") as handle:
+        handle.truncate(64 * 1024 + 1)
+
+    with pytest.raises(module.ManifestValidationError, match="manifest.*(size|limit|large)"):
+        module.load_result_manifest(tmp_path)
+
+
+def test_v2_validator_rejects_unbounded_declared_artifact_size(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _manifests()
+    root = tmp_path / "v2"
+    manifest, _ = _v2_bundle(root, monkeypatch)
+    hostile = copy.deepcopy(manifest)
+    hostile["artifacts"][4]["bytes"] = 64 * 1024 * 1024 + 1
+    (root / module.V2_MANIFEST_PATH).write_bytes(canonical_json_bytes(hostile))
+
+    with pytest.raises(module.ManifestValidationError, match="artifact.*(size|limit|large)"):
+        module.validate_result_manifest(root, hostile)
+
+
+def test_v2_validator_rejects_declared_total_bundle_above_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _manifests()
+    root = tmp_path / "v2"
+    manifest, _ = _v2_bundle(root, monkeypatch)
+    hostile = copy.deepcopy(manifest)
+    for record in hostile["artifacts"]:
+        record["bytes"] = (
+            4 * 1024 * 1024
+            if record["relative_path"].endswith(".log")
+            else 64 * 1024 * 1024
+        )
+    (root / module.V2_MANIFEST_PATH).write_bytes(canonical_json_bytes(hostile))
+
+    with pytest.raises(module.ManifestValidationError, match="total bundle.*(size|limit|large)"):
+        module.validate_result_manifest(root, hostile)
+
+
+def test_public_manifest_loader_returns_exact_bounded_bytes_and_document(
+    tmp_path: Path,
+) -> None:
+    module = _manifests()
+    root = tmp_path / "bundle"
+    root.mkdir()
+    _bundle(root)
+    manifest = module.build_result_manifest(root)
+    manifest_bytes = canonical_json_bytes(manifest)
+    (root / module.MANIFEST_PATH).write_bytes(manifest_bytes)
+
+    manifest_name, observed_bytes, observed_document = (
+        module.load_result_manifest_bytes_and_document(root)
+    )
+
+    assert manifest_name == module.MANIFEST_PATH
+    assert observed_bytes == manifest_bytes
+    assert observed_document == manifest

@@ -1,12 +1,17 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { downloadDesignPdb } from '../lib/api.js';
 import {
     analyzeFrustraMpnnDesigns,
     fetchFrustraMpnnReceipt,
+    inspectFrustraMpnnUploadedSource,
+    validateFrustraMpnnUploadedSettings,
     type FrustraMpnnChildReceipt,
+    type FrustraMpnnRequestedSettings,
 } from '../lib/frustraMpnnApi.js';
 import { useModelIntegrationConfig } from './ModelIntegrationControl';
+import { FrustraMpnnSettingsPanel } from './frustrampnn/FrustraMpnnSettingsPanel.js';
+import { CANONICAL_FRUSTRAMPNN_SETTINGS } from './frustrampnn/frustraMpnnSettingsState.js';
 
 interface OwnedDesignSelection {
     id: string;
@@ -36,7 +41,10 @@ const resolveOwnedSelection = async (design: OwnedDesignSelection) => {
     if (!response.ok) throw new Error(`${design.name} structure authority could not be read (${response.status}).`);
     const bytes = await response.arrayBuffer();
     if (bytes.byteLength === 0) throw new Error(`${design.name} structure authority is empty.`);
-    return { design_id: design.id, source_sha256: await sha256Hex(bytes) };
+    return {
+        selection: { design_id: design.id, source_sha256: await sha256Hex(bytes) },
+        file: new File([bytes], `${design.id}.pdb`, { type: 'chemical/x-pdb' }),
+    };
 };
 
 const stateClass = (status: string): string => {
@@ -53,13 +61,47 @@ export default function FrustraMpnnAnalysisControls({
     const integrationQuery = useModelIntegrationConfig('frustrampnn');
     const integration = integrationQuery.data;
     const [receipt, setReceipt] = useState<FrustraMpnnChildReceipt | null>(null);
+    const [frustrampnnSettings, setFrustrampnnSettings] = useState<FrustraMpnnRequestedSettings>(CANONICAL_FRUSTRAMPNN_SETTINGS);
+    const [governedPreview, setGovernedPreview] = useState<Awaited<ReturnType<typeof resolveOwnedSelection>> | null>(null);
+    const [previewError, setPreviewError] = useState<string | null>(null);
     const selectionIsOwned = selectedDesigns.length > 0 && selectedDesigns.every((design) => Boolean(design.pdb_path));
     const orderedNames = useMemo(() => selectedDesigns.map((design) => design.name).join(' • '), [selectedDesigns]);
+    const firstDesign = selectedDesigns[0];
+    const firstDesignId = firstDesign?.id ?? null;
+    const firstDesignName = firstDesign?.name ?? null;
+    const firstDesignPath = firstDesign?.pdb_path ?? null;
+
+    useEffect(() => {
+        let current = true;
+        setGovernedPreview(null);
+        setPreviewError(null);
+        if (!firstDesignId || !firstDesignName || !firstDesignPath) return () => { current = false; };
+        resolveOwnedSelection({ id: firstDesignId, name: firstDesignName, pdb_path: firstDesignPath })
+            .then((resolved) => { if (current) setGovernedPreview(resolved); })
+            .catch((error: unknown) => {
+                if (current) setPreviewError(errorMessage(error));
+            });
+        return () => { current = false; };
+    }, [firstDesignId, firstDesignName, firstDesignPath]);
+
     const submission = useMutation({
         mutationFn: async () => {
-            const selections = [];
-            for (const design of selectedDesigns) selections.push(await resolveOwnedSelection(design));
-            return analyzeFrustraMpnnDesigns(parentJobId, { selections });
+            const resolvedSelections = [];
+            for (const design of selectedDesigns) {
+                resolvedSelections.push(
+                    design.id === firstDesignId && governedPreview
+                        ? governedPreview
+                        : await resolveOwnedSelection(design),
+                );
+            }
+            for (const resolved of resolvedSelections) {
+                await inspectFrustraMpnnUploadedSource(resolved.file, frustrampnnSettings.source_structure);
+                await validateFrustraMpnnUploadedSettings(frustrampnnSettings, resolved.file);
+            }
+            return analyzeFrustraMpnnDesigns(parentJobId, {
+                selections: resolvedSelections.map((resolved) => resolved.selection),
+                frustrampnn_settings: frustrampnnSettings,
+            });
         },
         onSuccess: setReceipt,
     });
@@ -102,13 +144,23 @@ export default function FrustraMpnnAnalysisControls({
                 </div>
                 <button
                     type="button"
-                    disabled={!selectionIsOwned || submission.isPending}
+                    disabled={!selectionIsOwned || !governedPreview || submission.isPending}
                     onClick={() => submission.mutate()}
                     className="rounded-lg border border-cyan-500/50 bg-cyan-500/15 px-4 py-2 text-xs font-semibold text-cyan-100 hover:bg-cyan-500/25 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                     {submission.isPending ? 'Creating queued child…' : `Analyze ${selectedDesigns.length} selected`}
                 </button>
             </div>
+            <FrustraMpnnSettingsPanel
+                value={frustrampnnSettings}
+                onChange={setFrustrampnnSettings}
+                governedSource={governedPreview ? { kind: 'upload', file: governedPreview.file } : undefined}
+            />
+            {previewError && (
+                <div role="alert" className="mt-3 rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-xs text-red-100">
+                    Governed source inspection failed: {previewError}
+                </div>
+            )}
             {submission.isError && (
                 <div role="alert" className="mt-3 rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-xs text-red-100">
                     {errorMessage(submission.error)}
@@ -123,7 +175,6 @@ export default function FrustraMpnnAnalysisControls({
                         </button>
                     </div>
                     <div className="mt-1 font-mono text-[10px] opacity-80">{current.child_job_id}</div>
-                    {current.error_message && <div className="mt-2">{current.error_message}</div>}
                 </div>
             )}
         </section>

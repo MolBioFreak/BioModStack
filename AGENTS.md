@@ -20,6 +20,19 @@ BioModStack is operated as a managed service. Keep the repository limited to cod
 4. Confirm service ownership using the actual process, listener, health/readiness, source revision, and database identity before treating a service as live.
 5. Stop or restart services only through their supported management path. Snapshot or preserve meaningful state before migration, restore, or destructive maintenance.
 
+## Model integration hard rule
+
+- Every scientific model used by BMS shall expose every relevant scientific and inference setting through a closed, versioned global parameter schema.
+- The browser shall provide an appropriate typed control for every relevant setting. Use checkboxes, selectors, sliders with synchronized numeric values, bounded inputs, and typed chain, residue, region, file, or dataset selectors as appropriate.
+- AI agents shall have complete parity through the same typed API schema. Agent-only hidden scientific settings and UI-only scientific settings are prohibited.
+- Defaults, saved values, cloned jobs, retries, and execution receipts shall preserve the complete effective parameter set. Silent fallback, loss, renaming, or dropping of a supported setting is a release blocker.
+- A raw JSON editor does not satisfy the operator-control requirement.
+- Runtime paths, credentials, storage roots, security policy, command construction, container digests, and scheduler-owned physical resource assignment remain system-owned. Record applicable runtime identity in receipts.
+- Model-native results may stay distinct. Reuse global BMS mechanisms for typed persistence, provenance, statistics, visualization, capture, export, comparison, and result viewing wherever the data permits.
+- A workflow may add context and actions. It shall not fork global model settings, numerical authority, analysis semantics, or result-workbench behavior.
+- A model integration is incomplete until the parameter inventory, UI, agent API, execution mapping, persistence, analysis, visualization, and live acceptance all reach 100%.
+- The controlling policy is `docs/Model_Configuration_Operator_Control_and_Agent_Parity.md`. Read it before planning, implementing, reviewing, or accepting any model integration.
+
 ## Development versus production
 
 - **Development:** use `test`, development configuration, isolated development state, and local/managed development services. Validate behavior here first.

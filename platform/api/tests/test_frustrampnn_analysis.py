@@ -320,3 +320,147 @@ def test_raw_csv_rejects_extra_or_trailing_fields_and_retained_1ubq_has_exact_wi
     assert all(set(row) == {
         "frustration_pred", "position", "wildtype", "mutation", "chain", "pdb"
     } for row in rows)
+
+
+def _selected_effective(*, positions: tuple[int, ...] = (0, 1)):
+    settings = importlib.import_module("services.frustrampnn.settings")
+    structure_map = _map()
+    selectors = []
+    for position in positions:
+        row = structure_map["rows"][position]
+        selectors.append({
+            key: row[key]
+            for key in (
+                "entity_instance_id", "source_entity_id", "label_asym_id",
+                "auth_asym_id", "auth_seq_id", "insertion_code", "sequence_index",
+            )
+        })
+    requested = settings.FrustraMPNNRequestedSettings.model_validate({
+        "protein_selection": {
+            "mode": "selected_residues",
+            "entities": [],
+            "residues": selectors,
+        },
+        "source_structure": {
+            "selected_model_number": 1,
+            "preferred_altloc": "A",
+        },
+        "classification_policy": {
+            "mode": "custom",
+            "high_max": -0.5,
+            "minimal_min": 0.5,
+        },
+    })
+    return settings.resolve_effective_settings(requested, structure_map)
+
+
+def _selected_rows(position: int, wt: str) -> list[dict[str, object]]:
+    rows = []
+    for index, mutation in enumerate(AA_ORDER):
+        score = -0.5 if index == 0 else 0.5 if index == 1 else 0.125
+        rows.append({
+            "frustration_pred": score,
+            "position": position,
+            "wildtype": wt,
+            "mutation": mutation,
+            "chain": "A",
+            "pdb": "normalized.pdb",
+        })
+    return rows
+
+
+def test_v2_shard_merge_is_selected_exact_stable_and_classifies_custom_boundaries() -> None:
+    module = _analysis()
+    configuration = importlib.import_module(
+        "services.frustrampnn.configuration"
+    ).execution_configuration
+    effective = _selected_effective()
+    shard_position_1 = _raw(_selected_rows(1, "A")).encode("utf-8")
+    shard_position_0 = _raw(_selected_rows(0, "G")).encode("utf-8")
+
+    merged, landscape = module.finalize_landscape_v2(
+        (shard_position_1, shard_position_0),
+        effective,
+        execution_configuration=configuration(effective),
+        target_id="target-1",
+        parent_job_id="job-1",
+        candidate_id="candidate-1",
+    )
+
+    merged_rows = list(csv.DictReader(merged.decode("utf-8").splitlines()))
+    assert [
+        (row["chain"], int(row["position"]), row["mutation"])
+        for row in merged_rows
+    ] == [
+        ("A", position, mutation)
+        for position in (0, 1)
+        for mutation in AA_ORDER
+    ]
+    assert [slot["class"] for slot in landscape["residues"][0]["slots"][:3]] == [
+        "high", "minimal", "neutral",
+    ]
+    assert [slot["score"] for slot in landscape["residues"][0]["slots"][:3]] == [
+        -0.5, 0.5, 0.125,
+    ]
+    assert landscape["threshold_policy"] == {
+        "mode": "custom", "high_max": -0.5, "minimal_min": 0.5,
+    }
+    assert landscape["threshold_policy_sha256"] == effective.threshold_policy_sha256
+    first_identity = effective.resolved_chains[0].residues[0].model_dump(mode="json")
+    assert {
+        key: landscape["residues"][0][key] for key in first_identity
+    } == first_identity
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("duplicate_across_shards", "duplicate"),
+        ("outside_selection", "selected|outside"),
+        ("missing_slot", "incomplete|missing"),
+        ("wt_mismatch", "WT|wildtype"),
+        ("invalid_aa", "substitution|amino"),
+        ("nonfinite", "nonfinite|finite"),
+        ("bad_header", "header"),
+    ],
+)
+def test_v2_shard_merge_rejects_duplicate_extra_missing_and_malformed_slots(
+    mutation: str,
+    message: str,
+) -> None:
+    module = _analysis()
+    effective = _selected_effective(positions=(0,))
+    rows = _selected_rows(0, "G")
+    shards = [_raw(rows).encode("utf-8")]
+    if mutation == "duplicate_across_shards":
+        shards.append(_raw([rows[0]]).encode("utf-8"))
+    elif mutation == "outside_selection":
+        rows.append(_selected_rows(1, "A")[0])
+        shards = [_raw(rows).encode("utf-8")]
+    elif mutation == "missing_slot":
+        shards = [_raw(rows[:-1]).encode("utf-8")]
+    elif mutation == "wt_mismatch":
+        rows[0]["wildtype"] = "V"
+        shards = [_raw(rows).encode("utf-8")]
+    elif mutation == "invalid_aa":
+        rows[0]["mutation"] = "B"
+        shards = [_raw(rows).encode("utf-8")]
+    elif mutation == "nonfinite":
+        rows[0]["frustration_pred"] = "NaN"
+        shards = [_raw(rows).encode("utf-8")]
+    else:
+        shards = [shards[0].replace(b"frustration_pred", b"score", 1)]
+
+    with pytest.raises(module.LandscapeValidationError, match=message):
+        module.merge_raw_frustrampnn_shards(tuple(shards), effective)
+
+
+def test_v2_finalization_rejects_tampered_effective_policy_hash() -> None:
+    module = _analysis()
+    effective = _selected_effective(positions=(0,))
+    tampered = effective.model_copy(update={"threshold_policy_sha256": "0" * 64})
+    with pytest.raises(module.LandscapeValidationError, match="policy.*hash"):
+        module.merge_raw_frustrampnn_shards(
+            (_raw(_selected_rows(0, "G")).encode("utf-8"),),
+            tampered,
+        )

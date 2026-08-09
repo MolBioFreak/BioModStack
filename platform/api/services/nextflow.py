@@ -22,6 +22,7 @@ from typing import Deque, Dict, Any, Iterable, Iterator, Optional, List, Tuple, 
 import logging
 
 from services import stage_reporting
+from services.frustrampnn.contracts import canonical_json_bytes
 
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,7 @@ DEFAULT_NEXTFLOW_LOG_READ_BYTES = 256 * 1024
 NEXTFLOW_LOG_TAIL_MAX_LINES = 2_048
 NEXTFLOW_ATTEMPT_LOG_MAX_LINES = 1_024
 NEXTFLOW_LOG_MAX_LINE_CHARS = 16_384
+FRUSTRAMPNN_SETTINGS_MAX_BYTES = 64 * 1024
 
 
 def _bounded_env_int(name: str, default: int, minimum: int) -> int:
@@ -2871,7 +2873,7 @@ def build_nextflow_command(
         if (
             not isinstance(batch, dict)
             or batch.get("schema_name") != "bms_frustrampnn_scheduler_batch"
-            or batch.get("schema_version") != 1
+            or batch.get("schema_version") != 2
             or batch.get("execution_owner_job_id") != str(job_id)
             or not isinstance(records, list)
             or not records
@@ -3970,7 +3972,10 @@ def build_nextflow_command(
     for key, value in params.items():
         # Physical GPU assignment is exclusively scheduler-owned.  Never pass a
         # request-supplied component override through the generic parameter lane.
-        if key == "frustrampnn_physical_gpu_id":
+        if key in {
+            "frustrampnn_physical_gpu_id",
+            "frustrampnn_settings_value_origin",
+        }:
             continue
         if value is not None:
             # Skip empty strings - they would become valueless flags interpreted as boolean true
@@ -3990,8 +3995,50 @@ def build_nextflow_command(
                 # Convert list to comma-separated string for Nextflow
                 cmd.extend([f"--{nf_key}", ",".join(str(v) for v in value)])
             elif isinstance(value, dict):
-                # Skip dict parameters for now (handled specially like complex_components)
-                logger.warning(f"Skipping dict parameter {key} - not supported in command line")
+                if key == "frustrampnn_settings":
+                    transport_value = dict(value)
+                    settings_value_origin = transport_value.pop(
+                        "settings_value_origin", None
+                    )
+                    if settings_value_origin not in {
+                        "bms_default",
+                        "operator_request",
+                    }:
+                        raise ValueError(
+                            "frustrampnn_settings_value_origin must be "
+                            "bms_default or operator_request"
+                        )
+                    separate_origin = params.get(
+                        "frustrampnn_settings_value_origin"
+                    )
+                    if separate_origin is not None and separate_origin != settings_value_origin:
+                        raise ValueError(
+                            "frustrampnn_settings_value_origin disagrees with durable settings"
+                        )
+                    try:
+                        serialized = canonical_json_bytes(transport_value)
+                    except ValueError as exc:
+                        raise ValueError(
+                            "frustrampnn_settings contains invalid canonical JSON: "
+                            f"{exc}"
+                        ) from exc
+                    if len(serialized) > FRUSTRAMPNN_SETTINGS_MAX_BYTES:
+                        raise ValueError(
+                            "frustrampnn_settings exceeds "
+                            f"{FRUSTRAMPNN_SETTINGS_MAX_BYTES} byte limit"
+                        )
+                    cmd.extend(
+                        [
+                            "--frustrampnn_settings_value_origin",
+                            settings_value_origin,
+                            f"--{nf_key}",
+                            serialized.decode("utf-8"),
+                        ]
+                    )
+                else:
+                    # Unrelated nested parameters remain unsupported and are not
+                    # broadened into a generic JSON command-line transport.
+                    logger.warning(f"Skipping dict parameter {key} - not supported in command line")
             else:
                 cmd.extend([f"--{nf_key}", str(value)])
 

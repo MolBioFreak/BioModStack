@@ -906,6 +906,13 @@ class FrustraMPNNResult(Base):
     assigned_gpu_json = Column(JSON, nullable=False)
     terminal_result_json = Column(JSON, nullable=False)
     parent_metadata_json = Column(JSON, nullable=True)
+    settings_sha256 = Column(String(64), nullable=True)
+    effective_settings_sha256 = Column(String(64), nullable=True)
+    effective_settings_json = Column(JSON, nullable=True)
+    capability_inventory_sha256 = Column(String(64), nullable=True)
+    statistics_sha256 = Column(String(64), nullable=True)
+    statistics_json = Column(JSON, nullable=True)
+    comparison_compatibility_id = Column(String(64), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
