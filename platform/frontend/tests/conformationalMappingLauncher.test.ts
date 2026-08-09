@@ -178,6 +178,14 @@ test('run notes and general CM source paths are typed without unrelated metadata
 test('launcher does not promote browser-augmented metadata into server-owned source identity', () => {
     const launcher = source('conformationalMapping/ConformationalMappingLauncher.tsx');
     const api = source('conformationalMapping/conformationalMappingApi.ts');
+    const sourceLabelBlock = launcher.match(/const sourceLabel = \(source: CmSource\): string => \{[\s\S]*?\n\};/)?.[0] || '';
+    assert.match(sourceLabelBlock, /source\.source_id/);
+    assert.doesNotMatch(sourceLabelBlock, /source\.metadata/);
+    for (const authorityLabel of ['Selected input', 'Input authority']) {
+        const start = launcher.indexOf(`>${authorityLabel}<`);
+        assert.notEqual(start, -1, `missing ${authorityLabel} surface`);
+        assert.doesNotMatch(launcher.slice(start, start + 900), /selectedSource\.metadata/);
+    }
     assert.doesNotMatch(launcher, /const contextSource: CmSource|const sourceWithContext: CmSource/);
     assert.doesNotMatch(launcher, /normalizedMetadata|source\.metadata\]/);
     assert.doesNotMatch(api, /defaultRcsbModel|defaultRcsbSample/);

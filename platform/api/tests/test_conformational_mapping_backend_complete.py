@@ -203,42 +203,70 @@ def _recovery_scheduler() -> dict[str, object]:
     }
 
 
+_RECOVERY_ATTEMPT_ID = "00000000-0000-4000-8000-00000000c001"
+
+
+def _recovery_request_params() -> dict[str, object]:
+    return {
+        "backend": "protenix_v2_ensemble",
+        "targets": [{"target_id": "target-a", "target_order": 0}],
+        "ordered_seeds": [101],
+        "samples_per_seed": 1,
+        "feature_policy": {
+            "mode": "regenerate_mutated_protein_v1",
+            "protein_msa_enabled": True,
+            "templates_enabled": True,
+            "rna_msa_enabled": True,
+        },
+        "runtime_policy": {"use_default_params": True},
+        "analysis_policy": {
+            "sign_zero_epsilon": 0.000001,
+            "clash_detector_id": "bms_clash",
+            "clash_detector_version": "1",
+            "outer_support_minimum": 0.8,
+            "inner_support_minimum": 0.6,
+            "sign_consistency_minimum": 0.8,
+            "clash_free_minimum": 0.9,
+            "rank_stability_minimum": 0.6,
+            "minimum_common_ranked_universe_size": 3,
+        },
+        "protenix_snapshot_id": "snapshot",
+    }
+
+
 async def _persist_recoverable_cm_attempt(
     session: AsyncSession,
     *,
     scheduler: dict[str, object],
-    attempt_id: str = "attempt",
+    results_root: Path,
+    attempt_id: str = _RECOVERY_ATTEMPT_ID,
     run_group_id: str = "group",
 ) -> tuple[Job, ConformationalMappingRequest]:
     params = scheduler["params"]
     assert isinstance(params, dict)
     submission = params["cm_submission"]
     assert isinstance(submission, dict)
-    request_without_hash = {
-        "request_id": attempt_id,
-        "backend": "protenix_v2_ensemble",
-        "created_by": {"principal_id": global_adapter._PERSONAL_WORKFLOW_PRINCIPAL},
-    }
-    request_sha256 = global_adapter.canonical_sha256(request_without_hash)
-    request_json = {**request_without_hash, "request_sha256": request_sha256}
-    plan_without_hash = {
-        "request_id": attempt_id,
-        "backend": "protenix_v2_ensemble",
-        "request_sha256": request_sha256,
-        "expected_cardinality": 1,
-    }
-    coordinate_plan_sha256 = global_adapter.canonical_sha256(plan_without_hash)
-    coordinate_plan_json = {
-        **plan_without_hash,
-        "coordinate_plan_sha256": coordinate_plan_sha256,
-    }
+    output_root = results_root / f"conformational_mapping_{attempt_id}"
+    materialized = global_adapter.materialize_trusted_internal_request(
+        _recovery_request_params(),
+        output_dir=output_root,
+        request_id=attempt_id,
+        principal_id=global_adapter._PERSONAL_WORKFLOW_PRINCIPAL,
+    )
+    request_json = json.loads(materialized.request_path.read_text(encoding="utf-8"))
+    coordinate_plan_json = json.loads(
+        materialized.coordinate_plan_path.read_text(encoding="utf-8")
+    )
+    request_sha256 = request_json["request_sha256"]
+    coordinate_plan_sha256 = coordinate_plan_json["coordinate_plan_sha256"]
     job = Job(
         id=attempt_id,
         name=str(scheduler["name"]),
         status="queued",
         model_id="conformational_mapping",
         mode="map",
-        params={"cm_request_path": f"/trusted/{attempt_id}/cm_request_v1.json"},
+        params={"cm_request_path": str(materialized.request_path)},
+        output_dir=str(output_root),
         batch_id=run_group_id,
         lineage_root_job_id=attempt_id,
         stage_family="conformational_mapping",
@@ -278,6 +306,7 @@ async def _persist_recoverable_cm_attempt(
 @pytest.mark.asyncio
 async def test_global_cm_existing_attempt_recovery_accepts_exact_authoritative_provenance(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'recovery-exact.db'}")
     try:
@@ -286,17 +315,21 @@ async def test_global_cm_existing_attempt_recovery_accepts_exact_authoritative_p
         factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
         scheduler = _recovery_scheduler()
         submitted_scheduler = json.loads(json.dumps(scheduler))
+        results_root = tmp_path / "results"
+        monkeypatch.setattr(global_adapter, "get_results_dir", lambda: results_root)
         async with factory() as session:
-            await _persist_recoverable_cm_attempt(session, scheduler=scheduler)
+            await _persist_recoverable_cm_attempt(
+                session, scheduler=scheduler, results_root=results_root,
+            )
             receipt = await global_adapter.materialize_preallocated_cm_job(
                 session,
-                attempt_id="attempt",
+                attempt_id=_RECOVERY_ATTEMPT_ID,
                 scheduler=scheduler,
                 run_group_id="group",
             )
 
         assert receipt["recovered_existing"] is True
-        assert receipt["scheduler_job_id"] == "attempt"
+        assert receipt["scheduler_job_id"] == _RECOVERY_ATTEMPT_ID
         assert scheduler == submitted_scheduler
     finally:
         await engine.dispose()
@@ -310,14 +343,19 @@ async def test_global_cm_existing_attempt_recovery_accepts_exact_authoritative_p
 async def test_global_cm_existing_attempt_recovery_rejects_incoming_authority_substitution(
     tmp_path: Path,
     substitution: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / f'recovery-{substitution}.db'}")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     scheduler = _recovery_scheduler()
+    results_root = tmp_path / "results"
+    monkeypatch.setattr(global_adapter, "get_results_dir", lambda: results_root)
     async with factory() as session:
-        await _persist_recoverable_cm_attempt(session, scheduler=scheduler)
+        await _persist_recoverable_cm_attempt(
+            session, scheduler=scheduler, results_root=results_root,
+        )
         incoming = json.loads(json.dumps(scheduler))
         run_group_id = "group"
         params = incoming["params"]
@@ -347,7 +385,7 @@ async def test_global_cm_existing_attempt_recovery_rejects_incoming_authority_su
         with pytest.raises(DispatchFailure, match="recovery authority"):
             await global_adapter.materialize_preallocated_cm_job(
                 session,
-                attempt_id="attempt",
+                attempt_id=_RECOVERY_ATTEMPT_ID,
                 scheduler=incoming,
                 run_group_id=run_group_id,
             )
@@ -363,14 +401,19 @@ async def test_global_cm_existing_attempt_recovery_rejects_incoming_authority_su
 async def test_global_cm_existing_attempt_recovery_rejects_inconsistent_persisted_provenance(
     tmp_path: Path,
     persisted_substitution: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / f'provenance-{persisted_substitution}.db'}")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     scheduler = _recovery_scheduler()
+    results_root = tmp_path / "results"
+    monkeypatch.setattr(global_adapter, "get_results_dir", lambda: results_root)
     async with factory() as session:
-        job, request = await _persist_recoverable_cm_attempt(session, scheduler=scheduler)
+        job, request = await _persist_recoverable_cm_attempt(
+            session, scheduler=scheduler, results_root=results_root,
+        )
         provenance = dict(job.provenance)
         if persisted_substitution == "attempt":
             provenance["global_attempt_id"] = "other-attempt"
@@ -388,7 +431,138 @@ async def test_global_cm_existing_attempt_recovery_rejects_inconsistent_persiste
         with pytest.raises(DispatchFailure, match="recovery authority"):
             await global_adapter.materialize_preallocated_cm_job(
                 session,
-                attempt_id="attempt",
+                attempt_id=_RECOVERY_ATTEMPT_ID,
+                scheduler=scheduler,
+                run_group_id="group",
+            )
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "substitution",
+    [
+        "missing_params",
+        "extra_params",
+        "traversal_request_path",
+        "alternate_request_path",
+        "nonexistent_request_path",
+        "substituted_output_dir",
+        "equivalent_output_dir",
+        "missing_request_file",
+        "missing_coordinate_plan_file",
+    ],
+)
+async def test_global_cm_existing_attempt_recovery_rejects_nonexecutable_job_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    substitution: str,
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / f'job-{substitution}.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    scheduler = _recovery_scheduler()
+    results_root = tmp_path / "results"
+    output_root = results_root / f"conformational_mapping_{_RECOVERY_ATTEMPT_ID}"
+    request_path = output_root / "cm_request_v1.json"
+    plan_path = output_root / "cm_coordinate_plan_v1.json"
+    monkeypatch.setattr(global_adapter, "get_results_dir", lambda: results_root)
+
+    async with factory() as session:
+        job, _ = await _persist_recoverable_cm_attempt(
+            session, scheduler=scheduler, results_root=results_root,
+        )
+        if substitution == "missing_params":
+            job.params = {}
+        elif substitution == "extra_params":
+            job.params = {"cm_request_path": str(request_path), "gpu_id": 0}
+        elif substitution == "traversal_request_path":
+            job.params = {"cm_request_path": f"{output_root}/nested/../cm_request_v1.json"}
+        elif substitution == "alternate_request_path":
+            arbitrary = tmp_path / "fixture" / "cm_request_v1.json"
+            arbitrary.parent.mkdir()
+            arbitrary.write_bytes(request_path.read_bytes())
+            job.params = {"cm_request_path": str(arbitrary)}
+        elif substitution == "nonexistent_request_path":
+            job.params = {"cm_request_path": str(tmp_path / "missing" / "cm_request_v1.json")}
+        elif substitution == "substituted_output_dir":
+            job.output_dir = str(tmp_path / "other-output")
+        elif substitution == "equivalent_output_dir":
+            job.output_dir = f"{output_root}/."
+        elif substitution == "missing_request_file":
+            request_path.unlink()
+        else:
+            plan_path.unlink()
+        await session.commit()
+
+        with pytest.raises(DispatchFailure, match="executable authority"):
+            await global_adapter.materialize_preallocated_cm_job(
+                session,
+                attempt_id=_RECOVERY_ATTEMPT_ID,
+                scheduler=scheduler,
+                run_group_id="group",
+            )
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("document", ["request", "coordinate_plan"])
+async def test_global_cm_existing_attempt_recovery_rejects_schema_invalid_resigned_documents(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    document: str,
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / f'schema-{document}.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    scheduler = _recovery_scheduler()
+    results_root = tmp_path / "results"
+    output_root = results_root / f"conformational_mapping_{_RECOVERY_ATTEMPT_ID}"
+    monkeypatch.setattr(global_adapter, "get_results_dir", lambda: results_root)
+
+    async with factory() as session:
+        job, record = await _persist_recoverable_cm_attempt(
+            session, scheduler=scheduler, results_root=results_root,
+        )
+        request_json = dict(record.request_json)
+        coordinate_plan_json = dict(record.coordinate_plan_json)
+        if document == "request":
+            request_json["unexpected"] = "fully-resigned"
+            request_json["request_sha256"] = global_adapter.canonical_sha256({
+                key: value for key, value in request_json.items() if key != "request_sha256"
+            })
+            coordinate_plan_json["request_sha256"] = request_json["request_sha256"]
+        else:
+            coordinate_plan_json["unexpected"] = "fully-resigned"
+        coordinate_plan_json["coordinate_plan_sha256"] = global_adapter.canonical_sha256({
+            key: value
+            for key, value in coordinate_plan_json.items()
+            if key != "coordinate_plan_sha256"
+        })
+        record.request_json = request_json
+        record.coordinate_plan_json = coordinate_plan_json
+        record.request_sha256 = request_json["request_sha256"]
+        record.coordinate_plan_sha256 = coordinate_plan_json["coordinate_plan_sha256"]
+        provenance = dict(job.provenance)
+        provenance["cm_request_sha256"] = record.request_sha256
+        provenance["cm_coordinate_plan_sha256"] = record.coordinate_plan_sha256
+        job.provenance = provenance
+        (output_root / "cm_request_v1.json").write_text(
+            json.dumps(request_json, sort_keys=True, separators=(",", ":")), encoding="utf-8",
+        )
+        (output_root / "cm_coordinate_plan_v1.json").write_text(
+            json.dumps(coordinate_plan_json, sort_keys=True, separators=(",", ":")), encoding="utf-8",
+        )
+        await session.commit()
+
+        with pytest.raises(DispatchFailure, match="schema-valid"):
+            await global_adapter.materialize_preallocated_cm_job(
+                session,
+                attempt_id=_RECOVERY_ATTEMPT_ID,
                 scheduler=scheduler,
                 run_group_id="group",
             )

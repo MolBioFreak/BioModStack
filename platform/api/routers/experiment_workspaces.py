@@ -65,15 +65,14 @@ router = APIRouter(prefix="/api/experiment-workspaces", tags=["experiment-worksp
 _APPLICATION_PROXY_HEADER = "X-BMS-CM-Proxy-Secret"
 
 
-def _mutation_principal(request: Request) -> str:
-    """Resolve the authenticated global-CM actor at the existing application boundary."""
-
+def _authenticated_principal(request: Request) -> tuple[str, frozenset[str]]:
+    """Resolve the authenticated actor and roles at the existing application boundary."""
     principal = getattr(request.state, "authenticated_principal", None)
     if principal is None:
         configured = os.getenv("BMS_CM_TRUSTED_PROXY_SECRET", "")
         supplied = request.headers.get(_APPLICATION_PROXY_HEADER, "")
         if configured and supplied and secrets.compare_digest(configured, supplied):
-            return "local-application-operator"
+            return "local-application-operator", frozenset({"operator"})
         raise HTTPException(status_code=401, detail="authenticated global CM principal required")
     if isinstance(principal, Mapping):
         actor = principal.get("id") or principal.get("subject")
@@ -81,10 +80,30 @@ def _mutation_principal(request: Request) -> str:
     else:
         actor = getattr(principal, "id", None) or getattr(principal, "subject", None)
         roles = getattr(principal, "roles", [])
-    normalized_roles = {str(role).strip().lower() for role in roles}
-    if not actor or not normalized_roles.intersection({"scientist", "operator", "admin"}):
+    if isinstance(roles, str):
+        roles = [roles]
+    normalized_roles = frozenset(str(role).strip().lower() for role in roles)
+    if not actor:
+        raise HTTPException(status_code=403, detail="authenticated global CM actor required")
+    return str(actor), normalized_roles
+
+
+def _mutation_principal(request: Request) -> str:
+    """Require an authenticated global-CM scientist, operator, or admin."""
+
+    actor, normalized_roles = _authenticated_principal(request)
+    if not normalized_roles.intersection({"scientist", "operator", "admin"}):
         raise HTTPException(status_code=403, detail="global CM scientist/operator role required")
-    return str(actor)
+    return actor
+
+
+def _operator_principal(request: Request) -> str:
+    """Require operator authority for a mutation that cannot bind one workspace owner."""
+
+    actor, normalized_roles = _authenticated_principal(request)
+    if not normalized_roles.intersection({"operator", "admin"}):
+        raise HTTPException(status_code=403, detail="global CM operator/admin role required")
+    return actor
 
 
 async def _require_mutation_owner(
@@ -389,9 +408,11 @@ async def list_workspace_datasets(
 async def create_workspace_experiment(
     workspace_id: str,
     payload: ExperimentCreateRequest,
+    request: Request,
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict[str, Any]:
     try:
+        await _require_mutation_owner(request, session, resource_id=workspace_id)
         head = await create_experiment(session, workspace_id, payload.name, payload.question)
         await session.commit()
         return _head_json(head)
@@ -544,9 +565,11 @@ async def get_revision(
 async def create_workspace_dataset(
     workspace_id: str,
     payload: DatasetCreateRequest,
+    request: Request,
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict[str, Any]:
     try:
+        await _require_mutation_owner(request, session, resource_id=workspace_id)
         head = await create_dataset(
             session,
             workspace_id,
@@ -566,9 +589,11 @@ async def save_dataset_revision_route(
     workspace_id: str,
     dataset_id: str,
     payload: DatasetRevisionSaveRequest,
+    request: Request,
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict[str, Any]:
     try:
+        await _require_mutation_owner(request, session, resource_id=dataset_id)
         head = await session.get(ExperimentAggregateHead, dataset_id)
         if head is None or head.workspace_id != workspace_id:
             raise NotFound(f"dataset not found: {dataset_id}")
@@ -594,6 +619,7 @@ async def prepare_workspace_workflow(
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict[str, Any]:
     try:
+        _mutation_principal(request)
         revision = await session.get(ExperimentRevision, workflow_revision_id)
         if revision is None:
             raise NotFound(f"workflow revision not found: {workflow_revision_id}")
@@ -798,8 +824,9 @@ async def retry_workspace_run_group(
 
 
 @router.post("/ops/backup", status_code=status.HTTP_201_CREATED)
-async def create_experiment_backup() -> dict[str, Any]:
+async def create_experiment_backup(request: Request) -> dict[str, Any]:
     try:
+        _operator_principal(request)
         return create_online_backup()
     except ExperimentOperationError as exc:
         raise _error(exc) from exc
@@ -842,9 +869,11 @@ async def get_experiment_sync_health(
 @router.post("/{workspace_id}/exports", status_code=status.HTTP_201_CREATED)
 async def export_workspace(
     workspace_id: str,
+    request: Request,
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict[str, Any]:
     try:
+        await _require_mutation_owner(request, session, resource_id=workspace_id)
         return await build_workspace_export(session, workspace_id)
     except ExperimentOperationError as exc:
         raise _error(exc) from exc
@@ -874,9 +903,11 @@ async def get_workspace_analytics_summary(
 async def register_stats_toolkit_handoff(
     workspace_id: str,
     payload: StatsHandoffRequest,
+    request: Request,
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict[str, Any]:
     try:
+        await _require_mutation_owner(request, session, resource_id=workspace_id)
         if len(payload.source_resource_ids) != len(payload.source_content_digests):
             raise ExperimentOperationError("Stats Toolkit source IDs and digests must have equal length")
         for resource_id, digest in zip(payload.source_resource_ids, payload.source_content_digests):
@@ -921,9 +952,11 @@ async def register_stats_toolkit_handoff(
 async def register_workspace_external_receipt(
     workspace_id: str,
     payload: ExternalReceiptCreateRequest,
+    request: Request,
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict[str, Any]:
     try:
+        await _require_mutation_owner(request, session, resource_id=workspace_id)
         receipt = await register_external_entity_receipt(
             session,
             workspace_id=workspace_id,
@@ -955,10 +988,12 @@ async def register_workspace_external_receipt(
 
 @router.post("/dispatch/once")
 async def dispatch_one_experiment_outbox(
+    request: Request,
     session: AsyncSession = Depends(get_experiment_session),
     core_session: AsyncSession = Depends(get_core_session),
 ) -> dict[str, Any]:
     try:
+        _operator_principal(request)
         dispatched = await dispatch_pending_outbox(session, ExistingJobMaterializer(core_session))
         return {"dispatched": dispatched}
     except ExperimentServiceError as exc:

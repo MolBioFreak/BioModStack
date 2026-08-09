@@ -523,18 +523,10 @@ def _run_record_selected_input(
     chain_ids: list[str],
     entity_ids: list[str] | None = None,
 ) -> dict[str, Any]:
-    metadata = source.metadata_json or {}
-    label = str(
-        metadata.get("name")
-        or metadata.get("target_id")
-        or source.source_id
-    ).strip()[:255]
-    if not label:
-        label = source.source_id
     record: dict[str, Any] = {
         "source_id": source.source_id,
         "source_kind": source.source_kind,
-        "source_label": label,
+        "source_label": source.source_id,
         "source_sha256": source.content_sha256,
     }
     receipt = _read_source_authority(source)

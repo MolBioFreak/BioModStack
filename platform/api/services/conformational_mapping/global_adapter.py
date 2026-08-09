@@ -24,7 +24,12 @@ from routers.conformational_mapping import (
     _runtime_registry,
     _server_confornets_identity,
 )
-from services.conformational_mapping.contracts import canonical_sha256, validate_schema
+from services.conformational_mapping.contracts import (
+    ContractValidationError,
+    canonical_json_loads,
+    canonical_sha256,
+    validate_schema,
+)
 from services.conformational_mapping.import_stager import RegisteredArtifact, stage_registered_assets
 from services.conformational_mapping.persistence import (
     issue_request_capability,
@@ -51,6 +56,67 @@ _GENERATOR_ADAPTERS = {
 EXECUTABLE_CM_ADAPTERS = frozenset(_GENERATOR_ADAPTERS)
 if WORKFLOW_ADAPTER_REGISTRY["conformational_mapping"] != set(EXECUTABLE_CM_ADAPTERS):
     raise RuntimeError("registered CM global adapters must have executable materializers")
+
+_COORDINATE_PLAN_FIELDS = frozenset({
+    "schema_name",
+    "schema_version",
+    "request_id",
+    "backend",
+    "request_sha256",
+    "expected_cardinality",
+    "coordinates",
+    "coordinate_plan_sha256",
+})
+_RECOVERABLE_REQUEST_PARAM_FIELDS = frozenset({
+    "backend",
+    "targets",
+    "ordered_seeds",
+    "samples_per_seed",
+    "feature_policy",
+    "runtime_policy",
+    "analysis_policy",
+    "run_record",
+    "state_landscape_comparison",
+    "confornets",
+    "protenix_snapshot_id",
+})
+
+
+def _validate_recovered_coordinate_plan(
+    request_json: Mapping[str, Any],
+    coordinate_plan_json: Mapping[str, Any],
+) -> None:
+    """Validate the current plan schema, with the current-tree semantic fallback."""
+
+    try:
+        validate_schema("cm_coordinate_plan_v1", coordinate_plan_json)
+    except ContractValidationError as exc:
+        if str(exc) != "unknown schema key: cm_coordinate_plan_v1":
+            raise
+
+    # The current contract registry already calls this schema key from retry
+    # recovery, but this pinned tree does not yet publish its standalone file.
+    # Enforce the same closed envelope and rederive the backend coordinates from
+    # the schema-valid request rather than weakening existing-attempt recovery.
+    if set(coordinate_plan_json) != _COORDINATE_PLAN_FIELDS:
+        raise ContractValidationError("cm_coordinate_plan_v1 has unexpected fields")
+    request_params = {
+        key: request_json[key]
+        for key in _RECOVERABLE_REQUEST_PARAM_FIELDS
+        if key in request_json
+    }
+    validated = validate_request_params(request_params)
+    coordinates = list(validated.coordinate_plan)
+    if (
+        coordinate_plan_json.get("schema_name") != "cm_coordinate_plan"
+        or coordinate_plan_json.get("schema_version") != 1
+        or coordinate_plan_json.get("request_id") != request_json.get("request_id")
+        or coordinate_plan_json.get("backend") != request_json.get("backend")
+        or coordinate_plan_json.get("request_sha256") != request_json.get("request_sha256")
+        or coordinate_plan_json.get("expected_cardinality") != len(coordinates)
+        or coordinate_plan_json.get("coordinates") != coordinates
+    ):
+        raise ContractValidationError("cm_coordinate_plan_v1 does not match request authority")
 
 
 def _seal_confornets_snapshot(snapshot: Mapping[str, Any]) -> dict[str, Any]:
@@ -149,6 +215,7 @@ def _verify_existing_attempt_authority(
     *,
     existing_job: Job,
     existing_request: ConformationalMappingRequest,
+    expected_output_root: Path,
     attempt_id: str,
     scheduler: Mapping[str, Any],
     scheduler_sha256: str,
@@ -159,6 +226,22 @@ def _verify_existing_attempt_authority(
 ) -> None:
     """Fail closed unless a recovered core attempt matches the incoming authority."""
 
+    expected_request_path = expected_output_root / "cm_request_v1.json"
+    expected_coordinate_plan_path = expected_output_root / "cm_coordinate_plan_v1.json"
+    expected_job_params = {"cm_request_path": str(expected_request_path)}
+    if (
+        not isinstance(existing_job.params, dict)
+        or existing_job.params != expected_job_params
+        or existing_job.output_dir != str(expected_output_root)
+        or expected_output_root.is_symlink()
+        or not expected_output_root.is_dir()
+        or expected_request_path.is_symlink()
+        or not expected_request_path.is_file()
+        or expected_coordinate_plan_path.is_symlink()
+        or not expected_coordinate_plan_path.is_file()
+    ):
+        raise DispatchFailure("CM existing-attempt executable authority is invalid")
+
     provenance = existing_job.provenance
     request_json = existing_request.request_json
     coordinate_plan_json = existing_request.coordinate_plan_json
@@ -167,6 +250,28 @@ def _verify_existing_attempt_authority(
     assert isinstance(provenance, Mapping)
     assert isinstance(request_json, Mapping)
     assert isinstance(coordinate_plan_json, Mapping)
+    try:
+        persisted_request = dict(request_json)
+        persisted_coordinate_plan = dict(coordinate_plan_json)
+        executable_request = canonical_json_loads(expected_request_path.read_bytes())
+        executable_coordinate_plan = canonical_json_loads(expected_coordinate_plan_path.read_bytes())
+        if (
+            not isinstance(executable_request, Mapping)
+            or not isinstance(executable_coordinate_plan, Mapping)
+            or dict(executable_request) != persisted_request
+            or dict(executable_coordinate_plan) != persisted_coordinate_plan
+        ):
+            raise DispatchFailure(
+                "CM existing-attempt executable authority conflicts with persisted documents"
+            )
+        validate_schema("cm_request_v1", persisted_request)
+        _validate_recovered_coordinate_plan(persisted_request, persisted_coordinate_plan)
+    except DispatchFailure:
+        raise
+    except (OSError, TypeError, ValueError, KeyError) as exc:
+        raise DispatchFailure(
+            "CM existing-attempt request and coordinate plan are not schema-valid"
+        ) from exc
     try:
         persisted_request_sha256 = canonical_sha256(
             {key: value for key, value in request_json.items() if key != "request_sha256"}
@@ -250,6 +355,7 @@ async def _materialize_preallocated_cm_job(
     if receipt_ids != expected_source_ids:
         raise DispatchFailure("CM global adapter receipts do not bind the submitted source identities")
 
+    output_root = get_results_dir() / f"conformational_mapping_{attempt_id}"
     existing_job = await core_session.get(Job, attempt_id)
     if existing_job is not None:
         existing_request = (
@@ -262,6 +368,7 @@ async def _materialize_preallocated_cm_job(
         _verify_existing_attempt_authority(
             existing_job=existing_job,
             existing_request=existing_request,
+            expected_output_root=output_root,
             attempt_id=attempt_id,
             scheduler=scheduler,
             scheduler_sha256=scheduler_sha256,
@@ -278,7 +385,6 @@ async def _materialize_preallocated_cm_job(
             "recovered_existing": True,
         }
 
-    output_root = get_results_dir() / f"conformational_mapping_{attempt_id}"
     if output_root.exists() and any(output_root.iterdir()):
         raise DispatchFailure("preallocated CM output root already contains unowned files")
     output_root.mkdir(parents=True, exist_ok=True)

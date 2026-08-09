@@ -6,11 +6,13 @@ import json
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import httpx
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.routing import APIRoute
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -32,6 +34,7 @@ from experiment_services import (
     ExistingJobMaterializer,
     IdempotencyConflict,
     RevisionConflict,
+    add_audit_event,
     create_dataset,
     create_experiment_workspace,
     create_workflow,
@@ -81,7 +84,10 @@ def _workflow_payload() -> dict:
 
 
 def _mutation_request(
-    *, principal: str | None = None, proxy_secret: str | None = None,
+    *,
+    principal: str | None = None,
+    roles: list[str] | None = None,
+    proxy_secret: str | None = None,
 ) -> Request:
     headers = []
     if proxy_secret is not None:
@@ -94,7 +100,7 @@ def _mutation_request(
     if principal is not None:
         request.state.authenticated_principal = {
             "subject": principal,
-            "roles": ["scientist"],
+            "roles": roles or ["scientist"],
         }
     return request
 
@@ -115,88 +121,282 @@ def test_global_cm_mutation_principal_requires_authentication_and_preserves_trus
     assert workspace_router._mutation_principal(_mutation_request(principal="alice")) == "alice"
 
 
+def test_global_cm_operator_principal_rejects_scientists_and_accepts_operator_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BMS_CM_TRUSTED_PROXY_SECRET", "trusted-secret")
+    with pytest.raises(HTTPException) as missing:
+        workspace_router._operator_principal(_mutation_request())
+    assert missing.value.status_code == 401
+    with pytest.raises(HTTPException) as scientist:
+        workspace_router._operator_principal(_mutation_request(principal="alice"))
+    assert scientist.value.status_code == 403
+    assert workspace_router._operator_principal(
+        _mutation_request(principal="olivia", roles=["operator"])
+    ) == "olivia"
+    assert workspace_router._operator_principal(
+        _mutation_request(principal="ada", roles=["admin"])
+    ) == "ada"
+    assert workspace_router._operator_principal(
+        _mutation_request(proxy_secret="trusted-secret")
+    ) == "local-application-operator"
+
+
 @pytest.mark.asyncio
-async def test_global_cm_mutation_owner_fails_closed_for_ownerless_and_foreign_resources() -> None:
-    resources = {
-        "workspace-owned": SimpleNamespace(
-            id="workspace-owned", kind="workspace", workspace_id=None,
-        ),
-        "workspace-ownerless": SimpleNamespace(
-            id="workspace-ownerless", kind="workspace", workspace_id=None,
-        ),
-        "workspace-foreign": SimpleNamespace(
-            id="workspace-foreign", kind="workspace", workspace_id=None,
-        ),
-        "owned": SimpleNamespace(
-            id="owned", kind="workflow", workspace_id="workspace-owned",
-        ),
-        "ownerless": SimpleNamespace(
-            id="ownerless", kind="workflow", workspace_id="workspace-ownerless",
-        ),
-        "foreign": SimpleNamespace(
-            id="foreign", kind="workflow", workspace_id="workspace-foreign",
-        ),
-    }
-    owners = {
-        "workspace-owned": [SimpleNamespace(payload_json=json.dumps({"principal_id": "alice"}))],
-        "workspace-ownerless": [],
-        "workspace-foreign": [SimpleNamespace(payload_json=json.dumps({"principal_id": "bob"}))],
-    }
-
-    class ScalarResult:
-        def __init__(self, values):
-            self.values = values
-
-        def scalars(self):
-            return self
-
-        def all(self):
-            return self.values
-
-    class Session:
-        def __init__(self):
-            self.current_resource_id = ""
-
-        async def get(self, _model, resource_id):
-            self.current_resource_id = resource_id
-            return resources.get(resource_id)
-
-        async def execute(self, _statement):
-            resource = resources[self.current_resource_id]
-            workspace_id = resource.id if resource.kind == "workspace" else resource.workspace_id
-            return ScalarResult(owners.get(workspace_id, []))
-
-    session = Session()
-    request = _mutation_request(principal="alice")
-    for resource_id in ("ownerless", "foreign"):
-        with pytest.raises(HTTPException) as denied:
-            await workspace_router._require_mutation_owner(
-                request, session, resource_id=resource_id,
+async def test_global_cm_mutation_owner_fails_closed_for_ownerless_and_foreign_resources(
+    experiment_store,
+) -> None:
+    _db_path, _engine, factory = experiment_store
+    async with factory() as session:
+        owned_workspace = await create_experiment_workspace(session, "owned")
+        ownerless_workspace = await create_experiment_workspace(session, "ownerless")
+        foreign_workspace = await create_experiment_workspace(session, "foreign")
+        owned_workflow = await create_workflow(
+            session, owned_workspace.id, "owned workflow", "generic_test",
+        )
+        ownerless_workflow = await create_workflow(
+            session, ownerless_workspace.id, "ownerless workflow", "generic_test",
+        )
+        foreign_workflow = await create_workflow(
+            session, foreign_workspace.id, "foreign workflow", "generic_test",
+        )
+        for workspace, principal_id in (
+            (owned_workspace, "alice"),
+            (foreign_workspace, "bob"),
+        ):
+            add_audit_event(
+                session,
+                workspace_id=workspace.id,
+                resource_id=workspace.id,
+                event_type="workspace_owner_bound",
+                generation=0,
+                payload={"principal_id": principal_id},
             )
-        assert denied.value.status_code == 404
-    assert await workspace_router._require_mutation_owner(
-        request, session, resource_id="owned",
-    ) == "alice"
-    assert await workspace_router._require_mutation_owner(
-        request, session, resource_id="workspace-owned",
-    ) == "alice"
+        await session.commit()
+
+        request = _mutation_request(principal="alice")
+        for resource_id in (ownerless_workspace.id, ownerless_workflow.id, foreign_workflow.id):
+            with pytest.raises(HTTPException) as denied:
+                await workspace_router._require_mutation_owner(
+                    request, session, resource_id=resource_id,
+                )
+            assert denied.value.status_code == 404
+        assert await workspace_router._require_mutation_owner(
+            request, session, resource_id=owned_workflow.id,
+        ) == "alice"
+        assert await workspace_router._require_mutation_owner(
+            request, session, resource_id=owned_workspace.id,
+        ) == "alice"
 
 
-def test_global_cm_workflow_and_run_group_mutations_all_apply_owner_gate() -> None:
-    for route in (
-        workspace_router.archive_workspace_aggregate,
-        workspace_router.create_workspace_workflow,
-        workspace_router.save_workflow_draft_route,
-        workspace_router.save_workflow_revision_route,
-        workspace_router.clone_workspace_workflow,
-        workspace_router.prepare_workspace_workflow,
-        workspace_router.create_workspace_run_group,
-        workspace_router.reconcile_workspace_run_group,
-        workspace_router.retry_workspace_run_group,
-    ):
-        source = inspect.getsource(route)
-        assert "request: Request" in source
-        assert "_require_mutation_owner(" in source
+_MUTATING_METHODS = {"POST", "PATCH", "PUT", "DELETE"}
+_GLOBAL_OPERATOR_PATHS = {
+    "/api/experiment-workspaces/ops/backup",
+    "/api/experiment-workspaces/dispatch/once",
+}
+
+
+def _mutating_routes() -> list[APIRoute]:
+    return [
+        route
+        for route in router.routes
+        if isinstance(route, APIRoute) and route.methods & _MUTATING_METHODS
+    ]
+
+
+def test_every_global_cm_mutation_route_has_the_appropriate_complete_auth_gate() -> None:
+    routes = _mutating_routes()
+    assert routes
+    for route in routes:
+        source = inspect.getsource(route.endpoint)
+        assert "request: Request" in source, f"{route.methods} {route.path} lacks request authority"
+        if route.path == "/api/experiment-workspaces":
+            assert "_mutation_principal(" in source
+        elif route.path in _GLOBAL_OPERATOR_PATHS:
+            assert "_operator_principal(" in source
+            assert "_require_mutation_owner(" not in source
+        else:
+            assert "_require_mutation_owner(" in source, (
+                f"{route.methods} {route.path} lacks persisted workspace-owner gate"
+            )
+
+
+_MUTATION_HTTP_CASES = {
+    "create_workspace": ("/api/experiment-workspaces", {"name": "workspace"}, None),
+    "archive_workspace_aggregate": (
+        "/api/experiment-workspaces/workspace/aggregates/aggregate/archive", {}, None,
+    ),
+    "create_workspace_experiment": (
+        "/api/experiment-workspaces/workspace/experiments", {"name": "experiment"}, None,
+    ),
+    "create_workspace_workflow": (
+        "/api/experiment-workspaces/workspace/workflows",
+        {"name": "workflow", "workflow_family": "generic_test"},
+        None,
+    ),
+    "save_workflow_draft_route": (
+        "/api/experiment-workspaces/workspace/workflows/workflow/draft",
+        {"payload": {}, "expected_generation": 0},
+        None,
+    ),
+    "save_workflow_revision_route": (
+        "/api/experiment-workspaces/workspace/workflows/workflow/revisions",
+        {"expected_head_generation": 0},
+        None,
+    ),
+    "clone_workspace_workflow": (
+        "/api/experiment-workspaces/workspace/workflows/workflow/clone", {}, None,
+    ),
+    "create_workspace_dataset": (
+        "/api/experiment-workspaces/workspace/datasets",
+        {"name": "dataset", "dataset_kind": "generic_inputs"},
+        None,
+    ),
+    "save_dataset_revision_route": (
+        "/api/experiment-workspaces/workspace/datasets/dataset/revisions",
+        {"payload": {}, "expected_head_generation": 0},
+        None,
+    ),
+    "prepare_workspace_workflow": (
+        "/api/experiment-workspaces/workspace/preparations",
+        {},
+        {"workflow_revision_id": "revision"},
+    ),
+    "create_workspace_run_group": (
+        "/api/experiment-workspaces/workspace/run-groups",
+        {"preparation_ids": ["preparation"], "idempotency_key": "launch"},
+        None,
+    ),
+    "reconcile_workspace_run_group": (
+        "/api/experiment-workspaces/workspace/run-groups/group/reconcile", None, None,
+    ),
+    "retry_workspace_run_group": (
+        "/api/experiment-workspaces/workspace/run-groups/group/retry",
+        {"idempotency_key": "retry"},
+        None,
+    ),
+    "create_experiment_backup": (
+        "/api/experiment-workspaces/ops/backup", None, None,
+    ),
+    "export_workspace": (
+        "/api/experiment-workspaces/workspace/exports", None, None,
+    ),
+    "register_stats_toolkit_handoff": (
+        "/api/experiment-workspaces/workspace/analytics/stats-handoffs",
+        {
+            "stats_run_id": "stats-run",
+            "toolkit_version": "1",
+            "source_resource_ids": ["source"],
+            "source_content_digests": ["0" * 64],
+            "result_content_digest": "1" * 64,
+            "result_generation_or_revision": "1",
+        },
+        None,
+    ),
+    "register_workspace_external_receipt": (
+        "/api/experiment-workspaces/workspace/external-receipts",
+        {
+            "store_id": "store",
+            "entity_kind": "entity",
+            "entity_id": "external-id",
+            "generation_or_revision": "1",
+            "content_digest": "2" * 64,
+        },
+        None,
+    ),
+    "dispatch_one_experiment_outbox": (
+        "/api/experiment-workspaces/dispatch/once", None, None,
+    ),
+}
+
+
+@pytest.mark.asyncio
+async def test_every_global_cm_mutation_http_route_rejects_missing_authentication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    routes = _mutating_routes()
+    assert {route.endpoint.__name__ for route in routes} == set(_MUTATION_HTTP_CASES)
+    monkeypatch.setattr(workspace_router, "create_online_backup", lambda: {"backup_id": "blocked"})
+    app = FastAPI()
+    app.include_router(router)
+
+    class StubSession(SimpleNamespace):
+        async def rollback(self) -> None:
+            pass
+
+    async def override_session():
+        yield StubSession()
+
+    app.dependency_overrides[workspace_router.get_experiment_session] = override_session
+    app.dependency_overrides[workspace_router.get_core_session] = override_session
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        for route in routes:
+            path, body, params = _MUTATION_HTTP_CASES[route.endpoint.__name__]
+            method = next(iter(route.methods & _MUTATING_METHODS))
+            response = await client.request(method, path, json=body, params=params)
+            assert response.status_code == 401, (
+                f"{method} {path} returned {response.status_code} without authentication"
+            )
+
+
+@pytest.mark.asyncio
+async def test_global_backup_and_dispatch_http_routes_require_operator_or_admin_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def fake_backup() -> dict[str, Any]:
+        calls.append("backup")
+        return {"backup_id": "operator-backup"}
+
+    async def fake_dispatch(_session, _materializer) -> int:
+        calls.append("dispatch")
+        return 1
+
+    monkeypatch.setattr(workspace_router, "create_online_backup", fake_backup)
+    monkeypatch.setattr(workspace_router, "dispatch_pending_outbox", fake_dispatch)
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def inject_test_principal(request: Request, call_next):
+        role = request.headers.get("X-Test-Role")
+        if role:
+            request.state.authenticated_principal = {
+                "subject": "role-test-user",
+                "roles": [role],
+            }
+        return await call_next(request)
+
+    app.include_router(router)
+
+    class StubSession(SimpleNamespace):
+        async def rollback(self) -> None:
+            pass
+
+    async def override_session():
+        yield StubSession()
+
+    app.dependency_overrides[workspace_router.get_experiment_session] = override_session
+    app.dependency_overrides[workspace_router.get_core_session] = override_session
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        for path in _GLOBAL_OPERATOR_PATHS:
+            scientist = await client.post(path, headers={"X-Test-Role": "scientist"})
+            assert scientist.status_code == 403
+        assert calls == []
+        backup = await client.post(
+            "/api/experiment-workspaces/ops/backup",
+            headers={"X-Test-Role": "operator"},
+        )
+        dispatch = await client.post(
+            "/api/experiment-workspaces/dispatch/once",
+            headers={"X-Test-Role": "admin"},
+        )
+        assert backup.status_code == 201
+        assert dispatch.status_code == 200
+        assert dispatch.json() == {"dispatched": 1}
+        assert calls == ["backup", "dispatch"]
 
 
 @pytest.mark.asyncio

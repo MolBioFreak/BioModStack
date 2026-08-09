@@ -153,16 +153,34 @@ async def test_retry_never_downgrades_completed_request_from_stale_failed_job(mo
 
 
 @pytest.mark.asyncio
-async def test_retry_rejects_missing_authority_without_mutating_terminal_job(monkeypatch) -> None:
+async def test_retry_rejects_missing_authority_without_mutating_terminal_job(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request_without_hash = {"request_id": "request-1", "backend": "external_import"}
+    request_sha = cm_router.canonical_sha256(request_without_hash)
+    request_payload = {**request_without_hash, "request_sha256": request_sha}
+    plan_without_hash = {
+        "request_id": "request-1", "backend": "external_import",
+        "request_sha256": request_sha, "expected_cardinality": 1,
+    }
+    plan_sha = cm_router.canonical_sha256(plan_without_hash)
+    coordinate_plan = {**plan_without_hash, "coordinate_plan_sha256": plan_sha}
+    source_root = tmp_path / "source"
+    _retry_authority_tree(source_root)
+    (source_root / "cm_request_v1.json").write_text(json.dumps(request_payload), encoding="utf-8")
+    (source_root / "cm_coordinate_plan_v1.json").write_text(json.dumps(coordinate_plan), encoding="utf-8")
     record = SimpleNamespace(
         request_id="request-1", status="failed", job_id="job-1", backend="external_import",
-        request_json={}, coordinate_plan_json={}, request_sha256="a" * 64,
-        coordinate_plan_sha256="b" * 64,
+        request_json=request_payload, coordinate_plan_json=coordinate_plan,
+        request_sha256=request_sha, coordinate_plan_sha256=plan_sha,
     )
     job = SimpleNamespace(
         id="job-1", status="failed", queue_status="failed", error_message="failed",
         started_at=datetime.utcnow(), completed_at=datetime.utcnow(), nextflow_run_id="123",
-        retry_count=1, max_retries=2, params={"cm_request_path": "/results/request.json"},
+        retry_count=1, max_retries=2,
+        params={"cm_request_path": str(source_root / "cm_request_v1.json")},
+        output_dir=str(source_root), provenance={},
     )
 
     async def authorized(*_args, **_kwargs):
@@ -175,7 +193,11 @@ async def test_retry_rejects_missing_authority_without_mutating_terminal_job(mon
         async def commit(self):
             raise AssertionError("invalid retry authority must not commit")
 
+        async def rollback(self):
+            pass
+
     monkeypatch.setattr(cm_router, "_authorized_record", authorized)
+    monkeypatch.setattr(cm_router, "validate_schema", lambda *_args, **_kwargs: None)
     with pytest.raises(HTTPException, match="persisted CM retry authority") as raised:
         await retry_request("request-1", _http_request(client_host="127.0.0.1"), Session())
     assert raised.value.status_code == 409
@@ -301,6 +323,127 @@ def test_clean_retry_reconstructs_documents_and_copies_exact_authoritative_bytes
         copied = (attempt_root / relative_path).read_bytes()
         assert hashlib.sha256(copied).hexdigest() == identity["sha256"]
         assert len(copied) == identity["size_bytes"]
+
+
+def test_clean_retry_rejects_symlinked_and_raced_authority_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = tmp_path / "source"
+    request_payload, coordinate_plan = _retry_authority_tree(source_root)
+    authority = _retry_authority_manifest(source_root)
+    checkpoint = source_root / "registered" / "checkpoint.pt"
+    outside = tmp_path / "outside.pt"
+    outside.write_bytes(checkpoint.read_bytes())
+    checkpoint.unlink()
+    checkpoint.symlink_to(outside)
+    monkeypatch.setattr(cm_router, "validate_schema", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(HTTPException, match="unsafe source paths"):
+        cm_router._copy_clean_retry_authority(
+            source_root=source_root,
+            attempt_root=tmp_path / "symlink-attempt",
+            request_payload=request_payload,
+            coordinate_plan=coordinate_plan,
+            persisted_authority=authority,
+        )
+
+    checkpoint.unlink()
+    checkpoint.write_bytes(b"original-checkpoint")
+    expected = authority["files"]["registered/checkpoint.pt"]
+    original_read = cm_router.os.read
+    mutated = False
+
+    def mutate_after_open(descriptor: int, size: int) -> bytes:
+        nonlocal mutated
+        if not mutated:
+            mutated = True
+            checkpoint.write_bytes(b"raced-checkpoint-content")
+        return original_read(descriptor, size)
+
+    monkeypatch.setattr(cm_router.os, "read", mutate_after_open)
+    with pytest.raises(OSError, match="retry authority file digest changed"):
+        cm_router._copy_verified_retry_file(
+            checkpoint,
+            tmp_path / "raced-copy.pt",
+            expected,
+        )
+
+
+@pytest.mark.asyncio
+async def test_retry_route_materializes_only_verified_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request_without_hash = {"request_id": "request-1", "backend": "external_import"}
+    request_sha = cm_router.canonical_sha256(request_without_hash)
+    request_payload = {**request_without_hash, "request_sha256": request_sha}
+    plan_without_hash = {
+        "request_id": "request-1",
+        "backend": "external_import",
+        "request_sha256": request_sha,
+        "expected_cardinality": 1,
+    }
+    plan_sha = cm_router.canonical_sha256(plan_without_hash)
+    coordinate_plan = {**plan_without_hash, "coordinate_plan_sha256": plan_sha}
+    source_root = tmp_path / "source"
+    _retry_authority_tree(source_root)
+    (source_root / "cm_request_v1.json").write_text(json.dumps(request_payload), encoding="utf-8")
+    (source_root / "cm_coordinate_plan_v1.json").write_text(json.dumps(coordinate_plan), encoding="utf-8")
+    authority = cm_router._build_retry_authority(source_root)
+    record = SimpleNamespace(
+        request_id="request-1", status="failed", job_id="job-1", backend="external_import",
+        request_json=request_payload, coordinate_plan_json=coordinate_plan,
+        request_sha256=request_sha, coordinate_plan_sha256=plan_sha,
+    )
+    job = Job(
+        id="job-1", name="retry", status="failed", queue_status="failed",
+        model_id="conformational_mapping", mode="map",
+        params={"cm_request_path": str(source_root / "cm_request_v1.json")},
+        output_dir=str(source_root), retry_count=0, max_retries=2,
+        lineage_root_job_id="job-1", stage_family="conformational_mapping",
+        stage_mode="external_import", provenance={"cm_retry_authority_v1": authority},
+    )
+    added: list[Job] = []
+
+    async def authorized(*_args, **_kwargs):
+        return record
+
+    async def transition(_session, target, *, status, progress, **_kwargs):
+        target.status = status
+
+    class Session:
+        async def get(self, *_args, **_kwargs):
+            return job
+
+        def add(self, value):
+            added.append(value)
+
+        async def flush(self):
+            pass
+
+        async def commit(self):
+            pass
+
+        async def rollback(self):
+            raise AssertionError("valid retry authority must not roll back")
+
+    monkeypatch.setattr(cm_router, "_authorized_record", authorized)
+    monkeypatch.setattr(cm_router, "transition_request", transition)
+    monkeypatch.setattr(cm_router, "validate_schema", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cm_router, "get_results_dir", lambda: tmp_path / "results")
+    response = await retry_request(
+        "request-1", _http_request(client_host="127.0.0.1"), Session(),
+    )
+
+    assert response["status"] == "queued"
+    assert response["parent_job_id"] == "job-1"
+    assert len(added) == 1
+    retry_job = added[0]
+    attempt_root = Path(str(retry_job.output_dir))
+    assert retry_job.params == {"cm_request_path": str(attempt_root / "cm_request_v1.json")}
+    assert json.loads((attempt_root / "cm_request_v1.json").read_text()) == request_payload
+    assert (attempt_root / "registered" / "checkpoint.pt").read_bytes() == b"original-checkpoint"
 
 
 @pytest.mark.asyncio
@@ -430,11 +573,12 @@ def test_cm_run_record_trusts_only_content_bound_provider_receipts(
 ) -> None:
     monkeypatch.setattr(cm_router, "get_data_root", lambda: tmp_path)
     source = SimpleNamespace(
-        source_id="source",
+        source_id="cm_src_safe_authority",
         source_kind="structure_upload",
         content_sha256="a" * 64,
         metadata_json={
-            "name": "RCSB 1UBQ",
+            "name": "ATTACKER SELECTED INPUT LABEL",
+            "target_id": "attacker-target-id",
             "provider_receipt": {
                 "provider": "RCSB",
                 "accession": "FAKE",
@@ -443,6 +587,9 @@ def test_cm_run_record_trusts_only_content_bound_provider_receipts(
         },
     )
     selected = cm_router._run_record_selected_input(source, model_id=None, sample_id=None, chain_ids=[])  # type: ignore[arg-type]
+    assert selected["source_label"] == source.source_id
+    assert "ATTACKER SELECTED INPUT LABEL" not in json.dumps(selected)
+    assert "attacker-target-id" not in json.dumps(selected)
     assert "provider" not in selected
     assert "accession" not in selected
 
@@ -465,10 +612,11 @@ def test_cm_run_record_trusts_only_content_bound_provider_receipts(
         },
     )
     selected = cm_router._run_record_selected_input(source, model_id=None, sample_id=None, chain_ids=[])  # type: ignore[arg-type]
+    assert selected["source_label"] == source.source_id
     assert selected["provider"] == "RCSB"
     assert selected["accession"] == "1UBQ"
 
-    receipt_path = cm_router._source_authority_path("source")
+    receipt_path = cm_router._source_authority_path(source.source_id)
     tampered = {**receipt, "payload": {"provider": "RCSB", "accession": "2XYZ"}}
     receipt_path.write_text(json.dumps(tampered), encoding="utf-8")
     selected = cm_router._run_record_selected_input(source, model_id=None, sample_id=None, chain_ids=[])  # type: ignore[arg-type]

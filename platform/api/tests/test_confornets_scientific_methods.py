@@ -143,6 +143,21 @@ def test_ca_rmsd_rejects_underdetermined_kabsch_geometry(tmp_path: Path, atoms) 
         runner._ca_rmsd(first, second)
 
 
+def test_ca_rmsd_rejects_non_finite_coordinates(tmp_path: Path) -> None:
+    runner = _load_runner()
+    first = tmp_path / "first.pdb"
+    second = tmp_path / "second.pdb"
+    atoms = _base_atoms()
+    non_finite = list(atoms)
+    chain, residue_name, residue_number, _xyz = non_finite[0]
+    non_finite[0] = (chain, residue_name, residue_number, (float("nan"), 0.0, 0.0))
+    _write_pdb(first, atoms)
+    _write_pdb(second, non_finite)
+
+    with pytest.raises(runner.CoordinateIdentityError, match="finite"):
+        runner._ca_rmsd(first, second)
+
+
 def test_ca_rmsd_parses_mmcif_atom_site_by_column_name_not_column_order(tmp_path: Path) -> None:
     runner = _load_runner()
     canonical = tmp_path / "canonical.cif"

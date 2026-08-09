@@ -185,7 +185,8 @@ test('mounted selected-input preview and summary show only digest-bound receipt 
         sha256: sha('9'),
         bytes: 4096,
         metadata: {
-            name: 'Caller-controlled display label',
+            name: 'ATTACKER SELECTED INPUT LABEL',
+            target_id: 'attacker-target-id',
             provider: 'ATTACKER',
             accession: 'EVIL',
             model_id: 'attacker-model',
@@ -220,14 +221,18 @@ test('mounted selected-input preview and summary show only digest-bound receipt 
 
     const preview = mounted.renderer.root.findByProps({ 'aria-labelledby': 'cm-preview-heading' });
     const summary = mounted.renderer.root.findByProps({ 'aria-labelledby': 'cm-summary-heading' });
+    const launcherText = text(mounted.renderer.root);
+    assert.doesNotMatch(launcherText, /ATTACKER SELECTED INPUT LABEL|attacker-target-id/i);
+    assert.match(launcherText, /rcsb-authoritative/);
     for (const surface of [preview, summary]) {
         const surfaceText = text(surface);
+        assert.match(surfaceText, /rcsb-authoritative/);
         assert.match(surfaceText, /accession 1UBQ/i);
         assert.match(surfaceText, /model 1/i);
         assert.match(surfaceText, /sample asymmetric-unit/i);
         assert.match(surfaceText, /chains? A/i);
         assert.match(surfaceText, /entities? 1/i);
-        assert.doesNotMatch(surfaceText, /ATTACKER|EVIL|FAKE|attacker-model|attacker-sample|chains? Z|chains? Y|entities? 999/i);
+        assert.doesNotMatch(surfaceText, /ATTACKER SELECTED INPUT LABEL|attacker-target-id|ATTACKER|EVIL|FAKE|attacker-model|attacker-sample|chains? Z|chains? Y|entities? 999/i);
         assert.doesNotMatch(surfaceText, /Model, sample, and chain context resolve at server normalization/i);
     }
 
