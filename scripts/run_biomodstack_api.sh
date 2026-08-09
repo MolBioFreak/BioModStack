@@ -6,7 +6,7 @@ PROJECT_DIR="${BMS_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+export PATH="$HOME/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 
 pin_nextflow_java() {
     local candidate="${BMS_NEXTFLOW_JAVA_HOME:-}"
@@ -44,6 +44,23 @@ if [ "${BMS_RUNTIME_MODE,,}" = "dev" ]; then
     export BMS_CORE_RUNTIME_MODE=0
     unset BMS_WORKFLOW_ADAPTER_URL
 fi
+
+# Native Development shares the pinned pLannotate micromamba environment with
+# the container runtime, but it does not run inside the pLannotate-enabled API
+# image. Discover the user-owned micromamba installation without hard-coding a
+# host path into the API or requiring generated env.sh to carry this setting.
+if [ -z "${BMS_MICROMAMBA_BIN:-}" ]; then
+    if micromamba_bin="$(command -v micromamba 2>/dev/null)"; then
+        export BMS_MICROMAMBA_BIN="$micromamba_bin"
+    fi
+fi
+if [ -n "${BMS_MICROMAMBA_BIN:-}" ] && [ -z "${BMS_MICROMAMBA_ROOT_PREFIX:-}" ]; then
+    micromamba_root="$("$BMS_MICROMAMBA_BIN" info --base 2>/dev/null || true)"
+    if [ -n "$micromamba_root" ]; then
+        export BMS_MICROMAMBA_ROOT_PREFIX="$micromamba_root"
+    fi
+fi
+export BMS_PLANNOTATE_ENV="${BMS_PLANNOTATE_ENV:-plannotate}"
 
 pin_nextflow_java
 
