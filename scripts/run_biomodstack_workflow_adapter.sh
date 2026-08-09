@@ -27,6 +27,14 @@ SYSTEMD_AUTHORITY_KEYS=(
     BMS_TAILNET_CONTROL_TRUSTED_PROXY_HOSTS
     BMS_WORKFLOW_ADAPTER_BIND_HOST
     BMS_WORKFLOW_ADAPTER_PORT
+    BMS_WORKFLOW_ADAPTER_LANE
+    BMS_STATE_DIR
+    BMS_DB_PATH
+    BMS_WORK
+    BMS_RESULTS_DIR
+    BMS_RESULTS_ROOT
+    BMS_DATA
+    BMS_INPUTS
     BMS_FEATURE_MOLECULAR_DYNAMICS
     BMS_MD_ANALYSIS_ENABLED
     BMS_MD_ANALYSIS_CONTAINER
@@ -46,6 +54,13 @@ restore_systemd_authority_environment() {
         export "$key=${SYSTEMD_AUTHORITY_ENV[$key]}"
     done
 }
+
+# A generated user unit is the authority for the lane and all mutable roots.
+# Preserve its explicit BMS_* values across compatibility/profile files.
+declare -A _BMS_LAUNCH_ENV=()
+while IFS= read -r key; do
+    _BMS_LAUNCH_ENV["$key"]="${!key}"
+done < <(compgen -A variable BMS_)
 
 if [ -f "$HOME/.biomodstack/env.sh" ]; then
     source "$HOME/.biomodstack/env.sh"
@@ -79,6 +94,9 @@ if [ -f "$CORE_RUNTIME_ENV_FILE" ]; then
 elif [ -f "$LEGACY_CORE_RUNTIME_ENV_FILE" ]; then
     load_env_file_overrides "$LEGACY_CORE_RUNTIME_ENV_FILE"
 fi
+for key in "${!_BMS_LAUNCH_ENV[@]}"; do
+    export "$key=${_BMS_LAUNCH_ENV[$key]}"
+done
 restore_systemd_authority_environment
 pin_nextflow_java
 
@@ -95,13 +113,43 @@ fi
 export BMS_HOME="$PROJECT_DIR"
 unset BMS_WORKFLOW_ADAPTER_URL
 export BMS_CORE_RUNTIME_MODE=0
+BMS_WORKFLOW_ADAPTER_LANE="${BMS_WORKFLOW_ADAPTER_LANE:-}"
+case "${BMS_WORKFLOW_ADAPTER_LANE,,}" in
+    development)
+        expected_adapter_port=18001
+        ;;
+    production)
+        expected_adapter_port=18101
+        ;;
+    *)
+        echo "BioModStack workflow adapter is blocked: BMS_WORKFLOW_ADAPTER_LANE must be development or production." >&2
+        exit 78
+        ;;
+esac
+BMS_WORKFLOW_ADAPTER_PORT="${BMS_WORKFLOW_ADAPTER_PORT:-$expected_adapter_port}"
+if [ "$BMS_WORKFLOW_ADAPTER_PORT" != "$expected_adapter_port" ]; then
+    echo "BioModStack workflow adapter is blocked: port $BMS_WORKFLOW_ADAPTER_PORT does not belong to lane $BMS_WORKFLOW_ADAPTER_LANE." >&2
+    exit 78
+fi
+for required_root in BMS_STATE_DIR BMS_DB_PATH BMS_WORK; do
+    if [ -z "${!required_root:-}" ] || [[ "${!required_root}" != /* ]]; then
+        echo "BioModStack workflow adapter is blocked: $required_root must be an explicit absolute lane-local root." >&2
+        exit 78
+    fi
+done
+BMS_RESULTS_DIR="${BMS_RESULTS_DIR:-${BMS_RESULTS_ROOT:-}}"
+if [ -z "$BMS_RESULTS_DIR" ] || [[ "$BMS_RESULTS_DIR" != /* ]]; then
+    echo "BioModStack workflow adapter is blocked: BMS_RESULTS_DIR must be an explicit absolute lane-local root." >&2
+    exit 78
+fi
+export BMS_WORKFLOW_ADAPTER_LANE BMS_WORKFLOW_ADAPTER_PORT BMS_STATE_DIR BMS_DB_PATH BMS_WORK BMS_RESULTS_DIR
+export BMS_RESULTS_ROOT="$BMS_RESULTS_DIR"
 BMS_NEXTFLOW_HOME="${BMS_NEXTFLOW_HOME:-${BMS_DATA:-/mnt/BioModStack}/nextflow}"
 export BMS_NEXTFLOW_HOME
 export NXF_HOME="${NXF_HOME:-$BMS_NEXTFLOW_HOME}"
 mkdir -p "$NXF_HOME"
 export BMS_CPU_POWER_COLLECTOR_URL="${BMS_CPU_POWER_COLLECTOR_URL:-http://127.0.0.1:18797/power}"
 BMS_WORKFLOW_ADAPTER_BIND_HOST="${BMS_WORKFLOW_ADAPTER_BIND_HOST:-127.0.0.1}"
-BMS_WORKFLOW_ADAPTER_PORT="${BMS_WORKFLOW_ADAPTER_PORT:-18001}"
 CM_API_RUNTIME_DIR="${BMS_CM_API_RUNTIME_DIR:-${BMS_DATA:-/mnt/BioModStack}/runtime/cm-api-python}"
 
 rewrite_cm_api_pyvenv_home() {

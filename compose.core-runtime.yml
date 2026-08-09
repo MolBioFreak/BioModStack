@@ -40,6 +40,8 @@ services:
       BMS_DATA: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}
       BMS_INPUTS: ${BMS_INPUTS_CONTAINER_PATH:-/var/lib/biomodstack/inputs}
       BMS_DB_PATH: ${BMS_DB_CONTAINER_PATH:-/var/lib/biomodstack/biomodstack.db}
+      BMS_RESULTS_DIR: ${BMS_RESULTS_CONTAINER_PATH:-/var/lib/biomodstack/bms_results}
+      BMS_RESULTS_ROOT: ${BMS_RESULTS_CONTAINER_PATH:-/var/lib/biomodstack/bms_results}
       BMS_WEIGHTS: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/weights
       BMS_COLABFOLD_DB: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/colabfold_db
       BMS_MSA_CACHE: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/msa_cache
@@ -64,7 +66,8 @@ services:
       BMS_BOLTZ_API_CLI: ${BMS_BOLTZ_API_CLI:-/var/lib/biomodstack/tools/boltz-api}
       BMS_BOLTZ_API_HOME: ${BMS_BOLTZ_API_HOME:-/var/lib/biomodstack/secrets/boltz-api-home}
       BMS_BOLTZ_DOWNLOAD_ROOT: ${BMS_BOLTZ_DOWNLOAD_ROOT:-/var/lib/biomodstack/boltz_results}
-      BMS_WORKFLOW_ADAPTER_URL: ${BMS_WORKFLOW_ADAPTER_URL:-http://127.0.0.1:18001}
+      BMS_WORKFLOW_ADAPTER_LANE: ${BMS_WORKFLOW_ADAPTER_LANE:-production}
+      BMS_WORKFLOW_ADAPTER_URL: ${BMS_WORKFLOW_ADAPTER_URL:-http://127.0.0.1:18101}
       BMS_HOST_AGENT_URL: ${BMS_HOST_AGENT_URL:-http://127.0.0.1:18798}
       BMS_HOST_AGENT_TIMEOUT_SECONDS: ${BMS_HOST_AGENT_TIMEOUT_SECONDS:-2.0}
       BMS_MK1D_RECONNECT_SOCKET: ${BMS_MK1D_RECONNECT_SOCKET:-/run/biomodstack/mk1d-reconnect.sock}

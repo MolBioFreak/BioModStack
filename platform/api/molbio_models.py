@@ -227,6 +227,31 @@ class MolecularOperationOutput(MolBioBase):
     snapshot = Column(JSON, nullable=False, default=dict)
 
 
+class MolecularImportBatch(MolBioBase):
+    """Immutable result binding for an authoritative multi-record import."""
+
+    __tablename__ = "molecular_import_batches"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_molecular_import_batch_idempotency"),
+        UniqueConstraint("operation_id", name="uq_molecular_import_batch_operation"),
+        Index("ix_molecular_import_batches_source_digest", "source_sha256"),
+    )
+
+    id = Column(String(36), primary_key=True)
+    operation_id = Column(
+        String(36),
+        ForeignKey("molecular_operations.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    idempotency_key = Column(String(255), nullable=False)
+    request_fingerprint = Column(String(64), nullable=False)
+    source_format = Column(String(16), nullable=False)
+    source_sha256 = Column(String(64), nullable=False)
+    result = Column(JSON, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    created_by = Column(String(255), nullable=True)
+
+
 class TmModel(MolBioBase):
     __tablename__ = "tm_models"
 
@@ -398,6 +423,7 @@ IMMUTABLE_TABLES = (
     "molecular_operations",
     "molecular_operation_inputs",
     "molecular_operation_outputs",
+    "molecular_import_batches",
     "tm_model_revisions",
     "polymerase_preset_revisions",
     "pcr_experiment_revisions",

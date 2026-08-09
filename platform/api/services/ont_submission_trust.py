@@ -13,6 +13,15 @@ ONT_SERVER_CONTROLLED_PROVENANCE_PARAMS = frozenset(
         "source_barcode_unit",
         "source_ont_job_id",
         "source_instrument_artifact_manifest_sha256",
+        "source_barcode_units_manifest_sha256",
+        "source_barcode_unit_manifest_sha256",
+        "source_barcode_source_calls_sha256",
+        "source_barcode_preflight_sha256",
+        "source_barcode_demux_manifest_sha256",
+        "reference_set_binding",
+        "ngs_reference_set_binding",
+        "barcode_mapping_binding",
+        "molbio_revision_binding",
     }
 )
 

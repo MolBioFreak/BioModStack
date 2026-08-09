@@ -42,8 +42,8 @@ process FastqPlasmidQC {
     path "igv_track_config.json", emit: igv_track_config
     path "igv_report.html", emit: igv_report
     path "igv_report.log", emit: igv_report_log
-    path "fastq_consensus.fasta", optional: true, emit: consensus
-    path "fastq_consensus.fasta.fai", optional: true, emit: consensus_index
+    path "fastq_consensus.fasta", emit: consensus
+    path "fastq_consensus.fasta.fai", emit: consensus_index
     path "fastq_consensus.log", emit: consensus_log
     path "fastq_qc.log", emit: log
 
@@ -56,28 +56,25 @@ process FastqPlasmidQC {
     def igvReportMaxSites = (params.igv_report_max_sites ?: 40) as Integer
     def igvReportFlankingBp = (params.igv_report_flanking_bp ?: 200) as Integer
     def codeRoot = params.code_root ?: projectDir
-    def manifestJobId = params.job_id ?: 'nanopore-fastq-qc'
+    def manifestJobId = ((params.job_id ?: '') as String).trim()
+    if (!manifestJobId) {
+        error('FASTQ plasmid QC requires an exact job_id')
+    }
     def referenceSequenceSha256 = shellQuote(params.reference_sequence_sha256 ?: '')
     """
     set -euo pipefail
 
-    if command -v samtools >/dev/null 2>&1; then
-        SAMTOOLS_CMD=(samtools)
-    elif command -v apptainer >/dev/null 2>&1 && [[ -f "${params.container_dir}/dorado.sif" ]]; then
-        SAMTOOLS_CMD=(apptainer exec "${params.container_dir}/dorado.sif" samtools)
-    else
-        echo "samtools not found on host and no fallback dorado container available" >&2
+    if ! command -v samtools >/dev/null 2>&1; then
+        echo "CRITICAL_FAILURE: SAMTOOLS_RUNTIME_UNAVAILABLE" >&2
         exit 127
     fi
+    SAMTOOLS_CMD=(samtools)
 
-    if command -v python3 >/dev/null 2>&1; then
-        PYTHON_CMD=(python3)
-    elif command -v python >/dev/null 2>&1; then
-        PYTHON_CMD=(python)
-    else
-        echo "python interpreter not found (tried python3 and python)" >&2
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "CRITICAL_FAILURE: PYTHON_RUNTIME_UNAVAILABLE" >&2
         exit 127
     fi
+    PYTHON_CMD=(python3)
 
     printf "read_id\\tlength_bp\\n" > read_lengths.tsv
 
@@ -99,7 +96,14 @@ process FastqPlasmidQC {
         }
     ' >> read_lengths.tsv
 
-    total_reads=\$(awk 'NR > 1 {c++} END {print c + 0}' read_lengths.tsv)
+    source_total_reads=\$(\${reader} "${fastq}" | awk '
+        END {
+            if (NR == 0 || NR % 4 != 0) exit 86
+            print NR / 4
+        }
+    ') || { echo "CRITICAL_FAILURE: FASTQ_RECORD_ACCOUNTING_INVALID" >&2; exit 86; }
+    reads_passing_length_filter=\$(awk 'NR > 1 {c++} END {print c + 0}' read_lengths.tsv)
+    total_reads="\${source_total_reads}"
     total_bases=\$(awk 'NR > 1 {s += \$2} END {print s + 0}' read_lengths.tsv)
     mean_read_length=\$(awk 'NR > 1 {s += \$2; c++} END {if (c > 0) printf "%.2f", s / c; else printf "0"}' read_lengths.tsv)
     median_read_length=\$(awk 'NR > 1 {print \$2}' read_lengths.tsv | LC_ALL=C sort -n | awk '
@@ -145,20 +149,24 @@ process FastqPlasmidQC {
     reference_name=\$(head -n1 reference_qc.fasta.fai | cut -f1)
     reference_length=\$(head -n1 reference_qc.fasta.fai | cut -f2)
 
-    mapped_reads=\$("\${SAMTOOLS_CMD[@]}" view -c -F 4 "${bam}")
-    unmapped_reads=\$("\${SAMTOOLS_CMD[@]}" view -c -f 4 "${bam}")
-    primary_mapped_reads=\$("\${SAMTOOLS_CMD[@]}" view -c -F 2308 "${bam}")
+    mapped_alignment_records=\$("\${SAMTOOLS_CMD[@]}" view -c -F 4 "${bam}")
+    unmapped_alignment_records=\$("\${SAMTOOLS_CMD[@]}" view -c -f 4 "${bam}")
+    mapped_reads=\$("\${SAMTOOLS_CMD[@]}" view -c -F 2308 "${bam}")
+    unmapped_reads=\$("\${SAMTOOLS_CMD[@]}" view -c -f 4 -F 2304 "${bam}")
+    primary_mapped_reads="\${mapped_reads}"
     secondary_alignments=\$("\${SAMTOOLS_CMD[@]}" view -c -f 256 "${bam}")
     supplementary_alignments=\$("\${SAMTOOLS_CMD[@]}" view -c -f 2048 "${bam}")
-    total_alignment_records=\$((mapped_reads + unmapped_reads))
-    mapping_rate_pct=\$(awk -v mapped="\${mapped_reads}" -v total="\${total_alignment_records}" 'BEGIN {
+    total_alignment_records=\$((mapped_alignment_records + unmapped_alignment_records))
+    logical_read_records=\$((mapped_reads + unmapped_reads))
+    if [[ "\${logical_read_records}" -ne "\${source_total_reads}" ]]; then
+        echo "CRITICAL_FAILURE: FASTQ_BAM_READ_ACCOUNTING_MISMATCH source=\${source_total_reads} primary_records=\${logical_read_records}" >&2
+        exit 86
+    fi
+    mapping_rate_pct=\$(awk -v mapped="\${mapped_reads}" -v total="\${source_total_reads}" 'BEGIN {
         if (total > 0) printf "%.4f", (100.0 * mapped) / total
         else printf "0"
     }')
-    primary_mapping_rate_pct=\$(awk -v mapped="\${primary_mapped_reads}" -v total="\${total_alignment_records}" 'BEGIN {
-        if (total > 0) printf "%.4f", (100.0 * mapped) / total
-        else printf "0"
-    }')
+    primary_mapping_rate_pct="\${mapping_rate_pct}"
 
     printf "reference\\tposition\\tdepth\\n" > fastq_coverage.tsv
     "\${SAMTOOLS_CMD[@]}" depth -aa "${bam}" | awk 'BEGIN { OFS="\\t" } { print \$1, \$2, \$3 }' >> fastq_coverage.tsv
@@ -183,82 +191,40 @@ process FastqPlasmidQC {
     }')
 
     has_called_consensus_base() {
-        awk 'NR > 1 { line = toupper(\$0); if (line ~ /[ACGT]/) found = 1 } END { exit(found ? 0 : 1) }' "\$1"
+        awk '
+            BEGIN { headers = 0; called = 0 }
+            /^>/ { headers++; next }
+            {
+                line = toupper(\$0)
+                if (line ~ /[ACGT]/) called = 1
+            }
+            END { exit(headers == 1 && called ? 0 : 1) }
+        ' "\$1"
     }
 
     consensus_status="not_run"
     workflow_status="completed"
     verification_reason_code="phase1_manual_review_required"
-    if "\${SAMTOOLS_CMD[@]}" consensus -f fasta "${bam}" > fastq_consensus.fasta 2> fastq_consensus.log && \
-       has_called_consensus_base fastq_consensus.fasta; then
-        consensus_status="ok"
-    else
-        echo "samtools consensus unavailable, failed, or contained no called A/C/G/T bases; attempting mpileup-majority fallback" >> fastq_consensus.log
-        if [[ -f "${codeRoot}/scripts/mpileup_majority_consensus.awk" ]]; then
-            # samtools mpileup has no worker-thread option. Split the one
-            # reference into ordered indexed regions so this fallback can use
-            # the CPU allocation assigned to this process, then run the region
-            # workers through a bounded pool. Unbounded background forks put
-            # the whole workflow tree inside one service cgroup and stall on
-            # memory throttling, so cap concurrent workers here. The 44-CPU
-            # ceiling stays the scheduling limit for this process; 8 workers
-            # is the safe concurrency for the host samtools/apptainer path.
-            mpileup_workers=${task.cpus}
-            if [[ "\${mpileup_workers}" -gt "\${reference_length}" ]]; then
-                mpileup_workers="\${reference_length}"
-            fi
-            if [[ "\${mpileup_workers}" -lt 1 ]]; then
-                mpileup_workers=1
-            fi
-            mpileup_chunk_bp=\$(( (reference_length + mpileup_workers - 1) / mpileup_workers ))
-            rm -f mpileup.chunk.*
-            : > mpileup.regions.tsv
-            for ((chunk_start = 1; chunk_start <= reference_length; chunk_start += mpileup_chunk_bp)); do
-                chunk_end=\$((chunk_start + mpileup_chunk_bp - 1))
-                if [[ "\${chunk_end}" -gt "\${reference_length}" ]]; then
-                    chunk_end="\${reference_length}"
-                fi
-                printf '%s\t%s\n' "\${chunk_start}" "\${chunk_end}" >> mpileup.regions.tsv
-            done
-            export SAMTOOLS_CMD_STR="\${SAMTOOLS_CMD[*]}" reference_name reference_qc_fasta="aligned.bam"
-            export REFERENCE_QC_FASTA="reference_qc.fasta" REFERENCE_QC_NAME="\${reference_name}" MPILEUP_QC_BAM="aligned.bam"
-            mpileup_worker="${codeRoot}/scripts/mpileup_chunk_worker.sh"
-            if [[ ! -f "\${mpileup_worker}" ]]; then
-                echo "Missing mpileup worker script: \${mpileup_worker}" >&2
-                exit 1
-            fi
-            if command -v xargs >/dev/null 2>&1; then
-                mpileup_concurrency=8
-                cat mpileup.regions.tsv | xargs -r -P "\${mpileup_concurrency}" -n 2 bash "\${mpileup_worker}"
-            else
-                # xargs unavailable: fall back to ordered serial execution.
-                while IFS=\$(printf '\t') read -r chunk_start chunk_end; do
-                    bash "\${mpileup_worker}" "\${chunk_start}" "\${chunk_end}"
-                done < mpileup.regions.tsv
-            fi
-            cat mpileup.chunk.* | awk -f "${codeRoot}/scripts/mpileup_majority_consensus.awk" > fastq_consensus.fasta.tmp
-        fi
-        if [[ -s fastq_consensus.fasta.tmp ]] && \
-           has_called_consensus_base fastq_consensus.fasta.tmp; then
-            mv fastq_consensus.fasta.tmp fastq_consensus.fasta
-            consensus_status="pileup_majority_fallback"
-        else
-            rm -f fastq_consensus.fasta.tmp fastq_consensus.fasta fastq_consensus.fasta.fai
-            consensus_status="unavailable"
-            workflow_status="completed_with_unavailable_observation"
-            verification_reason_code="observed_consensus_unavailable"
-            echo "Unable to derive observed consensus from aligned reads; refusing expected-reference substitution" | tee -a fastq_consensus.log >&2
-        fi
+    rm -f fastq_consensus.fasta fastq_consensus.fasta.fai
+    if ! "\${SAMTOOLS_CMD[@]}" consensus --mode bayesian -f fasta "${bam}" > fastq_consensus.fasta 2> fastq_consensus.log; then
+        echo "CRITICAL_FAILURE: SAMTOOLS_CONSENSUS_FAILED" | tee -a fastq_consensus.log >&2
+        rm -f fastq_consensus.fasta fastq_consensus.fasta.fai
+        exit 86
     fi
+    if ! has_called_consensus_base fastq_consensus.fasta; then
+        echo "CRITICAL_FAILURE: SAMTOOLS_CONSENSUS_EMPTY" | tee -a fastq_consensus.log >&2
+        rm -f fastq_consensus.fasta fastq_consensus.fasta.fai
+        exit 86
+    fi
+    consensus_status="ok"
 
-    if [[ -s fastq_consensus.fasta ]]; then
-        "\${SAMTOOLS_CMD[@]}" faidx fastq_consensus.fasta
-        consensus_name=\$(awk 'NR == 1 {gsub(/^>/, "", \$0); print \$0; exit}' fastq_consensus.fasta)
-        consensus_length=\$(awk 'NR > 1 {gsub(/\\r/, "", \$0); s += length(\$0)} END {print s + 0}' fastq_consensus.fasta)
-    else
-        consensus_name="unavailable"
-        consensus_length=0
+    if ! "\${SAMTOOLS_CMD[@]}" faidx fastq_consensus.fasta >> fastq_consensus.log 2>&1; then
+        echo "CRITICAL_FAILURE: SAMTOOLS_CONSENSUS_INDEX_FAILED" | tee -a fastq_consensus.log >&2
+        rm -f fastq_consensus.fasta fastq_consensus.fasta.fai
+        exit 86
     fi
+    consensus_name=\$(awk 'NR == 1 {gsub(/^>/, "", \$0); print \$0; exit}' fastq_consensus.fasta)
+    consensus_length=\$(awk 'NR > 1 {gsub(/\\r/, "", \$0); s += length(\$0)} END {print s + 0}' fastq_consensus.fasta)
     igv_report_status="not_generated"
     igv_report_cli_available=0
 
@@ -393,37 +359,27 @@ JSON
 
     : > igv_report.log
 
-    if command -v create_report >/dev/null 2>&1; then
-        igv_report_cli_available=1
-        if create_report igv_report_sites.bed \\
-            --fasta reference_qc.fasta \\
-            --track-config igv_track_config.json \\
-            --flanking ${igvReportFlankingBp} \\
-            --title "FASTQ Plasmid QC IGV Report" \\
-            --output igv_report.html >> igv_report.log 2>&1; then
-            igv_report_status="created"
-        else
-            igv_report_status="fallback_cli_error"
-            {
-                echo "<!doctype html>"
-                echo "<html><head><meta charset=\\"utf-8\\"><title>IGV Report Fallback</title></head><body>"
-                echo "<h1>IGV report fallback</h1>"
-                echo "<p><strong>create_report</strong> was found but failed for this run. See <code>igv_report.log</code>.</p>"
-                echo "<p>Generated tracks remain available in this directory.</p>"
-                echo "</body></html>"
-            } > igv_report.html
-        fi
-    else
-        igv_report_status="fallback_missing_cli"
-        {
-            echo "<!doctype html>"
-            echo "<html><head><meta charset=\\"utf-8\\"><title>IGV Report Fallback</title></head><body>"
-            echo "<h1>IGV report fallback</h1>"
-            echo "<p><strong>create_report</strong> (igv-reports) is not installed in this runtime.</p>"
-            echo "<p>Install igv-reports to generate fully interactive static report HTML from these artifacts.</p>"
-            echo "</body></html>"
-        } > igv_report.html
+    if ! command -v create_report >/dev/null 2>&1; then
+        echo "CRITICAL_FAILURE: IGV_REPORT_CREATE_REPORT_UNAVAILABLE" | tee -a igv_report.log >&2
+        exit 86
     fi
+    rm -f igv_report.html
+    if ! create_report igv_report_sites.bed \\
+        --fasta reference_qc.fasta \\
+        --track-config igv_track_config.json \\
+        --flanking ${igvReportFlankingBp} \\
+        --title "FASTQ Plasmid QC IGV Report" \\
+        --output igv_report.html >> igv_report.log 2>&1; then
+        echo "CRITICAL_FAILURE: IGV_REPORT_CREATE_REPORT_FAILED" | tee -a igv_report.log >&2
+        rm -f igv_report.html
+        exit 86
+    fi
+    if [[ ! -s igv_report.html ]]; then
+        echo "CRITICAL_FAILURE: IGV_REPORT_ARTIFACT_EMPTY" | tee -a igv_report.log >&2
+        exit 86
+    fi
+    igv_report_cli_available=1
+    igv_report_status="created"
 
     {
         echo "igv_report_cli_available=\${igv_report_cli_available}"
@@ -439,6 +395,7 @@ JSON
         echo -e "fastq_minimap2_preset\\t${minimapPreset}"
         echo -e "fastq_minimap2_allow_secondary\\t${minimapAllowSecondary}"
         echo -e "total_reads\\t\${total_reads}"
+        echo -e "reads_passing_length_filter\\t\${reads_passing_length_filter}"
         echo -e "total_bases\\t\${total_bases}"
         echo -e "mean_read_length_bp\\t\${mean_read_length}"
         echo -e "median_read_length_bp\\t\${median_read_length}"
@@ -448,6 +405,9 @@ JSON
         echo -e "trimer_plus_reads\\t\${trimer_plus_reads}"
         echo -e "mapped_reads\\t\${mapped_reads}"
         echo -e "unmapped_reads\\t\${unmapped_reads}"
+        echo -e "logical_read_records\\t\${logical_read_records}"
+        echo -e "mapped_alignment_records\\t\${mapped_alignment_records}"
+        echo -e "unmapped_alignment_records\\t\${unmapped_alignment_records}"
         echo -e "total_alignment_records\\t\${total_alignment_records}"
         echo -e "mapping_rate_pct\\t\${mapping_rate_pct}"
         echo -e "primary_mapped_reads\\t\${primary_mapped_reads}"
@@ -504,7 +464,7 @@ JSON
         --expected-reference-sha256 ${referenceSequenceSha256} \\
         --source-reads "${fastq}" \\
         --consensus-fasta fastq_consensus.fasta \\
-        --consensus-method bcftools_consensus \\
+        --consensus-method samtools_consensus \\
         --out-dir construct_verification_input
 
     "\${PYTHON_CMD[@]}" "${codeRoot}/scripts/build_sequence_qc_manifest.py" \\

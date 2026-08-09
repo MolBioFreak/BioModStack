@@ -42,7 +42,8 @@ done
 # boundary after sourcing compatibility configuration.
 if [ "${BMS_RUNTIME_MODE,,}" = "dev" ]; then
     export BMS_CORE_RUNTIME_MODE=0
-    unset BMS_WORKFLOW_ADAPTER_URL
+    export BMS_WORKFLOW_ADAPTER_LANE=development
+    export BMS_WORKFLOW_ADAPTER_URL=http://127.0.0.1:18001
 fi
 
 # Native Development shares the pinned pLannotate micromamba environment with

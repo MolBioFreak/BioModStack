@@ -102,7 +102,7 @@ def test_dev_api_launcher_does_not_inherit_container_adapter_routing(tmp_path: P
     assert captured == {
         "runtime_mode": "dev",
         "core_runtime_mode": "0",
-        "workflow_adapter_url": None,
+        "workflow_adapter_url": "http://127.0.0.1:18001",
         "data": str(tmp_path / "dev-state"),
         "db_path": str(tmp_path / "dev-state" / "biomodstack.db"),
         "uv_cache_dir": str(home / ".cache" / "biomodstack" / "uv"),

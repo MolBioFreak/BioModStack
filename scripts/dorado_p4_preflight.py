@@ -98,6 +98,49 @@ def verify_model_identity(model: dict[str, Any], model_dir: Path) -> dict[str, A
     return {"path": str(Path(model_dir).resolve()), "aggregate_sha256": aggregate, "files": count, "bytes": total}
 
 
+def _verify_scientific_tools(runtime_sif: Path, lock: dict[str, Any]) -> dict[str, Any]:
+    expected = lock.get("scientific_tools")
+    if not isinstance(expected, dict):
+        raise ValueError("Dorado lock is missing scientific_tools")
+
+    commands = {
+        "samtools": ["samtools", "--version"],
+        "samtools_consensus": ["samtools", "consensus", "--help"],
+        "modkit": ["modkit", "--version"],
+        "igv_reports": ["/opt/igv-reports/bin/pip", "show", "igv-reports"],
+        "igv_create_report": ["create_report", "--help"],
+    }
+    observed: dict[str, dict[str, Any]] = {}
+    for name, command in commands.items():
+        completed = subprocess.run(
+            ["apptainer", "exec", str(runtime_sif), *command],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=60,
+        )
+        output = ((completed.stdout or "") + "\n" + (completed.stderr or "")).strip()
+        if completed.returncode != 0:
+            raise ValueError(f"Dorado runtime scientific tool failed: {name}")
+        observed[name] = {
+            "command": command,
+            "output_sha256": hashlib.sha256(output.encode("utf-8")).hexdigest(),
+        }
+
+        if name == "samtools" and not output.startswith(f"samtools {expected['samtools']['version']}"):
+            raise ValueError("Dorado runtime samtools version mismatch")
+        if name == "samtools_consensus" and "samtools consensus" not in output:
+            raise ValueError("Dorado runtime is missing samtools consensus")
+        if name == "modkit" and f"modkit {expected['modkit']['version']}" not in output:
+            raise ValueError("Dorado runtime modkit version mismatch")
+        if name == "igv_reports" and f"Version: {expected['igv_reports']['version']}" not in output:
+            raise ValueError("Dorado runtime igv-reports version mismatch")
+    observed["consensus_method"] = {
+        "identity": expected["samtools"]["consensus_method"],
+    }
+    return observed
+
+
 def _verify_runtime_capabilities(runtime_sif: Path, lock: dict[str, Any], *, mode: str,
                                  barcode_kit: str | None, modified_bases: str) -> dict[str, Any]:
     required = lock["required_runtime_capabilities"]
@@ -109,7 +152,7 @@ def _verify_runtime_capabilities(runtime_sif: Path, lock: dict[str, Any], *, mod
         commands["demux"] = set(required["demux"])
     if modified_bases != "none":
         commands["basecaller"].update(required["basecaller_modified_bases"])
-    evidence: dict[str, Any] = {}
+    evidence: dict[str, Any] = {"scientific_tools": _verify_scientific_tools(runtime_sif, lock)}
     for command, options in sorted(commands.items()):
         completed = subprocess.run(
             ["apptainer", "exec", str(runtime_sif), "dorado", command, "--help"],

@@ -96,7 +96,11 @@ def test_runtime_descriptor_for_dev_mode(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(
         services,
         "service_is_active",
-        lambda name, project_root=None: name in {services.API_SERVICE, services.FRONTEND_SERVICE},
+        lambda name, project_root=None: name in {
+            services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE,
+            services.API_SERVICE,
+            services.FRONTEND_SERVICE,
+        },
     )
     monkeypatch.setattr(services, "url_is_ready", lambda url, timeout_seconds=2.0: True)
     monkeypatch.setattr(
@@ -136,6 +140,7 @@ def test_runtime_descriptor_for_dev_mode(tmp_path: Path, monkeypatch) -> None:
     assert descriptor["router_basename"] == "/"
     assert descriptor["supported_launch_surfaces"] == ["browser", "electron", "none"]
     assert descriptor["services"] == [
+        {"name": services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE, "active": True},
         {"name": services.API_SERVICE, "active": True},
         {"name": services.FRONTEND_SERVICE, "active": True},
     ]
@@ -217,7 +222,7 @@ def test_runtime_descriptor_for_container_mode(tmp_path: Path, monkeypatch) -> N
         },
         {
             "id": "workflow-adapter",
-            "label": "Workflow adapter log",
+            "label": "Production workflow adapter log",
             "path": str(services.WORKFLOW_ADAPTER_LOG),
         },
         {
@@ -552,7 +557,11 @@ def test_operator_runtime_mode_prefers_fully_active_dev_runtime(tmp_path: Path, 
     monkeypatch.setattr(
         services,
         "service_is_active",
-        lambda name, project_root=None: name in {services.API_SERVICE, services.FRONTEND_SERVICE},
+        lambda name, project_root=None: name in {
+            services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE,
+            services.API_SERVICE,
+            services.FRONTEND_SERVICE,
+        },
     )
 
     assert services.operator_runtime_mode(project_root=project_root) == services.DEV_RUNTIME_MODE
@@ -606,6 +615,9 @@ def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path, mo
     units = services.render_user_units(project_root, runtime_mode="dev")
 
     assert set(units) == {
+        services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE,
+        services.WORKFLOW_ROOT_SLICE,
+        services.DEVELOPMENT_WORKFLOW_SLICE,
         services.API_SERVICE,
         services.FRONTEND_SERVICE,
         services.TAILNET_GLOBAL_SERVICE,
@@ -658,7 +670,11 @@ def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path, mo
     assert "TimeoutStartSec=120" in tailnet_unit
 
     target_unit = units[services.DEV_TARGET_UNIT]
-    assert f"Wants={services.API_SERVICE} {services.FRONTEND_SERVICE}" in target_unit
+    assert (
+        f"Wants={services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE} {services.WORKFLOW_ROOT_SLICE} "
+        f"{services.DEVELOPMENT_WORKFLOW_SLICE} {services.API_SERVICE} {services.FRONTEND_SERVICE}"
+        in target_unit
+    )
     assert services.TAILNET_GLOBAL_SERVICE not in target_unit
     assert "WantedBy=default.target" in target_unit
 
@@ -667,13 +683,19 @@ def test_render_user_units_support_container_runtime_mode(tmp_path: Path) -> Non
     project_root = tmp_path / "biomodstack"
     units = services.render_user_units(project_root, runtime_mode="container")
 
-    assert set(units) == {services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE, services.TARGET_UNIT}
+    assert set(units) == {
+        services.WORKFLOW_ADAPTER_SERVICE,
+        services.WORKFLOW_ROOT_SLICE,
+        services.PRODUCTION_WORKFLOW_SLICE,
+        services.CORE_RUNTIME_SERVICE,
+        services.TARGET_UNIT,
+    }
 
     adapter_unit = units[services.WORKFLOW_ADAPTER_SERVICE]
     assert f"Environment=BMS_HOME={project_root}" in adapter_unit
     assert "Environment=BMS_RUNTIME_MODE=container" in adapter_unit
     assert "Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=127.0.0.1" in adapter_unit
-    assert "Environment=BMS_WORKFLOW_ADAPTER_PORT=18001" in adapter_unit
+    assert "Environment=BMS_WORKFLOW_ADAPTER_PORT=18101" in adapter_unit
     assert f"ExecStartPre=/usr/bin/env python3 {project_root / 'scripts' / 'rotate_biomodstack_logs.py'}" in adapter_unit
     assert f"ExecStart={project_root / 'scripts' / 'run_biomodstack_workflow_adapter.sh'}" in adapter_unit
     assert f"StandardOutput=append:{services.WORKFLOW_ADAPTER_LOG}" in adapter_unit
@@ -700,7 +722,11 @@ def test_render_user_units_support_container_runtime_mode(tmp_path: Path) -> Non
     assert f"PartOf={services.TARGET_UNIT}" in runtime_unit
 
     target_unit = units[services.TARGET_UNIT]
-    assert f"Wants={services.WORKFLOW_ADAPTER_SERVICE} {services.CORE_RUNTIME_SERVICE}" in target_unit
+    assert (
+        f"Wants={services.WORKFLOW_ADAPTER_SERVICE} {services.WORKFLOW_ROOT_SLICE} "
+        f"{services.PRODUCTION_WORKFLOW_SLICE} {services.CORE_RUNTIME_SERVICE}"
+        in target_unit
+    )
     assert services.API_SERVICE not in target_unit
     assert services.FRONTEND_SERVICE not in target_unit
 
@@ -713,6 +739,8 @@ def test_install_user_units_writes_expected_files(tmp_path: Path) -> None:
 
     assert {path.name for path in written} == {
         services.WORKFLOW_ADAPTER_SERVICE,
+        services.WORKFLOW_ROOT_SLICE,
+        services.PRODUCTION_WORKFLOW_SLICE,
         services.CORE_RUNTIME_SERVICE,
         services.TARGET_UNIT,
     }
@@ -819,6 +847,7 @@ def test_runtime_api_listener_ownership_classifies_legacy_dev_api_as_wrong_owner
     monkeypatch.setattr(services, "listener_pids", lambda port: [9100])
     monkeypatch.setattr(services, "pid_is_biomodstack_runtime_container", lambda pid, kind, project_root=None: False)
     monkeypatch.setattr(services, "matching_process_chain", lambda pid, matcher, project_root=None: [9101, 9102])
+    monkeypatch.setattr(services, "read_pid_cmdline", lambda pid: (_ for _ in ()).throw(FileNotFoundError(pid)))
 
     ownership = services.runtime_api_listener_ownership(project_root=project_root, runtime_mode="container")
 
@@ -897,7 +926,7 @@ def test_runtime_listener_preflight_checks_all_stable_dependencies(monkeypatch, 
         "cpu-power",
         "host-agent",
     }
-    assert set(seen) == {18001, 18000, 18080, 18797, 18798}
+    assert set(seen) == {18101, 18000, 18080, 18797, 18798}
     assert all(component["status"] == "no-listener" for component in result["components"].values())
 
 
@@ -1524,7 +1553,11 @@ def test_start_api_dev_mode_can_coexist_with_container_api_on_prod_port(monkeypa
 
     assert calls == [
         ("ensure", "dev"),
-        ("systemctl", ("start", services.API_SERVICE)),
+        (
+            "systemctl",
+            ("start", services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE, services.API_SERVICE),
+        ),
+        ("wait", services.DEVELOPMENT_WORKFLOW_ADAPTER_HEALTH_URL),
         ("wait", services.runtime_api_health_url("dev", project_root=project_root)),
     ]
 

@@ -42,9 +42,9 @@ def test_load_sequence_qc_manifest_normalizes_existing_artifacts(tmp_path: Path)
             "reference": {"name": "plasmid", "path": "reference.fasta", "length": 12},
             "consensus": {
                 "path": "fastq_consensus.fasta",
-                "status": "reference_copy_fallback",
-                "method": "reference_copy_fallback",
-                "fallback": True,
+                "status": "ok",
+                "method": "samtools_1.24_bayesian_consensus",
+                "fallback": False,
                 "length": 12,
             },
             "artifacts": [
@@ -68,7 +68,7 @@ def test_load_sequence_qc_manifest_normalizes_existing_artifacts(tmp_path: Path)
     assert manifest["reference"]["declared_path"] == "reference.fasta"
     assert manifest["reference"]["path"] is None
     assert manifest["reference"]["exists"] is False
-    assert manifest["consensus"]["fallback"] is True
+    assert manifest["consensus"]["fallback"] is False
     assert manifest["interpretation"]["verified_construct_status"] == "fail"
     assert manifest["artifacts"][0]["exists"] is True
     assert manifest["artifacts"][0]["state"] == "present"
@@ -195,7 +195,7 @@ def test_load_sequence_qc_manifest_rejects_top_level_consensus_symlink_escape(tm
         load_sequence_qc_manifest(manifest_path)
 
 
-def test_reference_copy_fallback_forces_failed_verified_status(tmp_path: Path) -> None:
+def test_consensus_fallback_status_labels_are_rejected(tmp_path: Path) -> None:
     manifest_path = tmp_path / "qc_manifest.json"
     _write_manifest(
         manifest_path,
@@ -208,11 +208,8 @@ def test_reference_copy_fallback_forces_failed_verified_status(tmp_path: Path) -
         },
     )
 
-    manifest = load_sequence_qc_manifest(manifest_path)
-
-    assert manifest["consensus"]["fallback"] is True
-    assert manifest["interpretation"]["verified_construct_status"] == "fail"
-    assert "reference-copy fallback consensus is not verified" in manifest["interpretation"]["notes"]
+    with pytest.raises(SequenceQcManifestError, match="fallback status labels are forbidden"):
+        load_sequence_qc_manifest(manifest_path)
 
 
 def test_load_sequence_qc_manifest_rejects_required_missing_artifact(tmp_path: Path) -> None:

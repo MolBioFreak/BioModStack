@@ -18,7 +18,23 @@ from services.ngs_comparison_panels import consume_comparison_panel_receipt, mat
 from paths import get_allowed_roots, resolve_allowed_path
 from schemas import JobCreate, JobResponse
 from services import alignment_access, ont_run_control, ont_submission_trust
+from services.ont_barcode_batches import (
+    BarcodeBatchError,
+    BarcodeBatchRequest,
+    create_barcoded_reference_set,
+    get_reference_set,
+    list_reference_sets,
+)
 from services.ont_barcode_units import load_barcode_unit, load_barcode_units
+from services.ont_pooled_reference_assignment import (
+    PooledAssignmentError,
+    PooledAssignmentReleaseRequest,
+    PooledReferenceAssignmentRequest,
+    get_pooled_assignment_manifest,
+    get_pooled_assignment_targets,
+    release_pooled_assignment,
+    submit_pooled_reference_assignment,
+)
 from services.ont_ngs_contract import (
     get_ont_workflow_spec,
     normalize_ont_launch_params,
@@ -544,6 +560,15 @@ async def ont_submit_ngs_workflow(
         receipt_id = str(submitted.pop("molbio_ngs_receipt_id", "") or "").strip()
         panel_receipt_id = str(submitted.pop("ngs_comparison_panel_receipt_id", "") or "").strip()
         canonical_id = resolve_ont_workflow_alias(workflow_id)
+        if canonical_id in ONT_REFERENCE_REQUIRED_WORKFLOWS:
+            if str(submitted.get("reference_fasta") or "").strip():
+                raise ValueError(
+                    "reference_fasta is server-controlled for reference-required NGS workflows; submit an immutable MolBio receipt"
+                )
+            if not receipt_id:
+                raise ValueError(
+                    f"workflow {canonical_id!r} requires a server-issued molbio_ngs_receipt_id"
+                )
         _validate_comparison_panel_launch(canonical_id, receipt_id, panel_receipt_id)
         receipt = None
         panel_receipt = None
@@ -611,6 +636,90 @@ async def ont_submit_ngs_workflow(
     return created
 
 
+@router.post("/ngs/pooled-reference-assignment/submit", status_code=201)
+async def ont_submit_pooled_reference_assignment(
+    request: PooledReferenceAssignmentRequest,
+    background_tasks: BackgroundTasks,
+    http_request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Atomically stage receipts and launch one review-only pooled assignment."""
+    try:
+        return await submit_pooled_reference_assignment(
+            session=session,
+            request=request,
+            background_tasks=background_tasks,
+            http_request=http_request,
+            response=response,
+        )
+    except PooledAssignmentError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
+@barcode_router.get("/{assignment_job_id}/pooled-assignment/manifest")
+async def ont_get_pooled_assignment_manifest(
+    assignment_job_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Read and revalidate one canonical immutable pooled manifest."""
+    try:
+        return await get_pooled_assignment_manifest(
+            session, assignment_job_id=assignment_job_id
+        )
+    except PooledAssignmentError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
+@barcode_router.get("/{assignment_job_id}/pooled-assignment/targets")
+async def ont_get_pooled_assignment_targets(
+    assignment_job_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Read persisted pooled target identities and immutable revision bindings."""
+    try:
+        return await get_pooled_assignment_targets(
+            session, assignment_job_id=assignment_job_id
+        )
+    except PooledAssignmentError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
+@barcode_router.post("/{assignment_job_id}/pooled-assignment/release", status_code=201)
+async def ont_release_pooled_assignment(
+    assignment_job_id: str,
+    request: PooledAssignmentReleaseRequest,
+    background_tasks: BackgroundTasks,
+    http_request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Atomically release selected reviewed targets into consensus-QC children."""
+    try:
+        return await release_pooled_assignment(
+            session=session,
+            assignment_job_id=assignment_job_id,
+            request=request,
+            background_tasks=background_tasks,
+            http_request=http_request,
+            response=response,
+        )
+    except PooledAssignmentError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
 @barcode_router.get("/{job_id}/barcode-units")
 async def ont_list_barcode_units(
     job_id: str,
@@ -642,7 +751,94 @@ async def ont_get_barcode_unit(
     return unit
 
 
-@barcode_router.post("/{job_id}/barcode-units/{unit_id}/submit", response_model=JobResponse, status_code=201)
+@barcode_router.post("/{source_job_id}/barcode-batches", status_code=201)
+async def ont_submit_barcode_batch(
+    source_job_id: str,
+    request: BarcodeBatchRequest,
+    background_tasks: BackgroundTasks,
+    http_request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Atomically create all intended barcode children from one completed demux."""
+    source_job, output_dir, manifest_sha256 = await _authorized_barcode_source(
+        source_job_id, http_request, session
+    )
+    try:
+        return await create_barcoded_reference_set(
+            session=session,
+            source_job=source_job,
+            source_root=output_dir,
+            source_demux_manifest_sha256=manifest_sha256,
+            request=request,
+            background_tasks=background_tasks,
+            http_request=http_request,
+            response=response,
+        )
+    except BarcodeBatchError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
+@barcode_router.get("/{source_job_id}/reference-sets")
+async def ont_list_reference_sets(
+    source_job_id: str,
+    http_request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """List immutable reference-set manifests for an authorized source demux."""
+    await _authorized_barcode_source(source_job_id, http_request, session)
+    try:
+        return await list_reference_sets(session, source_job_id=source_job_id)
+    except BarcodeBatchError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
+@barcode_router.get("/{source_job_id}/reference-sets/{reference_set_id}")
+async def ont_get_reference_set(
+    source_job_id: str,
+    reference_set_id: str,
+    http_request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Read one immutable reference-set manifest and its child bindings."""
+    await _authorized_barcode_source(source_job_id, http_request, session)
+    try:
+        return await get_reference_set(
+            session,
+            source_job_id=source_job_id,
+            reference_set_id=reference_set_id,
+        )
+    except BarcodeBatchError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
+@barcode_router.get("/{source_job_id}/reference-sets/{reference_set_id}/manifest")
+async def ont_get_reference_set_manifest(
+    source_job_id: str,
+    reference_set_id: str,
+    http_request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Read the canonical JSON payload of one immutable reference-set manifest."""
+    result = await ont_get_reference_set(
+        source_job_id=source_job_id,
+        reference_set_id=reference_set_id,
+        http_request=http_request,
+        session=session,
+    )
+    return result["manifest"]
+
+
+@barcode_router.post("/{job_id}/barcode-units/{unit_id}/submit", status_code=410)
 async def ont_submit_barcode_unit(
     job_id: str,
     unit_id: str,
@@ -651,35 +847,13 @@ async def ont_submit_barcode_unit(
     http_request: Request,
     response: Response,
     session: AsyncSession = Depends(get_session),
-) -> JobResponse:
-    """Submit one isolated barcode BAM with exact source lineage and no override map."""
-    source_job, unit = await _authorized_barcode_unit(job_id, unit_id, http_request, session)
-    trusted = {
-        "bam_source_sha256": unit["bam_sha256"],
-        "source_ont_job_id": source_job.id,
-        "source_barcode_unit": unit["unit_id"],
-        "source_barcode_manifest_sha256": unit["manifest_sha256"],
-    }
-    submit = OntNgsSubmitRequest(
-        name=request.name or f"{source_job.name} {unit_id}",
-        params={
-            "bam_path": unit["bam_path"],
-            "reference_fasta": request.reference_fasta,
-            "bam_force_realign": True,
-            **trusted,
-        },
-        pinned_gpu=request.pinned_gpu,
+) -> dict[str, Any]:
+    """Retired: browser paths are never an authority for barcode submissions."""
+    del job_id, unit_id, request, background_tasks, http_request, response, session
+    raise HTTPException(
+        status_code=410,
+        detail="single barcode submission is retired; use the server-authorized barcode-batches endpoint",
     )
-    try:
-        job = _job_create_for_ont_submit(
-            request.target_workflow,
-            submit,
-            trusted_server_params=frozenset(trusted),
-            trusted_result_paths=frozenset({"bam_path"}),
-        )
-    except (KeyError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return await _create_pipeline_job(job, background_tasks, session, response, http_request)
 
 
 @router.post("/runs/{run_id}/handoff/plasmid-qc/submit", response_model=JobResponse, status_code=201)

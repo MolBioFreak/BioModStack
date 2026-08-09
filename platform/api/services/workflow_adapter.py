@@ -8,6 +8,12 @@ from pathlib import Path
 from typing import Any
 
 from biomodstack_runtime_profile import resolve_runtime_paths
+from .execution_ownership import (
+    LaneMismatchError,
+    configured_lane,
+    lane_for_runtime_mode,
+    validate_adapter_url_for_lane,
+)
 
 
 DEFAULT_ADAPTER_TIMEOUT_SECONDS = 15.0
@@ -28,7 +34,26 @@ def workflow_adapter_base_url() -> str | None:
     if raw_value is None:
         return None
     normalized = raw_value.strip().rstrip("/")
+    lane = workflow_adapter_lane(required=False)
+    if lane is not None:
+        try:
+            normalized = validate_adapter_url_for_lane(normalized, lane)
+        except LaneMismatchError:
+            raise
     return normalized or None
+
+
+def workflow_adapter_lane(*, required: bool = False) -> str | None:
+    """Return the caller's explicit adapter lane, if one is configured."""
+    raw_lane = os.getenv("BMS_WORKFLOW_ADAPTER_LANE")
+    if raw_lane is not None and raw_lane.strip():
+        return configured_lane(required=True)
+    runtime_mode = os.getenv("BMS_RUNTIME_MODE")
+    if runtime_mode is not None and runtime_mode.strip():
+        return lane_for_runtime_mode(runtime_mode)
+    if required:
+        return configured_lane(required=True)
+    return None
 
 
 
@@ -84,6 +109,9 @@ def request_via_workflow_adapter(
     url = f"{base_url}{path}"
     data = None
     headers: dict[str, str] = {}
+    lane = workflow_adapter_lane(required=False)
+    if lane is not None:
+        headers["X-BMS-Workflow-Adapter-Lane"] = lane
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
         headers["Content-Type"] = "application/json"
@@ -180,16 +208,22 @@ def launch_via_workflow_adapter(
 ) -> dict[str, Any]:
     translated_params = _translate_container_paths(params)
     translated_output_dir = _container_to_host_path(output_dir)
+    payload: dict[str, Any] = {
+        "job_id": job_id,
+        "model_id": model_id,
+        "mode": mode,
+        "params": translated_params,
+        "output_dir": translated_output_dir,
+    }
+    lane = workflow_adapter_lane(required=False)
+    if lane is not None:
+        # The receiving adapter rejects a mismatched lane before it can claim a
+        # deterministic systemd unit.
+        payload["lane"] = lane
     return _request_json(
         "POST",
         "/api/workflow-adapter/launch",
-        {
-            "job_id": job_id,
-            "model_id": model_id,
-            "mode": mode,
-            "params": translated_params,
-            "output_dir": translated_output_dir,
-        },
+        payload,
     )
 
 
@@ -208,15 +242,20 @@ def cancel_via_workflow_adapter(nextflow_run_id: str, *, graceful_timeout_second
 
 
 
-def get_adapter_running_jobs() -> dict[str, int]:
+def get_adapter_running_jobs() -> dict[str, int | str]:
     response = _request_json("GET", "/api/workflow-adapter/running-jobs")
     running_jobs = response.get("running_jobs", {})
     if not isinstance(running_jobs, dict):
         raise RuntimeError(f"Workflow adapter returned invalid running_jobs payload: {running_jobs!r}")
-    normalized: dict[str, int] = {}
+    normalized: dict[str, int | str] = {}
     for job_id, run_id in running_jobs.items():
         try:
             normalized[str(job_id)] = int(run_id)
-        except (TypeError, ValueError) as exc:
-            raise RuntimeError(f"Workflow adapter returned invalid run id for {job_id!r}: {run_id!r}") from exc
+        except (TypeError, ValueError):
+            if isinstance(run_id, str) and run_id.strip():
+                normalized[str(job_id)] = run_id.strip()
+            else:
+                raise RuntimeError(
+                    f"Workflow adapter returned invalid run id for {job_id!r}: {run_id!r}"
+                )
     return normalized

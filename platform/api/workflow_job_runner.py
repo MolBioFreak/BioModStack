@@ -1,0 +1,309 @@
+"""Execute one authoritative workflow attempt inside its transient systemd unit."""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+from datetime import datetime
+import logging
+import os
+import sys
+from typing import Any
+
+import sqlalchemy
+
+import database
+from services import nextflow
+from services.execution_ownership import (
+    AdapterIdentity,
+    ExecutionOwnershipError,
+    EXECUTION_ATTEMPT_TERMINAL_STATES,
+    TRANSIENT_WORKFLOW_OWNER_NONCE_ENV,
+    TRANSIENT_WORKFLOW_UNIT_ENV,
+    TRANSIENT_WORKFLOW_UNIT_NAME_ENV,
+    assert_unit_lane,
+    adapter_identity_from_environment,
+    execution_attempt_is_terminal,
+    latest_execution_attempt,
+    params_mapping,
+    show_unit_properties,
+    strip_execution_metadata,
+    update_execution_attempt,
+    utc_timestamp,
+)
+
+
+logger = logging.getLogger(__name__)
+
+
+def _positive_float_env(name: str, default: float) -> float:
+    try:
+        return max(0.0, float(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+def require_transient_environment(job_id: str, lane: str) -> tuple[AdapterIdentity, str, str, str]:
+    """Prove that this process is the exact runner selected by the adapter."""
+    if os.getenv(TRANSIENT_WORKFLOW_UNIT_ENV) != "1":
+        raise ExecutionOwnershipError(
+            f"{TRANSIENT_WORKFLOW_UNIT_ENV}=1 is required for workflow execution"
+        )
+    identity = adapter_identity_from_environment()
+    if identity.lane != str(lane).strip().lower():
+        raise ExecutionOwnershipError(
+            f"Runner lane {lane!r} does not match adapter lane {identity.lane!r}"
+        )
+    unit_name = str(os.getenv(TRANSIENT_WORKFLOW_UNIT_NAME_ENV) or "").strip()
+    if not unit_name:
+        raise ExecutionOwnershipError(
+            f"{TRANSIENT_WORKFLOW_UNIT_NAME_ENV} is required for transient workflow execution"
+        )
+    unit_identity = assert_unit_lane(unit_name, identity.lane)
+    if unit_identity.job_id != str(job_id):
+        raise ExecutionOwnershipError(
+            f"Runner job {job_id!r} does not match transient unit {unit_name!r}"
+        )
+    owner_nonce = str(os.getenv(TRANSIENT_WORKFLOW_OWNER_NONCE_ENV) or "").strip()
+    if not owner_nonce:
+        raise ExecutionOwnershipError(
+            f"{TRANSIENT_WORKFLOW_OWNER_NONCE_ENV} is required for transient workflow execution"
+        )
+    invocation_id = str(os.getenv("INVOCATION_ID") or "").strip()
+    if not invocation_id:
+        raise ExecutionOwnershipError("systemd INVOCATION_ID is required for transient workflow execution")
+    return identity, unit_name, owner_nonce, invocation_id
+
+
+async def _load_authoritative_attempt(
+    *,
+    job_id: str,
+    lane: str,
+    unit_name: str,
+    owner_nonce: str,
+    invocation_id: str,
+) -> tuple[Any, dict[str, Any], dict[str, Any]]:
+    """Wait briefly for the adapter's post-acceptance receipt commit."""
+    deadline = asyncio.get_running_loop().time() + _positive_float_env(
+        "BMS_TRANSIENT_WORKFLOW_RECEIPT_WAIT_SECONDS",
+        30.0,
+    )
+    while True:
+        async with database.async_session() as session:
+            result = await session.execute(
+                sqlalchemy.select(database.Job).where(database.Job.id == job_id)
+            )
+            job = result.scalar_one_or_none()
+            if job is None:
+                raise ExecutionOwnershipError(f"Authoritative workflow job {job_id} was not found")
+            params = params_mapping(getattr(job, "params", {}))
+            receipt = latest_execution_attempt(params)
+            if receipt is not None and str(receipt.get("lane", "")) == lane:
+                if str(receipt.get("unit", "")) != unit_name:
+                    raise ExecutionOwnershipError(
+                        f"Authoritative receipt unit {receipt.get('unit')!r} does not match {unit_name!r}"
+                    )
+                if str(receipt.get("owner_nonce", "")) != owner_nonce:
+                    raise ExecutionOwnershipError("Transient workflow owner nonce does not match the receipt")
+                state = str(receipt.get("state", "")).strip().lower()
+                stored_invocation_id = str(receipt.get("invocation_id", "")).strip()
+                if state == "started" and stored_invocation_id == invocation_id:
+                    properties = await asyncio.to_thread(show_unit_properties, unit_name, lane)
+                    if properties.invocation_id != invocation_id:
+                        raise ExecutionOwnershipError(
+                            "systemd InvocationID changed after adapter acceptance"
+                        )
+                    return job, params, receipt
+                if state in EXECUTION_ATTEMPT_TERMINAL_STATES:
+                    raise ExecutionOwnershipError(
+                        f"Transient workflow receipt became terminal before runner start: {state}"
+                    )
+            elif receipt is not None:
+                raise ExecutionOwnershipError(
+                    f"Latest authoritative execution receipt belongs to another lane: {receipt.get('lane')!r}"
+                )
+        if asyncio.get_running_loop().time() >= deadline:
+            raise ExecutionOwnershipError(
+                f"Timed out waiting for the adapter to persist the started receipt for {unit_name}"
+            )
+        await asyncio.sleep(0.05)
+
+
+async def _finish_attempt(
+    *,
+    job_id: str,
+    lane: str,
+    unit_name: str,
+    owner_nonce: str,
+    invocation_id: str,
+    state: str,
+    reason: str | None = None,
+) -> str:
+    async with database.async_session() as session:
+        result = await session.execute(
+            sqlalchemy.select(database.Job).where(database.Job.id == job_id)
+        )
+        job = result.scalar_one_or_none()
+        if job is None:
+            return state
+        params = params_mapping(getattr(job, "params", {}))
+        receipt = latest_execution_attempt(params)
+        if receipt is None or str(receipt.get("lane", "")) != lane:
+            return state
+        if str(receipt.get("unit", "")) != unit_name or str(receipt.get("owner_nonce", "")) != owner_nonce:
+            return state
+        # Startup reconciliation can terminalize an ownership record while an
+        # old runner is still draining.  That terminal decision is authoritative
+        # and must not be replaced by a late completion from the old process.
+        if execution_attempt_is_terminal(receipt):
+            return state
+        try:
+            generation = int(receipt["generation"])
+            attempt = int(receipt["attempt"])
+            params = update_execution_attempt(
+                params,
+                lane=lane,
+                generation=generation,
+                attempt=attempt,
+                unit=unit_name,
+                owner_nonce=owner_nonce,
+                changes={
+                    "state": state,
+                    "terminal_at": utc_timestamp(),
+                    "terminal_reason": reason or state,
+                    "invocation_id": invocation_id,
+                },
+            )
+        except (KeyError, TypeError, ValueError, ExecutionOwnershipError):
+            logger.exception("Could not publish terminal workflow receipt for %s", job_id)
+            return state
+        job.params = params
+        if state in {"failed", "interrupted_owner"} and str(getattr(job, "status", "") or "").lower() not in {
+            "completed",
+            "cancelled",
+            "failed",
+        }:
+            job.status = "failed"
+            job.queue_status = "failed"
+            job.error_message = reason or state
+            job.completed_at = datetime.utcnow()
+        await session.commit()
+    return state
+
+
+def _terminal_state(job: Any) -> tuple[str, str | None]:
+    status = str(getattr(job, "status", "") or "").strip().lower()
+    if status == "cancelled":
+        params = params_mapping(getattr(job, "params", {}))
+        cancellation = params.get("cancellation_receipt")
+        if isinstance(cancellation, dict) and cancellation.get("state") == "completed":
+            return "cancelled", "API cancellation receipt"
+        return "failed", "CANCELLED_WITHOUT_API_RECEIPT"
+    if status == "completed" or status == "awaiting_input":
+        return "completed", "job finalization completed"
+    if status == "failed":
+        return "failed", str(getattr(job, "error_message", "") or "workflow failed")[:2000]
+    return "interrupted_owner", "runner returned with nonterminal Job state"
+
+
+async def run_workflow_job(job_id: str, lane: str) -> int:
+    identity, unit_name, owner_nonce, invocation_id = require_transient_environment(job_id, lane)
+    job, params, _receipt = await _load_authoritative_attempt(
+        job_id=job_id,
+        lane=identity.lane,
+        unit_name=unit_name,
+        owner_nonce=owner_nonce,
+        invocation_id=invocation_id,
+    )
+
+    try:
+        authoritative_model_id = str(job.model_id)
+        authoritative_mode = str(job.mode)
+        authoritative_output_dir = str(getattr(job, "output_dir", "") or "")
+        if not authoritative_output_dir:
+            raise ExecutionOwnershipError(
+                f"Authoritative Job.output_dir is required for workflow {job_id}"
+            )
+        await nextflow.launch_nextflow_job(
+            job_id=job_id,
+            model_id=authoritative_model_id,
+            mode=authoritative_mode,
+            params=strip_execution_metadata(params),
+            output_dir=authoritative_output_dir,
+            allow_running_job=True,
+        )
+    except Exception as exc:
+        logger.exception("Transient workflow runner failed for %s", job_id)
+        await _finish_attempt(
+            job_id=job_id,
+            lane=identity.lane,
+            unit_name=unit_name,
+            owner_nonce=owner_nonce,
+            invocation_id=invocation_id,
+            state="failed",
+            reason=str(exc),
+        )
+        return 1
+
+    try:
+        async with database.async_session() as session:
+            result = await session.execute(
+                sqlalchemy.select(database.Job).where(database.Job.id == job_id)
+            )
+            final_job = result.scalar_one_or_none()
+    except Exception as exc:
+        logger.exception("Could not reload the authoritative workflow result for %s", job_id)
+        await _finish_attempt(
+            job_id=job_id,
+            lane=identity.lane,
+            unit_name=unit_name,
+            owner_nonce=owner_nonce,
+            invocation_id=invocation_id,
+            state="failed",
+            reason=str(exc),
+        )
+        return 1
+    if final_job is None:
+        await _finish_attempt(
+            job_id=job_id,
+            lane=identity.lane,
+            unit_name=unit_name,
+            owner_nonce=owner_nonce,
+            invocation_id=invocation_id,
+            state="failed",
+            reason="authoritative job disappeared after workflow execution",
+        )
+        return 1
+
+    state, reason = _terminal_state(final_job)
+    await _finish_attempt(
+        job_id=job_id,
+        lane=identity.lane,
+        unit_name=unit_name,
+        owner_nonce=owner_nonce,
+        invocation_id=invocation_id,
+        state=state,
+        reason=reason,
+    )
+    return 0 if state in {"completed", "cancelled"} else 1
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--job-id", required=True)
+    parser.add_argument("--lane", required=True)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    logging.basicConfig(level=os.getenv("BMS_LOG_LEVEL", "INFO"))
+    args = _parser().parse_args(argv)
+    try:
+        return asyncio.run(run_workflow_job(str(args.job_id), str(args.lane)))
+    except Exception:
+        logger.exception("Transient workflow runner rejected job %s", args.job_id)
+        return 78
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -98,6 +98,9 @@ def get_inputs_dir() -> Path:
 
 
 def get_results_dir() -> Path:
+    configured = os.getenv("BMS_RESULTS_DIR") or os.getenv("BMS_RESULTS_ROOT")
+    if configured:
+        return _resolve_path(configured)
     return get_data_root() / "bms_results"
 
 
@@ -106,6 +109,9 @@ def get_analysis_cache_dir() -> Path:
 
 
 def get_work_dir() -> Path:
+    configured = os.getenv("BMS_WORK")
+    if configured:
+        return _resolve_path(configured)
     return get_data_root() / "work"
 
 

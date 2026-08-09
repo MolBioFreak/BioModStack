@@ -1219,28 +1219,39 @@ process FastqDimerAnalysis {
             ' dimer_junction_clusters.tsv > dimer_junction_rotated_profile.tsv
         fi
 
-        if samtools consensus -f fasta dimer_candidates.aligned.bam > dimer_consensus.fasta 2> dimer_consensus.log; then
-            consensus_status="ok"
-        else
-            echo "samtools consensus unavailable or failed; attempting mpileup-majority fallback" >> dimer_consensus.log
-            if samtools mpileup -aa -A -d 1000000 -f dimer_reference.fasta dimer_candidates.aligned.bam 2>> dimer_consensus.log \
-                | awk -f "${codeRoot}/scripts/mpileup_majority_consensus.awk" \
-                > dimer_consensus.fasta.tmp && [[ -s dimer_consensus.fasta.tmp ]]; then
-                mv dimer_consensus.fasta.tmp dimer_consensus.fasta
-                consensus_status="pileup_majority_fallback"
-            else
-                rm -f dimer_consensus.fasta.tmp
-                cp dimer_reference.fasta dimer_consensus.fasta
-                consensus_status="fallback_reference_copy"
-            fi
+        has_called_consensus_base() {
+            awk '
+                BEGIN { headers = 0; called = 0 }
+                /^>/ { headers++; next }
+                {
+                    line = toupper(\$0)
+                    if (line ~ /[ACGT]/) called = 1
+                }
+                END { exit(headers == 1 && called ? 0 : 1) }
+            ' "\$1"
+        }
+
+        rm -f dimer_consensus.fasta dimer_consensus.fasta.fai dimer_consensus.fasta.tmp
+        if ! samtools consensus --mode bayesian -f fasta dimer_candidates.aligned.bam > dimer_consensus.fasta 2> dimer_consensus.log; then
+            echo "CRITICAL_FAILURE: SAMTOOLS_CONSENSUS_FAILED" | tee -a dimer_consensus.log >&2
+            rm -f dimer_consensus.fasta dimer_consensus.fasta.fai
+            exit 86
         fi
+        if ! has_called_consensus_base dimer_consensus.fasta; then
+            echo "CRITICAL_FAILURE: SAMTOOLS_CONSENSUS_EMPTY" | tee -a dimer_consensus.log >&2
+            rm -f dimer_consensus.fasta dimer_consensus.fasta.fai
+            exit 86
+        fi
+        if ! samtools faidx dimer_consensus.fasta >> dimer_consensus.log 2>&1; then
+            echo "CRITICAL_FAILURE: SAMTOOLS_CONSENSUS_INDEX_FAILED" | tee -a dimer_consensus.log >&2
+            rm -f dimer_consensus.fasta dimer_consensus.fasta.fai
+            exit 86
+        fi
+        consensus_status="ok"
 
         bash "${codeRoot}/scripts/dominant_dimer_consensus.sh" \\
             --events dimer_junction_events.tsv \\
             --bam dimer_candidates.aligned.bam \\
-            --fastq dimer_candidates.fastq \\
-            --dimer-consensus dimer_consensus.fasta \\
-            --dimer-reference dimer_reference.fasta \\
             --dimer-count "\${dimer_count}" \\
             --screened-pos "\${screened_primary_breakpoint_position_mod_ref}" \\
             --screened-support "\${screened_primary_breakpoint_support_reads}" \\

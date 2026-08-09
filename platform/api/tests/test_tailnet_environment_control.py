@@ -1,9 +1,22 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
 from fastapi.testclient import TestClient
 
 from routers import workflow_adapter
 from workflow_adapter_app import app
+
+
+@pytest.fixture(autouse=True)
+def explicit_development_adapter_identity(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    state_root = tmp_path / "development"
+    monkeypatch.setenv("BMS_WORKFLOW_ADAPTER_LANE", "development")
+    monkeypatch.setenv("BMS_STATE_DIR", str(state_root))
+    monkeypatch.setenv("BMS_DB_PATH", str(state_root / "biomodstack.db"))
+    monkeypatch.setenv("BMS_WORK", str(state_root / "work"))
+    monkeypatch.setenv("BMS_RESULTS_DIR", str(state_root / "results"))
 
 
 def _enable_operator(monkeypatch) -> dict[str, str]:

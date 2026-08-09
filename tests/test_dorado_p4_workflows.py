@@ -41,9 +41,14 @@ def test_barcode_is_classified_inline_then_demultiplexed_without_reclassificatio
     assert "biomodstack.dorado_barcode_unit.v1" in text
     assert "demux read-count parity failed" in text
     assert "unit_manifest_sha256" in text
-    assert 'stem="\\${segment%.bam}"' in text
-    assert '"\\${stem}" =~ ^(barcode[0-9]+|unclassified)' in text
-    assert 'alias_to_barcode[\\${stem}]' in text
+    assert 'filename="\\${candidate##*/}"' in text
+    assert "is_canonical_label()" in text
+    assert "^barcode(0[1-9]|[1-8][0-9]|9[0-6])" in text
+    assert "CRITICAL_FAILURE: UNKNOWN_DEMUX_LABEL" in text
+    assert "printf '%s\\n' unclassified" not in text
+    assert 'alias_to_barcode[\\${segment}]' in text
+    assert 'barcode_to_alias["\\${canonical_barcode}"]="\\${alias}"' in text
+    assert 'sample_alias:(if \\$sample_alias == "" then null else \\$sample_alias end)' in text
 
 
 def test_all_pod5_routes_publish_canonical_basecall_provenance_and_fail_closed_reporting() -> None:
@@ -64,6 +69,9 @@ def test_all_pod5_routes_publish_canonical_basecall_provenance_and_fail_closed_r
 
     reporter = (ROOT / "scripts/stage_reporter.py").read_text(encoding="utf-8")
     assert "sys.exit(1)" in reporter
+    assert 'os.environ.get("API_BASE_URL", "").strip()' in reporter
+    assert "http://localhost:8000" not in reporter
+    assert "missing environment-owned API_BASE_URL" in reporter
     assert "Do not fail workflow if reporting fails" not in reporter
 
 

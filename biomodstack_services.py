@@ -23,8 +23,9 @@ from biomodstack_runtime_profile import (
     DEFAULT_DEV_API_HOST_PORT,
     DEFAULT_DEV_WEB_HOST_PORT,
     DEFAULT_HOST_AGENT_PORT,
+    DEFAULT_DEVELOPMENT_WORKFLOW_ADAPTER_PORT,
+    DEFAULT_PRODUCTION_WORKFLOW_ADAPTER_PORT,
     DEFAULT_WEB_HOST_PORT,
-    DEFAULT_WORKFLOW_ADAPTER_PORT,
     get_biomodstack_config_dir as runtime_profile_config_dir,
     install_profile_snapshot as runtime_profile_snapshot,
     load_install_profile,
@@ -34,7 +35,18 @@ from biomodstack_runtime_profile import (
 
 API_SERVICE = "biomodstack-api.service"
 FRONTEND_SERVICE = "biomodstack-frontend.service"
-WORKFLOW_ADAPTER_SERVICE = "biomodstack-workflow-adapter.service"
+DEVELOPMENT_LANE = "development"
+PRODUCTION_LANE = "production"
+DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE = "biomodstack-development-workflow-adapter.service"
+PRODUCTION_WORKFLOW_ADAPTER_SERVICE = "biomodstack-production-workflow-adapter.service"
+DEV_WORKFLOW_ADAPTER_SERVICE = DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE
+PROD_WORKFLOW_ADAPTER_SERVICE = PRODUCTION_WORKFLOW_ADAPTER_SERVICE
+# Compatibility alias for code that refers to the stable/core adapter without
+# selecting a lane. New service rendering always uses the explicit name.
+WORKFLOW_ADAPTER_SERVICE = PRODUCTION_WORKFLOW_ADAPTER_SERVICE
+WORKFLOW_ROOT_SLICE = "biomodstack-workflows.slice"
+DEVELOPMENT_WORKFLOW_SLICE = "biomodstack-workflows-development.slice"
+PRODUCTION_WORKFLOW_SLICE = "biomodstack-workflows-production.slice"
 TAILNET_GLOBAL_SERVICE = "biomodstack-tailnet-global.service"
 CORE_RUNTIME_SERVICE = "biomodstack-core-runtime.service"
 TARGET_UNIT = "biomodstack.target"
@@ -52,7 +64,11 @@ SYSTEMD_RESOURCE_LIMITS: dict[str, tuple[str, dict[str, str]]] = {
         "FRONTEND",
         {"MemoryHigh": "2G", "MemoryMax": "4G", "TasksMax": "1024", "LimitNOFILE": "65536"},
     ),
-    WORKFLOW_ADAPTER_SERVICE: (
+    DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE: (
+        "WORKFLOW_ADAPTER",
+        {"MemoryHigh": "48G", "MemoryMax": "64G", "TasksMax": "8192", "LimitNOFILE": "262144"},
+    ),
+    PRODUCTION_WORKFLOW_ADAPTER_SERVICE: (
         "WORKFLOW_ADAPTER",
         {"MemoryHigh": "48G", "MemoryMax": "64G", "TasksMax": "8192", "LimitNOFILE": "262144"},
     ),
@@ -73,12 +89,17 @@ API_PORT = DEFAULT_API_HOST_PORT
 DEV_API_PORT = DEFAULT_DEV_API_HOST_PORT
 FRONTEND_PORT = DEFAULT_DEV_WEB_HOST_PORT
 STABLE_FRONTEND_PORT = DEFAULT_WEB_HOST_PORT
-WORKFLOW_ADAPTER_PORT = DEFAULT_WORKFLOW_ADAPTER_PORT
+# Unqualified compatibility callers refer to the stable Production listener.
+WORKFLOW_ADAPTER_PORT = DEFAULT_PRODUCTION_WORKFLOW_ADAPTER_PORT
+DEVELOPMENT_WORKFLOW_ADAPTER_PORT = DEFAULT_DEVELOPMENT_WORKFLOW_ADAPTER_PORT
+PRODUCTION_WORKFLOW_ADAPTER_PORT = DEFAULT_PRODUCTION_WORKFLOW_ADAPTER_PORT
 CPU_POWER_PORT = DEFAULT_CPU_POWER_PORT
 HOST_AGENT_PORT = DEFAULT_HOST_AGENT_PORT
 API_HEALTH_URL = f"http://127.0.0.1:{API_PORT}/api/health"
 FRONTEND_URL = f"http://127.0.0.1:{STABLE_FRONTEND_PORT}/bms/"
-WORKFLOW_ADAPTER_HEALTH_URL = f"http://127.0.0.1:{WORKFLOW_ADAPTER_PORT}/api/workflow-adapter/health"
+DEVELOPMENT_WORKFLOW_ADAPTER_HEALTH_URL = f"http://127.0.0.1:{DEVELOPMENT_WORKFLOW_ADAPTER_PORT}/api/workflow-adapter/health"
+PRODUCTION_WORKFLOW_ADAPTER_HEALTH_URL = f"http://127.0.0.1:{PRODUCTION_WORKFLOW_ADAPTER_PORT}/api/workflow-adapter/health"
+WORKFLOW_ADAPTER_HEALTH_URL = PRODUCTION_WORKFLOW_ADAPTER_HEALTH_URL
 DEFAULT_HTTP_WAIT_TIMEOUT_SECONDS = 30.0
 CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS = 180.0
 
@@ -99,12 +120,56 @@ _STATE_HOME = Path(os.getenv("XDG_STATE_HOME", str(Path.home() / ".local" / "sta
 LOG_DIR = _STATE_HOME / "biomodstack" / "logs"
 API_LOG = LOG_DIR / "api.log"
 FRONTEND_LOG = LOG_DIR / "frontend.log"
-WORKFLOW_ADAPTER_LOG = LOG_DIR / "workflow-adapter.log"
+DEVELOPMENT_WORKFLOW_ADAPTER_LOG = LOG_DIR / "development-workflow-adapter.log"
+PRODUCTION_WORKFLOW_ADAPTER_LOG = LOG_DIR / "production-workflow-adapter.log"
+# Compatibility consumers use the production/core adapter identity by default.
+WORKFLOW_ADAPTER_LOG = PRODUCTION_WORKFLOW_ADAPTER_LOG
 CORE_RUNTIME_LOG = LOG_DIR / "core-runtime.log"
 DEFAULT_LOG_MAX_BYTES = 10 * 1024 * 1024
 DEFAULT_LOG_BACKUP_COUNT = 5
 _LIFECYCLE_LOCK_FILENAME = "lifecycle.lock"
 _lifecycle_lock_state = threading.local()
+
+
+def _normalize_execution_lane(lane: str) -> str:
+    normalized = str(lane or "").strip().lower()
+    if normalized not in {DEVELOPMENT_LANE, PRODUCTION_LANE}:
+        raise ServiceManagerError(
+            f"Unknown workflow execution lane {lane!r}; expected development or production"
+        )
+    return normalized
+
+
+def workflow_adapter_service_for_lane(lane: str) -> str:
+    return (
+        DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE
+        if _normalize_execution_lane(lane) == DEVELOPMENT_LANE
+        else PRODUCTION_WORKFLOW_ADAPTER_SERVICE
+    )
+
+
+def workflow_adapter_port_for_lane(lane: str) -> int:
+    return (
+        DEVELOPMENT_WORKFLOW_ADAPTER_PORT
+        if _normalize_execution_lane(lane) == DEVELOPMENT_LANE
+        else PRODUCTION_WORKFLOW_ADAPTER_PORT
+    )
+
+
+def workflow_adapter_url_for_lane(lane: str) -> str:
+    return f"http://127.0.0.1:{workflow_adapter_port_for_lane(lane)}"
+
+
+def workflow_adapter_health_url_for_lane(lane: str) -> str:
+    return f"{workflow_adapter_url_for_lane(lane)}/api/workflow-adapter/health"
+
+
+def workflow_adapter_log_for_lane(lane: str) -> Path:
+    return (
+        DEVELOPMENT_WORKFLOW_ADAPTER_LOG
+        if _normalize_execution_lane(lane) == DEVELOPMENT_LANE
+        else PRODUCTION_WORKFLOW_ADAPTER_LOG
+    )
 
 
 @contextmanager
@@ -183,7 +248,14 @@ def rotate_log_file(path: Path, *, max_bytes: int | None = None, backup_count: i
 
 
 def rotate_runtime_logs() -> None:
-    for path in (API_LOG, FRONTEND_LOG, WORKFLOW_ADAPTER_LOG, CORE_RUNTIME_LOG):
+    for path in (
+        API_LOG,
+        FRONTEND_LOG,
+        WORKFLOW_ADAPTER_LOG,
+        DEVELOPMENT_WORKFLOW_ADAPTER_LOG,
+        PRODUCTION_WORKFLOW_ADAPTER_LOG,
+        CORE_RUNTIME_LOG,
+    ):
         rotate_log_file(path)
 
 
@@ -307,8 +379,8 @@ def resolve_runtime_mode(runtime_mode: str | None = None) -> str:
 def runtime_service_names(runtime_mode: str | None = None) -> tuple[str, ...]:
     mode = resolve_runtime_mode(runtime_mode)
     if mode == CONTAINER_RUNTIME_MODE:
-        return (WORKFLOW_ADAPTER_SERVICE, CORE_RUNTIME_SERVICE)
-    return (API_SERVICE, FRONTEND_SERVICE)
+        return (PRODUCTION_WORKFLOW_ADAPTER_SERVICE, CORE_RUNTIME_SERVICE)
+    return (DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE, API_SERVICE, FRONTEND_SERVICE)
 
 
 def runtime_target_unit(runtime_mode: str | None = None) -> str:
@@ -317,7 +389,13 @@ def runtime_target_unit(runtime_mode: str | None = None) -> str:
 
 
 def all_runtime_service_names() -> tuple[str, ...]:
-    return (API_SERVICE, FRONTEND_SERVICE, WORKFLOW_ADAPTER_SERVICE, CORE_RUNTIME_SERVICE)
+    return (
+        API_SERVICE,
+        FRONTEND_SERVICE,
+        DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE,
+        PRODUCTION_WORKFLOW_ADAPTER_SERVICE,
+        CORE_RUNTIME_SERVICE,
+    )
 
 
 def incompatible_runtime_service_names(runtime_mode: str | None = None) -> tuple[str, ...]:
@@ -484,10 +562,19 @@ def runtime_log_descriptors(runtime_mode: str | None = None) -> list[dict[str, s
         return [
             {"id": "api", "label": "API backend log", "path": "docker:biomodstack-api", "fallback_path": str(API_LOG)},
             {"id": "frontend", "label": "Frontend/web log", "path": "docker:biomodstack-web", "fallback_path": str(FRONTEND_LOG)},
-            {"id": "workflow-adapter", "label": "Workflow adapter log", "path": str(WORKFLOW_ADAPTER_LOG)},
+            {
+                "id": "workflow-adapter",
+                "label": "Production workflow adapter log",
+                "path": str(PRODUCTION_WORKFLOW_ADAPTER_LOG),
+            },
             {"id": "core-runtime", "label": "Container runtime log", "path": str(CORE_RUNTIME_LOG)},
         ]
     return [
+        {
+            "id": "workflow-adapter",
+            "label": "Development workflow adapter log",
+            "path": str(DEVELOPMENT_WORKFLOW_ADAPTER_LOG),
+        },
         {"id": "api", "label": "API backend log", "path": str(API_LOG)},
         {"id": "frontend", "label": "Frontend/web log", "path": str(FRONTEND_LOG)},
     ]
@@ -509,11 +596,20 @@ def _runtime_listener_specs(
     mode = resolve_runtime_mode(runtime_mode)
     if mode == DEV_RUNTIME_MODE:
         return (
+            {
+                "id": "workflow-adapter",
+                "port": DEVELOPMENT_WORKFLOW_ADAPTER_PORT,
+                "owner_kind": "development-workflow-adapter",
+            },
             {"id": "api", "port": runtime_api_port(mode, project_root=root), "owner_kind": "dev-api"},
             {"id": "frontend", "port": runtime_frontend_port(mode, project_root=root), "owner_kind": "dev-frontend"},
         )
     return (
-        {"id": "workflow-adapter", "port": WORKFLOW_ADAPTER_PORT, "owner_kind": "workflow-adapter"},
+        {
+            "id": "workflow-adapter",
+            "port": PRODUCTION_WORKFLOW_ADAPTER_PORT,
+            "owner_kind": "production-workflow-adapter",
+        },
         {"id": "api", "port": runtime_api_port(mode, project_root=root), "owner_kind": "api"},
         {"id": "frontend", "port": runtime_frontend_port(mode, project_root=root), "owner_kind": "frontend"},
         {"id": "cpu-power", "port": CPU_POWER_PORT, "owner_kind": "cpu-power"},
@@ -530,9 +626,17 @@ def _listener_matches_expected_owner(
         if pid_is_biomodstack_runtime_container(pid, owner_kind, project_root):
             return True, f"managed-container-{owner_kind}", []
         return False, "foreign", []
-    if owner_kind == "workflow-adapter":
-        chain = matching_process_chain(pid, is_biomodstack_workflow_adapter_process, project_root)
-        return bool(chain), "managed-workflow-adapter" if chain else "foreign", chain
+    if owner_kind in {"development-workflow-adapter", "production-workflow-adapter"}:
+        lane = (
+            DEVELOPMENT_LANE
+            if owner_kind == "development-workflow-adapter"
+            else PRODUCTION_LANE
+        )
+        matcher = lambda cmdline, cwd, root: is_biomodstack_workflow_adapter_process(  # noqa: E731
+            cmdline, cwd, root, lane=lane
+        )
+        chain = matching_process_chain(pid, matcher, project_root)
+        return bool(chain), f"managed-{lane}-workflow-adapter" if chain else "foreign", chain
     if owner_kind == "dev-api":
         chain = matching_process_chain(pid, is_biomodstack_api_process, project_root)
         return bool(chain), "managed-dev-api" if chain else "foreign", chain
@@ -782,7 +886,11 @@ def runtime_descriptor(project_root: Path | None = None, runtime_mode: str | Non
         log_refs = {
             "api": "docker:biomodstack-api" if mode == CONTAINER_RUNTIME_MODE else str(API_LOG),
             "frontend": "docker:biomodstack-web" if mode == CONTAINER_RUNTIME_MODE else str(FRONTEND_LOG),
-            "workflow-adapter": str(WORKFLOW_ADAPTER_LOG),
+            "workflow-adapter": str(
+                DEVELOPMENT_WORKFLOW_ADAPTER_LOG
+                if mode == DEV_RUNTIME_MODE
+                else PRODUCTION_WORKFLOW_ADAPTER_LOG
+            ),
             "cpu-power": str(CORE_RUNTIME_LOG),
             "host-agent": str(CORE_RUNTIME_LOG),
             "analytical-db": str(CORE_RUNTIME_LOG),
@@ -812,7 +920,9 @@ def runtime_descriptor(project_root: Path | None = None, runtime_mode: str | Non
         "frontend": component_readiness("frontend", required=True, http_ready=frontend_http_ready),
     }
     if mode == CONTAINER_RUNTIME_MODE:
-        adapter_http_ready = url_is_ready(WORKFLOW_ADAPTER_HEALTH_URL)
+        adapter_http_ready = url_is_ready(
+            workflow_adapter_health_url_for_lane(PRODUCTION_LANE)
+        )
         readiness = {
             "workflow-adapter": component_readiness(
                 "workflow-adapter",
@@ -828,6 +938,22 @@ def runtime_descriptor(project_root: Path | None = None, runtime_mode: str | Non
         "api_ready": readiness["api"]["ready"],
         "frontend_ready": readiness["frontend"]["ready"],
     }
+    if mode == DEV_RUNTIME_MODE:
+        adapter_http_ready = url_is_ready(
+            workflow_adapter_health_url_for_lane(DEVELOPMENT_LANE)
+        )
+        readiness = {
+            "workflow-adapter": component_readiness(
+                "workflow-adapter",
+                required=True,
+                http_ready=adapter_http_ready,
+            ),
+            **readiness,
+        }
+        health = {
+            "adapter_ready": readiness["workflow-adapter"]["ready"],
+            **health,
+        }
     if mode == CONTAINER_RUNTIME_MODE:
         health = {
             "adapter_ready": readiness["workflow-adapter"]["ready"],
@@ -943,6 +1069,37 @@ def git_build_identity(project_root: Path) -> dict[str, str]:
     }
 
 
+def render_workflow_root_slice() -> str:
+    return dedent(
+        """\
+        [Unit]
+        Description=BioModStack aggregate workflow resource envelope
+
+        [Slice]
+        CPUAccounting=yes
+        CPUQuota=2400%
+        MemoryAccounting=yes
+        MemoryMax=96G
+        TasksAccounting=yes
+        """
+    )
+
+
+def render_workflow_slice(lane: str) -> str:
+    normalized_lane = _normalize_execution_lane(lane)
+    return dedent(
+        f"""\
+        [Unit]
+        Description=BioModStack {normalized_lane} workflow jobs
+
+        [Slice]
+        CPUAccounting=yes
+        MemoryAccounting=yes
+        TasksAccounting=yes
+        """
+    )
+
+
 def render_user_units(project_root: Path | None = None, runtime_mode: str | None = None) -> dict[str, str]:
     root = (project_root or get_project_root()).resolve()
     mode = resolve_runtime_mode(runtime_mode)
@@ -956,10 +1113,21 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     build_id = build_identity["build_id"]
     build_time = build_identity["build_time"]
     log_rotator = root / "scripts" / "rotate_biomodstack_logs.py"
+    shared_data_root = Path(str(resolved.get("data_root", Path("/mnt/BioModStack"))))
     if mode == CONTAINER_RUNTIME_MODE:
         adapter_runner = root / "scripts" / "run_biomodstack_workflow_adapter.sh"
         core_runner = root / "scripts" / "run_biomodstack_core_runtime.sh"
-        adapter_limits = render_systemd_resource_boundaries(WORKFLOW_ADAPTER_SERVICE).replace(
+        production_state_root = str(resolved.get("data_root", Path("/mnt/BioModStack")))
+        production_inputs_dir = str(resolved.get("inputs_dir", Path(production_state_root) / "inputs"))
+        production_db_path = str(resolved.get("db_path", Path(production_state_root) / "biomodstack.db"))
+        production_work_dir = str(resolved.get("work_dir", Path(production_state_root) / "work"))
+        production_results_root = str(
+            resolved.get("results_dir", Path(production_state_root) / "bms_results")
+        )
+        production_container_dir = str(
+            resolved.get("container_dir", Path(production_state_root) / "apptainer")
+        )
+        adapter_limits = render_systemd_resource_boundaries(PRODUCTION_WORKFLOW_ADAPTER_SERVICE).replace(
             "\n", "\n            "
         )
         core_limits = render_systemd_resource_boundaries(CORE_RUNTIME_SERVICE).replace(
@@ -968,7 +1136,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         workflow_adapter_unit = dedent(
             f"""\
             [Unit]
-            Description=BioModStack host workflow adapter
+            Description=BioModStack Production workflow adapter
             PartOf={TARGET_UNIT}
             After=network-online.target
             Wants=network-online.target
@@ -979,8 +1147,21 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
             Type=simple
             Environment=BMS_HOME={root}
             Environment=BMS_RUNTIME_MODE={CONTAINER_RUNTIME_MODE}
+            Environment=BMS_WORKFLOW_ADAPTER_LANE={PRODUCTION_LANE}
+            Environment=BMS_REQUIRE_TRANSIENT_WORKFLOW_UNITS=1
+            Environment=BMS_STATE_DIR={production_state_root}
+            Environment=BMS_DATA={production_state_root}
+            Environment=BMS_INPUTS={production_inputs_dir}
+            Environment=BMS_DB_PATH={production_db_path}
+            Environment=BMS_WORK={production_work_dir}
+            Environment=BMS_RESULTS_DIR={production_results_root}
+            Environment=BMS_RESULTS_ROOT={production_results_root}
+            Environment=BMS_CONTAINER_DIR={production_container_dir}
             Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=127.0.0.1
-            Environment=BMS_WORKFLOW_ADAPTER_PORT={WORKFLOW_ADAPTER_PORT}
+            Environment=BMS_WORKFLOW_ADAPTER_PORT={PRODUCTION_WORKFLOW_ADAPTER_PORT}
+            Environment=BMS_BUILD_SHA={build_revision}
+            Environment=BMS_BUILD_ID={build_id}
+            Environment=BMS_BUILD_TIME={build_time}
             ExecStartPre=/usr/bin/env python3 {log_rotator}
             ExecStart={adapter_runner}
             Restart=on-failure
@@ -988,13 +1169,15 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
             TimeoutStopSec=20
             KillMode=control-group
             {adapter_limits}
-            StandardOutput=append:{WORKFLOW_ADAPTER_LOG}
-            StandardError=append:{WORKFLOW_ADAPTER_LOG}
+            StandardOutput=append:{PRODUCTION_WORKFLOW_ADAPTER_LOG}
+            StandardError=append:{PRODUCTION_WORKFLOW_ADAPTER_LOG}
 
             [Install]
             WantedBy={TARGET_UNIT}
             """
         )
+        workflow_root_slice = render_workflow_root_slice()
+        production_workflow_slice = render_workflow_slice(PRODUCTION_LANE)
         core_runtime_unit = dedent(
             f"""\
             [Unit]
@@ -1009,6 +1192,15 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
             Type=simple
             Environment=BMS_HOME={root}
             Environment=BMS_RUNTIME_MODE={CONTAINER_RUNTIME_MODE}
+            Environment=BMS_WORKFLOW_ADAPTER_LANE={PRODUCTION_LANE}
+            Environment=BMS_REQUIRE_TRANSIENT_WORKFLOW_UNITS=1
+            Environment=BMS_WORKFLOW_ADAPTER_URL={workflow_adapter_url_for_lane(PRODUCTION_LANE)}
+            Environment=BMS_STATE_DIR={production_state_root}
+            Environment=BMS_DB_PATH={production_db_path}
+            Environment=BMS_WORK={production_work_dir}
+            Environment=BMS_RESULTS_DIR={production_results_root}
+            Environment=BMS_RESULTS_ROOT={production_results_root}
+            Environment=BMS_CONTAINER_DIR={production_container_dir}
             ExecStartPre={core_runner} preflight
             ExecStart={core_runner} supervise
             ExecStop={core_runner} down
@@ -1029,7 +1221,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
             f"""\
             [Unit]
             Description=BioModStack workstation runtime target
-            Wants={WORKFLOW_ADAPTER_SERVICE} {CORE_RUNTIME_SERVICE}
+            Wants={PRODUCTION_WORKFLOW_ADAPTER_SERVICE} {WORKFLOW_ROOT_SLICE} {PRODUCTION_WORKFLOW_SLICE} {CORE_RUNTIME_SERVICE}
 
             [Install]
             WantedBy=default.target
@@ -1037,7 +1229,9 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         )
 
         return {
-            WORKFLOW_ADAPTER_SERVICE: workflow_adapter_unit,
+            PRODUCTION_WORKFLOW_ADAPTER_SERVICE: workflow_adapter_unit,
+            WORKFLOW_ROOT_SLICE: workflow_root_slice,
+            PRODUCTION_WORKFLOW_SLICE: production_workflow_slice,
             CORE_RUNTIME_SERVICE: core_runtime_unit,
             TARGET_UNIT: target_unit,
         }
@@ -1051,6 +1245,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     dev_inputs_dir = str(resolved.get("dev_inputs_dir", Path(dev_data_root) / "inputs"))
     dev_db_path = str(resolved.get("dev_db_path", Path(dev_data_root) / "biomodstack.db"))
     dev_work_dir = str(resolved.get("dev_work_dir", Path(dev_data_root) / "work"))
+    dev_results_root = str(resolved.get("dev_results_dir", Path(dev_data_root) / "bms_results"))
     # Model weights are immutable shared runtime assets, not lane-owned job
     # state.  Native Development keeps its DB/work/results isolated while
     # reusing the profile's canonical weights root (as container mode does).
@@ -1060,6 +1255,12 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     dev_colabfold_db = str(resolved.get("colabfold_db", Path("/mnt/BioModStack") / "colabfold_db"))
     dev_msa_cache_dir = str(resolved.get("dev_msa_cache_dir", Path(dev_data_root) / "msa_cache"))
     dev_sabdab_cache_dir = str(resolved.get("dev_sabdab_cache_dir", Path(dev_data_root) / "sabdab_cache"))
+    dev_container_dir = str(
+        resolved.get("dev_container_dir", shared_data_root / "dev" / "apptainer")
+    )
+    dev_adapter_limits = render_systemd_resource_boundaries(DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE).replace(
+        "\n", "\n            "
+    )
     api_limits = render_systemd_resource_boundaries(API_SERVICE).replace("\n", "\n        ")
     frontend_limits = render_systemd_resource_boundaries(FRONTEND_SERVICE).replace("\n", "\n        ")
 
@@ -1085,10 +1286,10 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         """
     )
 
-    api_unit = dedent(
+    development_workflow_adapter_unit = dedent(
         f"""\
         [Unit]
-        Description=BioModStack API service
+        Description=BioModStack Development workflow adapter
         PartOf={DEV_TARGET_UNIT}
         After=network-online.target
         Wants=network-online.target
@@ -1099,6 +1300,56 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Type=simple
         Environment=BMS_HOME={root}
         Environment=BMS_RUNTIME_MODE={DEV_RUNTIME_MODE}
+        Environment=BMS_WORKFLOW_ADAPTER_LANE={DEVELOPMENT_LANE}
+        Environment=BMS_REQUIRE_TRANSIENT_WORKFLOW_UNITS=1
+        Environment=BMS_STATE_DIR={dev_data_root}
+        Environment=BMS_DATA={dev_data_root}
+        Environment=BMS_INPUTS={dev_inputs_dir}
+        Environment=BMS_DB_PATH={dev_db_path}
+        Environment=BMS_WORK={dev_work_dir}
+        Environment=BMS_RESULTS_DIR={dev_results_root}
+        Environment=BMS_RESULTS_ROOT={dev_results_root}
+        Environment=BMS_CONTAINER_DIR={dev_container_dir}
+        Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=127.0.0.1
+        Environment=BMS_WORKFLOW_ADAPTER_PORT={DEVELOPMENT_WORKFLOW_ADAPTER_PORT}
+        Environment=BMS_BUILD_SHA={build_revision}
+        Environment=BMS_BUILD_ID={build_id}
+        Environment=BMS_BUILD_TIME={build_time}
+        ExecStartPre=/usr/bin/mkdir -p {dev_data_root} {dev_inputs_dir} {dev_work_dir} {dev_results_root} {dev_container_dir}
+        ExecStartPre=/usr/bin/env python3 {log_rotator}
+        ExecStart={root / 'scripts' / 'run_biomodstack_workflow_adapter.sh'}
+        Restart=on-failure
+        RestartSec=10
+        TimeoutStopSec=20
+        KillMode=control-group
+        {dev_adapter_limits}
+        StandardOutput=append:{DEVELOPMENT_WORKFLOW_ADAPTER_LOG}
+        StandardError=append:{DEVELOPMENT_WORKFLOW_ADAPTER_LOG}
+
+        [Install]
+        WantedBy={DEV_TARGET_UNIT}
+        """
+    )
+    workflow_root_slice = render_workflow_root_slice()
+    development_workflow_slice = render_workflow_slice(DEVELOPMENT_LANE)
+
+    api_unit = dedent(
+        f"""\
+        [Unit]
+        Description=BioModStack API service
+        PartOf={DEV_TARGET_UNIT}
+        After=network-online.target {DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE}
+        Wants=network-online.target {DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE}
+        StartLimitIntervalSec=300
+        StartLimitBurst=3
+
+        [Service]
+        Type=simple
+        Environment=BMS_HOME={root}
+        Environment=BMS_RUNTIME_MODE={DEV_RUNTIME_MODE}
+        Environment=BMS_WORKFLOW_ADAPTER_LANE={DEVELOPMENT_LANE}
+        Environment=BMS_REQUIRE_TRANSIENT_WORKFLOW_UNITS=1
+        Environment=BMS_WORKFLOW_ADAPTER_URL={workflow_adapter_url_for_lane(DEVELOPMENT_LANE)}
         Environment=BMS_FRONTEND_HEALTH_URL=http://127.0.0.1:{dev_web_host_port}/
         Environment=BMS_API_MODE=dev
         Environment=BMS_API_RELOAD=0
@@ -1108,6 +1359,9 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment=BMS_INPUTS={dev_inputs_dir}
         Environment=BMS_DB_PATH={dev_db_path}
         Environment=BMS_WORK={dev_work_dir}
+        Environment=BMS_RESULTS_DIR={dev_results_root}
+        Environment=BMS_RESULTS_ROOT={dev_results_root}
+        Environment=BMS_CONTAINER_DIR={dev_container_dir}
         Environment=BMS_WEIGHTS={dev_weights_root}
         Environment=BMS_COLABFOLD_DB={dev_colabfold_db}
         Environment=BMS_MSA_CACHE={dev_msa_cache_dir}
@@ -1117,7 +1371,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment=BMS_BUILD_ID={build_id}
         Environment=BMS_BUILD_TIME={build_time}
         Environment=PYTHONUNBUFFERED=1
-        ExecStartPre=/usr/bin/mkdir -p {dev_data_root} {dev_inputs_dir} {dev_work_dir} {dev_weights_root} {dev_msa_cache_dir} {dev_sabdab_cache_dir}
+        ExecStartPre=/usr/bin/mkdir -p {dev_data_root} {dev_inputs_dir} {dev_work_dir} {dev_results_root} {dev_weights_root} {dev_msa_cache_dir} {dev_sabdab_cache_dir} {dev_container_dir}
         ExecStartPre=/usr/bin/env python3 {log_rotator}
         ExecStart={api_runner}
         Restart=on-failure
@@ -1172,7 +1426,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         f"""\
         [Unit]
         Description=BioModStack development UI target
-        Wants={API_SERVICE} {FRONTEND_SERVICE}
+        Wants={DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE} {WORKFLOW_ROOT_SLICE} {DEVELOPMENT_WORKFLOW_SLICE} {API_SERVICE} {FRONTEND_SERVICE}
 
         [Install]
         WantedBy=default.target
@@ -1180,6 +1434,9 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     )
 
     return {
+        DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE: development_workflow_adapter_unit,
+        WORKFLOW_ROOT_SLICE: workflow_root_slice,
+        DEVELOPMENT_WORKFLOW_SLICE: development_workflow_slice,
         API_SERVICE: api_unit,
         FRONTEND_SERVICE: frontend_unit,
         TAILNET_GLOBAL_SERVICE: tailnet_global_unit,
@@ -1232,6 +1489,8 @@ def ensure_user_units(project_root: Path | None = None, runtime_mode: str | None
     API_LOG.touch(exist_ok=True)
     FRONTEND_LOG.touch(exist_ok=True)
     WORKFLOW_ADAPTER_LOG.touch(exist_ok=True)
+    DEVELOPMENT_WORKFLOW_ADAPTER_LOG.touch(exist_ok=True)
+    PRODUCTION_WORKFLOW_ADAPTER_LOG.touch(exist_ok=True)
     CORE_RUNTIME_LOG.touch(exist_ok=True)
     install_user_units(project_root=project_root, runtime_mode=runtime_mode)
     daemon_reload(project_root=project_root)
@@ -1301,11 +1560,18 @@ def is_biomodstack_workflow_adapter_process(
     cmdline: str,
     cwd: str | None,
     project_root: Path | None = None,
+    *,
+    lane: str | None = None,
 ) -> bool:
     root = (project_root or get_project_root()).resolve()
     api_dir = str(root / "platform" / "api")
     cmd = cmdline.strip()
-    port_markers = (f"--port {WORKFLOW_ADAPTER_PORT}", f"--port={WORKFLOW_ADAPTER_PORT}")
+    expected_port = (
+        workflow_adapter_port_for_lane(lane)
+        if lane is not None
+        else WORKFLOW_ADAPTER_PORT
+    )
+    port_markers = (f"--port {expected_port}", f"--port={expected_port}")
     if "workflow_adapter_app:app" not in cmd or not any(marker in cmd for marker in port_markers):
         return False
     return api_dir in cmd or cwd == api_dir
@@ -1725,7 +1991,12 @@ def start_all(
         )
     run_systemctl("start", *runtime_service_names(mode), TARGET_UNIT, project_root=root)
     if not skip_workflow_adapter_wait:
-        wait_for_http(WORKFLOW_ADAPTER_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
+        wait_for_http(
+            workflow_adapter_health_url_for_lane(
+                PRODUCTION_LANE if mode == CONTAINER_RUNTIME_MODE else DEVELOPMENT_LANE
+            ),
+            timeout_seconds=wait_timeout_seconds,
+        )
     if not skip_api_wait:
         wait_for_http(runtime_api_health_url(mode, project_root=root), timeout_seconds=wait_timeout_seconds)
     wait_for_http(frontend_url, timeout_seconds=wait_timeout_seconds)
@@ -1767,7 +2038,7 @@ def stop_all(project_root: Path | None = None, runtime_mode: str | None = None) 
         run_systemctl("stop", TARGET_UNIT, check=False, project_root=root)
         run_systemctl(
             "stop",
-            WORKFLOW_ADAPTER_SERVICE,
+            PRODUCTION_WORKFLOW_ADAPTER_SERVICE,
             CORE_RUNTIME_SERVICE,
             check=False,
             project_root=root,
@@ -1807,9 +2078,18 @@ def restart_all(project_root: Path | None = None, runtime_mode: str | None = Non
 
     ensure_target_enabled(root, runtime_mode=mode)
     run_systemctl("stop", TARGET_UNIT, check=False, project_root=root)
-    run_systemctl("stop", WORKFLOW_ADAPTER_SERVICE, CORE_RUNTIME_SERVICE, check=False, project_root=root)
+    run_systemctl(
+        "stop",
+        PRODUCTION_WORKFLOW_ADAPTER_SERVICE,
+        CORE_RUNTIME_SERVICE,
+        check=False,
+        project_root=root,
+    )
     run_systemctl("start", *runtime_service_names(mode), TARGET_UNIT, project_root=root)
-    wait_for_http(WORKFLOW_ADAPTER_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
+    wait_for_http(
+        workflow_adapter_health_url_for_lane(PRODUCTION_LANE),
+        timeout_seconds=wait_timeout_seconds,
+    )
     wait_for_http(runtime_api_health_url(mode, project_root=root), timeout_seconds=wait_timeout_seconds)
     wait_for_http(frontend_url, timeout_seconds=wait_timeout_seconds)
 
@@ -1832,8 +2112,17 @@ def start_api(project_root: Path | None = None, runtime_mode: str | None = None)
         wait_for_http(runtime_api_health_url(mode, project_root=root), timeout_seconds=wait_timeout_seconds)
         return
 
+    services_to_start: list[str] = []
+    if not service_is_active(DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE, project_root=root):
+        services_to_start.append(DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE)
     if not service_is_active(API_SERVICE, project_root=root):
-        run_systemctl("start", API_SERVICE, project_root=root)
+        services_to_start.append(API_SERVICE)
+    if services_to_start:
+        run_systemctl("start", *services_to_start, project_root=root)
+    wait_for_http(
+        workflow_adapter_health_url_for_lane(DEVELOPMENT_LANE),
+        timeout_seconds=wait_timeout_seconds,
+    )
     wait_for_http(runtime_api_health_url(mode, project_root=root), timeout_seconds=wait_timeout_seconds)
 
 
@@ -1878,10 +2167,10 @@ def status_lines(project_root: Path | None = None, runtime_mode: str | None = No
     if mode == CONTAINER_RUNTIME_MODE:
         return [
             f"Runtime: {'active' if descriptor['runtime_active'] else 'inactive'} ({CORE_RUNTIME_SERVICE})",
-            f"Workflow adapter: {'ready' if descriptor['health']['adapter_ready'] else 'not ready'} ({WORKFLOW_ADAPTER_HEALTH_URL})",
+            f"Workflow adapter: {'ready' if descriptor['health']['adapter_ready'] else 'not ready'} ({PRODUCTION_WORKFLOW_ADAPTER_HEALTH_URL})",
             f"API: {'ready' if descriptor['health']['api_ready'] else 'not ready'} ({api_health_url})",
             f"Frontend: {'ready' if descriptor['health']['frontend_ready'] else 'not ready'} ({descriptor['frontend_url']})",
-            f"Workflow adapter log: {WORKFLOW_ADAPTER_LOG}",
+            f"Workflow adapter log: {PRODUCTION_WORKFLOW_ADAPTER_LOG}",
             f"Runtime log: {CORE_RUNTIME_LOG}",
         ]
 

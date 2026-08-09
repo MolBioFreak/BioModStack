@@ -351,6 +351,183 @@ class NgsComparisonPanelReceipt(Base):
     created_at = Column(LenientSQLiteDateTime, default=datetime.utcnow, nullable=False)
 
 
+class NgsReferenceSetManifest(Base):
+    """Immutable server-owned reference-set launch authority for one barcode batch."""
+
+    __tablename__ = "ngs_reference_set_manifests"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_ngs_reference_set_idempotency"),
+        Index("ix_ngs_reference_set_manifests_source_job_id", "source_job_id"),
+        Index("ix_ngs_reference_set_manifests_manifest_sha256", "manifest_sha256"),
+    )
+
+    id = Column(String(36), primary_key=True)
+    manifest_schema = Column(String(80), nullable=False)
+    mode = Column(String(32), nullable=False)
+    source_job_id = Column(
+        String(36), ForeignKey("jobs.id", ondelete="RESTRICT"), nullable=False
+    )
+    target_workflow = Column(String(64), nullable=False)
+    idempotency_key = Column(String(255), nullable=False)
+    request_fingerprint = Column(String(64), nullable=False)
+    manifest_path = Column(String(1000), nullable=False)
+    manifest_sha256 = Column(String(64), nullable=False)
+    manifest_json = Column(JSON, nullable=False)
+    created_at = Column(LenientSQLiteDateTime, default=datetime.utcnow, nullable=False)
+
+
+class NgsReferenceSetMapping(Base):
+    """Immutable barcode-to-revision binding within one NGS reference set."""
+
+    __tablename__ = "ngs_reference_set_mappings"
+    __table_args__ = (
+        UniqueConstraint(
+            "reference_set_id",
+            "unit_id",
+            name="uq_ngs_reference_set_mapping_unit",
+        ),
+        UniqueConstraint("receipt_id", name="uq_ngs_reference_set_mapping_receipt"),
+        UniqueConstraint("child_job_id", name="uq_ngs_reference_set_mapping_child_job"),
+        Index("ix_ngs_reference_set_mappings_reference_set_id", "reference_set_id"),
+        Index("ix_ngs_reference_set_mappings_unit_id", "unit_id"),
+    )
+
+    id = Column(String(36), primary_key=True)
+    reference_set_id = Column(
+        String(36),
+        ForeignKey("ngs_reference_set_manifests.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    child_job_id = Column(
+        String(36), ForeignKey("jobs.id", ondelete="RESTRICT"), nullable=False
+    )
+    unit_id = Column(String(32), nullable=False)
+    sample_alias = Column(String(255), nullable=True)
+    sequence_id = Column(String(36), nullable=False)
+    revision_id = Column(String(36), nullable=False)
+    revision_sha256 = Column(String(64), nullable=False)
+    receipt_id = Column(
+        String(36), ForeignKey("molbio_ngs_receipts.id", ondelete="RESTRICT"), nullable=False
+    )
+    fasta_snapshot_sha256 = Column(String(64), nullable=False)
+    source_bam_path = Column(String(1000), nullable=False)
+    source_bam_sha256 = Column(String(64), nullable=False)
+    source_calls_sha256 = Column(String(64), nullable=False)
+    preflight_sha256 = Column(String(64), nullable=False)
+    demux_manifest_sha256 = Column(String(64), nullable=False)
+    unit_manifest_sha256 = Column(String(64), nullable=False)
+    created_at = Column(LenientSQLiteDateTime, default=datetime.utcnow, nullable=False)
+
+
+class NgsPooledReferenceTarget(Base):
+    """Immutable target identity within a pooled reference-set manifest."""
+
+    __tablename__ = "ngs_pooled_reference_targets"
+    __table_args__ = (
+        UniqueConstraint(
+            "reference_set_id",
+            "target_id",
+            name="uq_ngs_pooled_reference_target_id",
+        ),
+        UniqueConstraint("receipt_id", name="uq_ngs_pooled_reference_target_receipt"),
+        Index("ix_ngs_pooled_reference_targets_reference_set_id", "reference_set_id"),
+        Index("ix_ngs_pooled_reference_targets_target_id", "target_id"),
+    )
+
+    id = Column(String(36), primary_key=True)
+    reference_set_id = Column(
+        String(36),
+        ForeignKey("ngs_reference_set_manifests.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    target_id = Column(String(128), nullable=False)
+    label = Column(String(255), nullable=False)
+    indistinguishable_group = Column(String(128), nullable=True)
+    sequence_id = Column(String(128), nullable=False)
+    revision_id = Column(String(128), nullable=False)
+    revision_sha256 = Column(String(64), nullable=False)
+    receipt_id = Column(
+        String(36), ForeignKey("molbio_ngs_receipts.id", ondelete="RESTRICT"), nullable=False
+    )
+    fasta_path = Column(String(512), nullable=False)
+    fasta_sha256 = Column(String(64), nullable=False)
+    created_at = Column(LenientSQLiteDateTime, default=datetime.utcnow, nullable=False)
+
+
+class NgsPooledAssignmentRelease(Base):
+    """Append-only operator release of reviewed pooled-assignment evidence."""
+
+    __tablename__ = "ngs_pooled_assignment_releases"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_ngs_pooled_assignment_release_idempotency"),
+        Index("ix_ngs_pooled_assignment_releases_assignment_job_id", "assignment_job_id"),
+        Index("ix_ngs_pooled_assignment_releases_reference_set_id", "reference_set_id"),
+    )
+
+    id = Column(String(36), primary_key=True)
+    assignment_job_id = Column(
+        String(36), ForeignKey("jobs.id", ondelete="RESTRICT"), nullable=False
+    )
+    reference_set_id = Column(
+        String(36),
+        ForeignKey("ngs_reference_set_manifests.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    idempotency_key = Column(String(255), nullable=False)
+    request_fingerprint = Column(String(64), nullable=False)
+    target_workflow = Column(String(64), nullable=False)
+    assignment_summary_path = Column(String(1000), nullable=False)
+    assignment_summary_sha256 = Column(String(64), nullable=False)
+    created_at = Column(LenientSQLiteDateTime, default=datetime.utcnow, nullable=False)
+
+
+class NgsPooledAssignmentReleaseTarget(Base):
+    """Immutable target-to-child binding within one pooled assignment release."""
+
+    __tablename__ = "ngs_pooled_assignment_release_targets"
+    __table_args__ = (
+        UniqueConstraint(
+            "release_id",
+            "target_id",
+            name="uq_ngs_pooled_assignment_release_target",
+        ),
+        UniqueConstraint("child_job_id", name="uq_ngs_pooled_assignment_release_child"),
+        Index("ix_ngs_pooled_assignment_release_targets_release_id", "release_id"),
+        Index("ix_ngs_pooled_assignment_release_targets_assignment_job_id", "assignment_job_id"),
+    )
+
+    id = Column(String(36), primary_key=True)
+    release_id = Column(
+        String(36),
+        ForeignKey("ngs_pooled_assignment_releases.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    assignment_job_id = Column(
+        String(36), ForeignKey("jobs.id", ondelete="RESTRICT"), nullable=False
+    )
+    reference_set_id = Column(
+        String(36),
+        ForeignKey("ngs_reference_set_manifests.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    target_id = Column(String(128), nullable=False)
+    child_job_id = Column(
+        String(36), ForeignKey("jobs.id", ondelete="RESTRICT"), nullable=False
+    )
+    sequence_id = Column(String(128), nullable=False)
+    revision_id = Column(String(128), nullable=False)
+    revision_sha256 = Column(String(64), nullable=False)
+    receipt_id = Column(
+        String(36), ForeignKey("molbio_ngs_receipts.id", ondelete="RESTRICT"), nullable=False
+    )
+    fasta_path = Column(String(1000), nullable=False)
+    fasta_sha256 = Column(String(64), nullable=False)
+    assigned_fastq_path = Column(String(1000), nullable=False)
+    assigned_fastq_sha256 = Column(String(64), nullable=False)
+    assigned_read_count = Column(Integer, nullable=False)
+    created_at = Column(LenientSQLiteDateTime, default=datetime.utcnow, nullable=False)
+
+
 class ViewerSnapshotRecord(Base):
     """Immutable, job-owned M6A viewer snapshot metadata and canonical JSON."""
 
@@ -1413,6 +1590,7 @@ async def _ensure_schema(conn):
     await _backfill_frustrampnn_summary_projections(conn)
     await _backfill_design_review_contracts(conn)
     await _ensure_sqlite_indexes(conn)
+    await _ensure_ngs_reference_set_immutability(conn)
 
 
 async def _backfill_frustrampnn_summary_projections(conn):
@@ -1529,6 +1707,99 @@ async def _backfill_design_review_contracts(conn):
 async def _ensure_sqlite_indexes(conn):
     """Install indexes required by high-volume list/count paths on legacy DBs."""
     await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_designs_job_id ON designs (job_id)"))
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_ngs_reference_set_manifests_source_job_id "
+            "ON ngs_reference_set_manifests (source_job_id)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_ngs_reference_set_manifests_manifest_sha256 "
+            "ON ngs_reference_set_manifests (manifest_sha256)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_ngs_reference_set_mappings_reference_set_id "
+            "ON ngs_reference_set_mappings (reference_set_id)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_ngs_reference_set_mappings_unit_id "
+            "ON ngs_reference_set_mappings (unit_id)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_ngs_pooled_reference_targets_reference_set_id "
+            "ON ngs_pooled_reference_targets (reference_set_id)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_ngs_pooled_reference_targets_target_id "
+            "ON ngs_pooled_reference_targets (target_id)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_ngs_pooled_assignment_releases_assignment_job_id "
+            "ON ngs_pooled_assignment_releases (assignment_job_id)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_ngs_pooled_assignment_releases_reference_set_id "
+            "ON ngs_pooled_assignment_releases (reference_set_id)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_ngs_pooled_assignment_release_targets_release_id "
+            "ON ngs_pooled_assignment_release_targets (release_id)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_ngs_pooled_assignment_release_targets_assignment_job_id "
+            "ON ngs_pooled_assignment_release_targets (assignment_job_id)"
+        )
+    )
+
+
+async def _ensure_ngs_reference_set_immutability(conn):
+    """Install append-only guards for the server-owned NGS reference-set rows."""
+    for table_name, label in (
+        ("ngs_reference_set_manifests", "NGS reference-set manifests"),
+        ("ngs_reference_set_mappings", "NGS reference-set mappings"),
+        ("ngs_pooled_reference_targets", "NGS pooled reference targets"),
+        ("ngs_pooled_assignment_releases", "NGS pooled assignment releases"),
+        ("ngs_pooled_assignment_release_targets", "NGS pooled assignment release targets"),
+    ):
+        await conn.execute(
+            text(
+                f"""
+                CREATE TRIGGER IF NOT EXISTS "trg_{table_name}_no_update"
+                BEFORE UPDATE ON "{table_name}"
+                BEGIN
+                    SELECT RAISE(ABORT, '{label} are immutable');
+                END
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                f"""
+                CREATE TRIGGER IF NOT EXISTS "trg_{table_name}_no_delete"
+                BEFORE DELETE ON "{table_name}"
+                BEGIN
+                    SELECT RAISE(ABORT, '{label} are immutable');
+                END
+                """
+            )
+        )
 
 
 async def _ensure_table_columns(conn, table_name: str, columns):

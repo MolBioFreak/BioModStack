@@ -6,7 +6,7 @@ Provides digest, PCR, ligation, mutagenesis, Gibson, and Golden Gate workflows.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Header
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 from typing import Any, List, Literal, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -14,12 +14,14 @@ from sqlalchemy.exc import IntegrityError
 from datetime import datetime
 import asyncio
 import hashlib
+import json
 import os
 import uuid
 from Bio.SeqUtils import MeltingTemp as mt
 
 from molbio_database import get_molbio_session
 from molbio_models import (
+    MolecularDocument,
     MolecularRevision,
     NucleotideSequence,
     PCRExperiment,
@@ -38,6 +40,12 @@ from services.molbio_persistence import (
     revise_pcr_review_state,
     sequence_snapshot,
     tm_model_revision_identity,
+)
+from services.molbio_sequence_import import (
+    SequenceImportInputError,
+    SequenceImportRequest,
+    build_sequence_import_preview,
+    commit_sequence_import,
 )
 from services.assembly.common import fragment_provenance_payload
 from services.assembly.gibson import simulate_gibson
@@ -81,8 +89,8 @@ from services.sequence_alignment import (
     SequenceAlignmentError,
     align_sequences,
 )
-from database import Job, MolBioNgsReceipt, get_session
-from services.molbio_ngs_workup import project_ngs_workup, safe_job_result_root
+from database import Job, MolBioNgsReceipt, NgsComparisonPanelReceipt, get_session
+from services.molbio_ngs_workup import project_ngs_workup, safe_comparison_panel_root, safe_job_result_root
 from services.molbio_ngs_receipts import issue_molbio_ngs_receipt
 from services.molbio_ngs_receipts import consume_molbio_ngs_receipt
 from services.ngs_comparison_panels import issue_comparison_panel_receipt, list_approved_panels, seed_approved_panel
@@ -104,6 +112,45 @@ class ApprovedPanelSeedRequest(BaseModel):
 
 class ComparisonPanelReceiptRequest(BaseModel):
     expected_receipt_id: str = Field(min_length=1)
+
+
+class NgsReceiptRequest(BaseModel):
+    """Require an explicit historical revision or an explicit current-head choice."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
+
+    revision_id: str | None = Field(default=None, min_length=1, max_length=255)
+    use_current_revision: StrictBool = False
+
+    @model_validator(mode="after")
+    def require_explicit_revision_selector(self) -> "NgsReceiptRequest":
+        if bool(self.revision_id) == bool(self.use_current_revision):
+            raise ValueError(
+                "provide exactly one of revision_id or use_current_revision=true"
+            )
+        return self
+
+
+class MolecularRevisionSummaryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    revision_id: str
+    sequence_id: str
+    revision_number: int
+    change_kind: str
+    content_sha256: str
+    content_length: int
+    topology: Literal["circular", "linear"]
+    created_at: datetime
+    created_by: str | None
+    is_current: bool
+
+
+class MolecularRevisionDetailResponse(MolecularRevisionSummaryResponse):
+    snapshot: dict[str, Any]
+    provenance: dict[str, Any]
+    operation_id: str | None
 
 
 def _require_panel_seed_authority(value: str | None) -> str:
@@ -169,6 +216,123 @@ async def issue_ngs_comparison_panel_receipt(
             "panel_snapshot_sha256": receipt.panel_snapshot_sha256, "expires_at": receipt.expires_at.isoformat() + "Z"}
 
 
+@router.post("/sequences/import/preview")
+async def preview_sequence_import(payload: SequenceImportRequest) -> dict[str, Any]:
+    """Parse a bounded import source without mutating either MolBio data plane."""
+
+    try:
+        return build_sequence_import_preview(payload)
+    except ValueError as exc:
+        # Request-model validation handles shape errors. This guard covers only
+        # bounded canonicalization failures raised while building the report.
+        raise HTTPException(status_code=422, detail="sequence import preview failed validation") from exc
+
+
+@router.post("/sequences/import/commit", status_code=201)
+async def commit_sequence_import_route(
+    payload: SequenceImportRequest,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    molbio_session: AsyncSession = Depends(get_molbio_session),
+) -> dict[str, Any]:
+    """Commit a valid server preview as one MolBio SQLite transaction."""
+
+    try:
+        return await commit_sequence_import(
+            molbio_session,
+            payload,
+            idempotency_key=idempotency_key,
+        )
+    except SequenceImportInputError:
+        await molbio_session.rollback()
+        report = build_sequence_import_preview(payload)
+        raise HTTPException(status_code=422, detail=report)
+    except IdempotencyConflictError as exc:
+        await molbio_session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "IDEMPOTENCY_CONFLICT", "message": str(exc)},
+        ) from exc
+    except ValueError as exc:
+        await molbio_session.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _revision_summary(revision: MolecularRevision, *, current_revision_id: str | None) -> dict[str, Any]:
+    topology = str((revision.snapshot or {}).get("topology") or "").strip().lower()
+    if topology not in {"circular", "linear"}:
+        raise HTTPException(
+            status_code=409,
+            detail="Immutable molecular revision is missing a valid topology",
+        )
+    return {
+        "id": revision.id,
+        "revision_id": revision.id,
+        "sequence_id": revision.document_id,
+        "revision_number": revision.revision_number,
+        "change_kind": revision.change_kind,
+        "content_sha256": revision.content_sha256,
+        "content_length": revision.content_length,
+        "topology": topology,
+        "created_at": revision.created_at,
+        "created_by": revision.created_by,
+        "is_current": revision.id == current_revision_id,
+    }
+
+
+@router.get(
+    "/sequences/{sequence_id}/revisions",
+    response_model=list[MolecularRevisionSummaryResponse],
+)
+async def list_sequence_revisions(
+    sequence_id: str,
+    molbio_session: AsyncSession = Depends(get_molbio_session),
+) -> list[dict[str, Any]]:
+    sequence = await molbio_session.get(NucleotideSequence, sequence_id)
+    if sequence is None:
+        raise HTTPException(status_code=404, detail="Saved molecular sequence not found")
+    document = await molbio_session.get(MolecularDocument, sequence_id)
+    current_revision_id = document.current_revision_id if document is not None else None
+    revisions = (
+        await molbio_session.execute(
+            select(MolecularRevision)
+            .where(MolecularRevision.document_id == sequence_id)
+            .order_by(MolecularRevision.revision_number.desc())
+        )
+    ).scalars().all()
+    return [
+        _revision_summary(revision, current_revision_id=current_revision_id)
+        for revision in revisions
+    ]
+
+
+@router.get(
+    "/sequences/{sequence_id}/revisions/{revision_id}",
+    response_model=MolecularRevisionDetailResponse,
+)
+async def get_sequence_revision(
+    sequence_id: str,
+    revision_id: str,
+    molbio_session: AsyncSession = Depends(get_molbio_session),
+) -> dict[str, Any]:
+    sequence = await molbio_session.get(NucleotideSequence, sequence_id)
+    revision = await molbio_session.get(MolecularRevision, revision_id)
+    if sequence is None or revision is None or revision.document_id != sequence_id:
+        raise HTTPException(status_code=404, detail="Saved molecular sequence revision not found")
+    document = await molbio_session.get(MolecularDocument, sequence_id)
+    detail = _revision_summary(
+        revision,
+        current_revision_id=document.current_revision_id if document is not None else None,
+    )
+    detail.update(
+        {
+            "snapshot": revision.snapshot,
+            "provenance": revision.provenance,
+            "operation_id": revision.operation_id,
+        }
+    )
+    return detail
+
+
 @router.get("/sequences/{sequence_id}/ngs-workup")
 async def get_sequence_ngs_workup(
     sequence_id: str,
@@ -183,7 +347,8 @@ async def get_sequence_ngs_workup(
     candidates = (await session.execute(select(Job).where(Job.model_id == "nanopore"))).scalars().all()
     workups: list[dict[str, Any]] = []
     for job in candidates:
-        binding = (job.params or {}).get("molbio_revision_binding")
+        params = job.params or {}
+        binding = params.get("molbio_revision_binding") if isinstance(params, dict) else None
         if not isinstance(binding, dict) or binding.get("sequence_id") != sequence_id:
             continue
         receipt_id = binding.get("receipt_id")
@@ -196,7 +361,23 @@ async def get_sequence_ngs_workup(
             or receipt.reference_snapshot_sha256 != binding.get("reference_snapshot_sha256")
         ):
             continue
+        panel_binding = params.get("comparison_panel_binding") if isinstance(params, dict) else None
+        panel_receipt_authorized: bool | None = None
+        if "comparison_panel_binding" in params:
+            panel_receipt_authorized = False
+            if isinstance(panel_binding, dict) and isinstance(panel_binding.get("receipt_id"), str):
+                panel_receipt = await session.get(NgsComparisonPanelReceipt, panel_binding["receipt_id"])
+                panel_receipt_authorized = bool(
+                    panel_receipt is not None
+                    and panel_receipt.consumed_at is not None
+                    and panel_receipt.consumed_job_id == job.id
+                    and panel_receipt.expected_receipt_id == receipt.id
+                    and panel_receipt.panel_id == panel_binding.get("panel_id")
+                    and panel_receipt.panel_version == panel_binding.get("panel_version")
+                    and panel_receipt.panel_snapshot_sha256 == panel_binding.get("panel_snapshot_sha256")
+                )
         manifest: dict[str, Any] | None = None
+        root = None
         try:
             root = safe_job_result_root(job)
             manifest_path = root / "verification" / "qc_manifest.json"
@@ -204,26 +385,38 @@ async def get_sequence_ngs_workup(
                 manifest = load_sequence_qc_manifest(manifest_path)
         except (SequenceQcManifestError, ValueError, OSError):
             manifest = None
+        comparison_summary = None
+        comparison_root = None
+        summary_path = None
+        if isinstance(panel_binding, dict) and root is not None:
+            try:
+                comparison_root = safe_comparison_panel_root(root)
+                summary_path = comparison_root / "comparison_panel_summary.json"
+                if summary_path.is_symlink() or not summary_path.is_file():
+                    raise ValueError("comparison summary is unavailable or unsafe")
+                resolved_summary = summary_path.resolve(strict=True)
+                if resolved_summary.parent != comparison_root.resolve() or not resolved_summary.is_file():
+                    raise ValueError("comparison summary path is outside the comparison panel root")
+                if resolved_summary.stat().st_size > 10 * 1024 * 1024:
+                    raise ValueError("comparison summary is too large")
+                comparison_summary = json.loads(resolved_summary.read_text(encoding="utf-8"))
+                summary_path = resolved_summary
+            except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                comparison_summary = None
         try:
-            comparison_summary = None
-            summary_path = root / "comparison_panel" / "comparison_panel_summary.json" if manifest is not None else None
-            if summary_path is not None and summary_path.is_file():
-                import json
-                comparison_summary = json.loads(summary_path.read_text(encoding="utf-8"))
-                declared = comparison_summary.get("artifacts") if isinstance(comparison_summary, dict) else None
-                valid_kinds = {"comparison_panel_alignment_bam", "comparison_panel_alignment_bai"}
-                comparison_summary["artifacts_integrity_valid"] = isinstance(declared, list) and all(
-                    isinstance(item, dict)
-                    and item.get("kind") in valid_kinds
-                    and isinstance(item.get("path"), str)
-                    and (root / "comparison_panel" / item["path"]).is_file()
-                    and hashlib.sha256((root / "comparison_panel" / item["path"]).read_bytes()).hexdigest() == item.get("sha256")
-                    and (root / "comparison_panel" / item["path"]).stat().st_size == item.get("size_bytes")
-                    for item in declared
-                ) and {item.get("kind") for item in declared} == valid_kinds
-            workups.append(project_ngs_workup(job, manifest, revision, comparison_summary))
+            workups.append(
+                project_ngs_workup(
+                    job,
+                    manifest,
+                    revision,
+                    comparison_summary,
+                    comparison_panel_root=comparison_root,
+                    comparison_summary_path=summary_path,
+                    comparison_panel_authorized=panel_receipt_authorized,
+                )
+            )
         except ValueError:
-            # A malformed receipt is not evidence and must not be silently projected.
+            # A malformed primary receipt is not evidence and must not be silently projected.
             continue
     return {
         "schema": "bms.molbio.ngs-workup-list.v1",
@@ -238,18 +431,28 @@ async def get_sequence_ngs_workup(
 @router.post("/sequences/{sequence_id}/ngs-receipts")
 async def issue_sequence_ngs_receipt(
     sequence_id: str,
+    payload: NgsReceiptRequest,
     molbio_session: AsyncSession = Depends(get_molbio_session),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    """Materialize a one-time expected-reference snapshot from immutable revision content."""
+    """Materialize a one-time expected-reference snapshot from an explicit revision."""
     sequence = await molbio_session.get(NucleotideSequence, sequence_id)
-    revision = await current_molecular_revision(molbio_session, sequence_id) if sequence else None
+    if sequence is None:
+        raise HTTPException(status_code=404, detail="Saved molecular sequence not found")
+    revision = (
+        await current_molecular_revision(molbio_session, sequence_id)
+        if payload.use_current_revision
+        else await molbio_session.get(MolecularRevision, payload.revision_id)
+    )
+    if revision is not None and revision.document_id != sequence_id:
+        revision = None
     if sequence is None or revision is None:
         raise HTTPException(status_code=404, detail="Saved molecular sequence or immutable revision not found")
     try:
         receipt = await issue_molbio_ngs_receipt(session, sequence_id=sequence_id, revision=revision)
         await session.commit()
     except ValueError as exc:
+        await session.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"schema": "bms.molbio.ngs-receipt.v2", "receipt_id": receipt.id,
             "sequence_id": sequence_id, "revision_id": revision.id,

@@ -251,6 +251,7 @@ def preflight_nextflow_java(env: Dict[str, str]) -> Tuple[bool, str]:
 
 # Track running processes
 _running_processes: Dict[str, asyncio.subprocess.Process] = {}
+_running_units: Dict[str, str] = {}
 _launching_jobs: Set[str] = set()
 
 from paths import (
@@ -287,10 +288,35 @@ from .workflow_adapter import (
     launch_via_workflow_adapter,
     workflow_adapter_enabled,
 )
+from .execution_ownership import (
+    DuplicateUnitError,
+    ExecutionOwnershipError,
+    LaneIdentityError,
+    UnitNotFoundError,
+    adapter_identity_from_environment,
+    build_systemd_run_command,
+    cancel_systemd_workflow_unit,
+    configured_lane,
+    create_systemd_workflow_unit,
+    discover_active_workflow_units,
+    is_legacy_numeric_run_id,
+    owner_receipt,
+    show_unit_properties,
+    unit_has_empty_cgroup,
+    TRANSIENT_WORKFLOW_UNIT_ENV,
+    TRANSIENT_WORKFLOW_UNIT_NAME_ENV,
+    TRANSIENT_WORKFLOW_OWNER_NONCE_ENV,
+    assert_unit_lane,
+)
 from runtime_policy import assert_workflow_launch_allowed
 
 # Project root (parent of platform directory)
 PROJECT_ROOT = get_code_root()
+
+
+def transient_workflow_runner_mode() -> bool:
+    """Return true only inside the adapter-owned transient runner service."""
+    return os.getenv(TRANSIENT_WORKFLOW_UNIT_ENV) == "1"
 
 LEGACY_MAIN_ENTRYPOINT = "main.nf"
 DEFAULT_WORKFLOW_ENTRYPOINT = "workflows/protein_design.nf"
@@ -1564,6 +1590,10 @@ async def launch_msa_batch_job(
 
     This runs the batch MSA script and then unlocks child inference jobs.
     """
+    if not transient_workflow_runner_mode():
+        raise ExecutionOwnershipError(
+            "msa_batch execution is only permitted inside the transient workflow runner"
+        )
     from database import async_session, Job
     from sqlalchemy import select
     from schemas import JobStatus
@@ -1763,6 +1793,27 @@ async def launch_nextflow_job(
     This runs in a background task and updates the database with status.
     """
     assert_workflow_launch_allowed("launch workflow jobs")
+    transient_runner = transient_workflow_runner_mode()
+    # Adapter-routed callers prove their lane at the adapter boundary. A local
+    # launch must prove it here before it can construct a new unit.
+    launch_lane = configured_lane(required=False)
+    if transient_runner:
+        if launch_lane is None:
+            raise ExecutionOwnershipError("Transient workflow runner requires an explicit lane")
+        transient_unit = str(os.getenv(TRANSIENT_WORKFLOW_UNIT_NAME_ENV) or "").strip()
+        if not transient_unit:
+            raise ExecutionOwnershipError(
+                f"{TRANSIENT_WORKFLOW_UNIT_NAME_ENV} is required inside the transient runner"
+            )
+        transient_identity = assert_unit_lane(transient_unit, launch_lane)
+        if transient_identity.job_id != str(job_id):
+            raise ExecutionOwnershipError(
+                f"Transient unit {transient_unit!r} does not own job {job_id!r}"
+            )
+        if not str(os.getenv(TRANSIENT_WORKFLOW_OWNER_NONCE_ENV) or "").strip():
+            raise ExecutionOwnershipError(
+                f"{TRANSIENT_WORKFLOW_OWNER_NONCE_ENV} is required inside the transient runner"
+            )
     from database import async_session, Job
     from sqlalchemy import select, inspect, update
     from schemas import JobStatus
@@ -1806,15 +1857,14 @@ async def launch_nextflow_job(
             logger.info(stale_log_message, job_id)
         return bool(published.rowcount)
 
-    existing_process = _running_processes.get(job_id)
-    if existing_process and existing_process.returncode is None:
-        logger.warning(f"Skipping duplicate launch request for active job {job_id}")
-        return
-    
     # ═══════════════════════════════════════════════════════════════════════════
     # MSA BATCH JOBS: Run batch_msa.py directly (not Nextflow)
     # ═══════════════════════════════════════════════════════════════════════════
     if model_id == 'msa_batch':
+        if not transient_runner:
+            raise ExecutionOwnershipError(
+                "msa_batch execution is only permitted inside the transient workflow runner"
+            )
         await launch_msa_batch_job(job_id, params, output_dir)
         return
 
@@ -1898,7 +1948,8 @@ async def launch_nextflow_job(
             )
 
         try:
-            if workflow_adapter_enabled():
+            if workflow_adapter_enabled() and not transient_runner:
+                prior_run_id = str(job.nextflow_run_id or "").strip()
                 adapter_response = launch_via_workflow_adapter(
                     job_id=job_id,
                     model_id=model_id,
@@ -1913,10 +1964,20 @@ async def launch_nextflow_job(
                 adapter_run_id = (
                     adapter_response.get("nextflow_run_id")
                     or adapter_response.get("run_id")
-                    or adapter_response.get("job_id")
-                    or job_id
                 )
+                if not adapter_run_id:
+                    raise RuntimeError(
+                        f"Workflow adapter returned no execution unit for job {job_id}"
+                    )
                 job.nextflow_run_id = str(adapter_run_id)
+                if launch_lane is not None:
+                    if is_legacy_numeric_run_id(adapter_run_id):
+                        if not is_legacy_numeric_run_id(prior_run_id):
+                            raise ExecutionOwnershipError(
+                                "A new workflow launch cannot create a numeric run id"
+                            )
+                    else:
+                        assert_unit_lane(str(adapter_run_id), launch_lane)
                 await session.commit()
                 logger.info(
                     "[WORKFLOW-ADAPTER] Job %s delegated to host adapter with run id %s",
@@ -1924,6 +1985,12 @@ async def launch_nextflow_job(
                     job.nextflow_run_id,
                 )
                 return
+
+            if launch_lane is None:
+                # Do not permit a raw/native process path without an explicit
+                # lane. This is the fail-closed boundary for new jobs.
+                launch_lane = configured_lane(required=True)
+            adapter_identity_from_environment()
 
             # ═══════════════════════════════════════════════════════════════
             # GPU ASSIGNMENT: Set CUDA_VISIBLE_DEVICES from orchestrator
@@ -2247,39 +2314,111 @@ async def launch_nextflow_job(
                     for line_str in log_reader.read_available(final=final):
                         await handle_log_line(line_str)
 
-                with open(log_path, "ab", buffering=0) as log_sink:
-                    # Launch in a new session and write directly to a durable log file so
-                    # the workflow survives API reloads/restarts instead of depending on a pipe reader.
-                    process = await asyncio.create_subprocess_exec(
-                        *cmd,
-                        cwd=str(PROJECT_ROOT),
-                        stdout=log_sink,
-                        stderr=asyncio.subprocess.STDOUT,
-                        env=env,
-                        close_fds=True,
-                        start_new_session=True,
+                if transient_runner:
+                    # The adapter has already claimed the outer systemd unit.
+                    # Directly starting the workflow here keeps Nextflow and
+                    # msa_batch descendants in that same transient cgroup and
+                    # makes nested systemd ownership impossible.
+                    if not str(job.nextflow_run_id or "").strip():
+                        raise ExecutionOwnershipError(
+                            "Transient workflow runner requires the adapter-persisted unit identity"
+                        )
+                    with open(log_path, "ab", buffering=0) as log_sink:
+                        process = await asyncio.create_subprocess_exec(
+                            *cmd,
+                            cwd=str(PROJECT_ROOT),
+                            stdout=log_sink,
+                            stderr=asyncio.subprocess.STDOUT,
+                            env=env,
+                            close_fds=True,
+                            start_new_session=True,
+                        )
+                    _running_processes[job_id] = process
+                    await session.commit()
+                    try:
+                        while True:
+                            try:
+                                exit_code = await asyncio.wait_for(process.wait(), timeout=1.0)
+                                await consume_new_log(final=True)
+                                break
+                            except asyncio.TimeoutError:
+                                await consume_new_log()
+                    finally:
+                        _running_processes.pop(job_id, None)
+                elif os.getenv("BMS_REQUIRE_TRANSIENT_WORKFLOW_UNITS", "").strip() == "1":
+                    raise ExecutionOwnershipError(
+                        "lane-owned workflow launch requires the adapter-started transient runner"
                     )
-                # Store process reference for potential cancellation
-                _running_processes[job_id] = process
-                # Store the Nextflow run ID (PID for now)
-                job.nextflow_run_id = str(process.pid)
-                await session.commit()
+                else:
+                    systemd_command = build_systemd_run_command(
+                        lane=launch_lane,
+                        job_id=job_id,
+                        attempt=attempt,
+                        command=cmd,
+                        environment=env,
+                        working_directory=PROJECT_ROOT,
+                        log_path=log_path,
+                    )
+                    # systemd-run is the atomic claim. There is intentionally no
+                    # check-then-spawn probe: a duplicate deterministic unit is a
+                    # hard ownership conflict.
+                    unit_name = await asyncio.to_thread(
+                        create_systemd_workflow_unit,
+                        systemd_command,
+                    )
+                    _running_units[job_id] = unit_name
+                    job.nextflow_run_id = unit_name
+                    provenance = dict(job.provenance or {})
+                    provenance["execution_owner_receipt"] = owner_receipt(
+                        lane=launch_lane,
+                        job_id=job_id,
+                        attempt=attempt,
+                        unit_name=unit_name,
+                        command=cmd,
+                    )
+                    job.provenance = provenance
+                    await session.commit()
 
-                try:
-                    while True:
-                        try:
-                            exit_code = await asyncio.wait_for(process.wait(), timeout=1.0)
+                    try:
+                        inactive_cgroup_deadline: float | None = None
+                        while True:
+                            try:
+                                properties = await asyncio.to_thread(
+                                    show_unit_properties,
+                                    unit_name,
+                                    launch_lane,
+                                )
+                            except UnitNotFoundError as exc:
+                                raise ExecutionOwnershipError(
+                                    f"Owned workflow unit disappeared before terminal proof: {unit_name}"
+                                ) from exc
+                            if properties.active_state in {"active", "activating", "reloading"}:
+                                inactive_cgroup_deadline = None
+                                await consume_new_log()
+                                await asyncio.sleep(1.0)
+                                continue
+                            if not unit_has_empty_cgroup(properties):
+                                if inactive_cgroup_deadline is None:
+                                    inactive_cgroup_deadline = asyncio.get_running_loop().time() + 30.0
+                                if asyncio.get_running_loop().time() >= inactive_cgroup_deadline:
+                                    raise ExecutionOwnershipError(
+                                        f"Owned workflow unit reached {properties.active_state!r} with a non-empty cgroup: {unit_name}"
+                                    )
+                                await consume_new_log()
+                                await asyncio.sleep(0.25)
+                                continue
                             await consume_new_log(final=True)
+                            try:
+                                exit_code = int(properties.exec_main_status or "1")
+                            except ValueError:
+                                exit_code = 1
                             break
-                        except asyncio.TimeoutError:
-                            await consume_new_log()
-                finally:
-                    _running_processes.pop(job_id, None)
+                    finally:
+                        _running_units.pop(job_id, None)
 
                 lock_failed = exit_code != 0 and attempt_resume_lock_seen
                 if lock_failed and resume_lock_retries_used < max_resume_lock_retries:
                     resume_lock_retries_used += 1
-                    _running_processes.pop(job_id, None)
                     sleep_s = min(20, 5 * resume_lock_retries_used)
                     msg = (
                         f"[BMS] Resume lock retry {resume_lock_retries_used}/{max_resume_lock_retries}; "
@@ -2307,7 +2446,6 @@ async def launch_nextflow_job(
                             break
 
                     if selected_changes:
-                        _running_processes.pop(job_id, None)
                         msg = (
                             f"[PROTENIX-GUARDRAIL] OOM retry {protenix_oom_retries_used}/{max_protenix_oom_retries}: "
                             + " | ".join(selected_changes)
@@ -2393,12 +2531,21 @@ async def launch_nextflow_job(
                                     )
 
                             
-                    # Check for cancellation exit codes (SIGTERM=15/-15/143, SIGKILL=9/-9/137)
+                    # Exit codes never grant cancellation authority. The
+                    # operator cancellation path must first publish CANCELLED
+                    # after systemd proves an inactive, empty cgroup.
                     elif exit_code in (-15, -9, 143, 137):
-                        job.status = JobStatus.CANCELLED.value
-                        job.queue_status = 'cancelled'
-                        job.error_message = "Job cancelled by user"
-                        logger.info(f"Job {job_id} exit code {exit_code} interpreted as CANCELLED")
+                        job.status = JobStatus.FAILED.value
+                        job.queue_status = 'failed'
+                        job.error_message = (
+                            "TERMINATED_WITHOUT_CANCELLATION_RECEIPT: "
+                            f"owned unit exited with code {exit_code}"
+                        )
+                        logger.error(
+                            "Job %s terminated with exit code %s without an authoritative cancellation receipt",
+                            job_id,
+                            exit_code,
+                        )
                         
                     else:
                         if job.status == JobStatus.COMPLETED.value or (job.current_stage or "").lower() == "complete":
@@ -2497,11 +2644,21 @@ async def launch_nextflow_job(
                         session.expire_all()
                         await reconcile_md_analysis_parent(md_analysis_parent_id, session)
                         await session.commit()
-                _running_processes.pop(job_id, None)
+                _running_units.pop(job_id, None)
                 
         except Exception as e:
+            if isinstance(e, DuplicateUnitError):
+                # The existing deterministic unit remains the sole owner. Do
+                # not let a losing launcher publish a failure over its state.
+                await session.rollback()
+                logger.error(
+                    "Rejected duplicate deterministic workflow unit for job %s: %s",
+                    job_id,
+                    e,
+                )
+                return
             logger.exception(f"Error running job {job_id}")
-            _running_processes.pop(job_id, None)
+            _running_units.pop(job_id, None)
             
             result = await session.execute(select(Job).where(Job.id == job_id))
             job = result.scalar_one_or_none()
@@ -2570,12 +2727,12 @@ def launch_nextflow_job_detached(
     """
     assert_workflow_launch_allowed("launch workflow jobs from the scheduler")
     if job_id in _launching_jobs:
-        logger.warning("Job %s is already queued for detached launch in this process; skipping duplicate scheduling", job_id)
-
-        async def _noop() -> None:
-            return None
-
-        return asyncio.create_task(_noop())
+        # Keep both launch attempts visible to the atomic systemd unit claim.
+        # This set is diagnostic only and must never grant execution authority.
+        logger.warning(
+            "Job %s has another detached launcher; allowing systemd to reject any duplicate unit claim",
+            job_id,
+        )
 
     _launching_jobs.add(job_id)
 
@@ -3884,6 +4041,22 @@ async def cancel_nextflow_job(nextflow_run_id: str, graceful_timeout_seconds: fl
             logger.warning("Workflow adapter cancellation failed for %r: %s", nextflow_run_id, exc)
             return False
 
+    # New native jobs are owned by their exact transient systemd unit. A
+    # numeric run id is retained only for already-running legacy processes;
+    # no new launch path creates one.
+    if not is_legacy_numeric_run_id(nextflow_run_id):
+        try:
+            lane = configured_lane(required=True)
+            return await asyncio.to_thread(
+                cancel_systemd_workflow_unit,
+                str(nextflow_run_id),
+                lane,
+                graceful_timeout_seconds=graceful_timeout_seconds,
+            )
+        except ExecutionOwnershipError as exc:
+            logger.warning("Could not cancel owned workflow unit %r: %s", nextflow_run_id, exc)
+            return False
+
     try:
         pid = int(nextflow_run_id)
     except (TypeError, ValueError) as exc:
@@ -3949,20 +4122,30 @@ async def cancel_nextflow_job(nextflow_run_id: str, graceful_timeout_seconds: fl
     return False
 
 
-def get_running_jobs() -> Dict[str, int]:
-    """Get currently running job IDs and their PIDs."""
+def get_running_jobs() -> Dict[str, int | str]:
+    """Get running jobs from the lane owner, with a legacy PID fallback only."""
     if workflow_adapter_enabled():
-        running = get_adapter_running_jobs()
+        # Adapter status is already required to come from the lane-local
+        # systemd owner. Diagnostic launcher state cannot create a running-job
+        # claim while the owner is absent.
+        return dict(get_adapter_running_jobs())
+
+    try:
+        lane = configured_lane(required=True)
+    except LaneIdentityError:
+        # Compatibility for adapters started before lane ownership existed.
+        # New jobs fail closed before launch when no explicit lane is present.
+        running: Dict[str, int | str] = {
+            job_id: proc.pid
+            for job_id, proc in _running_processes.items()
+            if proc.returncode is None
+        }
+        running.update(_discover_managed_nextflow_processes())
         for job_id in _launching_jobs:
             running.setdefault(job_id, 0)
         return running
 
-    running = _discover_managed_nextflow_processes()
-    running.update({
-        job_id: proc.pid 
-        for job_id, proc in _running_processes.items() 
-        if proc.returncode is None
-    })
-    for job_id in _launching_jobs:
-        running.setdefault(job_id, 0)
-    return running
+    # Explicitly lane-owned jobs are discovered only through exact systemd
+    # unit names and properties. In particular, do not supplement this result
+    # with /proc or PID liveness checks.
+    return discover_active_workflow_units(lane)

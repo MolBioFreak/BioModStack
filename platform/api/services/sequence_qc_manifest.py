@@ -12,6 +12,7 @@ from paths import get_results_dir
 
 MANIFEST_FILENAME = "qc_manifest.json"
 MANIFEST_SCHEMA_VERSION = 2
+CONSENSUS_METHOD = "samtools_1.24_bayesian_consensus"
 MAX_MANIFEST_BYTES = 10 * 1024 * 1024
 SAFE_JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]{0,255}$")
 
@@ -238,25 +239,12 @@ def _normalize_consensus_and_interpretation(manifest: dict[str, Any]) -> None:
 
     status = str(consensus.get("status") or "").strip().lower()
     method = str(consensus.get("method") or "").strip().lower()
-    fallback = bool(consensus.get("fallback", False)) or status == "reference_copy_fallback" or method == "reference_copy_fallback"
-    consensus["fallback"] = fallback
+    if bool(consensus.get("fallback", False)) or "fallback" in status or "fallback" in method:
+        raise SequenceQcManifestError("consensus fallback status labels are forbidden")
+    if method and method != CONSENSUS_METHOD:
+        raise SequenceQcManifestError(f"unsupported consensus method: {method}")
+    consensus["fallback"] = False
     manifest["consensus"] = consensus
-
-    if not fallback:
-        return
-
-    interpretation = manifest.get("interpretation")
-    if not isinstance(interpretation, dict):
-        interpretation = {}
-    interpretation["verified_construct_status"] = "fail"
-    notes = interpretation.get("notes")
-    if not isinstance(notes, list):
-        notes = []
-    note = "reference-copy fallback consensus is not verified"
-    if note not in notes:
-        notes.append(note)
-    interpretation["notes"] = notes
-    manifest["interpretation"] = interpretation
 
 
 VERIFICATION_SCHEMA = "biomodstack.construct_verification.v2"

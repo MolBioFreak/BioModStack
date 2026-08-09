@@ -139,18 +139,54 @@ async def cancel_job_lineage(
                 detail=f"Cannot cancel job with status: {root_job.status}",
             )
 
-    now = datetime.utcnow()
-    for job in lineage:
-        if job.nextflow_run_id:
-            try:
-                killed = await cancel_nextflow_job(job.nextflow_run_id)
-                if killed:
-                    logger.info("[CANCEL] Killed Nextflow process for job %s", job.id)
-            except Exception as exc:
-                logger.warning("[CANCEL] Failed to kill process for %s: %s", job.id, exc)
+    request_time = datetime.utcnow()
+    cancellable = [job for job in lineage if _job_is_cancelable(job)]
+    already_cancelled = [
+        job for job in lineage
+        if str(job.status or "").strip().lower() == JobStatus.CANCELLED.value
+    ]
 
+    # Publish durable intent before asking the external owner to stop anything.
+    # A process/unit result cannot grant terminal cancellation authority.
+    for job in cancellable:
+        params = json.loads(job.params) if isinstance(job.params, str) else dict(job.params or {})
+        params["cancellation_receipt"] = {
+            "schema": "bms.workflow-cancellation.v1",
+            "state": "requested",
+            "requested_at": request_time.isoformat() + "Z",
+            "run_identity": str(job.nextflow_run_id or ""),
+        }
+        job.params = params
+        job.queue_status = "cancelling"
+    await session.commit()
+
+    incomplete: list[str] = []
+    for job in cancellable:
+        if not job.nextflow_run_id:
+            continue
+        try:
+            stopped_and_empty = await cancel_nextflow_job(job.nextflow_run_id)
+        except Exception as exc:
+            logger.warning("[CANCEL] Failed to stop owned unit for %s: %s", job.id, exc)
+            stopped_and_empty = False
+        if not stopped_and_empty:
+            incomplete.append(job.id)
+
+    if incomplete:
+        await session.commit()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "CANCELLATION_INCOMPLETE",
+                "message": "Cancellation remains pending until every owned unit is inactive and its cgroup is empty",
+                "job_ids": incomplete,
+            },
+        )
+
+    completed_at = datetime.utcnow()
+    for job in [*cancellable, *already_cancelled]:
         status = str(job.status or "").strip().lower()
-        if status == JobStatus.CANCELLED.value or status not in _TERMINAL_JOB_STATUSES or _job_is_cancelable(job):
+        if status not in _TERMINAL_JOB_STATUSES or status == JobStatus.CANCELLED.value:
             job.status = JobStatus.CANCELLED.value
             job.queue_status = "cancelled"
             job.paused = False
@@ -161,8 +197,20 @@ async def cancel_job_lineage(
             job.retry_count = 0
             job.current_stage = None
             job.stage_progress = None
-            job.completed_at = job.completed_at or now
+            job.completed_at = job.completed_at or completed_at
             job.error_message = job.error_message or error_message
+            params = json.loads(job.params) if isinstance(job.params, str) else dict(job.params or {})
+            receipt = dict(params.get("cancellation_receipt") or {})
+            receipt.update(
+                {
+                    "schema": "bms.workflow-cancellation.v1",
+                    "state": "completed",
+                    "completed_at": completed_at.isoformat() + "Z",
+                    "run_identity": str(job.nextflow_run_id or receipt.get("run_identity") or ""),
+                }
+            )
+            params["cancellation_receipt"] = receipt
+            job.params = params
 
     await session.commit()
     return root_job, lineage
