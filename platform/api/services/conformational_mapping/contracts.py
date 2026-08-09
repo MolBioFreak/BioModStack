@@ -25,6 +25,7 @@ AA_ORDER = "ACDEFGHIKLMNPQRSTVWY"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 SCHEMA_FILENAMES = {
     "cm_request_v1": "cm_request_v1.schema.json",
+    "cm_coordinate_plan_v1": "cm_coordinate_plan_v1.schema.json",
     "cm_complex_snapshot_v1": "cm_complex_snapshot_v1.schema.json",
     "cm_native_artifacts_v1": "cm_native_artifacts_v1.schema.json",
     "cm_ensemble_v1": "cm_ensemble_v1.schema.json",

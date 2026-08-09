@@ -86,18 +86,9 @@ def _validate_recovered_coordinate_plan(
     request_json: Mapping[str, Any],
     coordinate_plan_json: Mapping[str, Any],
 ) -> None:
-    """Validate the current plan schema, with the current-tree semantic fallback."""
+    """Validate the plan schema and rederive its coordinates from request authority."""
 
-    try:
-        validate_schema("cm_coordinate_plan_v1", coordinate_plan_json)
-    except ContractValidationError as exc:
-        if str(exc) != "unknown schema key: cm_coordinate_plan_v1":
-            raise
-
-    # The current contract registry already calls this schema key from retry
-    # recovery, but this pinned tree does not yet publish its standalone file.
-    # Enforce the same closed envelope and rederive the backend coordinates from
-    # the schema-valid request rather than weakening existing-attempt recovery.
+    validate_schema("cm_coordinate_plan_v1", coordinate_plan_json)
     if set(coordinate_plan_json) != _COORDINATE_PLAN_FIELDS:
         raise ContractValidationError("cm_coordinate_plan_v1 has unexpected fields")
     request_params = {

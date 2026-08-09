@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://biomodstack.org/schemas/conformational_mapping/cm_coordinate_plan_v1.schema.json",
+  "title": "BioModStack conformational mapping coordinate plan v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_name", "schema_version", "request_id", "backend", "request_sha256", "expected_cardinality", "coordinates", "coordinate_plan_sha256"],
+  "properties": {
+    "schema_name": {"const": "cm_coordinate_plan"},
+    "schema_version": {"const": 1},
+    "request_id": {"type": "string", "format": "uuid"},
+    "backend": {"enum": ["protenix_v2_ensemble", "confornets", "external_import"]},
+    "request_sha256": {"$ref": "#/$defs/sha256"},
+    "expected_cardinality": {"type": "integer", "minimum": 1},
+    "coordinates": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "oneOf": [
+          {"$ref": "#/$defs/protenix_coordinate"},
+          {"$ref": "#/$defs/confornets_coordinate"},
+          {"$ref": "#/$defs/external_import_coordinate"}
+        ]
+      }
+    },
+    "coordinate_plan_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "nonempty": {"type": "string", "minLength": 1},
+    "nonnegative": {"type": "integer", "minimum": 0},
+    "protenix_coordinate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["backend", "target_id", "ordered_seed", "sample_index"],
+      "properties": {
+        "backend": {"const": "protenix_v2_ensemble"},
+        "target_id": {"$ref": "#/$defs/nonempty"},
+        "ordered_seed": {"type": "integer", "minimum": -2147483648, "maximum": 2147483647},
+        "sample_index": {"$ref": "#/$defs/nonnegative"}
+      }
+    },
+    "confornets_coordinate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["backend", "target_id", "task", "test_case_id", "reference_id", "run_index", "saved_step", "confornet_index", "sample_index"],
+      "properties": {
+        "backend": {"const": "confornets"},
+        "target_id": {"$ref": "#/$defs/nonempty"},
+        "task": {"enum": ["diversity", "mse", "transfer"]},
+        "test_case_id": {"$ref": "#/$defs/nonempty"},
+        "reference_id": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/nonempty"}]},
+        "run_index": {"$ref": "#/$defs/nonnegative"},
+        "saved_step": {"$ref": "#/$defs/nonnegative"},
+        "confornet_index": {"$ref": "#/$defs/nonnegative"},
+        "sample_index": {"$ref": "#/$defs/nonnegative"}
+      }
+    },
+    "external_import_coordinate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["backend", "target_id", "staged_index", "source_content_sha256", "staged_receipt_sha256"],
+      "properties": {
+        "backend": {"const": "external_import"},
+        "target_id": {"$ref": "#/$defs/nonempty"},
+        "staged_index": {"$ref": "#/$defs/nonnegative"},
+        "source_content_sha256": {"$ref": "#/$defs/sha256"},
+        "staged_receipt_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

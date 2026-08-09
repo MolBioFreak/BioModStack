@@ -157,21 +157,15 @@ async def test_retry_rejects_missing_authority_without_mutating_terminal_job(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    request_without_hash = {"request_id": "request-1", "backend": "external_import"}
-    request_sha = cm_router.canonical_sha256(request_without_hash)
-    request_payload = {**request_without_hash, "request_sha256": request_sha}
-    plan_without_hash = {
-        "request_id": "request-1", "backend": "external_import",
-        "request_sha256": request_sha, "expected_cardinality": 1,
-    }
-    plan_sha = cm_router.canonical_sha256(plan_without_hash)
-    coordinate_plan = {**plan_without_hash, "coordinate_plan_sha256": plan_sha}
+    request_id = "00000000-0000-4000-8000-00000000d001"
     source_root = tmp_path / "source"
-    _retry_authority_tree(source_root)
-    (source_root / "cm_request_v1.json").write_text(json.dumps(request_payload), encoding="utf-8")
-    (source_root / "cm_coordinate_plan_v1.json").write_text(json.dumps(coordinate_plan), encoding="utf-8")
+    request_payload, coordinate_plan = _production_retry_authority_tree(
+        source_root, request_id=request_id,
+    )
+    request_sha = request_payload["request_sha256"]
+    plan_sha = coordinate_plan["coordinate_plan_sha256"]
     record = SimpleNamespace(
-        request_id="request-1", status="failed", job_id="job-1", backend="external_import",
+        request_id=request_id, status="failed", job_id="job-1", backend="protenix_v2_ensemble",
         request_json=request_payload, coordinate_plan_json=coordinate_plan,
         request_sha256=request_sha, coordinate_plan_sha256=plan_sha,
     )
@@ -197,9 +191,8 @@ async def test_retry_rejects_missing_authority_without_mutating_terminal_job(
             pass
 
     monkeypatch.setattr(cm_router, "_authorized_record", authorized)
-    monkeypatch.setattr(cm_router, "validate_schema", lambda *_args, **_kwargs: None)
     with pytest.raises(HTTPException, match="persisted CM retry authority") as raised:
-        await retry_request("request-1", _http_request(client_host="127.0.0.1"), Session())
+        await retry_request(request_id, _http_request(client_host="127.0.0.1"), Session())
     assert raised.value.status_code == 409
     assert job.status == "failed"
     assert job.nextflow_run_id == "123"
@@ -223,6 +216,79 @@ def _retry_authority_tree(root: Path) -> tuple[dict, dict]:
     registered = root / "registered"
     registered.mkdir()
     (registered / "checkpoint.pt").write_bytes(b"original-checkpoint")
+    return request_payload, coordinate_plan
+
+
+def _production_retry_authority_tree(root: Path, *, request_id: str) -> tuple[dict, dict]:
+    params = {
+        "backend": "protenix_v2_ensemble",
+        "targets": [{"target_id": "target-a", "target_order": 0}],
+        "ordered_seeds": [101],
+        "samples_per_seed": 1,
+        "feature_policy": {
+            "mode": "regenerate_mutated_protein_v1",
+            "protein_msa_enabled": True,
+            "templates_enabled": True,
+            "rna_msa_enabled": True,
+        },
+        "runtime_policy": {"use_default_params": True},
+        "analysis_policy": {
+            "sign_zero_epsilon": 0.000001,
+            "clash_detector_id": "bms_clash",
+            "clash_detector_version": "1",
+            "outer_support_minimum": 0.8,
+            "inner_support_minimum": 0.6,
+            "sign_consistency_minimum": 0.8,
+            "clash_free_minimum": 0.9,
+            "rank_stability_minimum": 0.6,
+            "minimum_common_ranked_universe_size": 3,
+        },
+        "protenix_snapshot_id": "snapshot",
+    }
+    materialized = cm_global_adapter.materialize_trusted_internal_request(
+        params,
+        output_dir=root,
+        request_id=request_id,
+        principal_id="test-principal",
+    )
+    snapshot = {
+        "schema_name": "cm_complex_snapshot", "schema_version": 1,
+        "target_id": "target-a", "target_order": 0,
+        "original_source_path": "registered/input.cif",
+        "original_source_sha256": "a" * 64,
+        "normalized_source_sha256": "b" * 64,
+        "entities": [{
+            "entity_type": "protein", "source_entity_id": "1", "count": 1,
+            "ordered_instance_ids": ["A"], "sequence": "A",
+        }],
+        "bonds": [],
+        "instance_mappings": [{
+            "source_entity_id": "1", "source_instance_id": "A",
+            "runtime_target_id": "target-a", "runtime_entity_id": "1",
+            "runtime_instance_id": "A", "runtime_order": 0,
+            "candidate_id": "candidate-a", "output_entity_id": "1",
+            "output_label_asym_id": "A", "output_auth_asym_id": "A",
+            "output_entity_order": 0,
+        }],
+        "admission": {
+            "token_count": 1, "atom_count": 1, "token_limit": 100,
+            "conversion_omissions": [],
+        },
+        "unsupported_fields": [],
+    }
+    cm_router.validate_schema("cm_complex_snapshot_v1", snapshot)
+    (root / "cm_runtime_registry_v1.json").write_text(
+        json.dumps({"schema_name": "cm_runtime_registry", "schema_version": 1}),
+        encoding="utf-8",
+    )
+    (root / "cm_complex_snapshots_v1.json").write_text(json.dumps([snapshot]), encoding="utf-8")
+    registered = root / "registered"
+    registered.mkdir()
+    (registered / "checkpoint.pt").write_bytes(b"original-checkpoint")
+    request_payload = json.loads(materialized.request_path.read_text(encoding="utf-8"))
+    coordinate_plan = json.loads(materialized.coordinate_plan_path.read_text(encoding="utf-8"))
+    cm_router.validate_schema("cm_request_v1", request_payload)
+    cm_router.validate_schema("cm_coordinate_plan_v1", coordinate_plan)
     return request_payload, coordinate_plan
 
 
@@ -375,24 +441,16 @@ async def test_retry_route_materializes_only_verified_authority(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    request_without_hash = {"request_id": "request-1", "backend": "external_import"}
-    request_sha = cm_router.canonical_sha256(request_without_hash)
-    request_payload = {**request_without_hash, "request_sha256": request_sha}
-    plan_without_hash = {
-        "request_id": "request-1",
-        "backend": "external_import",
-        "request_sha256": request_sha,
-        "expected_cardinality": 1,
-    }
-    plan_sha = cm_router.canonical_sha256(plan_without_hash)
-    coordinate_plan = {**plan_without_hash, "coordinate_plan_sha256": plan_sha}
+    request_id = "00000000-0000-4000-8000-00000000d002"
     source_root = tmp_path / "source"
-    _retry_authority_tree(source_root)
-    (source_root / "cm_request_v1.json").write_text(json.dumps(request_payload), encoding="utf-8")
-    (source_root / "cm_coordinate_plan_v1.json").write_text(json.dumps(coordinate_plan), encoding="utf-8")
+    request_payload, coordinate_plan = _production_retry_authority_tree(
+        source_root, request_id=request_id,
+    )
+    request_sha = request_payload["request_sha256"]
+    plan_sha = coordinate_plan["coordinate_plan_sha256"]
     authority = cm_router._build_retry_authority(source_root)
     record = SimpleNamespace(
-        request_id="request-1", status="failed", job_id="job-1", backend="external_import",
+        request_id=request_id, status="failed", job_id="job-1", backend="protenix_v2_ensemble",
         request_json=request_payload, coordinate_plan_json=coordinate_plan,
         request_sha256=request_sha, coordinate_plan_sha256=plan_sha,
     )
@@ -402,7 +460,7 @@ async def test_retry_route_materializes_only_verified_authority(
         params={"cm_request_path": str(source_root / "cm_request_v1.json")},
         output_dir=str(source_root), retry_count=0, max_retries=2,
         lineage_root_job_id="job-1", stage_family="conformational_mapping",
-        stage_mode="external_import", provenance={"cm_retry_authority_v1": authority},
+        stage_mode="protenix_v2_ensemble", provenance={"cm_retry_authority_v1": authority},
     )
     added: list[Job] = []
 
@@ -430,10 +488,9 @@ async def test_retry_route_materializes_only_verified_authority(
 
     monkeypatch.setattr(cm_router, "_authorized_record", authorized)
     monkeypatch.setattr(cm_router, "transition_request", transition)
-    monkeypatch.setattr(cm_router, "validate_schema", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cm_router, "get_results_dir", lambda: tmp_path / "results")
     response = await retry_request(
-        "request-1", _http_request(client_host="127.0.0.1"), Session(),
+        request_id, _http_request(client_host="127.0.0.1"), Session(),
     )
 
     assert response["status"] == "queued"

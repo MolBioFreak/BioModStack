@@ -396,7 +396,10 @@ def test_cm011_handoff_idempotency_vector() -> None:
 def test_cm012_unknown_fields_fail_closed() -> None:
     fixtures = _json(SCHEMA_FIXTURES / "positive" / "all_schemas.json")
     unknown_values = _json(SCHEMA_FIXTURES / "negative" / "unknown_fields.json")
-    assert set(fixtures) == set(SCHEMA_FILENAMES) - {"cm_state_landscape_analysis_v1"}
+    assert set(fixtures) == set(SCHEMA_FILENAMES) - {
+        "cm_coordinate_plan_v1",
+        "cm_state_landscape_analysis_v1",
+    }
     for schema_key, instance in fixtures.items():
         schema = load_schema(schema_key)
         assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
@@ -406,6 +409,18 @@ def test_cm012_unknown_fields_fail_closed() -> None:
         unknown["silent_drop_me"] = unknown_values["top_level_field"]
         with pytest.raises(ContractValidationError):
             validate_schema(schema_key, unknown)
+
+    coordinate_plan = _json(SCHEMA_FIXTURES / "positive" / "cm_coordinate_plan_v1.json")
+    assert isinstance(coordinate_plan, dict)
+    validate_schema("cm_coordinate_plan_v1", coordinate_plan)
+    plan_unknown = copy.deepcopy(coordinate_plan)
+    plan_unknown["silent_drop_me"] = unknown_values["top_level_field"]
+    with pytest.raises(ContractValidationError):
+        validate_schema("cm_coordinate_plan_v1", plan_unknown)
+    mixed_backend = copy.deepcopy(coordinate_plan)
+    mixed_backend["coordinates"][0]["backend"] = "external_import"
+    with pytest.raises(ContractValidationError):
+        validate_schema("cm_coordinate_plan_v1", mixed_backend)
 
     nested_unknown = copy.deepcopy(fixtures["cm_request_v1"])
     nested_unknown["runtime_policy"]["silent_drop_me"] = unknown_values["nested_field"]
