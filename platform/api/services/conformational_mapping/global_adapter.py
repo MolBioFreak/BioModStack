@@ -25,7 +25,6 @@ from routers.conformational_mapping import (
     _server_confornets_identity,
 )
 from services.conformational_mapping.contracts import (
-    ContractValidationError,
     canonical_json_loads,
     canonical_sha256,
     validate_schema,
@@ -38,6 +37,7 @@ from services.conformational_mapping.persistence import (
 )
 from services.conformational_mapping.request_builder import (
     materialize_trusted_internal_request,
+    validate_materialized_coordinate_plan,
     validate_request_params,
 )
 from experiment_services import (
@@ -57,57 +57,13 @@ EXECUTABLE_CM_ADAPTERS = frozenset(_GENERATOR_ADAPTERS)
 if WORKFLOW_ADAPTER_REGISTRY["conformational_mapping"] != set(EXECUTABLE_CM_ADAPTERS):
     raise RuntimeError("registered CM global adapters must have executable materializers")
 
-_COORDINATE_PLAN_FIELDS = frozenset({
-    "schema_name",
-    "schema_version",
-    "request_id",
-    "backend",
-    "request_sha256",
-    "expected_cardinality",
-    "coordinates",
-    "coordinate_plan_sha256",
-})
-_RECOVERABLE_REQUEST_PARAM_FIELDS = frozenset({
-    "backend",
-    "targets",
-    "ordered_seeds",
-    "samples_per_seed",
-    "feature_policy",
-    "runtime_policy",
-    "analysis_policy",
-    "run_record",
-    "state_landscape_comparison",
-    "confornets",
-    "protenix_snapshot_id",
-})
-
-
 def _validate_recovered_coordinate_plan(
     request_json: Mapping[str, Any],
     coordinate_plan_json: Mapping[str, Any],
 ) -> None:
-    """Validate the plan schema and rederive its coordinates from request authority."""
+    """Apply the shared request-bound coordinate-plan authority contract."""
 
-    validate_schema("cm_coordinate_plan_v1", coordinate_plan_json)
-    if set(coordinate_plan_json) != _COORDINATE_PLAN_FIELDS:
-        raise ContractValidationError("cm_coordinate_plan_v1 has unexpected fields")
-    request_params = {
-        key: request_json[key]
-        for key in _RECOVERABLE_REQUEST_PARAM_FIELDS
-        if key in request_json
-    }
-    validated = validate_request_params(request_params)
-    coordinates = list(validated.coordinate_plan)
-    if (
-        coordinate_plan_json.get("schema_name") != "cm_coordinate_plan"
-        or coordinate_plan_json.get("schema_version") != 1
-        or coordinate_plan_json.get("request_id") != request_json.get("request_id")
-        or coordinate_plan_json.get("backend") != request_json.get("backend")
-        or coordinate_plan_json.get("request_sha256") != request_json.get("request_sha256")
-        or coordinate_plan_json.get("expected_cardinality") != len(coordinates)
-        or coordinate_plan_json.get("coordinates") != coordinates
-    ):
-        raise ContractValidationError("cm_coordinate_plan_v1 does not match request authority")
+    validate_materialized_coordinate_plan(request_json, coordinate_plan_json)
 
 
 def _seal_confornets_snapshot(snapshot: Mapping[str, Any]) -> dict[str, Any]:

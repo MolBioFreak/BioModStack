@@ -76,6 +76,7 @@ from services.conformational_mapping.request_builder import (
     ConformationalMappingRequestError,
     bind_materialized_source_snapshot,
     materialize_trusted_internal_request,
+    validate_materialized_coordinate_plan,
     validate_request_params,
 )
 from services.conformational_mapping.rcsb_source import (
@@ -2421,8 +2422,7 @@ def _verified_retry_documents(record: ConformationalMappingRequest) -> tuple[dic
     request_payload = dict(record.request_json or {})
     coordinate_plan = dict(record.coordinate_plan_json or {})
     try:
-        validate_schema("cm_request_v1", request_payload)
-        validate_schema("cm_coordinate_plan_v1", coordinate_plan)
+        validate_materialized_coordinate_plan(request_payload, coordinate_plan)
     except (TypeError, ValueError, KeyError) as exc:
         raise HTTPException(status_code=409, detail="persisted CM retry authority is not schema-valid") from exc
     if request_payload.get("request_id") != record.request_id:

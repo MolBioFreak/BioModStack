@@ -783,6 +783,66 @@ def validate_request_params(params: Mapping[str, Any]) -> ValidatedRequest:
     )
 
 
+def validate_materialized_coordinate_plan(
+    request_json: Mapping[str, Any],
+    coordinate_plan_json: Mapping[str, Any],
+) -> None:
+    """Validate and rederive a materialized coordinate plan from request authority."""
+
+    validate_schema("cm_request_v1", request_json)
+    validate_schema("cm_coordinate_plan_v1", coordinate_plan_json)
+    expected_fields = {
+        "schema_name", "schema_version", "request_id", "backend",
+        "request_sha256", "expected_cardinality", "coordinates",
+        "coordinate_plan_sha256",
+    }
+    if set(coordinate_plan_json) != expected_fields:
+        raise ContractValidationError("cm_coordinate_plan_v1 has unexpected fields")
+    recoverable_fields = {
+        "backend", "targets", "ordered_seeds", "samples_per_seed",
+        "feature_policy", "runtime_policy", "analysis_policy", "run_record",
+        "state_landscape_comparison", "confornets", "protenix_snapshot_id",
+        "import_receipt_id", "resolved_import_entries",
+    }
+    request_params = {
+        key: request_json[key]
+        for key in recoverable_fields
+        if key in request_json
+    }
+    if request_json.get("backend") == "external_import":
+        targets = request_json.get("targets")
+        coordinates_value = coordinate_plan_json.get("coordinates")
+        receipt_sha256 = request_json.get("import_receipt_id")
+        if not isinstance(targets, list) or not isinstance(coordinates_value, list):
+            raise ContractValidationError("external import coordinate authority is malformed")
+        if len(targets) != len(coordinates_value):
+            raise ContractValidationError("external import coordinate cardinality disagrees with targets")
+        for staged_index, (target, coordinate) in enumerate(zip(targets, coordinates_value, strict=True)):
+            if not isinstance(target, Mapping) or not isinstance(coordinate, Mapping):
+                raise ContractValidationError("external import coordinate authority is malformed")
+            if (
+                coordinate.get("backend") != "external_import"
+                or coordinate.get("target_id") != target.get("target_id")
+                or coordinate.get("staged_index") != staged_index
+                or coordinate.get("staged_receipt_sha256") != receipt_sha256
+            ):
+                raise ContractValidationError("external import coordinates do not match request authority")
+        coordinates = coordinates_value
+    else:
+        validated = validate_request_params(request_params)
+        coordinates = list(validated.coordinate_plan)
+    if (
+        coordinate_plan_json.get("schema_name") != "cm_coordinate_plan"
+        or coordinate_plan_json.get("schema_version") != 1
+        or coordinate_plan_json.get("request_id") != request_json.get("request_id")
+        or coordinate_plan_json.get("backend") != request_json.get("backend")
+        or coordinate_plan_json.get("request_sha256") != request_json.get("request_sha256")
+        or coordinate_plan_json.get("expected_cardinality") != len(coordinates)
+        or coordinate_plan_json.get("coordinates") != coordinates
+    ):
+        raise ContractValidationError("cm_coordinate_plan_v1 does not match request authority")
+
+
 def _stage_canonical_json(path: Path, payload: Mapping[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(

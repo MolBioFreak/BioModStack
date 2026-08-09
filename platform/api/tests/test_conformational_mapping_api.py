@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import inspect
@@ -501,6 +502,43 @@ async def test_retry_route_materializes_only_verified_authority(
     assert retry_job.params == {"cm_request_path": str(attempt_root / "cm_request_v1.json")}
     assert json.loads((attempt_root / "cm_request_v1.json").read_text()) == request_payload
     assert (attempt_root / "registered" / "checkpoint.pt").read_bytes() == b"original-checkpoint"
+
+
+def test_retry_rejects_resigned_semantically_contradictory_coordinate_plans(
+    tmp_path: Path,
+) -> None:
+    request_id = "00000000-0000-4000-8000-00000000d003"
+    request_payload, coordinate_plan = _production_retry_authority_tree(
+        tmp_path / "source", request_id=request_id,
+    )
+    mutations = []
+    wrong_backend = copy.deepcopy(coordinate_plan)
+    wrong_backend["backend"] = "confornets"
+    mutations.append(wrong_backend)
+    wrong_cardinality = copy.deepcopy(coordinate_plan)
+    wrong_cardinality["expected_cardinality"] = 2
+    mutations.append(wrong_cardinality)
+    wrong_coordinate = copy.deepcopy(coordinate_plan)
+    wrong_coordinate["coordinates"][0]["sample_index"] = 1
+    mutations.append(wrong_coordinate)
+
+    for contradictory_plan in mutations:
+        contradictory_plan["coordinate_plan_sha256"] = cm_router.canonical_sha256({
+            key: value
+            for key, value in contradictory_plan.items()
+            if key != "coordinate_plan_sha256"
+        })
+        record = SimpleNamespace(
+            request_id=request_id,
+            backend="protenix_v2_ensemble",
+            request_json=request_payload,
+            coordinate_plan_json=contradictory_plan,
+            request_sha256=request_payload["request_sha256"],
+            coordinate_plan_sha256=contradictory_plan["coordinate_plan_sha256"],
+        )
+        with pytest.raises(HTTPException, match="schema-valid") as denied:
+            cm_router._verified_retry_documents(record)
+        assert denied.value.status_code == 409
 
 
 @pytest.mark.asyncio

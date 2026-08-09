@@ -184,6 +184,7 @@ test('mounted selected-input preview and summary show only digest-bound receipt 
         format: 'mmcif',
         sha256: sha('9'),
         bytes: 4096,
+        created_at: '2026-08-09T12:00:00Z',
         metadata: {
             name: 'ATTACKER SELECTED INPUT LABEL',
             target_id: 'attacker-target-id',
@@ -218,6 +219,19 @@ test('mounted selected-input preview and summary show only digest-bound receipt 
         name: 'Authoritative preview',
         registered_artifact_ids: [authoritativeSource.source_id],
     });
+
+    for (const tab of [/^RCSB$/i, /^Cached$/i]) {
+        await clickButton(mounted.renderer, tab);
+        const browser = mounted.renderer.root.findByProps({ 'aria-labelledby': 'cm-source-browser-heading' });
+        const browserText = text(browser);
+        assert.match(browserText, /rcsb-authoritative/);
+        assert.match(browserText, /provider RCSB/i);
+        assert.match(browserText, /accession 1UBQ/i);
+        assert.match(browserText, /receipt 888888888888/i);
+        assert.match(browserText, /registered 2026-08-09T12:00:00Z/i);
+        assert.match(browserText, /available/i);
+        assert.doesNotMatch(browserText, /ATTACKER SELECTED INPUT LABEL|attacker-target-id|provider ATTACKER|accession EVIL/i);
+    }
 
     const preview = mounted.renderer.root.findByProps({ 'aria-labelledby': 'cm-preview-heading' });
     const summary = mounted.renderer.root.findByProps({ 'aria-labelledby': 'cm-summary-heading' });
