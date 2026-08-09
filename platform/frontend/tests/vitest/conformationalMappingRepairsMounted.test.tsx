@@ -9,6 +9,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { ConformationalMappingLauncher } from '../../src/components/conformationalMapping/ConformationalMappingLauncher.js';
 import { ConformationalMappingViewer } from '../../src/components/conformationalMapping/ConformationalMappingViewer.js';
 import { JobDetailPage } from '../../src/components/JobDetailPage.js';
+import { JobSubmission } from '../../src/components/JobSubmission.js';
 import {
     searchCmRcsb,
     type CmFailureReceipt,
@@ -314,6 +315,45 @@ test('mounted canonical viewer navigation and lifecycle controls use typed CM ro
     assert.deepEqual(calls.slice(-1), ['retry:/api/conformational-mapping/requests/request-actions/retry']);
     await act(async () => retried.renderer.unmount());
     retried.client.clear();
+});
+
+test('mounted JobSubmission catalog routes open the canonical and legacy CM launchers', async () => {
+    const originalAdapter = api.defaults.adapter;
+    api.defaults.adapter = async (config) => {
+        const url = String(config.url || '');
+        let data: unknown = [];
+        if (url === '/api/models') data = [
+            { id: 'conformational_mapping', name: 'Conformational Mapping', category: 'structure' },
+            { id: 'confornets_experimental', name: 'ConforNets', category: 'structure' },
+        ];
+        else if (url === '/api/templates') data = [
+            { id: 'conformational_mapping', name: 'Conformational Mapping', description: 'Canonical typed CM' },
+            { id: 'confornets_experimental', name: 'ConforNets', description: 'Legacy CM entry' },
+        ];
+        else if (url.startsWith('/api/templates/')) {
+            const id = url.split('/').at(-1)!;
+            data = { id, name: id, preset_params: { template_model_id: id, template_mode_id: 'map' }, user_params: [] };
+        } else if (url === '/api/conformational-mapping/sources') data = { sources: [] };
+        return { data, status: 200, statusText: 'OK', headers: {}, config };
+    };
+    try {
+        for (const templateId of ['conformational_mapping', 'confornets_experimental']) {
+            const queryClient = client();
+            let renderer: ReactTestRenderer | undefined;
+            try {
+                await act(async () => {
+                    renderer = create(<MemoryRouter initialEntries={[`/submit?template=${templateId}`]}><QueryClientProvider client={queryClient}><JobSubmission /></QueryClientProvider></MemoryRouter>);
+                });
+                await flush();
+                assert.equal(renderer!.root.findAllByProps({ 'data-bms-cm-launcher': 'canonical' }).length, 1, templateId);
+            } finally {
+                await act(async () => renderer?.unmount());
+                queryClient.clear();
+            }
+        }
+    } finally {
+        api.defaults.adapter = originalAdapter;
+    }
 });
 
 test('mounted /jobs/:id routes a CM job to the canonical viewer without generic cancellation', async () => {
