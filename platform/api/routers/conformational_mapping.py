@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 import httpx
 import json
+import logging
 import os
 import re
+import secrets
 import shutil
 import tempfile
 import uuid
@@ -17,15 +19,16 @@ from pathlib import Path
 from typing import Annotated, Any, BinaryIO, Literal, Mapping, Sequence, cast
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import (
     ConformationalMappingArtifact,
     ConformationalMappingRecord,
+    ConformationalMappingRequest,
     ConformationalMappingSource,
     Job,
     get_session,
@@ -35,7 +38,6 @@ from paths import (
     get_results_dir,
     get_container_dir,
     get_weights_root,
-    get_work_dir,
 )
 from services.conformational_mapping.contracts import candidate_id, canonical_sha256, validate_schema
 from services.conformational_mapping.import_stager import (
@@ -156,7 +158,10 @@ class SubmitRequest(BaseModel):
     runtime_policy: dict[str, Any]
     analysis_policy: dict[str, Any]
     registered_snapshot_id: str | None = None
-    registered_artifact_ids: list[str] = Field(default_factory=list)
+    # The wire name stays plural for compatibility with the launcher contract.
+    # External import is nevertheless singular in authority: exactly one item
+    # is accepted by this bounded collection.
+    registered_artifact_ids: list[str] = Field(default_factory=list, max_length=1)
     registered_sequence_id: str | None = None
     registered_reference_ids: list[str] = Field(default_factory=list, max_length=2)
     registered_checkpoint_id: str | None = None
@@ -164,6 +169,29 @@ class SubmitRequest(BaseModel):
     registered_transfer_id: str | None = None
     confornets: dict[str, Any] | None = None
     state_landscape_comparison: dict[str, Any] | None = None
+
+
+class RcsbSelection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    accession: str | None = Field(default=None, min_length=4, max_length=4)
+    model_id: str | None = Field(default=None, min_length=1, max_length=64)
+    sample_id: str | None = Field(default=None, min_length=1, max_length=128)
+    chain_ids: list[str] = Field(default_factory=list, max_length=128)
+    entity_ids: list[str] = Field(default_factory=list, max_length=128)
+
+    @model_validator(mode="after")
+    def _validate_identity_lists(self) -> "RcsbSelection":
+        if len(set(self.chain_ids)) != len(self.chain_ids):
+            raise ValueError("RCSB chain selection must not contain duplicates")
+        if len(set(self.entity_ids)) != len(self.entity_ids):
+            raise ValueError("RCSB entity selection must not contain duplicates")
+        if self.accession is not None:
+            normalized = self.accession.strip().upper()
+            if not re.fullmatch(r"[A-Z0-9]{4}", normalized):
+                raise ValueError("RCSB accession must be exactly four letters or digits")
+            self.accession = normalized
+        return self
 
 
 class HandoffRequest(BaseModel):
@@ -246,6 +274,11 @@ def _validated_source_suffix(source_kind: str, filename: str) -> str:
 
 
 def _validate_upload_source_kind(source_kind: str) -> None:
+    if source_kind == "structure_artifact":
+        raise HTTPException(
+            status_code=422,
+            detail="prior-run artifact authority must use the Your Runs registration endpoint",
+        )
     if source_kind == "confornets_checkpoint":
         raise HTTPException(
             status_code=422,
@@ -273,12 +306,62 @@ def _source_authority_path(source_id: str) -> Path:
     return get_data_root() / "conformational_mapping" / "source_authority" / f"{source_id}.json"
 
 
+def _validate_source_authority_payload(
+    source: ConformationalMappingSource,
+    *,
+    authority_kind: str,
+    payload: Mapping[str, Any],
+) -> None:
+    """Validate the small server-owned receipt envelope before it is published."""
+
+    if not authority_kind or len(authority_kind) > 96:
+        raise ValueError("source authority kind is invalid")
+    expected_source_kind = {
+        "rcsb_download": "structure_upload",
+        "complex_snapshot_normalization": "complex_snapshot",
+        "completed_run_artifact": "structure_artifact",
+    }.get(authority_kind)
+    if expected_source_kind is None:
+        raise ValueError("source authority kind is not governed")
+    if source.source_kind != expected_source_kind:
+        raise ValueError("source authority kind does not match the registered source kind")
+    if authority_kind == "rcsb_download":
+        if payload.get("provider") != "RCSB":
+            raise ValueError("RCSB receipt provider is invalid")
+        accession = str(payload.get("accession") or "").upper()
+        if not re.fullmatch(r"[A-Z0-9]{4}", accession):
+            raise ValueError("RCSB receipt accession is invalid")
+        selection = payload.get("selection")
+        if selection is not None:
+            selected = RcsbSelection.model_validate(selection)
+            if selected.accession and selected.accession != accession:
+                raise ValueError("RCSB receipt selection accession does not match its source")
+    elif authority_kind == "complex_snapshot_normalization":
+        chain_ids = payload.get("chain_ids")
+        if not isinstance(chain_ids, list) or any(
+            not isinstance(value, str) or not value for value in chain_ids
+        ) or len(set(chain_ids)) != len(chain_ids):
+            raise ValueError("complex snapshot receipt chain identity is invalid")
+    elif authority_kind == "completed_run_artifact":
+        required = {"request_id", "job_id", "artifact_id", "content_sha256"}
+        if required.difference(payload) or any(
+            not isinstance(payload.get(key), str) or not payload[key]
+            for key in required
+        ):
+            raise ValueError("completed-run artifact receipt identity is incomplete")
+        if payload["content_sha256"] != source.content_sha256:
+            raise ValueError("completed-run artifact receipt hash disagrees with source")
+
+
 def _publish_source_authority(
     source: ConformationalMappingSource,
     *,
     authority_kind: str,
     payload: Mapping[str, Any],
 ) -> dict[str, Any]:
+    _validate_source_authority_payload(
+        source, authority_kind=authority_kind, payload=payload
+    )
     unsigned = {
         "schema_name": "cm_source_authority_receipt",
         "schema_version": 1,
@@ -290,6 +373,16 @@ def _publish_source_authority(
     }
     receipt = {**unsigned, "receipt_sha256": canonical_sha256(unsigned)}
     destination = _source_authority_path(source.source_id)
+    if destination.exists() or destination.is_symlink():
+        existing = _read_source_authority(source)
+        if existing is None:
+            raise RuntimeError("source authority path exists but is not a valid receipt")
+        existing_unsigned = {
+            key: value for key, value in existing.items() if key != "receipt_sha256"
+        }
+        if existing_unsigned != unsigned:
+            raise RuntimeError("source authority identity conflicts with an existing receipt")
+        return existing
     destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd, temporary_name = tempfile.mkstemp(prefix=f".{source.source_id}.", suffix=".tmp", dir=destination.parent)
     try:
@@ -299,6 +392,14 @@ def _publish_source_authority(
             os.fsync(handle.fileno())
         os.chmod(temporary_name, 0o600)
         os.replace(temporary_name, destination)
+        directory_fd = os.open(
+            destination.parent,
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+        )
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     finally:
         Path(temporary_name).unlink(missing_ok=True)
     return receipt
@@ -333,6 +434,11 @@ def _read_source_authority(source: ConformationalMappingSource) -> dict[str, Any
             or receipt["receipt_sha256"] != canonical_sha256(unsigned)
         ):
             return None
+        _validate_source_authority_payload(
+            source,
+            authority_kind=str(receipt["authority_kind"]),
+            payload=receipt["payload"],
+        )
         return receipt
     except (FileNotFoundError, OSError, ValueError, TypeError, json.JSONDecodeError):
         return None
@@ -355,12 +461,48 @@ def _snapshot_chain_ids(snapshots: Sequence[Mapping[str, Any]]) -> list[str]:
     return values
 
 
+def _snapshot_entity_ids(snapshots: Sequence[Mapping[str, Any]]) -> list[str]:
+    values: list[str] = []
+    for snapshot in snapshots:
+        entities = snapshot.get("entities")
+        if not isinstance(entities, list):
+            continue
+        for entity in entities:
+            if not isinstance(entity, Mapping):
+                continue
+            entity_id = str(entity.get("source_entity_id") or "").strip()
+            if entity_id and entity_id not in values:
+                values.append(entity_id)
+    return values
+
+
+def _source_rcsb_selection(source: ConformationalMappingSource) -> RcsbSelection | None:
+    receipt = _read_source_authority(source)
+    if not isinstance(receipt, Mapping) or receipt.get("authority_kind") != "rcsb_download":
+        return None
+    payload = receipt.get("payload")
+    if not isinstance(payload, Mapping):
+        return None
+    selection = payload.get("selection")
+    if selection is None:
+        return RcsbSelection(accession=str(payload.get("accession") or "").upper())
+    try:
+        parsed = RcsbSelection.model_validate(selection)
+    except (TypeError, ValueError):
+        return None
+    accession = str(payload.get("accession") or "").upper()
+    if parsed.accession is None:
+        parsed.accession = accession
+    return parsed
+
+
 def _run_record_selected_input(
     source: ConformationalMappingSource,
     *,
     model_id: str | None,
     sample_id: str | None,
     chain_ids: list[str],
+    entity_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     metadata = source.metadata_json or {}
     label = str(
@@ -388,12 +530,20 @@ def _run_record_selected_input(
     ):
         record["provider"] = "RCSB"
         record["accession"] = str(receipt_payload["accession"])
+        selection = _source_rcsb_selection(source)
+        if selection is not None:
+            model_id = model_id or selection.model_id
+            sample_id = sample_id or selection.sample_id
+            chain_ids = chain_ids or list(selection.chain_ids)
+            entity_ids = entity_ids or list(selection.entity_ids)
     if model_id:
         record["model_id"] = model_id
     if sample_id:
         record["sample_id"] = sample_id
     if chain_ids:
         record["chain_ids"] = chain_ids
+    if entity_ids:
+        record["entity_ids"] = entity_ids
     return record
 
 
@@ -473,7 +623,6 @@ async def _ensure_managed_confornets_checkpoint(
         created_at=datetime.utcnow(),
     )
     session.add(managed)
-    await session.flush()
     return managed
 
 
@@ -534,12 +683,16 @@ async def list_sources(request: Request, session: AsyncSession = Depends(get_ses
     principal_id = _principal(request)
     managed_checkpoint = await _ensure_managed_confornets_checkpoint(session)
     managed_checkpoint_source_id = managed_checkpoint.source_id if managed_checkpoint is not None else None
-    await session.commit()
+    if managed_checkpoint is not None and managed_checkpoint in session.new:
+        await session.commit()
     rows = (
         await session.execute(
             select(ConformationalMappingSource).where(
                 ConformationalMappingSource.immutable.is_(True),
-                ConformationalMappingSource.principal_id == principal_id,
+                or_(
+                    ConformationalMappingSource.principal_id == principal_id,
+                    ConformationalMappingSource.source_id == managed_checkpoint_source_id,
+                ),
             ).order_by(ConformationalMappingSource.created_at, ConformationalMappingSource.source_id)
         )
     ).scalars().all()
@@ -556,11 +709,217 @@ async def list_sources(request: Request, session: AsyncSession = Depends(get_ses
     ]}
 
 
-@router.post("/sources")
-async def register_source(
-    request: Request, source_kind: str = Form(...), metadata_json: str = Form("{}"),
-    file: UploadFile = File(...), session: AsyncSession = Depends(get_session),
-):
+_REUSABLE_CM_ARTIFACT_ROLES = frozenset({"authoritative_cif"})
+_REUSABLE_CM_MEDIA_TYPES = frozenset({"chemical/x-mmcif", "chemical/mmcif"})
+
+
+def _verified_reusable_artifact(job: Job, artifact: ConformationalMappingArtifact) -> bool:
+    if (
+        artifact.role not in _REUSABLE_CM_ARTIFACT_ROLES
+        or artifact.media_type not in _REUSABLE_CM_MEDIA_TYPES
+        or not job.output_dir
+    ):
+        return False
+    try:
+        descriptor = _open_verified_artifact_descriptor(
+            storage_path=artifact.storage_path,
+            root_path=job.output_dir,
+            size_bytes=artifact.size_bytes,
+            content_sha256=artifact.content_sha256,
+        )
+    except (OSError, ValueError, HTTPException):
+        return False
+    os.close(descriptor)
+    return True
+
+
+@router.get("/runs")
+async def list_reusable_runs(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Discover only caller-owned completed runs with reusable verified mmCIF bytes."""
+    principal_id = _principal(request)
+    rows = (await session.execute(
+        select(ConformationalMappingRequest, Job, ConformationalMappingArtifact)
+        .join(Job, Job.id == ConformationalMappingRequest.job_id)
+        .join(
+            ConformationalMappingArtifact,
+            ConformationalMappingArtifact.request_id == ConformationalMappingRequest.request_id,
+        )
+        .where(
+            ConformationalMappingRequest.principal_id == principal_id,
+            ConformationalMappingRequest.status == "completed",
+            Job.status == "completed",
+            ConformationalMappingArtifact.role.in_(_REUSABLE_CM_ARTIFACT_ROLES),
+        )
+        .order_by(ConformationalMappingRequest.created_at.desc(), ConformationalMappingArtifact.artifact_id)
+    )).all()
+    grouped: dict[str, dict[str, Any]] = {}
+    for record, job, artifact in rows:
+        if not _verified_reusable_artifact(job, artifact):
+            continue
+        run = grouped.setdefault(record.request_id, {
+            "request_id": record.request_id,
+            "job_id": job.id,
+            "workflow": "conformational_mapping",
+            "name": job.name,
+            "status": "completed",
+            "backend": record.backend,
+            "artifacts": [],
+        })
+        run["artifacts"].append({
+            "artifact_id": artifact.artifact_id,
+            "candidate_id": artifact.candidate_id,
+            "artifact_type": artifact.role,
+            "format": "mmcif",
+            "sha256": artifact.content_sha256,
+            "bytes": artifact.size_bytes,
+        })
+    return {"runs": list(grouped.values())}
+
+
+@router.post("/runs/{request_id}/artifacts/{artifact_id}/sources", status_code=201)
+async def register_reusable_run_artifact(
+    request_id: str,
+    artifact_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Issue a source handle bound to one explicitly selected completed-run artifact."""
+    record = await _authorized_record(request_id, request, session, mutation=True)
+    job = await session.get(Job, record.job_id)
+    artifact = await session.get(ConformationalMappingArtifact, artifact_id)
+    if (
+        job is None
+        or record.status != "completed"
+        or job.status != "completed"
+        or artifact is None
+        or artifact.request_id != request_id
+        or not _verified_reusable_artifact(job, artifact)
+    ):
+        raise HTTPException(status_code=409, detail="selected completed-run artifact is unavailable")
+    principal_id = _principal(request)
+    binding = canonical_sha256({
+        "principal_id": principal_id,
+        "request_id": request_id,
+        "artifact_id": artifact_id,
+        "content_sha256": artifact.content_sha256,
+    })
+    source_id = f"cm_src_{binding[:48]}"
+    existing = await session.get(ConformationalMappingSource, source_id)
+    if existing is not None:
+        authority = _read_source_authority(existing)
+        authority_payload = authority.get("payload") if isinstance(authority, Mapping) else None
+        if (
+            existing.principal_id != principal_id
+            or existing.source_kind != "structure_artifact"
+            or existing.content_sha256 != artifact.content_sha256
+            or existing.size_bytes != artifact.size_bytes
+            or not existing.immutable
+            or not isinstance(authority, Mapping)
+            or authority.get("authority_kind") != "completed_run_artifact"
+            or not isinstance(authority_payload, Mapping)
+            or authority_payload.get("request_id") != request_id
+            or authority_payload.get("artifact_id") != artifact_id
+            or authority_payload.get("content_sha256") != artifact.content_sha256
+        ):
+            raise HTTPException(status_code=409, detail="run artifact source authority is unavailable")
+        return {"source_id": existing.source_id, "source_kind": existing.source_kind,
+                "sha256": existing.content_sha256, "bytes": existing.size_bytes,
+                "authority_receipt": authority}
+    try:
+        root = Path(job.output_dir).resolve(strict=True)
+        path = Path(artifact.storage_path).resolve(strict=True)
+        relative = path.relative_to(root).as_posix()
+    except (OSError, ValueError, TypeError) as exc:
+        raise HTTPException(status_code=409, detail="selected completed-run artifact is outside its job authority") from exc
+    source = ConformationalMappingSource(
+        source_id=source_id,
+        principal_id=principal_id,
+        source_kind="structure_artifact",
+        storage_root=str(root),
+        relative_path=relative,
+        content_sha256=artifact.content_sha256,
+        size_bytes=artifact.size_bytes,
+        metadata_json={"name": f"{job.name}: {artifact.candidate_id or artifact.artifact_id}"},
+        immutable=True,
+        created_at=datetime.utcnow(),
+    )
+    authority_path = _source_authority_path(source_id)
+    try:
+        session.add(source)
+        await session.flush()
+        authority = _publish_source_authority(
+            source,
+            authority_kind="completed_run_artifact",
+            payload={
+                "request_id": request_id,
+                "job_id": job.id,
+                "artifact_id": artifact.artifact_id,
+                "candidate_id": artifact.candidate_id,
+                "content_sha256": artifact.content_sha256,
+            },
+        )
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        authority_path.unlink(missing_ok=True)
+        raise
+    return {"source_id": source_id, "source_kind": "structure_artifact",
+            "sha256": artifact.content_sha256, "bytes": artifact.size_bytes,
+            "authority_receipt": authority}
+
+
+def _remove_source_publication(destination_dir: Path, destination: Path | None = None) -> None:
+    """Remove only the publication directory created by one source attempt."""
+
+    if destination is not None:
+        destination.unlink(missing_ok=True)
+    if destination_dir.is_symlink():
+        destination_dir.unlink(missing_ok=True)
+    elif destination_dir.exists():
+        destination_dir.rmdir()
+
+
+def _requested_source_authority(request: Request) -> tuple[str, dict[str, Any]] | None:
+    value = getattr(request.state, "_cm_source_authority", None)
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise HTTPException(status_code=500, detail="source authority request is malformed")
+    authority_kind = value.get("authority_kind")
+    payload = value.get("payload")
+    if not isinstance(authority_kind, str) or not isinstance(payload, Mapping):
+        raise HTTPException(status_code=500, detail="source authority request is malformed")
+    return authority_kind, dict(payload)
+
+
+def _existing_rcsb_authority_matches(
+    existing: Mapping[str, Any] | None,
+    payload: Mapping[str, Any],
+) -> bool:
+    if not isinstance(existing, Mapping) or existing.get("authority_kind") != "rcsb_download":
+        return False
+    existing_payload = existing.get("payload")
+    if not isinstance(existing_payload, Mapping):
+        return False
+    return (
+        existing_payload.get("provider") == "RCSB"
+        and str(existing_payload.get("accession") or "").upper()
+        == str(payload.get("accession") or "").upper()
+        and existing_payload.get("selection", {}) == payload.get("selection", {})
+    )
+
+
+async def _register_source_impl(
+    *,
+    request: Request,
+    source_kind: str,
+    metadata_json: str,
+    file: UploadFile,
+    session: AsyncSession,
+) -> dict[str, Any]:
     principal_id = _mutation_principal(request)
     if source_kind not in _SOURCE_KINDS:
         raise HTTPException(status_code=422, detail="unsupported conformational-mapping source kind")
@@ -572,134 +931,172 @@ async def register_source(
     if not isinstance(metadata, dict):
         raise HTTPException(status_code=422, detail="source metadata must be an object")
     _reject_reserved_source_metadata(metadata)
+    requested_authority = _requested_source_authority(request)
     registry = get_data_root() / "conformational_mapping_sources"
     registry.mkdir(mode=0o750, parents=True, exist_ok=True)
     temporary = registry / f".upload-{uuid.uuid4()}"
+    destination_dir: Path | None = None
+    destination: Path | None = None
+    authority_path: Path | None = None
+    authority_published = False
     digest = hashlib.sha256()
     size = 0
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o440)
     try:
-        while chunk := await file.read(1024 * 1024):
-            size += len(chunk)
-            if size > _SOURCE_MAX_BYTES[source_kind]:
-                raise HTTPException(status_code=413, detail="registered source exceeds its server limit")
-            digest.update(chunk)
-            _write_all(descriptor, chunk)
-        os.fsync(descriptor)
-    except Exception:
-        os.close(descriptor)
-        temporary.unlink(missing_ok=True)
-        raise
-    else:
-        os.close(descriptor)
-    if size == 0:
-        temporary.unlink(missing_ok=True)
-        raise HTTPException(status_code=422, detail="registered source is empty")
-    content_sha256 = digest.hexdigest()
-    owner_tag = hashlib.sha256(principal_id.encode("utf-8")).hexdigest()[:8]
-    source_id = f"cm_src_{owner_tag}_{source_kind[:10]}_{content_sha256[:32]}"
-    existing = await session.get(ConformationalMappingSource, source_id)
-    if existing is not None:
-        temporary.unlink(missing_ok=True)
-        if (
-            existing.principal_id != principal_id or existing.source_kind != source_kind
-            or existing.content_sha256 != content_sha256 or existing.size_bytes != size
-            or not existing.immutable
-        ):
-            raise HTTPException(status_code=409, detail="registered source identity is not available")
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o440,
+        )
         try:
-            verify_registered_artifact(
-                _registered(existing), principal_id=principal_id,
-                maximum_bytes=2 * 1024 * 1024 * 1024,
-            )
-        except ImportStagingError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return {
-            "source_id": source_id, "source_kind": source_kind,
-            "format": _registered_source_format(existing.relative_path),
-            "sha256": content_sha256, "bytes": size, "metadata": existing.metadata_json,
-            "authority_receipt": _read_source_authority(existing),
-        }
-    destination_dir = registry / source_id
-    try:
-        destination_dir.mkdir(mode=0o750)
-    except FileExistsError as exc:
-        temporary.unlink(missing_ok=True)
-        raise HTTPException(status_code=409, detail="registered source publication raced or is ambiguous") from exc
-    try:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > _SOURCE_MAX_BYTES[source_kind]:
+                    raise HTTPException(status_code=413, detail="registered source exceeds its server limit")
+                digest.update(chunk)
+                _write_all(descriptor, chunk)
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        if size == 0:
+            raise HTTPException(status_code=422, detail="registered source is empty")
+        content_sha256 = digest.hexdigest()
+        owner_tag = hashlib.sha256(principal_id.encode("utf-8")).hexdigest()[:8]
+        source_id = f"cm_src_{owner_tag}_{source_kind[:10]}_{content_sha256[:32]}"
+        existing = await session.get(ConformationalMappingSource, source_id)
+        if existing is not None:
+            if (
+                existing.principal_id != principal_id or existing.source_kind != source_kind
+                or existing.content_sha256 != content_sha256 or existing.size_bytes != size
+                or not existing.immutable
+            ):
+                raise HTTPException(status_code=409, detail="registered source identity is not available")
+            try:
+                verify_registered_artifact(
+                    _registered(existing), principal_id=principal_id,
+                    maximum_bytes=2 * 1024 * 1024 * 1024,
+                )
+            except ImportStagingError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            authority_receipt = _read_source_authority(existing)
+            if requested_authority is not None:
+                authority_kind, authority_payload = requested_authority
+                if authority_kind != "rcsb_download" or not _existing_rcsb_authority_matches(
+                    authority_receipt, authority_payload
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="registered source bytes already have a different authority",
+                    )
+            elif source_kind == "complex_snapshot" and authority_receipt is None:
+                existing_snapshots = _read_registered_json(existing)
+                if isinstance(existing_snapshots, Mapping):
+                    existing_snapshots = [existing_snapshots]
+                if not isinstance(existing_snapshots, list) or not existing_snapshots:
+                    raise HTTPException(status_code=409, detail="registered complex snapshot authority is unavailable")
+                for snapshot in existing_snapshots:
+                    validate_schema("cm_complex_snapshot_v1", snapshot)
+                authority_receipt = _publish_source_authority(
+                    existing,
+                    authority_kind="complex_snapshot_normalization",
+                    payload={"chain_ids": _snapshot_chain_ids(existing_snapshots)},
+                )
+            return {
+                "source_id": source_id, "source_kind": source_kind,
+                "format": _registered_source_format(existing.relative_path),
+                "sha256": content_sha256, "bytes": size, "metadata": existing.metadata_json,
+                "authority_receipt": authority_receipt,
+            }
+
+        destination_dir = registry / source_id
+        try:
+            destination_dir.mkdir(mode=0o750)
+        except FileExistsError as exc:
+            raise HTTPException(status_code=409, detail="registered source publication raced or is ambiguous") from exc
         source_suffix = _validated_source_suffix(source_kind, file.filename or "")
-    except HTTPException:
-        temporary.unlink(missing_ok=True)
-        destination_dir.rmdir()
-        raise
-    destination = destination_dir / f"content{source_suffix}"
-    created_destination = False
-    try:
+        destination = destination_dir / f"content{source_suffix}"
         os.link(temporary, destination, follow_symlinks=False)
-        created_destination = True
         temporary.unlink()
         directory_fd = os.open(destination_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
         try:
             os.fsync(directory_fd)
         finally:
             os.close(directory_fd)
-    except Exception:
-        temporary.unlink(missing_ok=True)
-        destination.unlink(missing_ok=True)
-        destination_dir.rmdir()
-        raise
-    snapshots: list[Mapping[str, Any]] = []
-    if source_kind == "complex_snapshot":
-        try:
-            payload = json.loads(destination.read_text(encoding="utf-8"))
-            snapshots = payload if isinstance(payload, list) else [payload]
-            for snapshot in snapshots:
-                validate_schema("cm_complex_snapshot_v1", snapshot)
-            metadata = {
-                **metadata,
-                "target_ids": [value["target_id"] for value in snapshots],
-            }
-        except Exception as exc:
-            if created_destination:
-                destination.unlink(missing_ok=True)
-                destination_dir.rmdir()
-            raise HTTPException(status_code=422, detail=f"invalid complex snapshot: {exc}") from exc
-    elif source_kind == "protein_sequence":
-        sequence = "".join(destination.read_text(encoding="utf-8").split()).upper()
-        if not sequence or any(value not in "ACDEFGHIKLMNPQRSTVWY" for value in sequence):
-            if created_destination:
-                destination.unlink(missing_ok=True)
-                destination_dir.rmdir()
-            raise HTTPException(status_code=422, detail="protein sequence source is invalid")
-        metadata = {**metadata, "sequence": sequence, "target_id": str(metadata.get("target_id") or source_id)}
-    source_record = ConformationalMappingSource(
-        source_id=source_id, principal_id=principal_id, source_kind=source_kind,
-        storage_root=str(registry), relative_path=f"{source_id}/{destination.name}",
-        content_sha256=content_sha256, size_bytes=size, metadata_json=metadata,
-        immutable=True, created_at=datetime.utcnow(),
-    )
-    session.add(source_record)
-    try:
-        await session.commit()
-    except Exception:
-        await session.rollback()
-        destination.unlink(missing_ok=True)
-        destination_dir.rmdir()
-        raise
-    destination_dir.chmod(0o550)
-    authority_receipt = None
-    if source_kind == "complex_snapshot":
-        authority_receipt = _publish_source_authority(
-            source_record,
-            authority_kind="complex_snapshot_normalization",
-            payload={"chain_ids": _snapshot_chain_ids(snapshots)},
+
+        snapshots: list[Mapping[str, Any]] = []
+        if source_kind == "complex_snapshot":
+            try:
+                payload = json.loads(destination.read_text(encoding="utf-8"))
+                snapshots = payload if isinstance(payload, list) else [payload]
+                for snapshot in snapshots:
+                    validate_schema("cm_complex_snapshot_v1", snapshot)
+                metadata = {
+                    **metadata,
+                    "target_ids": [value["target_id"] for value in snapshots],
+                }
+            except Exception as exc:
+                raise HTTPException(status_code=422, detail=f"invalid complex snapshot: {exc}") from exc
+        elif source_kind == "protein_sequence":
+            sequence = "".join(destination.read_text(encoding="utf-8").split()).upper()
+            if not sequence or any(value not in "ACDEFGHIKLMNPQRSTVWY" for value in sequence):
+                raise HTTPException(status_code=422, detail="protein sequence source is invalid")
+            metadata = {**metadata, "sequence": sequence, "target_id": str(metadata.get("target_id") or source_id)}
+
+        source_record = ConformationalMappingSource(
+            source_id=source_id, principal_id=principal_id, source_kind=source_kind,
+            storage_root=str(registry), relative_path=f"{source_id}/{destination.name}",
+            content_sha256=content_sha256, size_bytes=size, metadata_json=metadata,
+            immutable=True, created_at=datetime.utcnow(),
         )
-    return {
-        "source_id": source_id, "source_kind": source_kind,
-        "format": _registered_source_format(destination.name),
-        "sha256": content_sha256, "bytes": size, "metadata": metadata,
-        "authority_receipt": authority_receipt,
-    }
+        authority_spec = requested_authority
+        if authority_spec is None and source_kind == "complex_snapshot":
+            authority_spec = (
+                "complex_snapshot_normalization",
+                {"chain_ids": _snapshot_chain_ids(snapshots)},
+            )
+        session.add(source_record)
+        if authority_spec is not None:
+            authority_path = _source_authority_path(source_id)
+            authority_receipt = _publish_source_authority(
+                source_record,
+                authority_kind=authority_spec[0],
+                payload=authority_spec[1],
+            )
+            authority_published = True
+        else:
+            authority_receipt = None
+        destination_dir.chmod(0o550)
+        await session.commit()
+        return {
+            "source_id": source_id, "source_kind": source_kind,
+            "format": _registered_source_format(destination.name),
+            "sha256": content_sha256, "bytes": size, "metadata": metadata,
+            "authority_receipt": authority_receipt,
+        }
+    except Exception:
+        try:
+            await session.rollback()
+        finally:
+            if authority_path is not None and (authority_published or authority_path.exists()):
+                authority_path.unlink(missing_ok=True)
+            if destination_dir is not None and destination_dir.exists():
+                _remove_source_publication(destination_dir, destination)
+        raise
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+@router.post("/sources")
+async def register_source(
+    request: Request, source_kind: str = Form(...), metadata_json: str = Form("{}"),
+    file: UploadFile = File(...), session: AsyncSession = Depends(get_session),
+):
+    return await _register_source_impl(
+        request=request,
+        source_kind=source_kind,
+        metadata_json=metadata_json,
+        file=file,
+        session=session,
+    )
 
 
 def _rcsb_http_client() -> httpx.AsyncClient:
@@ -711,15 +1108,29 @@ async def register_rcsb_mmcif_source(
     pdb_id: str,
     request: Request,
     session: AsyncSession = Depends(get_session),
+    selection: RcsbSelection | None = None,
 ):
     """Stream a public RCSB mmCIF into bounded storage, then register it immutably."""
     accession = pdb_id.strip().upper()
     if not re.fullmatch(r"[A-Z0-9]{4}", accession):
         raise HTTPException(status_code=422, detail="RCSB accession must be exactly four letters or digits")
+    if selection is None:
+        selection = RcsbSelection(accession=accession)
+    elif selection.accession and selection.accession != accession:
+        raise HTTPException(status_code=422, detail="RCSB selection accession does not match the URL accession")
+    else:
+        selection = selection.model_copy(update={"accession": accession})
     maximum_bytes = _SOURCE_MAX_BYTES["structure_upload"]
     spool = tempfile.SpooledTemporaryFile(max_size=min(maximum_bytes, 8 * 1024 * 1024), mode="w+b")
     prefix = bytearray()
     size = 0
+    retrieved_at = datetime.now(timezone.utc).isoformat()
+    authority_payload = {
+        "provider": "RCSB",
+        "accession": accession,
+        "retrieved_at": retrieved_at,
+        "selection": selection.model_dump(mode="json", exclude_none=True),
+    }
     try:
         try:
             async with _rcsb_http_client() as client:
@@ -745,37 +1156,228 @@ async def register_rcsb_mmcif_source(
             raise HTTPException(status_code=502, detail="RCSB response is not raw mmCIF")
         spool.seek(0)
         upload = UploadFile(filename=f"{accession}.cif", file=cast(BinaryIO, spool))
-        registration = await register_source(
-            request=request,
-            source_kind="structure_upload",
-            metadata_json=json.dumps({"name": f"RCSB {accession}"}),
-            file=upload,
-            session=session,
-        )
+        request.state._cm_source_authority = {
+            "authority_kind": "rcsb_download",
+            "payload": authority_payload,
+        }
+        try:
+            registration = await register_source(
+                request=request,
+                source_kind="structure_upload",
+                metadata_json=json.dumps({"name": f"RCSB {accession}"}),
+                file=upload,
+                session=session,
+            )
+        finally:
+            try:
+                del request.state._cm_source_authority
+            except AttributeError:
+                pass
         source = await session.get(ConformationalMappingSource, registration["source_id"])
-        if source is None or source.principal_id != _principal(request):
+        if source is None:
             raise HTTPException(status_code=500, detail="registered RCSB source authority is unavailable")
-        authority_receipt = _publish_source_authority(
-            source,
-            authority_kind="rcsb_download",
-            payload={
-                "provider": "RCSB",
-                "accession": accession,
-                "retrieved_at": datetime.now(timezone.utc).isoformat(),
-            },
-        )
+        authority_receipt = registration.get("authority_receipt") or _read_source_authority(source)
+        # The fallback is only for in-process compatibility wrappers around the
+        # normal registration function.  The real registration path publishes
+        # this receipt before its database commit.
+        if authority_receipt is None:
+            authority_receipt = _publish_source_authority(
+                source, authority_kind="rcsb_download", payload=authority_payload
+            )
         return {**registration, "authority_receipt": authority_receipt}
     finally:
         spool.close()
 
 
+def _rcsb_human_metadata(accession: str, payload: Mapping[str, Any] | None) -> dict[str, Any]:
+    value = payload if isinstance(payload, Mapping) else {}
+    struct = value.get("struct") if isinstance(value.get("struct"), Mapping) else {}
+    entry_info = value.get("rcsb_entry_info") if isinstance(value.get("rcsb_entry_info"), Mapping) else {}
+    experimental = value.get("exptl")
+    methods = [
+        str(item.get("method"))
+        for item in experimental
+        if isinstance(item, Mapping) and item.get("method")
+    ] if isinstance(experimental, list) else []
+    return {
+        "accession": accession,
+        "title": str(struct.get("title") or value.get("name") or f"RCSB entry {accession}"),
+        "experimental_methods": methods,
+        "resolution": entry_info.get("resolution_combined"),
+        "deposition_date": value.get("rcsb_accession_info", {}).get("deposit_date")
+        if isinstance(value.get("rcsb_accession_info"), Mapping) else None,
+        "entity_count": entry_info.get("polymer_entity_count"),
+        "assembly_count": entry_info.get("assembly_count"),
+    }
+
+
+async def _rcsb_entry_metadata(accession: str) -> dict[str, Any]:
+    try:
+        async with _rcsb_http_client() as client:
+            response = await client.get(f"https://data.rcsb.org/rest/v1/core/entry/{accession}")
+    except httpx.TimeoutException as exc:
+        raise HTTPException(status_code=504, detail="RCSB metadata request timed out") from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="RCSB metadata request failed") from exc
+    if response.status_code == 404:
+        raise HTTPException(status_code=404, detail="RCSB accession was not found")
+    if response.status_code != 200:
+        raise HTTPException(status_code=502, detail="RCSB metadata returned an unexpected status")
+    try:
+        payload = response.json()
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail="RCSB metadata was not valid JSON") from exc
+    if not isinstance(payload, Mapping):
+        raise HTTPException(status_code=502, detail="RCSB metadata was not an object")
+    return _rcsb_human_metadata(accession, payload)
+
+
+async def _cached_rcsb_entries(
+    principal_id: str,
+    session: AsyncSession,
+) -> list[dict[str, Any]]:
+    rows = (await session.execute(
+        select(ConformationalMappingSource).where(
+            ConformationalMappingSource.principal_id == principal_id,
+            ConformationalMappingSource.source_kind == "structure_upload",
+            ConformationalMappingSource.immutable.is_(True),
+        ).order_by(ConformationalMappingSource.created_at.desc())
+    )).scalars().all()
+    entries: list[dict[str, Any]] = []
+    for source in rows:
+        receipt = _read_source_authority(source)
+        if not isinstance(receipt, Mapping) or receipt.get("authority_kind") != "rcsb_download":
+            continue
+        payload = receipt.get("payload")
+        if not isinstance(payload, Mapping):
+            continue
+        accession = str(payload.get("accession") or "").upper()
+        if not re.fullmatch(r"[A-Z0-9]{4}", accession):
+            continue
+        entry = _rcsb_human_metadata(accession, source.metadata_json)
+        entry.update({
+            "source_id": source.source_id,
+            "source_kind": source.source_kind,
+            "sha256": source.content_sha256,
+            "bytes": source.size_bytes,
+            "cached": True,
+            "selection": payload.get("selection", {}),
+        })
+        entries.append(entry)
+    return entries
+
+
+@router.get("/sources/rcsb/cached")
+async def list_cached_rcsb_sources(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    return {"entries": await _cached_rcsb_entries(_principal(request), session)}
+
+
+@router.get("/sources/rcsb/search")
+async def search_rcsb_sources(
+    request: Request,
+    keyword: str | None = Query(default=None, min_length=2, max_length=200),
+    accession: str | None = Query(default=None, min_length=4, max_length=4),
+    limit: Annotated[int, Query(ge=1, le=20)] = 10,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    principal_id = _principal(request)
+    normalized_accession = accession.strip().upper() if accession else None
+    if normalized_accession and not re.fullmatch(r"[A-Z0-9]{4}", normalized_accession):
+        raise HTTPException(status_code=422, detail="RCSB accession must be exactly four letters or digits")
+    normalized_keyword = keyword.strip() if keyword else None
+    if not normalized_accession and not normalized_keyword:
+        raise HTTPException(status_code=422, detail="RCSB accession or keyword is required")
+    cached = await _cached_rcsb_entries(principal_id, session)
+    if normalized_accession:
+        cached_match = [entry for entry in cached if entry["accession"] == normalized_accession]
+        if cached_match:
+            return {"query": normalized_accession, "entries": cached_match, "cached": True}
+        entry = await _rcsb_entry_metadata(normalized_accession)
+        return {"query": normalized_accession, "entries": [entry], "cached": False}
+    lowered = normalized_keyword.casefold()
+    cached_matches = [
+        entry for entry in cached
+        if lowered in str(entry.get("title") or "").casefold()
+        or lowered in str(entry.get("accession") or "").casefold()
+    ]
+    if cached_matches:
+        return {"query": normalized_keyword, "entries": cached_matches[:limit], "cached": True}
+    search_payload = {
+        "query": {
+            "type": "terminal",
+            "service": "full_text",
+            "parameters": {"value": normalized_keyword},
+        },
+        "return_type": "entry",
+        "request_options": {"paginate": {"start": 0, "rows": limit}},
+    }
+    try:
+        async with _rcsb_http_client() as client:
+            response = await client.post(
+                "https://search.rcsb.org/rcsbsearch/v2/query", json=search_payload
+            )
+    except httpx.TimeoutException as exc:
+        raise HTTPException(status_code=504, detail="RCSB search request timed out") from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="RCSB search request failed") from exc
+    if response.status_code != 200:
+        raise HTTPException(status_code=502, detail="RCSB search returned an unexpected status")
+    try:
+        result_payload = response.json()
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail="RCSB search was not valid JSON") from exc
+    result_set = result_payload.get("result_set") if isinstance(result_payload, Mapping) else None
+    if not isinstance(result_set, list):
+        raise HTTPException(status_code=502, detail="RCSB search result set is invalid")
+    entries: list[dict[str, Any]] = []
+    for item in result_set[:limit]:
+        if not isinstance(item, Mapping):
+            continue
+        candidate = str(item.get("identifier") or "").upper()
+        if not re.fullmatch(r"[A-Z0-9]{4}", candidate):
+            continue
+        metadata = await _rcsb_entry_metadata(candidate)
+        metadata["score"] = item.get("score")
+        entries.append(metadata)
+    return {"query": normalized_keyword, "entries": entries, "cached": False}
+
+
 def _principal(request: Request) -> str:
-    """CM is a personal-workflow lane: local callers share one owner identity."""
-    return _PERSONAL_WORKFLOW_PRINCIPAL
+    """Resolve an authenticated caller or the configured trusted application proxy."""
+    principal = getattr(request.state, "authenticated_principal", None)
+    if principal is None:
+        configured = os.getenv("BMS_CM_TRUSTED_PROXY_SECRET", "")
+        supplied = request.headers.get(_APPLICATION_PROXY_HEADER, "")
+        if configured and supplied and secrets.compare_digest(configured, supplied):
+            return "local-application-operator"
+        raise HTTPException(
+            status_code=401,
+            detail="authenticated conformational-mapping principal required",
+        )
+    if isinstance(principal, Mapping):
+        actor = principal.get("id") or principal.get("subject")
+        roles = principal.get("roles") or []
+    else:
+        actor = getattr(principal, "id", None) or getattr(principal, "subject", None)
+        roles = getattr(principal, "roles", [])
+    normalized_roles = {str(role).strip().lower() for role in roles}
+    if not actor or not normalized_roles.intersection({"scientist", "operator", "admin"}):
+        raise HTTPException(
+            status_code=403,
+            detail="conformational-mapping scientist/operator role required",
+        )
+    return str(actor)
 
 
 def _mutation_principal(request: Request) -> str:
     return _principal(request)
+
+
+def _capability_cookie_name(request_id: str) -> str:
+    return f"{_COOKIE_PREFIX}{request_id.replace('-', '_')}"
 
 
 async def _authorized_record(
@@ -785,10 +1387,26 @@ async def _authorized_record(
     *,
     mutation: bool = False,
 ):
-    record = await get_request(session, request_id)
     principal_id = _principal(request)
-    if record is None or record.principal_id != principal_id:
+    record = await get_request(session, request_id)
+    if record is None:
         raise HTTPException(status_code=404, detail="conformational-mapping request not found")
+    if record.principal_id != principal_id:
+        supplied = ""
+        authorization = request.headers.get("authorization", "")
+        if authorization.lower().startswith("bearer "):
+            supplied = authorization[7:].strip()
+        if not supplied:
+            supplied = request.cookies.get(_capability_cookie_name(request_id), "")
+        progress = record.progress_json or {}
+        expected = str(
+            progress.get("request_capability_sha256")
+            or progress.get("capability_sha256")
+            or ""
+        )
+        actual = hashlib.sha256(supplied.encode("utf-8")).hexdigest() if supplied else ""
+        if not expected or not actual or not secrets.compare_digest(expected, actual):
+            raise HTTPException(status_code=404, detail="conformational-mapping request not found")
     return record
 
 
@@ -892,8 +1510,39 @@ def _read_registered_json(source: ConformationalMappingSource) -> Any:
         raise HTTPException(status_code=422, detail="registered source is not valid JSON") from exc
 
 
+def _validate_rcsb_selection_against_snapshots(
+    source: ConformationalMappingSource,
+    snapshots: Sequence[Mapping[str, Any]],
+) -> RcsbSelection | None:
+    selection = _source_rcsb_selection(source)
+    if selection is None:
+        return None
+    model_ids = {
+        str(snapshot.get("source_model_id") or "").strip()
+        for snapshot in snapshots
+        if str(snapshot.get("source_model_id") or "").strip()
+    }
+    chain_ids = set(_snapshot_chain_ids(snapshots))
+    entity_ids = set(_snapshot_entity_ids(snapshots))
+    if selection.model_id and selection.model_id not in model_ids:
+        raise HTTPException(status_code=422, detail="selected RCSB model is not present in the staged source")
+    if selection.chain_ids and set(selection.chain_ids) != chain_ids:
+        raise HTTPException(
+            status_code=422,
+            detail="selected RCSB chains do not match the complete staged source context",
+        )
+    if selection.entity_ids and set(selection.entity_ids) != entity_ids:
+        raise HTTPException(
+            status_code=422,
+            detail="selected RCSB entities do not match the complete staged source context",
+        )
+    return selection
+
+
 def _remove_request_root(path: Path) -> None:
-    if path.exists():
+    if path.is_symlink():
+        path.unlink(missing_ok=True)
+    elif path.exists():
         shutil.rmtree(path)
 
 
@@ -1171,14 +1820,30 @@ async def submit_request(
                 encoding="utf-8",
             )
             normalized_snapshot = import_snapshots[0]
+            rcsb_selection = _validate_rcsb_selection_against_snapshots(
+                import_sources[0], import_snapshots
+            )
+            selected_model_id = str(normalized_snapshot.get("source_model_id") or "") or None
+            selected_sample_id = rcsb_selection.sample_id if rcsb_selection else None
+            selected_chain_ids = (
+                list(rcsb_selection.chain_ids)
+                if rcsb_selection and rcsb_selection.chain_ids
+                else _snapshot_chain_ids(import_snapshots)
+            )
+            selected_entity_ids = (
+                list(rcsb_selection.entity_ids)
+                if rcsb_selection and rcsb_selection.entity_ids
+                else _snapshot_entity_ids(import_snapshots)
+            )
             request_payload, coordinate_plan = bind_materialized_source_snapshot(
                 materialized,
                 source_snapshot_sha256=canonical_sha256(normalized_snapshot),
                 selected_input=_run_record_selected_input(
                     import_sources[0],
-                    model_id=str(normalized_snapshot.get("source_model_id") or "") or None,
-                    sample_id=None,
-                    chain_ids=_snapshot_chain_ids(import_snapshots),
+                    model_id=selected_model_id,
+                    sample_id=selected_sample_id,
+                    chain_ids=selected_chain_ids,
+                    entity_ids=selected_entity_ids,
                 ),
             )
         if body.backend == "confornets":
@@ -1225,7 +1890,7 @@ async def submit_request(
             await transition_request(session, cm_record, status="queued", progress={"phase": "queued"})
         await session.commit()
         response.set_cookie(
-            key=f"{_COOKIE_PREFIX}{request_id.replace('-', '_')}", value=token,
+            key=_capability_cookie_name(request_id), value=token,
             httponly=True, secure=request.url.scheme == "https", samesite="strict",
             path=f"/api/conformational-mapping/requests/{request_id}",
         )
@@ -1251,6 +1916,56 @@ async def submit_request(
         await session.rollback()
         _remove_request_root(root)
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        # A database, runtime-registry, or materializer failure must not leave
+        # a directory that looks resumable without its durable request row.
+        await session.rollback()
+        _remove_request_root(root)
+        logging.getLogger(__name__).exception("CM request materialization failed")
+        raise HTTPException(status_code=500, detail="conformational-mapping request could not be materialized") from exc
+
+
+def _project_request_state(
+    record: ConformationalMappingRequest,
+    job: Job | None,
+) -> tuple[str, dict[str, Any], dict[str, Any] | None]:
+    """Project one read-only status view from the request and its current job."""
+
+    status = str(record.status or "prepared")
+    progress = dict(record.progress_json or {})
+    failure_receipt = record.failure_receipt_json if status == "failed" else None
+    if status == "completed":
+        # A historical failure receipt is audit data, not the current state.
+        return status, progress, None
+    if job is None:
+        return status, progress, failure_receipt
+
+    job_state = str(job.status or job.queue_status or "").lower()
+    if job_state == "running" and status in {"prepared", "queued", "running"}:
+        status = "running"
+        progress["phase"] = "running"
+    elif job_state == "queued" and status == "prepared":
+        status = "queued"
+        progress["phase"] = "queued"
+    elif job_state in {"failed", "cancelled"} and status not in {"failed", "cancelled"}:
+        status = job_state
+        progress["phase"] = job_state
+        failure_receipt = None
+        if job_state == "failed":
+            failure_receipt = {
+                "schema_name": "cm_failure_receipt", "schema_version": 1,
+                "request_id": record.request_id, "job_id": job.id,
+                "terminal_state": job_state,
+                "message": str(job.error_message or "canonical job failed"),
+                "recorded_at": datetime.utcnow().isoformat() + "Z",
+            }
+    current_stage = getattr(job, "current_stage", None)
+    if current_stage:
+        progress["job_stage"] = current_stage
+    stage_progress = getattr(job, "stage_progress", None)
+    if stage_progress is not None:
+        progress["job_progress"] = stage_progress
+    return status, progress, failure_receipt
 
 
 @router.get("/requests/{request_id}")
@@ -1259,24 +1974,7 @@ async def request_status(
 ):
     record = await _authorized_record(request_id, request, session)
     job = await session.get(Job, record.job_id)
-    status = record.status
-    progress = record.progress_json
-    failure_receipt = record.failure_receipt_json if status == "failed" else None
-    if job is not None and record.status not in {"completed", "failed", "cancelled"}:
-        job_state = str(job.status or job.queue_status or "").lower()
-        if job_state == "running" and record.status == "queued":
-            status = "running"
-            progress = {"phase": "running", "job_stage": job.current_stage}
-        elif job_state in {"failed", "cancelled"}:
-            status = job_state
-            progress = {"phase": job_state}
-            failure_receipt = {
-                "schema_name": "cm_failure_receipt", "schema_version": 1,
-                "request_id": record.request_id, "job_id": job.id,
-                "terminal_state": job_state,
-                "message": str(job.error_message or f"canonical job {job_state}"),
-                "recorded_at": datetime.utcnow().isoformat() + "Z",
-            }
+    status, progress, failure_receipt = _project_request_state(record, job)
     return {
         "request_id": record.request_id, "job_id": record.job_id, "backend": record.backend,
         "status": status, "job_status": job.status if job else None,
@@ -1293,10 +1991,12 @@ async def request_progress(
 ):
     record = await _authorized_record(request_id, request, session)
     job = await session.get(Job, record.job_id)
+    status, progress, _failure_receipt = _project_request_state(record, job)
     return {
-        "request_id": request_id, "status": record.status,
-        "progress": record.progress_json, "job_stage": job.current_stage if job else None,
-        "job_progress": job.stage_progress if job else None,
+        "request_id": request_id, "status": status,
+        "progress": progress,
+        "job_stage": progress.get("job_stage"),
+        "job_progress": progress.get("job_progress"),
     }
 
 
@@ -1524,6 +2224,12 @@ async def launch_resampling(
         if root_created and root is not None:
             _remove_request_root(root)
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        await session.rollback()
+        if root_created and root is not None:
+            _remove_request_root(root)
+        logging.getLogger(__name__).exception("CM resampling materialization failed")
+        raise HTTPException(status_code=500, detail="conformational-mapping resampling could not be materialized") from exc
 
 
 @router.post("/requests/{request_id}/cancel")
@@ -1533,10 +2239,136 @@ async def cancel_request(
     record = await _authorized_record(request_id, request, session, mutation=True)
     if record.status not in {"prepared", "queued", "running"}:
         raise HTTPException(status_code=409, detail="request is not cancellable")
-    await cancel_job_lineage(record.job_id, session, error_message="Cancelled through typed CM API")
-    await transition_request(session, record, status="cancelled", progress={"phase": "cancelled"})
-    await session.commit()
+    try:
+        await cancel_job_lineage(
+            record.job_id,
+            session,
+            error_message="Cancelled through typed CM API",
+            commit=False,
+        )
+        await transition_request(
+            session,
+            record,
+            status="cancelled",
+            progress={"phase": "cancelled"},
+            flush=False,
+        )
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
     return {"request_id": request_id, "status": "cancelled"}
+
+
+def _clean_retry_launch_params(
+    params: Mapping[str, Any], *, attempt_root: Path
+) -> dict[str, Any]:
+    """Build clean-attempt launch parameters without accepting old work state."""
+
+    cleaned = dict(params)
+    for key in (
+        "resume_work_dir",
+        "work_dir",
+        "nextflow_work_dir",
+        "nextflow_run_id",
+        "resume",
+    ):
+        cleaned.pop(key, None)
+    cleaned["cm_request_path"] = str(attempt_root / "cm_request_v1.json")
+    return cleaned
+
+
+def _verified_retry_documents(record: ConformationalMappingRequest) -> tuple[dict[str, Any], dict[str, Any]]:
+    request_payload = dict(record.request_json or {})
+    coordinate_plan = dict(record.coordinate_plan_json or {})
+    try:
+        validate_schema("cm_request_v1", request_payload)
+        validate_schema("cm_coordinate_plan_v1", coordinate_plan)
+    except (TypeError, ValueError, KeyError) as exc:
+        raise HTTPException(status_code=409, detail="persisted CM retry authority is not schema-valid") from exc
+    if request_payload.get("request_id") != record.request_id:
+        raise HTTPException(status_code=409, detail="persisted CM request identity does not match its record")
+    if request_payload.get("backend") != record.backend:
+        raise HTTPException(status_code=409, detail="persisted CM backend identity does not match its record")
+    request_digest = canonical_sha256(
+        {key: value for key, value in request_payload.items() if key != "request_sha256"}
+    )
+    plan_digest = canonical_sha256(
+        {key: value for key, value in coordinate_plan.items() if key != "coordinate_plan_sha256"}
+    )
+    if request_digest != record.request_sha256 or request_payload.get("request_sha256") != request_digest:
+        raise HTTPException(status_code=409, detail="persisted CM request authority is not byte-valid")
+    if (
+        plan_digest != record.coordinate_plan_sha256
+        or coordinate_plan.get("coordinate_plan_sha256") != plan_digest
+        or coordinate_plan.get("request_sha256") != request_digest
+    ):
+        raise HTTPException(status_code=409, detail="persisted CM coordinate plan authority is not byte-valid")
+    return request_payload, coordinate_plan
+
+
+def _copy_clean_retry_authority(
+    *,
+    source_root: Path,
+    attempt_root: Path,
+    request_payload: Mapping[str, Any],
+    coordinate_plan: Mapping[str, Any],
+) -> None:
+    if attempt_root.exists():
+        raise HTTPException(status_code=409, detail="clean retry attempt root already exists")
+    if source_root.is_symlink() or not source_root.is_dir():
+        raise HTTPException(status_code=409, detail="clean retry authority root is unavailable")
+    source_root = source_root.resolve(strict=True)
+    request_path = source_root / "cm_request_v1.json"
+    plan_path = source_root / "cm_coordinate_plan_v1.json"
+    if (
+        request_path.is_symlink() or not request_path.is_file()
+        or plan_path.is_symlink() or not plan_path.is_file()
+    ):
+        raise HTTPException(status_code=409, detail="clean retry authority documents are unavailable")
+    try:
+        on_disk_request = json.loads(request_path.read_text(encoding="utf-8"))
+        on_disk_plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=409, detail="clean retry authority documents are unreadable") from exc
+    if on_disk_request != request_payload or on_disk_plan != coordinate_plan:
+        raise HTTPException(status_code=409, detail="retry input files disagree with persisted CM authority")
+
+    attempt_root.mkdir(parents=True, mode=0o700)
+    try:
+        shutil.copyfile(request_path, attempt_root / "cm_request_v1.json", follow_symlinks=False)
+        shutil.copyfile(plan_path, attempt_root / "cm_coordinate_plan_v1.json", follow_symlinks=False)
+        for name in ("cm_runtime_registry_v1.json", "cm_complex_snapshots_v1.json"):
+            source = source_root / name
+            if not source.is_file() or source.is_symlink():
+                raise HTTPException(status_code=409, detail=f"clean retry authority is missing {name}")
+            try:
+                payload = json.loads(source.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise HTTPException(status_code=409, detail=f"clean retry authority has unreadable {name}") from exc
+            if name == "cm_runtime_registry_v1.json":
+                if not isinstance(payload, Mapping):
+                    raise HTTPException(status_code=409, detail="clean retry runtime registry is not an object")
+            else:
+                snapshot_bundle = payload if isinstance(payload, list) else [payload]
+                if not snapshot_bundle or any(not isinstance(snapshot, Mapping) for snapshot in snapshot_bundle):
+                    raise HTTPException(status_code=409, detail="clean retry snapshot authority is invalid")
+                try:
+                    for snapshot in snapshot_bundle:
+                        validate_schema("cm_complex_snapshot_v1", snapshot)
+                except (TypeError, ValueError, KeyError) as exc:
+                    raise HTTPException(status_code=409, detail="clean retry snapshot authority is not schema-valid") from exc
+            shutil.copyfile(source, attempt_root / name, follow_symlinks=False)
+        for name in ("registered_snapshot", "registered", "registered_import"):
+            source = source_root / name
+            if not source.exists():
+                continue
+            if source.is_symlink() or not source.is_dir() or any(path.is_symlink() for path in source.rglob("*")):
+                raise HTTPException(status_code=409, detail=f"clean retry authority contains unsafe {name} paths")
+            shutil.copytree(source, attempt_root / name, copy_function=shutil.copyfile)
+    except Exception:
+        shutil.rmtree(attempt_root, ignore_errors=True)
+        raise
 
 
 @router.post("/requests/{request_id}/retry")
@@ -1549,36 +2381,99 @@ async def retry_request(
     job = await session.get(Job, record.job_id)
     if job is None:
         raise HTTPException(status_code=409, detail="request job is missing")
-    if record.status not in {"failed", "cancelled"}:
-        job_state = str(job.status or job.queue_status or "").lower()
-        if job_state not in {"failed", "cancelled"}:
-            raise HTTPException(status_code=409, detail="request is not retry eligible")
-        await transition_request(
-            session, record, status=job_state, progress={"phase": job_state},
-            failure_receipt={
-                "schema_name": "cm_failure_receipt", "schema_version": 1,
-                "request_id": record.request_id, "job_id": job.id,
-                "terminal_state": job_state,
-                "message": str(job.error_message or f"canonical job {job_state}"),
-                "recorded_at": datetime.utcnow().isoformat() + "Z",
-            } if job_state == "failed" else None,
+    job_state = str(job.status or job.queue_status or "").lower()
+    if record.status not in {"failed", "cancelled"} and job_state not in {"failed", "cancelled"}:
+        raise HTTPException(status_code=409, detail="request is not retry eligible")
+    retry_count = int(job.retry_count or 0) + 1
+    if retry_count > int(getattr(job, "max_retries", 2) or 2):
+        raise HTTPException(status_code=409, detail="request retry limit is exhausted")
+    request_payload, coordinate_plan = _verified_retry_documents(record)
+    attempt_job_id = str(uuid.uuid4())
+    attempt_root = get_results_dir() / f"conformational_mapping_{request_id}_retry_{retry_count}_{attempt_job_id}"
+    attempt_root_created = False
+    try:
+        source_root = _resolve_artifact_runtime_alias(str(job.output_dir))
+        _copy_clean_retry_authority(
+            source_root=source_root,
+            attempt_root=attempt_root,
+            request_payload=request_payload,
+            coordinate_plan=coordinate_plan,
         )
-    job.status = "queued"
-    job.queue_status = "queued"
-    job.error_message = None
-    job.started_at = None
-    job.completed_at = None
-    job.nextflow_run_id = None
-    job.retry_count = int(job.retry_count or 0) + 1
-    retry_params = dict(job.params or {})
-    retry_params["resume_work_dir"] = str(get_work_dir())
-    job.params = retry_params
-    await transition_request(
-        session, record, status="queued",
-        progress={"phase": "queued", "completed_coordinates": 0},
-    )
-    await session.commit()
-    return {"request_id": request_id, "job_id": job.id, "status": "queued", "retry_count": job.retry_count}
+        attempt_root_created = True
+        retry_params = _clean_retry_launch_params(dict(job.params or {}), attempt_root=attempt_root)
+        provenance = dict(job.provenance or {})
+        provenance.update(
+            {
+                "cm_retry_parent_job_id": job.id,
+                "cm_retry_attempt": retry_count,
+                "cm_request_sha256": record.request_sha256,
+                "cm_coordinate_plan_sha256": record.coordinate_plan_sha256,
+            }
+        )
+        retry_job = Job(
+            id=attempt_job_id,
+            name=job.name,
+            status="queued",
+            model_id=job.model_id,
+            mode=job.mode,
+            params=retry_params,
+            output_dir=str(attempt_root),
+            queue_status="queued",
+            batch_id=job.batch_id,
+            batch_name=job.batch_name,
+            lineage_root_job_id=job.lineage_root_job_id or job.id,
+            parent_job_id=job.id,
+            source_stage_job_id=job.id,
+            source_stage_family=job.stage_family,
+            stage_family=job.stage_family,
+            stage_mode=job.stage_mode,
+            retry_count=retry_count,
+            max_retries=job.max_retries,
+            oom_tolerance=job.oom_tolerance,
+            sequence_length=job.sequence_length,
+            vram_estimate_mb=job.vram_estimate_mb,
+            provenance=provenance,
+        )
+        if record.status not in {"failed", "cancelled"}:
+            await transition_request(
+                session, record, status=job_state, progress={"phase": job_state},
+                failure_receipt={
+                    "schema_name": "cm_failure_receipt", "schema_version": 1,
+                    "request_id": record.request_id, "job_id": job.id,
+                    "terminal_state": job_state,
+                    "message": str(job.error_message or f"canonical job {job_state}"),
+                    "recorded_at": datetime.utcnow().isoformat() + "Z",
+                } if job_state == "failed" else None,
+            )
+        session.add(retry_job)
+        await session.flush()
+        record.job_id = retry_job.id
+        await transition_request(
+            session,
+            record,
+            status="queued",
+            progress={"phase": "queued", "completed_coordinates": 0, "retry_attempt": retry_count},
+            flush=False,
+        )
+        await session.commit()
+    except HTTPException:
+        await session.rollback()
+        if attempt_root_created:
+            _remove_request_root(attempt_root)
+        raise
+    except Exception as exc:
+        await session.rollback()
+        if attempt_root_created:
+            _remove_request_root(attempt_root)
+        logging.getLogger(__name__).exception("CM clean retry materialization failed")
+        raise HTTPException(status_code=500, detail="conformational-mapping retry could not be materialized") from exc
+    return {
+        "request_id": request_id,
+        "job_id": retry_job.id,
+        "status": "queued",
+        "retry_count": retry_count,
+        "parent_job_id": job.id,
+    }
 
 
 @router.get("/requests/{request_id}/results")

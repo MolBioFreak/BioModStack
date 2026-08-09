@@ -282,6 +282,13 @@ The registered source authority receipt must retain the RCSB accession as the op
 
 Provider and normalization authority live in server-owned, content-bound receipt files outside caller metadata. Legacy metadata cannot claim those receipts.
 
+The CM API exposes RCSB keyword and accession search through the server-owned
+RCSB path. A registration may bind one explicit model, sample, chain, and
+entity selection to the content-bound receipt. The external-import contract
+still accepts one `registered_artifact_ids` value at most; the plural wire
+name is retained for launcher compatibility. Ambiguous model or entity
+contexts fail closed unless a backend-native transformation is available.
+
 ### 6.9 Cached
 
 Cached entries must:

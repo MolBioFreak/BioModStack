@@ -125,6 +125,7 @@ async def cancel_job_lineage(
     session: AsyncSession,
     *,
     error_message: str = "Cancelled by user",
+    commit: bool = True,
 ) -> tuple[Job, list[Job]]:
     root_job, lineage, _ = await _load_job_lineage(session, job_id)
     if not root_job:
@@ -158,7 +159,10 @@ async def cancel_job_lineage(
         }
         job.params = params
         job.queue_status = "cancelling"
-    await session.commit()
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
 
     incomplete: list[str] = []
     for job in cancellable:
@@ -173,7 +177,10 @@ async def cancel_job_lineage(
             incomplete.append(job.id)
 
     if incomplete:
-        await session.commit()
+        if commit:
+            await session.commit()
+        else:
+            await session.flush()
         raise HTTPException(
             status_code=409,
             detail={
@@ -212,7 +219,10 @@ async def cancel_job_lineage(
             params["cancellation_receipt"] = receipt
             job.params = params
 
-    await session.commit()
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
     return root_job, lineage
 
 

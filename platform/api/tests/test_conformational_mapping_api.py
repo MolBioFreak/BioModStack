@@ -47,8 +47,9 @@ def _http_request(
     *,
     client_host: str,
     headers: dict[str, str] | None = None,
+    principal: str | None = None,
 ) -> Request:
-    return Request({
+    request = Request({
         "type": "http",
         "method": "GET",
         "scheme": "http",
@@ -61,6 +62,12 @@ def _http_request(
         "client": (client_host, 42000),
         "server": ("127.0.0.1", 8000),
     })
+    if principal:
+        request.state.authenticated_principal = {
+            "subject": principal,
+            "roles": ["scientist"],
+        }
+    return request
 
 
 def test_registered_source_format_is_server_normalized() -> None:
@@ -69,15 +76,24 @@ def test_registered_source_format_is_server_normalized() -> None:
     assert _registered_source_format("legacy/content.pdb") == "pdb"
 
 
-def test_cm_personal_workflow_principal_is_available_without_proxy_or_operator_credentials() -> None:
-    assert _principal(_http_request(client_host="127.0.0.1")) == "local-personal-workflow"
-    assert _principal(_http_request(client_host="100.64.0.12", headers={"Authorization": "Bearer ignored"})) == (
-        "local-personal-workflow"
-    )
+def test_cm_principal_requires_authentication_or_trusted_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("BMS_CM_TRUSTED_PROXY_SECRET", raising=False)
+    with pytest.raises(HTTPException, match="authenticated conformational-mapping principal"):
+        _principal(_http_request(client_host="127.0.0.1"))
+    monkeypatch.setenv("BMS_CM_TRUSTED_PROXY_SECRET", "trusted")
+    assert _principal(
+        _http_request(
+            client_host="100.64.0.12",
+            headers={"X-BMS-CM-Proxy-Secret": "trusted"},
+        )
+    ) == "local-application-operator"
+    assert _principal(_http_request(client_host="127.0.0.1", principal="alice")) == "alice"
 
 
-def test_cm_personal_workflow_mutations_need_no_browser_origin_or_operator_credential() -> None:
-    assert _mutation_principal(_http_request(client_host="127.0.0.1")) == "local-personal-workflow"
+def test_cm_mutations_require_an_authenticated_principal() -> None:
+    with pytest.raises(HTTPException, match="authenticated conformational-mapping principal"):
+        _mutation_principal(_http_request(client_host="127.0.0.1"))
+    assert _mutation_principal(_http_request(client_host="127.0.0.1", principal="alice")) == "alice"
 
 
 @pytest.mark.asyncio
@@ -136,45 +152,35 @@ async def test_retry_never_downgrades_completed_request_from_stale_failed_job(mo
 
 
 @pytest.mark.asyncio
-async def test_retry_uses_authoritative_nextflow_work_dir_for_resume(monkeypatch, tmp_path) -> None:
-    record = SimpleNamespace(status="failed", job_id="job-1")
+async def test_retry_rejects_missing_authority_without_mutating_terminal_job(monkeypatch) -> None:
+    record = SimpleNamespace(
+        request_id="request-1", status="failed", job_id="job-1", backend="external_import",
+        request_json={}, coordinate_plan_json={}, request_sha256="a" * 64,
+        coordinate_plan_sha256="b" * 64,
+    )
     job = SimpleNamespace(
         id="job-1", status="failed", queue_status="failed", error_message="failed",
         started_at=datetime.utcnow(), completed_at=datetime.utcnow(), nextflow_run_id="123",
-        retry_count=1, params={"cm_request_path": "/results/request.json"},
+        retry_count=1, max_retries=2, params={"cm_request_path": "/results/request.json"},
     )
 
     async def authorized(*_args, **_kwargs):
         return record
-
-    async def transition(_session, target, *, status, progress, **_kwargs):
-        target.status = status
-        target.progress_json = progress
 
     class Session:
         async def get(self, *_args, **_kwargs):
             return job
 
         async def commit(self):
-            return None
+            raise AssertionError("invalid retry authority must not commit")
 
-    work_dir = tmp_path / "work"
     monkeypatch.setattr(cm_router, "_authorized_record", authorized)
-    monkeypatch.setattr(cm_router, "transition_request", transition)
-    monkeypatch.setattr(cm_router, "get_work_dir", lambda: work_dir)
-
-    result = await retry_request(
-        "request-1", _http_request(client_host="127.0.0.1"), Session()
-    )
-
-    assert result == {
-        "request_id": "request-1", "job_id": "job-1", "status": "queued", "retry_count": 2,
-    }
-    assert job.params == {
-        "cm_request_path": "/results/request.json", "resume_work_dir": str(work_dir),
-    }
-    assert job.nextflow_run_id is None
-    assert record.status == "queued"
+    with pytest.raises(HTTPException, match="persisted CM retry authority") as raised:
+        await retry_request("request-1", _http_request(client_host="127.0.0.1"), Session())
+    assert raised.value.status_code == 409
+    assert job.status == "failed"
+    assert job.nextflow_run_id == "123"
+    assert record.status == "failed"
 
 
 @pytest.mark.asyncio
@@ -378,7 +384,10 @@ async def test_cm_source_preview_returns_verified_registered_bytes(tmp_path: Pat
 
     response = await cm_router.source_content(
         source.source_id,
-        _http_request(client_host="127.0.0.1"),
+        _http_request(
+            client_host="127.0.0.1",
+            principal=cm_router._PERSONAL_WORKFLOW_PRINCIPAL,
+        ),
         SourceSession(),  # type: ignore[arg-type]
     )
     assert response.body == payload
@@ -389,13 +398,13 @@ async def test_cm_source_preview_returns_verified_registered_bytes(tmp_path: Pat
 @pytest.mark.asyncio
 async def test_cm_request_lookup_rejects_cross_principal_record(monkeypatch) -> None:
     async def get_foreign(*_args):
-        return SimpleNamespace(principal_id="other-principal")
+        return SimpleNamespace(principal_id="other-principal", progress_json={})
 
     monkeypatch.setattr(cm_router, "get_request", get_foreign)
     with pytest.raises(HTTPException, match="request not found"):
         await cm_router._authorized_record(
             "foreign-request",
-            _http_request(client_host="127.0.0.1"),
+            _http_request(client_host="127.0.0.1", principal="alice"),
             SimpleNamespace(),
         )
 
@@ -408,7 +417,7 @@ async def test_cm_source_listing_is_principal_scoped(tmp_path: Path, monkeypatch
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     factory = sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
-    request = _http_request(client_host="127.0.0.1")
+    request = _http_request(client_host="127.0.0.1", principal="alice")
     expected_principal = _principal(request)
     async with factory() as session:
         session.add_all([
@@ -452,7 +461,9 @@ async def test_cm_source_listing_provisions_installed_managed_checkpoint(
         await connection.run_sync(Base.metadata.create_all)
     factory = sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     async with factory() as session:
-        result = await cm_router.list_sources(_http_request(client_host="127.0.0.1"), session)
+        result = await cm_router.list_sources(
+            _http_request(client_host="127.0.0.1", principal="alice"), session
+        )
     checkpoint_sources = [
         source for source in result["sources"] if source["source_kind"] == "confornets_checkpoint"
     ]
