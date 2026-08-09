@@ -1,0 +1,374 @@
+import assert from 'node:assert/strict';
+import { afterEach, test } from 'vitest';
+
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import React from 'react';
+import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+
+import { ConformationalMappingLauncher } from '../../src/components/conformationalMapping/ConformationalMappingLauncher.js';
+import { ConformationalMappingViewer } from '../../src/components/conformationalMapping/ConformationalMappingViewer.js';
+import { JobDetailPage } from '../../src/components/JobDetailPage.js';
+import {
+    searchCmRcsb,
+    type CmFailureReceipt,
+    type CmRcsbSearchResponse,
+    type CmReusableRun,
+    type CmSource,
+    type CmStatus,
+    type CmSubmitRequest,
+} from '../../src/components/conformationalMapping/conformationalMappingApi.js';
+import { api } from '../../src/lib/api.js';
+
+const sha = (letter: string) => letter.repeat(64);
+const text = (node: ReactTestInstance): string => node.children.map((child) => typeof child === 'string' ? child : text(child)).join('');
+const flush = async (turns = 8) => {
+    for (let index = 0; index < turns; index += 1) {
+        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    }
+};
+const client = () => new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity }, mutations: { retry: false } } });
+const LocationProbe = () => <span data-mounted-location={useLocation().pathname} />;
+
+const snapshot: CmSource = {
+    source_id: 'snapshot-source',
+    source_kind: 'complex_snapshot',
+    format: 'json',
+    sha256: sha('a'),
+    bytes: 2048,
+    metadata: { name: 'Kinase complex', target_ids: ['target-a'] },
+    authority_receipt: {
+        schema_name: 'cm_source_authority_receipt', schema_version: 1,
+        source_id: 'snapshot-source', source_kind: 'complex_snapshot', content_sha256: sha('a'),
+        authority_kind: 'complex_snapshot_normalization', receipt_sha256: sha('b'),
+        payload: {
+            target_ids: ['target-a'], model_ids: ['model-1'], sample_ids: ['sample-1'],
+            chain_ids: ['A', 'B'], entity_ids: ['entity-1', 'entity-2'],
+        },
+    },
+};
+
+const mountLauncher = async (services: Record<string, unknown>, initialValues: Record<string, unknown> = {}) => {
+    sessionStorage.clear();
+    const queryClient = client();
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+        renderer = create(
+            <MemoryRouter><QueryClientProvider client={queryClient}>
+                <ConformationalMappingLauncher services={services as never} initialValues={initialValues} />
+            </QueryClientProvider></MemoryRouter>,
+        );
+    });
+    await flush();
+    return { renderer: renderer!, client: queryClient };
+};
+
+const clickButton = async (renderer: ReactTestRenderer, label: RegExp) => {
+    const button = renderer.root.findAllByType('button').find((item) => label.test(text(item)));
+    assert.ok(button, `button ${String(label)} was not mounted`);
+    await act(async () => button.props.onClick());
+    await flush();
+};
+
+afterEach(() => sessionStorage.clear());
+
+test('mounted launcher round-trips reference state-landscape authority into the typed request', async () => {
+    const submissions: CmSubmitRequest[] = [];
+    const mounted = await mountLauncher({
+        listSources: async () => [snapshot],
+        submitRequest: async (payload: CmSubmitRequest) => {
+            submissions.push(payload);
+            return {
+                request_id: 'request-reference', job_id: 'request-reference', status: 'queued',
+                backend: payload.backend, request_sha256: sha('c'), coordinate_plan_sha256: sha('d'), expected_cardinality: 2,
+            };
+        },
+    }, {
+        name: 'Reference comparison', backend: 'protenix_v2_ensemble', registered_snapshot_id: snapshot.source_id,
+        ordered_seeds: [101, 202], samples_per_seed: 1,
+        state_landscape_comparison: {
+            mode: 'reference', target_id: 'target-a', scope: 'all_other_within_target',
+            reference_backend_coordinates: {
+                backend: 'protenix_v2_ensemble', target_id: 'target-a', ordered_seed: 101, sample_index: 0,
+            },
+        },
+    });
+
+    assert.match(text(mounted.renderer.root), /Reference comparison/i);
+    await clickButton(mounted.renderer, /Launch conformational mapping/i);
+    assert.equal(submissions.length, 1);
+    assert.deepEqual(submissions[0].state_landscape_comparison, {
+        mode: 'reference', target_id: 'target-a', scope: 'all_other_within_target',
+        reference_backend_coordinates: {
+            backend: 'protenix_v2_ensemble', target_id: 'target-a', ordered_seed: 101, sample_index: 0,
+        },
+    });
+    const persisted = JSON.parse(sessionStorage.getItem('bms.conformational-mapping.launcher.v1') || '{}');
+    assert.equal(persisted.stateComparisonMode, 'reference');
+    assert.equal(persisted.referenceOrderedSeed, 101);
+    assert.equal(persisted.referenceSampleIndex, 0);
+    await act(async () => mounted.renderer.unmount());
+    mounted.client.clear();
+});
+
+test('mounted Your Runs discovers reusable artifacts and registers only an explicit authoritative choice', async () => {
+    const runs: CmReusableRun[] = [{
+        run_id: 'run-1', job_id: 'job-1', run_name: 'Completed kinase fold', workflow: 'structure_prediction',
+        status: 'completed', completed_at: '2026-08-08T12:00:00Z',
+        artifacts: [{
+            artifact_id: 'artifact-a', name: 'model 1', role: 'authoritative_structure', format: 'mmcif',
+            media_type: 'chemical/x-mmcif', sha256: sha('e'), bytes: 4096, available: true,
+            model_id: 'model-1', sample_id: 'sample-1', chain_ids: ['A'], entity_ids: ['entity-1'],
+        }, {
+            artifact_id: 'artifact-b', name: 'model 2', role: 'authoritative_structure', format: 'mmcif',
+            media_type: 'chemical/x-mmcif', sha256: sha('f'), bytes: 8192, available: true,
+            model_id: 'model-2', sample_id: 'sample-2', chain_ids: ['B'], entity_ids: ['entity-2'],
+        }],
+    }];
+    const registrations: Array<[string, string]> = [];
+    const runSource: CmSource = {
+        source_id: 'registered-run-artifact', source_kind: 'structure_artifact', format: 'mmcif', sha256: sha('f'), bytes: 8192,
+        metadata: { name: 'Completed kinase fold / model 2' },
+        authority_receipt: {
+            schema_name: 'cm_source_authority_receipt', schema_version: 1, source_id: 'registered-run-artifact',
+            source_kind: 'structure_artifact', content_sha256: sha('f'), authority_kind: 'run_artifact', receipt_sha256: sha('0'),
+            payload: { run_id: 'run-1', job_id: 'job-1', artifact_id: 'artifact-b', model_id: 'model-2', sample_id: 'sample-2', chain_ids: ['B'], entity_ids: ['entity-2'] },
+        },
+    };
+    const mounted = await mountLauncher({
+        listSources: async () => [],
+        listReusableRuns: async () => runs,
+        registerRunArtifact: async (runId: string, artifactId: string) => {
+            registrations.push([runId, artifactId]);
+            return runSource;
+        },
+    }, { backend: 'external_import', name: 'Reuse run' });
+
+    await clickButton(mounted.renderer, /^Your Runs$/i);
+    assert.match(text(mounted.renderer.root), /Completed kinase fold/);
+    assert.match(text(mounted.renderer.root), /model 1/);
+    assert.match(text(mounted.renderer.root), /model 2/);
+    assert.equal(registrations.length, 0, 'opening a run must not silently choose an artifact');
+    await clickButton(mounted.renderer, /Use model 2/i);
+    assert.deepEqual(registrations, [['run-1', 'artifact-b']]);
+    assert.match(text(mounted.renderer.root), new RegExp(`${sha('f')}.*model-2.*sample-2|model-2.*sample-2.*${sha('f')}`, 'i'));
+
+    const sourceKind = mounted.renderer.root.findAllByType('select').find((item) => {
+        const options = item.findAllByType('option').map(text);
+        return options.includes('Protein mmCIF upload');
+    });
+    assert.ok(sourceKind);
+    assert.equal(sourceKind.findAllByType('option').some((option) => option.props.value === 'structure_artifact'), false,
+        'an uploaded caller must not be allowed to self-declare prior-run authority');
+    await act(async () => mounted.renderer.unmount());
+    mounted.client.clear();
+});
+
+test('mounted RCSB source path supports keyword search, entry metadata, and explicit ambiguous context selection', async () => {
+    const searches: string[] = [];
+    const registrations: Array<Record<string, unknown>> = [];
+    const response: CmRcsbSearchResponse = {
+        query: 'kinase', total_count: 1,
+        results: [{
+            accession: '4HHB', title: 'Human deoxyhaemoglobin', method: 'X-RAY DIFFRACTION', resolution: 1.74,
+            organism: 'Homo sapiens', release_date: '1984-07-17',
+            models: [{ model_id: '1', label: 'Model 1' }, { model_id: '2', label: 'Model 2' }],
+            samples: [{ sample_id: 'sample-a', label: 'Biological assembly 1' }],
+            chains: [{ chain_id: 'A', label: 'Alpha chain', entity_id: '1', entity_type: 'protein', residue_count: 141 }, { chain_id: 'B', label: 'Beta chain', entity_id: '2', entity_type: 'protein', residue_count: 146 }],
+            entities: [{ entity_id: '1', label: 'Hemoglobin alpha', entity_type: 'protein', residue_count: 141 }, { entity_id: '2', label: 'Hemoglobin beta', entity_type: 'protein', residue_count: 146 }],
+            required_selection: ['model_id', 'chain_ids', 'entity_ids'],
+        }],
+    };
+    const mounted = await mountLauncher({
+        listSources: async () => [],
+        searchRcsb: async (query: string) => { searches.push(query); return response; },
+        registerRcsb: async (selection: Record<string, unknown>) => {
+            registrations.push(selection);
+            return {
+                source_id: 'rcsb-4hhb', source_kind: 'structure_upload', format: 'mmcif', sha256: sha('1'), bytes: 10000,
+                metadata: { name: 'RCSB 4HHB' },
+                authority_receipt: {
+                    schema_name: 'cm_source_authority_receipt', schema_version: 1, source_id: 'rcsb-4hhb', source_kind: 'structure_upload',
+                    content_sha256: sha('1'), authority_kind: 'rcsb_download', receipt_sha256: sha('2'),
+                    payload: { provider: 'RCSB', accession: '4HHB', model_id: '2', sample_id: 'sample-a', chain_ids: ['B'], entity_ids: ['2'] },
+                },
+            } as CmSource;
+        },
+    }, { backend: 'external_import', name: 'RCSB import' });
+
+    await clickButton(mounted.renderer, /^RCSB$/i);
+    const searchInput = mounted.renderer.root.findAllByType('input').find((item) => item.props['aria-label'] === 'RCSB accession or keyword');
+    assert.ok(searchInput);
+    await act(async () => searchInput.props.onChange({ target: { value: 'kinase' } }));
+    await clickButton(mounted.renderer, /Search RCSB/i);
+    assert.deepEqual(searches, ['kinase']);
+    assert.match(text(mounted.renderer.root), /Human deoxyhaemoglobin/);
+    await clickButton(mounted.renderer, /Select 4HHB/i);
+    assert.equal(registrations.length, 0, 'ambiguous provider entries must not register before explicit context selection');
+
+    const modelSelect = mounted.renderer.root.findAllByType('select').find((item) => item.props['aria-label'] === 'RCSB model');
+    const chainSelect = mounted.renderer.root.findAllByType('select').find((item) => item.props['aria-label'] === 'RCSB chain');
+    const entitySelect = mounted.renderer.root.findAllByType('select').find((item) => item.props['aria-label'] === 'RCSB entity');
+    assert.ok(modelSelect && chainSelect && entitySelect);
+    await act(async () => modelSelect.props.onChange({ target: { value: '2' } }));
+    await act(async () => chainSelect.props.onChange({ target: { value: 'B' } }));
+    await act(async () => entitySelect.props.onChange({ target: { value: '2' } }));
+    await clickButton(mounted.renderer, /Register selected RCSB mmCIF/i);
+    assert.deepEqual(registrations, [{ accession: '4HHB', model_id: '2', sample_id: 'sample-a', chain_ids: ['B'], entity_ids: ['2'] }]);
+    assert.match(text(mounted.renderer.root), /4HHB.*model 2.*sample-a.*chain B.*entity 2/i);
+    await act(async () => mounted.renderer.unmount());
+    mounted.client.clear();
+});
+
+const mountViewer = async (
+    getStatus: () => Promise<CmStatus>,
+    getFailureReceipts: () => Promise<CmFailureReceipt[]>,
+    lifecycle: { cancelRequest?: () => Promise<unknown>; retryRequest?: () => Promise<unknown> } = {},
+    includeLocationProbe = false,
+) => {
+    const queryClient = client();
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+        renderer = create(
+            <MemoryRouter><QueryClientProvider client={queryClient}>
+                <ConformationalMappingViewer requestId="request-temporal" services={{
+                    getStatus,
+                    getProgress: async () => ({ request_id: 'request-temporal', status: 'running', progress: {}, job_stage: null, job_progress: null }),
+                    getFailureReceipts,
+                    getLogs: async () => ({ command_log: '', command_err: '', nextflow_log: '' }),
+                    getResults: async () => { throw new Error('results should not load'); },
+                    getLandscape: async () => { throw new Error('landscape should not load'); },
+                    artifactUrl: () => '/unused',
+                    cancelRequest: lifecycle.cancelRequest,
+                    retryRequest: lifecycle.retryRequest,
+                }} Workbench={() => <div />} />
+                {includeLocationProbe && <LocationProbe />}
+            </QueryClientProvider></MemoryRouter>,
+        );
+    });
+    await flush();
+    return { renderer: renderer!, client: queryClient };
+};
+
+test('mounted failure diagnostics refresh on running-to-failed transition and distinguish retrieval error from true empty', async () => {
+    let lifecycleStatus: CmStatus['status'] = 'running';
+    let receiptCalls = 0;
+    const status = (): CmStatus => ({
+        request_id: 'request-temporal', job_id: 'job-temporal', backend: 'protenix_v2_ensemble', status: lifecycleStatus,
+        job_status: lifecycleStatus, progress: {}, failure_receipt: null, retry_eligible: false,
+        result_contract_id: 'conformational_mapping_protenix_v1', run_record: null,
+    });
+    const mounted = await mountViewer(async () => status(), async () => {
+        receiptCalls += 1;
+        return lifecycleStatus === 'failed' ? [{ receipt_id: 'receipt-terminal', sha256: sha('3'), payload: { code: 'worker_failed' } }] : [];
+    });
+    assert.equal(receiptCalls, 1);
+    lifecycleStatus = 'failed';
+    await act(async () => { await mounted.client.invalidateQueries({ queryKey: ['cm-status', 'request-temporal'] }); });
+    await flush();
+    await clickButton(mounted.renderer, /Failure receipts/i);
+    assert.equal(receiptCalls, 2, 'terminal status transition must refresh failure receipts');
+    assert.match(text(mounted.renderer.root), /receipt-terminal/);
+    await act(async () => mounted.renderer.unmount());
+    mounted.client.clear();
+
+    const failed = await mountViewer(async () => status(), async () => { throw new Error('receipt store unavailable'); });
+    await clickButton(failed.renderer, /Failure receipts/i);
+    assert.match(text(failed.renderer.root), /Unable to retrieve failure receipts|receipt store unavailable/i);
+    assert.doesNotMatch(text(failed.renderer.root), /No failure receipt is recorded/);
+    await act(async () => failed.renderer.unmount());
+    failed.client.clear();
+});
+
+test('mounted canonical viewer navigation and lifecycle controls use typed CM routes', async () => {
+    const calls: string[] = [];
+    let lifecycleStatus: CmStatus['status'] = 'running';
+    const status = (): CmStatus => ({
+        request_id: 'request-actions', job_id: 'job-actions', backend: 'protenix_v2_ensemble', status: lifecycleStatus,
+        job_status: lifecycleStatus, progress: {}, failure_receipt: null, retry_eligible: lifecycleStatus === 'failed',
+        result_contract_id: 'conformational_mapping_protenix_v1', run_record: null,
+    });
+    const mounted = await mountViewer(
+        async () => status(), async () => [],
+        { cancelRequest: async () => { calls.push('cancel:/api/conformational-mapping/requests/request-actions/cancel'); return {}; } },
+        true,
+    );
+    const confirm = window.confirm;
+    window.confirm = () => true;
+    await clickButton(mounted.renderer, /Cancel request/i);
+    assert.deepEqual(calls, ['cancel:/api/conformational-mapping/requests/request-actions/cancel']);
+    await clickButton(mounted.renderer, /All results/i);
+    assert.equal(mounted.renderer.root.findByProps({ 'data-mounted-location': '/designs' }).props['data-mounted-location'], '/designs');
+    await clickButton(mounted.renderer, /New request/i);
+    assert.equal(mounted.renderer.root.findByProps({ 'data-mounted-location': '/submit' }).props['data-mounted-location'], '/submit');
+    window.confirm = confirm;
+    await act(async () => mounted.renderer.unmount());
+    mounted.client.clear();
+
+    lifecycleStatus = 'failed';
+    const retried = await mountViewer(
+        async () => status(), async () => [],
+        { retryRequest: async () => { calls.push('retry:/api/conformational-mapping/requests/request-actions/retry'); return {}; } },
+    );
+    await clickButton(retried.renderer, /Retry request/i);
+    assert.deepEqual(calls.slice(-1), ['retry:/api/conformational-mapping/requests/request-actions/retry']);
+    await act(async () => retried.renderer.unmount());
+    retried.client.clear();
+});
+
+test('mounted /jobs/:id routes a CM job to the canonical viewer without generic cancellation', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+        if (String(input).endsWith('/api/jobs/cm-route')) {
+            return new Response(JSON.stringify({
+                id: 'cm-route', name: 'Canonical routed CM', model_id: 'conformational_mapping', mode: 'map',
+                status: 'running', created_at: '2026-08-09T00:00:00Z', output_dir: '/unused',
+            }), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        return new Response('{}', { status: 404 });
+    }) as typeof fetch;
+    const queryClient = client();
+    let renderer: ReactTestRenderer;
+    try {
+        await act(async () => {
+            renderer = create(<MemoryRouter initialEntries={['/jobs/cm-route']}><QueryClientProvider client={queryClient}><Routes><Route path="/jobs/:jobId" element={<JobDetailPage />} /></Routes></QueryClientProvider></MemoryRouter>);
+        });
+        await flush();
+        assert.equal(renderer!.root.findAllByProps({ 'data-bms-cm-viewer': 'canonical' }).length, 1);
+        assert.equal(renderer!.root.findAllByType('button').some((button) => /Cancel request|Cancel this job/.test(text(button))), false);
+    } finally {
+        await act(async () => renderer?.unmount());
+        queryClient.clear();
+        globalThis.fetch = originalFetch;
+    }
+});
+
+test('typed RCSB search calls the CM authority endpoint with accession or keyword parameters', async () => {
+    const originalAdapter = api.defaults.adapter;
+    const requests: Array<{ url?: string; params?: unknown }> = [];
+    api.defaults.adapter = async (config) => {
+        requests.push({ url: config.url, params: config.params });
+        return {
+            data: { query: '4HHB', entries: [{ accession: '4HHB', title: 'Haemoglobin' }], cached: false },
+            status: 200,
+            statusText: 'OK',
+            headers: {},
+            config,
+        };
+    };
+    try {
+        const accession = await searchCmRcsb('4hhb');
+        assert.equal(accession.results[0]?.accession, '4HHB');
+        assert.deepEqual(requests[0], {
+            url: '/api/conformational-mapping/sources/rcsb/search',
+            params: { accession: '4HHB' },
+        });
+        await searchCmRcsb('kinase domain');
+        assert.deepEqual(requests[1], {
+            url: '/api/conformational-mapping/sources/rcsb/search',
+            params: { keyword: 'kinase domain' },
+        });
+    } finally {
+        api.defaults.adapter = originalAdapter;
+    }
+});

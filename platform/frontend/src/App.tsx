@@ -35,6 +35,7 @@ function App() {
             <Route path="/results" element={<ResultsViewer />} />
             <Route path="/designs" element={<ResultsViewer />} />
             <Route path="/designs/:jobId" element={<ResultsViewer />} />
+            <Route path="/jobs" element={<Navigate replace to="/designs" />} />
             <Route path="/jobs/:jobId" element={<JobDetailPage />} />
             {/* Molecular Biology Toolkit - Seqviz-based sequence editor */}
             <Route path="/designer" element={<MolBioToolkitV2 />} />

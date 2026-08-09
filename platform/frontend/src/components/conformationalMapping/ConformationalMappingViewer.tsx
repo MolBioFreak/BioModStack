@@ -66,8 +66,11 @@ interface Props {
         getProgress?: typeof getCmProgress;
         getFailureReceipts?: typeof getCmFailureReceipts;
         getResults?: typeof getCmResults;
+        getLogs?: typeof getCmLogs;
         getLandscape?: typeof getCmLandscape;
         artifactUrl?: typeof cmArtifactUrl;
+        cancelRequest?: typeof cancelCmRequest;
+        retryRequest?: typeof retryCmRequest;
     };
     Workbench?: typeof StructureWorkbench;
 }
@@ -154,7 +157,7 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
         retry: false,
     });
     const logs = useQuery({
-        queryKey: ['cm-logs', status.data?.job_id], queryFn: () => getCmLogs(status.data!.job_id),
+        queryKey: ['cm-logs', status.data?.job_id], queryFn: () => (services?.getLogs || getCmLogs)(status.data!.job_id),
         enabled: Boolean(status.data?.job_id), refetchInterval: TERMINAL.has(status.data?.status || '') ? false : 4000,
         retry: false,
     });
@@ -162,6 +165,20 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
         queryKey: ['cm-failure-receipts', requestId], queryFn: () => (services?.getFailureReceipts || getCmFailureReceipts)(requestId),
         enabled: Boolean(status.data), retry: false,
     });
+    const refetchFailureReceipts = failures.refetch;
+    const previousStatus = useRef<string | null>(null);
+    useEffect(() => {
+        const nextStatus = status.data?.status;
+        if (!nextStatus) return;
+        const priorStatus = previousStatus.current;
+        previousStatus.current = nextStatus;
+        if (priorStatus && priorStatus !== nextStatus && TERMINAL.has(nextStatus)) {
+            // A terminal transition is the authority boundary for durable
+            // receipts. Refresh the receipt store even when the status object
+            // itself does not carry a receipt.
+            void refetchFailureReceipts();
+        }
+    }, [refetchFailureReceipts, status.data?.status]);
     const results = useQuery({
         queryKey: ['cm-results', requestId], queryFn: () => (services?.getResults || getCmResults)(requestId),
         enabled: status.data?.status === 'completed' && APPROVED_CM_CONTRACTS.has(status.data.result_contract_id), retry: false,
@@ -244,7 +261,7 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
             const firstAlternative = parsed.data!.candidates.find((candidate) => candidate.candidate_id !== selected.candidate_id);
             return firstAlternative ? [firstAlternative.candidate_id] : retained;
         });
-    }, [parsed.data, selected?.candidate_id]);
+    }, [parsed.data, selected]);
     useEffect(() => {
         setSelectedPairId('');
         setSelectedStateRowKey(null);
@@ -291,7 +308,7 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
     }, [pendingStateResidue, selected?.candidate_id, structureMap]);
     useEffect(() => {
         if (pendingStateResidue && selected?.candidate_id !== pendingStateResidue.candidateId) clearStateAnalysisResidueSelection(selected?.candidate_id || '');
-    }, [pendingStateResidue, selected?.candidate_id]);
+    }, [pendingStateResidue, selected]);
     const overlays = useMemo(() => {
         if (!parsed.data || !selected) return [];
         return overlayIds.filter((id) => id !== selected.candidate_id).map((id) => {
@@ -300,7 +317,7 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
             const artifact = candidateStructureArtifact(candidate, parsed.data!.value.artifacts);
             return { id, structureUrl: (services?.artifactUrl || cmArtifactUrl)(requestId, artifact.artifact_id), format: 'cif' as const, label: candidateLabel(candidate) };
         });
-    }, [overlayIds, parsed.data, requestId, selected]);
+    }, [overlayIds, parsed.data, requestId, selected, services?.artifactUrl]);
 
     const landscape = useQuery({
         queryKey: ['cm-landscape', requestId, selected?.candidate_id, landscapeOffset],
@@ -353,7 +370,9 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
         : undefined;
 
     const lifecycle = useMutation({
-        mutationFn: async (action: 'cancel' | 'retry') => action === 'cancel' ? cancelCmRequest(requestId) : retryCmRequest(requestId),
+        mutationFn: async (action: 'cancel' | 'retry') => action === 'cancel'
+            ? (services?.cancelRequest || cancelCmRequest)(requestId)
+            : (services?.retryRequest || retryCmRequest)(requestId),
         onSuccess: async () => {
             setActionError(null);
             await Promise.all([
@@ -387,7 +406,7 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
                 <header className="rounded-2xl border border-slate-800 bg-slate-900/80 p-4 sm:p-5">
                     <div className="flex flex-wrap items-start justify-between gap-4">
                         <div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-orange-300">Canonical ensemble lens</p><h1 className="mt-1 text-2xl font-semibold text-white">{title}</h1><p className="mt-1 break-all font-mono text-xs text-slate-500">{requestId}</p></div>
-                        <div className="flex flex-wrap items-center gap-2"><button type="button" onClick={() => navigate('/results')} className="rounded-lg border border-slate-700 px-3 py-2 text-xs hover:border-slate-500">All results</button><button type="button" onClick={() => navigate('/submit')} className="rounded-lg border border-slate-700 px-3 py-2 text-xs hover:border-slate-500">New request</button><span className={`rounded-full border px-3 py-1.5 text-xs font-medium ${statusLabel === 'completed' ? 'border-emerald-500/40 text-emerald-200' : statusLabel === 'failed' ? 'border-red-500/40 text-red-200' : 'border-slate-700 text-slate-300'}`}>{statusLabel}</span>{['prepared', 'queued', 'running'].includes(statusLabel) && <button type="button" disabled={lifecycle.isPending} onClick={() => { if (window.confirm('Cancel this conformational-mapping request?')) lifecycle.mutate('cancel'); }} className="rounded-lg border border-red-500/40 px-3 py-2 text-xs text-red-200 disabled:opacity-40">Cancel</button>}{status.data?.retry_eligible && <button type="button" disabled={lifecycle.isPending} onClick={() => lifecycle.mutate('retry')} className="rounded-lg border border-blue-500/40 px-3 py-2 text-xs text-blue-200 disabled:opacity-40">Retry eligible</button>}</div>
+                        <div className="flex flex-wrap items-center gap-2"><button type="button" onClick={() => navigate('/designs')} className="rounded-lg border border-slate-700 px-3 py-2 text-xs hover:border-slate-500">All results</button><button type="button" onClick={() => navigate('/submit')} className="rounded-lg border border-slate-700 px-3 py-2 text-xs hover:border-slate-500">New request</button><span className={`rounded-full border px-3 py-1.5 text-xs font-medium ${statusLabel === 'completed' ? 'border-emerald-500/40 text-emerald-200' : statusLabel === 'failed' ? 'border-red-500/40 text-red-200' : 'border-slate-700 text-slate-300'}`}>{statusLabel}</span>{['prepared', 'queued', 'running'].includes(statusLabel) && <button type="button" aria-label="Cancel request" disabled={lifecycle.isPending} onClick={() => { if (window.confirm('Cancel this conformational-mapping request?')) lifecycle.mutate('cancel'); }} className="rounded-lg border border-red-500/40 px-3 py-2 text-xs text-red-200 disabled:opacity-40">Cancel request</button>}{status.data?.retry_eligible && <button type="button" aria-label="Retry request" disabled={lifecycle.isPending} onClick={() => lifecycle.mutate('retry')} className="rounded-lg border border-blue-500/40 px-3 py-2 text-xs text-blue-200 disabled:opacity-40">Retry request</button>}</div>
                     </div>
                     <p className="mt-4 rounded-lg border border-sky-500/20 bg-sky-500/5 p-3 text-xs leading-5 text-sky-100">{CM_SCIENTIFIC_LIMIT}</p>
                     {receipt && <div className="mt-3 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3"><div className="text-xs font-semibold text-emerald-200">Authenticated submission receipt</div><div className="mt-2 grid gap-2 text-[11px] sm:grid-cols-2 lg:grid-cols-4"><div>Backend: <span className="font-mono text-slate-300">{receipt.backend}</span></div><div>Cardinality: <span className="text-slate-300">{receipt.expected_cardinality}</span></div><div title={receipt.request_sha256}>Request: <span className="font-mono text-slate-300">{shortHash(receipt.request_sha256)}</span></div><div title={receipt.coordinate_plan_sha256}>Coordinate plan: <span className="font-mono text-slate-300">{shortHash(receipt.coordinate_plan_sha256)}</span></div></div></div>}
@@ -400,7 +419,7 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
                     <div className="mt-4">
                         {lifecycleTab === 'progress' && <div className="grid gap-3 lg:grid-cols-2"><div><div className="mb-1 text-xs font-medium text-slate-400">Typed request progress</div>{json(progress.data?.progress || status.data?.progress || {})}</div><div><div className="mb-1 text-xs font-medium text-slate-400">Scheduler projection</div>{json({ job_status: status.data?.job_status, job_stage: progress.data?.job_stage, job_progress: progress.data?.job_progress, retry_eligible: status.data?.retry_eligible })}</div></div>}
                         {lifecycleTab === 'logs' && (logs.data ? <div className="grid gap-3 xl:grid-cols-3">{([['Command output', logs.data.command_log], ['Command errors', logs.data.command_err], ['Nextflow log', logs.data.nextflow_log]] as const).map(([label, value]) => <div key={label}><div className="mb-1 text-xs font-medium text-slate-400">{label}</div><pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-slate-950 p-3 font-mono text-[11px] text-slate-400">{value || 'No log content recorded.'}</pre></div>)}</div> : <p className="text-sm text-slate-500">{logs.isError ? cmApiError(logs.error, 'Job diagnostics are unavailable.') : 'Loading durable job diagnostics…'}</p>)}
-                        {lifecycleTab === 'failures' && (currentFailureReceipts.length ? <div className="space-y-3">{currentFailureReceipts.map((item, index) => <details key={`${item.receipt_id}:${index}`} className="rounded-lg border border-red-500/20 bg-red-500/5 p-3"><summary className="cursor-pointer text-xs font-medium text-red-200">{item.receipt_id}{item.sha256 ? ` · ${shortHash(item.sha256)}` : ''}</summary><div className="mt-2">{json(item.payload)}</div></details>)}</div> : <p className="text-sm text-slate-500">No failure receipt is recorded for this request.</p>)}
+                        {lifecycleTab === 'failures' && (failures.isError ? <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200"><div className="font-medium">Unable to retrieve failure receipts</div><div className="mt-1 text-xs">{cmApiError(failures.error, 'The durable receipt store could not be read.')}</div></div> : currentFailureReceipts.length ? <div className="space-y-3">{currentFailureReceipts.map((item, index) => <details key={`${item.receipt_id}:${index}`} className="rounded-lg border border-red-500/20 bg-red-500/5 p-3"><summary className="cursor-pointer text-xs font-medium text-red-200">{item.receipt_id}{item.sha256 ? ` · ${shortHash(item.sha256)}` : ''}</summary><div className="mt-2">{json(item.payload)}</div></details>)}</div> : <p className="text-sm text-slate-500">No failure receipt is recorded for this request.</p>)}
                     </div>
                 </section>
 

@@ -8,6 +8,7 @@ import { useParams, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import MolstarViewer from './MolstarViewer';
+import { ConformationalMappingViewer } from './conformationalMapping/ConformationalMappingViewer';
 import type { Job } from '../lib/api';
 import { jobPollingInterval } from '../lib/queryPolling';
 
@@ -59,6 +60,8 @@ export function JobDetailPage() {
     const isMolecularDynamicsJob = job?.model_id === 'molecular_dynamics' ||
         job?.mode === 'molecular_dynamics' ||
         job?.mode === 'md';
+    const isConformationalMappingJob = job?.model_id === 'conformational_mapping' ||
+        job?.model_id === 'confornets_experimental';
 
     // Fetch docking results
     const { data: dockingData, isLoading: dockingLoading } = useQuery({
@@ -68,7 +71,7 @@ export function JobDetailPage() {
             if (!res.ok) throw new Error('Failed to fetch docking results');
             return res.json();
         },
-        enabled: isDockingJob && job?.status === 'completed',
+        enabled: isDockingJob && !isConformationalMappingJob && job?.status === 'completed',
     });
 
     // Fetch structure files for structure prediction jobs
@@ -79,7 +82,7 @@ export function JobDetailPage() {
             if (!res.ok) throw new Error('Failed to fetch structure files');
             return res.json();
         },
-        enabled: job?.status === 'completed' && !isDockingJob && !isMolecularDynamicsJob,
+        enabled: job?.status === 'completed' && !isDockingJob && !isMolecularDynamicsJob && !isConformationalMappingJob,
     });
 
     const poses = dockingData?.sdfs || [];
@@ -105,6 +108,10 @@ export function JobDetailPage() {
                 </div>
             </div>
         );
+    }
+
+    if (isConformationalMappingJob) {
+        return <ConformationalMappingViewer requestId={job.id} title={job.name} />;
     }
 
     return (

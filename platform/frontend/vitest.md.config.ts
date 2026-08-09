@@ -22,6 +22,7 @@ export default defineConfig({
             './tests/vitest/frustraMpnnOperatorSurfaces.test.tsx',
             './tests/vitest/frustraMpnnGovernedLaunches.test.tsx',
             './tests/vitest/frustraMpnnUploadAnalysis.test.tsx',
+            './tests/vitest/conformationalMappingRepairsMounted.test.tsx',
         ],
     },
 });
