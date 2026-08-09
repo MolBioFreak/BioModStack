@@ -237,6 +237,7 @@ def test_workflow_and_profile_are_review_only_and_use_competitive_alignment() ->
     assert "occurrence_map.json" in workflow
     assert "scientific_status" in (root / "scripts/pooled_ont_reference_assignment.py").read_text(encoding="utf-8")
     assert "ont_pooled_reference_assignment" in config
+    assert 'container = "${params.container_dir}/dorado.sif"' in config
     assert "ont_pooled_reference_assignment" in dispatcher
     assert "ont_pooled_reference_assignment" in model_config
     for forbidden in ("FastqDimerAnalysis", "FastqPlasmidQC", "ConstructVerify", "consensus", "dimer"):
