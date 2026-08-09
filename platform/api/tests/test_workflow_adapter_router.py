@@ -83,3 +83,16 @@ async def test_workflow_adapter_launch_rejects_nonlocal_clients() -> None:
     with pytest.raises(workflow_adapter.HTTPException) as exc_info:
         await workflow_adapter.workflow_adapter_launch(payload, request)  # type: ignore[arg-type]
     assert exc_info.value.status_code == 403
+
+
+def test_runner_environment_owns_development_stage_callback_url(monkeypatch) -> None:
+    monkeypatch.setenv("API_BASE_URL", "http://127.0.0.1:65535")
+    identity = workflow_adapter.adapter_identity_from_environment()
+
+    environment = workflow_adapter._runner_environment(  # noqa: SLF001 - execution boundary under test.
+        identity=identity,
+        unit_name="biomodstack-development-job-test-attempt-1.service",
+        owner_nonce="owner-nonce",
+    )
+
+    assert environment["API_BASE_URL"] == "http://127.0.0.1:18002"

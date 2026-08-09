@@ -27,6 +27,7 @@ from biomodstack_services import (
     restart_all,
     restart_api,
     run_core_runtime_script,
+    runtime_api_url,
     runtime_descriptor,
     start_all,
     start_api,
@@ -330,6 +331,7 @@ def _launch_request_fingerprint(payload: WorkflowAdapterLaunchRequest, lane: str
 
 def _runner_environment(*, identity: AdapterIdentity, unit_name: str, owner_nonce: str) -> dict[str, object]:
     """Pass the lane authority into systemd without passing request authority."""
+    runtime_mode = DEV_RUNTIME_MODE if identity.lane == "development" else CONTAINER_RUNTIME_MODE
     environment: dict[str, object] = {
         key: value
         for key, value in os.environ.items()
@@ -338,6 +340,7 @@ def _runner_environment(*, identity: AdapterIdentity, unit_name: str, owner_nonc
     }
     environment.update(
         {
+            "API_BASE_URL": runtime_api_url(runtime_mode, project_root=API_ROOT.parent.parent),
             "BMS_HOME": str(API_ROOT.parent.parent),
             "BMS_WORKFLOW_ADAPTER_URL": "",
             "BMS_CORE_RUNTIME_MODE": "0",
