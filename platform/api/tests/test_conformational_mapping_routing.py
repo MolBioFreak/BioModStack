@@ -272,6 +272,75 @@ def _request_params(backend: str = "protenix_v2_ensemble") -> dict[str, object]:
     return params
 
 
+def test_materialized_request_persists_bounded_run_record(tmp_path: Path) -> None:
+    params = _request_params("external_import")
+    params["run_record"] = {
+        "name": "Open and closed comparison",
+        "notes": "Preserve the complete structure context.",
+        "selected_input": {
+            "source_id": "cm-source-1",
+            "source_kind": "structure_upload",
+            "source_label": "open-state.cif",
+            "source_sha256": "a" * 64,
+            "model_id": "1",
+            "chain_ids": ["A", "B"],
+        },
+    }
+
+    materialized = materialize_trusted_internal_request(
+        params,
+        output_dir=tmp_path,
+        request_id="00000000-0000-4000-8000-000000000799",
+    )
+    request = json.loads(materialized.request_path.read_text(encoding="utf-8"))
+
+    assert request["run_record"] == params["run_record"]
+    validate_schema("cm_request_v1", request)
+
+
+def test_snapshot_chain_context_uses_schema_mapping_fields() -> None:
+    fixture = json.loads(
+        (API_ROOT / "tests" / "fixtures" / "conformational_mapping" / "schemas" / "positive" / "all_schemas.json").read_text()
+    )
+    assert cm_router._snapshot_chain_ids([fixture["cm_complex_snapshot_v1"]]) == ["A", "B"]
+
+
+def test_external_import_binding_reseals_authoritative_input_context(tmp_path: Path) -> None:
+    params = _request_params("external_import")
+    params["run_record"] = {
+        "name": "Normalized import",
+        "notes": "",
+        "selected_input": {
+            "source_id": "source-before-normalization",
+            "source_kind": "structure_upload",
+            "source_label": "Input",
+            "source_sha256": "1" * 64,
+        },
+    }
+    materialized = materialize_trusted_internal_request(
+        params,
+        output_dir=tmp_path,
+        request_id="00000000-0000-4000-8000-000000000601",
+    )
+    selected_input = {
+        "source_id": "source-before-normalization",
+        "source_kind": "structure_upload",
+        "source_label": "Input",
+        "source_sha256": "1" * 64,
+        "model_id": "2",
+        "chain_ids": ["B"],
+    }
+    request, plan = bind_materialized_source_snapshot(
+        materialized,
+        source_snapshot_sha256="a" * 64,
+        selected_input=selected_input,
+    )
+    assert request["run_record"]["selected_input"] == selected_input
+    assert request["source_snapshot_sha256"] == "a" * 64
+    assert plan["request_sha256"] == request["request_sha256"]
+    validate_schema("cm_request_v1", request)
+
+
 def _flag_value(command: list[str], flag: str) -> str:
     return command[command.index(flag) + 1]
 
@@ -539,6 +608,36 @@ def test_cm3_004c_task_invariants_fail_before_schedule(
         validate_request_params(params)
 
 
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ({"saved_steps": [5, 10]}, "exactly one saved step"),
+        ({"confornet_count": 2}, "exactly one ConforNet"),
+    ],
+)
+def test_cm_mse_cardinality_axes_are_canonical(
+    mutation: dict[str, object], message: str
+) -> None:
+    params = _request_params("confornets")
+    settings: dict[str, object] = dict(params["confornets"])  # type: ignore[arg-type]
+    settings.update({
+        "task": "mse",
+        "references": [{
+            "reference_id": "reference-a",
+            "staged_path": "registered/reference-a/content.cif",
+            "content_sha256": "e" * 64,
+            "state": "reference",
+            "source": "registered_artifact",
+        }],
+        "saved_steps": [10],
+        "confornet_count": 1,
+    })
+    settings.update(mutation)
+    params["confornets"] = settings
+    with pytest.raises(ConformationalMappingRequestError, match=message):
+        validate_request_params(params)
+
+
 def test_cm3_004d_future_backend_controls_are_hash_bound(tmp_path: Path) -> None:
     for backend, field, value, request_id in (
         ("protenix_v2_ensemble", "protenix_snapshot_id", "snapshot-7", "00000000-0000-4000-8000-000000000017"),
@@ -793,7 +892,7 @@ async def test_cm3_004dc_submit_route_persists_state_comparison_authority(
     session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)()
     try:
         session.add(ConformationalMappingSource(
-            source_id="snapshot", principal_id="alice", source_kind="complex_snapshot",
+            source_id="snapshot", principal_id=cm_router._PERSONAL_WORKFLOW_PRINCIPAL, source_kind="complex_snapshot",
             storage_root=str(source_root), relative_path="snapshot.json",
             content_sha256=hashlib.sha256(snapshot_bytes).hexdigest(), size_bytes=len(snapshot_bytes),
             metadata_json={}, immutable=True,

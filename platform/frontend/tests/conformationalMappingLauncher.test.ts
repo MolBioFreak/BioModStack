@@ -116,3 +116,50 @@ test('normal external import is mmCIF-only with server-derived snapshot authorit
     );
     assert.doesNotMatch(launcher, /form\.snapshotId\) errors\.push\('Select the matching ordered complete-complex snapshot bundle/);
 });
+
+test('launcher is a full-width card-grid run workspace with one backend authority', () => {
+    const launcher = source('conformationalMapping/ConformationalMappingLauncher.tsx');
+    assert.match(launcher, /data-bms-cm-launcher="canonical"/);
+    assert.match(launcher, /className="w-full space-y-5 text-slate-200"/);
+    assert.doesNotMatch(launcher, /mx-auto max-w-7xl/);
+    assert.match(launcher, />Run record</);
+    assert.match(launcher, />Scientific controls</);
+    assert.match(launcher, />Source browser</);
+    assert.match(launcher, />Input preview</);
+    assert.match(launcher, />Pre-submit summary</);
+    assert.doesNotMatch(launcher, />Backend<select/);
+    assert.match(launcher, /order-1 xl:order-1/);
+    assert.match(launcher, /order-2 xl:order-3/);
+    assert.match(launcher, /order-3 xl:order-4/);
+    assert.match(launcher, /order-4 xl:order-2/);
+    assert.match(launcher, /const effectivePayload = validationErrors\.length === 0 \? buildPayload\(\) : null/);
+});
+
+test('run notes and general CM source paths are typed without unrelated metadata systems', () => {
+    const launcher = source('conformationalMapping/ConformationalMappingLauncher.tsx');
+    const api = source('conformationalMapping/conformationalMappingApi.ts');
+    assert.match(launcher, /notes: string/);
+    assert.match(api, /notes: string/);
+    assert.match(launcher, /notes: form\.notes\.trim\(\)/);
+    for (const label of ['Upload', 'Your Runs', 'RCSB', 'Cached']) {
+        assert.match(launcher, new RegExp(`label: '${label}'`));
+    }
+    assert.doesNotMatch(launcher, /label: 'Presets'/);
+    assert.doesNotMatch(launcher, /SAbDab|project|campaign/i);
+});
+
+test('ConforNets starts with one explicit seed and server-derived chain authority', () => {
+    const launcher = source('conformationalMapping/ConformationalMappingLauncher.tsx');
+    assert.match(launcher, /seeds: '101'/);
+    assert.doesNotMatch(launcher, /selectedChainIds/);
+    assert.match(launcher, /submission_policy/);
+    assert.match(launcher, /availableChainIds/);
+    assert.match(launcher, /managed_checkpoint === true/);
+    assert.doesNotMatch(launcher, /metadata\.managed === true/);
+    assert.match(launcher, /if \(!selectedSnapshot\) errors\.push/);
+    assert.match(launcher, /if \(form\.configId && !selectedConfig\) errors\.push/);
+    assert.match(launcher, /referenceSources\.length !== form\.referenceIds\.length/);
+    assert.match(launcher, /if \(form\.task === 'transfer' && !selectedTransfer\) errors\.push/);
+    assert.match(launcher, /form\.task === 'diversity' \|\| form\.task === 'mse'/);
+    assert.doesNotMatch(launcher, />Chain ID<input/);
+});

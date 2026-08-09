@@ -139,6 +139,7 @@ def test_import_snapshot_is_deterministic_and_binds_explicit_mmcif_identity() ->
 
     assert first == second
     assert first["original_source_sha256"] == hashlib.sha256(MMCIF).hexdigest()
+    assert first["source_model_id"] == "1"
     assert first["entities"] == [{
         "entity_type": "protein",
         "source_entity_id": "1",
@@ -511,17 +512,7 @@ async def test_local_application_upload_and_submit_materializes_snapshot_and_job
             "samples_per_seed": 1,
             "feature_policy": {"mode": "features_disabled_control_v1"},
             "runtime_policy": {"use_default_params": True},
-            "analysis_policy": {
-                "sign_zero_epsilon": 1e-6,
-                "clash_detector_id": "bms_clash",
-                "clash_detector_version": "1",
-                "outer_support_minimum": 1.0,
-                "inner_support_minimum": 1.0,
-                "sign_consistency_minimum": 1.0,
-                "clash_free_minimum": 1.0,
-                "rank_stability_minimum": 1.0,
-                "minimum_common_ranked_universe_size": 3,
-            },
+            "analysis_policy": cm_router._canonical_analysis_policy(),
         })
         response = Response()
         receipt = await cm_router.submit_request(body, request, response, session)
@@ -533,7 +524,20 @@ async def test_local_application_upload_and_submit_materializes_snapshot_and_job
         assert job.vram_estimate_mb == 12_000
         assert job.sequence_length == 2
         assert await session.scalar(select(func.count()).select_from(ConformationalMappingRequest)) == 1
-        assert await session.scalar(select(func.count()).select_from(ConformationalMappingSource)) == 1
+        persisted_request = await session.scalar(select(ConformationalMappingRequest))
+        assert persisted_request is not None
+        selected_input = persisted_request.request_json["run_record"]["selected_input"]
+        assert selected_input["model_id"] == "1"
+        assert selected_input["chain_ids"] == ["A"]
+        source_rows = (await session.execute(
+            select(ConformationalMappingSource.source_id, ConformationalMappingSource.source_kind)
+        )).all()
+        assert (registered["source_id"], "structure_upload") in source_rows
+        assert all(
+            row == (registered["source_id"], "structure_upload")
+            or (row.source_id.startswith("cm_src_server_confornets_checkpoint_") and row.source_kind == "confornets_checkpoint")
+            for row in source_rows
+        ), source_rows
 
     root = tmp_path / "results" / f"conformational_mapping_{receipt['request_id']}"
     snapshots = json.loads((root / "cm_complex_snapshots_v1.json").read_text())
@@ -634,8 +638,26 @@ async def test_rcsb_mmcif_bridge_stops_at_streaming_source_limit(
 @pytest.mark.asyncio
 async def test_rcsb_mmcif_bridge_streams_success_into_normal_registration(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
+    monkeypatch.setattr(cm_router, "get_data_root", lambda: tmp_path)
     captured: dict[str, object] = {}
+    source = SimpleNamespace(
+        source_id="cm_src_rcsb",
+        source_kind="structure_upload",
+        metadata_json={"name": "RCSB 1UBQ"},
+        content_sha256=hashlib.sha256(b"  \n" + MMCIF).hexdigest(),
+        principal_id=cm_router._PERSONAL_WORKFLOW_PRINCIPAL,
+    )
+
+    class FakeSession:
+        async def get(self, model, source_id):
+            assert model is ConformationalMappingSource
+            assert source_id == "cm_src_rcsb"
+            return source
+
+        async def commit(self):
+            return None
 
     async def fake_register_source(**kwargs):
         captured.update(kwargs)
@@ -648,13 +670,19 @@ async def test_rcsb_mmcif_bridge_streams_success_into_normal_registration(
         _mock_rcsb_client(lambda request: httpx.Response(200, request=request, content=b"  \n" + MMCIF)),
     )
     monkeypatch.setattr(cm_router, "register_source", fake_register_source)
-    receipt = await cm_router.register_rcsb_mmcif_source("1ubq", _rcsb_request(), object())
+    receipt = await cm_router.register_rcsb_mmcif_source("1ubq", _rcsb_request(), FakeSession())  # type: ignore[arg-type]
     assert receipt["source_id"] == "cm_src_rcsb"
     assert captured["payload"] == b"  \n" + MMCIF
     assert captured["source_kind"] == "structure_upload"
     metadata = json.loads(str(captured["metadata_json"]))
-    assert metadata["rcsb_accession"] == "1UBQ"
-    assert metadata["source"] == "rcsb_raw_mmcif"
+    assert metadata == {"name": "RCSB 1UBQ"}
+    authority_receipt = receipt["authority_receipt"]
+    assert authority_receipt["authority_kind"] == "rcsb_download"
+    assert authority_receipt["content_sha256"] == source.content_sha256
+    assert authority_receipt["payload"]["provider"] == "RCSB"
+    assert authority_receipt["payload"]["accession"] == "1UBQ"
+    assert authority_receipt["payload"]["retrieved_at"].endswith("+00:00")
+    assert cm_router._read_source_authority(source) == authority_receipt  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
