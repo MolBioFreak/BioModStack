@@ -7,11 +7,18 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException, Request
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from database import Base, ConformationalMappingArtifact, ConformationalMappingRequest, Job
-from experiment_services import WORKFLOW_ADAPTER_REGISTRY
+from experiment_services import (
+    WORKFLOW_ADAPTER_REGISTRY,
+    DispatchFailure,
+    ValidationFailure,
+    _cm_submission_source_ids,
+    _validate_workflow_payload,
+)
 from routers import conformational_mapping as cm
 from services.conformational_mapping import global_adapter
 from services.conformational_mapping.persistence import issue_request_capability
@@ -83,6 +90,76 @@ def test_registered_global_cm_adapters_equal_executable_materializers() -> None:
     }
     assert set(global_adapter.EXECUTABLE_CM_ADAPTERS) == expected
     assert WORKFLOW_ADAPTER_REGISTRY["conformational_mapping"] == expected
+
+
+def _global_cm_payload(submission: dict[str, object], receipt_ids: list[str]) -> dict[str, object]:
+    backend = str(submission["backend"])
+    adapter = (
+        "bms.cm.protenix_v2.adapter.v1"
+        if backend == "protenix_v2_ensemble"
+        else "bms.cm.confornets.adapter.v1"
+    )
+    return {
+        "schema": "bms.experiment.workflow.v1",
+        "workflow_family": "conformational_mapping",
+        "contract_version": "1",
+        "adapter_id": adapter,
+        "stage": "protenix_v2_sampling" if backend == "protenix_v2_ensemble" else "confornets_sampling",
+        "backend": backend,
+        "source_receipt_ids": receipt_ids,
+        "expected_cardinality": 1,
+        "nodes": [{"id": "generate", "kind": "generator"}],
+        "edges": [],
+        "scheduler": {
+            "name": "global CM", "model_id": "conformational_mapping", "mode": "map",
+            "params": {"workflow_adapter": adapter, "cm_submission": submission},
+        },
+    }
+
+
+def test_global_cm_source_receipts_exactly_bind_submitted_sources() -> None:
+    submission: dict[str, object] = {
+        "backend": "confornets",
+        "registered_sequence_id": "sequence",
+        "registered_checkpoint_id": "checkpoint",
+        "registered_reference_ids": ["reference-a", "reference-b"],
+        "registered_config_id": "config",
+        "registered_transfer_id": "transfer",
+    }
+    expected = ["sequence", "checkpoint", "reference-a", "reference-b", "config", "transfer"]
+    assert _cm_submission_source_ids(submission) == expected
+    _validate_workflow_payload(_global_cm_payload(submission, expected))
+    with pytest.raises(ValidationFailure, match="do not bind"):
+        _validate_workflow_payload(_global_cm_payload(submission, ["sequence", "checkpoint"]))
+
+
+@pytest.mark.asyncio
+async def test_global_cm_materializer_rolls_back_core_state_and_removes_failed_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'rollback.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(global_adapter, "get_results_dir", lambda: tmp_path)
+
+    async def fail_after_flush(session: AsyncSession, **_: object) -> dict[str, object]:
+        root = tmp_path / "conformational_mapping_attempt"
+        root.mkdir(parents=True)
+        (root / "partial").write_text("partial", encoding="utf-8")
+        session.add(Job(id="attempt", name="partial", status="queued", model_id="conformational_mapping", mode="map", params={}))
+        await session.flush()
+        raise DispatchFailure("injected materialization failure")
+
+    monkeypatch.setattr(global_adapter, "_materialize_preallocated_cm_job", fail_after_flush)
+    async with factory() as session:
+        with pytest.raises(DispatchFailure, match="injected"):
+            await global_adapter.materialize_preallocated_cm_job(
+                session, attempt_id="attempt", scheduler={}, run_group_id="group",
+            )
+        assert (await session.execute(select(Job).where(Job.id == "attempt"))).scalar_one_or_none() is None
+    assert not (tmp_path / "conformational_mapping_attempt").exists()
+    await engine.dispose()
 
 
 def test_confornets_snapshot_identity_binds_full_normalized_snapshot() -> None:
