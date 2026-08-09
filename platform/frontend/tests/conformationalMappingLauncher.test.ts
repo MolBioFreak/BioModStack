@@ -118,6 +118,21 @@ test('normal external import is mmCIF-only with server-derived snapshot authorit
     assert.doesNotMatch(launcher, /form\.snapshotId\) errors\.push\('Select the matching ordered complete-complex snapshot bundle/);
 });
 
+test('template makes Protenix-only controls conditional on the selected backend', () => {
+    const template = readFileSync(resolve(process.cwd(), '../api/config/templates/conformational_mapping.yaml'), 'utf8');
+    const paramBlock = (name: string): string => {
+        const start = template.indexOf(`  - name: ${name}\n`);
+        assert.notEqual(start, -1, `missing template parameter ${name}`);
+        const next = template.indexOf('\n  - name: ', start + 1);
+        return template.slice(start, next === -1 ? undefined : next);
+    };
+
+    for (const name of ['ordered_seeds', 'samples_per_seed', 'feature_policy', 'runtime_policy']) {
+        const block = paramBlock(name);
+        assert.match(block, /condition:\s*\n\s+param: backend\s*\n\s+values: \[protenix_v2_ensemble\]/);
+    }
+});
+
 test('server-owned policy and singular external artifact contracts stay out of editable launcher state', () => {
     const launcher = source('conformationalMapping/ConformationalMappingLauncher.tsx');
     const state = source('jobSubmissionTemplateState.ts');

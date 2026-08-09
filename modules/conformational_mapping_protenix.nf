@@ -41,6 +41,7 @@ process CanonicalProtenixEnsemble {
     tag "cm-protenix:${request_id}"
     label 'Protenix'
     label 'gpu'
+    container { "${preflight}/runtime-image.sif" }
     stageInMode 'copy'
 
     input:
@@ -184,7 +185,7 @@ PY
   {"semantic_role":"execution_snapshot_receipt","relative_path":"runtime/execution-snapshot-receipt.json"}
 ]
 JSON
-    RUNTIME_IMAGE="\${BMS_PROTENIX_RUNTIME_IMAGE:-\$PREFLIGHT/runtime-image.sif}"
+    RUNTIME_IMAGE="\$PREFLIGHT/runtime-image.sif"
     test -f "\$RUNTIME_IMAGE"
     python3 ${params.code_root}/scripts/attest_protenix_runtime.py \
       --registry "\$REGISTRY" --image-receipt "\$IMAGE_RECEIPT" \

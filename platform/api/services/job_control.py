@@ -5,7 +5,7 @@ Job control helpers shared across routers.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Iterable, Optional, Sequence
+from typing import Awaitable, Callable, Iterable, Optional, Sequence
 import json
 import logging
 
@@ -126,6 +126,8 @@ async def cancel_job_lineage(
     *,
     error_message: str = "Cancelled by user",
     commit: bool = True,
+    before_intent_commit: Callable[[], Awaitable[None]] | None = None,
+    before_terminal_commit: Callable[[], Awaitable[None]] | None = None,
 ) -> tuple[Job, list[Job]]:
     root_job, lineage, _ = await _load_job_lineage(session, job_id)
     if not root_job:
@@ -159,6 +161,8 @@ async def cancel_job_lineage(
         }
         job.params = params
         job.queue_status = "cancelling"
+    if before_intent_commit is not None:
+        await before_intent_commit()
     if commit:
         await session.commit()
     else:
@@ -218,6 +222,9 @@ async def cancel_job_lineage(
             )
             params["cancellation_receipt"] = receipt
             job.params = params
+
+    if before_terminal_commit is not None:
+        await before_terminal_commit()
 
     if commit:
         await session.commit()

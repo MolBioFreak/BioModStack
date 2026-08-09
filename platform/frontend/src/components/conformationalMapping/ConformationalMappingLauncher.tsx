@@ -227,6 +227,49 @@ const metadataText = (value: unknown): string => {
     return String(value);
 };
 
+type CmSourceIdentityContext = {
+    provider: unknown;
+    accession: unknown;
+    model: unknown;
+    sample: unknown;
+    chains: unknown;
+    entities: unknown;
+};
+
+const sourceIdentityContext = (source: CmSource): CmSourceIdentityContext => {
+    const receipt = source.authority_receipt;
+    const payload = receipt
+        && receipt.source_id === source.source_id
+        && receipt.source_kind === source.source_kind
+        && receipt.content_sha256 === source.sha256
+        ? receipt.payload
+        : {};
+    const selection = asObject(payload.selection) || {};
+    const normalizedMetadata = asObject(source.metadata.normalized_metadata) || {};
+    const scopes = [selection, payload, normalizedMetadata, source.metadata];
+    const pick = (...keys: string[]): unknown => {
+        for (const scope of scopes) {
+            for (const key of keys) {
+                if (scope[key] != null && scope[key] !== '') return scope[key];
+            }
+        }
+        return undefined;
+    };
+    return {
+        provider: pick('provider'),
+        accession: pick('accession'),
+        model: pick('model_id', 'model_ids'),
+        sample: pick('sample_id', 'sample_ids'),
+        chains: pick('chain_ids', 'chain_id'),
+        entities: pick('entity_ids', 'entity_id'),
+    };
+};
+
+const identityStringArray = (value: unknown): string[] => {
+    if (typeof value === 'string' && value.length > 0) return [value];
+    return asStringArray(value).filter((item) => item.length > 0);
+};
+
 const integerList = (value: string): number[] | null => {
     const parts = value.split(',').map((item) => item.trim());
     if (!parts.length || parts.some((item) => !/^-?\d+$/.test(item))) return null;
@@ -380,6 +423,10 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
         || (form.backend === 'confornets' && source.source_kind === 'protein_sequence')
         || (form.backend === 'external_import' && ['structure_upload', 'structure_artifact'].includes(source.source_kind))
     ));
+    const selectedInputIdentity = useMemo(
+        () => selectedSource ? sourceIdentityContext(selectedSource) : null,
+        [selectedSource],
+    );
     const selectedCheckpoint = sourceRegistry.find((source) =>
         source.source_id === form.checkpointId
         && source.source_kind === 'confornets_checkpoint'
@@ -398,13 +445,8 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
                 ? [selectedSource.submission_policy.chain_id]
                 : [];
         }
-        const receipt = selectedSource?.authority_receipt;
-        if (receipt?.authority_kind !== 'complex_snapshot_normalization'
-            || receipt.content_sha256 !== selectedSource?.sha256) return [];
-        return Array.isArray(receipt.payload.chain_ids)
-            ? receipt.payload.chain_ids.filter((chainId): chainId is string => typeof chainId === 'string' && chainId.length > 0)
-            : [];
-    }, [form.backend, selectedSource]);
+        return identityStringArray(selectedInputIdentity?.chains);
+    }, [form.backend, selectedInputIdentity?.chains, selectedSource?.submission_policy?.chain_id]);
 
     const compatibleSources = useMemo(() => sourceRegistry.filter((source) => {
         if (form.backend === 'protenix_v2_ensemble') return source.source_kind === 'complex_snapshot';
@@ -640,11 +682,12 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
     });
 
     const selectRcsbEntry = (entry: CmRcsbEntry) => {
+        const required = new Set(entry.required_selection);
         setSelectedRcsbEntry(entry);
-        setRcsbModelId(entry.models[0]?.model_id || '');
-        setRcsbSampleId(entry.samples[0]?.sample_id || '');
-        setRcsbChainId(entry.chains[0]?.chain_id || '');
-        setRcsbEntityId(entry.entities[0]?.entity_id || entry.chains[0]?.entity_id || '');
+        setRcsbModelId(required.has('model_id') ? '' : entry.models[0]?.model_id || '');
+        setRcsbSampleId(required.has('sample_id') ? '' : entry.samples[0]?.sample_id || '');
+        setRcsbChainId(required.has('chain_ids') ? '' : entry.chains[0]?.chain_id || '');
+        setRcsbEntityId(required.has('entity_ids') ? '' : entry.entities[0]?.entity_id || entry.chains[0]?.entity_id || '');
         setError(null);
     };
 
@@ -871,15 +914,23 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
     const runIdentity = (run: CmReusableRun): string => run.request_id || run.run_id || run.job_id;
     const runLabel = (run: CmReusableRun): string => run.name || run.run_name || runIdentity(run);
     const artifactLabel = (artifact: CmReusableRun['artifacts'][number]): string => artifact.name || artifact.candidate_id || artifact.artifact_id;
-    const selectedInputContext = selectedSource ? [
-        `provider ${metadataText(selectedSource.metadata.provider)}`,
-        `accession ${metadataText(selectedSource.metadata.accession)}`,
-        `model ${metadataText(selectedSource.metadata.model_id)}`,
-        `sample ${metadataText(selectedSource.metadata.sample_id)}`,
-        `chain ${metadataText(selectedSource.metadata.chain_ids)}`,
-        `entity ${metadataText(selectedSource.metadata.entity_ids)}`,
-        `coordinate ${metadataText(selectedSource.metadata.backend_coordinates)}`,
+    const selectedInputContext = selectedInputIdentity ? [
+        `provider ${metadataText(selectedInputIdentity.provider)}`,
+        `accession ${metadataText(selectedInputIdentity.accession)}`,
+        `model ${metadataText(selectedInputIdentity.model)}`,
+        `sample ${metadataText(selectedInputIdentity.sample)}`,
+        `chains ${metadataText(selectedInputIdentity.chains)}`,
+        `entities ${metadataText(selectedInputIdentity.entities)}`,
+        `coordinate ${metadataText(selectedSource?.metadata.backend_coordinates)}`,
     ].filter((item) => !item.endsWith('—')).join(' · ') : 'No model/sample/chain/entity context is selected.';
+    const hasSelectedInputContext = Boolean(selectedInputIdentity && [
+        selectedInputIdentity.provider,
+        selectedInputIdentity.accession,
+        selectedInputIdentity.model,
+        selectedInputIdentity.sample,
+        selectedInputIdentity.chains,
+        selectedInputIdentity.entities,
+    ].some((value) => value != null && value !== '' && (!Array.isArray(value) || value.length > 0)));
     const comparisonControls = form.backend === 'external_import' ? (
         <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950/30 p-3 text-xs text-slate-500">State-landscape comparison is unavailable for a single imported coordinate. Register one immutable structure and compare it in the canonical results viewer.</div>
     ) : (
@@ -995,7 +1046,7 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
                         <p className="mt-1 text-xs text-slate-400">Search the RCSB catalogue, inspect entry metadata, select the exact model/sample/chain/entity context, then register the immutable mmCIF.</p>
                         <div className="mt-3 flex max-w-xl gap-2"><input aria-label="RCSB accession or keyword" value={rcsbQuery} onChange={(event) => setRcsbQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') searchRcsbMutation.mutate(); }} placeholder="4HHB or deoxyhaemoglobin" className={inputClass} /><button type="button" disabled={searchRcsbMutation.isPending || rcsbQuery.trim().length < 2} onClick={() => searchRcsbMutation.mutate()} className="shrink-0 rounded-lg border border-violet-400/40 px-3 py-2 text-sm text-violet-100 disabled:opacity-40">{searchRcsbMutation.isPending ? 'Searching…' : 'Search RCSB'}</button></div>
                         {rcsbSearchResults && <div className="mt-4 space-y-2" aria-label="RCSB search results">{rcsbSearchResults.results.length ? rcsbSearchResults.results.map((entry) => <article key={entry.accession} className="rounded-xl border border-slate-800 bg-slate-950/30 p-3"><div className="flex flex-wrap items-start justify-between gap-3"><div><h5 className="text-sm font-medium text-white">{entry.title}</h5><p className="mt-1 text-xs text-slate-400">{entry.accession} · {entry.method || 'method unavailable'} · resolution {entry.resolution ?? '—'} Å · {entry.organism || 'organism unavailable'} · released {entry.release_date || '—'}</p></div><button type="button" onClick={() => selectRcsbEntry(entry)} className="shrink-0 rounded-lg border border-violet-400/40 px-3 py-2 text-xs text-violet-100">Select {entry.accession}</button></div></article>) : <p className="text-sm text-slate-500">No RCSB entries matched this search.</p>}</div>}
-                        {selectedRcsbEntry && <div className="mt-4 rounded-xl border border-violet-400/30 bg-violet-500/5 p-3"><div className="text-xs font-semibold text-violet-100">Selected entry: {selectedRcsbEntry.accession}</div><div className="mt-1 text-xs text-slate-400">{selectedRcsbEntry.title} · {selectedRcsbEntry.method || 'method unavailable'} · {selectedRcsbEntry.organism || 'organism unavailable'}</div><div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="space-y-1 text-xs text-slate-400">Model<select aria-label="RCSB model" value={rcsbModelId} onChange={(event) => setRcsbModelId(event.target.value)} className={inputClass}>{selectedRcsbEntry.models.map((model) => <option key={model.model_id} value={model.model_id}>{model.label || `Model ${model.model_id}`}</option>)}</select></label><label className="space-y-1 text-xs text-slate-400">Sample<select aria-label="RCSB sample" value={rcsbSampleId} onChange={(event) => setRcsbSampleId(event.target.value)} className={inputClass}>{selectedRcsbEntry.samples.map((sample) => <option key={sample.sample_id} value={sample.sample_id}>{sample.label || sample.sample_id}</option>)}</select></label><label className="space-y-1 text-xs text-slate-400">Chain<select aria-label="RCSB chain" value={rcsbChainId} onChange={(event) => { setRcsbChainId(event.target.value); const chain = selectedRcsbEntry.chains.find((item) => item.chain_id === event.target.value); if (chain) setRcsbEntityId(chain.entity_id); }} className={inputClass}><option value="">Select chain…</option>{selectedRcsbEntry.chains.map((chain) => <option key={chain.chain_id} value={chain.chain_id}>{chain.label || chain.chain_id} · entity {chain.entity_id}</option>)}</select></label><label className="space-y-1 text-xs text-slate-400">Entity<select aria-label="RCSB entity" value={rcsbEntityId} onChange={(event) => setRcsbEntityId(event.target.value)} className={inputClass}><option value="">Select entity…</option>{selectedRcsbEntry.entities.map((entity) => <option key={entity.entity_id} value={entity.entity_id}>{entity.label || entity.entity_id} · {entity.entity_type}</option>)}</select></label></div><div className="mt-3 flex flex-wrap items-center justify-between gap-3"><span className="text-xs text-slate-400">{rcsbSelectionSummary}</span><button type="button" disabled={!rcsbSelectionReady || registerRcsbSelectionMutation.isPending} onClick={() => registerRcsbSelectionMutation.mutate()} className="rounded-lg border border-violet-400/40 px-3 py-2 text-sm text-violet-100 disabled:opacity-40">{registerRcsbSelectionMutation.isPending ? 'Registering…' : 'Register selected RCSB mmCIF'}</button></div></div>}
+                        {selectedRcsbEntry && <div className="mt-4 rounded-xl border border-violet-400/30 bg-violet-500/5 p-3"><div className="text-xs font-semibold text-violet-100">Selected entry: {selectedRcsbEntry.accession}</div><div className="mt-1 text-xs text-slate-400">{selectedRcsbEntry.title} · {selectedRcsbEntry.method || 'method unavailable'} · {selectedRcsbEntry.organism || 'organism unavailable'}</div><div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="space-y-1 text-xs text-slate-400">Model<select aria-label="RCSB model" value={rcsbModelId} onChange={(event) => setRcsbModelId(event.target.value)} className={inputClass}><option value="">Select model…</option>{selectedRcsbEntry.models.map((model) => <option key={model.model_id} value={model.model_id}>{model.label || `Model ${model.model_id}`}</option>)}</select></label><label className="space-y-1 text-xs text-slate-400">Sample<select aria-label="RCSB sample" value={rcsbSampleId} onChange={(event) => setRcsbSampleId(event.target.value)} className={inputClass}><option value="">Select sample…</option>{selectedRcsbEntry.samples.map((sample) => <option key={sample.sample_id} value={sample.sample_id}>{sample.label || sample.sample_id}</option>)}</select></label><label className="space-y-1 text-xs text-slate-400">Chain<select aria-label="RCSB chain" value={rcsbChainId} onChange={(event) => setRcsbChainId(event.target.value)} className={inputClass}><option value="">Select chain…</option>{selectedRcsbEntry.chains.map((chain) => <option key={chain.chain_id} value={chain.chain_id}>{chain.label || chain.chain_id} · entity {chain.entity_id}</option>)}</select></label><label className="space-y-1 text-xs text-slate-400">Entity<select aria-label="RCSB entity" value={rcsbEntityId} onChange={(event) => setRcsbEntityId(event.target.value)} className={inputClass}><option value="">Select entity…</option>{selectedRcsbEntry.entities.map((entity) => <option key={entity.entity_id} value={entity.entity_id}>{entity.label || entity.entity_id} · {entity.entity_type}</option>)}</select></label></div><div className="mt-3 flex flex-wrap items-center justify-between gap-3"><span className="text-xs text-slate-400">{rcsbSelectionSummary}</span><button type="button" disabled={!rcsbSelectionReady || registerRcsbSelectionMutation.isPending} onClick={() => registerRcsbSelectionMutation.mutate()} className="rounded-lg border border-violet-400/40 px-3 py-2 text-sm text-violet-100 disabled:opacity-40">{registerRcsbSelectionMutation.isPending ? 'Registering…' : 'Register selected RCSB mmCIF'}</button></div></div>}
                         <div className="mt-4 space-y-2">{tabSources.length ? tabSources.map((source) => <button key={source.source_id} type="button" onClick={() => selectSource(source)} aria-pressed={selectedSourceId === source.source_id} className={`w-full rounded-xl border p-3 text-left ${selectedSourceId === source.source_id ? 'border-orange-400/60 bg-orange-500/10' : 'border-slate-800 bg-slate-950/30'}`}><span className="block text-sm font-medium text-white">{String(source.metadata.name || source.source_id)}</span><span className="mt-1 block truncate font-mono text-[11px] text-slate-500">{source.sha256}</span></button>) : <div className="rounded-lg border border-dashed border-violet-500/20 p-3 text-xs text-slate-500">No registered RCSB sources are available.</div>}</div>
                     </div>}
                     {activeSourceTab === 'cached' && <div id="cm-source-panel-cached" role="tabpanel" aria-labelledby="cm-source-tab-cached" className="mt-4 space-y-2">{tabSources.length ? tabSources.map((source) => <button key={source.source_id} type="button" onClick={() => selectSource(source)} aria-pressed={selectedSourceId === source.source_id} className={`w-full rounded-xl border p-3 text-left ${selectedSourceId === source.source_id ? 'border-orange-400/60 bg-orange-500/10' : 'border-slate-800 bg-slate-950/30'}`}><span className="block text-sm font-medium text-white">{String(source.metadata.name || source.metadata.target_id || source.source_id)}</span><span className="mt-1 block truncate font-mono text-[11px] text-slate-500">{source.source_kind} · {source.sha256} · {source.bytes.toLocaleString()} bytes</span></button>) : <div className="rounded-xl border border-dashed border-slate-800 p-6 text-center text-sm text-slate-500">No compatible sources are available in this view.</div>}</div>}
@@ -1006,6 +1057,7 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
                     <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-orange-300">4</p><h3 id="cm-preview-heading" className="mt-1 font-semibold text-white">Input preview</h3><p className="mt-1 text-xs text-slate-500">Resolved structure and selection context</p>
                     <div className="mt-4 overflow-hidden rounded-xl border border-slate-800 bg-slate-950/50">{sourcePreviewUrl ? <MolstarViewer structureUrl={sourcePreviewUrl} format="cif" height={340} hideControls label="Selected CM input preview" /> : <div className="flex h-[340px] items-center justify-center px-6 text-center text-sm text-slate-500">{selectedSource ? 'This immutable source has no browser-safe preview URL. Its identity remains available below.' : 'Select a structure source or choose a local mmCIF file to preview it.'}</div>}</div>
                     <div className="mt-4 grid gap-3 sm:grid-cols-2"><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Selected input</span><div className="mt-1 break-words text-white">{selectedSource ? String(selectedSource.metadata.name || selectedSource.metadata.target_id || selectedSource.source_id) : sourceFile?.name || 'None'}</div></div><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Immutable provenance</span><div className="mt-1 break-all font-mono text-white">{selectedSource?.sha256 || 'Created after registration'}</div></div></div>
+                    {selectedSource && <div className="mt-3 rounded-xl border border-slate-800 p-3 text-xs" aria-label="Preview source identity"><span className="text-slate-500">Server-owned source identity</span><div className="mt-1 break-words leading-5 text-slate-200">{selectedInputContext}</div></div>}
                     <div className="mt-4"><div className="text-xs text-slate-500">{form.backend === 'confornets' ? 'Server-canonical chain' : 'Retained source chains'}</div>{availableChainIds.length ? <div className="mt-2 flex flex-wrap gap-2">{availableChainIds.map((chainId) => <span key={chainId} className="rounded-lg border border-slate-800 px-3 py-2 text-xs text-slate-300">Chain {chainId}</span>)}</div> : <p className="mt-2 text-xs text-slate-500">Chain identities are derived after server-side source normalization.</p>}</div>
                     <p className="mt-4 rounded-lg border border-sky-500/20 bg-sky-500/5 p-3 text-xs leading-5 text-sky-100">{CM_SCIENTIFIC_LIMIT}</p>
                 </section>
@@ -1013,7 +1065,7 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
 
             <section className={`${cardClass} ${planningWarning ? 'border-amber-500/40' : ''}`} aria-labelledby="cm-summary-heading">
                 <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-orange-300">5</p><h3 id="cm-summary-heading" className="mt-1 font-semibold text-white">Pre-submit summary</h3><p className="mt-1 text-xs text-slate-500">Effective request</p></div><span className={`rounded-full px-3 py-1 text-xs font-medium ${validationErrors.length ? 'bg-red-500/10 text-red-200' : 'bg-emerald-500/10 text-emerald-200'}`}>{validationErrors.length ? `${validationErrors.length} blocking issue${validationErrors.length === 1 ? '' : 's'}` : 'Ready for typed admission'}</span></div>
-                <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-7"><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Run</span><div className="mt-1 text-white">{effectivePayload?.name || form.name || 'Unnamed'}</div></div><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Workflow</span><div className="mt-1 text-white">{backendLabel}</div></div><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Input authority</span><div className="mt-1 truncate text-white">{selectedSource ? String(selectedSource.metadata.name || selectedSource.metadata.target_id || selectedSource.source_id) : 'Not selected'}</div><div className="mt-1 truncate font-mono text-[11px] text-slate-400">{selectedSourceId || 'Source unresolved'}</div><div className="mt-1 truncate font-mono text-[11px] text-slate-500">{selectedSource ? `${selectedSource.source_kind} · ${selectedSource.sha256}` : 'Source unresolved'}</div><div className="mt-1 text-[11px] text-slate-500">{[form.backend === 'confornets' && selectedSource?.submission_policy && `server-canonical chain ${selectedSource.submission_policy.chain_id}`, form.backend !== 'confornets' && availableChainIds.length > 0 && `retained chains ${availableChainIds.join(', ')}`].filter(Boolean).join(' · ') || 'Model, sample, and chain context resolve at server normalization'}</div></div><div className="rounded-xl border border-slate-800 p-3 text-xs" aria-label="Selected input context"><span className="text-slate-500">Selected input context</span><div className="mt-1 break-words leading-5 text-slate-200">{selectedInputContext}</div></div><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Candidate coordinates</span><div className="mt-1 text-white">{expectedCount.toLocaleString()}</div></div><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Planning storage</span><div className="mt-1 text-white">~{estimatedStorageGiB.toFixed(2)} GiB</div></div><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Notes</span><div className="mt-1 text-white">{effectivePayload?.notes ? 'Included in immutable run record' : 'None'}</div></div></div>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-7"><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Run</span><div className="mt-1 text-white">{effectivePayload?.name || form.name || 'Unnamed'}</div></div><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Workflow</span><div className="mt-1 text-white">{backendLabel}</div></div><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Input authority</span><div className="mt-1 truncate text-white">{selectedSource ? String(selectedSource.metadata.name || selectedSource.metadata.target_id || selectedSource.source_id) : 'Not selected'}</div><div className="mt-1 truncate font-mono text-[11px] text-slate-400">{selectedSourceId || 'Source unresolved'}</div><div className="mt-1 truncate font-mono text-[11px] text-slate-500">{selectedSource ? `${selectedSource.source_kind} · ${selectedSource.sha256}` : 'Source unresolved'}</div><div className="mt-1 text-[11px] text-slate-500">{[form.backend === 'confornets' && selectedSource?.submission_policy && `server-canonical chain ${selectedSource.submission_policy.chain_id}`, form.backend !== 'confornets' && availableChainIds.length > 0 && `retained chains ${availableChainIds.join(', ')}`].filter(Boolean).join(' · ') || (hasSelectedInputContext ? 'Server-owned source context shown here' : 'Source identity unavailable')}</div></div><div className="rounded-xl border border-slate-800 p-3 text-xs" aria-label="Selected input context"><span className="text-slate-500">Selected input context</span><div className="mt-1 break-words leading-5 text-slate-200">{selectedInputContext}</div></div><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Candidate coordinates</span><div className="mt-1 text-white">{expectedCount.toLocaleString()}</div></div><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Planning storage</span><div className="mt-1 text-white">~{estimatedStorageGiB.toFixed(2)} GiB</div></div><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Notes</span><div className="mt-1 text-white">{effectivePayload?.notes ? 'Included in immutable run record' : 'None'}</div></div></div>
                 <div className="mt-3 grid gap-3 lg:grid-cols-2"><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Effective scientific settings</span><div className="mt-1 leading-5 text-slate-200">{scientificSummary}</div></div><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Expected outputs</span><div className="mt-1 leading-5 text-slate-200">{expectedOutputsSummary}</div></div></div>
                 {validationErrors.length > 0 && <ul className="mt-4 grid gap-2 text-sm text-red-200 sm:grid-cols-2">{validationErrors.map((message) => <li key={message} className="rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2">{message}</li>)}</ul>}
                 {planningWarning && <p className="mt-4 text-xs font-medium text-amber-200">Large request: confirm GPU queue capacity and durable result storage before submission.</p>}

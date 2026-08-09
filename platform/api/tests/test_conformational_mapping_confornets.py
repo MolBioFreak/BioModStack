@@ -146,7 +146,7 @@ def _fixture_settings(**overrides: object) -> dict[str, object]:
             },
         ],
         "runs": 1,
-        "saved_steps": [5, 10],
+        "saved_steps": [10],
         "confornet_count": 1,
         "samples": 2,
         "max_steps": 10,
@@ -212,7 +212,7 @@ def _sha256(path: Path) -> str:
 
 def test_cm4_001_single_chain_only() -> None:
     plan = build_confornets_coordinate_plan(_fixture_settings(), target_id="target-a")
-    assert len(plan) == 8
+    assert len(plan) == 4
 
     with pytest.raises(ConformationalMappingRequestError, match="single-chain protein"):
         build_confornets_coordinate_plan(
@@ -425,7 +425,7 @@ def test_cm4_004_full_coordinate_identity(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     ensemble = json.loads((output / "cm_ensemble_v1.json").read_text(encoding="utf-8"))
 
-    assert len(ensemble["candidates"]) == 8
+    assert len(ensemble["candidates"]) == 4
     for record in ensemble["candidates"]:
         coordinates = record["backend_coordinates"]
         assert set(coordinates) == {
@@ -440,7 +440,7 @@ def test_cm4_004_full_coordinate_identity(tmp_path: Path) -> None:
             "sample_index",
         }
         assert record["candidate_id"] == candidate_id(coordinates)
-    assert len({row["candidate_id"] for row in ensemble["candidates"]}) == 8
+    assert len({row["candidate_id"] for row in ensemble["candidates"]}) == 4
 
 
 def test_cm4_005_dimension_formula(tmp_path: Path) -> None:
@@ -448,14 +448,14 @@ def test_cm4_005_dimension_formula(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     ensemble = json.loads((output / "cm_ensemble_v1.json").read_text(encoding="utf-8"))
 
-    # Two target/task/test/reference groups, each 1 run * 2 steps * 1 net * 2 samples.
-    assert ensemble["expected_cardinality"] == 2 * (1 * 2 * 1 * 2)
+    # Two target/task/test/reference groups, each 1 run * 1 step * 1 net * 2 samples.
+    assert ensemble["expected_cardinality"] == 2 * (1 * 1 * 1 * 2)
     assert len(ensemble["expected_coordinates"]) == ensemble["expected_cardinality"]
 
 
 def test_cm4_006_missing_or_extra_coordinate_fails(tmp_path: Path) -> None:
     missing = _copy_fixture(tmp_path / "missing")
-    (missing / "native" / "conformers" / "candidate_007.cif").unlink()
+    (missing / "native" / "conformers" / "candidate_003.cif").unlink()
     result, _ = _run_finalizer(tmp_path / "missing-run", fixture_root=missing)
     assert result.returncode != 0
     assert "missing" in result.stderr.lower()

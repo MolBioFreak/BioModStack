@@ -318,6 +318,18 @@ def _normalize_confornets_settings(settings: Mapping[str, Any]) -> dict[str, Any
         raise ConformationalMappingRequestError(
             "ConforNets MSE requires exactly one ConforNet"
         )
+    if task == "mse" and len(normalized_steps) != 1:
+        raise ConformationalMappingRequestError(
+            "ConforNets MSE requires exactly one saved step"
+        )
+    if task == "mse" and normalized_steps != [max_steps]:
+        raise ConformationalMappingRequestError(
+            "ConforNets MSE saved step must equal max_steps"
+        )
+    if task != "mse" and normalized_references:
+        raise ConformationalMappingRequestError(
+            "ConforNets references are valid only for MSE"
+        )
     transfer = config["transfer_source"]
     normalized_transfer: dict[str, Any] | None = None
     if transfer is not None:
@@ -348,6 +360,12 @@ def _normalize_confornets_settings(settings: Mapping[str, Any]) -> dict[str, Any
     if task != "transfer" and normalized_transfer is not None:
         raise ConformationalMappingRequestError(
             "ConforNets transfer source is invalid for this task"
+        )
+    if task == "transfer" and (
+        runs != 1 or normalized_steps != [0] or confornet_count != 1
+    ):
+        raise ConformationalMappingRequestError(
+            "ConforNets transfer requires one run, saved step 0, and one ConforNet"
         )
 
     identity = _strict_object(

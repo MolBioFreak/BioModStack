@@ -1498,6 +1498,11 @@ async def _authorized_record(
     if record is None:
         _principal(request)
         raise HTTPException(status_code=404, detail="conformational-mapping request not found")
+    if mutation:
+        principal_id = _principal(request)
+        if record.principal_id != principal_id:
+            raise HTTPException(status_code=404, detail="conformational-mapping request not found")
+        return record
     principal = getattr(request.state, "authenticated_principal", None)
     supplied = ""
     authorization = request.headers.get("authorization", "")
@@ -2365,20 +2370,30 @@ async def cancel_request(
     if record.status not in {"prepared", "queued", "running"}:
         raise HTTPException(status_code=409, detail="request is not cancellable")
     try:
+        async def persist_cancellation_intent() -> None:
+            progress = dict(record.progress_json or {})
+            progress.update({"phase": "cancellation_requested"})
+            record.progress_json = progress
+            record.updated_at = datetime.utcnow()
+            await session.flush()
+
+        async def persist_terminal_cancellation() -> None:
+            await transition_request(
+                session,
+                record,
+                status="cancelled",
+                progress={"phase": "cancelled"},
+                flush=False,
+            )
+
         await cancel_job_lineage(
             record.job_id,
             session,
             error_message="Cancelled through typed CM API",
-            commit=False,
+            commit=True,
+            before_intent_commit=persist_cancellation_intent,
+            before_terminal_commit=persist_terminal_cancellation,
         )
-        await transition_request(
-            session,
-            record,
-            status="cancelled",
-            progress={"phase": "cancelled"},
-            flush=False,
-        )
-        await session.commit()
     except Exception:
         await session.rollback()
         raise

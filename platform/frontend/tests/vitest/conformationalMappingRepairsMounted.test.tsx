@@ -10,6 +10,7 @@ import { ConformationalMappingLauncher } from '../../src/components/conformation
 import { ConformationalMappingViewer } from '../../src/components/conformationalMapping/ConformationalMappingViewer.js';
 import { JobDetailPage } from '../../src/components/JobDetailPage.js';
 import { JobSubmission } from '../../src/components/JobSubmission.js';
+import { ResultsViewer } from '../../src/components/ResultsViewer.js';
 import {
     searchCmRcsb,
     type CmFailureReceipt,
@@ -176,6 +177,56 @@ test('mounted Your Runs discovers reusable artifacts and registers only an expli
     mounted.client.clear();
 });
 
+test('mounted selected-input preview and summary show server-owned receipt and normalized identity', async () => {
+    const authoritativeSource: CmSource = {
+        source_id: 'rcsb-authoritative',
+        source_kind: 'structure_upload',
+        format: 'mmcif',
+        sha256: sha('9'),
+        bytes: 4096,
+        metadata: {
+            name: 'Server-normalized RCSB import',
+            sample_id: 'asymmetric-unit',
+            chain_ids: ['A'],
+            entity_ids: ['1'],
+        },
+        authority_receipt: {
+            schema_name: 'cm_source_authority_receipt',
+            schema_version: 1,
+            source_id: 'rcsb-authoritative',
+            source_kind: 'structure_upload',
+            content_sha256: sha('9'),
+            authority_kind: 'rcsb_download',
+            receipt_sha256: sha('8'),
+            payload: {
+                provider: 'RCSB',
+                accession: '1UBQ',
+                selection: { model_id: '1' },
+            },
+        },
+    };
+    const mounted = await mountLauncher({ listSources: async () => [authoritativeSource] }, {
+        backend: 'external_import',
+        name: 'Authoritative preview',
+        registered_artifact_ids: [authoritativeSource.source_id],
+    });
+
+    const preview = mounted.renderer.root.findByProps({ 'aria-labelledby': 'cm-preview-heading' });
+    const summary = mounted.renderer.root.findByProps({ 'aria-labelledby': 'cm-summary-heading' });
+    for (const surface of [preview, summary]) {
+        const surfaceText = text(surface);
+        assert.match(surfaceText, /accession 1UBQ/i);
+        assert.match(surfaceText, /model 1/i);
+        assert.match(surfaceText, /sample asymmetric-unit/i);
+        assert.match(surfaceText, /chains? A/i);
+        assert.match(surfaceText, /entities? 1/i);
+        assert.doesNotMatch(surfaceText, /Model, sample, and chain context resolve at server normalization/i);
+    }
+
+    await act(async () => mounted.renderer.unmount());
+    mounted.client.clear();
+});
+
 test('mounted RCSB source path supports keyword search, entry metadata, and explicit ambiguous context selection', async () => {
     const searches: string[] = [];
     const registrations: Array<Record<string, unknown>> = [];
@@ -188,7 +239,7 @@ test('mounted RCSB source path supports keyword search, entry metadata, and expl
             samples: [{ sample_id: 'sample-a', label: 'Biological assembly 1' }],
             chains: [{ chain_id: 'A', label: 'Alpha chain', entity_id: '1', entity_type: 'protein', residue_count: 141 }, { chain_id: 'B', label: 'Beta chain', entity_id: '2', entity_type: 'protein', residue_count: 146 }],
             entities: [{ entity_id: '1', label: 'Hemoglobin alpha', entity_type: 'protein', residue_count: 141 }, { entity_id: '2', label: 'Hemoglobin beta', entity_type: 'protein', residue_count: 146 }],
-            required_selection: ['model_id', 'chain_ids', 'entity_ids'],
+            required_selection: ['model_id', 'sample_id', 'chain_ids', 'entity_ids'],
         }],
     };
     const mounted = await mountLauncher({
@@ -219,12 +270,27 @@ test('mounted RCSB source path supports keyword search, entry metadata, and expl
     assert.equal(registrations.length, 0, 'ambiguous provider entries must not register before explicit context selection');
 
     const modelSelect = mounted.renderer.root.findAllByType('select').find((item) => item.props['aria-label'] === 'RCSB model');
+    const sampleSelect = mounted.renderer.root.findAllByType('select').find((item) => item.props['aria-label'] === 'RCSB sample');
     const chainSelect = mounted.renderer.root.findAllByType('select').find((item) => item.props['aria-label'] === 'RCSB chain');
     const entitySelect = mounted.renderer.root.findAllByType('select').find((item) => item.props['aria-label'] === 'RCSB entity');
-    assert.ok(modelSelect && chainSelect && entitySelect);
+    const registerButton = mounted.renderer.root.findAllByType('button').find((item) => /Register selected RCSB mmCIF/i.test(text(item)));
+    assert.ok(modelSelect && sampleSelect && chainSelect && entitySelect && registerButton);
+    assert.deepEqual(
+        [modelSelect.props.value, sampleSelect.props.value, chainSelect.props.value, entitySelect.props.value],
+        ['', '', '', ''],
+        'every server-required RCSB context must start explicitly unresolved',
+    );
+    assert.equal(registerButton.props.disabled, true);
+
     await act(async () => modelSelect.props.onChange({ target: { value: '2' } }));
+    assert.equal(registerButton.props.disabled, true, 'sample, chain, and entity remain unresolved');
+    await act(async () => sampleSelect.props.onChange({ target: { value: 'sample-a' } }));
+    assert.equal(registerButton.props.disabled, true, 'chain and entity remain unresolved');
     await act(async () => chainSelect.props.onChange({ target: { value: 'B' } }));
+    assert.equal(entitySelect.props.value, '', 'choosing a chain must not silently choose its entity');
+    assert.equal(registerButton.props.disabled, true, 'entity remains unresolved');
     await act(async () => entitySelect.props.onChange({ target: { value: '2' } }));
+    assert.equal(registerButton.props.disabled, false);
     await clickButton(mounted.renderer, /Register selected RCSB mmCIF/i);
     assert.deepEqual(registrations, [{ accession: '4HHB', model_id: '2', sample_id: 'sample-a', chain_ids: ['B'], entity_ids: ['2'] }]);
     assert.match(text(mounted.renderer.root), /4HHB.*model 2.*sample-a.*chain B.*entity 2/i);
@@ -394,6 +460,65 @@ test('mounted /jobs/:id routes a CM job to the canonical viewer without generic 
         queryClient.clear();
         api.defaults.adapter = originalAdapter;
         globalThis.fetch = originalFetch;
+    }
+});
+
+test('mounted /designs/:id dispatches a CM job to the existing canonical viewer', async () => {
+    const originalAdapter = api.defaults.adapter;
+    const job = {
+        id: 'cm-results-route',
+        name: 'Canonical CM results',
+        model_id: 'conformational_mapping',
+        mode: 'map',
+        status: 'running',
+        created_at: '2026-08-09T00:00:00Z',
+        output_dir: '/unused',
+        params: {},
+        design_count: 0,
+    };
+    api.defaults.adapter = async (config) => {
+        const url = String(config.url || '');
+        let data: unknown;
+        if (url === '/api/jobs') data = { jobs: [job], total: 1 };
+        else if (url === `/api/jobs/${job.id}`) data = job;
+        else if (url === '/api/models/frustrampnn/integration') data = { model_id: 'frustrampnn', enabled: false };
+        else if (url.endsWith(`/requests/${job.id}/status`)) data = {
+            request_id: job.id,
+            job_id: job.id,
+            backend: 'protenix_v2_ensemble',
+            status: 'running',
+            job_status: 'running',
+            progress: {},
+            failure_receipt: null,
+            retry_eligible: false,
+            result_contract_id: 'conformational_mapping_protenix_v1',
+            run_record: null,
+        };
+        else if (url.endsWith(`/requests/${job.id}/progress`)) data = {
+            request_id: job.id, status: 'running', progress: {}, job_stage: null, job_progress: null,
+        };
+        else if (url.endsWith(`/requests/${job.id}/failures`)) data = { receipts: [] };
+        else throw new Error(`unexpected mounted ResultsViewer request: ${url}`);
+        return { data, status: 200, statusText: 'OK', headers: {}, config };
+    };
+    const queryClient = client();
+    let renderer: ReactTestRenderer | undefined;
+    try {
+        await act(async () => {
+            renderer = create(
+                <MemoryRouter initialEntries={[`/designs/${job.id}`]}>
+                    <QueryClientProvider client={queryClient}>
+                        <Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes>
+                    </QueryClientProvider>
+                </MemoryRouter>,
+            );
+        });
+        await flush(12);
+        assert.equal(renderer!.root.findAllByProps({ 'data-bms-cm-viewer': 'canonical' }).length, 1);
+    } finally {
+        await act(async () => renderer?.unmount());
+        queryClient.clear();
+        api.defaults.adapter = originalAdapter;
     }
 });
 

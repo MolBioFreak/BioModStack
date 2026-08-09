@@ -20,6 +20,7 @@ from experiment_services import (
     _validate_workflow_payload,
 )
 from routers import conformational_mapping as cm
+from services import job_control
 from services.conformational_mapping import global_adapter
 from services.conformational_mapping.persistence import issue_request_capability
 
@@ -64,6 +65,17 @@ async def test_request_capability_is_enforced_for_non_owner(monkeypatch: pytest.
         await cm._authorized_record("r", _request(principal="bob"), SimpleNamespace())
     assert denied.value.status_code == 404
     assert await cm._authorized_record("r", _request(principal="bob", token=token), SimpleNamespace()) is record
+    with pytest.raises(HTTPException) as anonymous_mutation:
+        await cm._authorized_record("r", _request(token=token), SimpleNamespace(), mutation=True)
+    assert anonymous_mutation.value.status_code == 401
+    with pytest.raises(HTTPException) as foreign_mutation:
+        await cm._authorized_record(
+            "r", _request(principal="bob", token=token), SimpleNamespace(), mutation=True,
+        )
+    assert foreign_mutation.value.status_code == 404
+    assert await cm._authorized_record(
+        "r", _request(principal="alice"), SimpleNamespace(), mutation=True,
+    ) is record
 
 
 def test_upload_cannot_impersonate_a_prior_run_artifact() -> None:
@@ -229,3 +241,50 @@ def test_retry_launch_params_never_reuse_resume_work_dir() -> None:
     cleaned = cm._clean_retry_launch_params(params, attempt_root=Path("/fresh/attempt"))
     assert "resume_work_dir" not in cleaned
     assert cleaned["cm_request_path"] == "/fresh/attempt/cm_request_v1.json"
+
+
+@pytest.mark.asyncio
+async def test_typed_cancellation_persists_joint_intent_before_external_stop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = SimpleNamespace(
+        id="job", parent_job_id=None, status="running", queue_status="running",
+        params={}, nextflow_run_id="run", paused=False, assigned_gpu=0,
+        awaiting_input=False, awaiting_stage=None, awaiting_payload={}, retry_count=0,
+        current_stage="inference", stage_progress=0.5, completed_at=None, error_message=None,
+    )
+    typed = {"status": "running", "phase": "running"}
+    commits: list[tuple[str, str, str]] = []
+
+    class Session:
+        async def flush(self) -> None:
+            return None
+
+        async def commit(self) -> None:
+            commits.append((job.status, job.queue_status, typed["phase"]))
+
+    async def load_lineage(_session: object, _job_id: str):
+        return job, [job], {"job": 0}
+
+    async def stop(_run_id: str) -> bool:
+        assert commits == [("running", "cancelling", "cancellation_requested")]
+        return True
+
+    async def mark_intent() -> None:
+        typed["phase"] = "cancellation_requested"
+
+    async def mark_terminal() -> None:
+        typed.update({"status": "cancelled", "phase": "cancelled"})
+
+    monkeypatch.setattr(job_control, "_load_job_lineage", load_lineage)
+    monkeypatch.setattr(job_control, "cancel_nextflow_job", stop)
+    await job_control.cancel_job_lineage(
+        "job", Session(),  # type: ignore[arg-type]
+        commit=True,
+        before_intent_commit=mark_intent,
+        before_terminal_commit=mark_terminal,
+    )
+    assert commits == [
+        ("running", "cancelling", "cancellation_requested"),
+        ("cancelled", "cancelled", "cancelled"),
+    ]

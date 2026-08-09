@@ -294,6 +294,18 @@ def test_execution_attestation_rejects_staged_image_swap_and_source_commit_misma
         )
 
 
+def test_canonical_process_executes_and_remeasures_the_verified_image_snapshot() -> None:
+    module = (REPO_ROOT / "modules" / "conformational_mapping_protenix.nf").read_text(encoding="utf-8")
+    config = (REPO_ROOT / "nextflow.config").read_text(encoding="utf-8")
+
+    assert 'container { "${preflight}/runtime-image.sif" }' in module
+    assert 'RUNTIME_IMAGE="\\$PREFLIGHT/runtime-image.sif"' in module
+    protenix_label = config.split("withLabel: Protenix {", 1)[1].split("withLabel:", 1)[0]
+    assert "container =" not in protenix_label
+    assert "BMS_PROTENIX_RUNTIME_IMAGE" not in protenix_label
+    assert "protenixImageBind" not in protenix_label
+
+
 def test_finalizer_rejects_registry_shaped_identity_without_observed_attestation() -> None:
     copied_expected_values = {
         "backend_version": "protenix-v2",

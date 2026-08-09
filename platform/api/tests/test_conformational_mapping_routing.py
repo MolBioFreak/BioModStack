@@ -612,6 +612,7 @@ def test_cm3_004c_task_invariants_fail_before_schedule(
     ("mutation", "message"),
     [
         ({"saved_steps": [5, 10]}, "exactly one saved step"),
+        ({"saved_steps": [5]}, "must equal max_steps"),
         ({"confornet_count": 2}, "exactly one ConforNet"),
     ],
 )
@@ -635,6 +636,39 @@ def test_cm_mse_cardinality_axes_are_canonical(
     settings.update(mutation)
     params["confornets"] = settings
     with pytest.raises(ConformationalMappingRequestError, match=message):
+        validate_request_params(params)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"runs": 2},
+        {"saved_steps": [1]},
+        {"confornet_count": 2},
+    ],
+)
+def test_cm_transfer_coordinate_axes_match_runtime_emission(mutation: dict[str, object]) -> None:
+    params = _request_params("confornets")
+    settings: dict[str, object] = dict(params["confornets"])  # type: ignore[arg-type]
+    settings.update({
+        "task": "transfer",
+        "runs": 1,
+        "saved_steps": [0],
+        "confornet_count": 1,
+        "references": [],
+        "transfer_source": {
+            "kind": "confornet_state",
+            "staged_path": "registered/transfer/state.pt",
+            "content_sha256": "f" * 64,
+            "source_test_cases": "",
+        },
+    })
+    settings.update(mutation)
+    params["confornets"] = settings
+    with pytest.raises(
+        ConformationalMappingRequestError,
+        match="one run, saved step 0, and one ConforNet",
+    ):
         validate_request_params(params)
 
 

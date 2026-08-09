@@ -22,8 +22,26 @@ preset_params:
   workflow_model_topic: conformational_mapping
 user_params:
   - {name: backend, label: Backend, type: select, required: true, default: protenix_v2_ensemble, options: [protenix_v2_ensemble, confornets, external_import]}
-  - {name: ordered_seeds, label: Ordered seeds, type: text, required: true, default: "101,202,303,404,505", description: Protenix-only sampling axis. The dedicated launcher emits the fixed non-Protenix sentinel required by the typed API.}
-  - {name: samples_per_seed, label: Samples per seed, type: number, required: true, default: 5, min: 1, max: 100, description: Protenix-only sampling axis. ConforNets uses its typed samples control and external import has one admitted structure.}
+  - name: ordered_seeds
+    label: Ordered seeds
+    type: text
+    required: true
+    default: "101,202,303,404,505"
+    description: Protenix-only sampling axis. The dedicated launcher emits the fixed non-Protenix sentinel required by the typed API.
+    condition:
+      param: backend
+      values: [protenix_v2_ensemble]
+  - name: samples_per_seed
+    label: Samples per seed
+    type: number
+    required: true
+    default: 5
+    min: 1
+    max: 100
+    description: Protenix-only sampling axis. ConforNets uses its typed samples control and external import has one admitted structure.
+    condition:
+      param: backend
+      values: [protenix_v2_ensemble]
   - {name: registered_snapshot_id, label: Registered complex snapshot ID, type: string, required: false, description: Server registry ID only; host paths are not accepted.}
   - {name: registered_artifact_ids, label: Registered import IDs, type: text, required: false, description: JSON array containing exactly one explicitly registered immutable mmCIF artifact for external import.}
   - {name: registered_sequence_id, label: Registered sequence ID, type: string, required: false, description: ConforNets protein-sequence registry ID.}
@@ -31,6 +49,20 @@ user_params:
   - {name: registered_checkpoint_id, label: Registered checkpoint ID, type: string, required: false}
   - {name: registered_config_id, label: Registered config ID, type: string, required: false}
   - {name: registered_transfer_id, label: Registered transfer-state ID, type: string, required: false}
-  - {name: feature_policy, label: Feature policy, type: text, required: true, description: Versioned JSON object with explicit protein-MSA, template and RNA-MSA booleans for Protenix.}
-  - {name: runtime_policy, label: Runtime policy, type: text, required: true, description: Protenix-only JSON object selecting defaults or explicit positive cycle and step values. Other backends use the server-owned default marker.}
+  - name: feature_policy
+    label: Feature policy
+    type: text
+    required: true
+    description: Versioned JSON object with explicit protein-MSA, template and RNA-MSA booleans for Protenix.
+    condition:
+      param: backend
+      values: [protenix_v2_ensemble]
+  - name: runtime_policy
+    label: Runtime policy
+    type: text
+    required: true
+    description: Protenix-only JSON object selecting defaults or explicit positive cycle and step values. Other backends use the server-owned default marker.
+    condition:
+      param: backend
+      values: [protenix_v2_ensemble]
   - {name: confornets, label: ConforNets controls, type: text, required: false, description: JSON object containing task, run, saved-step, network, sample, diffusion, optimization, confidence and evaluation controls; chain, test case, benchmark, source paths and runtime identity are server-owned.}
