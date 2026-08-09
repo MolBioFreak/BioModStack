@@ -34,6 +34,7 @@ EXPECTED_CANONICAL = {
     "ont_construct_screening",
     "ont_methylation_analysis",
     "ont_fastq_qc",
+    "ont_pooled_reference_assignment",
     "wf_clone_validation",
 }
 

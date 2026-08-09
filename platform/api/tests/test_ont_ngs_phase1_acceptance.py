@@ -59,6 +59,16 @@ def test_explicit_canonical_model_mapping_is_complete_and_registered() -> None:
 
     registry = get_registry()
     for canonical_id, model_mode in ONT_WORKFLOW_MODEL_MODES.items():
+        nanopore = registry.get_model("nanopore")
+        assert nanopore is not None
+        assert model_mode in {mode.id for mode in nanopore.modes}
+        if canonical_id == "ont_pooled_reference_assignment":
+            with pytest.raises(ValueError, match="dedicated atomic submission endpoint"):
+                _job_create_for_ont_submit(
+                    canonical_id,
+                    _request({"fastq_path": "/tmp/reads.fastq"}),
+                )
+            continue
         params: dict[str, object]
         if canonical_id == "ont_basecall_dna":
             params = {"pod5_dir": "/tmp/run.pod5"}
@@ -193,6 +203,13 @@ def test_methylation_pod5_is_reference_aligned_before_modkit() -> None:
 def test_every_workflow_alias_crosses_the_real_registry_boundary() -> None:
     registry = get_registry()
     for alias, canonical_id in ONT_WORKFLOW_ALIASES.items():
+        if canonical_id == "ont_pooled_reference_assignment":
+            with pytest.raises(ValueError, match="dedicated atomic submission endpoint"):
+                _job_create_for_ont_submit(
+                    alias,
+                    _request({"fastq_path": "/tmp/reads.fastq"}),
+                )
+            continue
         params: dict[str, object]
         if canonical_id in {"ont_basecall_dna", "ont_basecall_rna"}:
             params = {"pod5_dir": "/tmp/run.pod5"}

@@ -337,6 +337,7 @@ WORKFLOW_ENTRYPOINTS: Dict[str, str] = {
     "ont_construct_screening": "workflows/ngs/ont_construct_screening.nf",
     "ont_methylation_analysis": "workflows/ngs/ont_methylation_analysis.nf",
     "ont_fastq_qc": "workflows/ngs/ont_fastq_qc.nf",
+    "ont_pooled_reference_assignment": "workflows/ngs/ont_pooled_reference_assignment.nf",
     "wf_clone_validation": "workflows/ngs/wf_clone_validation.nf",
     "protein_local_redesign": "workflows/protein_local_redesign.nf",
     "protein_cad_experimental": "workflows/protein_cad_experimental.nf",

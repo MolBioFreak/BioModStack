@@ -27,6 +27,7 @@ from services.ont_barcode_batches import (
 )
 from services.ont_barcode_units import load_barcode_unit, load_barcode_units
 from services.ont_pooled_reference_assignment import (
+    ASSIGNMENT_WORKFLOW_ID,
     PooledAssignmentError,
     PooledAssignmentReleaseRequest,
     PooledReferenceAssignmentRequest,
@@ -54,6 +55,7 @@ ONT_WORKFLOW_MODEL_MODES: dict[str, str] = {
     "ont_construct_screening": "construct_screening",
     "ont_methylation_analysis": "methylation_analysis",
     "ont_fastq_qc": "fastq_qc",
+    "ont_pooled_reference_assignment": "pooled_reference_assignment",
     "wf_clone_validation": "clone_validation",
 }
 
@@ -342,6 +344,11 @@ def _job_create_for_ont_submit(
     trusted_server_params: frozenset[str] = frozenset(),
     trusted_result_paths: frozenset[str] = frozenset(),
 ) -> JobCreate:
+    canonical_id = resolve_ont_workflow_alias(workflow_id)
+    if canonical_id == ASSIGNMENT_WORKFLOW_ID:
+        raise ValueError(
+            "pooled reference assignment requires the dedicated atomic submission endpoint"
+        )
     submitted_params = dict(request.params)
     if any(key in submitted_params for key in ("comparison_panel_snapshot", "comparison_panel_min_mapq", "ngs_comparison_panel_receipt_id")):
         raise ValueError(
@@ -357,7 +364,6 @@ def _job_create_for_ont_submit(
             + ", ".join(submitted_server_controlled)
         )
 
-    canonical_id = resolve_ont_workflow_alias(workflow_id)
     spec = get_ont_workflow_spec(canonical_id)
     params = normalize_ont_launch_params(canonical_id, submitted_params)
     path_contract = {
@@ -537,6 +543,30 @@ async def ont_handoff_plasmid_qc(run_id: str, payload: dict[str, Any]) -> dict[s
     )
 
 
+@router.post("/ngs/pooled-reference-assignment/submit", status_code=201)
+async def ont_submit_pooled_reference_assignment(
+    request: PooledReferenceAssignmentRequest,
+    background_tasks: BackgroundTasks,
+    http_request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Atomically stage receipts and launch one review-only pooled assignment."""
+    try:
+        return await submit_pooled_reference_assignment(
+            session=session,
+            request=request,
+            background_tasks=background_tasks,
+            http_request=http_request,
+            response=response,
+        )
+    except PooledAssignmentError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
 @router.post("/ngs/{workflow_id}/submit", response_model=JobResponse, status_code=201)
 async def ont_submit_ngs_workflow(
     workflow_id: str,
@@ -634,32 +664,6 @@ async def ont_submit_ngs_workflow(
     if receipt is not None or panel_receipt is not None:
         await session.commit()
     return created
-
-
-@router.post("/ngs/pooled-reference-assignment/submit", status_code=201)
-async def ont_submit_pooled_reference_assignment(
-    request: PooledReferenceAssignmentRequest,
-    background_tasks: BackgroundTasks,
-    http_request: Request,
-    response: Response,
-    session: AsyncSession = Depends(get_session),
-) -> dict[str, Any]:
-    """Atomically stage receipts and launch one review-only pooled assignment."""
-    try:
-        return await submit_pooled_reference_assignment(
-            session=session,
-            request=request,
-            background_tasks=background_tasks,
-            http_request=http_request,
-            response=response,
-        )
-    except PooledAssignmentError as exc:
-        raise HTTPException(
-            status_code=exc.status_code,
-            detail={"code": exc.code, "message": str(exc)},
-        ) from exc
-
-
 @barcode_router.get("/{assignment_job_id}/pooled-assignment/manifest")
 async def ont_get_pooled_assignment_manifest(
     assignment_job_id: str,
