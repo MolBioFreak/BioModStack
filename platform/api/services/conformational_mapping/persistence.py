@@ -41,6 +41,7 @@ from .contracts import (
     validate_contract_bundle,
     validate_schema,
 )
+from .frustrampnn_adapter import bind_cm_candidate_snapshot_bytes
 from .state_landscape_analysis import (
     MAX_STATE_LANDSCAPE_COMPARISON_ROWS,
     StateLandscapeAnalysisError,
@@ -753,7 +754,23 @@ async def ingest_result_bundle(
                 raise ConformationalPersistenceError(
                     "CM candidate has no persisted snapshot authority"
                 )
-            expected_snapshot_by_candidate[str(candidate["candidate_id"])] = canonical_sha256(snapshot)
+            relative_source = str(candidate.get("authoritative_structure_path") or "")
+            try:
+                candidate_source = _contained_file(root, relative_source)
+                bound_snapshot = bind_cm_candidate_snapshot_bytes(
+                    snapshot,
+                    candidate_id=str(candidate["candidate_id"]),
+                    source_bytes=candidate_source.read_bytes(),
+                    source_suffix=candidate_source.suffix,
+                    source_relative_path=relative_source,
+                )
+            except Exception as exc:
+                raise ConformationalPersistenceError(
+                    "CM candidate snapshot authority cannot be reconstructed"
+                ) from exc
+            expected_snapshot_by_candidate[str(candidate["candidate_id"])] = canonical_sha256(
+                bound_snapshot
+            )
         if not isinstance(global_references, Mapping) or set(global_references) != {
             "schema_name", "schema_version", "parent_job_id", "parent_workflow_id",
             "expected_cardinality", "results",

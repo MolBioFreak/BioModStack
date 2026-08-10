@@ -27,6 +27,7 @@ from services.conformational_mapping.contracts import (
     request_sha256,
     validate_schema,
 )
+from services.conformational_mapping.frustrampnn_adapter import bind_cm_candidate_snapshot_bytes
 from services.conformational_mapping.persistence import (
     ConformationalPersistenceError,
     ingest_result_bundle,
@@ -42,6 +43,24 @@ from services.result_ingester import _persist_cm_bundle_atomically, ingest_job_r
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "conformational_mapping" / "schemas" / "positive" / "all_schemas.json"
+
+
+def _minimal_mmcif() -> bytes:
+    return b"""data_candidate
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.label_entity_id
+_atom_site.auth_asym_id
+_atom_site.auth_seq_id
+ATOM 1 C CA ALA A 1 A 1
+ATOM 2 C CA ALA B 1 B 1
+#
+"""
 
 
 async def _session(tmp_path: Path) -> tuple[AsyncSession, AsyncEngine]:
@@ -186,7 +205,28 @@ def _global_bundle(root: Path) -> tuple[dict, dict, dict, dict]:
     bundle["cm_analysis_v1"]["source_ensemble_sha256"] = canonical_sha256(ensemble)
     fixture = copy.deepcopy(json.loads(FIXTURE.read_text()))
     snapshot = fixture["cm_complex_snapshot_v1"]
-    candidate_id_value = ensemble["candidates"][0]["candidate_id"]
+    candidate = ensemble["candidates"][0]
+    candidate_id_value = candidate["candidate_id"]
+    source_path = root / candidate["authoritative_structure_path"]
+    source_bytes = _minimal_mmcif()
+    source_path.write_bytes(source_bytes)
+    native = bundle["cm_native_artifacts_v1"]
+    source_record = next(
+        item for item in native["files"]
+        if item["relative_path"] == candidate["authoritative_structure_path"]
+    )
+    source_record["sha256"] = hashlib.sha256(source_bytes).hexdigest()
+    source_record["bytes"] = len(source_bytes)
+    candidate["authoritative_structure_sha256"] = source_record["sha256"]
+    ensemble["native_manifest_sha256"] = canonical_sha256(native)
+    bundle["cm_analysis_v1"]["source_ensemble_sha256"] = canonical_sha256(ensemble)
+    bound_snapshot = bind_cm_candidate_snapshot_bytes(
+        snapshot,
+        candidate_id=candidate_id_value,
+        source_bytes=source_bytes,
+        source_suffix=source_path.suffix,
+        source_relative_path=candidate["authoritative_structure_path"],
+    )
     invocation_id = f"frustrampnn:{request['request_id']}:{candidate_id_value}"
     settings_sha256 = requested_settings_sha256(settings)
     manifest_sha256 = "7" * 64
@@ -194,7 +234,7 @@ def _global_bundle(root: Path) -> tuple[dict, dict, dict, dict]:
         "candidate_id": candidate_id_value,
         "invocation_id": invocation_id,
         "source_sha256": "1" * 64,
-        "cm_complex_snapshot_sha256": canonical_sha256(snapshot),
+        "cm_complex_snapshot_sha256": canonical_sha256(bound_snapshot),
         "requested_settings_sha256": settings_sha256,
         "effective_settings_sha256": "6" * 64,
         "bundle_relative_path": f"frustrampnn/results/{candidate_id_value}",
@@ -302,6 +342,9 @@ async def test_cm_global_landscape_query_uses_only_referenced_invocations(
     root = tmp_path / "global-query"
     root.mkdir()
     request, bundle, reference, result_values = _global_bundle(root)
+    assert reference["cm_complex_snapshot_sha256"] != canonical_sha256(
+        bundle["cm_complex_snapshots"][0]
+    )
     monkeypatch.setattr(cm_persistence, "validate_frustrampnn_schema", lambda *_args: None)
     session, engine = await _session(tmp_path)
     try:
