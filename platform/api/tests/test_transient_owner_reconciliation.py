@@ -33,7 +33,13 @@ async def test_completion_reconciler_waits_for_transient_owner_before_stale_fail
         owner_nonce="owner-nonce-1",
         request_fingerprint_value="request-fingerprint-1",
     )
-    receipt.update({"state": "started", "invocation_id": "invocation-1"})
+    receipt.update(
+        {
+            "state": "started",
+            "invocation_id": "invocation-1",
+            "started_at": "2026-08-09T23:04:24.446389Z",
+        }
+    )
     job = SimpleNamespace(
         id=job_id,
         name="adapter-owned-job",
@@ -213,6 +219,28 @@ async def test_completion_reconciler_waits_for_transient_owner_before_stale_fail
     assert job.status == "running"
     assert job.queue_status == "running"
 
+    job.params = {
+        execution_ownership.EXECUTION_ATTEMPTS_PARAM: [receipt, "malformed-newest-receipt"]
+    }
+    unit_invocation_id = "invocation-1"
+    await orchestrator.check_job_completions()
+
+    assert job.status == "running"
+    assert job.queue_status == "running"
+
+    sparse_receipt = {
+        "lane": "development",
+        "unit": unit_name,
+        "invocation_id": "invocation-1",
+    }
+    job.params = {
+        execution_ownership.EXECUTION_ATTEMPTS_PARAM: [receipt, sparse_receipt]
+    }
+    await orchestrator.check_job_completions()
+
+    assert job.status == "running"
+    assert job.queue_status == "running"
+
     wrong_lane_receipt = execution_ownership.planned_execution_attempt(
         lane="production",
         job_id=job_id,
@@ -223,7 +251,11 @@ async def test_completion_reconciler_waits_for_transient_owner_before_stale_fail
         request_fingerprint_value="request-fingerprint-production",
     )
     wrong_lane_receipt.update(
-        {"state": "started", "invocation_id": "production-invocation"}
+        {
+            "state": "started",
+            "invocation_id": "production-invocation",
+            "started_at": "2026-08-09T23:04:24.446389Z",
+        }
     )
     job.params = {
         execution_ownership.EXECUTION_ATTEMPTS_PARAM: [receipt, wrong_lane_receipt]
@@ -245,7 +277,11 @@ async def test_completion_reconciler_waits_for_transient_owner_before_stale_fail
         request_fingerprint_value="request-fingerprint-other-job",
     )
     other_job_receipt.update(
-        {"state": "started", "invocation_id": "other-job-invocation"}
+        {
+            "state": "started",
+            "invocation_id": "other-job-invocation",
+            "started_at": "2026-08-09T23:04:24.446389Z",
+        }
     )
     job.params = {
         execution_ownership.EXECUTION_ATTEMPTS_PARAM: [receipt, other_job_receipt]

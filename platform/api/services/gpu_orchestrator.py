@@ -38,7 +38,7 @@ CODE_ROOT = Path(__file__).resolve().parents[3]
 from antibody_pipeline_contract import is_antibody_pipeline_mode
 from services.execution_ownership import (
     ExecutionOwnershipError,
-    latest_execution_attempt,
+    latest_started_execution_attempt,
     parse_unit_identity,
     show_unit_properties,
     unit_has_empty_cgroup,
@@ -1278,7 +1278,16 @@ async def _adapter_transient_owner_liveness(
     lane: str,
 ) -> _AdapterTransientOwnerLiveness:
     """Resolve lane-owned systemd liveness without guessing on query failure."""
-    receipt = latest_execution_attempt(getattr(job, "params", None))
+    try:
+        receipt = latest_started_execution_attempt(getattr(job, "params", None))
+    except ExecutionOwnershipError as exc:
+        logger.critical(
+            "[COMPLETION] Holding job %s because its newest transient ownership receipt "
+            "is malformed or not in the started state: %s",
+            job.id,
+            exc,
+        )
+        return _AdapterTransientOwnerLiveness.UNKNOWN
     if receipt is None:
         logger.critical(
             "[COMPLETION] Holding job %s because no transient ownership receipt exists",

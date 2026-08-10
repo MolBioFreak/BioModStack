@@ -258,6 +258,59 @@ def test_execution_attempt_receipt_history_is_append_only_and_identity_is_immuta
         )
 
 
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("schema", "bms.workflow-execution-attempt.v0"),
+        ("state", "failed"),
+        ("lane", "Development"),
+        ("generation", True),
+        ("attempt", 0),
+        (
+            "unit",
+            ownership.deterministic_unit_name(ownership.DEVELOPMENT_LANE, "job-1", 2),
+        ),
+        ("owner_nonce", ""),
+        ("request_fingerprint", ""),
+        ("planned_at", "invalid"),
+        ("invocation_id", ""),
+        ("started_at", "invalid"),
+    ],
+)
+def test_latest_started_execution_attempt_requires_complete_canonical_receipt(
+    field: str,
+    invalid_value: object,
+) -> None:
+    unit = ownership.deterministic_unit_name(ownership.DEVELOPMENT_LANE, "job-1", 1)
+    receipt = ownership.planned_execution_attempt(
+        lane=ownership.DEVELOPMENT_LANE,
+        job_id="job-1",
+        generation=1,
+        attempt=1,
+        unit=unit,
+        owner_nonce="nonce-1",
+        request_fingerprint_value="fingerprint-1",
+        planned_at="2026-08-09T23:04:24.418747Z",
+    )
+    receipt.update(
+        {
+            "state": "started",
+            "invocation_id": "invocation-1",
+            "started_at": "2026-08-09T23:04:24.446389Z",
+        }
+    )
+    params = ownership.append_execution_attempt({}, receipt)
+
+    assert ownership.latest_started_execution_attempt(params) == receipt
+
+    malformed = dict(receipt)
+    malformed[field] = invalid_value
+    with pytest.raises(ownership.ExecutionOwnershipError):
+        ownership.latest_started_execution_attempt(
+            {ownership.EXECUTION_ATTEMPTS_PARAM: [malformed]}
+        )
+
+
 def test_transient_runner_command_has_only_job_and_lane_arguments() -> None:
     source = (API_ROOT / "workflow_job_runner.py").read_text(encoding="utf-8")
     assert "--job-id" in source

@@ -297,6 +297,89 @@ def latest_execution_attempt(
     return entries[-1] if entries else None
 
 
+def _required_receipt_text(receipt: Mapping[str, object], field: str) -> str:
+    value = receipt.get(field)
+    if not isinstance(value, str) or not value.strip():
+        raise ExecutionOwnershipError(
+            f"Execution-attempt receipt requires nonempty string field {field!r}"
+        )
+    return value.strip()
+
+
+def _required_receipt_timestamp(receipt: Mapping[str, object], field: str) -> str:
+    value = _required_receipt_text(receipt, field)
+    if not value.endswith("Z"):
+        raise ExecutionOwnershipError(
+            f"Execution-attempt receipt field {field!r} must be a UTC timestamp"
+        )
+    try:
+        datetime.fromisoformat(value[:-1] + "+00:00")
+    except ValueError as exc:
+        raise ExecutionOwnershipError(
+            f"Execution-attempt receipt field {field!r} must be a valid UTC timestamp"
+        ) from exc
+    return value
+
+
+def latest_started_execution_attempt(params: object) -> dict[str, Any] | None:
+    """Return the absolute newest complete started receipt or fail closed."""
+
+    values = params_mapping(params).get(EXECUTION_ATTEMPTS_PARAM, [])
+    if not isinstance(values, list):
+        raise ExecutionOwnershipError(
+            f"{EXECUTION_ATTEMPTS_PARAM} must remain an append-only list"
+        )
+    if not values:
+        return None
+
+    newest = values[-1]
+    if not isinstance(newest, Mapping):
+        raise ExecutionOwnershipError(
+            "Newest execution-attempt receipt is not a mapping"
+        )
+    receipt = dict(newest)
+
+    if receipt.get("schema") != EXECUTION_ATTEMPT_SCHEMA:
+        raise ExecutionOwnershipError(
+            f"Newest execution-attempt receipt must use schema {EXECUTION_ATTEMPT_SCHEMA!r}"
+        )
+    if receipt.get("state") != "started":
+        raise ExecutionOwnershipError(
+            "Newest execution-attempt receipt must be in state 'started' for liveness reconciliation"
+        )
+
+    lane = normalize_lane(receipt.get("lane"))
+    if receipt.get("lane") != lane:
+        raise ExecutionOwnershipError(
+            "Newest execution-attempt receipt lane must be canonical"
+        )
+
+    generation = receipt.get("generation")
+    attempt = receipt.get("attempt")
+    if type(generation) is not int or generation < 1:
+        raise ExecutionOwnershipError(
+            "Newest execution-attempt receipt generation must be a positive integer"
+        )
+    if type(attempt) is not int or attempt < 1:
+        raise ExecutionOwnershipError(
+            "Newest execution-attempt receipt attempt must be a positive integer"
+        )
+
+    unit_name = _required_receipt_text(receipt, "unit")
+    identity = parse_unit_identity(unit_name)
+    if identity.lane != lane or identity.attempt != attempt:
+        raise ExecutionOwnershipError(
+            "Newest execution-attempt receipt unit identity conflicts with its lane or attempt"
+        )
+
+    _required_receipt_text(receipt, "owner_nonce")
+    _required_receipt_text(receipt, "request_fingerprint")
+    _required_receipt_timestamp(receipt, "planned_at")
+    _required_receipt_text(receipt, "invocation_id")
+    _required_receipt_timestamp(receipt, "started_at")
+    return receipt
+
+
 def execution_attempt_is_terminal(receipt: Mapping[str, object] | None) -> bool:
     return str((receipt or {}).get("state", "")).strip().lower() in EXECUTION_ATTEMPT_TERMINAL_STATES
 
