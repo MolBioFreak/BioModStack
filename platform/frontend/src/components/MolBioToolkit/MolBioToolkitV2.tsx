@@ -158,7 +158,10 @@ function SequenceLibrary({
                 </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto">
+            <div
+                data-molbio-scroll-region="construct-shelf"
+                className="flex-1 min-h-0 overflow-y-auto overscroll-contain"
+            >
                 <div className="border-b border-slate-700">
                     <button
                         onClick={() => setShowDemos(!showDemos)}
@@ -2150,7 +2153,10 @@ export function MolBioToolkitV2() {
             <div
                 ref={toolkitRootRef}
                 tabIndex={-1}
-                className={`molbio-toolkit h-full w-full flex bg-slate-900 text-slate-100 overflow-hidden ${isViewerFullscreen ? 'fixed inset-0 z-[70]' : ''}`}
+                className={`molbio-toolkit w-full flex bg-slate-900 text-slate-100 overflow-hidden ${isViewerFullscreen ? 'fixed inset-0 z-[70] h-full' : ''}`}
+                style={isViewerFullscreen
+                    ? undefined
+                    : { height: 'clamp(32rem, calc(100vh - 12rem), 48rem)' }}
                 data-molbio-viewer-fullscreen={isViewerFullscreen ? 'true' : 'false'}
             >
                 {/* Left: Sequence Library */}
