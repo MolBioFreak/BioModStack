@@ -21,6 +21,7 @@ import re
 import shutil
 import subprocess
 from datetime import datetime, timedelta
+from enum import Enum
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Any
 from dataclasses import dataclass, replace
@@ -35,6 +36,13 @@ logger = logging.getLogger(__name__)
 CODE_ROOT = Path(__file__).resolve().parents[3]
 
 from antibody_pipeline_contract import is_antibody_pipeline_mode
+from services.execution_ownership import (
+    ExecutionOwnershipError,
+    latest_execution_attempt,
+    parse_unit_identity,
+    show_unit_properties,
+    unit_has_empty_cgroup,
+)
 from services.gpu_config import read_scheduler_config, mutate_scheduler_config
 from services.gpu_metadata import GPU_CAPABILITIES
 from services.gpu_stage_activity import job_uses_assigned_gpu
@@ -45,7 +53,7 @@ from services.stage_review import (
     refresh_gate_payload,
     resolve_nextflow_run_dir,
 )
-from services.workflow_adapter import workflow_adapter_enabled
+from services.workflow_adapter import workflow_adapter_enabled, workflow_adapter_lane
 
 
 @dataclass
@@ -1258,6 +1266,97 @@ def _read_nextflow_history_statuses(job_ids: List[str]) -> Dict[str, Tuple[str, 
     return found
 
 
+class _AdapterTransientOwnerLiveness(str, Enum):
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+    UNKNOWN = "unknown"
+
+
+async def _adapter_transient_owner_liveness(
+    job: Any,
+    *,
+    lane: str,
+) -> _AdapterTransientOwnerLiveness:
+    """Resolve lane-owned systemd liveness without guessing on query failure."""
+    receipt = latest_execution_attempt(getattr(job, "params", None))
+    if receipt is None:
+        logger.critical(
+            "[COMPLETION] Holding job %s because no transient ownership receipt exists",
+            job.id,
+        )
+        return _AdapterTransientOwnerLiveness.UNKNOWN
+    receipt_lane = str(receipt.get("lane", "")).strip().lower()
+    if receipt_lane != lane:
+        logger.critical(
+            "[COMPLETION] Holding job %s because its latest transient receipt belongs "
+            "to lane %r instead of %r",
+            job.id,
+            receipt_lane or "<missing>",
+            lane,
+        )
+        return _AdapterTransientOwnerLiveness.UNKNOWN
+
+    unit_name = str(receipt.get("unit", "")).strip()
+    expected_invocation_id = str(receipt.get("invocation_id", "")).strip()
+    try:
+        identity = parse_unit_identity(unit_name)
+        if identity.job_id != str(job.id):
+            raise ExecutionOwnershipError(
+                f"Receipt unit belongs to job {identity.job_id!r}, not {str(job.id)!r}"
+            )
+    except ExecutionOwnershipError as exc:
+        logger.critical(
+            "[COMPLETION] Holding job %s because its transient ownership receipt is invalid: %s",
+            job.id,
+            exc,
+        )
+        return _AdapterTransientOwnerLiveness.UNKNOWN
+
+    try:
+        properties = await asyncio.to_thread(show_unit_properties, unit_name, lane)
+        cgroup_nonempty = not unit_has_empty_cgroup(properties)
+    except ExecutionOwnershipError as exc:
+        logger.critical(
+            "[COMPLETION] Holding job %s because transient owner liveness is unavailable: %s",
+            job.id,
+            exc,
+        )
+        return _AdapterTransientOwnerLiveness.UNKNOWN
+
+    actual_invocation_id = properties.invocation_id.strip()
+    if not expected_invocation_id or actual_invocation_id != expected_invocation_id:
+        logger.critical(
+            "[COMPLETION] Holding job %s because unit %s is active with an "
+            "ownership conflict (receipt InvocationID=%r, systemd InvocationID=%r)",
+            job.id,
+            unit_name,
+            expected_invocation_id,
+            actual_invocation_id,
+        )
+        return _AdapterTransientOwnerLiveness.UNKNOWN
+
+    owner_state = properties.active_state.strip().lower()
+    if owner_state in {"active", "activating", "deactivating"}:
+        logger.debug(
+            "[COMPLETION] Job %s remains owned by active transient unit %s",
+            job.id,
+            unit_name,
+        )
+        return _AdapterTransientOwnerLiveness.ACTIVE
+
+    if owner_state == "inactive" and not cgroup_nonempty:
+        return _AdapterTransientOwnerLiveness.INACTIVE
+
+    logger.critical(
+        "[COMPLETION] Holding job %s because unit %s has unresolved systemd state %r "
+        "or a nonempty cgroup",
+        job.id,
+        unit_name,
+        properties.active_state,
+    )
+    return _AdapterTransientOwnerLiveness.UNKNOWN
+
+
 def _compute_auto_limit(
     model_id: str,
     job_infos: List["JobInfo"],
@@ -2460,6 +2559,7 @@ class GPUOrchestrator:
                 
                 # Get all running processes once (expensive operation)
                 adapter_authoritative = workflow_adapter_enabled()
+                adapter_lane = workflow_adapter_lane() if adapter_authoritative else None
                 all_processes = ""
                 gpu_has_activity = {}
                 if not adapter_authoritative:
@@ -2533,6 +2633,21 @@ class GPUOrchestrator:
                     # retain the one-minute grace period for missing-process heuristics.
                     if not job_is_running and job.started_at:
                         age_seconds = (datetime.utcnow() - job.started_at).total_seconds()
+                        if adapter_authoritative and (
+                            age_seconds > 60 or _has_terminal_nextflow_history(terminal_history)
+                        ):
+                            if adapter_lane is None:
+                                logger.critical(
+                                    "[COMPLETION] Holding job %s because adapter lane authority is unavailable",
+                                    job.id,
+                                )
+                                continue
+                            owner_liveness = await _adapter_transient_owner_liveness(
+                                job,
+                                lane=adapter_lane,
+                            )
+                            if owner_liveness is not _AdapterTransientOwnerLiveness.INACTIVE:
+                                continue
                         if age_seconds > 60 or _has_terminal_nextflow_history(terminal_history):
                             history_status = terminal_history
                             history_outcome = None
