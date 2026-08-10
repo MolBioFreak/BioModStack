@@ -4094,7 +4094,6 @@ async def ingest_job_results(
                         or references.get("expected_cardinality") != len(ensemble["candidates"])
                         or not isinstance(references.get("results"), list)
                         or len(references["results"]) != len(ensemble["candidates"])
-                        or canonical_count != len(ensemble["candidates"])
                     ):
                         raise ConformationalPersistenceError(
                             "canonical FrustraMPNN result references are incomplete or unbound"

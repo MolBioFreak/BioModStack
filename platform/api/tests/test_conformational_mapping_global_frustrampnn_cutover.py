@@ -732,6 +732,7 @@ def test_cm_persistence_reuses_global_result_rows_without_legacy_projection() ->
 
     assert "is_conformational_mapping" in ingester
     assert "canonical_count is not None and not is_conformational_mapping" in ingester
+    assert "canonical_count != len(ensemble" not in ingester
     assert "frustrampnn_result_references" in ingester
     assert "frustrampnn_landscape_v2.json" in ingester
     assert "FrustraMPNNResult" in persistence
