@@ -118,7 +118,8 @@ def postprocess_canonical_bundles(
         or expected != preparation.get("expected_cardinality")
         or expected != len(prepared_rows)
         or expected != len(bundle_dirs)
-        or preparation.get("parent_job_id") != request.get("request_id")
+        or not isinstance(preparation.get("parent_job_id"), str)
+        or not preparation["parent_job_id"]
     ):
         raise CMFrustraMPNNPostprocessError(
             "required canonical result cardinality/parent binding is incomplete"
@@ -357,7 +358,7 @@ def postprocess_canonical_bundles(
         result_references = {
             "schema_name": "cm_frustrampnn_result_references",
             "schema_version": 1,
-            "parent_job_id": request["request_id"],
+            "parent_job_id": preparation["parent_job_id"],
             "parent_workflow_id": "conformational_mapping",
             "expected_cardinality": expected,
             "results": references,

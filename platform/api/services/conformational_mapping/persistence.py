@@ -10,6 +10,7 @@ import stat
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
 from typing import Any, Mapping
 
 from sqlalchemy import delete, or_, select
@@ -23,8 +24,11 @@ from database import (
     ConformationalMappingStateLandscapeAnalysisHeader,
     ConformationalMappingStateLandscapeAnalysisPair,
     ConformationalMappingStateLandscapeAnalysisRow,
+    FrustraMPNNResult,
+    FrustraMPNNLandscapeRow,
     Job,
 )
+from services.frustrampnn.contracts import validate_schema as validate_frustrampnn_schema
 
 from .contracts import (
     ContractValidationError,
@@ -55,7 +59,7 @@ _RECORD_TYPES = frozenset(
     {
         "ensemble", "native_manifest", "structure_map", "landscape", "analysis",
         "state_landscape_analysis", "handoff", "resampling", "lineage", "support", "missingness",
-        "failure_receipt",
+        "frustrampnn_result_references", "failure_receipt",
     }
 )
 
@@ -572,6 +576,8 @@ async def ingest_result_bundle(
             "cm_structure_maps", "cm_frustration_landscapes", "cm_mutagenesis_handoffs",
             "cm_resampling_v1", "cm_lineage", "cm_support", "cm_missingness",
             "cm_state_landscape_analyses", "cm_derived_files",
+            "cm_frustrampnn_result_references", "frustrampnn_structure_maps",
+            "frustrampnn_landscapes",
         }
         unknown = set(bundle) - set(core_bundle) - allowed_extensions
         if unknown:
@@ -664,6 +670,7 @@ async def ingest_result_bundle(
         "cm_analysis_v1": "analysis", "cm_state_landscape_analyses": "state_landscape_analysis",
         "cm_mutagenesis_handoffs": "handoff", "cm_resampling_v1": "resampling", "cm_lineage": "lineage",
         "cm_support": "support", "cm_missingness": "missingness",
+        "cm_frustrampnn_result_references": "frustrampnn_result_references",
     }
     optional_schema = {
         "structure_map": "cm_structure_map_v1",
@@ -673,18 +680,101 @@ async def ingest_result_bundle(
         "handoff": "cm_mutagenesis_handoff_v1",
     }
     ensemble_candidate_ids = {item["candidate_id"] for item in ensemble["candidates"]}
+    global_references = bundle.get("cm_frustrampnn_result_references")
+    canonical_global_mode = global_references is not None
+    if canonical_global_mode:
+        if bundle.get("cm_structure_maps") is not None or bundle.get("cm_frustration_landscapes") is not None:
+            raise ConformationalPersistenceError(
+                "canonical global FrustraMPNN results cannot coexist with legacy CM landscapes"
+            )
+        structure_maps = bundle.get("frustrampnn_structure_maps") or []
+        landscapes = bundle.get("frustrampnn_landscapes") or []
+        try:
+            for value in structure_maps:
+                validate_frustrampnn_schema("frustrampnn_structure_map_v1", value)
+            for value in landscapes:
+                validate_frustrampnn_schema("frustrampnn_landscape_v2", value)
+        except Exception as exc:
+            raise ConformationalPersistenceError(
+                "canonical global FrustraMPNN result payload is invalid"
+            ) from exc
+    else:
+        if bundle.get("frustrampnn_structure_maps") is not None or bundle.get("frustrampnn_landscapes") is not None:
+            raise ConformationalPersistenceError(
+                "global FrustraMPNN payloads require canonical result references"
+            )
+        structure_maps = bundle.get("cm_structure_maps") or []
+        landscapes = bundle.get("cm_frustration_landscapes") or []
     structure_map_ids = {
-        str(value.get("candidate_id")) for value in bundle.get("cm_structure_maps", [])
+        str(value.get("candidate_id")) for value in structure_maps
         if isinstance(value, Mapping)
     }
     landscape_ids = {
-        str(value.get("candidate_id")) for value in bundle.get("cm_frustration_landscapes", [])
+        str(value.get("candidate_id")) for value in landscapes
         if isinstance(value, Mapping)
     }
     if structure_map_ids != ensemble_candidate_ids or landscape_ids != ensemble_candidate_ids:
         raise ConformationalPersistenceError(
             "derived structure-map and landscape candidate sets must exactly equal the ensemble"
         )
+    if canonical_global_mode:
+        if not isinstance(global_references, Mapping) or set(global_references) != {
+            "schema_name", "schema_version", "parent_job_id", "parent_workflow_id",
+            "expected_cardinality", "results",
+        }:
+            raise ConformationalPersistenceError("canonical FrustraMPNN result references are malformed")
+        reference_rows = global_references.get("results")
+        if (
+            global_references.get("schema_name") != "cm_frustrampnn_result_references"
+            or global_references.get("schema_version") != 1
+            or global_references.get("parent_job_id") != record.job_id
+            or global_references.get("parent_workflow_id") != "conformational_mapping"
+            or global_references.get("expected_cardinality") != len(ensemble_candidate_ids)
+            or not isinstance(reference_rows, list)
+            or len(reference_rows) != len(ensemble_candidate_ids)
+        ):
+            raise ConformationalPersistenceError("canonical FrustraMPNN result references are unbound")
+        expected_reference_keys = {
+            "candidate_id", "invocation_id", "source_sha256", "cm_complex_snapshot_sha256",
+            "requested_settings_sha256", "effective_settings_sha256", "bundle_relative_path",
+            "result_manifest_sha256", "landscape_sha256", "structure_map_sha256",
+        }
+        references_by_candidate: dict[str, Mapping[str, Any]] = {}
+        for reference in reference_rows:
+            if not isinstance(reference, Mapping) or set(reference) != expected_reference_keys:
+                raise ConformationalPersistenceError("canonical FrustraMPNN result reference is malformed")
+            candidate_id = str(reference["candidate_id"])
+            if candidate_id in references_by_candidate:
+                raise ConformationalPersistenceError("canonical FrustraMPNN result reference is duplicated")
+            references_by_candidate[candidate_id] = reference
+        if set(references_by_candidate) != ensemble_candidate_ids:
+            raise ConformationalPersistenceError(
+                "canonical FrustraMPNN result references do not cover the ensemble"
+            )
+        persisted_results = list((await session.execute(
+            select(FrustraMPNNResult).where(
+                FrustraMPNNResult.parent_job_id == record.job_id
+            )
+        )).scalars().all())
+        persisted_by_candidate = {value.candidate_id: value for value in persisted_results}
+        if set(persisted_by_candidate) != ensemble_candidate_ids:
+            raise ConformationalPersistenceError(
+                "required canonical FrustraMPNN results are not persisted"
+            )
+        for candidate_id, reference in references_by_candidate.items():
+            persisted = persisted_by_candidate[candidate_id]
+            if (
+                persisted.parent_workflow_id != "conformational_mapping"
+                or persisted.requiredness != "required"
+                or persisted.invocation_id != reference["invocation_id"]
+                or persisted.source_artifact_sha256 != reference["source_sha256"]
+                or persisted.settings_sha256 != reference["requested_settings_sha256"]
+                or persisted.effective_settings_sha256 != reference["effective_settings_sha256"]
+                or persisted.manifest_sha256 != reference["result_manifest_sha256"]
+            ):
+                raise ConformationalPersistenceError(
+                    "persisted canonical FrustraMPNN result does not match CM reference"
+                )
     if not isinstance(bundle.get("cm_analysis_v1"), Mapping):
         raise ConformationalPersistenceError("canonical analysis authority is missing")
     state_analysis_value = bundle.get("cm_state_landscape_analyses")
@@ -713,8 +803,8 @@ async def ingest_result_bundle(
             validate_state_landscape_analysis_binding(
                 record.request_json,
                 ensemble,
-                bundle.get("cm_frustration_landscapes") or [],
-                bundle.get("cm_structure_maps") or [],
+                landscapes,
+                structure_maps,
                 proposed_state_analysis,
             )
         except (ContractValidationError, StateLandscapeAnalysisError, KeyError, TypeError) as exc:
@@ -1017,9 +1107,76 @@ async def paged_landscape(
     sequence_end: int | None = None,
     offset: int = 0,
     limit: int = 200,
-) -> list[ConformationalMappingLandscapeRow]:
+) -> list[Any]:
     if offset < 0 or limit < 1 or limit > 1000:
         raise ConformationalPersistenceError("invalid landscape page")
+    if sequence_start is not None and sequence_start < 1:
+        raise ConformationalPersistenceError("invalid landscape sequence range")
+    if sequence_end is not None and (
+        sequence_end < 1 or (sequence_start is not None and sequence_end < sequence_start)
+    ):
+        raise ConformationalPersistenceError("invalid landscape sequence range")
+
+    request_record = await session.get(ConformationalMappingRequest, request_id)
+    canonical_reference = await session.scalar(
+        select(ConformationalMappingRecord).where(
+            ConformationalMappingRecord.request_id == request_id,
+            ConformationalMappingRecord.record_type == "frustrampnn_result_references",
+        )
+    )
+    if request_record is not None and canonical_reference is not None:
+        global_statement = (
+            select(FrustraMPNNLandscapeRow, FrustraMPNNResult.candidate_id)
+            .join(
+                FrustraMPNNResult,
+                (FrustraMPNNResult.parent_job_id == FrustraMPNNLandscapeRow.parent_job_id)
+                & (FrustraMPNNResult.invocation_id == FrustraMPNNLandscapeRow.invocation_id),
+            )
+            .where(FrustraMPNNLandscapeRow.parent_job_id == request_record.job_id)
+        )
+        if candidate_id:
+            global_statement = global_statement.where(FrustraMPNNResult.candidate_id == candidate_id)
+        if entity_instance_id:
+            global_statement = global_statement.where(
+                FrustraMPNNLandscapeRow.entity_instance_id == entity_instance_id
+            )
+        if sequence_start is not None:
+            global_statement = global_statement.where(
+                FrustraMPNNLandscapeRow.sequence_index >= sequence_start
+            )
+        if sequence_end is not None:
+            global_statement = global_statement.where(
+                FrustraMPNNLandscapeRow.sequence_index <= sequence_end
+            )
+        result_rows = (await session.execute(
+            global_statement.order_by(
+                FrustraMPNNResult.candidate_id,
+                FrustraMPNNLandscapeRow.entity_instance_id,
+                FrustraMPNNLandscapeRow.sequence_index,
+                FrustraMPNNLandscapeRow.mutation_aa,
+            ).offset(offset).limit(limit)
+        )).all()
+        return [
+            SimpleNamespace(
+                id=row.id,
+                candidate_id=canonical_candidate_id,
+                entity_instance_id=row.entity_instance_id,
+                auth_asym_id=row.auth_asym_id,
+                auth_seq_id=row.auth_seq_id,
+                insertion_code=row.insertion_code,
+                sequence_index=row.sequence_index,
+                wt=row.wt,
+                mutation_aa=row.mutation_aa,
+                score=row.score,
+                score_class=row.score_class,
+                scoreable=row.scoreable,
+                status=row.status,
+                reason=row.reason,
+                provenance_json=row.provenance_json,
+            )
+            for row, canonical_candidate_id in result_rows
+        ]
+
     statement = select(ConformationalMappingLandscapeRow).where(
         ConformationalMappingLandscapeRow.request_id == request_id
     )
@@ -1030,12 +1187,8 @@ async def paged_landscape(
             ConformationalMappingLandscapeRow.entity_instance_id == entity_instance_id
         )
     if sequence_start is not None:
-        if sequence_start < 1:
-            raise ConformationalPersistenceError("invalid landscape sequence range")
         statement = statement.where(ConformationalMappingLandscapeRow.sequence_index >= sequence_start)
     if sequence_end is not None:
-        if sequence_end < 1 or (sequence_start is not None and sequence_end < sequence_start):
-            raise ConformationalPersistenceError("invalid landscape sequence range")
         statement = statement.where(ConformationalMappingLandscapeRow.sequence_index <= sequence_end)
     statement = statement.order_by(
         ConformationalMappingLandscapeRow.candidate_id,

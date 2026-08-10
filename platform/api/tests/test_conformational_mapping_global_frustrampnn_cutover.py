@@ -499,7 +499,7 @@ def test_cm_postprocessor_validates_v2_bundle_and_passes_global_landscape_direct
     snapshot_sha256 = "2" * 64
     request_sha256 = "3" * 64
     request = {
-        "request_id": "cm-parent-job",
+        "request_id": "cm-request-record",
         "request_sha256": "4" * 64,
         "backend": "external_import",
         "targets": [{"target_id": "target-a"}],
@@ -619,6 +619,7 @@ def test_cm_postprocessor_validates_v2_bundle_and_passes_global_landscape_direct
     assert references["results"][0]["candidate_id"] == candidate_id
     assert references["results"][0]["source_sha256"] == source_sha256
     assert references["results"][0]["cm_complex_snapshot_sha256"] == snapshot_sha256
+    assert references["parent_job_id"] == "cm-parent-job"
     index = json.loads((output / "cm_derived_index_v1.json").read_text())
     assert "landscapes" not in index
     assert not list(output.rglob("cm_frustration_landscape_v1.json"))
@@ -717,3 +718,21 @@ def test_cm_nextflow_wires_every_candidate_through_canonical_v2_and_no_direct_ru
     assert "--checkpoint" not in module
     assert "--container" not in module
     assert "--gpu-id" not in module
+
+
+def test_cm_persistence_reuses_global_result_rows_without_legacy_projection() -> None:
+    root = Path(__file__).resolve().parents[3]
+    ingester = (root / "platform/api/services/result_ingester.py").read_text(encoding="utf-8")
+    persistence = (
+        root / "platform/api/services/conformational_mapping/persistence.py"
+    ).read_text(encoding="utf-8")
+
+    assert "is_conformational_mapping" in ingester
+    assert "canonical_count is not None and not is_conformational_mapping" in ingester
+    assert "frustrampnn_result_references" in ingester
+    assert "frustrampnn_landscape_v2.json" in ingester
+    assert "FrustraMPNNResult" in persistence
+    assert "FrustraMPNNLandscapeRow" in persistence
+    assert "canonical_global_mode" in persistence
+    assert "required canonical FrustraMPNN results are not persisted" in persistence
+    assert 'landscapes_to_insert = bundle.get("cm_frustration_landscapes") or []' in persistence

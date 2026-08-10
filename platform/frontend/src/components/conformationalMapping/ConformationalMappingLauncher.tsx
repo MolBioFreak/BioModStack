@@ -28,6 +28,12 @@ import {
 } from './conformationalMappingApi';
 import { CM_SCIENTIFIC_LIMIT } from './conformationalMappingSemantics';
 import { ModelDocumentationLinks } from '../ModelDocumentationLinks';
+import { useModelIntegrationConfig, type ModelIntegrationLoader } from '../ModelIntegrationControl';
+import { FrustraMpnnSettingsPanel } from '../frustrampnn/FrustraMpnnSettingsPanel';
+import {
+    hydrateFrustraMpnnSettings,
+    type FrustraMpnnRequestedSettings,
+} from '../frustrampnn/frustraMpnnSettingsState';
 import MolstarViewer from '../MolstarViewer';
 
 interface Props {
@@ -41,6 +47,7 @@ interface Props {
         registerRcsb?: typeof registerCmRcsbSelection;
         registerSource?: typeof registerCmSource;
         submitRequest?: typeof submitCmRequest;
+        loadFrustrampnnIntegration?: ModelIntegrationLoader;
     };
 }
 
@@ -90,6 +97,7 @@ interface LauncherState {
     referenceStagedIndex: number;
     referenceSourceContentSha256: string;
     referenceStagedReceiptSha256: string;
+    frustrampnnSettings: FrustraMpnnRequestedSettings;
 }
 
 const DEFAULT_STATE: LauncherState = {
@@ -106,6 +114,7 @@ const DEFAULT_STATE: LauncherState = {
     referenceOrderedSeed: 101, referenceSampleIndex: 0, referenceTask: 'diversity', referenceId: '',
     referenceRunIndex: 0, referenceSavedStep: 0, referenceConfornetIndex: 0, referenceStagedIndex: 0,
     referenceSourceContentSha256: '', referenceStagedReceiptSha256: '',
+    frustrampnnSettings: hydrateFrustraMpnnSettings(undefined),
 };
 
 const STATE_KEY = 'bms.conformational-mapping.launcher.v1';
@@ -211,6 +220,9 @@ const hydrateState = (values?: Record<string, unknown>): LauncherState => {
         referenceStagedIndex: finite(reference.staged_index ?? merged.referenceStagedIndex, DEFAULT_STATE.referenceStagedIndex),
         referenceSourceContentSha256: String(reference.source_content_sha256 || merged.referenceSourceContentSha256 || ''),
         referenceStagedReceiptSha256: String(reference.staged_receipt_sha256 || merged.referenceStagedReceiptSha256 || ''),
+        frustrampnnSettings: hydrateFrustraMpnnSettings(
+            merged.frustrampnn_settings ?? merged.frustrampnnSettings,
+        ),
     };
 };
 
@@ -342,6 +354,16 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const [form, setForm] = useState<LauncherState>(() => hydrateState(initialValues));
+    const frustrampnnIntegrationQuery = useModelIntegrationConfig(
+        'frustrampnn', services?.loadFrustrampnnIntegration,
+    );
+    const configuredFrustrampnnWorkflow = frustrampnnIntegrationQuery.data?.workflows?.conformational_mapping;
+    const frustrampnnConfigurationReady = Boolean(
+        !frustrampnnIntegrationQuery.isPending
+        && !frustrampnnIntegrationQuery.isFetching
+        && !frustrampnnIntegrationQuery.isError
+        && configuredFrustrampnnWorkflow,
+    );
     const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
     const [activeSourceTab, setActiveSourceTab] = useState<SourceTab>('upload');
     const [sourceKind, setSourceKind] = useState<CmSourceKind>('complex_snapshot');
@@ -528,6 +550,9 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
 
     const validationErrors = useMemo(() => {
         const errors: string[] = [];
+        if (!frustrampnnConfigurationReady) {
+            errors.push('FrustraMPNN integration configuration is unavailable. Launch is blocked.');
+        }
         if (!form.name.trim()) errors.push('Request name is required.');
         if (form.notes.length > 4000) errors.push('Notes cannot exceed 4,000 characters.');
 
@@ -601,7 +626,7 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
         }
         if (expectedCount < 1) errors.push('The current controls produce no candidate coordinates.');
         return errors;
-    }, [expectedCount, form, referenceSources.length, seedValues, selectedCheckpoint, selectedConfig,
+    }, [expectedCount, form, frustrampnnConfigurationReady, referenceSources.length, seedValues, selectedCheckpoint, selectedConfig,
         selectedSnapshot, selectedSource?.submission_policy, selectedTransfer, stepValues, structureSources]);
 
     const register = useMutation({
@@ -720,6 +745,7 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
             // Analysis policy is server-owned. Keep the typed field for the backend
             // contract, but never accept it from editable/session/clone state.
             analysis_policy: CANONICAL_CM_ANALYSIS_POLICY,
+            frustrampnn_settings: form.frustrampnnSettings,
         };
         if (form.backend === 'protenix_v2_ensemble') {
             payload.registered_snapshot_id = form.snapshotId;
@@ -1006,6 +1032,17 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
                         {comparisonControls}
                     </div>}
                     {form.backend === 'external_import' && <div className="mt-4 rounded-xl border border-sky-500/20 bg-sky-500/5 p-3 text-sm text-sky-100"><strong>External import accepts registered mmCIF handles only.</strong><p className="mt-1 text-xs leading-5 text-slate-400">Snapshot and residue identity are derived server-side from immutable staged bytes. Ambiguous structures fail closed.</p></div>}
+                    <div className="mt-4 rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-3" data-model-integration="frustrampnn">
+                        <div className="mb-3"><h4 className="text-sm font-medium text-cyan-100">Global FrustraMPNN settings</h4><p className="mt-1 text-xs text-slate-400">The same required settings apply to every generated conformer.</p></div>
+                        {frustrampnnConfigurationReady ? (
+                            <FrustraMpnnSettingsPanel
+                                value={form.frustrampnnSettings}
+                                onChange={(settings) => update('frustrampnnSettings', settings)}
+                            />
+                        ) : (
+                            <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-200">FrustraMPNN integration configuration is loading or unavailable. Launch remains blocked.</div>
+                        )}
+                    </div>
                     {form.backend !== 'external_import' && <details className="mt-4 rounded-xl border border-slate-800 p-3">
                         <summary className="cursor-pointer text-sm font-medium text-slate-300">Advanced settings</summary>
                         {form.backend === 'protenix_v2_ensemble' && <label className="mt-3 flex items-center gap-2 text-xs"><input type="checkbox" checked={form.defaultRuntime} onChange={(event) => update('defaultRuntime', event.target.checked)} className={checkClass} />Use installed runtime defaults</label>}

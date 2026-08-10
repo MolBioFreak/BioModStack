@@ -1,6 +1,7 @@
 import axios from 'axios';
 
 import { api, type JobLogs } from '../../lib/api';
+import type { FrustraMpnnRequestedSettings } from '../frustrampnn/frustraMpnnSettingsState';
 
 export type CmBackend = 'protenix_v2_ensemble' | 'confornets' | 'external_import';
 export type CmSourceKind =
@@ -107,6 +108,7 @@ export interface CmSubmitRequest {
     feature_policy: CmFeaturePolicy;
     runtime_policy: CmRuntimePolicy;
     analysis_policy: CmAnalysisPolicy;
+    frustrampnn_settings: FrustraMpnnRequestedSettings;
     state_landscape_comparison?: CmStateLandscapeComparison;
     registered_snapshot_id?: string;
     /** Bounded wire collection containing exactly one completed-run or uploaded mmCIF source. */

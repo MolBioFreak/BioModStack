@@ -3963,13 +3963,16 @@ async def ingest_job_results(
 
     job_result = await session.execute(select(Job).where(Job.id == job_id))
     current_job = job_result.scalar_one_or_none()
+    is_conformational_mapping = bool(
+        current_job and str(current_job.model_id or "").strip().lower() == "conformational_mapping"
+    )
     canonical_count = await _ingest_explicit_frustrampnn_results(
         current_job,
         output_path,
         session,
-        commit=commit,
+        commit=commit and not is_conformational_mapping,
     )
-    if canonical_count is not None:
+    if canonical_count is not None and not is_conformational_mapping:
         return canonical_count
 
     if not output_path.exists():
@@ -4033,11 +4036,22 @@ async def ingest_job_results(
                     raise ConformationalPersistenceError("canonical derived index request mismatch")
                 required_index_fields = {
                     "schema_name", "schema_version", "request_id", "source_ensemble_sha256",
-                    "records", "structure_maps", "landscapes", "analysis", "lineage",
-                    "support", "missingness", "resampling",
+                    "records", "analysis", "lineage", "support", "missingness", "resampling",
                 }
-                allowed_index_fields = required_index_fields | {"state_landscape_analyses"}
-                if not required_index_fields.issubset(derived) or set(derived) - allowed_index_fields:
+                legacy_result_fields = {"structure_maps", "landscapes"}
+                global_result_fields = {"frustrampnn_result_references"}
+                allowed_index_fields = (
+                    required_index_fields | legacy_result_fields | global_result_fields
+                    | {"state_landscape_analyses"}
+                )
+                has_legacy_results = legacy_result_fields.issubset(derived)
+                has_global_results = global_result_fields.issubset(derived)
+                if (
+                    not required_index_fields.issubset(derived)
+                    or set(derived) - allowed_index_fields
+                    or has_legacy_results == has_global_results
+                    or (set(derived) & legacy_result_fields and not has_legacy_results)
+                ):
                     raise ConformationalPersistenceError("canonical derived index fields are incomplete or unknown")
                 if derived["schema_name"] != "cm_derived_index" or derived["schema_version"] != 1:
                     raise ConformationalPersistenceError("canonical derived index schema is unsupported")
@@ -4069,8 +4083,88 @@ async def ingest_job_results(
                     digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
                     if digest != item["sha256"] or artifact.stat().st_size != item["bytes"]:
                         raise ConformationalPersistenceError("canonical derived artifact identity mismatch")
-                bundle["cm_structure_maps"] = derived.get("structure_maps", [])
-                bundle["cm_frustration_landscapes"] = derived.get("landscapes", [])
+                if has_global_results:
+                    references = derived["frustrampnn_result_references"]
+                    if (
+                        not isinstance(references, dict)
+                        or references.get("schema_name") != "cm_frustrampnn_result_references"
+                        or references.get("schema_version") != 1
+                        or references.get("parent_job_id") != str(current_job.id)
+                        or references.get("parent_workflow_id") != "conformational_mapping"
+                        or references.get("expected_cardinality") != len(ensemble["candidates"])
+                        or not isinstance(references.get("results"), list)
+                        or len(references["results"]) != len(ensemble["candidates"])
+                        or canonical_count != len(ensemble["candidates"])
+                    ):
+                        raise ConformationalPersistenceError(
+                            "canonical FrustraMPNN result references are incomplete or unbound"
+                        )
+                    global_maps: list[dict[str, Any]] = []
+                    global_landscapes: list[dict[str, Any]] = []
+                    for reference in references["results"]:
+                        if not isinstance(reference, dict):
+                            raise ConformationalPersistenceError(
+                                "canonical FrustraMPNN result reference is malformed"
+                            )
+                        relative = Path(str(reference.get("bundle_relative_path") or ""))
+                        relative_text = relative.as_posix()
+                        if (
+                            relative.is_absolute()
+                            or relative_text != str(reference.get("bundle_relative_path") or "")
+                            or any(part in {"", ".", ".."} for part in relative.parts)
+                            or "\\" in str(reference.get("bundle_relative_path") or "")
+                        ):
+                            raise ConformationalPersistenceError(
+                                "canonical FrustraMPNN result reference path is unsafe"
+                            )
+                        unresolved_bundle_root = result_root / relative
+                        if unresolved_bundle_root.is_symlink():
+                            raise ConformationalPersistenceError(
+                                "canonical FrustraMPNN result bundle is unsafe"
+                            )
+                        bundle_root = unresolved_bundle_root.resolve(strict=True)
+                        bundle_root.relative_to(result_root.resolve())
+                        if not bundle_root.is_dir():
+                            raise ConformationalPersistenceError(
+                                "canonical FrustraMPNN result bundle is unsafe"
+                            )
+                        manifest_path = bundle_root / "frustrampnn_result_manifest_v2.json"
+                        landscape_path = bundle_root / "frustrampnn_landscape_v2.json"
+                        structure_map_path = bundle_root / "frustrampnn_structure_map_v1.json"
+                        for artifact_path in (manifest_path, landscape_path, structure_map_path):
+                            if artifact_path.is_symlink() or not artifact_path.is_file():
+                                raise ConformationalPersistenceError(
+                                    "canonical FrustraMPNN result artifact is unsafe"
+                                )
+                        if (
+                            hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+                            != reference.get("result_manifest_sha256")
+                            or hashlib.sha256(landscape_path.read_bytes()).hexdigest()
+                            != reference.get("landscape_sha256")
+                            or hashlib.sha256(structure_map_path.read_bytes()).hexdigest()
+                            != reference.get("structure_map_sha256")
+                        ):
+                            raise ConformationalPersistenceError(
+                                "canonical FrustraMPNN result reference hash mismatch"
+                            )
+                        landscape = json.loads(landscape_path.read_text(encoding="utf-8"))
+                        structure_map = json.loads(structure_map_path.read_text(encoding="utf-8"))
+                        candidate_id = str(reference.get("candidate_id") or "")
+                        if (
+                            landscape.get("candidate_id") != candidate_id
+                            or structure_map.get("candidate_id") != candidate_id
+                        ):
+                            raise ConformationalPersistenceError(
+                                "canonical FrustraMPNN result candidate binding mismatch"
+                            )
+                        global_landscapes.append(landscape)
+                        global_maps.append(structure_map)
+                    bundle["cm_frustrampnn_result_references"] = references
+                    bundle["frustrampnn_structure_maps"] = global_maps
+                    bundle["frustrampnn_landscapes"] = global_landscapes
+                else:
+                    bundle["cm_structure_maps"] = derived.get("structure_maps", [])
+                    bundle["cm_frustration_landscapes"] = derived.get("landscapes", [])
                 bundle["cm_analysis_v1"] = derived.get("analysis")
                 bundle["cm_state_landscape_analyses"] = derived.get("state_landscape_analyses")
                 bundle["cm_lineage"] = derived.get("lineage")

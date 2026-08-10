@@ -85,6 +85,18 @@ test('launcher exposes state-conditioned FrustraMPNN comparison as an explicit t
     assert.match(api, /state_landscape_comparison\?:/);
 });
 
+test('launcher uses the shared global FrustraMPNN settings plane and fails closed on configuration', () => {
+    const launcher = source('conformationalMapping/ConformationalMappingLauncher.tsx');
+    const api = source('conformationalMapping/conformationalMappingApi.ts');
+    assert.match(launcher, /FrustraMpnnSettingsPanel/);
+    assert.match(launcher, /useModelIntegrationConfig\(/);
+    assert.match(launcher, /workflows\?\.conformational_mapping/);
+    assert.match(launcher, /frustrampnnConfigurationReady/);
+    assert.match(launcher, /frustrampnn_settings: form\.frustrampnnSettings/);
+    assert.match(launcher, /hydrateFrustraMpnnSettings/);
+    assert.match(api, /frustrampnn_settings: FrustraMpnnRequestedSettings/);
+});
+
 test('launcher can register a pasted canonical protein sequence into the existing immutable source registry', () => {
     const launcher = source('conformationalMapping/ConformationalMappingLauncher.tsx');
     const api = source('conformationalMapping/conformationalMappingApi.ts');

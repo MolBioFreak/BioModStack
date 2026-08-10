@@ -7,6 +7,7 @@ import { MemoryRouter } from 'react-router-dom';
 
 import { ConformationalMappingLauncher } from '../src/components/conformationalMapping/ConformationalMappingLauncher.js';
 import { compileCmRuntimePolicy } from '../src/components/conformationalMapping/conformationalMappingApi.js';
+import type { ModelIntegrationConfig } from '../src/lib/api.js';
 import type {
     CmSource,
     CmSubmitReceipt,
@@ -55,6 +56,19 @@ const containsOption = (node: ReactTestInstance, text: string): boolean =>
 const hasText = (root: ReactTestInstance, text: string): boolean =>
     root.findAll((node) => node.props.children === text).length > 0;
 
+const loadFrustrampnnIntegration = async (): Promise<ModelIntegrationConfig> => ({
+    model_id: 'frustrampnn', model_name: 'FrustraMPNN', model_version: 'MegaScale',
+    stage_parameter: 'run_frustrampnn', operator_label: 'Frustration analysis',
+    checkpoint_label: 'MegaScale-trained checkpoint', model_summary: 'Canonical frustration analysis.',
+    semantic_roles: ['analysis_authority'],
+    workflows: {
+        conformational_mapping: {
+            default_enabled: true,
+            enabled_summary: 'Compare canonical frustration landscapes across conformers.',
+        },
+    },
+});
+
 test('runtime policy overrides are executable only for Protenix', () => {
     assert.deepEqual(compileCmRuntimePolicy('protenix_v2_ensemble', false, 12, 240), {
         use_default_params: false,
@@ -81,6 +95,7 @@ test('rendered external import refresh clears stale IDs, filters formats, become
     };
     const services = {
         listSources: async () => sources,
+        loadFrustrampnnIntegration,
         submitRequest: async (payload: CmSubmitRequest) => {
             submissions.push(payload);
             return receipt;
@@ -196,6 +211,7 @@ test('rendered pasted sequence canonicalizes bytes, rejects invalid residues, an
     };
     const services = {
         listSources: async () => [...available],
+        loadFrustrampnnIntegration,
         registerSource: async (kind: string, file: File, metadata: Record<string, unknown>) => {
             registered.push({ kind, bytes: await file.text(), name: file.name, metadata });
             available.splice(0, available.length, returned);
@@ -276,6 +292,7 @@ test('rendered stale Protenix source handle remains blocked after registry refre
                     initialValues: { backend: 'protenix_v2_ensemble', registered_snapshot_id: 'stale-snapshot' },
                     services: {
                         listSources: async () => [],
+                        loadFrustrampnnIntegration,
                         submitRequest: async () => { throw new Error('blocked request must not submit'); },
                     },
                 }),
