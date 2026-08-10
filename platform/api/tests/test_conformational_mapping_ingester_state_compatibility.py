@@ -378,7 +378,10 @@ async def test_cm_global_ingest_rejects_candidate_path_replacement_after_verific
         record = await _register(session, request, bundle)
         session.add(FrustraMPNNResult(**result_values))
         await session.flush()
-        with pytest.raises(ConformationalPersistenceError, match="crosses CM settings or snapshot"):
+        with pytest.raises(
+            ConformationalPersistenceError,
+            match="crosses CM settings or snapshot|path contains a symlink",
+        ):
             await ingest_result_bundle(session, record, bundle=bundle, result_root=root)
         assert replaced is True
     finally:
@@ -514,17 +517,29 @@ async def test_cm_atomic_persistence_rolls_back_global_rows_when_cm_ingest_fails
 @pytest.mark.asyncio
 @pytest.mark.parametrize("state_value", [None, []])
 async def test_cm_ingest_bundle_treats_missing_or_empty_state_analysis_as_legacy_absence(
-    tmp_path: Path, state_value: object
+    tmp_path: Path, state_value: object, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from services.conformational_mapping import persistence as cm_persistence
+
     root = tmp_path / "result"
     root.mkdir()
     request, bundle = _no_authority_bundle(root)
+    capture_flags: list[bool] = []
+    original_measurement = cm_persistence._stable_file_measurement
+
+    def record_capture(path: Path, *, capture_bytes: bool = False) -> tuple[str, int, bytes | None]:
+        capture_flags.append(capture_bytes)
+        return original_measurement(path, capture_bytes=capture_bytes)
+
+    monkeypatch.setattr(cm_persistence, "_stable_file_measurement", record_capture)
     if state_value is not None:
         bundle["cm_state_landscape_analyses"] = state_value
     session, engine = await _session(tmp_path)
     try:
         record = await _register(session, request, bundle)
         await ingest_result_bundle(session, record, bundle=bundle, result_root=root)
+        assert capture_flags
+        assert not any(capture_flags)
         assert await session.scalar(
             select(ConformationalMappingRecord).where(
                 ConformationalMappingRecord.record_type == "state_landscape_analysis"

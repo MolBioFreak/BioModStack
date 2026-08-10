@@ -642,6 +642,51 @@ async def ingest_result_bundle(
         resume_key_to_persist = ensemble["resume_key"]
     elif ensemble["resume_key"] != record.resume_key:
         raise ConformationalPersistenceError("result bundle resume identity mismatch")
+    global_references = bundle.get("cm_frustrampnn_result_references")
+    canonical_global_mode = global_references is not None
+    expected_settings_sha256: str | None = None
+    expected_snapshot_by_candidate: dict[str, str] = {}
+    candidate_snapshot_bindings_by_path: dict[
+        str, list[tuple[str, Mapping[str, Any]]]
+    ] = {}
+    if canonical_global_mode:
+        snapshots = bundle.get("cm_complex_snapshots")
+        if not isinstance(snapshots, list) or not snapshots:
+            raise ConformationalPersistenceError("canonical CM snapshot authority is missing")
+        snapshot_by_target: dict[str, Mapping[str, Any]] = {}
+        try:
+            for snapshot in snapshots:
+                if not isinstance(snapshot, Mapping):
+                    raise TypeError("CM snapshot is not an object")
+                validate_schema("cm_complex_snapshot_v1", snapshot)
+                target_id = str(snapshot["target_id"])
+                if target_id in snapshot_by_target:
+                    raise ValueError("duplicate CM snapshot target")
+                snapshot_by_target[target_id] = snapshot
+            expected_settings_sha256 = requested_settings_sha256(
+                validate_persisted_requested_settings(
+                    record.request_json.get("frustrampnn_settings")
+                )
+            )
+        except Exception as exc:
+            raise ConformationalPersistenceError(
+                "persisted CM FrustraMPNN settings or snapshot authority is invalid"
+            ) from exc
+        for candidate in ensemble["candidates"]:
+            coordinates = candidate.get("backend_coordinates")
+            target_id = (
+                str(coordinates.get("target_id") or "")
+                if isinstance(coordinates, Mapping) else ""
+            )
+            snapshot = snapshot_by_target.get(target_id)
+            if snapshot is None:
+                raise ConformationalPersistenceError(
+                    "CM candidate has no persisted snapshot authority"
+                )
+            relative_source = str(candidate.get("authoritative_structure_path") or "")
+            candidate_snapshot_bindings_by_path.setdefault(relative_source, []).append(
+                (str(candidate["candidate_id"]), snapshot)
+            )
     root_input = Path(result_root)
     try:
         root_info = os.lstat(root_input)
@@ -651,11 +696,6 @@ async def ingest_result_bundle(
         raise ConformationalPersistenceError("result root is not a real directory")
     root = root_input.resolve(strict=True)
     verified_artifacts: list[tuple[Mapping[str, Any], Path]] = []
-    authoritative_structure_paths = {
-        str(candidate["authoritative_structure_path"])
-        for candidate in ensemble["candidates"]
-    }
-    verified_candidate_bytes: dict[str, bytes] = {}
     seen_paths: set[str] = set()
     for item in native["files"]:
         relative_path = item["relative_path"]
@@ -664,16 +704,31 @@ async def ingest_result_bundle(
         seen_paths.add(relative_path)
         path = _contained_file(root, relative_path)
         digest, byte_count, captured_bytes = _stable_file_measurement(
-            path, capture_bytes=relative_path in authoritative_structure_paths
+            path, capture_bytes=relative_path in candidate_snapshot_bindings_by_path
         )
         if digest != item["sha256"] or byte_count != item["bytes"]:
             raise ConformationalPersistenceError("native artifact hash or size mismatch")
-        if relative_path in authoritative_structure_paths:
+        if relative_path in candidate_snapshot_bindings_by_path:
             if captured_bytes is None:
                 raise ConformationalPersistenceError(
                     "authoritative candidate bytes were not captured during verification"
                 )
-            verified_candidate_bytes[relative_path] = captured_bytes
+            for candidate_id, snapshot in candidate_snapshot_bindings_by_path[relative_path]:
+                try:
+                    bound_snapshot = bind_cm_candidate_snapshot_bytes(
+                        snapshot,
+                        candidate_id=candidate_id,
+                        source_bytes=captured_bytes,
+                        source_suffix=Path(relative_path).suffix,
+                        source_relative_path=relative_path,
+                    )
+                except Exception as exc:
+                    raise ConformationalPersistenceError(
+                        "CM candidate snapshot authority cannot be reconstructed"
+                    ) from exc
+                expected_snapshot_by_candidate[candidate_id] = canonical_sha256(
+                    bound_snapshot
+                )
         verified_artifacts.append((item, path))
     for item in bundle.get("cm_derived_files", []):
         if not isinstance(item, Mapping):
@@ -703,8 +758,6 @@ async def ingest_result_bundle(
         "handoff": "cm_mutagenesis_handoff_v1",
     }
     ensemble_candidate_ids = {item["candidate_id"] for item in ensemble["candidates"]}
-    global_references = bundle.get("cm_frustrampnn_result_references")
-    canonical_global_mode = global_references is not None
     if canonical_global_mode:
         if bundle.get("cm_structure_maps") is not None or bundle.get("cm_frustration_landscapes") is not None:
             raise ConformationalPersistenceError(
@@ -741,54 +794,6 @@ async def ingest_result_bundle(
             "derived structure-map and landscape candidate sets must exactly equal the ensemble"
         )
     if canonical_global_mode:
-        snapshots = bundle.get("cm_complex_snapshots")
-        if not isinstance(snapshots, list) or not snapshots:
-            raise ConformationalPersistenceError("canonical CM snapshot authority is missing")
-        snapshot_by_target: dict[str, Mapping[str, Any]] = {}
-        try:
-            for snapshot in snapshots:
-                if not isinstance(snapshot, Mapping):
-                    raise TypeError("CM snapshot is not an object")
-                validate_schema("cm_complex_snapshot_v1", snapshot)
-                target_id = str(snapshot["target_id"])
-                if target_id in snapshot_by_target:
-                    raise ValueError("duplicate CM snapshot target")
-                snapshot_by_target[target_id] = snapshot
-            expected_settings_sha256 = requested_settings_sha256(
-                validate_persisted_requested_settings(
-                    record.request_json.get("frustrampnn_settings")
-                )
-            )
-        except Exception as exc:
-            raise ConformationalPersistenceError(
-                "persisted CM FrustraMPNN settings or snapshot authority is invalid"
-            ) from exc
-        expected_snapshot_by_candidate: dict[str, str] = {}
-        for candidate in ensemble["candidates"]:
-            coordinates = candidate.get("backend_coordinates")
-            target_id = str(coordinates.get("target_id") or "") if isinstance(coordinates, Mapping) else ""
-            snapshot = snapshot_by_target.get(target_id)
-            if snapshot is None:
-                raise ConformationalPersistenceError(
-                    "CM candidate has no persisted snapshot authority"
-                )
-            relative_source = str(candidate.get("authoritative_structure_path") or "")
-            try:
-                source_bytes = verified_candidate_bytes[relative_source]
-                bound_snapshot = bind_cm_candidate_snapshot_bytes(
-                    snapshot,
-                    candidate_id=str(candidate["candidate_id"]),
-                    source_bytes=source_bytes,
-                    source_suffix=Path(relative_source).suffix,
-                    source_relative_path=relative_source,
-                )
-            except Exception as exc:
-                raise ConformationalPersistenceError(
-                    "CM candidate snapshot authority cannot be reconstructed"
-                ) from exc
-            expected_snapshot_by_candidate[str(candidate["candidate_id"])] = canonical_sha256(
-                bound_snapshot
-            )
         if not isinstance(global_references, Mapping) or set(global_references) != {
             "schema_name", "schema_version", "parent_job_id", "parent_workflow_id",
             "expected_cardinality", "results",
