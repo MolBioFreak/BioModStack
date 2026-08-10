@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -86,6 +86,11 @@ from services.conformational_mapping.rcsb_source import (
 )
 from services.job_control import cancel_job_lineage
 from services.frustrampnn import runtime as _frustrampnn_runtime
+from services.frustrampnn.settings import (
+    FrustraMPNNRequestedSettings,
+    default_settings as default_frustrampnn_settings,
+    validate_complete_requested_settings,
+)
 
 
 router = APIRouter(prefix="/api/conformational-mapping", tags=["conformational-mapping"])
@@ -175,6 +180,16 @@ class SubmitRequest(BaseModel):
     registered_transfer_id: str | None = None
     confornets: dict[str, Any] | None = None
     state_landscape_comparison: dict[str, Any] | None = None
+    frustrampnn_settings: FrustraMPNNRequestedSettings = Field(
+        default_factory=default_frustrampnn_settings
+    )
+
+    @field_validator("frustrampnn_settings", mode="before")
+    @classmethod
+    def _complete_frustrampnn_settings(
+        cls, value: Any,
+    ) -> FrustraMPNNRequestedSettings:
+        return validate_complete_requested_settings(value)
 
 
 class RcsbSelection(BaseModel):
@@ -1724,6 +1739,9 @@ async def submit_request(
         "feature_policy": body.feature_policy,
         "runtime_policy": _bind_runtime_policy(body.backend, body.runtime_policy),
         "analysis_policy": _bind_analysis_policy(body.analysis_policy),
+        "frustrampnn_settings": body.frustrampnn_settings.model_dump(
+            mode="json", exclude_none=False
+        ),
     }
     if body.state_landscape_comparison is not None:
         params["state_landscape_comparison"] = body.state_landscape_comparison

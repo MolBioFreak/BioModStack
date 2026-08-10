@@ -37,6 +37,8 @@
     "feature_policy": {"$ref": "#/$defs/feature_policy"},
     "runtime_policy": {"$ref": "#/$defs/runtime_policy"},
     "analysis_policy": {"$ref": "#/$defs/analysis_policy"},
+    "frustrampnn_settings": {"type": "object"},
+    "frustrampnn_requiredness": {"const": "required"},
     "state_landscape_comparison": {"$ref": "#/$defs/state_landscape_comparison"},
     "confornets": {"$ref": "#/$defs/confornets"},
     "protenix_snapshot_id": {"type": "string", "minLength": 1},

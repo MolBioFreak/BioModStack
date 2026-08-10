@@ -23,6 +23,7 @@ from services.conformational_mapping.import_snapshot import (
     build_import_snapshot_from_mmcif,
     build_staged_import_snapshots,
 )
+from services.frustrampnn.settings import default_settings
 
 
 MMCIF = b"""data_minimal
@@ -503,6 +504,13 @@ async def test_local_application_upload_and_submit_materializes_snapshot_and_job
             file=UploadFile(filename="minimal.cif", file=io.BytesIO(MMCIF)),
             session=session,
         )
+        operator_settings = default_settings().model_dump(mode="json", exclude_none=False)
+        operator_settings.pop("settings_value_origin")
+        operator_settings["classification_policy"] = {
+            "mode": "custom",
+            "high_max": -0.75,
+            "minimal_min": 0.7,
+        }
         body = SubmitRequest.model_validate({
             "name": "minimal imported mmCIF",
             "idempotency_key": "minimal-import-v1",
@@ -513,6 +521,7 @@ async def test_local_application_upload_and_submit_materializes_snapshot_and_job
             "feature_policy": {"mode": "features_disabled_control_v1"},
             "runtime_policy": {"use_default_params": True},
             "analysis_policy": cm_router._canonical_analysis_policy(),
+            "frustrampnn_settings": operator_settings,
         })
         response = Response()
         receipt = await cm_router.submit_request(body, request, response, session)
@@ -526,6 +535,11 @@ async def test_local_application_upload_and_submit_materializes_snapshot_and_job
         assert await session.scalar(select(func.count()).select_from(ConformationalMappingRequest)) == 1
         persisted_request = await session.scalar(select(ConformationalMappingRequest))
         assert persisted_request is not None
+        assert persisted_request.request_json["frustrampnn_settings"] == {
+            **operator_settings,
+            "settings_value_origin": "operator_request",
+        }
+        assert persisted_request.request_json["frustrampnn_requiredness"] == "required"
         selected_input = persisted_request.request_json["run_record"]["selected_input"]
         assert selected_input["model_id"] == "1"
         assert selected_input["chain_ids"] == ["A"]

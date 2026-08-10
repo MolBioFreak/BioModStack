@@ -24,6 +24,12 @@ from .state_landscape_analysis import (
     MAX_STATE_LANDSCAPE_COMPARISONS,
     MAX_STATE_LANDSCAPE_RESIDUES_PER_CANDIDATE,
 )
+from services.frustrampnn.settings import (
+    FrustraMPNNRequestedSettings,
+    default_settings as default_frustrampnn_settings,
+    validate_complete_requested_settings,
+    validate_persisted_requested_settings,
+)
 
 
 BACKENDS = frozenset({"protenix_v2_ensemble", "confornets", "external_import"})
@@ -44,6 +50,7 @@ _TOP_LEVEL_FIELDS = frozenset(
         "import_receipt_id",
         "resolved_import_entries",
         "run_record",
+        "frustrampnn_settings",
     }
 )
 _CONFORNETS_FIELDS = frozenset(
@@ -215,6 +222,32 @@ def _normalize_run_record(value: object) -> dict[str, Any]:
         ),
         "selected_input": normalized_input,
     }
+
+
+def _normalize_frustrampnn_settings(value: object) -> dict[str, Any]:
+    """Validate one complete server-bound canonical settings object."""
+
+    try:
+        persisted = validate_persisted_requested_settings(value)
+        if isinstance(value, FrustraMPNNRequestedSettings):
+            normalized = persisted
+        else:
+            if not isinstance(value, Mapping):  # guarded by the canonical validator
+                raise ValueError("frustrampnn_settings must be an object")
+            editable = dict(value)
+            editable.pop("settings_value_origin", None)
+            complete = validate_complete_requested_settings(editable)
+            normalized = FrustraMPNNRequestedSettings.model_validate(
+                {
+                    **complete.model_dump(mode="json", exclude_none=False),
+                    "settings_value_origin": persisted.settings_value_origin,
+                }
+            )
+    except ValueError as exc:
+        raise ConformationalMappingRequestError(
+            f"frustrampnn_settings must be a complete server-bound canonical object: {exc}"
+        ) from exc
+    return normalized.model_dump(mode="json", exclude_none=False)
 
 
 def _validate_staged_record(value: object, *, field: str) -> dict[str, Any]:
@@ -635,6 +668,16 @@ def validate_request_params(params: Mapping[str, Any]) -> ValidatedRequest:
         "runtime_policy": values["runtime_policy"],
         "analysis_policy": values["analysis_policy"],
     }
+    if "frustrampnn_settings" not in values:
+        frustrampnn_settings = default_frustrampnn_settings().model_dump(
+            mode="json", exclude_none=False
+        )
+    else:
+        frustrampnn_settings = _normalize_frustrampnn_settings(
+            values["frustrampnn_settings"]
+        )
+    request_fields["frustrampnn_settings"] = frustrampnn_settings
+    request_fields["frustrampnn_requiredness"] = "required"
     if "run_record" in values:
         request_fields["run_record"] = _normalize_run_record(values["run_record"])
     if "state_landscape_comparison" in values:
