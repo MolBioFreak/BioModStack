@@ -5,6 +5,7 @@ import hashlib
 import json
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Mapping
 
 import pytest
 from sqlalchemy import select
@@ -302,6 +303,84 @@ async def test_cm_global_ingest_rejects_cross_bound_settings_or_snapshot(
         await session.flush()
         with pytest.raises(ConformationalPersistenceError, match="crosses CM settings or snapshot"):
             await ingest_result_bundle(session, record, bundle=bundle, result_root=root)
+    finally:
+        await session.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replacement_mode", ["leaf", "intermediate"])
+async def test_cm_global_ingest_rejects_candidate_path_replacement_after_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replacement_mode: str,
+) -> None:
+    from services.conformational_mapping import persistence as cm_persistence
+
+    root = tmp_path / f"global-race-{replacement_mode}"
+    root.mkdir()
+    request, bundle, reference, result_values = _global_bundle(root)
+    candidate = bundle["cm_ensemble_v1"]["candidates"][0]
+    source_path = root / candidate["authoritative_structure_path"]
+    malicious_bytes = _minimal_mmcif() + b"# substituted generation\n"
+    malicious_snapshot = bind_cm_candidate_snapshot_bytes(
+        bundle["cm_complex_snapshots"][0],
+        candidate_id=candidate["candidate_id"],
+        source_bytes=malicious_bytes,
+        source_suffix=source_path.suffix,
+        source_relative_path=candidate["authoritative_structure_path"],
+    )
+    reference["cm_complex_snapshot_sha256"] = canonical_sha256(malicious_snapshot)
+    attack_root = root / "attacker"
+    attack_root.mkdir()
+    attack_file = attack_root / source_path.name
+    attack_file.write_bytes(malicious_bytes)
+    original_read_bytes = Path.read_bytes
+    original_bind = cm_persistence.bind_cm_candidate_snapshot_bytes
+    replaced = False
+
+    def replace_candidate_path() -> None:
+        nonlocal replaced
+        if replaced:
+            return
+        replaced = True
+        if replacement_mode == "leaf":
+            source_path.unlink()
+            source_path.symlink_to(attack_file)
+        else:
+            original_parent = source_path.parent.with_name(source_path.parent.name + "-original")
+            source_path.parent.rename(original_parent)
+            source_path.parent.symlink_to(attack_root, target_is_directory=True)
+
+    def replace_before_reopen(path: Path) -> bytes:
+        if path == source_path:
+            replace_candidate_path()
+        return original_read_bytes(path)
+
+    def replace_before_binding(
+        snapshot: Mapping[str, Any], *, candidate_id: str, source_bytes: bytes,
+        source_suffix: str, source_relative_path: str | None = None,
+    ) -> dict[str, Any]:
+        replace_candidate_path()
+        return original_bind(
+            snapshot,
+            candidate_id=candidate_id,
+            source_bytes=source_bytes,
+            source_suffix=source_suffix,
+            source_relative_path=source_relative_path,
+        )
+
+    monkeypatch.setattr(Path, "read_bytes", replace_before_reopen)
+    monkeypatch.setattr(
+        cm_persistence, "bind_cm_candidate_snapshot_bytes", replace_before_binding
+    )
+    monkeypatch.setattr(cm_persistence, "validate_frustrampnn_schema", lambda *_args: None)
+    session, engine = await _session(tmp_path)
+    try:
+        record = await _register(session, request, bundle)
+        session.add(FrustraMPNNResult(**result_values))
+        await session.flush()
+        with pytest.raises(ConformationalPersistenceError, match="crosses CM settings or snapshot"):
+            await ingest_result_bundle(session, record, bundle=bundle, result_root=root)
+        assert replaced is True
     finally:
         await session.close()
         await engine.dispose()

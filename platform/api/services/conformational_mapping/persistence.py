@@ -314,7 +314,9 @@ def _same_file_identity(left: os.stat_result, right: os.stat_result) -> bool:
     )
 
 
-def _stable_file_measurement(path: Path) -> tuple[str, int]:
+def _stable_file_measurement(
+    path: Path, *, capture_bytes: bool = False,
+) -> tuple[str, int, bytes | None]:
     try:
         file_fd, parent_fd, leaf, before, path_before = _open_pinned_file(path)
     except OSError as exc:
@@ -324,12 +326,15 @@ def _stable_file_measurement(path: Path) -> tuple[str, int]:
             raise ConformationalPersistenceError("artifact is not a regular file")
         digest = hashlib.sha256()
         size = 0
+        captured = bytearray() if capture_bytes else None
         while True:
             chunk = os.read(file_fd, 1024 * 1024)
             if not chunk:
                 break
             digest.update(chunk)
             size += len(chunk)
+            if captured is not None:
+                captured.extend(chunk)
         after = os.fstat(file_fd)
         path_after = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
         visible_after = os.lstat(path)
@@ -337,7 +342,7 @@ def _stable_file_measurement(path: Path) -> tuple[str, int]:
             raise ConformationalPersistenceError("artifact path or bytes changed during verification")
         if size != before.st_size:
             raise ConformationalPersistenceError("artifact size changed during verification")
-        return digest.hexdigest(), size
+        return digest.hexdigest(), size, bytes(captured) if captured is not None else None
     finally:
         os.close(file_fd)
         os.close(parent_fd)
@@ -646,6 +651,11 @@ async def ingest_result_bundle(
         raise ConformationalPersistenceError("result root is not a real directory")
     root = root_input.resolve(strict=True)
     verified_artifacts: list[tuple[Mapping[str, Any], Path]] = []
+    authoritative_structure_paths = {
+        str(candidate["authoritative_structure_path"])
+        for candidate in ensemble["candidates"]
+    }
+    verified_candidate_bytes: dict[str, bytes] = {}
     seen_paths: set[str] = set()
     for item in native["files"]:
         relative_path = item["relative_path"]
@@ -653,9 +663,17 @@ async def ingest_result_bundle(
             raise ConformationalPersistenceError("native manifest contains a duplicate path")
         seen_paths.add(relative_path)
         path = _contained_file(root, relative_path)
-        digest, byte_count = _stable_file_measurement(path)
+        digest, byte_count, captured_bytes = _stable_file_measurement(
+            path, capture_bytes=relative_path in authoritative_structure_paths
+        )
         if digest != item["sha256"] or byte_count != item["bytes"]:
             raise ConformationalPersistenceError("native artifact hash or size mismatch")
+        if relative_path in authoritative_structure_paths:
+            if captured_bytes is None:
+                raise ConformationalPersistenceError(
+                    "authoritative candidate bytes were not captured during verification"
+                )
+            verified_candidate_bytes[relative_path] = captured_bytes
         verified_artifacts.append((item, path))
     for item in bundle.get("cm_derived_files", []):
         if not isinstance(item, Mapping):
@@ -665,7 +683,7 @@ async def ingest_result_bundle(
             raise ConformationalPersistenceError("derived artifact duplicates a native path")
         seen_paths.add(relative_path)
         path = _contained_file(root, relative_path)
-        digest, byte_count = _stable_file_measurement(path)
+        digest, byte_count, _captured_bytes = _stable_file_measurement(path)
         if digest != item.get("sha256") or byte_count != item.get("bytes"):
             raise ConformationalPersistenceError("derived artifact hash or size mismatch")
         verified_artifacts.append((item, path))
@@ -756,12 +774,12 @@ async def ingest_result_bundle(
                 )
             relative_source = str(candidate.get("authoritative_structure_path") or "")
             try:
-                candidate_source = _contained_file(root, relative_source)
+                source_bytes = verified_candidate_bytes[relative_source]
                 bound_snapshot = bind_cm_candidate_snapshot_bytes(
                     snapshot,
                     candidate_id=str(candidate["candidate_id"]),
-                    source_bytes=candidate_source.read_bytes(),
-                    source_suffix=candidate_source.suffix,
+                    source_bytes=source_bytes,
+                    source_suffix=Path(relative_source).suffix,
                     source_relative_path=relative_source,
                 )
             except Exception as exc:
