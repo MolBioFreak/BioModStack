@@ -442,7 +442,7 @@ def test_cm3_003_matrix_routes_canonical_entrypoint(
         command = nextflow.build_nextflow_command(
             "conformational_mapping",
             "map",
-            materialized.launch_params,
+            {**materialized.launch_params, "gpu_id": 3},
             str(tmp_path / backend),
             job_id=f"cm-{backend}",
         )
@@ -503,12 +503,15 @@ def test_cm3_004_cm_namespace_normalization(
     command = nextflow.build_nextflow_command(
         "conformational_mapping",
         "map",
-        materialized.launch_params,
+        {**materialized.launch_params, "gpu_id": 3},
         str(tmp_path),
         job_id="cm-normalized",
     )
     forwarded_flags = {token for token in command if token.startswith("--")}
-    assert forwarded_flags == {"--out_dir", "--job_id", "--cm_request_path"}
+    assert forwarded_flags == {
+        "--out_dir", "--job_id", "--cm_request_path", "--run_frustrampnn",
+        "--gpu_id", "--frustrampnn_physical_gpu_id",
+    }
     assert not any(flag.startswith("--cn_") for flag in forwarded_flags)
     assert "--ordered_seeds" not in forwarded_flags
     assert "--generated_json_ordered_seeds" not in forwarded_flags
@@ -1169,8 +1172,10 @@ def test_cm3_007_unknown_backend_fails() -> None:
     workflow_text = (REPO_ROOT / "workflows" / "conformational_mapping.nf").read_text(
         encoding="utf-8"
     )
-    assert "switch (request.backend)" in workflow_text
-    assert "default:" in workflow_text
+    assert "request.backend == 'protenix_v2_ensemble'" in workflow_text
+    assert "request.backend == 'confornets'" in workflow_text
+    assert "request.backend == 'external_import'" in workflow_text
+    assert "else {" in workflow_text
     assert "Unknown conformational-mapping backend" in workflow_text
     assert "dynamic include" not in workflow_text.lower()
     assert "fallback" not in workflow_text.lower()

@@ -480,7 +480,9 @@ def test_bms_api_python_is_provisioned_once_for_nextflow_and_cm_host_scripts() -
     assert "flock -x 9" in launcher
     assert "mv -Tf \"$next_link\" \"$CM_API_RUNTIME_DIR/current\"" in launcher
     assert "api_python = System.getenv('BMS_API_PYTHON')" in config
-    assert "${params.api_python} ${params.code_root}/scripts/run_conformational_mapping_analysis_plane.py" in cm_module
+    assert "prepare_conformational_mapping_frustrampnn_v2.py" in cm_module
+    assert "postprocess_conformational_mapping_frustrampnn_v2.py" in cm_module
+    assert "run_conformational_mapping_analysis_plane.py" not in cm_module
     subprocess.run(["bash", "-n", str(REPO_ROOT / "scripts/run_biomodstack_workflow_adapter.sh")], check=True)
 
 

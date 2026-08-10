@@ -97,7 +97,7 @@ class ValidatedRequest:
 class MaterializedRequest:
     request_path: Path
     coordinate_plan_path: Path
-    launch_params: dict[str, str]
+    launch_params: dict[str, Any]
     request_sha256: str
     coordinate_plan_sha256: str
 
@@ -1060,7 +1060,7 @@ def materialize_trusted_internal_request(
     return MaterializedRequest(
         request_path=request_path,
         coordinate_plan_path=coordinate_plan_path,
-        launch_params={"cm_request_path": str(request_path)},
+        launch_params={"cm_request_path": str(request_path), "run_frustrampnn": True},
         request_sha256=request["request_sha256"],
         coordinate_plan_sha256=plan["coordinate_plan_sha256"],
     )

@@ -93,20 +93,21 @@ def test_artifact_download_resolves_custom_state_root_and_http_ranges(
     assert raised.value.headers == {"Content-Range": "bytes */10"}
 
 
-def test_cm_analysis_runs_contracts_on_host_and_only_scores_in_container() -> None:
-    module = (REPO_ROOT / "modules/conformational_mapping_frustrampnn.nf").read_text()
+def test_cm_analysis_runs_contracts_on_host_and_only_scores_in_global_component() -> None:
+    cm_module = (REPO_ROOT / "modules/conformational_mapping_frustrampnn.nf").read_text()
+    global_module = (REPO_ROOT / "modules/frustrampnn.nf").read_text()
     config = (REPO_ROOT / "nextflow.config").read_text()
 
-    assert "label 'cm_gpu'" in module
-    assert "label 'gpu'" not in module
-    assert "\n    container " not in module
-    assert "\n    containerOptions " not in module
-    assert "${params.api_python} ${params.code_root}/scripts/run_conformational_mapping_analysis_plane.py" in module
-    assert "--frustrampnn-container ${params.container_dir}/frustrampnn.sif" in module
-    assert "--gpu-id '${assigned_gpu}'" in module
-    assert "export CUDA_VISIBLE_DEVICES='${assigned_gpu}'" in module
+    assert "label 'CPU'" in cm_module
+    assert "postprocess_conformational_mapping_frustrampnn_v2.py" in cm_module
+    assert "run_conformational_mapping_analysis_plane.py" not in cm_module
+    assert "--container" not in cm_module
+    assert "--gpu-id" not in cm_module
+    assert "label 'frustrampnn_gpu'" in global_module
+    assert "run_frustrampnn_component.py" in global_module
+    assert "--physical-gpu-id '${assigned_gpu}'" in global_module
+    assert "export CUDA_VISIBLE_DEVICES='${assigned_gpu}'" in global_module
     assert "api_python = System.getenv('BMS_API_PYTHON')" in config
-    assert "withLabel: cm_gpu" not in config
 
 
 def test_cm_scheduler_admission_and_nonzero_gpu_reach_contained_frustrampnn(
@@ -120,7 +121,7 @@ def test_cm_scheduler_admission_and_nonzero_gpu_reach_contained_frustrampnn(
     monkeypatch.setenv("BMS_NEXTFLOW_BIN", "/usr/local/bin/nextflow")
     command = build_nextflow_command(
         "conformational_mapping", "map",
-        {"cm_request_path": "/srv/request/cm_request_v1.json", "gpu_id": 3},
+        {"cm_request_path": "/srv/request/cm_request_v1.json", "gpu_id": 3, "run_frustrampnn": True},
         "/srv/results", job_id="cm-job",
     )
     assert command[command.index("--gpu_id") + 1] == "3"
@@ -146,39 +147,30 @@ def test_cm_scheduler_admission_and_nonzero_gpu_reach_contained_frustrampnn(
     assert "--gpu-id" not in argv
 
 
-def test_cm_nextflow_module_emits_assigned_gpu_into_runner_and_apptainer(
+def test_cm_canonical_component_requires_scheduler_assigned_gpu(
     tmp_path: Path,
 ) -> None:
     nextflow = Path(os.environ.get("BMS_NEXTFLOW_BIN", "/usr/local/bin/nextflow"))
     if not (nextflow.is_file() and os.access(nextflow, os.X_OK)):
         pytest.skip(f"real Nextflow launcher unavailable: {nextflow}")
 
-    request_root = tmp_path / "request"
-    canonical = tmp_path / "canonical"
-    fake_root = tmp_path / "fake-code"
-    for directory in (request_root, canonical, fake_root / "scripts"):
-        directory.mkdir(parents=True)
-    for name in (
-        "cm_request_v1.json", "cm_runtime_registry_v1.json", "cm_complex_snapshots_v1.json",
-    ):
-        (request_root / name).write_text("{}", encoding="utf-8")
-    capture = tmp_path / "runner-capture.json"
-    fake_runner = fake_root / "scripts/run_conformational_mapping_analysis_plane.py"
-    fake_runner.write_text(
-        "import json, os, pathlib, sys\n"
-        f"pathlib.Path({str(capture)!r}).write_text(json.dumps({{'argv': sys.argv[1:], 'cuda': os.environ.get('CUDA_VISIBLE_DEVICES')}}))\n"
-        "out = pathlib.Path(sys.argv[sys.argv.index('--out') + 1]); out.mkdir()\n"
-        "for name in ('cm_native_artifacts_v1.json','cm_ensemble_v1.json','cm_derived_index_v1.json'): (out / name).write_text('{}')\n",
-        encoding="utf-8",
-    )
+    request = tmp_path / "workflow_component_request_v2.json"
+    source = tmp_path / "canonical_source.pdb"
+    structure_map = tmp_path / "frustrampnn_structure_map_v1.json"
+    request.write_text(json.dumps({
+        "candidate_id": "candidate-a",
+        "invocation_id": "frustrampnn:cm-job:candidate-a",
+    }), encoding="utf-8")
+    source.write_text("ATOM\n", encoding="utf-8")
+    structure_map.write_text("{}", encoding="utf-8")
     harness = tmp_path / "harness.nf"
-    module = (REPO_ROOT / "modules/conformational_mapping_frustrampnn.nf").as_posix()
+    module = (REPO_ROOT / "modules/frustrampnn.nf").as_posix()
     harness.write_text(
         "nextflow.enable.dsl=2\n"
-        f"include {{ CanonicalConformationalAnalysisPlane }} from '{module}'\n"
+        f"include {{ CanonicalFrustraMPNNV2 }} from '{module}'\n"
         "workflow {\n"
-        "  inputs = Channel.of(tuple('request-1', 'external_import', file(params.request_root), file(params.canonical_dir), '/checkpoint'))\n"
-        "  CanonicalConformationalAnalysisPlane(inputs)\n"
+        "  inputs = Channel.of(tuple(file(params.request), file(params.source), file(params.structure_map)))\n"
+        "  CanonicalFrustraMPNNV2(inputs)\n"
         "}\n",
         encoding="utf-8",
     )
@@ -187,53 +179,27 @@ def test_cm_nextflow_module_emits_assigned_gpu_into_runner_and_apptainer(
     env["NXF_OFFLINE"] = "true"
     env.pop("SSL_CERT_FILE", None)
     env.pop("CURL_CA_BUNDLE", None)
-    subprocess.run(
-        [
-            str(nextflow), "run", str(harness),
-            "--request_root", str(request_root), "--canonical_dir", str(canonical),
-            "--gpu_id", "3", "--api_python", sys.executable,
-            "--code_root", str(fake_root), "--container_dir", str(tmp_path),
-            "--out_dir", str(tmp_path / "published"),
-            "-work-dir", str(tmp_path / "work"),
-        ],
-        check=True, cwd=tmp_path, env=env, text=True, capture_output=True,
+    base = [
+        str(nextflow), "run", str(harness), "-stub-run",
+        "--request", str(request), "--source", str(source),
+        "--structure_map", str(structure_map), "--api_python", sys.executable,
+        "-work-dir", str(tmp_path / "work"),
+    ]
+    accepted = subprocess.run(
+        [*base, "--frustrampnn_physical_gpu_id", "3"],
+        check=False, cwd=tmp_path, env=env, text=True, capture_output=True,
     )
-    emitted = json.loads(capture.read_text(encoding="utf-8"))
-    assert emitted["cuda"] == "3"
-    gpu_id = emitted["argv"][emitted["argv"].index("--gpu-id") + 1]
-    assert gpu_id == "3"
-    input_root = tmp_path / "command-input"
-    output_root = tmp_path / "command-output"
-    input_root.mkdir()
-    output_root.mkdir()
-    normalized = input_root / "normalized.pdb"
-    normalized.write_text("ATOM\n", encoding="utf-8")
-    argv = _frustrampnn_command(
-        apptainer="apptainer", container=tmp_path / "frustrampnn.sif",
-        tool="/opt/venv/bin/frustrampnn", normalized=normalized,
-        checkpoint=Path("/opt/frustrampnn_weights/megascale.ckpt"),
-        raw=output_root / "raw.csv", output_root=output_root, gpu_id=int(gpu_id),
-    )
-    assert "CUDA_VISIBLE_DEVICES=3" in argv
-    assert argv[-2:] == ["--device", "cuda"]
-    assert "--gpu_id" not in argv
-    assert "--gpu-id" not in argv
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
 
     injection_marker = tmp_path / "gpu-injection-proof"
     malicious_gpu = f"3'; touch {injection_marker}; #"
     rejected = subprocess.run(
-        [
-            str(nextflow), "run", str(harness),
-            "--request_root", str(request_root), "--canonical_dir", str(canonical),
-            "--gpu_id", malicious_gpu, "--api_python", sys.executable,
-            "--code_root", str(fake_root), "--container_dir", str(tmp_path),
-            "--out_dir", str(tmp_path / "rejected-published"),
-            "-work-dir", str(tmp_path / "rejected-work"),
-        ],
+        [*base[:-2], "-work-dir", str(tmp_path / "rejected-work"),
+         "--frustrampnn_physical_gpu_id", malicious_gpu],
         check=False, cwd=tmp_path, env=env, text=True, capture_output=True,
     )
     assert rejected.returncode != 0
-    assert "canonical non-negative integer" in (rejected.stdout + rejected.stderr)
+    assert "explicit scheduler-assigned" in (rejected.stdout + rejected.stderr)
     assert not injection_marker.exists()
 
 
@@ -245,7 +211,7 @@ def test_cm_scheduler_gpu_id_rejects_noncanonical_values(
     with pytest.raises(ValueError, match="non-negative integer"):
         build_nextflow_command(
             "conformational_mapping", "map",
-            {"cm_request_path": "/tmp/cm_request_v1.json", "gpu_id": gpu_id},
+            {"cm_request_path": "/tmp/cm_request_v1.json", "gpu_id": gpu_id, "run_frustrampnn": True},
             "/tmp/cm-output", "cm-job",
         )
 
