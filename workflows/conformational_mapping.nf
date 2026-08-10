@@ -5,7 +5,7 @@ nextflow.enable.dsl = 2
 include { CONFORMATIONAL_MAPPING_CONFORNETS } from '../modules/conformational_mapping_confornets.nf'
 include { CONFORMATIONAL_MAPPING_PROTENIX } from '../modules/conformational_mapping_protenix.nf'
 include { CONFORMATIONAL_MAPPING_IMPORT } from '../modules/conformational_mapping_import.nf'
-include { PrepareConformationalMappingFrustraMPNNV2; CanonicalConformationalAnalysisPlaneV2 } from '../modules/conformational_mapping_frustrampnn.nf'
+include { PrepareConformationalMappingFrustraMPNNV2; StageConformationalMappingFrustraMPNNResult; CanonicalConformationalAnalysisPlaneV2 } from '../modules/conformational_mapping_frustrampnn.nf'
 include { CanonicalFrustraMPNNV2 } from '../modules/frustrampnn.nf'
 
 params.cm_request_path = null
@@ -96,12 +96,13 @@ workflow {
         }
     }
     CanonicalFrustraMPNNV2(componentRequests)
+    StageConformationalMappingFrustraMPNNResult(CanonicalFrustraMPNNV2.out.result)
 
     preparationManifest = PrepareConformationalMappingFrustraMPNNV2.out.prepared.map {
         request_id, backend_dir, prepared_dir, preparation_manifest -> preparation_manifest
     }
-    requiredResultBundles = CanonicalFrustraMPNNV2.out.result.map {
-        component_result, candidate_bundle, result_manifest -> candidate_bundle
+    requiredResultBundles = StageConformationalMappingFrustraMPNNResult.out.staged.map {
+        component_result, candidate_bundle -> candidate_bundle
     }.collect()
 
     CanonicalConformationalAnalysisPlaneV2(

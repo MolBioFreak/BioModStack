@@ -707,6 +707,7 @@ def test_cm_nextflow_wires_every_candidate_through_canonical_v2_and_no_direct_ru
     assert "CONFORMATIONAL_MAPPING_IMPORT" in workflow
     assert "PrepareConformationalMappingFrustraMPNNV2" in workflow
     assert "CanonicalFrustraMPNNV2" in workflow
+    assert "StageConformationalMappingFrustraMPNNResult" in workflow
     assert "CanonicalConformationalAnalysisPlaneV2" in workflow
     assert "flatMap" in workflow
     assert "workflow_component_request_v2.json" in workflow

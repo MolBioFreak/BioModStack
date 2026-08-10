@@ -57,3 +57,23 @@ process CanonicalConformationalAnalysisPlaneV2 {
       --out canonical_result
     """
 }
+
+process StageConformationalMappingFrustraMPNNResult {
+    tag "cm-frustrampnn-stage:${component_result.candidate_id}"
+    label 'CPU'
+    errorStrategy 'terminate'
+    maxRetries 0
+    stageInMode 'copy'
+
+    input:
+    tuple val(component_result), path(candidate_bundle), path(result_manifest)
+
+    output:
+    tuple val(component_result), path("${component_result.candidate_id}"), emit: staged
+
+    script:
+    """
+    set -euo pipefail
+    cp -a '${candidate_bundle}' '${component_result.candidate_id}'
+    """
+}
