@@ -825,7 +825,6 @@ async def test_concurrent_pcr_review_mutations_serialize_revision_allocation(tmp
                     PCRReviewStateRequest(
                         review_state="in_review" if index % 2 == 0 else "draft",
                         notes=f"concurrent-{index}",
-                        actor=f"claimed-reviewer-{index}",
                     ),
                     session,
                 )
@@ -846,7 +845,7 @@ async def test_concurrent_pcr_review_mutations_serialize_revision_allocation(tmp
 
 
 @pytest.mark.asyncio
-async def test_review_actor_claim_cannot_forge_authenticated_audit_identity(tmp_path: Path) -> None:
+async def test_review_persists_server_owned_revision_and_audit_actor(tmp_path: Path) -> None:
     engine = create_molbio_engine(f"sqlite+aiosqlite:///{tmp_path / 'audit-actor.db'}")
     await init_molbio_db(engine=engine)
     sessions = make_molbio_session_factory(engine)
@@ -864,12 +863,10 @@ async def test_review_actor_claim_cannot_forge_authenticated_audit_identity(tmp_
                 ),
                 session,
             )
-            claim = "authenticated:principal:administrator"
             response = await update_pcr_experiment_review_state(
                 created.experiment_id,
                 PCRReviewStateRequest(
                     review_state="in_review",
-                    actor=claim,
                     provenance={"client": "test"},
                 ),
                 session,
@@ -886,17 +883,13 @@ async def test_review_actor_claim_cannot_forge_authenticated_audit_identity(tmp_
             assert revision is not None
             assert revision.created_by == "system:molbio-api"
             assert event is not None and event.actor == "system:molbio-api"
-            assert revision.provenance["client_actor_claim"] == {
-                "value": claim,
-                "verification": "unverified",
-            }
-            assert claim not in {revision.created_by, event.actor}
+            assert revision.provenance["client"] == "test"
     finally:
         await engine.dispose()
 
 
 @pytest.mark.asyncio
-async def test_approval_requires_authenticated_reviewer_and_persists_that_actor(
+async def test_approval_requires_authenticated_reviewer_and_persists_server_actor(
     tmp_path: Path,
 ) -> None:
     engine = create_molbio_engine(f"sqlite+aiosqlite:///{tmp_path / 'approval-actor.db'}")
@@ -920,7 +913,6 @@ async def test_approval_requires_authenticated_reviewer_and_persists_that_actor(
             experiment_id = created.experiment_id
             request = PCRReviewStateRequest(
                 review_state="approved",
-                actor="client-forgery",
             )
             with pytest.raises(HTTPException) as error:
                 await update_pcr_experiment_review_state(
@@ -939,8 +931,7 @@ async def test_approval_requires_authenticated_reviewer_and_persists_that_actor(
             revision = await session.get(PCRExperimentRevision, response["id"])
             assert revision is not None
             assert revision.review_state == "approved"
-            assert revision.created_by == "reviewer:alice"
-            assert revision.provenance["client_actor_claim"]["verification"] == "unverified"
+            assert revision.created_by == "system:molbio-api"
     finally:
         await engine.dispose()
 

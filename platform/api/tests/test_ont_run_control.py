@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
+import os
 import sys
 from datetime import timedelta
 from pathlib import Path
@@ -40,6 +42,7 @@ async def _seed_server_observed_run(
     state: str = "running",
     minknow_run_id: str = "PRIVATE-MINKNOW-RUN",
     output_files: dict[str, list[str]] | None = None,
+    output_directories: dict[str, str] | None = None,
 ) -> str:
     """Seed a host-observed row only for server-internal lifecycle tests.
 
@@ -61,7 +64,7 @@ async def _seed_server_observed_run(
                 sample_id="sample-safe",
                 experiment_group="group-safe",
                 kit="PRIVATE-KIT",
-                output_directories={"reads": "/private/output"},
+                output_directories=output_directories or {"reads": "/private/output"},
                 output_files=files,
                 handoff_ready=bool(files.get("fastq") or files.get("bam")),
                 last_minknow_payload={"protocol_id": "PRIVATE-PROTOCOL", "rpc": {"target": "PRIVATE-RPC"}},
@@ -390,7 +393,9 @@ def test_terminal_output_filter_rejects_host_reported_symlink(tmp_path: Path) ->
     link = tmp_path / "reported.fastq"
     link.symlink_to(target)
 
-    assert ont_run_control._existing_output_files({"fastq": [str(link)]}) == {
+    assert ont_run_control._existing_output_files(
+        {"fastq": [str(link)]}, approved_roots=(tmp_path,)
+    ) == {
         "fastq": [],
         "pod5": [],
         "bam": [],
@@ -405,11 +410,59 @@ def test_terminal_output_filter_rejects_symlinked_parent_before_resolution(tmp_p
     alias = tmp_path / "alias"
     alias.symlink_to(actual, target_is_directory=True)
 
-    assert ont_run_control._existing_output_files({"fastq": [str(alias / "reads.fastq")]}) == {
+    assert ont_run_control._existing_output_files(
+        {"fastq": [str(alias / "reads.fastq")]}, approved_roots=(tmp_path,)
+    ) == {
         "fastq": [],
         "pod5": [],
         "bam": [],
     }
+
+
+def test_terminal_output_filter_rejects_file_outside_configured_minknow_root(tmp_path: Path) -> None:
+    approved = tmp_path / "minknow-output"
+    approved.mkdir()
+    outside = tmp_path / "outside.fastq"
+    outside.write_text("@read\nACGT\n+\n!!!!\n", encoding="utf-8")
+    record = OntInstrumentRun(
+        minknow_run_id="PRIVATE-MINKNOW-RUN",
+        output_directories={"reads": str(approved)},
+    )
+
+    _state, output_files, _snapshot = ont_run_control._bounded_host_snapshot(
+        record,
+        {
+            "status": "completed",
+            "minknow_run_id": "PRIVATE-MINKNOW-RUN",
+            "output_files": {"fastq": [str(outside)]},
+        },
+    )
+
+    assert output_files == {"fastq": [], "pod5": [], "bam": []}
+
+
+def test_terminal_output_filter_rejects_lexical_traversal_inside_configured_root(tmp_path: Path) -> None:
+    approved = tmp_path / "minknow-output"
+    approved.mkdir()
+    (approved / "nested").mkdir()
+    target = approved / "reads.fastq"
+    target.write_text("@read\nACGT\n+\n!!!!\n", encoding="utf-8")
+    traversal = approved / "nested" / ".." / target.name
+    record = OntInstrumentRun(
+        minknow_run_id="PRIVATE-MINKNOW-RUN",
+        output_directories={"reads": str(approved)},
+    )
+
+    _state, output_files, _snapshot = ont_run_control._bounded_host_snapshot(
+        record,
+        {
+            "status": "completed",
+            "minknow_run_id": "PRIVATE-MINKNOW-RUN",
+            "output_files": {"fastq": [str(traversal)]},
+        },
+    )
+
+    assert output_files == {"fastq": [], "pod5": [], "bam": []}
 
 
 def test_protocol_catalog_maps_arbitrary_host_blockers_to_finite_public_reason() -> None:
@@ -841,11 +894,20 @@ async def test_armed_intent_revalidation_rejects_nonboolean_basecalling_evidence
 
 @pytest.mark.asyncio
 async def test_retained_server_handoff_keeps_paths_internal(monkeypatch, tmp_path: Path) -> None:
-    fastq = tmp_path / "reads.fastq.gz"
+    minknow_root = tmp_path / "minknow-output"
+    minknow_root.mkdir()
+    fastq = minknow_root / "reads.fastq.gz"
     reference = tmp_path / "reference.fasta"
+    inputs_root = tmp_path / "inputs"
+    inputs_root.mkdir()
     fastq.write_text("@r1\nACGT\n+\n!!!!\n")
     reference.write_text(">plasmid\nACGT\n")
-    run_id = await _seed_server_observed_run(state="starting", output_files={"fastq": [str(fastq)], "pod5": [], "bam": []})
+    run_id = await _seed_server_observed_run(
+        state="starting",
+        output_files={"fastq": [str(fastq)], "pod5": [], "bam": []},
+        output_directories={"reads": str(minknow_root)},
+    )
+    monkeypatch.setattr(ont_run_control, "get_inputs_dir", lambda: inputs_root, raising=False)
     monkeypatch.setattr(
         ont_run_control,
         "request_host_agent",
@@ -855,9 +917,51 @@ async def test_retained_server_handoff_keeps_paths_internal(monkeypatch, tmp_pat
 
     handoff = await build_plasmid_qc_handoff(run_id, {"reference_fasta": str(reference)})
 
-    assert handoff["params"]["fastq_path"] == str(fastq)
+    snapshot = Path(handoff["params"]["fastq_path"])
+    assert snapshot != fastq
+    assert snapshot.is_relative_to(inputs_root / "ont_instrument_launch_snapshots")
+    assert snapshot.read_bytes() == fastq.read_bytes()
+    assert hashlib.sha256(snapshot.read_bytes()).hexdigest() == handoff["params"]["source_instrument_artifact_sha256"]
+    assert snapshot.stat().st_size == handoff["params"]["source_instrument_artifact_bytes"]
+    assert os.stat(snapshot).st_mode & 0o222 == 0
     assert handoff["params"]["reference_fasta"] == str(reference)
     assert handoff["params"]["source_instrument_run_id"] == run_id
+    assert handoff["params"]["source_instrument_observed_generation"] == 2
+    assert handoff["params"]["source_instrument_artifact_manifest_sha256"] != handoff["params"]["source_instrument_artifact_sha256"]
+
+
+@pytest.mark.asyncio
+async def test_handoff_rejects_source_changed_after_terminal_manifest_without_snapshot(monkeypatch, tmp_path: Path) -> None:
+    minknow_root = tmp_path / "minknow-output"
+    minknow_root.mkdir()
+    fastq = minknow_root / "reads.fastq"
+    reference = tmp_path / "reference.fasta"
+    inputs_root = tmp_path / "inputs"
+    inputs_root.mkdir()
+    fastq.write_text("@r1\nACGT\n+\n!!!!\n", encoding="utf-8")
+    reference.write_text(">plasmid\nACGT\n", encoding="utf-8")
+    run_id = await _seed_server_observed_run(
+        state="starting",
+        output_directories={"reads": str(minknow_root)},
+    )
+    monkeypatch.setattr(ont_run_control, "get_inputs_dir", lambda: inputs_root, raising=False)
+    monkeypatch.setattr(
+        ont_run_control,
+        "request_host_agent",
+        lambda *_args, **_kwargs: {
+            "status": "completed",
+            "minknow_run_id": "PRIVATE-MINKNOW-RUN",
+            "output_files": {"fastq": [str(fastq)], "pod5": [], "bam": []},
+        },
+    )
+    await ont_run_control.reconcile_instrument_run(run_id)
+    fastq.write_text("@r1\nTGCA\n+\n!!!!\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="digest-mismatched"):
+        await build_plasmid_qc_handoff(run_id, {"reference_fasta": str(reference)})
+
+    snapshot_root = inputs_root / "ont_instrument_launch_snapshots"
+    assert not snapshot_root.exists() or not any(snapshot_root.rglob("*.fastq"))
 
 
 @pytest.mark.asyncio
@@ -1014,7 +1118,9 @@ async def test_reconcile_observes_active_then_completed_once_and_materializes_te
     """A bounded host snapshot advances durable state once per semantic observation."""
     fastq = tmp_path / "reads.fastq"
     fastq.write_text("@r1\nACGT\n+\n!!!!\n", encoding="utf-8")
-    run_id = await _seed_server_observed_run(state="starting")
+    run_id = await _seed_server_observed_run(
+        state="starting", output_directories={"reads": str(tmp_path)}
+    )
     snapshots = iter(
         [
             {"status": "active", "minknow_run_id": "PRIVATE-MINKNOW-RUN", "output_files": {"fastq": [], "pod5": [], "bam": []}},
@@ -1104,7 +1210,9 @@ async def test_reconcile_corrects_unmanifested_false_terminal_with_valid_running
 async def test_reconcile_does_not_supersede_hash_bound_terminal_manifest(monkeypatch, tmp_path: Path) -> None:
     fastq = tmp_path / "manifest.fastq"
     fastq.write_text("@r1\nACGT\n+\n!!!!\n", encoding="utf-8")
-    run_id = await _seed_server_observed_run(state="running")
+    run_id = await _seed_server_observed_run(
+        state="running", output_directories={"reads": str(tmp_path)}
+    )
     snapshots = iter(
         [
             {
@@ -1137,7 +1245,9 @@ async def test_terminal_manifest_freezes_first_observation_and_canonicalizes_reo
     late_fastq = tmp_path / "late.fastq"
     for path in (first_fastq, second_fastq, late_fastq):
         path.write_text("@r1\nACGT\n+\n!!!!\n", encoding="utf-8")
-    run_id = await _seed_server_observed_run(state="starting")
+    run_id = await _seed_server_observed_run(
+        state="starting", output_directories={"reads": str(tmp_path)}
+    )
     snapshots = iter(
         [
             {
@@ -1241,7 +1351,21 @@ async def test_reserved_handoff_attack_does_not_burn_a_durable_server_issued_mol
 
     async def fake_handoff(_run_id: str, payload: dict) -> dict:
         assert payload["reference_fasta"].endswith("expected_reference.fasta")
-        return {"params": {"fastq_path": "/trusted/reads.fastq", "reference_fasta": payload["reference_fasta"]}}
+        return {"params": {
+            "fastq_path": "/trusted/reads.fastq",
+            "reference_fasta": payload["reference_fasta"],
+            "source_instrument_observed_generation": 3,
+        }}
+
+    async def fake_attach_instrument_run(_domain_session, _core_session, **kwargs):
+        assert kwargs["global_domain_experiment_id"] == "domain-safe"
+        assert kwargs["state_revision_id"] == "state-safe"
+        assert kwargs["run_id"] == "ont-run-safe"
+        assert kwargs["observed_generation"] == 3
+        return SimpleNamespace(
+            receipt_id="ont-receipt-safe",
+            content_digest="e" * 64,
+        )
 
     def fake_job_create(*_args, **_kwargs):
         return SimpleNamespace(params={})
@@ -1267,16 +1391,23 @@ async def test_reserved_handoff_attack_does_not_burn_a_durable_server_issued_mol
         )
 
     monkeypatch.setattr(ont_runs.ont_run_control, "build_plasmid_qc_handoff", fake_handoff)
+    monkeypatch.setattr(ont_runs, "attach_instrument_run_evidence", fake_attach_instrument_run)
     monkeypatch.setattr(ont_runs, "_job_create_for_ont_submit", fake_job_create)
     monkeypatch.setattr(ont_runs, "_create_pipeline_job", fake_create_pipeline_job)
     app = FastAPI()
     app.include_router(ont_runs.router, prefix="/api/ont")
     app.dependency_overrides[ont_runs.get_session] = durable_session_override
+    app.dependency_overrides[ont_runs.get_molbio_ngs_session] = durable_session_override
 
     with TestClient(app) as client:
         attack = client.post(
             "/api/ont/runs/ont-run-safe/handoff/plasmid-qc/submit",
-            json={"molbio_ngs_receipt_id": receipt_id, "params": {"output_dir": "/browser/chosen/output"}},
+            json={
+                "molbio_ngs_receipt_id": receipt_id,
+                "global_domain_experiment_id": "domain-safe",
+                "molbio_ngs_state_revision_id": "state-safe",
+                "params": {"output_dir": "/browser/chosen/output"},
+            },
         )
         assert attack.status_code == 422
         assert created_jobs == []
@@ -1290,7 +1421,12 @@ async def test_reserved_handoff_attack_does_not_burn_a_durable_server_issued_mol
 
         usable_after_attack = client.post(
             "/api/ont/runs/ont-run-safe/handoff/plasmid-qc/submit",
-            json={"molbio_ngs_receipt_id": receipt_id, "params": {"igv_report_max_sites": 7}},
+            json={
+                "molbio_ngs_receipt_id": receipt_id,
+                "global_domain_experiment_id": "domain-safe",
+                "molbio_ngs_state_revision_id": "state-safe",
+                "params": {"igv_report_max_sites": 7},
+            },
         )
 
     assert usable_after_attack.status_code == 201, usable_after_attack.text

@@ -613,7 +613,7 @@ export function Layout({ children }: LayoutProps) {
                                     Data Viewer
                                 </Link>
                                 <Link
-                                    to="/designer"
+                                    to={{ pathname: '/designer', search: location.search }}
                                     data-bms-primary-nav-active={isActive('/designer') ? 'true' : undefined}
                                     className={TOPBAR_NAV_ITEM_CLASSNAME}
                                     style={{
@@ -625,7 +625,7 @@ export function Layout({ children }: LayoutProps) {
                                     Mol Bio Toolkit
                                 </Link>
                                 <Link
-                                    to="/ngs"
+                                    to={{ pathname: '/ngs', search: location.search }}
                                     data-bms-primary-nav-active={isActive('/ngs') ? 'true' : undefined}
                                     className={TOPBAR_NAV_ITEM_CLASSNAME}
                                     style={{

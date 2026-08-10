@@ -42,12 +42,24 @@ def _check(*, required: bool, ready: bool, status: str, **extra: Any) -> dict[st
     return {"required": required, "ready": ready, "status": status, **extra}
 
 
-async def collect_runtime_readiness(*, molbio: dict[str, Any]) -> dict[str, Any]:
+async def collect_runtime_readiness(
+    *,
+    molbio: dict[str, Any],
+    molbio_ngs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     container_mode = core_runtime_mode_enabled()
     mode = "container" if container_mode else "native"
 
     core_ready, core_status = await core_database_readiness()
     molbio_ready = molbio.get("status") == "healthy" or molbio.get("ready") is True
+    molbio_ngs_required = molbio_ngs is not None
+    molbio_ngs = molbio_ngs or {}
+    molbio_ngs_attestation = molbio_ngs.get("attestation")
+    molbio_ngs_ready = bool(
+        isinstance(molbio_ngs_attestation, dict)
+        and molbio_ngs_attestation.get("ok") is True
+        and molbio_ngs.get("migration")
+    )
 
     adapter_url = workflow_adapter_base_url()
     adapter_required = container_mode
@@ -74,6 +86,13 @@ async def collect_runtime_readiness(*, molbio: dict[str, Any]) -> dict[str, Any]
             required=True,
             ready=molbio_ready,
             status="ready" if molbio_ready else str(molbio.get("status", "unavailable")),
+        ),
+        "molbio_ngs_database": _check(
+            required=molbio_ngs_required,
+            ready=molbio_ngs_ready if molbio_ngs_required else True,
+            status=("ready" if molbio_ngs_ready else "unavailable")
+            if molbio_ngs_required
+            else "not_supplied",
         ),
         "workflow_adapter": _check(
             required=adapter_required,

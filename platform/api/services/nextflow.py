@@ -21,7 +21,7 @@ from datetime import datetime
 from typing import Deque, Dict, Any, Iterable, Iterator, Optional, List, Tuple, Set
 import logging
 
-from services import stage_reporting
+from services import ont_submission_trust, stage_reporting
 from services.frustrampnn.contracts import canonical_json_bytes
 
 
@@ -1965,6 +1965,9 @@ async def launch_nextflow_job(
         try:
             if workflow_adapter_enabled() and not transient_runner:
                 prior_run_id = str(job.nextflow_run_id or "").strip()
+                # Revalidate every immutable input at the literal adapter call
+                # boundary. A later retry re-enters this same launch path.
+                ont_submission_trust.verify_launch_input_snapshots(launch_params)
                 adapter_response = launch_via_workflow_adapter(
                     job_id=job_id,
                     model_id=model_id,
@@ -2329,6 +2332,9 @@ async def launch_nextflow_job(
                     for line_str in log_reader.read_available(final=final):
                         await handle_log_line(line_str)
 
+                # Keep this inside the retry loop and adjacent to the two literal
+                # native spawn paths so every retry revalidates immutable inputs.
+                ont_submission_trust.verify_launch_input_snapshots(launch_params)
                 if transient_runner:
                     # The adapter has already claimed the outer systemd unit.
                     # Directly starting the workflow here keeps Nextflow and

@@ -5,7 +5,7 @@ Provides digest, PCR, ligation, mutagenesis, Gibson, and Golden Gate workflows.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Header
+from fastapi import APIRouter, Depends, HTTPException, Request, Header, Query
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 from typing import Any, List, Literal, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -90,11 +90,21 @@ from services.sequence_alignment import (
     align_sequences,
 )
 from database import Job, MolBioNgsReceipt, NgsComparisonPanelReceipt, get_session
-from services.molbio_ngs_workup import project_ngs_workup, safe_comparison_panel_root, safe_job_result_root
-from services.molbio_ngs_receipts import issue_molbio_ngs_receipt
-from services.molbio_ngs_receipts import consume_molbio_ngs_receipt
+from services.job_result_roots import resolve_persisted_job_result_root
+from services.molbio_ngs_workup import project_ngs_workup, safe_comparison_panel_root
+from services.molbio_ngs_receipts import (
+    _snapshot_sequence,
+    consume_molbio_ngs_receipt,
+    issue_molbio_ngs_receipt,
+    serialize_molbio_ngs_receipt,
+    validate_molbio_ngs_receipt,
+)
 from services.ngs_comparison_panels import issue_comparison_panel_receipt, list_approved_panels, seed_approved_panel
-from services.sequence_qc_manifest import SequenceQcManifestError, load_sequence_qc_manifest
+from services.sequence_qc_manifest import (
+    SequenceQcManifestError,
+    find_manifest_in_result_root,
+    load_sequence_qc_manifest,
+)
 
 
 router = APIRouter(prefix="/api/molbio", tags=["molbio"])
@@ -203,9 +213,11 @@ async def issue_ngs_comparison_panel_receipt(
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     try:
-        # This verifies that an unconsumed expected-construct receipt existed
-        # before a panel receipt may be requested; it does not consume either.
-        await consume_molbio_ngs_receipt(session, receipt_id=payload.expected_receipt_id)
+        # Panel issuance proves the expected receipt without consuming it. Only
+        # atomic final job creation may burn either one-time authority.
+        await validate_molbio_ngs_receipt(
+            session, receipt_id=payload.expected_receipt_id
+        )
         receipt = await issue_comparison_panel_receipt(session, panel_id=panel_id, expected_receipt_id=payload.expected_receipt_id)
         await session.commit()
     except ValueError as exc:
@@ -384,10 +396,9 @@ async def get_sequence_ngs_workup(
         manifest: dict[str, Any] | None = None
         root = None
         try:
-            root = safe_job_result_root(job)
-            manifest_path = root / "verification" / "qc_manifest.json"
-            if manifest_path.is_file():
-                manifest = load_sequence_qc_manifest(manifest_path)
+            root = resolve_persisted_job_result_root(job)
+            manifest_path = find_manifest_in_result_root(root)
+            manifest = load_sequence_qc_manifest(manifest_path)
         except (SequenceQcManifestError, ValueError, OSError):
             manifest = None
         comparison_summary = None
@@ -433,6 +444,65 @@ async def get_sequence_ngs_workup(
     }
 
 
+async def _resolve_owned_molecular_revision(
+    molbio_session: AsyncSession,
+    sequence_id: str,
+    revision_id: str,
+) -> MolecularRevision:
+    document = await molbio_session.get(MolecularDocument, sequence_id)
+    revision = await molbio_session.get(MolecularRevision, revision_id)
+    if (
+        document is None
+        or revision is None
+        or revision.document_id != document.id
+    ):
+        raise HTTPException(
+            status_code=404,
+            detail="Saved molecular sequence or immutable revision not found",
+        )
+    try:
+        _snapshot_sequence(revision)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return revision
+
+
+async def _issue_sequence_revision_ngs_receipt(
+    sequence_id: str,
+    revision_id: str,
+    molbio_session: AsyncSession = Depends(get_molbio_session),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Materialize a one-time expected-reference snapshot from immutable revision content."""
+    revision = await _resolve_owned_molecular_revision(
+        molbio_session,
+        sequence_id,
+        revision_id,
+    )
+    try:
+        receipt = await issue_molbio_ngs_receipt(session, sequence_id=sequence_id, revision=revision)
+        await session.commit()
+    except ValueError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return serialize_molbio_ngs_receipt(receipt)
+
+
+@router.post("/sequences/{sequence_id}/revisions/{revision_id}/ngs-receipts")
+async def issue_sequence_revision_ngs_receipt(
+    sequence_id: str,
+    revision_id: str,
+    molbio_session: AsyncSession = Depends(get_molbio_session),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    return await _issue_sequence_revision_ngs_receipt(
+        sequence_id,
+        revision_id,
+        molbio_session,
+        session,
+    )
+
+
 @router.post("/sequences/{sequence_id}/ngs-receipts")
 async def issue_sequence_ngs_receipt(
     sequence_id: str,
@@ -440,29 +510,22 @@ async def issue_sequence_ngs_receipt(
     molbio_session: AsyncSession = Depends(get_molbio_session),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    """Materialize a one-time expected-reference snapshot from an explicit revision."""
-    sequence = await molbio_session.get(NucleotideSequence, sequence_id)
-    if sequence is None:
-        raise HTTPException(status_code=404, detail="Saved molecular sequence not found")
-    revision = (
-        await current_molecular_revision(molbio_session, sequence_id)
-        if payload.use_current_revision
-        else await molbio_session.get(MolecularRevision, payload.revision_id)
+    """Materialize a one-time snapshot from an explicitly selected revision."""
+    revision_id = payload.revision_id
+    if payload.use_current_revision:
+        document = await molbio_session.get(MolecularDocument, sequence_id)
+        revision_id = document.current_revision_id if document is not None else None
+    if not revision_id:
+        raise HTTPException(
+            status_code=404,
+            detail="Saved molecular sequence or immutable revision not found",
+        )
+    return await _issue_sequence_revision_ngs_receipt(
+        sequence_id,
+        revision_id,
+        molbio_session,
+        session,
     )
-    if revision is not None and revision.document_id != sequence_id:
-        revision = None
-    if sequence is None or revision is None:
-        raise HTTPException(status_code=404, detail="Saved molecular sequence or immutable revision not found")
-    try:
-        receipt = await issue_molbio_ngs_receipt(session, sequence_id=sequence_id, revision=revision)
-        await session.commit()
-    except ValueError as exc:
-        await session.rollback()
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {"schema": "bms.molbio.ngs-receipt.v2", "receipt_id": receipt.id,
-            "sequence_id": sequence_id, "revision_id": revision.id,
-            "revision_sha256": revision.content_sha256, "reference_snapshot_sha256": receipt.reference_snapshot_sha256,
-            "expires_at": receipt.expires_at.isoformat() + "Z", "one_time": True}
 
 
 def _annotation_source_http_error(error: Exception) -> HTTPException:
@@ -551,10 +614,59 @@ class PCRRequest(SequenceInput):
 
 
 class PCRReviewStateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     review_state: str = Field(pattern="^(draft|in_review|approved|rejected)$")
     notes: Optional[str] = None
-    actor: Optional[str] = None
     provenance: dict[str, Any] = Field(default_factory=dict)
+
+
+class PCRRevisionReopenParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    experiment_id: str
+    revision_id: str
+
+
+class PCRRevisionReopenDestination(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    surface: Literal["molbio-pcr-experiment-revision"]
+    params: PCRRevisionReopenParams
+
+
+class PCRExperimentRevisionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    experiment_id: str
+    revision_number: int
+    payload_sha256: str
+    parent_revision_id: Optional[str]
+    relation: Literal["current", "historical"]
+    operation_id: str
+    template_document_id: Optional[str]
+    template_revision_id: Optional[str]
+    template_sha256: str
+    template_snapshot: dict[str, Any]
+    forward_primer_snapshot: dict[str, Any]
+    reverse_primer_snapshot: dict[str, Any]
+    tm_model_revision_id: str
+    tm_snapshot: dict[str, Any]
+    polymerase_preset_revision_id: Optional[str]
+    polymerase_snapshot: Optional[dict[str, Any]]
+    reaction_settings: dict[str, Any]
+    cycling_assumptions: dict[str, Any]
+    product_document_id: Optional[str]
+    product_revision_id: Optional[str]
+    product_snapshot: dict[str, Any]
+    warnings: list[str]
+    notes: Optional[str]
+    review_state: Literal["draft", "in_review", "approved", "rejected"]
+    provenance: dict[str, Any]
+    created_by: Optional[str]
+    created_at: datetime
+    reopen_destination: PCRRevisionReopenDestination
 
 
 async def authenticated_molbio_reviewer(request: Request) -> Optional[str]:
@@ -1846,10 +1958,13 @@ async def pcr(request: PCRRequest, session: AsyncSession = Depends(get_molbio_se
 
 
 def _pcr_revision_payload(revision: PCRExperimentRevision) -> dict[str, Any]:
+    from services.molbio_ngs_member_receipts import pcr_experiment_revision_payload_sha256
+
     return {
         "id": revision.id,
         "experiment_id": revision.experiment_id,
         "revision_number": revision.revision_number,
+        "payload_sha256": pcr_experiment_revision_payload_sha256(revision),
         "operation_id": revision.operation_id,
         "template_document_id": revision.template_document_id,
         "template_revision_id": revision.template_revision_id,
@@ -1873,6 +1988,43 @@ def _pcr_revision_payload(revision: PCRExperimentRevision) -> dict[str, Any]:
         "created_by": revision.created_by,
         "created_at": revision.created_at,
     }
+
+
+def _pcr_revision_response(
+    experiment: PCRExperiment,
+    revision: PCRExperimentRevision,
+    *,
+    parent_revision_id: Optional[str],
+) -> PCRExperimentRevisionResponse:
+    payload = _pcr_revision_payload(revision)
+    template_snapshot = payload.get("template_snapshot")
+    if not isinstance(template_snapshot, dict):
+        raise ValueError("immutable PCR template snapshot is not an object")
+    raw_sequence = template_snapshot.get("sequence")
+    if not isinstance(raw_sequence, str):
+        raise ValueError("immutable PCR template snapshot has no sequence")
+    sequence_type = str(template_snapshot.get("sequence_type") or "dna")
+    canonical_sequence = canonicalize_nucleotide_sequence(
+        raw_sequence,
+        sequence_type,
+        allow_empty=False,
+    )
+    if canonical_sequence != raw_sequence:
+        raise ValueError("immutable PCR template snapshot is not canonical")
+    if hashlib.sha256(raw_sequence.encode("utf-8")).hexdigest() != revision.template_sha256:
+        raise ValueError("immutable PCR template snapshot digest is invalid")
+    return PCRExperimentRevisionResponse(
+        **payload,
+        parent_revision_id=parent_revision_id,
+        relation="current" if experiment.current_revision_id == revision.id else "historical",
+        reopen_destination=PCRRevisionReopenDestination(
+            surface="molbio-pcr-experiment-revision",
+            params=PCRRevisionReopenParams(
+                experiment_id=experiment.id,
+                revision_id=revision.id,
+            ),
+        ),
+    )
 
 
 @router.get("/pcr-experiments")
@@ -1943,6 +2095,91 @@ async def get_pcr_experiment(
     }
 
 
+@router.get(
+    "/pcr-experiments/{experiment_id}/revisions",
+    response_model=list[PCRExperimentRevisionResponse],
+)
+async def list_pcr_experiment_revisions(
+    experiment_id: str,
+    limit: int = Query(100, ge=1, le=500),
+    session: AsyncSession = Depends(get_molbio_session),
+) -> list[PCRExperimentRevisionResponse]:
+    experiment = await session.get(PCRExperiment, experiment_id)
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="PCR experiment not found")
+    revisions = list(
+        (
+            await session.execute(
+                select(PCRExperimentRevision)
+                .where(PCRExperimentRevision.experiment_id == experiment.id)
+                .order_by(PCRExperimentRevision.revision_number.desc())
+                .limit(limit)
+            )
+        ).scalars()
+    )
+    revision_ids_by_number = {
+        revision.revision_number: revision.id for revision in revisions
+    }
+    minimum_number = min((revision.revision_number for revision in revisions), default=1)
+    if minimum_number > 1 and minimum_number - 1 not in revision_ids_by_number:
+        previous_id = (
+            await session.execute(
+                select(PCRExperimentRevision.id).where(
+                    PCRExperimentRevision.experiment_id == experiment.id,
+                    PCRExperimentRevision.revision_number == minimum_number - 1,
+                )
+            )
+        ).scalar_one_or_none()
+        if previous_id is not None:
+            revision_ids_by_number[minimum_number - 1] = previous_id
+    try:
+        return [
+            _pcr_revision_response(
+                experiment,
+                revision,
+                parent_revision_id=revision_ids_by_number.get(
+                    revision.revision_number - 1
+                ),
+            )
+            for revision in revisions
+        ]
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get(
+    "/pcr-experiments/{experiment_id}/revisions/{revision_id}",
+    response_model=PCRExperimentRevisionResponse,
+)
+async def get_pcr_experiment_revision(
+    experiment_id: str,
+    revision_id: str,
+    session: AsyncSession = Depends(get_molbio_session),
+) -> PCRExperimentRevisionResponse:
+    experiment = await session.get(PCRExperiment, experiment_id)
+    revision = await session.get(PCRExperimentRevision, revision_id)
+    if experiment is None or revision is None or revision.experiment_id != experiment.id:
+        raise HTTPException(status_code=404, detail="PCR experiment revision not found")
+    parent_revision_id = None
+    if revision.revision_number > 1:
+        parent_revision_id = (
+            await session.execute(
+                select(PCRExperimentRevision.id).where(
+                    PCRExperimentRevision.experiment_id == experiment.id,
+                    PCRExperimentRevision.revision_number == revision.revision_number - 1,
+                )
+            )
+        ).scalar_one_or_none()
+    try:
+        return _pcr_revision_response(
+            experiment,
+            revision,
+            parent_revision_id=parent_revision_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.patch("/pcr-experiments/{experiment_id}/review-state")
 async def update_pcr_experiment_review_state(
     experiment_id: str,
@@ -1961,17 +2198,11 @@ async def update_pcr_experiment_review_state(
     try:
         await begin_immediate_molbio_write(session)
         review_provenance = dict(request.provenance)
-        if request.actor is not None:
-            review_provenance["client_actor_claim"] = {
-                "value": request.actor,
-                "verification": "unverified",
-            }
         revision = await revise_pcr_review_state(
             session,
             experiment_id=experiment_id,
             review_state=request.review_state,
             notes=request.notes,
-            actor=trusted_actor or "system:molbio-api",
             provenance=review_provenance,
         )
         await session.commit()

@@ -74,17 +74,19 @@ class SequenceQcManifestError(ValueError):
     """Raised when a sequence-QC manifest is malformed or unsafe."""
 
 
-def _read_json_object(path: Path) -> dict[str, Any]:
+def _read_json_object(path: Path, *, raw_bytes: bytes | None = None) -> dict[str, Any]:
     if not path.exists():
         raise SequenceQcManifestError(f"manifest not found: {path}")
     if not path.is_file():
         raise SequenceQcManifestError(f"manifest path is not a file: {path}")
-    if path.stat().st_size > MAX_MANIFEST_BYTES:
+    size_bytes = len(raw_bytes) if raw_bytes is not None else path.stat().st_size
+    if size_bytes > MAX_MANIFEST_BYTES:
         raise SequenceQcManifestError(f"manifest too large: {path}")
 
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+        text = raw_bytes.decode("utf-8") if raw_bytes is not None else path.read_text(encoding="utf-8")
+        payload = json.loads(text)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise SequenceQcManifestError(f"manifest is not valid JSON: {exc}") from exc
 
     if not isinstance(payload, dict):
@@ -351,11 +353,15 @@ def _verification_shape_errors(manifest: dict[str, Any]) -> list[str]:
     return errors
 
 
-def load_sequence_qc_manifest(manifest_path: str | Path) -> dict[str, Any]:
+def load_sequence_qc_manifest(
+    manifest_path: str | Path,
+    *,
+    raw_bytes: bytes | None = None,
+) -> dict[str, Any]:
     """Load and normalize a sequence-QC manifest without reading large artifacts."""
     path = Path(manifest_path).expanduser().resolve()
     try:
-        payload = _read_json_object(path)
+        payload = _read_json_object(path, raw_bytes=raw_bytes)
     except SequenceQcManifestError:
         if path.parent.name != "verification":
             raise
@@ -432,8 +438,50 @@ def _validate_job_id(job_id: str) -> str:
     return normalized
 
 
+def find_manifest_in_result_root(result_root: str | Path) -> Path:
+    """Find a sequence-QC manifest below one already-authorized job root."""
+
+    declared_root = Path(result_root).expanduser()
+    if declared_root.is_symlink():
+        raise SequenceQcManifestError("job result root is an unsafe symlink")
+    try:
+        root = declared_root.resolve(strict=True)
+    except OSError as exc:
+        raise SequenceQcManifestError("job result root is unavailable") from exc
+    if not root.is_dir():
+        raise SequenceQcManifestError("job result root is not a directory")
+
+    candidates = [
+        root / "verification" / MANIFEST_FILENAME,
+        root / "fastq_qc" / MANIFEST_FILENAME,
+        root / MANIFEST_FILENAME,
+    ]
+    candidates.extend(sorted(root.glob(f"**/{MANIFEST_FILENAME}")))
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError:
+            continue
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if not resolved.is_file():
+            continue
+        try:
+            resolved.relative_to(root)
+        except ValueError as exc:
+            raise SequenceQcManifestError(
+                f"manifest path escapes persisted job result root: {candidate}"
+            ) from exc
+        return resolved
+
+    raise SequenceQcManifestError("sequence-QC manifest not found in persisted job result root")
+
+
 def find_manifest_for_job(job_id: str, *, results_dir: str | Path | None = None) -> Path:
-    """Find the first sequence-QC manifest for a BMS result directory."""
+    """Legacy explicit-directory helper retained for existing non-route callers."""
     safe_job_id = _validate_job_id(job_id)
     root = Path(results_dir) if results_dir is not None else get_results_dir()
     job_dir = (root / safe_job_id).resolve()
@@ -442,27 +490,11 @@ def find_manifest_for_job(job_id: str, *, results_dir: str | Path | None = None)
         job_dir.relative_to(root_resolved)
     except ValueError as exc:
         raise SequenceQcManifestError(f"job directory escapes results root: {job_id!r}") from exc
-
-    candidates = [
-        job_dir / "verification" / MANIFEST_FILENAME,
-        job_dir / "fastq_qc" / MANIFEST_FILENAME,
-        job_dir / MANIFEST_FILENAME,
-    ]
-    candidates.extend(sorted(job_dir.glob(f"**/{MANIFEST_FILENAME}"))) if job_dir.exists() else None
-
-    seen: set[Path] = set()
-    for candidate in candidates:
-        resolved = candidate.resolve()
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        if not (resolved.exists() and resolved.is_file()):
-            continue
-        try:
-            resolved.relative_to(job_dir)
-            resolved.relative_to(root_resolved)
-        except ValueError as exc:
-            raise SequenceQcManifestError(f"manifest path escapes job/results root: {candidate}") from exc
-        return resolved
-
-    raise SequenceQcManifestError(f"sequence-QC manifest not found for job_id: {safe_job_id}")
+    try:
+        return find_manifest_in_result_root(job_dir)
+    except SequenceQcManifestError as exc:
+        if "not found" in str(exc):
+            raise SequenceQcManifestError(
+                f"sequence-QC manifest not found for job_id: {safe_job_id}"
+            ) from exc
+        raise

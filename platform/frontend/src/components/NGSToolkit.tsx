@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
 import type { Data, Layout, PlotMouseEvent } from 'plotly.js';
 import type { IGV as IgvLibrary } from 'igv';
-import { fetchJobLogs, fetchJobStages, fetchJobs, type Job, type JobLogs } from '../lib/api';
+import { fetchFullJob, fetchJobLogs, fetchJobStages, fetchJobs, type Job, type JobLogs } from '../lib/api';
 import {
     awaitCurrentGeneration,
     createGenerationBoundResourceWithTimeout,
@@ -29,6 +29,7 @@ import { PooledAssignmentReviewPanel } from './ngs/PooledAssignmentReviewPanel';
 import { SequenceQcManifestPanel } from './ngs/SequenceQcManifestPanel';
 import { useSequenceQcManifest } from './ngs/useSequenceQcManifest';
 import { useThemeColors, useThemePlotlyLayout } from './useThemeColors';
+import { useGlobalExperimentContext } from './experiments/GlobalExperimentContext';
 
 type ToolkitView = 'launch' | 'instrument' | 'runs';
 type LogTab = 'parsed' | 'command' | 'stderr' | 'nextflow';
@@ -2081,12 +2082,17 @@ function formatParamValue(value: unknown): string {
 }
 
 export function NGSToolkit() {
+    const { updateQueryParams, contextHref } = useGlobalExperimentContext();
+    const location = useLocation();
     const navigate = useNavigate();
     const [view, setView] = useState<ToolkitView>('launch');
     const [initialValues, setInitialValues] = useState<Record<string, unknown> | undefined>(undefined);
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
-    const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+    const selectedJobId = useMemo(
+        () => new URLSearchParams(location.search).get('job_id')?.trim() || null,
+        [location.search],
+    );
     const [logsModalOpen, setLogsModalOpen] = useState(false);
     const [logsLoading, setLogsLoading] = useState(false);
     const [logsData, setLogsData] = useState<JobLogs | null>(null);
@@ -2158,27 +2164,12 @@ export function NGSToolkit() {
         };
     }, []);
 
-    useEffect(() => {
-        const raw = localStorage.getItem('clonedJobData');
-        if (!raw) return;
-        try {
-            const parsed = JSON.parse(raw);
-            if (parsed?.model_id === 'nanopore') {
-                const clonedJob = {
-                    name: parsed.name,
-                    params: parsed.params || {},
-                } as Job;
-                setInitialValues(normalizeNanoporeCloneState(clonedJob));
-                setView('launch');
-            }
-        } catch (e) {
-            console.error('Failed to parse cloned nanopore data:', e);
-        } finally {
-            localStorage.removeItem('clonedJobData');
-        }
-    }, []);
-
-    const { data: jobsData, isLoading } = useQuery({
+    const {
+        data: jobsData,
+        isLoading,
+        isError: jobsQueryIsError,
+        error: jobsQueryError,
+    } = useQuery({
         queryKey: ['jobs', 'ngs'],
         queryFn: () => fetchJobs({ include_children: true, model_id: 'nanopore', limit: 100, summary: true }),
         refetchInterval: (query) => jobPollingInterval(5000, query),
@@ -2204,20 +2195,23 @@ export function NGSToolkit() {
         });
     }, [nanoporeJobs, search, statusFilter]);
 
-    const selectedJob = useMemo(() => {
+    const selectedJobSummary = useMemo(() => {
         if (!selectedJobId) return null;
         return nanoporeJobs.find((job) => job.id === selectedJobId) || null;
     }, [selectedJobId, nanoporeJobs]);
+    const fullJobQuery = useQuery({
+        queryKey: ['full-job', selectedJobId],
+        queryFn: () => fetchFullJob(selectedJobId as string),
+        enabled: Boolean(selectedJobId),
+        retry: false,
+    });
+    const selectedJob = fullJobQuery.data ?? null;
 
     useEffect(() => {
         if (!selectedJobId && filteredJobs.length > 0) {
-            setSelectedJobId(filteredJobs[0].id);
-            return;
+            updateQueryParams({ job_id: filteredJobs[0].id }, { replace: true });
         }
-        if (selectedJobId && !filteredJobs.some((job) => job.id === selectedJobId)) {
-            setSelectedJobId(filteredJobs.length > 0 ? filteredJobs[0].id : null);
-        }
-    }, [filteredJobs, selectedJobId]);
+    }, [filteredJobs, selectedJobId, updateQueryParams]);
 
     useEffect(() => {
         setShowRawTopLoci(false);
@@ -2226,7 +2220,7 @@ export function NGSToolkit() {
     const { data: stagesData, isLoading: stagesLoading } = useQuery({
         queryKey: ['job-stages', selectedJobId],
         queryFn: () => fetchJobStages(selectedJobId as string),
-        enabled: !!selectedJobId,
+        enabled: selectedJob?.id === selectedJobId,
         refetchInterval: (query) => selectedJob?.status === 'running'
             ? jobPollingInterval(4000, query)
             : false,
@@ -2262,7 +2256,10 @@ export function NGSToolkit() {
     const currentStage = stagePayload?.current_stage || selectedJob?.current_stage || null;
     const currentStageKey = currentStage ? normalizeStageKey(currentStage) : '';
     const forceCompleteByJobStatus = selectedJob?.status === 'completed';
-    const stageOutputs = useMemo(() => (stagePayload?.stage_outputs || {}) as StageOutputsMap, [stagePayload?.stage_outputs]);
+    const stageOutputs = useMemo(
+        () => (stagePayload?.stage_outputs || selectedJob?.stage_outputs || {}) as StageOutputsMap,
+        [selectedJob?.stage_outputs, stagePayload?.stage_outputs],
+    );
     const selectedJobParams = (selectedJob?.params || {}) as Record<string, unknown>;
     const selectedReferenceFastaPath = typeof selectedJobParams.reference_fasta === 'string'
         ? selectedJobParams.reference_fasta
@@ -3907,7 +3904,11 @@ export function NGSToolkit() {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {isLoading ? (
+                                    {jobsQueryIsError ? (
+                                        <tr>
+                                            <td colSpan={6} role="alert" className="px-4 py-6 text-center text-rose-300">Nanopore job summaries could not be loaded. {jobsQueryError instanceof Error ? jobsQueryError.message : String(jobsQueryError)}</td>
+                                        </tr>
+                                    ) : isLoading ? (
                                         <tr>
                                             <td colSpan={6} className="px-4 py-6 text-center text-[var(--text-secondary)]">Loading nanopore jobs...</td>
                                         </tr>
@@ -3944,7 +3945,7 @@ export function NGSToolkit() {
                                                 <td className="px-4 py-2">
                                                     <div className="flex gap-2">
                                                         <button
-                                                            onClick={() => setSelectedJobId(job.id)}
+                                                            onClick={() => updateQueryParams({ job_id: job.id })}
                                                             className="px-2 py-1 text-xs rounded bg-[var(--bg-tertiary)] hover:bg-[var(--bg-secondary)] text-[var(--text-primary)]"
                                                         >
                                                             Inspect
@@ -3956,17 +3957,26 @@ export function NGSToolkit() {
                                                             Logs
                                                         </button>
                                                         <button
-                                                            onClick={() => navigate(`/jobs/${job.id}`)}
+                                                            onClick={() => navigate(contextHref(`/jobs/${job.id}`, { job_id: job.id }))}
                                                             className="px-2 py-1 text-xs rounded bg-[var(--bg-tertiary)] hover:bg-[var(--bg-secondary)] text-[var(--text-primary)]"
                                                         >
                                                             Open
                                                         </button>
                                                         <button
                                                             onClick={() => {
-                                                                setInitialValues(normalizeNanoporeCloneState(job));
+                                                                if (!selectedJob || selectedJob.id !== job.id) return;
+                                                                setInitialValues(normalizeNanoporeCloneState(selectedJob));
                                                                 setView('launch');
                                                             }}
-                                                            className="px-2 py-1 text-xs rounded text-white"
+                                                            disabled={!fullJobQuery.isSuccess || selectedJob?.id !== job.id}
+                                                            title={selectedJobId !== job.id
+                                                                ? 'Inspect this run and wait for full detail before reusing parameters.'
+                                                                : fullJobQuery.isError
+                                                                    ? 'Full job detail failed; parameter reuse is disabled.'
+                                                                    : !fullJobQuery.isSuccess
+                                                                        ? 'Loading full job detail before parameter reuse.'
+                                                                        : undefined}
+                                                            className="px-2 py-1 text-xs rounded text-white disabled:opacity-40 disabled:cursor-not-allowed"
                                                             style={{ backgroundColor: 'var(--accent-secondary)' }}
                                                         >
                                                             Reuse Params
@@ -3984,22 +3994,41 @@ export function NGSToolkit() {
                     <div className="bg-[var(--bg-secondary)] rounded-lg border border-[var(--border-primary)] p-4 space-y-4">
                         <div className="flex items-center justify-between">
                             <h3 className="text-sm font-semibold text-[var(--text-primary)]">Run Inspector</h3>
-                            {selectedJob && (
+                            {selectedJobId && (
                                 <div className="flex items-center gap-2">
+                                    {selectedJob ? (
+                                        <a
+                                            href={contextHref('/ngs', { section: 'evidence', job_id: selectedJob.id })}
+                                            className="px-3 py-1.5 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]"
+                                        >
+                                            Evidence
+                                        </a>
+                                    ) : (
+                                        <span className="px-3 py-1.5 text-xs rounded border border-[var(--border-primary)] text-[var(--text-secondary)] opacity-50">Evidence</span>
+                                    )}
                                     <button
                                         onClick={() => void openIgvModal()}
+                                        disabled={!selectedJob}
                                         title={igvMissingReason || 'Open IGV genome viewer'}
                                         className="px-3 py-1.5 text-xs rounded border transition-colors text-[var(--text-primary)] border-[var(--border-primary)] hover:bg-[var(--bg-tertiary)]"
                                     >
                                         Open IGV
                                     </button>
-                                    <span className="text-xs text-[var(--text-secondary)]">{selectedJob.id}</span>
+                                    <span className="text-xs text-[var(--text-secondary)]">{selectedJobId}</span>
                                 </div>
                             )}
                         </div>
 
-                        {!selectedJob ? (
+                        {!selectedJobId ? (
                             <p className="text-sm text-[var(--text-secondary)]">Select a run to inspect.</p>
+                        ) : fullJobQuery.isLoading ? (
+                            <p className="text-sm text-[var(--text-secondary)]">Loading full job detail…{selectedJobSummary ? ` List status: ${selectedJobSummary.status}.` : ''}</p>
+                        ) : fullJobQuery.isError ? (
+                            <p role="alert" className="rounded border border-rose-500/40 bg-rose-500/10 p-3 text-sm text-rose-200">
+                                Full job detail failed to load. Inspector, evidence links, artifacts, and parameter reuse remain disabled. {fullJobQuery.error instanceof Error ? fullJobQuery.error.message : String(fullJobQuery.error)}
+                            </p>
+                        ) : !selectedJob ? (
+                            <p role="alert" className="text-sm text-rose-300">Full job detail returned no job record.</p>
                         ) : (
                             <>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">

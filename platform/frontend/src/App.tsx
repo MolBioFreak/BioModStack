@@ -2,6 +2,8 @@ import { lazy, Suspense } from 'react';
 import { Navigate, Routes, Route } from 'react-router-dom';
 import { HotkeysProvider } from '@blueprintjs/core';
 import { Layout } from './components/Layout';
+import { GlobalExperimentProvider } from './components/experiments/GlobalExperimentContext';
+import DomainExperimentWorkspace from './components/molbio-ngs/DomainExperimentWorkspace';
 import { useResolvedBmsFeatures } from './runtime/installFeatures';
 
 const Dashboard = lazy(() => import('./components/Dashboard').then((module) => ({ default: module.Dashboard })));
@@ -27,9 +29,10 @@ function App() {
 
   return (
     <HotkeysProvider>
-      <Layout>
-        <Suspense fallback={<RouteLoadingFallback />}>
-          <Routes>
+      <GlobalExperimentProvider>
+        <Layout>
+          <Suspense fallback={<RouteLoadingFallback />}>
+            <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/submit" element={<JobSubmission />} />
             <Route path="/results" element={<ResultsViewer />} />
@@ -38,9 +41,25 @@ function App() {
             <Route path="/jobs" element={<Navigate replace to="/designs" />} />
             <Route path="/jobs/:jobId" element={<JobDetailPage />} />
             {/* Molecular Biology Toolkit - Seqviz-based sequence editor */}
-            <Route path="/designer" element={<MolBioToolkitV2 />} />
+            <Route
+              path="/designer"
+              element={(
+                <div className="w-full max-w-none">
+                  <DomainExperimentWorkspace />
+                  <MolBioToolkitV2 />
+                </div>
+              )}
+            />
             {/* NGS Data Visualization Toolkit - Nanopore-focused orchestration surface */}
-            <Route path="/ngs" element={<NGSToolkit />} />
+            <Route
+              path="/ngs"
+              element={(
+                <div className="w-full max-w-none">
+                  <DomainExperimentWorkspace />
+                  <NGSToolkit />
+                </div>
+              )}
+            />
             {/* Isolated Stats Toolkit rendered inside the BioModStack workspace. */}
             <Route path="/stats" element={<StatsToolkitLauncher />} />
             {/* Infra Monitor - native workstation telemetry surface */}
@@ -54,9 +73,10 @@ function App() {
                   ? <BioXpCockpit />
                   : <Navigate replace to="/" />}
             />
-          </Routes>
-        </Suspense>
-      </Layout>
+            </Routes>
+          </Suspense>
+        </Layout>
+      </GlobalExperimentProvider>
     </HotkeysProvider>
   );
 }

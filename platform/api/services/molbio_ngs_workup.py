@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from paths import get_results_dir
+from services.job_result_roots import resolve_persisted_job_result_root
 
 COMPARISON_SUMMARY_SCHEMA = "bms.ngs.comparison-attribution-summary.v1"
 OCCURRENCE_MAP_SCHEMA = "bms.ngs.comparison-panel-occurrence-map.v1"
@@ -41,22 +41,7 @@ def _valid_sha256(value: object) -> bool:
     return isinstance(value, str) and bool(_SHA256.fullmatch(value))
 
 
-def safe_job_result_root(job: Any) -> Path:
-    """Resolve only the declared job-owned root below the configured results root."""
-    raw = getattr(job, "child_output_dir", None) or getattr(job, "output_dir", None)
-    root = get_results_dir().expanduser().resolve()
-    candidate = Path(str(raw or "")).expanduser()
-    declared = candidate if candidate.is_absolute() else root / candidate
-    if declared.is_symlink():
-        raise ValueError("job result root is an unsafe symlink")
-    resolved = declared.resolve(strict=True)
-    if not resolved.is_dir():
-        raise ValueError("job result root is unavailable")
-    try:
-        resolved.relative_to(root)
-    except ValueError as exc:
-        raise ValueError("job result root is outside configured results") from exc
-    return resolved
+
 
 
 def safe_comparison_panel_root(job_root: Path) -> Path:

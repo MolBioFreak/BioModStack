@@ -14,13 +14,18 @@ test('MolBio handoff obtains a server-issued receipt and submits only its id', (
   assert.match(api, /\/ngs-receipts/u);
   assert.match(api, /request: MolBioNgsReceiptRequest/u);
   assert.match(source, /revision_id: selectedMolbioRevisionId/);
+  assert.match(source, /params\.get\('molbio_sequence_id'\)/);
+  assert.match(source, /params\.get\('molbio_revision_id'\)/);
+  assert.match(source, /Exact molecular sequence and revision IDs must be supplied together/);
   assert.match(source, /molbio_ngs_receipt_id: molbioNgsReceiptId/);
-  assert.doesNotMatch(source, /localStorage|uploadFile|referencePath|reference_fasta/);
+  assert.match(source, /managed_reference:/);
+  assert.match(source, /ngs_reference_revision_id: selectedManagedReference\.revision\.id/);
+  assert.match(source, /untrusted import hints only/);
+  assert.doesNotMatch(source, /uploadFile/);
 });
 
 test('comparison selection lists server-approved opaque ids and obtains a bound receipt', () => {
   assert.match(source, /\/api\/molbio\/ngs-comparison-panels/);
   assert.match(source, /ngs_comparison_panel_receipt_id: comparisonPanelReceiptId/);
-  assert.match(source, /No approved comparison panels are available\./);
   assert.doesNotMatch(source, /comparison.*(path|url|download)/i);
 });

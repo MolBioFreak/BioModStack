@@ -122,12 +122,12 @@ async def test_pcr_experiment_persists_separately_and_is_idempotent(tmp_path: Pa
             PCRReviewStateRequest(
                 review_state="in_review",
                 notes="ready for independent review",
-                actor="test-reviewer",
             ),
             session,
         )
         assert review["revision_number"] == 2
         assert review["review_state"] == "in_review"
+        assert review["created_by"] == "system:molbio-api"
         detail = await get_pcr_experiment(first.experiment_id, session)
         listing = await list_pcr_experiments(100, session)
         assert detail["current_revision_id"] == review["id"]

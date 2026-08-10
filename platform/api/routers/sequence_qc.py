@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from database import Job, get_session
 from paths import resolve_allowed_path
+from services.job_result_roots import JobResultRootError, resolve_persisted_job_result_root
 from services.sequence_qc_manifest import (
     SequenceQcManifestError,
-    find_manifest_for_job,
+    find_manifest_in_result_root,
     load_sequence_qc_manifest,
 )
 
@@ -25,12 +28,19 @@ def _error_to_http(exc: SequenceQcManifestError) -> HTTPException:
 
 
 @router.get("/jobs/{job_id}/manifest")
-async def get_sequence_qc_manifest_for_job(job_id: str):
+async def get_sequence_qc_manifest_for_job(
+    job_id: str,
+    session: AsyncSession = Depends(get_session),
+):
     """Return the typed sequence-QC manifest for a completed BMS job."""
+    job = await session.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
     try:
-        manifest_path = find_manifest_for_job(job_id)
+        result_root = resolve_persisted_job_result_root(job)
+        manifest_path = find_manifest_in_result_root(result_root)
         return load_sequence_qc_manifest(manifest_path)
-    except SequenceQcManifestError as exc:
+    except (JobResultRootError, SequenceQcManifestError) as exc:
         raise _error_to_http(exc) from exc
 
 

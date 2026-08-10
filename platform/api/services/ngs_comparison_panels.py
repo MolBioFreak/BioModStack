@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import ApprovedNgsComparisonPanel, NgsComparisonPanelReceipt
@@ -163,14 +163,62 @@ async def issue_comparison_panel_receipt(session: AsyncSession, *, panel_id: str
     return receipt
 
 
-async def consume_comparison_panel_receipt(session: AsyncSession, *, receipt_id: str, expected_receipt_id: str) -> NgsComparisonPanelReceipt:
-    receipt = (await session.execute(select(NgsComparisonPanelReceipt).where(NgsComparisonPanelReceipt.id == receipt_id))).scalar_one_or_none()
-    if receipt is None or receipt.consumed_at is not None or receipt.expires_at <= datetime.utcnow() or receipt.expected_receipt_id != expected_receipt_id:
-        raise ValueError("comparison panel receipt is missing, expired, already used, or not bound to the expected receipt")
+async def validate_comparison_panel_receipt(
+    session: AsyncSession, *, receipt_id: str, expected_receipt_id: str
+) -> NgsComparisonPanelReceipt:
+    """Resolve exact panel authority without consuming its one-time claim."""
+
+    now = datetime.utcnow()
+    receipt = (
+        await session.execute(
+            select(NgsComparisonPanelReceipt).where(
+                NgsComparisonPanelReceipt.id == receipt_id,
+                NgsComparisonPanelReceipt.expected_receipt_id == expected_receipt_id,
+                NgsComparisonPanelReceipt.consumed_at.is_(None),
+                NgsComparisonPanelReceipt.expires_at > now,
+            )
+        )
+    ).scalar_one_or_none()
+    if receipt is None:
+        raise ValueError(
+            "comparison panel receipt is missing, expired, already used, or not bound to the expected receipt"
+        )
     panel = await session.get(ApprovedNgsComparisonPanel, receipt.panel_id)
-    if panel is None or panel.version != receipt.panel_version or panel.snapshot_sha256 != receipt.panel_snapshot_sha256:
+    if (
+        panel is None
+        or panel.version != receipt.panel_version
+        or panel.snapshot_sha256 != receipt.panel_snapshot_sha256
+    ):
         raise ValueError("comparison panel receipt no longer matches an approved panel")
     _validated_panel_manifest(panel)
+    return receipt
+
+
+async def consume_comparison_panel_receipt(session: AsyncSession, *, receipt_id: str, expected_receipt_id: str) -> NgsComparisonPanelReceipt:
+    await validate_comparison_panel_receipt(
+        session, receipt_id=receipt_id, expected_receipt_id=expected_receipt_id
+    )
+    now = datetime.utcnow()
+    claimed = await session.execute(
+        update(NgsComparisonPanelReceipt)
+        .where(
+            NgsComparisonPanelReceipt.id == receipt_id,
+            NgsComparisonPanelReceipt.expected_receipt_id == expected_receipt_id,
+            NgsComparisonPanelReceipt.consumed_at.is_(None),
+            NgsComparisonPanelReceipt.expires_at > now,
+        )
+        .values(consumed_at=now)
+        .execution_options(synchronize_session=False)
+    )
+    if claimed.rowcount != 1:
+        raise ValueError("comparison panel receipt is missing, expired, already used, or not bound to the expected receipt")
+    receipt = (
+        await session.execute(
+            select(NgsComparisonPanelReceipt)
+            .where(NgsComparisonPanelReceipt.id == receipt_id)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
     return receipt
 
 

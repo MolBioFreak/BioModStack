@@ -7,14 +7,19 @@
  * Pattern follows OligoDesignerTemplate for consistency.
  */
 
-import { useState, useMemo } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useState, useMemo } from 'react';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import {
     commitMolBioSequenceImport,
+    createMolBioNgsReference,
     fetchFiles,
+    fetchMolBioNgsReferenceRevisions,
+    fetchMolBioNgsReferences,
+    fetchMolBioNgsStateRevision,
     fetchMolBioSequenceRevisions,
     fetchNucleotideSequences,
+    importMolBioNgsBrowserReference,
     issueMolBioNgsReceipt,
     previewMolBioSequenceImport,
     submitOntNgsJob,
@@ -26,6 +31,7 @@ import {
     type NucleotideSequenceListItem,
     type PooledReferenceAssignmentSubmitRequest,
 } from '../lib/api';
+import { useGlobalExperimentContext } from './experiments/GlobalExperimentContext';
 import { useLiveGpuCatalog } from './useLiveGpuCatalog';
 
 
@@ -43,6 +49,17 @@ type InputSource = 'pod5' | 'bam' | 'fastq';
 type WorkflowKey = 'clone' | 'plasmidQc' | 'constructScreening' | 'fastqQc' | 'bamQc' | 'dna' | 'rna' | 'duplex' | 'modified' | 'barcode' | 'pooledAssignment';
 type PathField = 'pod5Dir' | 'bamPath' | 'fastqPath';
 type PathPickerMode = 'file' | 'directory';
+type ReferenceTab = 'managed' | 'paste' | 'create' | 'legacy';
+
+interface SavedReferenceEntry {
+    id: string;
+    name: string;
+    source: 'fasta' | 'path';
+    fasta?: string;
+    path?: string;
+    createdAt: string;
+    updatedAt: string;
+}
 type PathFilter = 'unknown' | 'bam' | 'fastq';
 
 interface PathPickerState {
@@ -141,6 +158,169 @@ function coerceNumberInput(value: unknown, fallback: number, min: number, max: n
 
 function isIntegerInRange(value: number, min: number, max: number): boolean {
     return Number.isFinite(value) && Number.isInteger(value) && value >= min && value <= max;
+}
+
+const LEGACY_REFERENCE_LIBRARY_STORAGE_KEY = 'bms.nanopore.referenceLibrary.v1';
+const REFERENCE_COORDINATE_CONTRACT = 'fasta-1-based-inclusive';
+
+function sanitizeFileStem(value: string): string {
+    const cleaned = value
+        .toLowerCase()
+        .replace(/[^a-z0-9._-]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+    return cleaned || 'reference';
+}
+
+function normalizeFastaText(raw: string): string | null {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+
+    const lines = trimmed
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+    if (lines.length === 0) return null;
+
+    // If user pasted plain sequence without header, wrap it as a FASTA entry.
+    if (!lines[0].startsWith('>')) {
+        const seq = lines.join('').replace(/\s+/g, '').toUpperCase();
+        if (!seq || /[^ACGTN]/i.test(seq)) return null;
+        return `>reference\n${seq}\n`;
+    }
+
+    let sawHeader = false;
+    let sawBases = false;
+    const normalized: string[] = [];
+    for (const line of lines) {
+        if (line.startsWith('>')) {
+            sawHeader = true;
+            normalized.push(line);
+            continue;
+        }
+        const seq = line.replace(/\s+/g, '').toUpperCase();
+        if (!seq || /[^ACGTN]/i.test(seq)) return null;
+        sawBases = true;
+        normalized.push(seq);
+    }
+    if (!sawHeader || !sawBases) return null;
+    return `${normalized.join('\n')}\n`;
+}
+
+function readFirstString(record: Record<string, unknown>, keys: string[]): string | undefined {
+    for (const key of keys) {
+        const value = record[key];
+        if (typeof value === 'string' && value.trim()) {
+            return value.trim();
+        }
+    }
+    return undefined;
+}
+
+function readLegacyReferenceImportHints(): SavedReferenceEntry[] {
+    if (typeof window === 'undefined') return [];
+    try {
+        const raw = window.localStorage.getItem(LEGACY_REFERENCE_LIBRARY_STORAGE_KEY);
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        const list = Array.isArray(parsed)
+            ? parsed
+            : (
+                (parsed && typeof parsed === 'object'
+                    && (
+                        Array.isArray((parsed as Record<string, unknown>).entries)
+                        || Array.isArray((parsed as Record<string, unknown>).references)
+                        || Array.isArray((parsed as Record<string, unknown>).items)
+                    ))
+                    ? (
+                        ((parsed as Record<string, unknown>).entries as unknown[])
+                        || ((parsed as Record<string, unknown>).references as unknown[])
+                        || ((parsed as Record<string, unknown>).items as unknown[])
+                    )
+                    : []
+            );
+        if (!Array.isArray(list)) return [];
+        return list
+            .map((item) => {
+                if (!item || typeof item !== 'object') return null;
+                const record = item as Record<string, unknown>;
+                const rawSource = typeof record.source === 'string'
+                    ? record.source.trim().toLowerCase()
+                    : '';
+                const legacyFasta = readFirstString(record, [
+                    'fasta',
+                    'fastaText',
+                    'sequence',
+                    'content',
+                    'reference_fasta_text',
+                    'referenceText',
+                ]);
+                const legacyPath = readFirstString(record, [
+                    'path',
+                    'referencePath',
+                    'reference_path',
+                    'reference_fasta',
+                    'filePath',
+                ]);
+                const normalizedLegacyFasta = legacyFasta ? (normalizeFastaText(legacyFasta) || legacyFasta) : undefined;
+
+                let source: 'fasta' | 'path' | null = null;
+                if (rawSource === 'path') {
+                    source = 'path';
+                } else if (rawSource === 'fasta' || rawSource === 'create' || rawSource === 'created') {
+                    source = 'fasta';
+                } else if (normalizedLegacyFasta) {
+                    source = 'fasta';
+                } else if (legacyPath) {
+                    source = 'path';
+                }
+
+                const name = String(record.name || '').trim()
+                    || (legacyPath ? (inferReferenceNameFromPath(legacyPath) || '') : '')
+                    || (normalizedLegacyFasta ? (inferReferenceNameFromFasta(normalizedLegacyFasta) || '') : '')
+                    || 'reference';
+                const id = String(record.id || '').trim()
+                    || `${sanitizeFileStem(name || legacyPath || 'reference')}_${String(record.createdAt || record.updatedAt || 'legacy').replace(/[^a-zA-Z0-9._-]+/g, '_')}`;
+                if (!id || !source) return null;
+                return {
+                    id,
+                    name: normalizeReferenceLabel(name),
+                    source,
+                    fasta: source === 'fasta' ? normalizedLegacyFasta : undefined,
+                    path: source === 'path' ? legacyPath : undefined,
+                    createdAt: typeof record.createdAt === 'string' ? record.createdAt : new Date().toISOString(),
+                    updatedAt: typeof record.updatedAt === 'string' ? record.updatedAt : new Date().toISOString(),
+                } as SavedReferenceEntry;
+            })
+            .filter((item): item is SavedReferenceEntry => item !== null);
+    } catch {
+        return [];
+    }
+}
+
+
+function inferReferenceNameFromFasta(fasta: string): string | null {
+    const firstHeader = fasta
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .find((line) => line.startsWith('>'));
+    if (!firstHeader) return null;
+    const name = firstHeader.replace(/^>\s*/, '').trim();
+    if (!name) return null;
+    return name.slice(0, 80);
+}
+
+function inferReferenceNameFromPath(path: string): string | null {
+    const normalized = path.trim().replace(/\\/g, '/');
+    if (!normalized) return null;
+    const leaf = normalized.split('/').filter(Boolean).pop() || '';
+    if (!leaf) return null;
+    return leaf.replace(/\.(fasta|fa|fna)(\.gz)?$/i, '').slice(0, 80) || leaf.slice(0, 80);
+}
+
+function normalizeReferenceLabel(name: string): string {
+    const trimmed = name.trim().replace(/\s+/g, ' ');
+    if (!trimmed) return 'reference';
+    return trimmed.slice(0, 80);
 }
 
 // SVG icon for the header (sequencer/nanopore)
@@ -563,8 +743,31 @@ function PooledReferenceAssignmentPanel({ fastqPath, sequences, onFastqBrowse }:
 // Main Component
 // ============================================================================
 export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProps) {
-    const [selectedMolbioSequenceId, setSelectedMolbioSequenceId] = useState('');
-    const [selectedMolbioRevisionId, setSelectedMolbioRevisionId] = useState('');
+    const experimentContext = useGlobalExperimentContext();
+    const {
+        workspaceId,
+        globalExperimentId,
+        stateRevisionId,
+        selectedDomainExperiment,
+        availability,
+        contextHref,
+    } = experimentContext;
+    const exactDomainExperimentId = selectedDomainExperiment?.domain_experiment_id ?? null;
+    // This is intentionally the URL/context-owned exact revision. Never replace it
+    // with the global experiment ID or silently advance to a newer local head.
+    const exactStateRevisionId = stateRevisionId;
+    const [{ molbioSequenceId, molbioRevisionId }] = useState(() => {
+        const params = new URLSearchParams(window.location.search);
+        return {
+            molbioSequenceId: params.get('molbio_sequence_id') || '',
+            molbioRevisionId: params.get('molbio_revision_id') || '',
+        };
+    });
+    const [selectedMolbioSequenceId, setSelectedMolbioSequenceId] = useState(molbioSequenceId);
+    const [selectedMolbioRevisionId, setSelectedMolbioRevisionId] = useState(molbioRevisionId);
+    const molbioRevisionPairError = Boolean(selectedMolbioSequenceId) !== Boolean(selectedMolbioRevisionId)
+        ? 'Exact molecular sequence and revision IDs must be supplied together.'
+        : null;
     const [approvedComparisonPanelId, setApprovedComparisonPanelId] = useState('');
     const navigate = useNavigate();
     const queryClient = useQueryClient();
@@ -615,6 +818,34 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         enabled: Boolean(selectedMolbioSequenceId),
         retry: false,
     });
+    const [selectedManagedReferenceRevisionId, setSelectedManagedReferenceRevisionId] = useState(
+        typeof initialValues?.ngsReferenceRevisionId === 'string'
+            ? initialValues.ngsReferenceRevisionId
+            : '',
+    );
+    const managedReferencesQuery = useQuery({
+        queryKey: ['molbio-ngs-references', exactDomainExperimentId],
+        queryFn: () => fetchMolBioNgsReferences(exactDomainExperimentId as string),
+        enabled: exactDomainExperimentId !== null,
+        retry: false,
+    });
+    const managedReferenceRevisionQueries = useQueries({
+        queries: (managedReferencesQuery.data ?? []).map((reference) => ({
+            queryKey: ['molbio-ngs-reference-revisions', reference.id],
+            queryFn: () => fetchMolBioNgsReferenceRevisions(reference.id),
+            enabled: exactDomainExperimentId !== null,
+            retry: false,
+        })),
+    });
+    const exactStateRevisionQuery = useQuery({
+        queryKey: ['molbio-ngs-state-revision', exactDomainExperimentId, exactStateRevisionId],
+        queryFn: () => fetchMolBioNgsStateRevision(
+            exactDomainExperimentId as string,
+            exactStateRevisionId as string,
+        ),
+        enabled: exactDomainExperimentId !== null && exactStateRevisionId !== null,
+        retry: false,
+    });
     const { data: approvedPanelResponse } = useQuery({
         queryKey: ['approved-ngs-comparison-panels'],
         queryFn: async () => {
@@ -622,7 +853,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             if (!response.ok) throw new Error('Unable to load approved comparison panels.');
             return response.json() as Promise<{ panels?: ApprovedComparisonPanel[]; absence_label?: string | null }>;
         },
-        enabled: Boolean(selectedMolbioSequenceId),
+        enabled: Boolean(selectedMolbioSequenceId && selectedMolbioRevisionId),
         staleTime: 30_000,
     });
     const approvedComparisonPanels = approvedPanelResponse?.panels || [];
@@ -766,6 +997,17 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const [error, setError] = useState<string | null>(null);
     const [pathPicker, setPathPicker] = useState<PathPickerState | null>(null);
     const [browserPath, setBrowserPath] = useState<string>('/');
+    const [referenceTab, setReferenceTab] = useState<ReferenceTab>('managed');
+    const [pastedFasta, setPastedFasta] = useState('');
+    const [pastedReferenceName, setPastedReferenceName] = useState('');
+    const [newFastaName, setNewFastaName] = useState('');
+    const [newFastaSeq, setNewFastaSeq] = useState('');
+    const [referenceMoleculeType, setReferenceMoleculeType] = useState<'dna' | 'rna'>('dna');
+    const [referenceTopology, setReferenceTopology] = useState<'linear' | 'circular'>('circular');
+    const [legacyReferenceHints, setLegacyReferenceHints] = useState<SavedReferenceEntry[]>([]);
+    const [legacyHintsLoaded, setLegacyHintsLoaded] = useState(false);
+    const [selectedLegacyReferenceId, setSelectedLegacyReferenceId] = useState('');
+    const [referenceLibraryNotice, setReferenceLibraryNotice] = useState<string | null>(null);
 
     const { data: browserData, isLoading: browserLoading } = useQuery({
         queryKey: ['files', browserPath, pathPicker?.field, pathPicker?.mode, pathPicker?.filter],
@@ -778,6 +1020,39 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     // ============================================================================
     // Computed
     // ============================================================================
+    const managedReferenceOptions = useMemo(() => (
+        (managedReferencesQuery.data ?? []).flatMap((resource, index) => (
+            (managedReferenceRevisionQueries[index]?.data ?? []).map((revision) => ({ resource, revision }))
+        ))
+    ), [managedReferenceRevisionQueries, managedReferencesQuery.data]);
+    const exactStateReferenceRevisionIds = useMemo(() => new Set(
+        (exactStateRevisionQuery.data?.members ?? [])
+            .filter((member) => member.role === 'ngs_reference' && member.entity_kind === 'ngs_reference_revision')
+            .map((member) => member.entity_id),
+    ), [exactStateRevisionQuery.data?.members]);
+    const selectedManagedReference = useMemo(() => (
+        managedReferenceOptions.find(({ revision }) => revision.id === selectedManagedReferenceRevisionId) ?? null
+    ), [managedReferenceOptions, selectedManagedReferenceRevisionId]);
+    const selectedReferenceIsExactStateMember = Boolean(
+        selectedManagedReference
+        && exactStateReferenceRevisionIds.has(selectedManagedReference.revision.id),
+    );
+
+    useEffect(() => {
+        if (selectedManagedReferenceRevisionId || !exactStateRevisionQuery.isSuccess) return;
+        const firstStateBoundReference = managedReferenceOptions.find(({ revision }) => (
+            exactStateReferenceRevisionIds.has(revision.id)
+        ));
+        if (firstStateBoundReference) {
+            setSelectedManagedReferenceRevisionId(firstStateBoundReference.revision.id);
+        }
+    }, [
+        exactStateReferenceRevisionIds,
+        exactStateRevisionQuery.isSuccess,
+        managedReferenceOptions,
+        selectedManagedReferenceRevisionId,
+    ]);
+
     const hasValidFastqNumericControls = useMemo(() => (
         isIntegerInRange(expectedPlasmidSize, 1, FASTQ_MAX_EXPECTED_PLASMID_SIZE_BP)
         && isIntegerInRange(minFastqReadLength, 0, FASTQ_MAX_MIN_READ_LENGTH_BP)
@@ -791,19 +1066,122 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const molbioRevisions = molbioRevisionsQuery.data || [];
     const selectedMolbioSequence = molbioSequences.find((sequence) => sequence.id === selectedMolbioSequenceId) || null;
     const selectedMolbioRevision = molbioRevisions.find((revision) => revision.id === selectedMolbioRevisionId) || null;
-
+    const usesMolBioReceiptLane = Boolean(selectedMolbioSequenceId);
+    const managedReferenceBlocker = useMemo(() => {
+        if (usesMolBioReceiptLane) return molbioRevisionPairError;
+        if (!exactDomainExperimentId) return 'Select an exact NGS/MolBio Domain Experiment.';
+        if (!exactStateRevisionId) return 'Select an exact local state revision.';
+        if (!availability.canMutateDomain) return availability.reason;
+        if (managedReferencesQuery.isError) return 'Managed references could not be loaded.';
+        if (exactStateRevisionQuery.isError) return 'The exact local state revision could not be loaded.';
+        if (!selectedManagedReference) return 'Select an immutable managed reference revision.';
+        if (!selectedReferenceIsExactStateMember) return 'The selected reference revision is not a member of the exact selected local state revision.';
+        return null;
+    }, [
+        availability.canMutateDomain,
+        availability.reason,
+        exactDomainExperimentId,
+        exactStateRevisionId,
+        exactStateRevisionQuery.isError,
+        managedReferencesQuery.isError,
+        molbioRevisionPairError,
+        selectedManagedReference,
+        selectedReferenceIsExactStateMember,
+        usesMolBioReceiptLane,
+    ]);
     const canSubmit = useMemo(() => {
         if (selectedWorkflow === 'pooledAssignment' || !jobName.trim()) return false;
-        if (requiresReference && (!selectedMolbioSequenceId || !selectedMolbioRevisionId)) return false;
+        if (molbioRevisionPairError) return false;
+        if (!usesMolBioReceiptLane && !availability.canMutateDomain) return false;
+        if (!usesMolBioReceiptLane && managedReferenceBlocker) return false;
+        if (requiresReference && !usesMolBioReceiptLane && !selectedManagedReference) return false;
         if (inputSource === 'pod5') return pod5Dir.trim() !== '';
         if (inputSource === 'bam') return bamPath.trim() !== '';
         return fastqPath.trim() !== ''
             && (selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc')
+            && (Boolean(selectedManagedReference) || usesMolBioReceiptLane)
             && hasValidFastqNumericControls;
-    }, [bamPath, fastqPath, hasValidFastqNumericControls, inputSource, jobName, pod5Dir, requiresReference, selectedMolbioRevisionId, selectedMolbioSequenceId, selectedWorkflow]);
+    }, [
+        availability.canMutateDomain,
+        bamPath,
+        fastqPath,
+        hasValidFastqNumericControls,
+        inputSource,
+        jobName,
+        managedReferenceBlocker,
+        molbioRevisionPairError,
+        pod5Dir,
+        selectedManagedReference,
+        selectedWorkflow,
+        usesMolBioReceiptLane,
+    ]);
+    const selectedLegacyReference = useMemo(
+        () => legacyReferenceHints.find((entry) => entry.id === selectedLegacyReferenceId) ?? null,
+        [legacyReferenceHints, selectedLegacyReferenceId],
+    );
 
     const methylationEnabled = modifiedBases !== 'none';
     const canRunModkit = selectedWorkflow === 'modified' && methylationEnabled;
+    const refreshManagedReferences = async () => {
+        await queryClient.invalidateQueries({ queryKey: ['molbio-ngs-references', exactDomainExperimentId] });
+        await queryClient.invalidateQueries({ queryKey: ['molbio-ngs-reference-revisions'] });
+        await exactStateRevisionQuery.refetch();
+    };
+
+    const createManagedReferenceMutation = useMutation({
+        mutationFn: async (input: { name: string; fasta: string }) => {
+            if (!exactDomainExperimentId) throw new Error('Select an exact NGS/MolBio Domain Experiment before creating a reference.');
+            const normalizedFasta = normalizeFastaText(input.fasta);
+            if (!normalizedFasta) throw new Error('Reference FASTA is invalid. Provide FASTA headers and A/C/G/T/N sequence.');
+            return createMolBioNgsReference({
+                global_domain_experiment_id: exactDomainExperimentId,
+                name: normalizeReferenceLabel(input.name),
+                fasta: normalizedFasta,
+                molecule_type: referenceMoleculeType,
+                topology: referenceTopology,
+                coordinate_contract: REFERENCE_COORDINATE_CONTRACT,
+                source_provenance: { kind: 'inline_fasta', source_surface: 'nanopore-template' },
+                idempotency_key: crypto.randomUUID(),
+            });
+        },
+        onSuccess: async (result) => {
+            await refreshManagedReferences();
+            setSelectedManagedReferenceRevisionId(result.id);
+            setReferenceTab('managed');
+            setReferenceLibraryNotice(`Created immutable managed reference revision ${result.id}. Select a state revision that includes it before launch.`);
+        },
+        onError: (err: unknown) => setReferenceLibraryNotice(extractApiErrorMessage(err)),
+    });
+
+    const importLegacyReferenceMutation = useMutation({
+        mutationFn: async (entry: SavedReferenceEntry) => {
+            if (!exactDomainExperimentId) throw new Error('Select an exact NGS/MolBio Domain Experiment before importing a browser hint.');
+            return importMolBioNgsBrowserReference({
+                global_domain_experiment_id: exactDomainExperimentId,
+                entry: {
+                    id: entry.id,
+                    name: entry.name,
+                    source: entry.source,
+                    fasta: entry.fasta,
+                    path: entry.path,
+                    createdAt: entry.createdAt,
+                    updatedAt: entry.updatedAt,
+                },
+                name: entry.name,
+                molecule_type: referenceMoleculeType,
+                topology: referenceTopology,
+                coordinate_contract: REFERENCE_COORDINATE_CONTRACT,
+                idempotency_key: crypto.randomUUID(),
+            });
+        },
+        onSuccess: async (result) => {
+            await refreshManagedReferences();
+            setSelectedManagedReferenceRevisionId(result.id);
+            setReferenceTab('managed');
+            setReferenceLibraryNotice(`Imported untrusted browser hint as immutable managed reference revision ${result.id}. Select a state revision that includes it before launch.`);
+        },
+        onError: (err: unknown) => setReferenceLibraryNotice(extractApiErrorMessage(err)),
+    });
 
     // ============================================================================
     // Job Submission
@@ -813,10 +1191,10 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             let molbioNgsReceiptId = '';
             let comparisonPanelReceiptId = '';
 
-            if (requiresReference) {
-                if (!selectedMolbioSequenceId || !selectedMolbioRevisionId) {
-                    throw new Error('Select a saved MolBio sequence and exact immutable revision before submitting.');
-                }
+            if (molbioRevisionPairError) {
+                throw new Error(molbioRevisionPairError);
+            }
+            if (selectedMolbioSequenceId && selectedMolbioRevisionId) {
                 const receiptResponse = await issueMolBioNgsReceipt(selectedMolbioSequenceId, { revision_id: selectedMolbioRevisionId });
                 molbioNgsReceiptId = receiptResponse.data.receipt_id.trim();
                 if (!molbioNgsReceiptId) throw new Error('The immutable MolBio handoff did not return a receipt.');
@@ -829,6 +1207,11 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     const panelReceipt = await panelResponse.json() as { receipt_id?: string };
                     comparisonPanelReceiptId = String(panelReceipt.receipt_id || '').trim();
                     if (!comparisonPanelReceiptId) throw new Error('The approved comparison panel did not return a receipt.');
+                }
+            } else {
+                if (managedReferenceBlocker) throw new Error(managedReferenceBlocker);
+                if (!exactDomainExperimentId || !exactStateRevisionId || !selectedManagedReference) {
+                    throw new Error('Exact Domain Experiment, state revision, and managed reference revision are required.');
                 }
             }
 
@@ -907,7 +1290,14 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         single_ref_split_max_query_gap_bp: singleRefSplitMaxQueryGapBp,
                     }),
                     ...(runModkit && canRunModkit && modkitFilterThreshold != null && { modkit_filter_threshold: modkitFilterThreshold }),
-                }
+                },
+                ...(!molbioNgsReceiptId && exactDomainExperimentId && exactStateRevisionId && selectedManagedReference && {
+                    managed_reference: {
+                        global_domain_experiment_id: exactDomainExperimentId,
+                        molbio_ngs_state_revision_id: exactStateRevisionId,
+                        ngs_reference_revision_id: selectedManagedReference.revision.id,
+                    },
+                }),
             };
             return submitOntNgsJob(workflowId, jobPayload);
         },
@@ -915,10 +1305,10 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
             const submittedJobId = response.data?.id;
             if (submittedJobId) {
-                navigate(`/jobs/${submittedJobId}`);
+                navigate(contextHref(`/jobs/${submittedJobId}`, { job_id: submittedJobId }));
                 return;
             }
-            navigate('/ngs');
+            navigate(contextHref('/ngs'));
         },
         onError: (err: unknown) => {
             setError(extractApiErrorMessage(err));
@@ -959,8 +1349,16 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             setError('Please specify a FASTQ file path');
             return;
         }
-        if (requiresReference && (!selectedMolbioSequenceId || !selectedMolbioRevisionId)) {
-            setError('This workflow requires a saved MolBio sequence and exact immutable revision.');
+        if (molbioRevisionPairError) {
+            setError(molbioRevisionPairError);
+            return;
+        }
+        if (!usesMolBioReceiptLane && !availability.canMutateDomain) {
+            setError(availability.reason);
+            return;
+        }
+        if (!usesMolBioReceiptLane && managedReferenceBlocker) {
+            setError(managedReferenceBlocker);
             return;
         }
         if (inputSource === 'fastq' && !hasValidFastqNumericControls) {
@@ -1443,6 +1841,46 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         }} />
                     </div>
                 </div>
+            )}
+            {/* Server-managed immutable reference authority */}
+            {selectedWorkflow !== 'pooledAssignment' && (
+            <div className="bg-[var(--bg-secondary)] rounded-lg p-4 xl:col-span-4 space-y-3">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div><label className="block text-sm font-medium text-[var(--text-secondary)]">Managed Reference FASTA</label><p className="mt-1 text-xs text-[var(--text-secondary)]">Only immutable server-managed revisions can enter managed-reference submission.</p></div>
+                    <div className="flex flex-wrap gap-1">{(['managed', 'paste', 'create', 'legacy'] as ReferenceTab[]).map((tab) => <button key={tab} type="button" onClick={() => setReferenceTab(tab)} className={`px-3 py-1.5 rounded text-xs font-medium ${referenceTab === tab ? 'text-[var(--text-primary)] bg-[var(--bg-tertiary)]' : 'text-[var(--text-secondary)]'}`}>{tab === 'managed' ? 'Managed' : tab === 'paste' ? 'Paste + Import' : tab === 'create' ? 'Create Managed' : 'Legacy Import'}</button>)}</div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/40 p-3 text-xs">
+                    <div>Project ID: <span className="font-mono break-all">{workspaceId || 'not selected'}</span></div><div>Global Experiment ID: <span className="font-mono break-all">{globalExperimentId || 'not selected'}</span></div>
+                    <div>Domain Experiment ID: <span className="font-mono break-all">{exactDomainExperimentId || 'not selected'}</span></div><div>Selected state revision ID: <span className="font-mono break-all">{exactStateRevisionId || 'not selected'}</span></div>
+                    <div>Reference resource ID: <span className="font-mono break-all">{selectedManagedReference?.resource.id || 'not selected'}</span></div><div>Reference revision ID: <span className="font-mono break-all">{selectedManagedReference?.revision.id || 'not selected'}</span></div>
+                    <div className="md:col-span-2">Canonical FASTA SHA-256: <span className="font-mono break-all">{selectedManagedReference?.revision.canonical_fasta_sha256 || 'not selected'}</span></div>
+                </div>
+                {usesMolBioReceiptLane ? <p className="rounded border border-cyan-500/40 bg-cyan-500/10 p-3 text-xs text-cyan-100">MolBio one-time receipt handoff is active for {selectedMolbioSequenceId}. Managed-reference authority cannot be mixed with this receipt/comparison-panel lane.</p> : managedReferenceBlocker ? <p role="alert" className="rounded border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-100">Managed launch disabled: {managedReferenceBlocker}</p> : null}
+                {referenceTab === 'managed' && <div className="space-y-2">
+                    <select value={selectedManagedReferenceRevisionId} onChange={(event) => setSelectedManagedReferenceRevisionId(event.target.value)} disabled={usesMolBioReceiptLane || managedReferencesQuery.isLoading} className="w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-3 py-2 text-sm disabled:opacity-50">
+                        <option value="">Select immutable managed revision…</option>{managedReferenceOptions.map(({ resource, revision }) => <option key={revision.id} value={revision.id}>{resource.name} · rev {revision.revision_number} · {revision.id}{exactStateReferenceRevisionIds.has(revision.id) ? ' · selected-state member' : ' · not in selected state'}</option>)}
+                    </select>{managedReferenceOptions.length === 0 && !managedReferencesQuery.isLoading && <p className="text-xs text-[var(--text-secondary)]">No managed references belong to this exact Domain Experiment.</p>}
+                </div>}
+                {(referenceTab === 'paste' || referenceTab === 'create' || referenceTab === 'legacy') && <div className="grid grid-cols-2 gap-2">
+                    <label className="text-xs">Molecule type<select value={referenceMoleculeType} onChange={(event) => setReferenceMoleculeType(event.target.value as 'dna' | 'rna')} className="mt-1 w-full bg-[var(--bg-tertiary)] rounded p-2"><option value="dna">DNA</option><option value="rna">RNA</option></select></label>
+                    <label className="text-xs">Topology<select value={referenceTopology} onChange={(event) => setReferenceTopology(event.target.value as 'linear' | 'circular')} className="mt-1 w-full bg-[var(--bg-tertiary)] rounded p-2"><option value="circular">Circular</option><option value="linear">Linear</option></select></label>
+                </div>}
+                {referenceTab === 'paste' && <div className="space-y-2">
+                    <input value={pastedReferenceName} onChange={(event) => setPastedReferenceName(event.target.value)} placeholder="Managed reference name" className="w-full bg-[var(--bg-tertiary)] border rounded px-3 py-2 text-sm" /><textarea value={pastedFasta} onChange={(event) => setPastedFasta(event.target.value)} placeholder=">my_reference
+ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded px-3 py-2 text-sm font-mono" />
+                    <button type="button" onClick={() => createManagedReferenceMutation.mutate({ name: pastedReferenceName.trim() || inferReferenceNameFromFasta(pastedFasta) || 'pasted-reference', fasta: pastedFasta })} disabled={!availability.canMutateDomain || usesMolBioReceiptLane || createManagedReferenceMutation.isPending || normalizeFastaText(pastedFasta) === null} title={!availability.canMutateDomain ? availability.reason : undefined} className="px-3 py-2 rounded border disabled:opacity-40">{createManagedReferenceMutation.isPending ? 'Creating managed revision…' : 'Create managed reference first'}</button>
+                </div>}
+                {referenceTab === 'create' && <div className="space-y-2">
+                    <input value={newFastaName} onChange={(event) => setNewFastaName(event.target.value)} placeholder="Managed reference and sequence name" className="w-full bg-[var(--bg-tertiary)] border rounded px-3 py-2 text-sm" /><textarea value={newFastaSeq} onChange={(event) => setNewFastaSeq(event.target.value.replace(/[^ATCGatcgNn\s]/g, ''))} placeholder="Raw nucleotide sequence (ATCGN only)" rows={4} className="w-full bg-[var(--bg-tertiary)] border rounded px-3 py-2 text-sm font-mono" />
+                    <button type="button" onClick={() => createManagedReferenceMutation.mutate({ name: newFastaName, fasta: `>${newFastaName.trim()}\n${newFastaSeq.replace(/\s/g, '').toUpperCase()}` })} disabled={!availability.canMutateDomain || usesMolBioReceiptLane || createManagedReferenceMutation.isPending || !newFastaName.trim() || !newFastaSeq.trim()} title={!availability.canMutateDomain ? availability.reason : undefined} className="px-3 py-2 rounded border disabled:opacity-40">{createManagedReferenceMutation.isPending ? 'Creating managed revision…' : 'Create managed reference first'}</button>
+                </div>}
+                {referenceTab === 'legacy' && <div className="space-y-2 rounded border border-amber-500/40 p-3">
+                    <p className="text-xs text-amber-100">Legacy browser entries are untrusted import hints only. They are read only on explicit action and never become scientific authority directly.</p><button type="button" onClick={() => { const hints = readLegacyReferenceImportHints(); setLegacyReferenceHints(hints); setLegacyHintsLoaded(true); setSelectedLegacyReferenceId(hints[0]?.id ?? ''); setReferenceLibraryNotice(hints.length ? `Loaded ${hints.length} untrusted browser hint(s).` : 'No legacy browser reference hints were found.'); }} className="px-3 py-2 rounded border text-sm">Read legacy browser hints</button>
+                    {legacyHintsLoaded && legacyReferenceHints.length > 0 && <><select value={selectedLegacyReferenceId} onChange={(event) => setSelectedLegacyReferenceId(event.target.value)} className="w-full bg-[var(--bg-tertiary)] border rounded px-3 py-2 text-sm">{legacyReferenceHints.map((entry) => <option key={entry.id} value={entry.id}>{entry.name} · untrusted {entry.source} hint</option>)}</select>{selectedLegacyReference && <div className="text-xs"><div>Hint ID: <span className="font-mono">{selectedLegacyReference.id}</span></div>{selectedLegacyReference.source === 'path' && <div className="text-amber-200">Path-only hint: backend import will fail closed.</div>}</div>}<button type="button" onClick={() => selectedLegacyReference && importLegacyReferenceMutation.mutate(selectedLegacyReference)} disabled={!selectedLegacyReference || !availability.canMutateDomain || usesMolBioReceiptLane || importLegacyReferenceMutation.isPending} title={!availability.canMutateDomain ? availability.reason : undefined} className="px-3 py-2 rounded border disabled:opacity-40">{importLegacyReferenceMutation.isPending ? 'Importing…' : 'Import hint into exact Domain Experiment'}</button></>}
+                </div>}
+                {selectedMolbioSequenceId && ['plasmidQc', 'constructScreening', 'fastqQc', 'bamQc'].includes(selectedWorkflow) && <div className="p-3 rounded border"><label className="block text-xs mb-1">Approved comparison panel (MolBio receipt lane only)</label><select value={approvedComparisonPanelId} onChange={(event) => setApprovedComparisonPanelId(event.target.value)} className="w-full bg-[var(--bg-secondary)] border rounded px-3 py-2 text-sm"><option value="">No comparison panel</option>{approvedComparisonPanels.map((panel) => <option key={panel.id} value={panel.id}>{panel.label}</option>)}</select></div>}
+                {referenceLibraryNotice && <p role="status" className="text-xs text-[var(--text-secondary)]">{referenceLibraryNotice}</p>}
+            </div>
             )}
 
             {/* Locked P4 molecule, mode, and multiplexing controls */}
@@ -2052,6 +2490,9 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     <button
                         onClick={handleSubmit}
                         disabled={!canSubmit || submitMutation.isPending}
+                        title={!usesMolBioReceiptLane && !availability.canMutateDomain
+                            ? availability.reason
+                            : (!usesMolBioReceiptLane && managedReferenceBlocker ? managedReferenceBlocker : undefined)}
                         className={`px-6 py-2.5 rounded-lg font-medium transition-all ${canSubmit && !submitMutation.isPending
                             ? 'text-[var(--text-primary)] shadow-lg'
                             : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] cursor-not-allowed'
@@ -2073,6 +2514,15 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     </button>
                 )}
             </div>
+            {!canSubmit && (
+                <p className="text-right text-xs text-[var(--text-secondary)]">
+                    {!usesMolBioReceiptLane && !availability.canMutateDomain
+                        ? `Run disabled: ${availability.reason}`
+                        : (!usesMolBioReceiptLane && managedReferenceBlocker
+                            ? `Run disabled: ${managedReferenceBlocker}`
+                            : 'Run disabled until all required inputs and valid controls are present.')}
+                </p>
+            )}
 
             {pathPicker && (
                 <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">

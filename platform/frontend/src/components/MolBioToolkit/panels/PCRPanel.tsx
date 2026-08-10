@@ -3,13 +3,20 @@
  */
 
 import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useLocation } from 'react-router-dom';
 import type { SequenceData, HighlightedRegion } from '../types';
 import {
     calculatePrimerTm,
+    fetchPcrExperimentRevision,
+    fetchPcrExperimentRevisions,
+    runPcrOperation,
+    type PcrExperimentRevision,
+    type PcrOperationResponse,
     type PrimerTmOptionsResponse,
     type PrimerTmResult,
     type PrimerTmSettings,
 } from '../../../lib/api';
+import { useGlobalExperimentContext } from '../../experiments/GlobalExperimentContext';
 import { PrimerTmSettingsPanel } from '../PrimerTmSettingsPanel';
 import {
     isValidNucleotideSequence,
@@ -34,6 +41,54 @@ function formatTm(result: PrimerTmResult | null | undefined): string {
     return `${result.tm.toFixed(1)}°C`;
 }
 
+function validatePcrRevision(
+    experimentId: string,
+    revisionId: string,
+    revision: PcrExperimentRevision,
+): PcrExperimentRevision {
+    if (
+        revision.experiment_id !== experimentId
+        || revision.id !== revisionId
+        || revision.reopen_destination.surface !== 'molbio-pcr-experiment-revision'
+        || revision.reopen_destination.params.experiment_id !== experimentId
+        || revision.reopen_destination.params.revision_id !== revisionId
+    ) {
+        throw new Error('PCR revision response identity does not match the exact requested experiment/revision pair.');
+    }
+    return revision;
+}
+
+function validatePcrRevisionList(
+    experimentId: string,
+    revisions: PcrExperimentRevision[],
+): PcrExperimentRevision[] {
+    revisions.forEach((revision) => validatePcrRevision(experimentId, revision.id, revision));
+    return revisions;
+}
+
+function immutablePcrPayload(revision: PcrExperimentRevision): Record<string, unknown> {
+    return {
+        operation_id: revision.operation_id,
+        template_document_id: revision.template_document_id,
+        template_revision_id: revision.template_revision_id,
+        template_sha256: revision.template_sha256,
+        template_snapshot: revision.template_snapshot,
+        forward_primer_snapshot: revision.forward_primer_snapshot,
+        reverse_primer_snapshot: revision.reverse_primer_snapshot,
+        tm_model_revision_id: revision.tm_model_revision_id,
+        tm_snapshot: revision.tm_snapshot,
+        polymerase_preset_revision_id: revision.polymerase_preset_revision_id,
+        polymerase_snapshot: revision.polymerase_snapshot,
+        reaction_settings: revision.reaction_settings,
+        cycling_assumptions: revision.cycling_assumptions,
+        product_document_id: revision.product_document_id,
+        product_revision_id: revision.product_revision_id,
+        product_snapshot: revision.product_snapshot,
+        warnings: revision.warnings,
+        notes: revision.notes,
+    };
+}
+
 export function PCRPanel(props: PCRPanelProps) {
     const {
         sequenceData,
@@ -44,12 +99,25 @@ export function PCRPanel(props: PCRPanelProps) {
         tmSettings,
         onTmSettingsChange,
     } = props;
+    const location = useLocation();
+    const { updateQueryParams, contextHref } = useGlobalExperimentContext();
+    const queryParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
+    const requestedPcrExperimentId = queryParams.get('pcr_experiment_id')?.trim() || null;
+    const requestedPcrRevisionId = queryParams.get('pcr_revision_id')?.trim() || null;
+    const hasExactPcrPair = requestedPcrExperimentId !== null && requestedPcrRevisionId !== null;
+    const hasIncompletePcrPair = (requestedPcrExperimentId === null) !== (requestedPcrRevisionId === null);
     const [forwardPrimer, setForwardPrimer] = useState('');
     const [reversePrimer, setReversePrimer] = useState('');
     const [productName, setProductName] = useState('');
+    const [persistImmutableRevision, setPersistImmutableRevision] = useState(Boolean(sequenceId));
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [result, setResult] = useState<{ sequence: string; length: number; start?: number; end?: number; wrapsOrigin?: boolean } | null>(null);
+    const [persistedResult, setPersistedResult] = useState<Pick<PcrOperationResponse, 'experiment_id' | 'experiment_revision_id'> | null>(null);
+    const [exactRevision, setExactRevision] = useState<PcrExperimentRevision | null>(null);
+    const [revisionHistory, setRevisionHistory] = useState<PcrExperimentRevision[]>([]);
+    const [authorityLoading, setAuthorityLoading] = useState(false);
+    const [authorityError, setAuthorityError] = useState<string | null>(null);
     const [tmLoading, setTmLoading] = useState(false);
     const [tmResults, setTmResults] = useState<{ forward: PrimerTmResult | null; reverse: PrimerTmResult | null }>({
         forward: null,
@@ -58,6 +126,62 @@ export function PCRPanel(props: PCRPanelProps) {
 
     const sequenceType: 'dna' | 'rna' = sequenceData.sequenceType === 'rna' ? 'rna' : 'dna';
     const unitLabel = sequenceUnitLabel(sequenceType);
+
+    useEffect(() => {
+        setPersistImmutableRevision(Boolean(sequenceId));
+    }, [sequenceId]);
+
+    useEffect(() => {
+        if (!hasExactPcrPair || !requestedPcrExperimentId || !requestedPcrRevisionId) {
+            setExactRevision(null);
+            setRevisionHistory([]);
+            setAuthorityLoading(false);
+            setAuthorityError(null);
+            return;
+        }
+
+        let cancelled = false;
+        setExactRevision(null);
+        setRevisionHistory([]);
+        setAuthorityLoading(true);
+        setAuthorityError(null);
+        void Promise.all([
+            fetchPcrExperimentRevision(requestedPcrExperimentId, requestedPcrRevisionId),
+            fetchPcrExperimentRevisions(requestedPcrExperimentId),
+        ])
+            .then(([revision, revisions]) => ({
+                revision: validatePcrRevision(requestedPcrExperimentId, requestedPcrRevisionId, revision),
+                revisions: validatePcrRevisionList(requestedPcrExperimentId, revisions),
+            }))
+            .then(({ revision, revisions }) => {
+                if (cancelled) return;
+                setExactRevision(revision);
+                setRevisionHistory(revisions);
+            })
+            .catch((authorityFailure) => {
+                if (!cancelled) {
+                    setAuthorityError(authorityFailure instanceof Error ? authorityFailure.message : String(authorityFailure));
+                }
+            })
+            .finally(() => {
+                if (!cancelled) setAuthorityLoading(false);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [
+        hasExactPcrPair,
+        requestedPcrExperimentId,
+        requestedPcrRevisionId,
+    ]);
+
+    const selectExactRevision = useCallback((revision: PcrExperimentRevision) => {
+        updateQueryParams({
+            pcr_experiment_id: revision.experiment_id,
+            pcr_revision_id: revision.id,
+        });
+    }, [updateQueryParams]);
 
     const fwdBindings = useMemo(() => resolvePrimerBindings(sequenceData.sequence, forwardPrimer, {
         reverse: false,
@@ -210,36 +334,27 @@ export function PCRPanel(props: PCRPanelProps) {
 
         setLoading(true);
         setError(null);
+        setPersistedResult(null);
 
         try {
-            const payload: Record<string, unknown> = {
+            const shouldPersist = Boolean(sequenceId) && persistImmutableRevision;
+            const data = await runPcrOperation({
                 primer_fwd: forwardPrimer,
                 primer_rev: reversePrimer,
                 is_circular: sequenceData.circular,
-                save: false,
+                save: shouldPersist,
+                persist_experiment: shouldPersist,
                 new_name: productName || `${sequenceData.name}_PCR`,
-            };
-
-            if (sequenceId) {
-                payload.sequence_id = sequenceId;
-            } else {
-                payload.sequence = sequenceData.sequence;
-                payload.name = sequenceData.name;
-                payload.sequence_type = sequenceType;
-            }
-
-            const res = await fetch('/api/molbio/pcr', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
+                tm_settings: tmSettings,
+                ...(sequenceId
+                    ? { sequence_id: sequenceId }
+                    : {
+                        sequence: sequenceData.sequence,
+                        name: sequenceData.name,
+                        sequence_type: sequenceType,
+                    }),
             });
 
-            if (!res.ok) {
-                const errData = await res.json().catch(() => ({}));
-                throw new Error(errData.detail || `PCR failed: ${res.status}`);
-            }
-
-            const data = await res.json();
             const responseProduct = data.product;
             const persistedSequence = data.sequence;
             const product = responseProduct
@@ -292,6 +407,26 @@ export function PCRPanel(props: PCRPanelProps) {
                     onHighlight(regions);
                 }
             }
+
+            const returnedIds = {
+                experiment_id: data.experiment_id,
+                experiment_revision_id: data.experiment_revision_id,
+            };
+            setPersistedResult(returnedIds);
+            const hasExperimentId = Boolean(data.experiment_id);
+            const hasRevisionId = Boolean(data.experiment_revision_id);
+            if (hasExperimentId !== hasRevisionId) {
+                throw new Error('PCR persistence returned an incomplete experiment/revision identity pair; no reopen authority was inferred.');
+            }
+            if (shouldPersist && (!data.experiment_id || !data.experiment_revision_id)) {
+                throw new Error('PCR completed, but the server did not return the requested immutable experiment/revision identity pair.');
+            }
+            if (data.experiment_id && data.experiment_revision_id) {
+                updateQueryParams({
+                    pcr_experiment_id: data.experiment_id,
+                    pcr_revision_id: data.experiment_revision_id,
+                });
+            }
         } catch (runError) {
             setError(runError instanceof Error ? runError.message : 'Unknown error');
         } finally {
@@ -307,6 +442,93 @@ export function PCRPanel(props: PCRPanelProps) {
     return (
         <div className="pcr-panel p-3 space-y-4">
             <h4 className="font-semibold text-slate-200">PCR Amplification</h4>
+
+            <section className="space-y-3 rounded-lg border border-slate-700 bg-slate-900/60 p-3" aria-label="Exact immutable PCR revision authority">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-cyan-300">
+                    Exact immutable PCR revision authority
+                </div>
+                {hasIncompletePcrPair ? (
+                    <div className="rounded border border-red-800 bg-red-950/40 px-3 py-2 text-xs text-red-300">
+                        Exact PCR reopen requires both pcr_experiment_id and pcr_revision_id. No identifier is inferred from the other.
+                    </div>
+                ) : authorityLoading ? (
+                    <div className="text-xs text-cyan-200">Loading the exact PCR revision and its immutable revision history…</div>
+                ) : authorityError ? (
+                    <div className="rounded border border-red-800 bg-red-950/40 px-3 py-2 text-xs text-red-300">
+                        Unable to load exact PCR revision authority: {authorityError}
+                    </div>
+                ) : exactRevision ? (
+                    <div className="space-y-3">
+                        <div className="rounded border border-amber-700/70 bg-amber-950/20 p-3">
+                            <div className="font-medium text-amber-200">Read-only immutable revision · {exactRevision.relation}</div>
+                            <p className="mt-1 text-xs text-slate-400">
+                                Historical selection changes only the exact PCR query pair and never replaces the live calculator inputs.
+                            </p>
+                            <dl className="mt-3 grid gap-2 text-xs">
+                                <div><dt className="text-slate-500">Experiment ID</dt><dd className="break-all font-mono text-slate-200">{exactRevision.experiment_id}</dd></div>
+                                <div><dt className="text-slate-500">Revision ID</dt><dd className="break-all font-mono text-slate-200">{exactRevision.id}</dd></div>
+                                <div><dt className="text-slate-500">Revision number</dt><dd className="text-slate-200">#{exactRevision.revision_number}</dd></div>
+                                <div><dt className="text-slate-500">Review state</dt><dd className="text-slate-200">{exactRevision.review_state.replace(/_/g, ' ')}</dd></div>
+                                <div><dt className="text-slate-500">Created</dt><dd className="text-slate-200">{new Date(exactRevision.created_at).toLocaleString()}</dd></div>
+                                <div><dt className="text-slate-500">Payload SHA-256</dt><dd className="break-all font-mono text-slate-200">{exactRevision.payload_sha256}</dd></div>
+                                <div><dt className="text-slate-500">Template SHA-256</dt><dd className="break-all font-mono text-slate-200">{exactRevision.template_sha256}</dd></div>
+                                <div><dt className="text-slate-500">Parent revision</dt><dd className="break-all font-mono text-slate-200">{exactRevision.parent_revision_id ?? 'root revision'}</dd></div>
+                            </dl>
+                            <a
+                                href={contextHref(location.pathname, {
+                                    pcr_experiment_id: exactRevision.reopen_destination.params.experiment_id,
+                                    pcr_revision_id: exactRevision.reopen_destination.params.revision_id,
+                                })}
+                                className="mt-3 inline-flex text-xs font-medium text-cyan-300 hover:text-cyan-200"
+                            >
+                                Exact context-preserving reopen link
+                            </a>
+                            <details className="mt-3 rounded border border-slate-700 bg-slate-950/60 px-3 py-2">
+                                <summary className="cursor-pointer text-xs font-medium text-slate-300">Immutable PCR payload</summary>
+                                <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all text-[11px] text-slate-400">{JSON.stringify(immutablePcrPayload(exactRevision), null, 2)}</pre>
+                            </details>
+                            <details className="mt-2 rounded border border-slate-700 bg-slate-950/60 px-3 py-2">
+                                <summary className="cursor-pointer text-xs font-medium text-slate-300">Provenance</summary>
+                                <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all text-[11px] text-slate-400">{JSON.stringify(exactRevision.provenance, null, 2)}</pre>
+                            </details>
+                            <details className="mt-2 rounded border border-slate-700 bg-slate-950/60 px-3 py-2">
+                                <summary className="cursor-pointer text-xs font-medium text-slate-300">Reopen metadata</summary>
+                                <pre className="mt-2 overflow-auto whitespace-pre-wrap break-all text-[11px] text-slate-400">{JSON.stringify(exactRevision.reopen_destination, null, 2)}</pre>
+                            </details>
+                        </div>
+
+                        <div className="space-y-2">
+                            <div className="flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.1em] text-slate-500">
+                                <span>Server immutable PCR revision history</span>
+                                <span>{revisionHistory.length} revisions</span>
+                            </div>
+                            {revisionHistory.map((revision) => {
+                                const selected = revision.id === exactRevision.id;
+                                return (
+                                    <button
+                                        key={revision.id}
+                                        type="button"
+                                        onClick={() => selectExactRevision(revision)}
+                                        disabled={selected}
+                                        className={`w-full rounded border px-3 py-2 text-left text-xs ${selected
+                                            ? 'cursor-default border-cyan-700 bg-cyan-950/30 text-cyan-200'
+                                            : 'border-slate-700 bg-slate-950/50 text-slate-300 hover:border-slate-500'
+                                        }`}
+                                    >
+                                        <div className="flex items-center justify-between gap-3">
+                                            <span>Revision #{revision.revision_number} · {revision.relation} · {revision.review_state.replace(/_/g, ' ')}</span>
+                                            <span>{new Date(revision.created_at).toLocaleString()}</span>
+                                        </div>
+                                        <div className="mt-1 break-all font-mono text-[11px] text-slate-500">{revision.id}</div>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+                ) : (
+                    <div className="text-xs text-slate-500">No exact immutable PCR revision is selected.</div>
+                )}
+            </section>
 
             <PrimerTmSettingsPanel
                 sequenceType={sequenceType}
@@ -417,6 +639,27 @@ export function PCRPanel(props: PCRPanelProps) {
                 />
             </div>
 
+            <label className={`flex items-start gap-2 rounded border px-3 py-2 text-sm ${sequenceId
+                ? 'border-slate-600 bg-slate-900/50 text-slate-300'
+                : 'cursor-not-allowed border-slate-700 bg-slate-900/30 text-slate-600'
+            }`}>
+                <input
+                    type="checkbox"
+                    checked={persistImmutableRevision}
+                    onChange={(event) => setPersistImmutableRevision(event.target.checked)}
+                    disabled={!sequenceId}
+                    className="mt-0.5"
+                />
+                <span>
+                    Persist immutable PCR revision
+                    <span className="mt-0.5 block text-xs text-slate-500">
+                        {sequenceId
+                            ? 'Saves the PCR product and its immutable experiment revision; uncheck for calculator-only execution.'
+                            : 'A saved template sequence is required for immutable PCR experiment persistence.'}
+                    </span>
+                </span>
+            </label>
+
             <button
                 onClick={runPCR}
                 disabled={loading || !canRun}
@@ -428,6 +671,14 @@ export function PCRPanel(props: PCRPanelProps) {
             {error && (
                 <div className="p-2 bg-red-900/50 border border-red-800 rounded text-sm text-red-300">
                     {error}
+                </div>
+            )}
+
+            {persistedResult && (persistedResult.experiment_id || persistedResult.experiment_revision_id) && (
+                <div className="space-y-2 rounded border border-cyan-800/60 bg-cyan-950/20 p-3 text-xs">
+                    <div className="font-medium text-cyan-200">Persisted immutable PCR authority</div>
+                    <div><span className="text-slate-500">Experiment ID: </span><span className="break-all font-mono text-slate-200">{persistedResult.experiment_id ?? 'missing'}</span></div>
+                    <div><span className="text-slate-500">Revision ID: </span><span className="break-all font-mono text-slate-200">{persistedResult.experiment_revision_id ?? 'missing'}</span></div>
                 </div>
             )}
 

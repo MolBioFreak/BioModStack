@@ -14,7 +14,9 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
+import stat
 from typing import Any
 from uuid import uuid4
 
@@ -22,6 +24,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import OntInstrumentRun, OntInstrumentRunEvent, OntInstrumentRunPreflight, OntProtocolOptionReceipt, async_session
+from paths import get_inputs_dir
 from services.host_agent_client import get_ont_position, get_ont_status, request_host_agent
 from services.ont_device_control import _public_mk1d_device
 
@@ -256,14 +259,86 @@ def _validate_state_edge(previous: str, next_state: str) -> None:
         )
 
 
-def _submitted_path_has_symlink_component(path: Path) -> bool:
-    """Reject aliases in the submitted path before canonical resolution."""
-    absolute = path.absolute()
-    return any(component.is_symlink() for component in (absolute, *absolute.parents))
+def _lexical_absolute_path(value: Any) -> Path | None:
+    raw = str(value or "").strip()
+    if not raw or len(raw) > 2048 or not os.path.isabs(raw):
+        return None
+    if any(component in {".", ".."} for component in raw.split(os.sep)):
+        return None
+    return Path(os.path.abspath(raw))
 
 
-def _existing_output_files(raw_files: Any) -> dict[str, list[str]]:
-    """Accept only bounded, regular files reported by the host-agent snapshot."""
+def _approved_output_roots(record: OntInstrumentRun) -> tuple[Path, ...]:
+    """Return only explicit MinKNOW output/read roots bound to this run."""
+    configured = record.output_directories if isinstance(record.output_directories, dict) else {}
+    roots: list[Path] = []
+    for key in ("output", "reads"):
+        root = _lexical_absolute_path(configured.get(key))
+        if root is not None and root not in roots:
+            roots.append(root)
+    return tuple(roots)
+
+
+def _open_absolute_directory_nofollow(path: Path) -> int:
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    current_fd = os.open(os.sep, flags)
+    try:
+        for component in path.parts[1:]:
+            next_fd = os.open(component, flags, dir_fd=current_fd)
+            os.close(current_fd)
+            current_fd = next_fd
+        return current_fd
+    except Exception:
+        os.close(current_fd)
+        raise
+
+
+def _open_approved_regular_file(path_value: Any, approved_roots: tuple[Path, ...]) -> tuple[int, Path]:
+    """Open one path relative to a pinned approved-root descriptor without following links."""
+    candidate = _lexical_absolute_path(path_value)
+    if candidate is None:
+        raise ValueError("ONT artifact path is not a canonical absolute path")
+    for root in approved_roots:
+        try:
+            relative = candidate.relative_to(root)
+        except ValueError:
+            continue
+        if not relative.parts:
+            continue
+        root_fd = _open_absolute_directory_nofollow(root)
+        parent_fd = root_fd
+        try:
+            for component in relative.parts[:-1]:
+                child_fd = os.open(
+                    component,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                    dir_fd=parent_fd,
+                )
+                if parent_fd != root_fd:
+                    os.close(parent_fd)
+                parent_fd = child_fd
+            file_fd = os.open(
+                relative.parts[-1],
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=parent_fd,
+            )
+            if not stat.S_ISREG(os.fstat(file_fd).st_mode):
+                os.close(file_fd)
+                raise ValueError("ONT artifact is not a regular file")
+            return file_fd, candidate
+        finally:
+            if parent_fd != root_fd:
+                os.close(parent_fd)
+            os.close(root_fd)
+    raise ValueError("ONT artifact is outside configured MinKNOW output roots")
+
+
+def _existing_output_files(
+    raw_files: Any,
+    *,
+    approved_roots: tuple[Path, ...] = (),
+) -> dict[str, list[str]]:
+    """Accept only descriptor-opened regular files beneath explicit MinKNOW roots."""
     normalized: dict[str, list[str]] = {"fastq": [], "pod5": [], "bam": []}
     if not isinstance(raw_files, dict):
         return normalized
@@ -276,26 +351,25 @@ def _existing_output_files(raw_files: Any) -> dict[str, list[str]]:
         for value in values[:128]:
             if not isinstance(value, str) or not value.strip() or len(value) > 2048:
                 continue
-            path = Path(value).expanduser()
-            if _submitted_path_has_symlink_component(path):
-                continue
             try:
-                resolved = path.resolve(strict=True)
-            except OSError:
+                file_fd, admitted_path = _open_approved_regular_file(value, approved_roots)
+            except (OSError, ValueError):
                 continue
-            if resolved.is_file() and not resolved.is_symlink():
-                normalized[kind].append(str(resolved))
+            else:
+                os.close(file_fd)
+                normalized[kind].append(str(admitted_path))
     for kind, paths in normalized.items():
         normalized[kind] = sorted(set(paths))
     return normalized
 
 
-def _sha256_file(path: Path) -> str:
+def _sha256_descriptor(file_fd: int) -> tuple[str, int]:
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    byte_count = 0
+    while chunk := os.read(file_fd, 1024 * 1024):
+        digest.update(chunk)
+        byte_count += len(chunk)
+    return digest.hexdigest(), byte_count
 
 
 def _terminal_artifact_manifest(
@@ -304,6 +378,7 @@ def _terminal_artifact_manifest(
     state: str,
     observed_generation: int,
     output_files: dict[str, list[str]],
+    approved_roots: tuple[Path, ...],
 ) -> tuple[dict[str, Any], str]:
     """Bind one terminal host observation to exact readable output bytes.
 
@@ -314,21 +389,22 @@ def _terminal_artifact_manifest(
     artifacts: list[dict[str, Any]] = []
     for kind in ("fastq", "pod5", "bam"):
         for raw_path in output_files.get(kind, []):
-            path = Path(raw_path)
             try:
-                stat = path.stat()
-                if not path.is_file() or path.is_symlink():
-                    continue
+                file_fd, admitted_path = _open_approved_regular_file(raw_path, approved_roots)
+                try:
+                    artifact_sha256, artifact_bytes = _sha256_descriptor(file_fd)
+                finally:
+                    os.close(file_fd)
                 artifacts.append(
                     {
                         "kind": kind,
-                        "path": str(path),
-                        "bytes": stat.st_size,
-                        "sha256": _sha256_file(path),
+                        "path": str(admitted_path),
+                        "bytes": artifact_bytes,
+                        "sha256": artifact_sha256,
                     }
                 )
-            except OSError:
-                # A host snapshot can race output retention.  Preserve terminal
+            except (OSError, ValueError):
+                # A host snapshot can race output retention. Preserve terminal
                 # state but withhold that unavailable artifact from handoff.
                 continue
     artifacts.sort(key=lambda artifact: (str(artifact["kind"]), str(artifact["path"])))
@@ -471,6 +547,52 @@ def _output_summary(output_files: dict[str, Any] | None) -> dict[str, int]:
     }
 
 
+def _terminal_manifest_digest_for_generation(
+    record: OntInstrumentRun,
+    observed_generation: int,
+) -> str | None:
+    manifest_present = record.terminal_artifact_manifest is not None
+    digest_present = record.terminal_artifact_manifest_sha256 is not None
+    if not manifest_present and not digest_present:
+        return None
+    if manifest_present != digest_present:
+        raise ValueError("persisted ONT terminal manifest authority is incomplete")
+    validated = _valid_terminal_manifest(record)
+    if validated is None:
+        raise ValueError("persisted ONT terminal manifest authority is invalid")
+    manifest, _artifacts = validated
+    if manifest["observed_generation"] != observed_generation:
+        return None
+    return record.terminal_artifact_manifest_sha256
+
+
+async def _run_summary_response(
+    session: AsyncSession,
+    record: OntInstrumentRun,
+) -> dict[str, Any]:
+    return {
+        "run_id": record.id,
+        "position_id": record.position_id,
+        "status": record.state,
+        "observed_at": _json_datetime(record.observed_at),
+        "observed_generation": record.observed_generation,
+        "created_at": _json_datetime(record.created_at),
+        "sample_id": record.sample_id,
+        "experiment_group": record.experiment_group,
+        "output_counts": _output_summary(record.output_files),
+        "terminal_manifest_sha256": _terminal_manifest_digest_for_generation(
+            record, record.observed_generation
+        ),
+        "reopen_destination": {
+            "surface": "ont-instrument-run-generation",
+            "params": {
+                "run_id": record.id,
+                "observed_generation": record.observed_generation,
+            },
+        },
+    }
+
+
 async def _run_response(session: AsyncSession, record: OntInstrumentRun) -> dict[str, Any]:
     events = await _events_for_run(session, record.id)
     preflight = await _preflight_for_run(session, record.id)
@@ -538,6 +660,7 @@ async def _append_observation(
                 state=state,
                 observed_generation=next_generation,
                 output_files=normalized_output_files,
+                approved_roots=_approved_output_roots(record),
             )
             if manifest["artifacts"]:
                 record.terminal_artifact_manifest = manifest
@@ -691,7 +814,11 @@ async def create_run_intent(position: str, payload: dict[str, Any]) -> dict[str,
             sample_id=sample_id,
             experiment_group=experiment_group,
             kit=receipt.source_snapshot.get("kit") if isinstance(receipt.source_snapshot, dict) else None,
-            output_directories={},
+            output_directories=(
+                dict(receipt.source_snapshot.get("output_directories") or {})
+                if isinstance(receipt.source_snapshot, dict)
+                else {}
+            ),
             output_files={"fastq": [], "pod5": [], "bam": []},
             handoff_ready=False,
             last_minknow_payload={"source_digest": receipt.source_digest, "event": "preflight_armed"},
@@ -805,13 +932,86 @@ async def get_instrument_run(run_id: str) -> dict[str, Any] | None:
         return await _run_response(session, record) if record else None
 
 
+async def list_instrument_runs(*, limit: int = 100) -> list[dict[str, Any]]:
+    """List only persisted safe run summaries; never contact MinKNOW."""
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
+        raise ValueError("ONT run list limit must be between 1 and 500")
+    async with async_session() as session:
+        records = list(
+            (
+                await session.execute(
+                    select(OntInstrumentRun)
+                    .order_by(
+                        OntInstrumentRun.created_at.desc(),
+                        OntInstrumentRun.id.desc(),
+                    )
+                    .limit(limit)
+                )
+            ).scalars()
+        )
+        return [await _run_summary_response(session, record) for record in records]
+
+
+async def get_instrument_run_generation(
+    run_id: str,
+    observed_generation: int,
+) -> dict[str, Any] | None:
+    """Resolve one exact persisted observation generation without a live probe."""
+    if (
+        isinstance(observed_generation, bool)
+        or not isinstance(observed_generation, int)
+        or observed_generation < 1
+    ):
+        raise ValueError("observed_generation must be a positive integer")
+    async with async_session() as session:
+        record = await session.get(OntInstrumentRun, run_id)
+        if record is None:
+            return None
+        event = (
+            await session.execute(
+                select(OntInstrumentRunEvent).where(
+                    OntInstrumentRunEvent.run_id == record.id,
+                    OntInstrumentRunEvent.observed_generation == observed_generation,
+                )
+            )
+        ).scalar_one_or_none()
+        if event is None:
+            return None
+        return {
+            "run_id": record.id,
+            "event_id": event.id,
+            "event_type": event.event_type,
+            "position_id": record.position_id,
+            "status": event.state,
+            "observed_at": _json_datetime(event.observed_at),
+            "observed_generation": event.observed_generation,
+            "created_at": _json_datetime(record.created_at),
+            "sample_id": record.sample_id,
+            "experiment_group": record.experiment_group,
+            "output_counts": _output_summary(event.output_files),
+            "terminal_manifest_sha256": _terminal_manifest_digest_for_generation(
+                record, event.observed_generation
+            ),
+            "reopen_destination": {
+                "surface": "ont-instrument-run-generation",
+                "params": {
+                    "run_id": record.id,
+                    "observed_generation": event.observed_generation,
+                },
+            },
+        }
+
+
 def _bounded_host_snapshot(record: OntInstrumentRun, payload: dict[str, Any]) -> tuple[str, dict[str, list[str]], dict[str, Any]]:
     """Normalize the host-agent's one-run observation before it reaches the ledger."""
     host_run_id = str(payload.get("minknow_run_id") or payload.get("run_id") or "").strip()
     if host_run_id and host_run_id != record.minknow_run_id:
         raise ValueError("host-agent run snapshot does not match the durable MinKNOW run binding")
     state = _normalized_state(payload.get("status") or payload.get("state"), fallback="unknown")
-    output_files = _existing_output_files(payload.get("output_files"))
+    output_files = _existing_output_files(
+        payload.get("output_files"),
+        approved_roots=_approved_output_roots(record),
+    )
     snapshot = {
         "schema": "bms.ont.host-run-snapshot.v1",
         "state": state,
@@ -895,6 +1095,141 @@ async def refresh_instrument_run_status(run_id: str) -> dict[str, Any]:
     return await reconcile_instrument_run(run_id)
 
 
+def _write_all(file_fd: int, content: bytes) -> None:
+    view = memoryview(content)
+    while view:
+        written = os.write(file_fd, view)
+        if written <= 0:
+            raise OSError("short write while snapshotting ONT artifact")
+        view = view[written:]
+
+
+def _snapshot_suffix(source_path: Path) -> str:
+    lowered = source_path.name.lower()
+    if lowered.endswith((".fastq.gz", ".fq.gz")):
+        return ".fastq.gz"
+    return ".fastq"
+
+
+def _open_or_create_private_directory(parent_fd: int, component: str) -> int:
+    try:
+        os.mkdir(component, mode=0o700, dir_fd=parent_fd)
+    except FileExistsError:
+        pass
+    child_fd = os.open(
+        component,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+        dir_fd=parent_fd,
+    )
+    os.fchmod(child_fd, 0o700)
+    return child_fd
+
+
+def _snapshot_selected_fastq(
+    record: OntInstrumentRun,
+    artifact: dict[str, Any],
+) -> tuple[Path, str, int]:
+    """Copy, authenticate, and atomically publish one unique immutable launch snapshot."""
+    expected_sha256 = str(artifact.get("sha256") or "")
+    expected_bytes = artifact.get("bytes")
+    if (
+        not _is_sha256(expected_sha256)
+        or isinstance(expected_bytes, bool)
+        or not isinstance(expected_bytes, int)
+        or expected_bytes < 0
+    ):
+        raise ValueError("instrument run FASTQ artifact authority is invalid")
+
+    approved_roots = _approved_output_roots(record)
+    source_fd, source_path = _open_approved_regular_file(artifact.get("path"), approved_roots)
+    base_root = _lexical_absolute_path(get_inputs_dir())
+    if base_root is None:
+        os.close(source_fd)
+        raise ValueError("server-owned ONT launch snapshot root is unavailable")
+
+    run_component = hashlib.sha256(record.id.encode("utf-8")).hexdigest()
+    directory_components = (
+        "ont_instrument_launch_snapshots",
+        run_component,
+        str(record.observed_generation),
+        expected_sha256,
+    )
+    base_fd = -1
+    destination_fd = -1
+    temp_name: str | None = None
+    final_name: str | None = None
+    final_linked = False
+    directory_path = base_root.joinpath(*directory_components)
+    try:
+        base_fd = _open_absolute_directory_nofollow(base_root)
+        destination_fd = base_fd
+        for component in directory_components:
+            child_fd = _open_or_create_private_directory(destination_fd, component)
+            if destination_fd != base_fd:
+                os.close(destination_fd)
+            destination_fd = child_fd
+
+        unique_id = uuid4().hex
+        temp_name = f".launch-{unique_id}.partial"
+        final_name = f"launch-{unique_id}{_snapshot_suffix(source_path)}"
+        snapshot_fd = os.open(
+            temp_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600,
+            dir_fd=destination_fd,
+        )
+        digest = hashlib.sha256()
+        copied_bytes = 0
+        try:
+            while chunk := os.read(source_fd, 1024 * 1024):
+                _write_all(snapshot_fd, chunk)
+                digest.update(chunk)
+                copied_bytes += len(chunk)
+            os.fsync(snapshot_fd)
+            copied_sha256 = digest.hexdigest()
+            if copied_bytes != expected_bytes or copied_sha256 != expected_sha256:
+                raise ValueError("instrument run FASTQ artifact is unavailable or digest-mismatched")
+            os.fchmod(snapshot_fd, 0o400)
+            os.fsync(snapshot_fd)
+        finally:
+            os.close(snapshot_fd)
+
+        os.link(
+            temp_name,
+            final_name,
+            src_dir_fd=destination_fd,
+            dst_dir_fd=destination_fd,
+            follow_symlinks=False,
+        )
+        final_linked = True
+        os.unlink(temp_name, dir_fd=destination_fd)
+        temp_name = None
+        os.fsync(destination_fd)
+        return directory_path / final_name, expected_sha256, expected_bytes
+    except (AttributeError, NotImplementedError, OSError, ValueError) as exc:
+        if destination_fd >= 0:
+            if temp_name is not None:
+                try:
+                    os.unlink(temp_name, dir_fd=destination_fd)
+                except FileNotFoundError:
+                    pass
+            if final_linked and final_name is not None:
+                try:
+                    os.unlink(final_name, dir_fd=destination_fd)
+                    os.fsync(destination_fd)
+                except FileNotFoundError:
+                    pass
+        if isinstance(exc, ValueError):
+            raise
+        raise ValueError("instrument run FASTQ artifact is unavailable or digest-mismatched") from exc
+    finally:
+        os.close(source_fd)
+        if destination_fd >= 0 and destination_fd != base_fd:
+            os.close(destination_fd)
+        if base_fd >= 0:
+            os.close(base_fd)
+
+
 async def build_plasmid_qc_handoff(run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Build generic plasmid-QC input only from a terminal, digested host artifact."""
     async with async_session() as session:
@@ -912,23 +1247,16 @@ async def build_plasmid_qc_handoff(run_id: str, payload: dict[str, Any]) -> dict
         fastq = next((item for item in artifacts if item["kind"] == "fastq"), None)
         if not isinstance(fastq, dict):
             raise ValueError("instrument run terminal manifest has no FASTQ artifact for plasmid QC handoff")
-        fastq_path = Path(str(fastq.get("path") or ""))
         try:
-            if (
-                not fastq_path.is_file()
-                or fastq_path.is_symlink()
-                or fastq_path.stat().st_size != int(fastq["bytes"])
-                or _sha256_file(fastq_path) != str(fastq["sha256"])
-            ):
-                raise ValueError
-        except (OSError, TypeError, ValueError) as exc:
+            fastq_path, artifact_sha256, artifact_bytes = _snapshot_selected_fastq(record, fastq)
+        except (AttributeError, NotImplementedError, OSError, TypeError, ValueError) as exc:
             raise ValueError("instrument run FASTQ artifact is unavailable or digest-mismatched") from exc
         return {
             "model_id": "nanopore",
             "mode": "plasmid_qc",
             "params": {
                 "ont_workflow_id": "ont_plasmid_qc",
-                "fastq_path": str(fastq_path.resolve()),
+                "fastq_path": str(fastq_path),
                 "reference_fasta": str(reference.resolve()),
                 "run_fastq_qc": True,
                 "run_modkit": False,
@@ -936,7 +1264,10 @@ async def build_plasmid_qc_handoff(run_id: str, payload: dict[str, Any]) -> dict
                 "fastq_minimap2_preset": "map-ont",
                 "source_instrument_run_id": run_id,
                 "source_minknow_run_id": record.minknow_run_id,
+                "source_instrument_observed_generation": manifest["observed_generation"],
                 "source_instrument_artifact_manifest_sha256": manifest_sha256,
+                "source_instrument_artifact_sha256": artifact_sha256,
+                "source_instrument_artifact_bytes": artifact_bytes,
             },
             "fake_or_demo_devices": False,
         }

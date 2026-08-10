@@ -695,11 +695,18 @@ export const submitBoltzApiJob = (
     payload: BoltzApiStructureRequest & { approved_estimate_fingerprint: string },
 ) => api.post<Job>('/api/jobs/boltz-api', payload);
 
+export interface OntManagedReferenceRequest {
+    global_domain_experiment_id: string;
+    molbio_ngs_state_revision_id: string;
+    ngs_reference_revision_id: string;
+}
+
 export interface OntNgsSubmitRequest {
     name?: string;
     params: Record<string, unknown>;
     pinned_gpu?: number | null;
     source_instrument_run_id?: string | null;
+    managed_reference?: OntManagedReferenceRequest | null;
 }
 
 export const submitOntNgsJob = (workflowId: string, request: OntNgsSubmitRequest) =>
@@ -3727,3 +3734,750 @@ export const createViewerSnapshot = (
 
 export const deleteViewerSnapshot = (jobId: string, snapshotId: string) =>
     api.delete(`/api/jobs/${encodeURIComponent(jobId)}/viewer/snapshots/${encodeURIComponent(snapshotId)}`);
+
+// Global Project / Experiment and MolBio/NGS Domain Experiment contracts.
+// These clients return response data directly and preserve the server's detail
+// so unavailable adapters, integrity failures, and revision conflicts are visible.
+export class VisibleApiError extends Error {
+    readonly status: number | null;
+    readonly detail: string;
+
+    constructor(message: string, status: number | null, detail: string) {
+        super(message);
+        this.name = 'VisibleApiError';
+        this.status = status;
+        this.detail = detail;
+    }
+}
+
+async function apiData<T>(request: Promise<{ data: T }>): Promise<T> {
+    try {
+        return (await request).data;
+    } catch (error) {
+        if (axios.isAxiosError(error)) {
+            const status = error.response?.status ?? null;
+            const body = error.response?.data as { detail?: unknown; message?: unknown } | string | undefined;
+            const detail = typeof body === 'string'
+                ? body
+                : typeof body?.detail === 'string'
+                    ? body.detail
+                    : typeof body?.message === 'string'
+                        ? body.message
+                        : error.message;
+            throw new VisibleApiError(
+                status === null ? detail : `${detail} (HTTP ${status})`,
+                status,
+                detail,
+            );
+        }
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new VisibleApiError(detail, null, detail);
+    }
+}
+
+export interface GlobalAggregateHead {
+    id: string;
+    kind: 'workspace' | 'experiment' | 'workflow' | 'dataset' | string;
+    workspace_id: string;
+    parent_id: string | null;
+    current_revision_id: string | null;
+    head_generation: number;
+    lifecycle_state: string;
+    name: string;
+    description: string;
+    created_at: string;
+    updated_at: string;
+}
+
+export const fetchGlobalWorkspaces = () =>
+    apiData(api.get<GlobalAggregateHead[]>('/api/experiment-workspaces'));
+export const fetchGlobalWorkspace = (workspaceId: string) =>
+    apiData(api.get<GlobalAggregateHead>(`/api/experiment-workspaces/${encodeURIComponent(workspaceId)}`));
+export const fetchGlobalExperiments = (workspaceId: string) =>
+    apiData(api.get<GlobalAggregateHead[]>(`/api/experiment-workspaces/${encodeURIComponent(workspaceId)}/experiments`));
+export const fetchGlobalExperiment = (workspaceId: string, experimentId: string) =>
+    apiData(api.get<GlobalAggregateHead>(
+        `/api/experiment-workspaces/${encodeURIComponent(workspaceId)}/experiments/${encodeURIComponent(experimentId)}`,
+    ));
+
+export interface LocalDomainCounts {
+    samples: number;
+    references: number;
+    evidence_assessments: number;
+}
+
+export interface DomainExperimentView {
+    project_id: string;
+    global_experiment_id: string;
+    domain_experiment_id: string;
+    global_domain_experiment_revision_id: string;
+    local_state_revision_id: string | null;
+    local_state_head_generation: number;
+    local_counts: LocalDomainCounts;
+    availability: {
+        local_state: 'available';
+        persisted_global_binding: 'acknowledged';
+        global_adapter: 'unavailable';
+    };
+    created_at: string;
+    updated_at: string;
+    reopen_destination: {
+        surface: 'molbio-ngs-domain-experiment';
+        params: { domain_experiment_id: string };
+    };
+}
+
+export interface ProjectDomainSummary {
+    project_id: string;
+    domain_experiment_count: number;
+    local_totals: LocalDomainCounts;
+    availability: {
+        persisted_global_bindings: 'acknowledged_only';
+        global_adapter: 'unavailable';
+    };
+    reopen_destination: {
+        surface: 'molbio-ngs-project-summary';
+        params: { project_id: string };
+    };
+}
+
+export const fetchMolBioNgsProjectSummary = (workspaceId: string) =>
+    apiData(api.get<ProjectDomainSummary>(
+        `/api/molbio-ngs/projects/${encodeURIComponent(workspaceId)}/summary`,
+    ));
+export const fetchMolBioNgsProjectExperiments = (workspaceId: string) =>
+    apiData(api.get<DomainExperimentView[]>(
+        `/api/molbio-ngs/projects/${encodeURIComponent(workspaceId)}/experiments`,
+    ));
+export const fetchMolBioNgsDomainExperiment = (domainExperimentId: string) =>
+    apiData(api.get<DomainExperimentView>(
+        `/api/molbio-ngs/experiments/${encodeURIComponent(domainExperimentId)}`,
+    ));
+
+export interface DomainState {
+    global_domain_experiment_id: string;
+    current_state_revision_id: string | null;
+    head_generation: number;
+    created_at: string;
+    updated_at: string;
+}
+
+export type DomainStateMemberRole =
+    | 'molecular_expected_construct'
+    | 'molecular_input_fragment'
+    | 'molecular_assembly_product'
+    | 'molecular_pcr_template'
+    | 'molecular_pcr_product'
+    | 'molecular_primer_forward'
+    | 'molecular_primer_reverse'
+    | 'molecular_operation'
+    | 'molecular_pcr_experiment'
+    | 'ngs_reference'
+    | 'ngs_comparison_panel'
+    | 'ngs_instrument_run'
+    | 'ngs_analysis_job'
+    | 'ngs_analysis_result_manifest'
+    | 'ngs_verification_assessment';
+
+export interface DomainStateRevisionPayload {
+    schema: 'bms.molbio-ngs.domain-state-revision.v1';
+    design: {
+        sample_revision_ids: string[];
+        conditions: Record<string, unknown>[];
+        replicates: Record<string, unknown>[];
+        expected_molecule_roles: DomainStateMemberRole[];
+    };
+    reference_policy: {
+        required_roles: DomainStateMemberRole[];
+        coordinate_policy: 'exact_revision';
+    };
+    acquisition_policy: {
+        platform: 'ont' | 'external' | 'none';
+        required_terminal_manifest: boolean;
+    };
+    analysis_policy: {
+        allowed_workflow_ids: string[];
+        required_manifest_schemas: string[];
+    };
+    assessment_policy: {
+        rule_id: string;
+        completion_is_scientific_pass: false;
+    };
+    notes: string;
+}
+
+export interface DomainStateMember {
+    receipt_id: string;
+    role: DomainStateMemberRole;
+    ordinal: number;
+    sample_revision_id: string | null;
+    source_store_id: string;
+    entity_kind: string;
+    entity_id: string;
+    source_generation_or_revision: string;
+    content_digest: string;
+    source_schema: string;
+    availability: string;
+    reopen_destination: Record<string, unknown>;
+    receipt_sha256: string;
+}
+
+export interface DomainStateRevision {
+    id: string;
+    global_domain_experiment_id: string;
+    global_domain_experiment_revision_id: string;
+    revision_number: number;
+    parent_revision_id: string | null;
+    schema_name: string;
+    schema_version: string;
+    payload: DomainStateRevisionPayload;
+    payload_sha256: string;
+    membership_graph_sha256: string;
+    members: DomainStateMember[];
+    created_at: string;
+    created_by: string | null;
+}
+
+export interface InitializeDomainStateRequest {
+    global_domain_experiment_revision_id: string;
+    idempotency_key: string;
+}
+
+export interface SaveDomainStateRevisionRequest {
+    global_domain_experiment_revision_id: string;
+    expected_head_generation: number;
+    parent_revision_id?: string | null;
+    idempotency_key: string;
+    payload: DomainStateRevisionPayload;
+    members: Array<{
+        receipt_id: string;
+        role: DomainStateMemberRole;
+        ordinal: number;
+        sample_revision_id?: string | null;
+    }>;
+}
+
+export const initializeMolBioNgsDomainState = (domainExperimentId: string, payload: InitializeDomainStateRequest) =>
+    apiData(api.post<DomainState>(
+        `/api/molbio-ngs/experiments/${encodeURIComponent(domainExperimentId)}/state`,
+        payload,
+    ));
+export const fetchMolBioNgsDomainState = (domainExperimentId: string) =>
+    apiData(api.get<DomainState>(
+        `/api/molbio-ngs/experiments/${encodeURIComponent(domainExperimentId)}/state`,
+    ));
+export const fetchMolBioNgsStateRevisions = (domainExperimentId: string) =>
+    apiData(api.get<DomainStateRevision[]>(
+        `/api/molbio-ngs/experiments/${encodeURIComponent(domainExperimentId)}/state/revisions`,
+    ));
+export const saveMolBioNgsStateRevision = (domainExperimentId: string, payload: SaveDomainStateRevisionRequest) =>
+    apiData(api.post<DomainStateRevision>(
+        `/api/molbio-ngs/experiments/${encodeURIComponent(domainExperimentId)}/state/revisions`,
+        payload,
+    ));
+export const fetchMolBioNgsStateRevision = (domainExperimentId: string, revisionId: string) =>
+    apiData(api.get<DomainStateRevision>(
+        `/api/molbio-ngs/experiments/${encodeURIComponent(domainExperimentId)}/state/revisions/${encodeURIComponent(revisionId)}`,
+    ));
+
+export interface SampleRevisionPayload {
+    schema: 'bms.molbio-ngs.sample-revision.v1';
+    name: string;
+    description: string;
+    sample_kind: string;
+    source: { organism: string | null; strain: string | null; external_ids: string[] };
+    preparation: { method: string; batch_id: string | null; prepared_at: string | null };
+    labels: { container_label: string | null; barcode: string | null; minknow_sample_id: string | null };
+    notes: string;
+}
+
+export interface DomainSample {
+    id: string;
+    global_domain_experiment_id: string;
+    current_revision_id: string | null;
+    head_generation: number;
+    archived_at: string | null;
+    created_at: string;
+    updated_at: string;
+    reopen_destination: {
+        surface: 'molbio-ngs-sample';
+        params: { global_domain_experiment_id: string; sample_id: string };
+    };
+}
+
+export interface DomainSampleRevision {
+    id: string;
+    sample_id: string;
+    global_domain_experiment_id: string;
+    revision_number: number;
+    parent_revision_id: string | null;
+    schema_name: string;
+    schema_version: string;
+    payload: SampleRevisionPayload;
+    payload_sha256: string;
+    created_at: string;
+    created_by: string | null;
+    reopen_destination: {
+        surface: 'molbio-ngs-sample-revision';
+        params: { global_domain_experiment_id: string; sample_id: string; revision_id: string };
+    };
+}
+
+export interface CreateDomainSampleRequest {
+    payload: SampleRevisionPayload;
+    idempotency_key: string;
+}
+
+export interface CreateDomainSampleRevisionRequest extends CreateDomainSampleRequest {
+    expected_head_generation: number;
+    parent_revision_id: string;
+}
+
+export const createMolBioNgsSample = (domainExperimentId: string, payload: CreateDomainSampleRequest) =>
+    apiData(api.post<DomainSampleRevision>(
+        `/api/molbio-ngs/experiments/${encodeURIComponent(domainExperimentId)}/samples`, payload,
+    ));
+export const fetchMolBioNgsSamples = (domainExperimentId: string) =>
+    apiData(api.get<DomainSample[]>(
+        `/api/molbio-ngs/experiments/${encodeURIComponent(domainExperimentId)}/samples`,
+    ));
+export const fetchMolBioNgsSample = (domainExperimentId: string, sampleId: string) =>
+    apiData(api.get<DomainSample>(
+        `/api/molbio-ngs/experiments/${encodeURIComponent(domainExperimentId)}/samples/${encodeURIComponent(sampleId)}`,
+    ));
+export const createMolBioNgsSampleRevision = (
+    domainExperimentId: string,
+    sampleId: string,
+    payload: CreateDomainSampleRevisionRequest,
+) => apiData(api.post<DomainSampleRevision>(
+    `/api/molbio-ngs/experiments/${encodeURIComponent(domainExperimentId)}/samples/${encodeURIComponent(sampleId)}/revisions`,
+    payload,
+));
+export const fetchMolBioNgsSampleRevisions = (domainExperimentId: string, sampleId: string) =>
+    apiData(api.get<DomainSampleRevision[]>(
+        `/api/molbio-ngs/experiments/${encodeURIComponent(domainExperimentId)}/samples/${encodeURIComponent(sampleId)}/revisions`,
+    ));
+export const fetchMolBioNgsSampleRevision = (domainExperimentId: string, sampleId: string, revisionId: string) =>
+    apiData(api.get<DomainSampleRevision>(
+        `/api/molbio-ngs/experiments/${encodeURIComponent(domainExperimentId)}/samples/${encodeURIComponent(sampleId)}/revisions/${encodeURIComponent(revisionId)}`,
+    ));
+
+export type ReferenceMoleculeType = 'dna' | 'rna';
+export type ReferenceTopology = 'linear' | 'circular' | 'mixed' | 'unknown';
+
+export interface DomainReference {
+    id: string;
+    global_domain_experiment_id: string;
+    name: string;
+    current_revision_id: string | null;
+    head_generation: number;
+    archived_at: string | null;
+    created_at: string;
+    updated_at: string;
+    reopen_destination: {
+        surface: 'molbio-ngs-reference';
+        params: { reference_id: string };
+    };
+}
+
+export interface DomainReferenceRevision {
+    id: string;
+    reference_id: string;
+    global_domain_experiment_id: string;
+    revision_number: number;
+    parent_revision_id: string | null;
+    schema_name: string;
+    schema_version: string;
+    payload: {
+        schema: 'bms.molbio-ngs.reference-revision.v1';
+        reference_id: string;
+        revision_number: number;
+        parent_revision_id: string | null;
+        head_generation: number;
+        canonical_fasta: { sha256: string; size_bytes: number; media_type: 'text/x-fasta; charset=us-ascii' };
+        contigs: Array<{ name: string; length: number; sequence_sha256: string }>;
+        contig_manifest_sha256: string;
+        normalized_sequence_sha256: string | null;
+        molecule_type: ReferenceMoleculeType;
+        topology: ReferenceTopology;
+        coordinate_contract: string;
+        source_provenance: Record<string, unknown>;
+    };
+    payload_sha256: string;
+    canonical_fasta_sha256: string;
+    canonical_fasta_size_bytes: number;
+    contig_manifest_sha256: string;
+    normalized_sequence_sha256: string | null;
+    molecule_type: ReferenceMoleculeType;
+    topology: ReferenceTopology;
+    coordinate_contract: string;
+    created_at: string;
+    created_by: string | null;
+    reopen_destination: {
+        surface: 'molbio-ngs-reference-revision';
+        params: { reference_id: string; revision_id: string };
+    };
+}
+
+export interface CreateDomainReferenceRequest {
+    global_domain_experiment_id: string;
+    name: string;
+    fasta: string;
+    molecule_type: ReferenceMoleculeType;
+    topology: ReferenceTopology;
+    coordinate_contract: string;
+    source_provenance: Record<string, unknown>;
+    idempotency_key: string;
+}
+
+export interface CreateDomainReferenceRevisionRequest {
+    fasta: string;
+    molecule_type: ReferenceMoleculeType;
+    topology: ReferenceTopology;
+    coordinate_contract: string;
+    source_provenance: Record<string, unknown>;
+    expected_head_generation: number;
+    parent_revision_id: string;
+    idempotency_key: string;
+}
+
+export interface ImportMolBioReferenceRequest {
+    global_domain_experiment_id: string;
+    sequence_id: string;
+    molecular_revision_id: string;
+    name: string;
+    molecule_type: ReferenceMoleculeType;
+    topology: ReferenceTopology;
+    coordinate_contract: string;
+    idempotency_key: string;
+}
+
+export interface ImportBrowserReferenceRequest {
+    global_domain_experiment_id: string;
+    entry: {
+        id: string;
+        name: string;
+        source: 'fasta' | 'path';
+        fasta?: string | null;
+        path?: string | null;
+        createdAt: string;
+        updatedAt: string;
+    };
+    name: string;
+    molecule_type: ReferenceMoleculeType;
+    topology: ReferenceTopology;
+    coordinate_contract: string;
+    idempotency_key: string;
+}
+
+export const createMolBioNgsReference = (payload: CreateDomainReferenceRequest) =>
+    apiData(api.post<DomainReferenceRevision>('/api/molbio-ngs/references', payload));
+export const fetchMolBioNgsReferences = (domainExperimentId: string) =>
+    apiData(api.get<DomainReference[]>('/api/molbio-ngs/references', {
+        params: { global_domain_experiment_id: domainExperimentId },
+    }));
+export const fetchMolBioNgsReference = (referenceId: string) =>
+    apiData(api.get<DomainReference>(`/api/molbio-ngs/references/${encodeURIComponent(referenceId)}`));
+export const createMolBioNgsReferenceRevision = (referenceId: string, payload: CreateDomainReferenceRevisionRequest) =>
+    apiData(api.post<DomainReferenceRevision>(
+        `/api/molbio-ngs/references/${encodeURIComponent(referenceId)}/revisions`, payload,
+    ));
+export const fetchMolBioNgsReferenceRevisions = (referenceId: string) =>
+    apiData(api.get<DomainReferenceRevision[]>(
+        `/api/molbio-ngs/references/${encodeURIComponent(referenceId)}/revisions`,
+    ));
+export const fetchMolBioNgsReferenceRevision = (referenceId: string, revisionId: string) =>
+    apiData(api.get<DomainReferenceRevision>(
+        `/api/molbio-ngs/references/${encodeURIComponent(referenceId)}/revisions/${encodeURIComponent(revisionId)}`,
+    ));
+export const importMolBioNgsReferenceRevision = (payload: ImportMolBioReferenceRequest) =>
+    apiData(api.post<DomainReferenceRevision>('/api/molbio-ngs/references/from-molbio-revision', payload));
+export const importMolBioNgsBrowserReference = (payload: ImportBrowserReferenceRequest) =>
+    apiData(api.post<DomainReferenceRevision>('/api/molbio-ngs/references/import-browser-entry', payload));
+export const archiveMolBioNgsReference = (
+    referenceId: string,
+    payload: { expected_head_generation: number; idempotency_key: string },
+) => apiData(api.post<DomainReference>(
+    `/api/molbio-ngs/references/${encodeURIComponent(referenceId)}/archive`, payload,
+));
+
+export interface ExternalMemberReceipt {
+    schema: 'bms.molbio-ngs.external-member-receipt.v1';
+    receipt_id: string;
+    source_store_id: string;
+    entity_kind: string;
+    entity_id: string;
+    source_generation_or_revision: string;
+    content_digest: string;
+    source_schema: string;
+    availability: 'available' | 'archived' | 'unavailable';
+    reopen_destination: Record<string, unknown>;
+    created_at: string;
+}
+
+const issueMemberReceipt = <T extends Record<string, unknown>>(path: string, payload: T) =>
+    apiData(api.post<ExternalMemberReceipt>(`/api/molbio-ngs/member-receipts/${path}`, payload));
+const issueDomainMemberReceipt = <T extends Record<string, unknown>>(
+    domainExperimentId: string,
+    path: string,
+    payload: T,
+) => apiData(api.post<ExternalMemberReceipt>(
+    `/api/molbio-ngs/experiments/${encodeURIComponent(domainExperimentId)}/member-receipts/${path}`,
+    payload,
+));
+
+export const issueReferenceRevisionMemberReceipt = (
+    domainExperimentId: string,
+    payload: { reference_id: string; revision_id: string },
+) => issueDomainMemberReceipt(domainExperimentId, 'ngs-reference-revisions', payload);
+export const issueMolecularRevisionMemberReceipt = (payload: { sequence_id: string; revision_id: string }) =>
+    issueMemberReceipt('molecular-revisions', payload);
+export const issuePrimerRevisionMemberReceipt = (payload: { primer_id: string; revision_id: string }) =>
+    issueMemberReceipt('primer-revisions', payload);
+export const issuePcrRevisionMemberReceipt = (payload: { experiment_id: string; revision_id: string }) =>
+    issueMemberReceipt('pcr-experiment-revisions', payload);
+export const issueMolecularOperationMemberReceipt = (payload: { operation_id: string }) =>
+    issueMemberReceipt('molecular-operations', payload);
+export const issueComparisonPanelMemberReceipt = (payload: { panel_id: string; panel_version: number }) =>
+    issueMemberReceipt('ngs-comparison-panels', payload);
+export const issueEvidenceAssessmentMemberReceipt = (
+    domainExperimentId: string,
+    payload: { evidence_id: string },
+) => issueDomainMemberReceipt(domainExperimentId, 'ngs-evidence-assessments', payload);
+
+export interface EvidenceAssessment {
+    evidence_id: string;
+    global_domain_experiment_id: string;
+    state_revision_id: string;
+    sample_revision_id: string | null;
+    receipt_ids: {
+        ngs_job: string;
+        ngs_result_manifest: string;
+        ngs_reference_revision: string;
+        ont_instrument_run: string | null;
+        molecular_revision: string | null;
+        ngs_comparison_panel: string | null;
+    };
+    assessment_rule_id: string;
+    scientific_assessment: 'PASS' | 'FAIL' | 'REVIEW';
+    job_lifecycle_state: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+    manifest_integrity: 'valid' | 'invalid' | 'unavailable';
+    raw_manifest_sha256: string;
+    notes: string | null;
+    wrapper_sha256: string;
+    created_at: string;
+    created_by: string | null;
+    reopen_destination: {
+        surface: 'molbio-ngs-evidence-assessment';
+        params: { global_domain_experiment_id: string; evidence_id: string };
+    };
+}
+
+export interface EvidenceAssessmentRequest {
+    state_revision_id: string;
+    sample_revision_id?: string | null;
+    ngs_job_receipt_id: string;
+    ngs_result_manifest_receipt_id: string;
+    ngs_reference_revision_receipt_id: string;
+    ont_instrument_run_receipt_id?: string | null;
+    molecular_revision_receipt_id?: string | null;
+    ngs_comparison_panel_receipt_id?: string | null;
+    assessment_rule_id: string;
+    notes?: string | null;
+    idempotency_key: string;
+}
+
+export const attachMolBioNgsJobEvidence = (
+    domainExperimentId: string,
+    payload: { job_id: string; idempotency_key: string },
+) => apiData(api.post<{ ngs_job: ExternalMemberReceipt; ngs_result_manifest: ExternalMemberReceipt }>(
+    `/api/molbio-ngs/experiments/${encodeURIComponent(domainExperimentId)}/evidence/attach-job`, payload,
+));
+export const attachMolBioNgsInstrumentRunEvidence = (
+    domainExperimentId: string,
+    payload: {
+        state_revision_id: string;
+        run_id: string;
+        observed_generation: number;
+        idempotency_key: string;
+    },
+) => apiData(api.post<ExternalMemberReceipt>(
+    `/api/molbio-ngs/experiments/${encodeURIComponent(domainExperimentId)}/evidence/attach-instrument-run`, payload,
+));
+export const assessMolBioNgsEvidence = (domainExperimentId: string, payload: EvidenceAssessmentRequest) =>
+    apiData(api.post<EvidenceAssessment>(
+        `/api/molbio-ngs/experiments/${encodeURIComponent(domainExperimentId)}/evidence/assess`, payload,
+    ));
+export const fetchMolBioNgsEvidence = (domainExperimentId: string) =>
+    apiData(api.get<EvidenceAssessment[]>(
+        `/api/molbio-ngs/experiments/${encodeURIComponent(domainExperimentId)}/evidence`,
+    ));
+export const fetchMolBioNgsEvidenceAssessment = (domainExperimentId: string, evidenceId: string) =>
+    apiData(api.get<EvidenceAssessment>(
+        `/api/molbio-ngs/experiments/${encodeURIComponent(domainExperimentId)}/evidence/${encodeURIComponent(evidenceId)}`,
+    ));
+
+export interface MolecularRevision {
+    document_id: string;
+    sequence_id: string;
+    document_kind: string;
+    document_name: string;
+    revision_id: string;
+    revision_number: number;
+    parent_revision_id: string | null;
+    change_kind: string;
+    relation: 'current' | 'historical';
+    snapshot: Record<string, unknown>;
+    content_sha256: string;
+    content_length: number;
+    operation_id: string | null;
+    provenance: Record<string, unknown>;
+    created_at: string;
+    created_by: string | null;
+    reopen_destination: {
+        surface: 'molbio-sequence-revision';
+        params: { sequence_id: string; revision_id: string };
+    };
+}
+
+export const fetchMolecularRevisions = (sequenceId: string, limit = 100) =>
+    apiData(api.get<MolecularRevision[]>(
+        `/api/sequences/${encodeURIComponent(sequenceId)}/revisions`, { params: { limit } },
+    ));
+export const fetchMolecularRevision = (sequenceId: string, revisionId: string) =>
+    apiData(api.get<MolecularRevision>(
+        `/api/sequences/${encodeURIComponent(sequenceId)}/revisions/${encodeURIComponent(revisionId)}`,
+    ));
+
+export interface PcrExperimentRevision {
+    id: string;
+    experiment_id: string;
+    revision_number: number;
+    payload_sha256: string;
+    parent_revision_id: string | null;
+    relation: 'current' | 'historical';
+    operation_id: string;
+    template_document_id: string | null;
+    template_revision_id: string | null;
+    template_sha256: string;
+    template_snapshot: Record<string, unknown>;
+    forward_primer_snapshot: Record<string, unknown>;
+    reverse_primer_snapshot: Record<string, unknown>;
+    tm_model_revision_id: string;
+    tm_snapshot: Record<string, unknown>;
+    polymerase_preset_revision_id: string | null;
+    polymerase_snapshot: Record<string, unknown> | null;
+    reaction_settings: Record<string, unknown>;
+    cycling_assumptions: Record<string, unknown>;
+    product_document_id: string | null;
+    product_revision_id: string | null;
+    product_snapshot: Record<string, unknown>;
+    warnings: string[];
+    notes: string | null;
+    review_state: 'draft' | 'in_review' | 'approved' | 'rejected';
+    provenance: Record<string, unknown>;
+    created_by: string | null;
+    created_at: string;
+    reopen_destination: {
+        surface: 'molbio-pcr-experiment-revision';
+        params: { experiment_id: string; revision_id: string };
+    };
+}
+
+export interface PcrExperimentListItem {
+    id: string;
+    name: string;
+    review_state: string;
+    current_revision_id: string | null;
+    created_at: string;
+    updated_at: string;
+    current_revision: Omit<PcrExperimentRevision, 'parent_revision_id' | 'relation' | 'reopen_destination'> | null;
+}
+
+export interface PcrOperationRequest {
+    sequence_id?: string;
+    name?: string;
+    sequence?: string;
+    sequence_type?: 'dna' | 'rna';
+    is_circular: boolean;
+    primer_fwd: string;
+    primer_rev: string;
+    new_name: string;
+    save: boolean;
+    persist_experiment: boolean;
+    tm_settings: PrimerTmSettings;
+}
+
+export interface PcrOperationResponse {
+    sequence: NucleotideSequenceResponse | null;
+    product: {
+        sequence: string;
+        start: number;
+        end: number;
+        length: number;
+        wraps_origin: boolean;
+    } | null;
+    message: string;
+    experiment_id: string | null;
+    experiment_revision_id: string | null;
+    operation_id: string | null;
+    reused: boolean;
+}
+
+export const runPcrOperation = (payload: PcrOperationRequest) =>
+    apiData(api.post<PcrOperationResponse>('/api/molbio/pcr', payload));
+
+export const fetchPcrExperiments = (limit = 100) =>
+    apiData(api.get<{ items: PcrExperimentListItem[]; count: number; limit: number }>(
+        '/api/molbio/pcr-experiments', { params: { limit } },
+    ));
+export const fetchPcrExperimentRevisions = (experimentId: string, limit = 100) =>
+    apiData(api.get<PcrExperimentRevision[]>(
+        `/api/molbio/pcr-experiments/${encodeURIComponent(experimentId)}/revisions`, { params: { limit } },
+    ));
+export const fetchPcrExperimentRevision = (experimentId: string, revisionId: string) =>
+    apiData(api.get<PcrExperimentRevision>(
+        `/api/molbio/pcr-experiments/${encodeURIComponent(experimentId)}/revisions/${encodeURIComponent(revisionId)}`,
+    ));
+export const updatePcrExperimentReviewState = (
+    experimentId: string,
+    payload: {
+        review_state: 'draft' | 'in_review' | 'approved' | 'rejected';
+        notes?: string | null;
+        provenance?: Record<string, unknown>;
+    },
+) => apiData(api.patch<Record<string, unknown>>(
+    `/api/molbio/pcr-experiments/${encodeURIComponent(experimentId)}/review-state`, payload,
+));
+
+export interface OntRunSummary {
+    run_id: string;
+    position_id: string;
+    status: 'armed' | 'starting' | 'running' | 'stopping' | 'stopped' | 'completed' | 'failed' | 'unknown';
+    observed_at: string;
+    observed_generation: number;
+    created_at: string;
+    sample_id: string | null;
+    experiment_group: string | null;
+    output_counts: { fastq: number; pod5: number; bam: number };
+    terminal_manifest_sha256: string | null;
+    reopen_destination: {
+        surface: 'ont-instrument-run-generation';
+        params: { run_id: string; observed_generation: number };
+    };
+}
+
+export interface OntRunGeneration extends OntRunSummary {
+    event_id: string;
+    event_type: string;
+}
+
+export const fetchOntInstrumentRuns = (limit = 100) =>
+    apiData(api.get<OntRunSummary[]>('/api/ont/runs', { params: { limit } }));
+export const fetchOntInstrumentRunGeneration = (runId: string, observedGeneration: number) =>
+    apiData(api.get<OntRunGeneration>(
+        `/api/ont/runs/${encodeURIComponent(runId)}/generations/${encodeURIComponent(String(observedGeneration))}`,
+    ));
+
+export const fetchFullJob = (jobId: string) =>
+    apiData(api.get<Job>(`/api/jobs/${encodeURIComponent(jobId)}`));
