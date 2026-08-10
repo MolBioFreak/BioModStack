@@ -178,6 +178,7 @@ def test_cm_submission_omission_binds_complete_canonical_defaults() -> None:
 
     assert body.frustrampnn_settings == default_settings()
     assert body.frustrampnn_settings.settings_value_origin == "bms_default"
+    assert "frustrampnn_settings" not in body.model_fields_set
 
 
 def test_cm_submission_accepts_complete_settings_but_rejects_caller_owned_origin() -> None:
@@ -193,6 +194,7 @@ def test_cm_submission_accepts_complete_settings_but_rejects_caller_owned_origin
     )
     assert body.frustrampnn_settings.settings_value_origin == "operator_request"
     assert body.frustrampnn_settings.classification_policy.high_max == -0.75
+    assert "frustrampnn_settings" in body.model_fields_set
 
     forged = dict(complete)
     forged["settings_value_origin"] = "bms_default"

@@ -1739,10 +1739,11 @@ async def submit_request(
         "feature_policy": body.feature_policy,
         "runtime_policy": _bind_runtime_policy(body.backend, body.runtime_policy),
         "analysis_policy": _bind_analysis_policy(body.analysis_policy),
-        "frustrampnn_settings": body.frustrampnn_settings.model_dump(
-            mode="json", exclude_none=False
-        ),
     }
+    if "frustrampnn_settings" in body.model_fields_set:
+        params["frustrampnn_settings"] = body.frustrampnn_settings.model_dump(
+            mode="json", exclude_none=False
+        )
     if body.state_landscape_comparison is not None:
         params["state_landscape_comparison"] = body.state_landscape_comparison
     import_sources: list[ConformationalMappingSource] = []
