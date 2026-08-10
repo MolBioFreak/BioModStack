@@ -3933,6 +3933,27 @@ def _canonical_protein_design_row_id(
     return expected
 
 
+async def _persist_cm_bundle_atomically(
+    session: AsyncSession,
+    cm_request: Any,
+    *,
+    bundle: Mapping[str, Any],
+    result_root: Path,
+    commit: bool,
+) -> None:
+    """Keep canonical FrustraMPNN rows and CM records in one transaction."""
+
+    try:
+        await ingest_cm_result_bundle(
+            session, cm_request, bundle=bundle, result_root=result_root
+        )
+        if commit:
+            await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+
+
 async def ingest_job_results(
     job_id: str, 
     output_dir: str, 
@@ -4084,6 +4105,16 @@ async def ingest_job_results(
                     if digest != item["sha256"] or artifact.stat().st_size != item["bytes"]:
                         raise ConformationalPersistenceError("canonical derived artifact identity mismatch")
                 if has_global_results:
+                    snapshots_path = result_root / "cm_complex_snapshots_v1.json"
+                    if snapshots_path.is_symlink() or not snapshots_path.is_file():
+                        raise ConformationalPersistenceError(
+                            "canonical CM snapshot authority is absent or unsafe"
+                        )
+                    snapshots = json.loads(snapshots_path.read_text(encoding="utf-8"))
+                    if not isinstance(snapshots, list) or not snapshots:
+                        raise ConformationalPersistenceError(
+                            "canonical CM snapshot authority is malformed"
+                        )
                     references = derived["frustrampnn_result_references"]
                     if (
                         not isinstance(references, dict)
@@ -4159,6 +4190,7 @@ async def ingest_job_results(
                         global_landscapes.append(landscape)
                         global_maps.append(structure_map)
                     bundle["cm_frustrampnn_result_references"] = references
+                    bundle["cm_complex_snapshots"] = snapshots
                     bundle["frustrampnn_structure_maps"] = global_maps
                     bundle["frustrampnn_landscapes"] = global_landscapes
                 else:
@@ -4175,9 +4207,13 @@ async def ingest_job_results(
                 raise ConformationalPersistenceError(
                     f"canonical derived index is malformed: {exc}"
                 ) from exc
-        await ingest_cm_result_bundle(session, cm_request, bundle=bundle, result_root=result_root)
-        if commit:
-            await session.commit()
+        await _persist_cm_bundle_atomically(
+            session,
+            cm_request,
+            bundle=bundle,
+            result_root=result_root,
+            commit=commit,
+        )
         return len(ensemble["candidates"])
     job_context = _job_stage_context(current_job)
     lineage_cache: Dict[str, Optional[Design]] = {}

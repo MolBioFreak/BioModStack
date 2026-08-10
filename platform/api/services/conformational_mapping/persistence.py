@@ -29,6 +29,10 @@ from database import (
     Job,
 )
 from services.frustrampnn.contracts import validate_schema as validate_frustrampnn_schema
+from services.frustrampnn.settings import (
+    requested_settings_sha256,
+    validate_persisted_requested_settings,
+)
 
 from .contracts import (
     ContractValidationError,
@@ -577,7 +581,7 @@ async def ingest_result_bundle(
             "cm_resampling_v1", "cm_lineage", "cm_support", "cm_missingness",
             "cm_state_landscape_analyses", "cm_derived_files",
             "cm_frustrampnn_result_references", "frustrampnn_structure_maps",
-            "frustrampnn_landscapes",
+            "frustrampnn_landscapes", "cm_complex_snapshots",
         }
         unknown = set(bundle) - set(core_bundle) - allowed_extensions
         if unknown:
@@ -718,6 +722,38 @@ async def ingest_result_bundle(
             "derived structure-map and landscape candidate sets must exactly equal the ensemble"
         )
     if canonical_global_mode:
+        snapshots = bundle.get("cm_complex_snapshots")
+        if not isinstance(snapshots, list) or not snapshots:
+            raise ConformationalPersistenceError("canonical CM snapshot authority is missing")
+        snapshot_by_target: dict[str, Mapping[str, Any]] = {}
+        try:
+            for snapshot in snapshots:
+                if not isinstance(snapshot, Mapping):
+                    raise TypeError("CM snapshot is not an object")
+                validate_schema("cm_complex_snapshot_v1", snapshot)
+                target_id = str(snapshot["target_id"])
+                if target_id in snapshot_by_target:
+                    raise ValueError("duplicate CM snapshot target")
+                snapshot_by_target[target_id] = snapshot
+            expected_settings_sha256 = requested_settings_sha256(
+                validate_persisted_requested_settings(
+                    record.request_json.get("frustrampnn_settings")
+                )
+            )
+        except Exception as exc:
+            raise ConformationalPersistenceError(
+                "persisted CM FrustraMPNN settings or snapshot authority is invalid"
+            ) from exc
+        expected_snapshot_by_candidate: dict[str, str] = {}
+        for candidate in ensemble["candidates"]:
+            coordinates = candidate.get("backend_coordinates")
+            target_id = str(coordinates.get("target_id") or "") if isinstance(coordinates, Mapping) else ""
+            snapshot = snapshot_by_target.get(target_id)
+            if snapshot is None:
+                raise ConformationalPersistenceError(
+                    "CM candidate has no persisted snapshot authority"
+                )
+            expected_snapshot_by_candidate[str(candidate["candidate_id"])] = canonical_sha256(snapshot)
         if not isinstance(global_references, Mapping) or set(global_references) != {
             "schema_name", "schema_version", "parent_job_id", "parent_workflow_id",
             "expected_cardinality", "results",
@@ -746,6 +782,14 @@ async def ingest_result_bundle(
             candidate_id = str(reference["candidate_id"])
             if candidate_id in references_by_candidate:
                 raise ConformationalPersistenceError("canonical FrustraMPNN result reference is duplicated")
+            if (
+                reference["requested_settings_sha256"] != expected_settings_sha256
+                or reference["cm_complex_snapshot_sha256"]
+                != expected_snapshot_by_candidate.get(candidate_id)
+            ):
+                raise ConformationalPersistenceError(
+                    "canonical FrustraMPNN result reference crosses CM settings or snapshot authority"
+                )
             references_by_candidate[candidate_id] = reference
         if set(references_by_candidate) != ensemble_candidate_ids:
             raise ConformationalPersistenceError(
@@ -757,7 +801,11 @@ async def ingest_result_bundle(
             )
         )).scalars().all())
         persisted_by_candidate = {value.candidate_id: value for value in persisted_results}
-        if set(persisted_by_candidate) != ensemble_candidate_ids:
+        if (
+            len(persisted_results) != len(ensemble_candidate_ids)
+            or len(persisted_by_candidate) != len(persisted_results)
+            or set(persisted_by_candidate) != ensemble_candidate_ids
+        ):
             raise ConformationalPersistenceError(
                 "required canonical FrustraMPNN results are not persisted"
             )
@@ -1125,6 +1173,21 @@ async def paged_landscape(
         )
     )
     if request_record is not None and canonical_reference is not None:
+        reference_payload = canonical_reference.payload_json
+        reference_rows = reference_payload.get("results") if isinstance(reference_payload, Mapping) else None
+        if not isinstance(reference_rows, list) or not reference_rows:
+            raise ConformationalPersistenceError(
+                "canonical FrustraMPNN landscape references are malformed"
+            )
+        invocation_ids = {
+            str(reference.get("invocation_id") or "")
+            for reference in reference_rows
+            if isinstance(reference, Mapping)
+        }
+        if "" in invocation_ids or len(invocation_ids) != len(reference_rows):
+            raise ConformationalPersistenceError(
+                "canonical FrustraMPNN landscape references are ambiguous"
+            )
         global_statement = (
             select(FrustraMPNNLandscapeRow, FrustraMPNNResult.candidate_id)
             .join(
@@ -1132,7 +1195,10 @@ async def paged_landscape(
                 (FrustraMPNNResult.parent_job_id == FrustraMPNNLandscapeRow.parent_job_id)
                 & (FrustraMPNNResult.invocation_id == FrustraMPNNLandscapeRow.invocation_id),
             )
-            .where(FrustraMPNNLandscapeRow.parent_job_id == request_record.job_id)
+            .where(
+                FrustraMPNNLandscapeRow.parent_job_id == request_record.job_id,
+                FrustraMPNNLandscapeRow.invocation_id.in_(invocation_ids),
+            )
         )
         if candidate_id:
             global_statement = global_statement.where(FrustraMPNNResult.candidate_id == candidate_id)

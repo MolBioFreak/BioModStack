@@ -8,10 +8,18 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from database import Base, ConformationalMappingLandscapeRow, ConformationalMappingRecord, Job
+from database import (
+    Base,
+    ConformationalMappingLandscapeRow,
+    ConformationalMappingRecord,
+    ConformationalMappingRequest,
+    FrustraMPNNLandscapeRow,
+    FrustraMPNNResult,
+    Job,
+)
 from services.conformational_mapping.contracts import (
     canonical_json_bytes,
     canonical_sha256,
@@ -22,19 +30,21 @@ from services.conformational_mapping.contracts import (
 from services.conformational_mapping.persistence import (
     ConformationalPersistenceError,
     ingest_result_bundle,
+    paged_landscape,
     register_prepared_request,
 )
+from services.frustrampnn.settings import default_settings, requested_settings_sha256
 from services.conformational_mapping.state_landscape_analysis import (
     derive_state_landscape_analysis_for_request,
     validate_state_landscape_analysis_binding,
 )
-from services.result_ingester import ingest_job_results
+from services.result_ingester import _persist_cm_bundle_atomically, ingest_job_results
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "conformational_mapping" / "schemas" / "positive" / "all_schemas.json"
 
 
-async def _session(tmp_path: Path) -> tuple[AsyncSession, object]:
+async def _session(tmp_path: Path) -> tuple[AsyncSession, AsyncEngine]:
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'ingester-state.db'}")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -144,7 +154,9 @@ def _coherent_state_bundle(root: Path) -> tuple[dict, dict, dict]:
     return request, bundle, artifact
 
 
-async def _register(session: AsyncSession, request: dict, bundle: dict) -> object:
+async def _register(
+    session: AsyncSession, request: dict, bundle: dict,
+) -> ConformationalMappingRequest:
     return await register_prepared_request(
         session,
         job=Job(
@@ -161,6 +173,220 @@ async def _register(session: AsyncSession, request: dict, bundle: dict) -> objec
         resume_key="0" * 64,
         capability_sha256="c" * 64,
     )
+
+
+def _global_bundle(root: Path) -> tuple[dict, dict, dict, dict]:
+    request, bundle = _no_authority_bundle(root)
+    settings = default_settings()
+    request["frustrampnn_settings"] = settings.model_dump(mode="json", exclude_none=False)
+    request["frustrampnn_requiredness"] = "required"
+    request["request_sha256"] = request_sha256(request)
+    ensemble = bundle["cm_ensemble_v1"]
+    ensemble["request_sha256"] = request["request_sha256"]
+    bundle["cm_analysis_v1"]["source_ensemble_sha256"] = canonical_sha256(ensemble)
+    fixture = copy.deepcopy(json.loads(FIXTURE.read_text()))
+    snapshot = fixture["cm_complex_snapshot_v1"]
+    candidate_id_value = ensemble["candidates"][0]["candidate_id"]
+    invocation_id = f"frustrampnn:{request['request_id']}:{candidate_id_value}"
+    settings_sha256 = requested_settings_sha256(settings)
+    manifest_sha256 = "7" * 64
+    reference = {
+        "candidate_id": candidate_id_value,
+        "invocation_id": invocation_id,
+        "source_sha256": "1" * 64,
+        "cm_complex_snapshot_sha256": canonical_sha256(snapshot),
+        "requested_settings_sha256": settings_sha256,
+        "effective_settings_sha256": "6" * 64,
+        "bundle_relative_path": f"frustrampnn/results/{candidate_id_value}",
+        "result_manifest_sha256": manifest_sha256,
+        "landscape_sha256": "8" * 64,
+        "structure_map_sha256": "9" * 64,
+    }
+    bundle.pop("cm_structure_maps")
+    bundle.pop("cm_frustration_landscapes")
+    global_map = copy.deepcopy(fixture["cm_structure_map_v1"])
+    global_map["schema_name"] = "frustrampnn_structure_map"
+    global_landscape = copy.deepcopy(fixture["cm_frustration_landscape_v1"])
+    global_landscape["schema_name"] = "frustrampnn_landscape"
+    global_landscape["schema_version"] = 2
+    bundle.update({
+        "cm_complex_snapshots": [snapshot],
+        "frustrampnn_structure_maps": [global_map],
+        "frustrampnn_landscapes": [global_landscape],
+        "cm_frustrampnn_result_references": {
+            "schema_name": "cm_frustrampnn_result_references",
+            "schema_version": 1,
+            "parent_job_id": request["request_id"],
+            "parent_workflow_id": "conformational_mapping",
+            "expected_cardinality": 1,
+            "results": [reference],
+        },
+    })
+    result_values = {
+        "parent_job_id": request["request_id"],
+        "invocation_id": invocation_id,
+        "parent_workflow_id": "conformational_mapping",
+        "candidate_id": candidate_id_value,
+        "requiredness": "required",
+        "request_sha256": "5" * 64,
+        "source_artifact_sha256": reference["source_sha256"],
+        "manifest_sha256": manifest_sha256,
+        "manifest_json": {},
+        "summary_sha256": "4" * 64,
+        "summary_json": {},
+        "runtime_identity_json": {},
+        "assigned_gpu_json": {},
+        "terminal_result_json": {},
+        "settings_sha256": settings_sha256,
+        "effective_settings_sha256": reference["effective_settings_sha256"],
+    }
+    return request, bundle, reference, result_values
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("authority_field", ["requested_settings_sha256", "cm_complex_snapshot_sha256"])
+async def test_cm_global_ingest_rejects_cross_bound_settings_or_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, authority_field: str,
+) -> None:
+    from services.conformational_mapping import persistence as cm_persistence
+
+    root = tmp_path / "global-cross-binding"
+    root.mkdir()
+    request, bundle, reference, result_values = _global_bundle(root)
+    reference[authority_field] = "0" * 64
+    monkeypatch.setattr(cm_persistence, "validate_frustrampnn_schema", lambda *_args: None)
+    session, engine = await _session(tmp_path)
+    try:
+        record = await _register(session, request, bundle)
+        session.add(FrustraMPNNResult(**result_values))
+        await session.flush()
+        with pytest.raises(ConformationalPersistenceError, match="crosses CM settings or snapshot"):
+            await ingest_result_bundle(session, record, bundle=bundle, result_root=root)
+    finally:
+        await session.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cm_global_ingest_rejects_duplicate_candidate_invocations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services.conformational_mapping import persistence as cm_persistence
+
+    root = tmp_path / "global-duplicate"
+    root.mkdir()
+    request, bundle, _reference, result_values = _global_bundle(root)
+    monkeypatch.setattr(cm_persistence, "validate_frustrampnn_schema", lambda *_args: None)
+    session, engine = await _session(tmp_path)
+    try:
+        record = await _register(session, request, bundle)
+        session.add(FrustraMPNNResult(**result_values))
+        duplicate = dict(result_values)
+        duplicate["invocation_id"] = str(result_values["invocation_id"]) + "-duplicate"
+        duplicate["manifest_sha256"] = "a" * 64
+        session.add(FrustraMPNNResult(**duplicate))
+        await session.flush()
+        with pytest.raises(ConformationalPersistenceError, match="required canonical FrustraMPNN results"):
+            await ingest_result_bundle(session, record, bundle=bundle, result_root=root)
+    finally:
+        await session.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cm_global_landscape_query_uses_only_referenced_invocations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services.conformational_mapping import persistence as cm_persistence
+
+    root = tmp_path / "global-query"
+    root.mkdir()
+    request, bundle, reference, result_values = _global_bundle(root)
+    monkeypatch.setattr(cm_persistence, "validate_frustrampnn_schema", lambda *_args: None)
+    session, engine = await _session(tmp_path)
+    try:
+        record = await _register(session, request, bundle)
+        session.add(FrustraMPNNResult(**result_values))
+        await session.flush()
+        await ingest_result_bundle(session, record, bundle=bundle, result_root=root)
+        assert await session.scalar(select(ConformationalMappingLandscapeRow)) is None
+
+        extra_result = dict(result_values)
+        extra_result["invocation_id"] = str(result_values["invocation_id"]) + "-unreferenced"
+        extra_result["candidate_id"] = "unreferenced-candidate"
+        extra_result["manifest_sha256"] = "a" * 64
+        session.add(FrustraMPNNResult(**extra_result))
+        await session.flush()
+        for invocation_id, score in (
+            (reference["invocation_id"], 1.0),
+            (extra_result["invocation_id"], 99.0),
+        ):
+            session.add(FrustraMPNNLandscapeRow(
+                id=f"row-{score}", parent_job_id=request["request_id"],
+                invocation_id=invocation_id, target_id="target-a",
+                entity_instance_id="protein-1", auth_asym_id="A", auth_seq_id="1",
+                insertion_code="", sequence_index=1, wt="A", mutation_aa="V",
+                score=score, score_class="neutral", scoreable=True, status="ok",
+                reason=None, row_json={"score": score}, provenance_json={},
+            ))
+        await session.flush()
+
+        rows = await paged_landscape(session, request["request_id"])
+        assert [(row.candidate_id, row.score) for row in rows] == [
+            (result_values["candidate_id"], 1.0),
+        ]
+    finally:
+        await session.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cm_atomic_persistence_rolls_back_global_rows_when_cm_ingest_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services import result_ingester
+
+    session, engine = await _session(tmp_path)
+    job_id = "atomic-cm-job"
+    result_values = {
+        "parent_job_id": job_id,
+        "invocation_id": "frustrampnn:atomic-cm-job:candidate-a",
+        "parent_workflow_id": "conformational_mapping",
+        "candidate_id": "candidate-a",
+        "requiredness": "required",
+        "request_sha256": "5" * 64,
+        "source_artifact_sha256": "1" * 64,
+        "manifest_sha256": "7" * 64,
+        "manifest_json": {},
+        "summary_sha256": "4" * 64,
+        "summary_json": {},
+        "runtime_identity_json": {},
+        "assigned_gpu_json": {},
+        "terminal_result_json": {},
+    }
+
+    async def fail_after_global_row(
+        active_session: AsyncSession, _cm_request: object, **_kwargs: object,
+    ) -> None:
+        active_session.add(FrustraMPNNResult(**result_values))
+        await active_session.flush()
+        raise ConformationalPersistenceError("forced CM persistence failure")
+
+    try:
+        session.add(Job(
+            id=job_id, name="atomic", model_id="conformational_mapping",
+            mode="map", status="running", params={}, created_at=datetime.utcnow(),
+        ))
+        await session.commit()
+        monkeypatch.setattr(result_ingester, "ingest_cm_result_bundle", fail_after_global_row)
+        with pytest.raises(ConformationalPersistenceError, match="forced CM persistence failure"):
+            await _persist_cm_bundle_atomically(
+                session, object(), bundle={}, result_root=tmp_path, commit=True,
+            )
+        assert await session.scalar(select(FrustraMPNNResult)) is None
+    finally:
+        await session.close()
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
