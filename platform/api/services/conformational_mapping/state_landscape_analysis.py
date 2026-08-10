@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 from typing import Any, Mapping, Sequence
 
+from services.frustrampnn.contracts import validate_schema as validate_frustrampnn_schema
+
 from .contracts import AA_ORDER, canonical_json_bytes, canonical_sha256, parse_backend_coordinates, validate_schema
 
 
@@ -163,12 +165,43 @@ def _source_by_candidate(
 ) -> dict[str, Mapping[str, Any]]:
     indexed: dict[str, Mapping[str, Any]] = {}
     for value in values:
-        validate_schema(schema_key, value)
+        schema_name = value.get("schema_name") if isinstance(value, Mapping) else None
+        schema_version = value.get("schema_version") if isinstance(value, Mapping) else None
+        if schema_key == "cm_frustration_landscape_v1" and (
+            schema_name, schema_version
+        ) == ("frustrampnn_landscape", 2):
+            validate_frustrampnn_schema("frustrampnn_landscape_v2", value)
+        elif schema_key == "cm_structure_map_v1" and (
+            schema_name, schema_version
+        ) == ("frustrampnn_structure_map", 1):
+            validate_frustrampnn_schema("frustrampnn_structure_map_v1", value)
+        else:
+            validate_schema(schema_key, value)
         candidate_id = str(value["candidate_id"])
         if candidate_id in indexed:
             raise StateLandscapeAnalysisError(f"duplicate {label} candidate: {candidate_id}")
         indexed[candidate_id] = value
     return indexed
+
+
+def _provenance_identity(landscape: Mapping[str, Any]) -> tuple[Any, ...]:
+    if (
+        landscape.get("schema_name") == "frustrampnn_landscape"
+        and landscape.get("schema_version") == 2
+    ):
+        return (
+            landscape["requested_settings_sha256"],
+            landscape["runtime_identity_sha256"],
+            landscape["threshold_policy_id"],
+            landscape["threshold_policy_sha256"],
+        )
+    return tuple(
+        landscape[field]
+        for field in (
+            "checkpoint_id", "checkpoint_sha256", "tool_id", "tool_sha256",
+            "threshold_policy_id", "threshold_policy_sha256",
+        )
+    )
 
 
 def _resolved_comparison(comparison: Mapping[str, Any]) -> dict[str, Any]:
@@ -478,9 +511,8 @@ def derive_state_landscape_analysis(
         maps_a, maps_b = map_rows_by_candidate[candidate_a_id], map_rows_by_candidate[candidate_b_id]
         all_keys = sorted(set(rows_a) | set(rows_b))
         eligible = 0
-        provenance_match = all(
-            landscape_a[field] == landscape_b[field]
-            for field in ("checkpoint_id", "checkpoint_sha256", "tool_id", "tool_sha256", "threshold_policy_id", "threshold_policy_sha256")
+        provenance_match = _provenance_identity(landscape_a) == _provenance_identity(
+            landscape_b
         )
         for key in all_keys:
             row_a, row_b = rows_a.get(key), rows_b.get(key)
