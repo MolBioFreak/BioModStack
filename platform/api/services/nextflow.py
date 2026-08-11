@@ -3614,6 +3614,7 @@ def build_nextflow_command(
             'length': 'plr_length',
             'seed': 'plr_seed',
             'dump_trajectories': 'plr_dump_trajectories',
+            'write_full_json': 'plr_write_full_json',
             'evaluation_states': 'plr_evaluation_states',
             'profile_id': 'plr_profile_id',
             'interactive_gating': 'interactive_gating',
@@ -3635,7 +3636,7 @@ def build_nextflow_command(
 
         if 'plr_num_designs' in params and 'rfd_num_designs' not in params:
             params['rfd_num_designs'] = params['plr_num_designs']
-        if model_id == 'protein_local_redesign' and 'rfd3_batches_per_design' not in params:
+        if model_id == 'protein_local_redesign':
             params['rfd3_batches_per_design'] = params.get('plr_num_designs', 1)
         if 'plr_seq_method' in params and 'seq_method' not in params:
             params['seq_method'] = params['plr_seq_method']

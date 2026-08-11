@@ -333,7 +333,9 @@ export function ProteinLocalRedesignTemplate({
     const [nativeHotspots, setNativeHotspots] = useState('');
     const [nativeHbondDonors, setNativeHbondDonors] = useState('');
     const [nativeHbondAcceptors, setNativeHbondAcceptors] = useState('');
+    const [nativeSeed, setNativeSeed] = useState('');
     const [nativeDumpTrajectories, setNativeDumpTrajectories] = useState(false);
+    const [nativeWriteFullJson, setNativeWriteFullJson] = useState(true);
     const [rfdMinHelices, setRfdMinHelices] = useState('');
     const [rfdMaxHelices, setRfdMaxHelices] = useState('');
     const [rfdMinStrands, setRfdMinStrands] = useState('');
@@ -415,7 +417,9 @@ export function ProteinLocalRedesignTemplate({
         if (typeof initialValues.select_hotspots === 'string') setNativeHotspots(initialValues.select_hotspots);
         if (typeof initialValues.select_hbond_donor === 'string') setNativeHbondDonors(initialValues.select_hbond_donor);
         if (typeof initialValues.select_hbond_acceptor === 'string') setNativeHbondAcceptors(initialValues.select_hbond_acceptor);
+        if (typeof initialValues.seed === 'number') setNativeSeed(String(initialValues.seed));
         if (typeof initialValues.dump_trajectories === 'boolean') setNativeDumpTrajectories(initialValues.dump_trajectories);
+        if (typeof initialValues.write_full_json === 'boolean') setNativeWriteFullJson(initialValues.write_full_json);
         if (typeof initialValues.rfd_min_helices === 'number') setRfdMinHelices(String(initialValues.rfd_min_helices));
         if (typeof initialValues.rfd_max_helices === 'number') setRfdMaxHelices(String(initialValues.rfd_max_helices));
         if (typeof initialValues.rfd_min_strands === 'number') setRfdMinStrands(String(initialValues.rfd_min_strands));
@@ -823,7 +827,7 @@ export function ProteinLocalRedesignTemplate({
 
         if (isNativeLocalRedesign) {
             let fixedAtoms: Record<string, unknown> = {};
-            if (nativeFixedAtomSpec.trim()) {
+            if (nativeRedesignMode === 'partial_diffusion' && nativeFixedAtomSpec.trim()) {
                 try {
                     const parsed = JSON.parse(nativeFixedAtomSpec);
                     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('fixed atom map must be a JSON object');
@@ -832,13 +836,9 @@ export function ProteinLocalRedesignTemplate({
                     setError(err instanceof Error ? `Fixed atom map: ${err.message}` : 'Fixed atom map must be valid JSON.');
                     return;
                 }
-            } else if (effectiveRanges) {
-                fixedAtoms = Object.fromEntries(
-                    effectiveRanges.split(',').map((token) => [token.trim(), []]).filter(([token]) => Boolean(token)),
-                );
             }
-            if (nativeRedesignMode === 'partial_diffusion' && Object.keys(fixedAtoms).length === 0) {
-                setError('Partial diffusion requires at least one selected residue or fixed-atom map entry.');
+            if (nativeRedesignMode === 'partial_diffusion' && !effectiveRanges) {
+                setError('Partial diffusion requires at least one selected editable residue.');
                 return;
             }
             if (nativeRedesignMode === 'minimal_insertion' && !nativeContig.trim()) {
@@ -866,8 +866,8 @@ export function ProteinLocalRedesignTemplate({
                     })),
                 })),
                 profile_id: nativeProfileId,
-                sequence_policy: nativeRedesignMode === 'partial_diffusion' ? 'preserve' : 'insert_only',
-                select_fixed_atoms: fixedAtoms,
+                sequence_policy: 'skip',
+                select_fixed_atoms: nativeRedesignMode === 'partial_diffusion' && Object.keys(fixedAtoms).length > 0 ? fixedAtoms : undefined,
                 contig: nativeRedesignMode === 'minimal_insertion' ? nativeContig.trim() : undefined,
                 insertion_anchor: nativeRedesignMode === 'minimal_insertion' ? nativeInsertionAnchor.trim() || undefined : undefined,
                 insertion_min_length: nativeRedesignMode === 'minimal_insertion' ? Number.parseInt(nativeInsertionMinLength, 10) : undefined,
@@ -878,11 +878,12 @@ export function ProteinLocalRedesignTemplate({
                 select_hbond_donor: nativeHbondDonors.split(',').map((value) => value.trim()).filter(Boolean),
                 select_hbond_acceptor: nativeHbondAcceptors.split(',').map((value) => value.trim()).filter(Boolean),
                 num_designs: numDesigns,
+                seed: parseOptionalIntegerInput(nativeSeed),
                 seq_method: seqMethod,
                 seqs_per_design: seqsPerDesign,
                 run_boltz_validation: false,
-                rfd3_batches_per_design: rfd3BatchesPerDesign,
                 dump_trajectories: nativeDumpTrajectories,
+                write_full_json: nativeWriteFullJson,
             };
             await submitMutation.mutateAsync({
                 name: jobName.trim(),
@@ -990,11 +991,13 @@ export function ProteinLocalRedesignTemplate({
                                     <input className="w-full rounded-lg border px-3 py-2 text-sm" style={themedInputStyle} type="number" min="0" step="0.1" value={nativePartialT} onChange={(event) => setNativePartialT(Number(event.target.value))} disabled={nativeRedesignMode !== 'partial_diffusion'} />
                                 </label>
                             </div>
+                            {nativeRedesignMode === 'partial_diffusion' && (
                             <label className="block space-y-1 text-xs font-medium">
                                 Fixed atom map JSON
                                 <textarea className="min-h-24 w-full rounded-lg border px-3 py-2 font-mono text-xs" style={themedInputStyle} value={nativeFixedAtomSpec} onChange={(event) => setNativeFixedAtomSpec(event.target.value)} placeholder={'{"A310-311":["BKBN"],"A312-318":[],"A319-320":["BKBN"]}'} />
-                                <span className="block text-[var(--text-secondary)]">Use `[]` for all atoms flexible, `BKBN` for backbone fixed, or explicit fixed atom names. Empty input uses the visual residue selection.</span>
+                                <span className="block text-[var(--text-secondary)]">Optional atom-level constraints apply only inside the visual editable region. The API fixes every source atom outside that region.</span>
                             </label>
+                            )}
                             {nativeRedesignMode === 'minimal_insertion' && (
                                 <>
                                     <div className="grid gap-3 md:grid-cols-3">
@@ -1037,12 +1040,24 @@ export function ProteinLocalRedesignTemplate({
                                     <input className="w-full rounded-lg border px-3 py-2 text-sm" style={themedInputStyle} value={nativeHbondAcceptors} onChange={(event) => setNativeHbondAcceptors(event.target.value)} placeholder="DATP_ID:N6" />
                                 </label>
                             </div>
-                            <label className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
-                                <input type="checkbox" checked={nativeDumpTrajectories} onChange={(event) => setNativeDumpTrajectories(event.target.checked)} />
-                                Retain native RFD3 trajectories for later visualization
-                            </label>
+                            <div className="grid gap-3 md:grid-cols-2">
+                                <label className="space-y-1 text-xs font-medium">
+                                    Seed
+                                    <input className="w-full rounded-lg border px-3 py-2 text-sm" style={themedInputStyle} type="number" min="0" value={nativeSeed} onChange={(event) => setNativeSeed(event.target.value)} placeholder="RFD3 default" />
+                                </label>
+                                <div className="space-y-2 rounded-lg border px-3 py-2" style={themedMutedInsetStyle}>
+                                    <label className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
+                                        <input type="checkbox" checked={nativeDumpTrajectories} onChange={(event) => setNativeDumpTrajectories(event.target.checked)} />
+                                        Retain noisy and denoised RFD3 trajectories
+                                    </label>
+                                    <label className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
+                                        <input type="checkbox" checked={nativeWriteFullJson} onChange={(event) => setNativeWriteFullJson(event.target.checked)} />
+                                        Retain full native JSON metadata
+                                    </label>
+                                </div>
+                            </div>
                             <div className="rounded-lg border px-3 py-2 text-xs text-[var(--text-secondary)]" style={themedMutedInsetStyle}>
-                                `select_unfixed_sequence` stays empty in this first-round contract. Add sequence freedom through the later insertion-only or packing-shell stage.
+                                `select_unfixed_sequence` stays empty. Sequence design remains explicitly not requested in the native skip path.
                             </div>
                         </div>
                     )}
@@ -1692,6 +1707,7 @@ export function ProteinLocalRedesignTemplate({
                     </section>
                     )}
 
+                    {proteinLocalRedesignUiState.showLegacyOptionalStages && (
                     <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
                         <div>
                             <h2 className="text-lg font-semibold">RFD3 Controls</h2>
@@ -1727,6 +1743,7 @@ export function ProteinLocalRedesignTemplate({
                             </div>
                         </div>
                     </section>
+                    )}
 
                     {proteinLocalRedesignUiState.showLegacyOptionalStages && (
                     <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
@@ -1876,7 +1893,11 @@ export function ProteinLocalRedesignTemplate({
                             </div>
                             <div className="flex items-start justify-between gap-4">
                                 <dt className="text-[var(--text-secondary)]">RFD3</dt>
-                                <dd className="text-right">{rfd3BatchesPerDesign} batch{rfd3BatchesPerDesign === 1 ? '' : 'es'} per design</dd>
+                                <dd className="text-right">
+                                    {isNativeLocalRedesign
+                                        ? `${numDesigns} exact samples`
+                                        : `${rfd3BatchesPerDesign} batch${rfd3BatchesPerDesign === 1 ? '' : 'es'} per design`}
+                                </dd>
                             </div>
                             <div className="flex items-start justify-between gap-4">
                                 <dt className="text-[var(--text-secondary)]">Validation</dt>

@@ -2,14 +2,23 @@
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import mimetypes
 import uuid
 from pathlib import Path
 from typing import Any, Mapping
 
+from Bio.PDB import MMCIFParser, PDBParser
+
 from paths import resolve_runtime_data_path
-from scripts.rfd3_local_redesign.contract import ContractError, build_request, request_sha256, write_request
+from scripts.rfd3_local_redesign.contract import (
+    CONTRACT_REVISION,
+    ContractError,
+    build_request,
+    request_sha256,
+    write_request,
+)
 
 
 def _sha256_file(path: Path) -> str:
@@ -18,6 +27,51 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _source_residue_identities(path: Path) -> list[dict[str, Any]]:
+    name = path.name.lower()
+    is_cif = name.endswith((".cif", ".mmcif", ".cif.gz", ".mmcif.gz"))
+    parser = MMCIFParser(QUIET=True) if is_cif else PDBParser(QUIET=True)
+    try:
+        if name.endswith(".gz"):
+            with gzip.open(path, "rt", encoding="utf-8") as handle:
+                structure = parser.get_structure("rfd3_local_redesign_source", handle)
+        else:
+            structure = parser.get_structure("rfd3_local_redesign_source", str(path))
+    except Exception as exc:
+        raise ContractError(f"input structure could not be parsed: {path}: {exc}") from exc
+
+    try:
+        model = next(structure.get_models())
+    except StopIteration as exc:
+        raise ContractError("input structure contains no models") from exc
+
+    chains: list[dict[str, Any]] = []
+    seen: set[tuple[str, int, str]] = set()
+    for chain in model:
+        residues: list[dict[str, Any]] = []
+        for residue in chain:
+            if not any(True for _atom in residue.get_atoms()):
+                continue
+            residue_number = int(residue.id[1])
+            insertion_code = str(residue.id[2] or "").strip()
+            identity = (str(chain.id), residue_number, insertion_code)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            residues.append(
+                {
+                    "res_num": residue_number,
+                    "insertion_code": insertion_code,
+                    "residue_name": str(residue.resname or "").strip(),
+                }
+            )
+        if residues:
+            chains.append({"chain_id": str(chain.id), "residues": residues})
+    if not chains:
+        raise ContractError("input structure contains no residues")
+    return chains
 
 
 def normalize_local_redesign_params(
@@ -39,19 +93,20 @@ def normalize_local_redesign_params(
     normalized["input_structure"] = str(source_path)
     normalized["input_pdb"] = str(source_path)
     normalized["plr_input_pdb"] = str(source_path)
+    normalized["source_residue_identities"] = _source_residue_identities(source_path)
     source_sha256 = _sha256_file(source_path)
+    rebuilt_request = build_request(normalized, job_name=job_name, source_sha256=source_sha256)
     existing_request = normalized.get("rfd3_request")
-    if isinstance(existing_request, dict) and existing_request.get("schema") == "bms.rfd3.local-redesign.request.v1":
-        input_binding = existing_request.get("input")
-        if (
-            not isinstance(input_binding, dict)
-            or input_binding.get("path") != str(source_path)
-            or input_binding.get("sha256") != source_sha256
-        ):
-            raise ContractError("existing local-redesign request source binding does not match the current input")
-        request = existing_request
-    else:
-        request = build_request(normalized, job_name=job_name, source_sha256=source_sha256)
+    if isinstance(existing_request, dict):
+        if existing_request.get("schema") != "bms.rfd3.local-redesign.request.v1":
+            raise ContractError("existing native RFD3 request schema is unsupported")
+        if existing_request.get("contract_revision") != CONTRACT_REVISION:
+            raise ContractError(
+                "existing native RFD3 request predates the fixed-scaffold contract and cannot be replayed"
+            )
+        if existing_request != rebuilt_request:
+            raise ContractError("existing native RFD3 request does not match the canonical source-derived request")
+    request = rebuilt_request
     digest = request_sha256(request)
     normalized["rfd3_request"] = request
     normalized["rfd3_request_sha256"] = digest
@@ -59,6 +114,10 @@ def normalize_local_redesign_params(
     normalized["rfd3_profile_id"] = request["profile_id"]
     normalized["plr_redesign_mode"] = request["redesign_mode"]
     normalized["plr_num_designs"] = request["execution"]["num_designs"]
+    normalized["plr_seed"] = request["execution"]["seed"]
+    normalized["plr_dump_trajectories"] = request["execution"]["dump_trajectories"]
+    normalized["plr_write_full_json"] = request["execution"]["write_full_json"]
+    normalized["rfd3_batches_per_design"] = request["execution"]["num_designs"]
     normalized.setdefault("plr_seq_method", "skip")
     normalized.setdefault("plr_run_boltz_validation", False)
     return normalized, request, digest

@@ -26,9 +26,15 @@ modes:
     params:
       - input_structure
       - redesign_mode
+      - design_chains
+      - context_chains
+      - redesign_ranges
+      - sequence_policy
       - select_fixed_atoms
       - contig
-      - select_unfixed_sequence
+      - insertion_anchor
+      - insertion_min_length
+      - insertion_max_length
       - partial_t
       - ligand
       - select_buried
@@ -43,6 +49,7 @@ modes:
       - num_designs
       - seed
       - dump_trajectories
+      - write_full_json
       - evaluation_states
       - profile_id
       - plr_design_chains
@@ -68,13 +75,13 @@ params:
     description: Native RFD3 local-redesign behavior.
     required: true
     default: partial_diffusion
-    enum: [partial_diffusion, minimal_insertion, packing_shell]
+    enum: [partial_diffusion, minimal_insertion]
     ui_group: RFD3 redesign
     ui_order: 10
   - name: select_fixed_atoms
     type: object
-    description: Residue selections with [] for flexible atoms, BKBN, ALL, TIP, or explicit atom names.
-    required: true
+    description: Optional atom-level overrides within the partial-diffusion editable region. The backend derives the complete preserved-scaffold map from the bound source structure.
+    required: false
     ui_group: RFD3 redesign
     ui_order: 11
   - name: contig
@@ -83,12 +90,52 @@ params:
     required: false
     ui_group: RFD3 redesign
     ui_order: 12
-  - name: select_unfixed_sequence
-    type: string
-    description: Explicit native residue selections whose amino-acid identities may change.
+  - name: design_chains
+    type: object
+    description: Source chain identifiers that contain the editable region.
     required: false
+    ui_group: RFD3 redesign
+    ui_order: 17
+  - name: context_chains
+    type: object
+    description: Source chain identifiers retained as fixed molecular context.
+    required: false
+    ui_group: RFD3 redesign
+    ui_order: 18
+  - name: redesign_ranges
+    type: string
+    description: Explicit editable residue ranges for partial diffusion.
+    required: false
+    ui_group: RFD3 redesign
+    ui_order: 19
+  - name: sequence_policy
+    type: string
+    description: Sequence handling for native RFD3 local redesign.
+    required: false
+    default: skip
+    enum: [skip]
     ui_group: Sequence policy
     ui_order: 20
+  - name: insertion_anchor
+    type: string
+    description: Source residue immediately before the inserted segment.
+    required: false
+    ui_group: RFD3 redesign
+    ui_order: 21
+  - name: insertion_min_length
+    type: integer
+    description: Minimum inserted segment length.
+    required: false
+    minimum: 1
+    ui_group: RFD3 redesign
+    ui_order: 22
+  - name: insertion_max_length
+    type: integer
+    description: Maximum inserted segment length.
+    required: false
+    minimum: 1
+    ui_group: RFD3 redesign
+    ui_order: 23
   - name: partial_t
     type: float
     description: Coordinate-noise magnitude for partial diffusion.
@@ -181,6 +228,13 @@ params:
     default: false
     ui_group: Execution
     ui_order: 42
+  - name: write_full_json
+    type: boolean
+    description: Retain the complete native RFD3 prediction metadata JSON.
+    required: false
+    default: true
+    ui_group: Execution
+    ui_order: 43
   - name: evaluation_states
     type: object
     description: Positive and negative typed acceptance states for downstream evaluation.

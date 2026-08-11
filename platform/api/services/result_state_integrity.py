@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import datetime
+import hashlib
 import math
 from pathlib import Path
 import re
@@ -17,7 +18,13 @@ from typing import Any, Awaitable, Callable, Optional
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import Design, Job
+from database import (
+    Design,
+    Job,
+    RFD3LocalRedesignArtifact,
+    RFD3LocalRedesignCandidate,
+    RFD3LocalRedesignRequest,
+)
 
 
 @dataclass(frozen=True)
@@ -95,12 +102,13 @@ def job_expects_design_results(job: Job) -> bool:
     mode = normalized_identifier(job.mode)
     model = aliases.get(model, model)
     mode = aliases.get(mode, mode)
+    if model == "protein_local_redesign":
+        return False
     design_model_ids = {
         "af3",
         "alphafold",
         "alphafold2",
         "alphafold3",
-
         "binder_design",
         "boltz2",
         "boltz_cp_experimental",
@@ -113,7 +121,6 @@ def job_expects_design_results(job: Job) -> bool:
         "fampnn",
         "ligandmpnn",
         "ppiflow",
-        "protein_local_redesign",
         "protein_hunter_experimental",
         "protein_modification_experimental",
         "proteinmpnn",
@@ -124,6 +131,11 @@ def job_expects_design_results(job: Job) -> bool:
         "rfdesign",
     }
     return model in design_model_ids or mode == "structure_prediction"
+
+
+def job_expects_rfd3_local_redesign_candidates(job: Job) -> bool:
+    model = re.sub(r"[^a-z0-9]+", "_", str(job.model_id or "").strip().lower()).strip("_")
+    return model == "protein_local_redesign"
 
 
 async def _design_count(session: AsyncSession, job_id: str) -> int:
@@ -138,6 +150,70 @@ async def _design_count(session: AsyncSession, job_id: str) -> int:
         )
         or 0
     )
+
+
+async def _rfd3_candidate_count(session: AsyncSession, job_id: str) -> int:
+    return int(
+        (
+            await session.scalar(
+                select(func.count(RFD3LocalRedesignCandidate.id))
+                .join(
+                    RFD3LocalRedesignRequest,
+                    RFD3LocalRedesignCandidate.request_id == RFD3LocalRedesignRequest.request_id,
+                )
+                .where(RFD3LocalRedesignRequest.job_id == job_id)
+            )
+        )
+        or 0
+    )
+
+
+async def _rfd3_candidates_are_usable(session: AsyncSession, job_id: str, output_dir: str) -> bool:
+    rows = list(
+        (
+            await session.execute(
+                select(RFD3LocalRedesignCandidate, RFD3LocalRedesignArtifact)
+                .join(
+                    RFD3LocalRedesignRequest,
+                    RFD3LocalRedesignCandidate.request_id == RFD3LocalRedesignRequest.request_id,
+                )
+                .join(
+                    RFD3LocalRedesignArtifact,
+                    (
+                        (RFD3LocalRedesignArtifact.request_id == RFD3LocalRedesignCandidate.request_id)
+                        & (RFD3LocalRedesignArtifact.candidate_id == RFD3LocalRedesignCandidate.candidate_id)
+                        & (RFD3LocalRedesignArtifact.role == "structure")
+                    ),
+                )
+                .where(RFD3LocalRedesignRequest.job_id == job_id)
+            )
+        ).all()
+    )
+    candidate_count = await _rfd3_candidate_count(session, job_id)
+    if candidate_count == 0 or len(rows) != candidate_count:
+        return False
+    output_root = Path(output_dir).expanduser().resolve()
+    for candidate, artifact in rows:
+        if candidate.status != "generated" or not str(candidate.artifact_manifest_sha256 or "").strip():
+            return False
+        storage_path = Path(str(artifact.storage_path or "")).expanduser().resolve()
+        if not storage_path.is_relative_to(output_root) or not storage_path.is_file():
+            return False
+        if storage_path.stat().st_size != artifact.size_bytes:
+            return False
+        digest = hashlib.sha256()
+        with storage_path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        if digest.hexdigest() != artifact.content_sha256:
+            return False
+    return True
+
+
+async def _authoritative_result_count(session: AsyncSession, job: Job) -> int:
+    if job_expects_rfd3_local_redesign_candidates(job):
+        return await _rfd3_candidate_count(session, str(job.id))
+    return await _design_count(session, str(job.id))
 
 
 async def _existing_designs_are_usable(
@@ -223,7 +299,7 @@ async def finalize_successful_job(
     await session.refresh(job)
     if job.status == "cancelled" or job.awaiting_input:
         state = "cancelled" if job.status == "cancelled" else "awaiting_input"
-        return FinalizationResult(False, await _design_count(session, job_id), state)
+        return FinalizationResult(False, await _authoritative_result_count(session, job), state)
 
     running_transition = await session.execute(
         update(Job)
@@ -239,7 +315,7 @@ async def finalize_successful_job(
         await session.rollback()
         job = await session.get(Job, job_id)
         state = "cancelled" if job is not None and job.status == "cancelled" else "awaiting_input"
-        return FinalizationResult(False, await _design_count(session, job_id), state)
+        return FinalizationResult(False, await _authoritative_result_count(session, job), state)
     await session.refresh(job)
 
     try:
@@ -250,9 +326,17 @@ async def finalize_successful_job(
             epitope_residues=epitope_residues,
             commit=False,
         )
-        count = await _design_count(session, job_id)
+        count = await _authoritative_result_count(session, job)
         idempotent_prior_results = False
-        if job_expects_design_results(job):
+        result_kind = "design"
+        if job_expects_rfd3_local_redesign_candidates(job):
+            result_kind = "rfd3_local_redesign_candidate"
+            if count == 0:
+                raise RuntimeError("workflow completed but result ingestion produced no typed RFD3 candidates")
+            if not await _rfd3_candidates_are_usable(session, job_id, output_dir):
+                raise RuntimeError("typed RFD3 candidate rows lack usable, contained, hash-valid structures")
+            idempotent_prior_results = int(ingested_count or 0) <= 0
+        elif job_expects_design_results(job):
             if count == 0:
                 raise RuntimeError("workflow completed but result ingestion produced no designs")
             usable_results = await _existing_designs_are_usable(session, job_id, output_dir)
@@ -271,8 +355,8 @@ async def finalize_successful_job(
         if job is None:
             raise RuntimeError(f"job disappeared during result finalization: {job_id}") from exc
         if job.status == "cancelled":
-            return FinalizationResult(False, await _design_count(session, job_id), "cancelled")
-        count = await _design_count(session, job_id)
+            return FinalizationResult(False, await _authoritative_result_count(session, job), "cancelled")
+        count = await _authoritative_result_count(session, job)
         partial = count > 0
         message = str(exc) or exc.__class__.__name__
         integrity_state = str(getattr(exc, "integrity_state", "ingestion_failed"))
@@ -281,6 +365,12 @@ async def finalize_successful_job(
             "state": integrity_state if no_candidates else "ingestion_failed",
             "partial": partial,
             "design_count": count,
+            "result_count": count,
+            "result_kind": (
+                "rfd3_local_redesign_candidate"
+                if job_expects_rfd3_local_redesign_candidates(job)
+                else "design"
+            ),
             "error": message,
         }
         if no_candidates:
@@ -327,6 +417,8 @@ async def finalize_successful_job(
             "state": "validated",
             "partial": False,
             "design_count": count,
+            "result_count": count,
+            "result_kind": result_kind,
             "idempotent_prior_results": idempotent_prior_results,
         },
     )

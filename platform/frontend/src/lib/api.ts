@@ -82,6 +82,16 @@ export interface MDArtifact {
 export interface RFD3LocalRedesignReadModel {
     schema: 'bms.rfd3.local-redesign.read-model.v1';
     job_id: string;
+    capabilities: {
+        source_structure: boolean;
+        candidate_structures: boolean;
+        native_metadata: boolean;
+        trajectories: {
+            requested: boolean;
+            available: boolean;
+            reason: 'produced' | 'not_requested' | 'requested_artifacts_unavailable';
+        };
+    };
     request: {
         request_id: string;
         schema_version: number;
@@ -92,6 +102,8 @@ export interface RFD3LocalRedesignReadModel {
         sequence_policy: string;
         status: string;
         request: Record<string, UntypedApiValue>;
+        request_path_scope: 'basename';
+        provenance_path_scope: 'basename';
         preparation_receipt?: Record<string, UntypedApiValue> | null;
         runtime_identity?: Record<string, UntypedApiValue> | null;
         result_manifest_sha256?: string | null;
@@ -114,7 +126,6 @@ export interface RFD3LocalRedesignReadModel {
         candidate_id?: string | null;
         role: string;
         relative_path: string;
-        storage_path: string;
         sha256: string;
         bytes: number;
         media_type: string;

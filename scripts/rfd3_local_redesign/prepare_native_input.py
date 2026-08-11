@@ -43,8 +43,11 @@ def main() -> None:
     input_binding = request.get("input")
     if not isinstance(input_binding, dict) or not isinstance(input_binding.get("path"), str):
         raise SystemExit("request.input must contain a source path")
+    staged_input_sha256 = _sha256_file(input_path)
+    if input_binding.get("sha256") != staged_input_sha256:
+        raise SystemExit("staged input structure does not match the canonical request")
     runtime_native = dict(native)
-    runtime_native["input"] = str(Path(input_binding["path"]).expanduser().resolve())
+    runtime_native["input"] = input_path.name
     native_payload = {args.design_id: runtime_native}
     native_json = canonical_json(native_payload)
     Path(args.output_native).write_text(native_json + "\n", encoding="utf-8")
@@ -57,11 +60,15 @@ def main() -> None:
         "native_input_sha256": hashlib.sha256(native_json.encode("utf-8")).hexdigest(),
         "runtime_input": {
             "path": input_path.name,
-            "sha256": _sha256_file(input_path),
+            "sha256": staged_input_sha256,
         },
         "design_id": args.design_id,
         "redesign_mode": request.get("redesign_mode"),
         "sequence_policy": request.get("sequence_policy"),
+        "sequence_design": {
+            "state": "not_requested" if request.get("sequence_policy") == "skip" else "requested",
+            "reason": "sequence_design_not_requested" if request.get("sequence_policy") == "skip" else None,
+        },
         "native_rfd3": runtime_native,
     }
     Path(args.output_receipt).write_text(canonical_json(receipt) + "\n", encoding="utf-8")

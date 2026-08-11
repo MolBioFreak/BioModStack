@@ -120,7 +120,7 @@ process PrepProteinLocalRFD3Input {
     path manifest_json
 
     output:
-    tuple val('protein_local_redesign_0'), path('rfd3_input_protein_local_redesign_0.json'), emit: input_json
+    tuple val('protein_local_redesign_0'), path('rfd3_input_protein_local_redesign_0.json'), path(seed_pdb), emit: input_json
 
     script:
     """
@@ -135,15 +135,17 @@ process PrepProteinLocalRFD3Input {
 
 process PrepareProteinLocalNativeRFD3Input {
     label 'pyrosetta_tools'
+    stageInMode 'copy'
 
     publishDir "${params.out_dir}/collected/protein_local_redesign", mode: 'copy', pattern: 'rfd3_preparation_receipt.json'
+    publishDir "${params.out_dir}/collected/protein_local_redesign", mode: 'copy', pattern: 'rfd3_input_protein_local_redesign_0.json'
 
     input:
     path input_structure
     path request_json
 
     output:
-    tuple val('protein_local_redesign_0'), path('rfd3_input_protein_local_redesign_0.json'), emit: input_json
+    tuple val('protein_local_redesign_0'), path('rfd3_input_protein_local_redesign_0.json'), path(input_structure), emit: input_json
     path 'rfd3_preparation_receipt.json', emit: receipt
 
     script:
@@ -164,8 +166,12 @@ process BuildProteinLocalRFD3ResultManifest {
 
     input:
     tuple path(cif_files), path(json_files)
+    tuple val(native_input_id), path(native_input_json), path(source_structure)
+    path trajectory_dir
     path request_json
-    path source_structure
+    path preparation_receipt
+    path producer_log
+    path producer_metadata_jsonl
 
     output:
     path 'rfd3_result_manifest.json', emit: manifest
@@ -178,10 +184,17 @@ process BuildProteinLocalRFD3ResultManifest {
         --request ${request_json} \\
         ${cifArgs} \\
         ${jsonArgs} \\
+        --native-input ${native_input_json} \\
+        --native-input-storage-path "${params.out_dir}/collected/protein_local_redesign/${native_input_json.name}" \\
+        --trajectory-dir ${trajectory_dir} \\
+        --preparation-receipt ${preparation_receipt} \\
+        --log-file ${producer_log} \\
+        --metadata-jsonl ${producer_metadata_jsonl} \\
         --storage-root "${params.out_dir}/run/rfd3" \\
         --request-storage-path "${params.rfd3_request_path}" \\
         --source-file ${source_structure} \\
         --source-storage-path "${params.plr_input_pdb}" \\
+        --preparation-receipt-storage-path "${params.out_dir}/collected/protein_local_redesign/rfd3_preparation_receipt.json" \\
         --output rfd3_result_manifest.json
     """
 }
@@ -361,8 +374,12 @@ workflow PROTEIN_LOCAL_REDESIGN {
         RunRFD3(PrepareProteinLocalNativeRFD3Input.out.input_json)
         BuildProteinLocalRFD3ResultManifest(
             RunRFD3.out.structures_metadata,
+            PrepareProteinLocalNativeRFD3Input.out.input_json,
+            RunRFD3.out.trajectories,
             Channel.of(file(params.rfd3_request_path)),
-            Channel.of(file(params.plr_input_pdb))
+            PrepareProteinLocalNativeRFD3Input.out.receipt,
+            RunRFD3.out.producer_log,
+            RunRFD3.out.producer_metadata_index
         )
         if (nativeSequenceMethod != 'skip') {
             FilterRFD3(RunRFD3.out.structures_metadata)

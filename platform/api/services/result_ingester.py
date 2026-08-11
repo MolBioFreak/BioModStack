@@ -2901,6 +2901,19 @@ async def _ingest_rfd3_local_redesign_manifest(
         or manifest.get("profile") != request_payload.get("profile")
     ):
         raise RuntimeError("RFD3 local-redesign result profile binding is invalid")
+    semantic_bindings = {
+        "request_schema": "schema",
+        "redesign_mode": "redesign_mode",
+        "contig_dialect": "contig_dialect",
+        "sequence_policy": "sequence_policy",
+        "input": "input",
+        "rfd3": "rfd3",
+        "execution": "execution",
+        "evaluation": "evaluation",
+    }
+    for manifest_key, request_key in semantic_bindings.items():
+        if manifest.get(manifest_key) != request_payload.get(request_key):
+            raise RuntimeError(f"RFD3 local-redesign manifest {manifest_key} binding is invalid")
     source_binding = request_payload.get("input")
     if not isinstance(source_binding, dict) or not isinstance(source_binding.get("path"), str):
         raise RuntimeError("RFD3 local-redesign request has no source input")
@@ -2923,9 +2936,51 @@ async def _ingest_rfd3_local_redesign_manifest(
         _local_redesign_validate_artifact(descriptor, output_root=output_root, source_path=source_path)
         descriptor_by_path[relative_path] = descriptor
 
-    roles = {str(descriptor.get("role") or "") for descriptor in descriptor_by_path.values()}
-    if not {"source_structure", "native_request"}.issubset(roles):
-        raise RuntimeError("RFD3 local-redesign result lacks source or native request artifact")
+    role_counts: dict[str, int] = {}
+    for descriptor in descriptor_by_path.values():
+        role = str(descriptor.get("role") or "")
+        role_counts[role] = role_counts.get(role, 0) + 1
+    required_roles = {
+        "source_structure",
+        "native_request",
+        "preparation_receipt",
+        "native_producer_input",
+        "producer_log",
+        "producer_metadata_index",
+    }
+    if any(role_counts.get(role) != 1 for role in required_roles):
+        raise RuntimeError("RFD3 local-redesign result lacks required source or runtime evidence")
+
+    execution = request_payload.get("execution")
+    execution_evidence = manifest.get("execution_evidence")
+    if not isinstance(execution, dict) or not isinstance(execution_evidence, dict):
+        raise RuntimeError("RFD3 local-redesign result lacks execution evidence")
+    requested_num_designs = execution.get("num_designs")
+    if (
+        not isinstance(requested_num_designs, int)
+        or execution_evidence.get("requested_num_designs") != requested_num_designs
+        or execution_evidence.get("observed_num_designs") != len(candidates)
+        or execution_evidence.get("candidate_count_integrity") != "exact"
+        or len(candidates) != requested_num_designs
+    ):
+        raise RuntimeError("RFD3 local-redesign candidate count integrity is invalid")
+    trajectories_requested = execution.get("dump_trajectories") is True
+    expected_trajectory_state = "produced" if trajectories_requested else "not_requested"
+    if execution_evidence.get("trajectories") != expected_trajectory_state:
+        raise RuntimeError("RFD3 local-redesign trajectory evidence is invalid")
+    if request_payload.get("sequence_policy") == "skip" and execution_evidence.get("sequence_design") != "not_requested":
+        raise RuntimeError("RFD3 local-redesign sequence skip evidence is invalid")
+    expected_role_counts = {role: 1 for role in required_roles}
+    expected_role_counts.update(
+        {
+            "structure": requested_num_designs,
+            "native_prediction_metadata": requested_num_designs,
+            "denoised_trajectory": requested_num_designs if trajectories_requested else 0,
+            "noisy_trajectory": requested_num_designs if trajectories_requested else 0,
+        }
+    )
+    if role_counts != {role: count for role, count in expected_role_counts.items() if count}:
+        raise RuntimeError("RFD3 local-redesign artifact role cardinality is invalid")
 
     seen_candidates: set[str] = set()
     seen_artifacts: set[str] = set()
@@ -2938,20 +2993,66 @@ async def _ingest_rfd3_local_redesign_manifest(
             raise RuntimeError("RFD3 local-redesign candidate IDs must be unique")
         if not isinstance(candidate_artifacts, list) or not candidate_artifacts:
             raise RuntimeError(f"RFD3 local-redesign candidate lacks artifacts: {candidate_id}")
+        if candidate.get("status") != "generated" or candidate.get("result_set") != "rfd3_local_redesign_candidates":
+            raise RuntimeError(f"RFD3 local-redesign candidate semantics are invalid: {candidate_id}")
         candidate_artifact_sha = _local_redesign_canonical_sha(candidate_artifacts)
         if candidate.get("artifact_manifest_sha256") != candidate_artifact_sha:
             raise RuntimeError(f"RFD3 local-redesign candidate artifact hash is invalid: {candidate_id}")
         candidate_roles = {str(item.get("role") or "") for item in candidate_artifacts if isinstance(item, dict)}
-        if "structure" not in candidate_roles or "native_prediction_metadata" not in candidate_roles:
-            raise RuntimeError(f"RFD3 local-redesign candidate lacks native structure metadata: {candidate_id}")
+        trajectory_roles = {"denoised_trajectory", "noisy_trajectory"}
+        expected_candidate_roles = {"structure", "native_prediction_metadata"}
+        if trajectories_requested:
+            expected_candidate_roles.update(trajectory_roles)
+        if candidate_roles != expected_candidate_roles or len(candidate_artifacts) != len(expected_candidate_roles):
+            raise RuntimeError(f"RFD3 local-redesign candidate artifact roles are invalid: {candidate_id}")
         for descriptor in candidate_artifacts:
             if not isinstance(descriptor, dict):
                 raise RuntimeError(f"RFD3 local-redesign candidate artifact is malformed: {candidate_id}")
             relative_path = descriptor.get("relative_path")
             if relative_path not in descriptor_by_path or descriptor_by_path[relative_path] != descriptor:
                 raise RuntimeError(f"RFD3 local-redesign candidate artifact is undeclared: {candidate_id}")
+            if str(relative_path) in seen_artifacts:
+                raise RuntimeError(f"RFD3 local-redesign candidate artifact is reused: {candidate_id}")
             seen_artifacts.add(str(relative_path))
+        native_metadata_descriptor = next(
+            item for item in candidate_artifacts if item.get("role") == "native_prediction_metadata"
+        )
+        native_metadata_path = _local_redesign_safe_job_artifact(
+            output_root, str(native_metadata_descriptor["relative_path"])
+        )
+        try:
+            native_metadata = json.loads(native_metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"RFD3 local-redesign native metadata is malformed: {candidate_id}") from exc
+        if not isinstance(native_metadata, dict):
+            raise RuntimeError(f"RFD3 local-redesign native metadata is not an object: {candidate_id}")
+        metric_keys = {
+            "summary_confidences",
+            "ca_rmsd_to_input",
+            "backbone_rmsd",
+            "insertion_rmsd",
+            "diffused_index_map",
+            "hbond_metrics",
+            "inference_metadata",
+        }
+        expected_metrics = {key: native_metadata[key] for key in metric_keys if key in native_metadata}
+        if candidate.get("metrics") != expected_metrics:
+            raise RuntimeError(f"RFD3 local-redesign candidate metrics do not match native metadata: {candidate_id}")
         seen_candidates.add(candidate_id)
+
+    candidate_roles_all = {
+        "structure",
+        "native_prediction_metadata",
+        "denoised_trajectory",
+        "noisy_trajectory",
+    }
+    declared_candidate_artifacts = {
+        relative_path
+        for relative_path, descriptor in descriptor_by_path.items()
+        if descriptor.get("role") in candidate_roles_all
+    }
+    if seen_artifacts != declared_candidate_artifacts:
+        raise RuntimeError("RFD3 local-redesign candidate artifact assignment is incomplete")
 
     runtime_records = [
         candidate.get("metrics", {}).get("inference_metadata")
@@ -2964,8 +3065,19 @@ async def _ingest_rfd3_local_redesign_manifest(
             "records": runtime_records,
         }
 
-    receipt_path = output_root / "collected" / "protein_local_redesign" / "rfd3_preparation_receipt.json"
-    if receipt_path.is_file() and not receipt_path.is_symlink():
+    receipt_descriptors = [
+        descriptor for descriptor in descriptor_by_path.values() if descriptor.get("role") == "preparation_receipt"
+    ]
+    if len(receipt_descriptors) != 1:
+        raise RuntimeError("RFD3 local-redesign preparation receipt descriptor is invalid")
+    receipt_descriptor = receipt_descriptors[0]
+    receipt_relative_path = str(receipt_descriptor.get("relative_path") or "")
+    if receipt_relative_path != "collected/protein_local_redesign/rfd3_preparation_receipt.json":
+        raise RuntimeError("RFD3 local-redesign preparation receipt path is invalid")
+    receipt_path = _local_redesign_safe_job_artifact(output_root, receipt_relative_path)
+    if not receipt_path.is_file() or receipt_path.is_symlink():
+        raise RuntimeError("RFD3 local-redesign preparation receipt is unavailable")
+    else:
         try:
             preparation_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
@@ -2976,6 +3088,47 @@ async def _ingest_rfd3_local_redesign_manifest(
             or preparation_receipt.get("request_sha256") != request.request_sha256
         ):
             raise RuntimeError("RFD3 local-redesign preparation receipt binding is invalid")
+        design_id = preparation_receipt.get("design_id")
+        native_input_descriptors = [
+            descriptor
+            for descriptor in descriptor_by_path.values()
+            if descriptor.get("role") == "native_producer_input"
+        ]
+        if len(native_input_descriptors) != 1:
+            raise RuntimeError("RFD3 local-redesign native producer input descriptor is invalid")
+        native_input_relative_path = str(native_input_descriptors[0].get("relative_path") or "")
+        if native_input_relative_path != "collected/protein_local_redesign/rfd3_input_protein_local_redesign_0.json":
+            raise RuntimeError("RFD3 local-redesign native producer input path is invalid")
+        native_input_path = _local_redesign_safe_job_artifact(output_root, native_input_relative_path)
+        try:
+            native_input_payload = json.loads(native_input_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError("RFD3 local-redesign native producer input is malformed") from exc
+        receipt_native = preparation_receipt.get("native_rfd3")
+        native_runtime_input = receipt_native.get("input") if isinstance(receipt_native, dict) else None
+        expected_native = dict(request_payload.get("rfd3") or {})
+        expected_native["input"] = native_runtime_input
+        runtime_input = preparation_receipt.get("runtime_input")
+        sequence_design = preparation_receipt.get("sequence_design")
+        if (
+            not isinstance(design_id, str)
+            or not design_id
+            or not isinstance(native_runtime_input, str)
+            or Path(native_runtime_input).name != source_path.name
+            or receipt_native != expected_native
+            or native_input_payload != {design_id: expected_native}
+            or preparation_receipt.get("native_input_sha256")
+            != _local_redesign_canonical_sha(native_input_payload)
+            or not isinstance(runtime_input, dict)
+            or runtime_input.get("path") != source_path.name
+            or runtime_input.get("sha256") != source_binding.get("sha256")
+            or preparation_receipt.get("redesign_mode") != request_payload.get("redesign_mode")
+            or preparation_receipt.get("sequence_policy") != request_payload.get("sequence_policy")
+            or not isinstance(sequence_design, dict)
+            or sequence_design.get("state")
+            != ("not_requested" if request_payload.get("sequence_policy") == "skip" else "requested")
+        ):
+            raise RuntimeError("RFD3 local-redesign preparation receipt semantics are invalid")
         request.preparation_receipt_json = preparation_receipt
 
     request.result_manifest_sha256 = claimed_manifest_sha

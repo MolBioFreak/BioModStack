@@ -6321,6 +6321,50 @@ async def launch_manual_mutagenesis_from_designs(
     )
 
 
+def _rfd3_public_json(value: Any, *, field: str | None = None) -> Any:
+    """Project stored RFD3 provenance without exposing absolute host paths."""
+
+    if isinstance(value, dict):
+        return {key: _rfd3_public_json(item, field=str(key)) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_rfd3_public_json(item, field=field) for item in value]
+    field_name = str(field or "").lower()
+    is_path_field = field_name in {
+        "input",
+        "path",
+        "paths",
+        "file",
+        "files",
+        "dir",
+        "directory",
+        "directories",
+        "filepath",
+        "filepaths",
+        "dirname",
+        "dirnames",
+        "storage_path",
+    } or field_name.endswith(
+        (
+            "_path",
+            "_paths",
+            "_file",
+            "_files",
+            "_dir",
+            "_directory",
+            "_directories",
+            "_filepath",
+            "_filepaths",
+            "_dirname",
+            "_dirnames",
+        )
+    )
+    if isinstance(value, str) and is_path_field:
+        candidate = Path(value).expanduser()
+        if candidate.is_absolute():
+            return candidate.name
+    return value
+
+
 @router.get("/{job_id}/rfd3-local-redesign")
 async def get_rfd3_local_redesign_result(job_id: str, session: AsyncSession = Depends(get_session)):
     """Return the typed local-redesign request and result projection."""
@@ -6346,9 +6390,48 @@ async def get_rfd3_local_redesign_result(job_id: str, session: AsyncSession = De
             .order_by(RFD3LocalRedesignArtifact.relative_path)
         )
     ).scalars().all()
+    artifact_roles = {row.role for row in artifacts}
+    candidate_ids = {row.candidate_id for row in candidates}
+    trajectory_roles_by_candidate = {
+        candidate_id: {
+            row.role
+            for row in artifacts
+            if row.candidate_id == candidate_id and row.role in {"denoised_trajectory", "noisy_trajectory"}
+        }
+        for candidate_id in candidate_ids
+    }
+    request_execution = request.request_json.get("execution", {}) if isinstance(request.request_json, dict) else {}
+    trajectories_requested = isinstance(request_execution, dict) and request_execution.get("dump_trajectories") is True
+    trajectories_available = bool(candidate_ids) and all(
+        roles == {"denoised_trajectory", "noisy_trajectory"}
+        for roles in trajectory_roles_by_candidate.values()
+    )
+    public_request = _rfd3_public_json(request.request_json)
     return {
         "schema": "bms.rfd3.local-redesign.read-model.v1",
         "job_id": str(job.id),
+        "capabilities": {
+            "source_structure": "source_structure" in artifact_roles,
+            "candidate_structures": bool(candidate_ids) and all(
+                any(row.candidate_id == candidate_id and row.role == "structure" for row in artifacts)
+                for candidate_id in candidate_ids
+            ),
+            "native_metadata": bool(candidate_ids) and all(
+                any(row.candidate_id == candidate_id and row.role == "native_prediction_metadata" for row in artifacts)
+                for candidate_id in candidate_ids
+            ),
+            "trajectories": {
+                "requested": trajectories_requested,
+                "available": trajectories_available,
+                "reason": (
+                    "produced"
+                    if trajectories_available
+                    else "not_requested"
+                    if not trajectories_requested
+                    else "requested_artifacts_unavailable"
+                ),
+            },
+        },
         "request": {
             "request_id": request.request_id,
             "schema_version": request.schema_version,
@@ -6358,11 +6441,13 @@ async def get_rfd3_local_redesign_result(job_id: str, session: AsyncSession = De
             "redesign_mode": request.redesign_mode,
             "sequence_policy": request.sequence_policy,
             "status": request.status,
-            "request": request.request_json,
-            "preparation_receipt": request.preparation_receipt_json,
-            "runtime_identity": request.runtime_identity_json,
+            "request": public_request,
+            "request_path_scope": "basename",
+            "provenance_path_scope": "basename",
+            "preparation_receipt": _rfd3_public_json(request.preparation_receipt_json),
+            "runtime_identity": _rfd3_public_json(request.runtime_identity_json),
             "result_manifest_sha256": request.result_manifest_sha256,
-            "failure_receipt": request.failure_receipt_json,
+            "failure_receipt": _rfd3_public_json(request.failure_receipt_json),
             "created_at": request.created_at.isoformat() if request.created_at else None,
             "updated_at": request.updated_at.isoformat() if request.updated_at else None,
             "terminal_at": request.terminal_at.isoformat() if request.terminal_at else None,
@@ -6374,8 +6459,8 @@ async def get_rfd3_local_redesign_result(job_id: str, session: AsyncSession = De
                 "stage": row.stage,
                 "status": row.status,
                 "artifact_manifest_sha256": row.artifact_manifest_sha256,
-                "metrics": row.metrics_json,
-                "metadata": row.metadata_json,
+                "metrics": _rfd3_public_json(row.metrics_json),
+                "metadata": _rfd3_public_json(row.metadata_json),
             }
             for row in candidates
         ],
@@ -6385,11 +6470,10 @@ async def get_rfd3_local_redesign_result(job_id: str, session: AsyncSession = De
                 "candidate_id": row.candidate_id,
                 "role": row.role,
                 "relative_path": row.relative_path,
-                "storage_path": row.storage_path,
                 "sha256": row.content_sha256,
                 "bytes": row.size_bytes,
                 "media_type": row.media_type,
-                "metadata": row.metadata_json,
+                "metadata": _rfd3_public_json(row.metadata_json),
             }
             for row in artifacts
         ],

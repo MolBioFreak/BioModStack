@@ -20,25 +20,37 @@ process RunRFD3 {
     label 'gpu'
     tag "B${batch_id}"
 
-    publishDir "${params.out_dir}/run/rfd3", mode: 'copy', pattern: "*.log"
+    publishDir "${params.out_dir}/run/rfd3", mode: 'copy', pattern: "rfd3_results/*.cif.gz", saveAs: { fn -> fn.replace('rfd3_results/', '') }
+    publishDir "${params.out_dir}/run/rfd3", mode: 'copy', pattern: "rfd3_results/*.json", saveAs: { fn -> fn.replace('rfd3_results/', '') }
+    publishDir "${params.out_dir}/run/rfd3/trajectories", mode: 'copy', pattern: "rfd3_trajectories/*.cif.gz", saveAs: { fn -> fn.replace('rfd3_trajectories/', '') }
+    publishDir "${params.out_dir}/run/rfd3", mode: 'copy', pattern: "rfd3_*.log"
+    publishDir "${params.out_dir}/run/rfd3", mode: 'copy', pattern: "rfd3_metadata_*.jsonl"
 
     beforeScript """
-        mkdir -p rfd3_results
+        mkdir -p rfd3_results rfd3_trajectories
     """
 
     input:
-    tuple val(batch_id), path(input_json)
+    tuple val(batch_id), path(input_json), path(runtime_source)
 
     output:
     path ("rfd3_results/*.cif.gz"), emit: structures
     path ("rfd3_results/*.json"), emit: metadata
     tuple path("rfd3_results/*.cif.gz"), path("rfd3_results/*.json"), emit: structures_metadata
-    path ("rfd3_metadata_${batch_id}.jsonl"), topic: metadata_ch_fold
-    path "rfd3_${batch_id}.log"
+    path "rfd3_trajectories", emit: trajectories
+    path ("rfd3_metadata_${batch_id}.jsonl"), emit: producer_metadata_index, topic: metadata_ch_fold
+    path "rfd3_${batch_id}.log", emit: producer_log
 
     script:
     def extra_config = params.rfd3_extra_config ?: ''
-    def n_batches = params.rfd3_batches_per_design ?: 1
+    def nativeRequest = params.rfd3_request_path && params.plr_redesign_mode
+    def num_designs = nativeRequest ? (params.plr_num_designs ?: 1) : (params.rfd3_batches_per_design ?: 1)
+    def seed = params.plr_seed == null ? 'null' : params.plr_seed
+    def dumpTrajectories = params.plr_dump_trajectories == true
+    def writeFullJson = params.plr_write_full_json != false
+    def executionConfig = nativeRequest
+        ? "diffusion_batch_size=1 seed=${seed} dump_trajectories=${dumpTrajectories} output_full_json=${writeFullJson}"
+        : extra_config
 
     """
     echo "Running RFdiffusion3 for batch ${batch_id}"
@@ -46,9 +58,17 @@ process RunRFD3 {
     rfd3 \\
         inputs=${input_json} \\
         out_dir=rfd3_results \\
-        n_batches=${n_batches} \\
-        ${extra_config} \\
+        n_batches=${num_designs} \\
+        ${executionConfig} \\
         2>&1 | tee rfd3_${batch_id}.log
+
+    trajectory_count=0
+    for trajectory in rfd3_results/*_denoised_model_*.cif.gz rfd3_results/*_noisy_model_*.cif.gz; do
+        [ -f "\$trajectory" ] || continue
+        mv "\$trajectory" rfd3_trajectories/
+        trajectory_count=\$((trajectory_count + 1))
+    done
+    printf '{"requested":%s,"count":%s}\n' '${dumpTrajectories}' "\$trajectory_count" > rfd3_trajectories/trajectory_inventory.json
     
     # Convert RFD3 output JSONs to pipeline metadata format
     python3 /scripts/metadata_converter.py \\
@@ -73,7 +93,7 @@ process PrepRFD3Input {
     tuple val(mode), val(contigs), path(input_pdb), val(hotspots), val(num_designs), val(design_startnum)
 
     output:
-    tuple val("${mode}_${design_startnum}"), path("rfd3_input_*.json"), emit: input_json
+    tuple val("${mode}_${design_startnum}"), path("rfd3_input_*.json"), path(input_pdb), emit: input_json
 
     script:
     def batch_id = "${mode}_${design_startnum}"
