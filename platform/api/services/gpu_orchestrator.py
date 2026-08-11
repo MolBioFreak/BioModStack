@@ -2225,7 +2225,6 @@ class GPUOrchestrator:
             base_conditions = [
                 Job.queue_status == "queued",
                 Job.paused == False,
-                Job.vram_estimate_mb.isnot(None),
                 # CRITICAL: Exclude jobs waiting for parent MSA job to complete
                 # Jobs with parent_job_id are linked to an MSA batch job
                 # They get their queue_status changed from pending_msa -> queued only after MSA completes
@@ -2271,8 +2270,8 @@ class GPUOrchestrator:
             # CPU-ONLY FAST PATH: Launch vram_estimate_mb == 0 jobs directly
             # These jobs (e.g. FASTQ-only nanopore) don't need GPU allocation.
             # ═══════════════════════════════════════════════════════════════════════
-            cpu_only_jobs = [j for j in pending_jobs if (j.vram_estimate_mb or 0) == 0]
-            gpu_jobs = [j for j in pending_jobs if (j.vram_estimate_mb or 0) > 0]
+            cpu_only_jobs = [j for j in pending_jobs if j.vram_estimate_mb == 0]
+            gpu_jobs = [j for j in pending_jobs if j.vram_estimate_mb != 0]
             
             for job in cpu_only_jobs:
                 try:

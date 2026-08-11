@@ -5,7 +5,10 @@ from __future__ import annotations
 import gzip
 import hashlib
 import mimetypes
+import os
+import shutil
 import uuid
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -178,17 +181,71 @@ def materialize_local_redesign_request(
     output_dir: str | Path,
     job_id: str,
 ) -> tuple[dict[str, Any], dict[str, Any], str, Path]:
-    """Write the canonical request under the owning job directory."""
-    request = params.get("rfd3_request")
-    if not isinstance(request, dict):
+    """Copy the source and write the canonical request under the owning job directory."""
+    request_value = params.get("rfd3_request")
+    if not isinstance(request_value, dict):
         raise ContractError("rfd3_request is missing from normalized job parameters")
-    digest = request_sha256(request)
-    destination = Path(output_dir).expanduser().resolve() / "requests" / "rfd3_local_redesign_request.json"
-    written_digest = write_request(destination, request)
-    if written_digest != digest:
-        raise ContractError("canonical request digest changed during materialization")
+    request = deepcopy(request_value)
+    input_binding = request.get("input")
+    if not isinstance(input_binding, dict) or not isinstance(input_binding.get("path"), str):
+        raise ContractError("rfd3_request input binding is missing")
+    source_lexical = Path(input_binding["path"]).expanduser()
+    expected_source_sha = input_binding.get("sha256")
+    if source_lexical.is_symlink():
+        raise ContractError("local-redesign source must be a regular non-symlink file")
+    source = source_lexical.resolve()
+    if not source.is_file():
+        raise ContractError("local-redesign source must be a regular non-symlink file")
+    output_root_lexical = Path(output_dir).expanduser()
+    if output_root_lexical.is_symlink():
+        raise ContractError("local-redesign output root must not be a symlink")
+    output_root = output_root_lexical.resolve()
+    if not output_root.is_dir():
+        raise ContractError("local-redesign output root is missing")
+    owned_dir = output_root / "external_inputs"
+    if owned_dir.exists() and (owned_dir.is_symlink() or not owned_dir.is_dir()):
+        raise ContractError("task-owned local-redesign source directory is unsafe")
+    owned_dir.mkdir(mode=0o700, exist_ok=True)
+    if owned_dir.resolve().parent != output_root:
+        raise ContractError("task-owned local-redesign source directory escaped the output root")
+    owned_source = owned_dir / source.name
+    if owned_source.exists() or owned_source.is_symlink():
+        raise ContractError("task-owned local-redesign source already exists")
+    temporary_source = owned_dir / f".{source.name}.{uuid.uuid4().hex}.tmp"
+    requests_dir = output_root / "requests"
+    if requests_dir.exists() and (requests_dir.is_symlink() or not requests_dir.is_dir()):
+        raise ContractError("local-redesign request directory is unsafe")
+    requests_dir.mkdir(mode=0o700, exist_ok=True)
+    if requests_dir.resolve().parent != output_root:
+        raise ContractError("local-redesign request directory escaped the output root")
+    destination = requests_dir / "rfd3_local_redesign_request.json"
+    if destination.exists() or destination.is_symlink():
+        raise ContractError("materialized local-redesign request already exists")
+    try:
+        with source.open("rb") as source_handle, temporary_source.open("xb") as destination_handle:
+            shutil.copyfileobj(source_handle, destination_handle)
+            destination_handle.flush()
+            os.fsync(destination_handle.fileno())
+        if _sha256_file(temporary_source) != expected_source_sha:
+            raise ContractError("task-owned local-redesign source hash mismatch")
+        os.replace(temporary_source, owned_source)
+        input_binding["path"] = str(owned_source)
+        digest = request_sha256(request)
+        written_digest = write_request(destination, request)
+        if written_digest != digest:
+            raise ContractError("canonical request digest changed during materialization")
+    except (ContractError, OSError) as exc:
+        temporary_source.unlink(missing_ok=True)
+        owned_source.unlink(missing_ok=True)
+        destination.unlink(missing_ok=True)
+        if isinstance(exc, ContractError):
+            raise
+        raise ContractError(f"failed to materialize local-redesign source and request: {exc}") from exc
 
     normalized = dict(params)
+    normalized["rfd3_request"] = request
+    for key in ("input_structure", "input_pdb", "input_cif", "input", "plr_input_pdb"):
+        normalized[key] = str(owned_source)
     normalized["rfd3_request_path"] = str(destination)
     normalized["rfd3_request_sha256"] = digest
     normalized["rfd3_request_id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, f"bms:rfd3-local-redesign:{job_id}"))

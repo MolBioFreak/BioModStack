@@ -4,6 +4,7 @@ import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from sqlalchemy import select, update
@@ -17,13 +18,87 @@ if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
 from database import Base, Job, MdRun
+import services.gpu_orchestrator as gpu_module
 from services.gpu_orchestrator import (
+    GPUOrchestrator,
     _commit_reconciled_job_mutations,
     _has_terminal_nextflow_history,
     _job_requires_result_output_for_terminal_history,
     _recover_rfantibody_parent_after_child_wait,
     _reconcile_terminal_history_without_process,
 )
+
+
+@pytest.mark.asyncio
+async def test_unknown_vram_is_estimated_and_pinned_while_explicit_zero_stays_cpu(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'scheduler.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as session:
+        session.add_all(
+            [
+                Job(
+                    id="gpu-job",
+                    name="gpu-job",
+                    status="queued",
+                    queue_status="queued",
+                    model_id="protein_local_redesign",
+                    mode="local_redesign",
+                    params={},
+                    output_dir=str(tmp_path / "gpu-output"),
+                    vram_estimate_mb=None,
+                    pinned_gpu=2,
+                ),
+                Job(
+                    id="cpu-job",
+                    name="cpu-job",
+                    status="queued",
+                    queue_status="queued",
+                    model_id="cpu-only",
+                    mode="run",
+                    params={},
+                    output_dir=str(tmp_path / "cpu-output"),
+                    vram_estimate_mb=0,
+                ),
+            ]
+        )
+        await session.commit()
+
+    monkeypatch.setattr(
+        gpu_module,
+        "read_scheduler_config",
+        lambda: {"global": {"enabled": True, "target_vram_fill": 0.9}, "concurrency_limits": {}},
+    )
+    launched: list[dict[str, Any]] = []
+
+    async def launch(**kwargs: Any) -> None:
+        launched.append(kwargs)
+
+    gpu = SimpleNamespace(
+        index=2,
+        name="GPU 2",
+        memory_used_mb=0,
+        memory_total_mb=32607,
+        memory_free_mb=32607,
+        utilization=0,
+        temperature=30,
+    )
+    orchestrator = GPUOrchestrator(factory, lambda: [gpu], launch)
+    await orchestrator._process_cycle()
+
+    by_id = {str(item["job_id"]): item for item in launched}
+    assert "gpu_id" not in by_id["cpu-job"]["params"]
+    assert by_id["gpu-job"]["params"]["gpu_id"] == 2
+    async with factory() as session:
+        gpu_job = await session.get(Job, "gpu-job")
+        cpu_job = await session.get(Job, "cpu-job")
+        assert gpu_job is not None and gpu_job.assigned_gpu == 2
+        assert gpu_job.vram_estimate_mb is not None and gpu_job.vram_estimate_mb > 0
+        assert cpu_job is not None and cpu_job.assigned_gpu is None
+    await engine.dispose()
 
 
 def test_recover_rfantibody_parent_after_child_wait_opens_post_rf_gate(tmp_path: Path) -> None:

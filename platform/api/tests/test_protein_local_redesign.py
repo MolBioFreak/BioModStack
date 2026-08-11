@@ -195,6 +195,60 @@ def test_api_derives_fixed_scaffold_from_the_bound_source_structure(
         "A2": [],
         "B1": ["ALL"],
     }
+    output_dir = tmp_path / "job-output"
+    output_dir.mkdir()
+    materialized, materialized_request, materialized_digest, request_path = (
+        rfd3_service.materialize_local_redesign_request(
+            normalized,
+            output_dir=output_dir,
+            job_id="owned-source-job",
+        )
+    )
+    owned_source = output_dir / "external_inputs" / source.name
+    assert owned_source.read_bytes() == source.read_bytes()
+    assert materialized_request["input"]["path"] == str(owned_source.resolve())
+    assert materialized["rfd3_request"] == materialized_request
+    for alias in ("input_structure", "input_pdb", "input_cif", "input", "plr_input_pdb"):
+        assert materialized[alias] == str(owned_source.resolve())
+    assert request_path.is_relative_to(output_dir.resolve())
+    assert request_sha256(materialized_request) == materialized_digest
+
+    unsafe_output = tmp_path / "unsafe-output"
+    unsafe_output.mkdir()
+    outside = tmp_path / "outside-owned"
+    outside.mkdir()
+    (unsafe_output / "external_inputs").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ContractError, match="source directory is unsafe"):
+        rfd3_service.materialize_local_redesign_request(
+            normalized,
+            output_dir=unsafe_output,
+            job_id="unsafe-owned-source-job",
+        )
+    assert not list(outside.iterdir())
+
+    failed_output = tmp_path / "failed-output"
+    failed_output.mkdir()
+    original_write_request = rfd3_service.write_request
+
+    def fail_request_write(_path: Path, _request: dict[str, object]) -> str:
+        raise OSError("forced request write failure")
+
+    monkeypatch.setattr(rfd3_service, "write_request", fail_request_write)
+    with pytest.raises(ContractError, match="failed to materialize"):
+        rfd3_service.materialize_local_redesign_request(
+            normalized,
+            output_dir=failed_output,
+            job_id="retryable-owned-source-job",
+        )
+    assert not list((failed_output / "external_inputs").iterdir())
+    assert not list((failed_output / "requests").iterdir())
+    monkeypatch.setattr(rfd3_service, "write_request", original_write_request)
+    retried, _, _, _ = rfd3_service.materialize_local_redesign_request(
+        normalized,
+        output_dir=failed_output,
+        job_id="retryable-owned-source-job",
+    )
+    assert Path(retried["input_structure"]).is_file()
 
 
 def test_api_rejects_source_outside_the_active_data_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
