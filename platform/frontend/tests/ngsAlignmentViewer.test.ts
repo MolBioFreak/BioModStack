@@ -209,6 +209,17 @@ test('timed-out IGV generation owns terminal loading state but cannot clear a ne
     assert.equal(ownsTerminal(4, 5, 5, true), false);
 });
 
+test('upstream NGS route producers retain context and avoid generic viewers', () => {
+    const queueSource = readFileSync(new URL('../src/components/dashboard/JobQueueTable.tsx', import.meta.url), 'utf8');
+    const molBioSource = readFileSync(new URL('../src/components/MolBioToolkit/MolBioToolkitV2.tsx', import.meta.url), 'utf8');
+
+    assert.match(queueSource, /isNgsJob\(job\)/);
+    assert.match(queueSource, /ngsResultHref\(job\.id, location\.search\)/);
+    assert.match(queueSource, /NGS Run Inspector/);
+    assert.match(molBioSource, /ngsResultHref\(workup\.job_id, location\.search\)/);
+    assert.doesNotMatch(molBioSource, /href=\{`\/jobs\/\$\{encodeURIComponent\(workup\.job_id\)\}`\}/);
+});
+
 test('alignment track completion cannot navigate away from a session-bound locus', () => {
     const source = readFileSync(new URL('../src/components/NGSToolkit.tsx', import.meta.url), 'utf8');
     const locusDetectionCalls = source.match(/detectInitialLocusFromFasta\(activeIgvFastaUrl\)/g) || [];

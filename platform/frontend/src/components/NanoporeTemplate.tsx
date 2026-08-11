@@ -1305,7 +1305,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
             const submittedJobId = response.data?.id;
             if (submittedJobId) {
-                navigate(contextHref(`/jobs/${submittedJobId}`, { job_id: submittedJobId }));
+                navigate(contextHref('/ngs', { section: 'analyses', job_id: submittedJobId }));
                 return;
             }
             navigate(contextHref('/ngs'));

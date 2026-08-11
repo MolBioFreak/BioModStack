@@ -14,7 +14,7 @@ process FastqPlasmidQC {
     tag "fastq_qc"
 
     input:
-    tuple path(bam), path(bai)
+    tuple path(bam, stageAs: 'source-aligned.bam'), path(bai, stageAs: 'source-aligned.bam.bai')
     path reference, stageAs: 'expected-reference-source.fasta'
     path fastq
 
@@ -267,95 +267,38 @@ process FastqPlasmidQC {
     bam_local=\$(basename "${bam}")
     bai_local=\$(basename "${bai}")
     if [[ "\${bam_local}" != "aligned.bam" ]]; then
-        cp "${bam}" aligned.bam
+        cp -- "${bam}" aligned.bam
         bam_local="aligned.bam"
     fi
     if [[ "\${bai_local}" != "aligned.bam.bai" ]]; then
-        cp "${bai}" aligned.bam.bai
+        cp -- "${bai}" aligned.bam.bai
         bai_local="aligned.bam.bai"
     fi
 
-    cat > igv_track_config.json <<JSON
-[
-  {
-    "name": "Aligned Reads",
-    "type": "alignment",
-    "format": "bam",
-    "url": "\${bam_local}",
-    "indexURL": "\${bai_local}",
-    "showCoverage": true,
-    "showSoftClips": true,
-    "showMismatches": true,
-    "showAllBases": true,
-    "showInsertionText": true,
-    "displayMode": "EXPANDED",
-    "visibilityWindow": -1
-  },
-  {
-    "name": "Coverage Depth",
-    "type": "wig",
-    "format": "bedgraph",
-    "url": "igv_coverage_depth.bedgraph",
-    "graphType": "bar",
-    "autoscale": true,
-    "color": "#4ea6ff"
-  },
-  {
-    "name": "Position Gradient",
-    "type": "wig",
-    "format": "bedgraph",
-    "url": "igv_position_gradient.bedgraph",
-    "graphType": "heatmap",
-    "min": 0,
-    "max": 1,
-    "autoscale": false
-  },
-  {
-    "name": "GC Content (%)",
-    "type": "wig",
-    "format": "bedgraph",
-    "url": "igv_gc_content.bedgraph",
-    "graphType": "line",
-    "autoscale": true,
-    "color": "#2ec27e"
-  },
-  {
-    "name": "GC Z-score",
-    "type": "wig",
-    "format": "bedgraph",
-    "url": "igv_gc_zscore.bedgraph",
-    "graphType": "line",
-    "autoscale": true,
-    "color": "#f6d32d"
-  },
-  {
-    "name": "Split-read Density",
-    "type": "wig",
-    "format": "bedgraph",
-    "url": "igv_split_read_density.bedgraph",
-    "graphType": "bar",
-    "autoscale": true,
-    "color": "#ff7800"
-  },
-  {
-    "name": "Soft-clip Density",
-    "type": "wig",
-    "format": "bedgraph",
-    "url": "igv_softclip_density.bedgraph",
-    "graphType": "bar",
-    "autoscale": true,
-    "color": "#e01b24"
-  },
-  {
-    "name": "Junction Hotspots",
-    "type": "annotation",
-    "format": "bed",
-    "url": "igv_junction_hotspots.bed",
-    "displayMode": "EXPANDED",
-    "color": "#ffbe6f"
-  }
-]
-JSON
+    if [[ ! -f "${codeRoot}/scripts/build_small_igv_report_inputs.py" ]]; then
+        echo "Missing report input builder: ${codeRoot}/scripts/build_small_igv_report_inputs.py" >&2
+        exit 1
+    fi
+    if [[ ! -f "${codeRoot}/scripts/finalize_small_igv_report.py" ]]; then
+        echo "Missing report finalizer: ${codeRoot}/scripts/finalize_small_igv_report.py" >&2
+        exit 1
+    fi
+    "\${PYTHON_CMD[@]}" "${codeRoot}/scripts/build_small_igv_report_inputs.py" \
+        --job-id "${manifestJobId}" \
+        --mode primary \
+        --reference-fasta reference_qc.fasta \
+        --reference-index reference_qc.fasta.fai \
+        --alignment-bam "\${bam_local}" \
+        --alignment-bai "\${bai_local}" \
+        --coverage-depth igv_coverage_depth.bedgraph \
+        --position-gradient igv_position_gradient.bedgraph \
+        --gc-content igv_gc_content.bedgraph \
+        --gc-zscore igv_gc_zscore.bedgraph \
+        --split-read-density igv_split_read_density.bedgraph \
+        --soft-clip-density igv_softclip_density.bedgraph \
+        --junction-hotspots igv_junction_hotspots.bed \
+        --out-track-config igv_track_config.json \
+        --out-reference-config igv_reference_config.json
 
     : > igv_report.log
 
@@ -364,11 +307,12 @@ JSON
         exit 86
     fi
     rm -f igv_report.html
-    if ! create_report igv_report_sites.bed \\
-        --fasta reference_qc.fasta \\
-        --track-config igv_track_config.json \\
-        --flanking ${igvReportFlankingBp} \\
-        --title "FASTQ Plasmid QC IGV Report" \\
+    if ! create_report igv_report_sites.bed \
+        --fasta reference_qc.fasta \
+        --track-config igv_track_config.json \
+        --flanking ${igvReportFlankingBp} \
+        --title "FASTQ Plasmid QC IGV Report" \
+        --no-embed \
         --output igv_report.html >> igv_report.log 2>&1; then
         echo "CRITICAL_FAILURE: IGV_REPORT_CREATE_REPORT_FAILED" | tee -a igv_report.log >&2
         rm -f igv_report.html
@@ -376,6 +320,23 @@ JSON
     fi
     if [[ ! -s igv_report.html ]]; then
         echo "CRITICAL_FAILURE: IGV_REPORT_ARTIFACT_EMPTY" | tee -a igv_report.log >&2
+        exit 86
+    fi
+    if ! "\${PYTHON_CMD[@]}" "${codeRoot}/scripts/finalize_small_igv_report.py" \
+        --report igv_report.html \
+        --reference-config igv_reference_config.json \
+        --track-config igv_track_config.json \
+        --generated-reference-fasta reference_qc.fasta \
+        --generated-reference-index reference_qc.fasta.fai \
+        --max-bytes 1048576 >> igv_report.log 2>&1; then
+        echo "CRITICAL_FAILURE: IGV_REPORT_FINALIZE_FAILED" | tee -a igv_report.log >&2
+        rm -f igv_report.html
+        exit 86
+    fi
+    igv_report_size=\$(wc -c < igv_report.html)
+    if [[ "\${igv_report_size}" -gt 1048576 ]]; then
+        echo "CRITICAL_FAILURE: IGV_REPORT_ARTIFACT_OVERSIZED bytes=\${igv_report_size} max_bytes=1048576" | tee -a igv_report.log >&2
+        rm -f igv_report.html
         exit 86
     fi
     igv_report_cli_available=1

@@ -9,9 +9,12 @@ import os
 import re
 import stat
 import subprocess
+import tempfile
+import threading
+from collections import OrderedDict
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, BinaryIO, Iterator, cast
 
 from paths import get_results_dir
 
@@ -23,10 +26,274 @@ MAX_READ_PAGE = 200
 MAX_SEQUENCE_PAGE = 20
 MAX_READ_CURSOR = 9_999
 MAX_READ_SCAN = 10_000
+LINKED_REPORT_ROLES = frozenset(
+    {
+        "alignment",
+        "alignment_index",
+        "reference",
+        "reference_index",
+        "coverage_depth",
+        "gc_content",
+        "position_gradient",
+        "gc_zscore",
+        "split_read_density",
+        "soft_clip_density",
+        "junction_hotspots",
+    }
+)
+SESSION_MODES = frozenset({"primary", "dimer_candidates"})
+SNAPSHOT_CACHE_MAX_BYTES = 2 * 1024 * 1024 * 1024
+SNAPSHOT_CACHE_MAX_ENTRIES = 64
+SNAPSHOT_CHUNK_BYTES = 1024 * 1024
+_snapshot_cache_lock = threading.RLock()
+_snapshot_cache_condition = threading.Condition(_snapshot_cache_lock)
+_snapshot_cache_owner: tempfile.TemporaryDirectory[str] | None = None
+_snapshot_cache_dir: Path | None = None
+_snapshot_cache: OrderedDict[str, int] = OrderedDict()
+_snapshot_cache_leases: dict[str, int] = {}
+_snapshot_cache_bytes = 0
+_snapshot_inflight: set[str] = set()
+_snapshot_inflight_bytes = 0
 
 
 class AlignmentSessionError(ValueError):
     """Raised when a requested session or artifact is unsafe or unavailable."""
+
+
+class _SnapshotLease:
+    def __init__(self, handle: BinaryIO, digest: str) -> None:
+        self._handle = handle
+        self._digest = digest
+        self._closed = False
+
+    def read(self, size: int = -1) -> bytes:
+        return self._handle.read(size)
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        return self._handle.seek(offset, whence)
+
+    def fileno(self) -> int:
+        return self._handle.fileno()
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._handle.close()
+        finally:
+            with _snapshot_cache_condition:
+                leases = _snapshot_cache_leases.get(self._digest, 0)
+                if leases <= 1:
+                    _snapshot_cache_leases.pop(self._digest, None)
+                else:
+                    _snapshot_cache_leases[self._digest] = leases - 1
+                _snapshot_cache_condition.notify_all()
+
+    def __enter__(self) -> _SnapshotLease:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        self.close()
+
+
+def _open_regular_file_no_symlinks(path: Path) -> BinaryIO:
+    absolute = Path(os.path.abspath(path))
+    if not absolute.is_absolute():
+        raise AlignmentSessionError("unsafe artifact path")
+    descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        for index, component in enumerate(absolute.parts[1:]):
+            final = index == len(absolute.parts[1:]) - 1
+            flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+            if not final:
+                flags |= os.O_DIRECTORY
+            next_descriptor = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = next_descriptor
+        file_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(file_stat.st_mode):
+            raise AlignmentSessionError("unsafe artifact: non-regular file")
+        return os.fdopen(descriptor, "rb", closefd=True)
+    except (OSError, ValueError) as exc:
+        os.close(descriptor)
+        raise AlignmentSessionError("unsafe artifact path") from exc
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def _snapshot_cache_directory() -> Path:
+    global _snapshot_cache_owner, _snapshot_cache_dir
+    with _snapshot_cache_condition:
+        if _snapshot_cache_dir is None:
+            _snapshot_cache_owner = tempfile.TemporaryDirectory(prefix="bms-alignment-snapshots-")
+            _snapshot_cache_dir = Path(_snapshot_cache_owner.name)
+            _snapshot_cache_dir.chmod(0o700)
+        return _snapshot_cache_dir
+
+
+def _discard_cached_snapshot_locked(digest: str) -> None:
+    global _snapshot_cache_bytes
+    if _snapshot_cache_leases.get(digest, 0) > 0:
+        return
+    discarded_size = _snapshot_cache.pop(digest, None)
+    if discarded_size is not None:
+        _snapshot_cache_bytes = max(0, _snapshot_cache_bytes - discarded_size)
+    _snapshot_cache_leases.pop(digest, None)
+    if _snapshot_cache_dir is not None:
+        (_snapshot_cache_dir / digest).unlink(missing_ok=True)
+
+
+def _cached_snapshot_locked(expected_sha256: str, expected_size: int) -> BinaryIO | None:
+    cached_size = _snapshot_cache.get(expected_sha256)
+    if cached_size != expected_size or _snapshot_cache_dir is None:
+        return None
+    cache_path = _snapshot_cache_dir / expected_sha256
+    try:
+        snapshot = _open_regular_file_no_symlinks(cache_path)
+    except AlignmentSessionError:
+        _discard_cached_snapshot_locked(expected_sha256)
+        return None
+    if os.fstat(snapshot.fileno()).st_size != expected_size:
+        snapshot.close()
+        _discard_cached_snapshot_locked(expected_sha256)
+        return None
+    _snapshot_cache.move_to_end(expected_sha256)
+    _snapshot_cache_leases[expected_sha256] = _snapshot_cache_leases.get(expected_sha256, 0) + 1
+    return cast(BinaryIO, _SnapshotLease(snapshot, expected_sha256))
+
+
+def _cached_snapshot(expected_sha256: str, expected_size: int) -> BinaryIO | None:
+    with _snapshot_cache_condition:
+        return _cached_snapshot_locked(expected_sha256, expected_size)
+
+
+def _evict_for_reservation_locked(required_size: int) -> bool:
+    while (
+        _snapshot_cache_bytes + _snapshot_inflight_bytes + required_size > SNAPSHOT_CACHE_MAX_BYTES
+        or len(_snapshot_cache) + len(_snapshot_inflight) >= SNAPSHOT_CACHE_MAX_ENTRIES
+    ):
+        evictable = next(
+            (digest for digest in _snapshot_cache if _snapshot_cache_leases.get(digest, 0) == 0),
+            None,
+        )
+        if evictable is None:
+            return False
+        _discard_cached_snapshot_locked(evictable)
+    return True
+
+
+def _reserve_snapshot(digest: str, size: int) -> BinaryIO | None:
+    global _snapshot_inflight_bytes
+    with _snapshot_cache_condition:
+        while True:
+            cached = _cached_snapshot_locked(digest, size)
+            if cached is not None:
+                return cached
+            if digest in _snapshot_inflight:
+                _snapshot_cache_condition.wait()
+                continue
+            if _evict_for_reservation_locked(size):
+                _snapshot_inflight.add(digest)
+                _snapshot_inflight_bytes += size
+                return None
+            raise AlignmentSessionError("snapshot cache capacity unavailable")
+def _release_snapshot_reservation(digest: str, size: int) -> None:
+    global _snapshot_inflight_bytes
+    with _snapshot_cache_condition:
+        if digest in _snapshot_inflight:
+            _snapshot_inflight.remove(digest)
+            _snapshot_inflight_bytes = max(0, _snapshot_inflight_bytes - size)
+        _snapshot_cache_condition.notify_all()
+
+
+def _publish_snapshot(snapshot: BinaryIO, snapshot_path: Path, digest: str, size: int) -> BinaryIO:
+    global _snapshot_cache_bytes, _snapshot_inflight_bytes
+    with _snapshot_cache_condition:
+        cache_dir = _snapshot_cache_directory()
+        cache_path = cache_dir / digest
+        os.chmod(snapshot_path, 0o400)
+        os.replace(snapshot_path, cache_path)
+        snapshot.close()
+        try:
+            readonly_snapshot = _open_regular_file_no_symlinks(cache_path)
+        except Exception:
+            cache_path.unlink(missing_ok=True)
+            raise
+        replaced_size = _snapshot_cache.pop(digest, None)
+        if replaced_size is not None:
+            _snapshot_cache_bytes -= replaced_size
+        _snapshot_cache[digest] = size
+        _snapshot_cache_bytes += size
+        _snapshot_cache_leases[digest] = 1
+        _snapshot_inflight.discard(digest)
+        _snapshot_inflight_bytes = max(0, _snapshot_inflight_bytes - size)
+        _snapshot_cache_condition.notify_all()
+        return cast(BinaryIO, _SnapshotLease(readonly_snapshot, digest))
+
+
+def open_verified_artifact_snapshot(
+    path: Path,
+    *,
+    expected_size: int,
+    expected_sha256: str,
+) -> BinaryIO:
+    """Return a private exact-byte snapshot bound to the declared digest."""
+    if expected_size < 0 or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None:
+        raise AlignmentSessionError("artifact integrity metadata is invalid")
+    if expected_size > SNAPSHOT_CACHE_MAX_BYTES:
+        raise AlignmentSessionError("artifact exceeds snapshot limit")
+    cached = _reserve_snapshot(expected_sha256, expected_size)
+    if cached is not None:
+        return cached
+
+    source: BinaryIO | None = None
+    temporary: BinaryIO | None = None
+    temporary_path: Path | None = None
+    reservation_active = True
+    try:
+        source = _open_regular_file_no_symlinks(path)
+        cache_dir = _snapshot_cache_directory()
+        temporary_file = tempfile.NamedTemporaryFile(mode="w+b", dir=cache_dir, delete=False)
+        temporary = cast(BinaryIO, temporary_file)
+        temporary_path = Path(temporary_file.name)
+        digest = hashlib.sha256()
+        copied = 0
+        if os.fstat(source.fileno()).st_size != expected_size:
+            raise AlignmentSessionError("artifact integrity size mismatch")
+        while copied <= expected_size:
+            chunk = source.read(min(SNAPSHOT_CHUNK_BYTES, expected_size + 1 - copied))
+            if not chunk:
+                break
+            copied += len(chunk)
+            digest.update(chunk)
+            temporary.write(chunk)
+        if copied != expected_size or digest.hexdigest() != expected_sha256:
+            raise AlignmentSessionError("artifact integrity digest mismatch")
+        temporary.flush()
+        os.fsync(temporary.fileno())
+        temporary.seek(0)
+        snapshot = _publish_snapshot(temporary, temporary_path, expected_sha256, expected_size)
+        reservation_active = False
+        temporary = None
+        temporary_path = None
+        return snapshot
+    except Exception:
+        if temporary is not None:
+            temporary.close()
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        raise
+    finally:
+        if source is not None:
+            source.close()
+        if reservation_active:
+            _release_snapshot_reservation(expected_sha256, expected_size)
 
 
 def _safe_job_root(
@@ -62,19 +329,22 @@ def _safe_job_root(
     return normalized, job_root
 
 
-@lru_cache(maxsize=256)
-def _sha256_file_cached(path_text: str, size_bytes: int, mtime_ns: int) -> str:
-    del size_bytes, mtime_ns  # cache-key material; path is the authoritative input below.
+def _sha256_file_and_size(path: Path) -> tuple[str, int]:
+    """Hash one no-follow descriptor and return its size from the same descriptor."""
+    handle = _open_regular_file_no_symlinks(path)
     digest = hashlib.sha256()
-    with Path(path_text).open("rb") as handle:
+    try:
+        size_bytes = os.fstat(handle.fileno()).st_size
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
-    return digest.hexdigest()
+        return digest.hexdigest(), size_bytes
+    finally:
+        handle.close()
 
 
 def _sha256_file(path: Path) -> str:
-    file_stat = path.stat()
-    return _sha256_file_cached(str(path), file_stat.st_size, file_stat.st_mtime_ns)
+    digest, _size_bytes = _sha256_file_and_size(path)
+    return digest
 
 
 def _regular_file_inside(path: Path, job_root: Path) -> tuple[Path | None, str | None]:
@@ -280,7 +550,6 @@ def _fasta_contigs(reference: Path) -> dict[str, tuple[int, str]]:
     return contigs
 
 
-@lru_cache(maxsize=128)
 def _validate_alignment_bundle_cached(
     bam_text: str,
     bam_signature: tuple[int, int],
@@ -356,8 +625,7 @@ def _artifact_descriptor(job_id: str, record: dict[str, Any], role: str) -> dict
     path = record["path"]
     if not isinstance(path, Path):
         raise AlignmentSessionError(str(record.get("error") or "unsafe artifact"))
-    observed_digest = _sha256_file(path)
-    observed_size = path.stat().st_size
+    observed_digest, observed_size = _sha256_file_and_size(path)
     declared_digest = record.get("declared_sha256")
     declared_size = record.get("declared_size_bytes")
     integrity_valid = (
@@ -515,6 +783,36 @@ def resolve_alignment_artifact(
         results_dir=results_dir,
         job_output_dir=job_output_dir,
     )[0]
+
+
+def resolve_alignment_artifact_by_role(
+    job_id: str,
+    mode: str,
+    role: str,
+    sha256: str,
+    *,
+    results_dir: str | Path | None = None,
+    job_output_dir: str | Path | None = None,
+) -> tuple[Path, dict[str, Any]]:
+    """Resolve one digest-bound artifact from an exact ready session."""
+    if (
+        mode not in SESSION_MODES
+        or role not in LINKED_REPORT_ROLES
+        or re.fullmatch(r"[0-9a-f]{64}", sha256) is None
+    ):
+        raise AlignmentSessionError("alignment artifact not found")
+    safe_job_id, job_root = _safe_job_root(job_id, results_dir, job_output_dir)
+    for session in _session_records(safe_job_id, job_root):
+        if session["mode"] != mode or session["ready"] is not True:
+            continue
+        artifact = session["artifacts"].get(role)
+        if (
+            artifact is not None
+            and artifact["integrity_valid"] is True
+            and artifact["sha256"] == sha256
+        ):
+            return artifact["_path"], artifact
+    raise AlignmentSessionError("alignment artifact not found")
 
 
 def resolve_session_bam(

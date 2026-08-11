@@ -6,6 +6,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { useLocation } from 'react-router-dom';
+import { ngsResultHref } from '../../lib/ngsResultRouting';
 import { anyToJson } from '@teselagen/bio-parsers';
 import { SequenceViewer, type ColorPaletteName } from './SequenceViewer';
 import { DEFAULT_VISIBILITY } from './sequenceViewerConstants';
@@ -2400,7 +2401,7 @@ export function MolBioToolkitV2() {
                             ) : ngsWorkups.map((workup) => (
                                 <div key={workup.job_id} className="mt-1 flex items-center justify-between text-slate-300">
                                     <span>{workup.scientific_status} · {workup.revision_relation === 'current' ? 'current revision' : 'historical revision'} · {workup.manifest_available ? 'validated manifest' : 'evidence unavailable/review'}</span>
-                                    <a className="text-blue-300 hover:text-blue-200" href={`/jobs/${encodeURIComponent(workup.job_id)}`}>Job</a>
+                                    <a className="text-blue-300 hover:text-blue-200" href={ngsResultHref(workup.job_id, location.search)}>NGS Run Inspector</a>
                                 </div>
                             ))}
                         </section>

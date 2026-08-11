@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterator
+from typing import BinaryIO, Iterator
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from database import Job, get_session
 from services import alignment_access
@@ -69,19 +70,26 @@ def _parse_range(value: str, size: int) -> tuple[int, int]:
     return start, min(end, size - 1)
 
 
-def _iter_range(path: Path, start: int, end: int, chunk_size: int = 1024 * 1024) -> Iterator[bytes]:
+def _iter_range(
+    snapshot: BinaryIO,
+    start: int,
+    end: int,
+    chunk_size: int = 1024 * 1024,
+) -> Iterator[bytes]:
     remaining = end - start + 1
-    with path.open("rb") as handle:
-        handle.seek(start)
+    try:
+        snapshot.seek(start)
         while remaining:
-            chunk = handle.read(min(chunk_size, remaining))
+            chunk = snapshot.read(min(chunk_size, remaining))
             if not chunk:
                 break
             remaining -= len(chunk)
             yield chunk
+    finally:
+        snapshot.close()
 
 
-def _serve_artifact(path: Path, metadata: dict, request: Request) -> Response:
+async def _serve_artifact(path: Path, metadata: dict, request: Request) -> Response:
     size = int(metadata["size_bytes"])
     digest = str(metadata["sha256"])
     etag = f'"{digest}"'
@@ -99,19 +107,28 @@ def _serve_artifact(path: Path, metadata: dict, request: Request) -> Response:
             start, end = _parse_range(range_header, size)
         except (TypeError, ValueError):
             return Response(status_code=416, headers={**base_headers, "Content-Range": f"bytes */{size}"})
+        status_code = 206
         headers = {
             **base_headers,
             "Content-Range": f"bytes {start}-{end}/{size}",
             "Content-Length": str(end - start + 1),
         }
-        return StreamingResponse(
-            _iter_range(path, start, end),
-            status_code=206,
-            headers=headers,
-            media_type=str(metadata["mime_type"]),
-        )
-    response = FileResponse(path, media_type=str(metadata["mime_type"]), headers=base_headers)
-    return response
+    else:
+        start, end = 0, size - 1
+        status_code = 200
+        headers = {**base_headers, "Content-Length": str(size)}
+    snapshot = await run_in_threadpool(
+        service.open_verified_artifact_snapshot,
+        path,
+        expected_size=size,
+        expected_sha256=digest,
+    )
+    return StreamingResponse(
+        _iter_range(snapshot, start, end),
+        status_code=status_code,
+        headers=headers,
+        media_type=str(metadata["mime_type"]),
+    )
 
 
 @router.get("/jobs/{job_id}/alignment-sessions")
@@ -120,9 +137,14 @@ async def list_alignment_sessions(
     authorized_job: Job = Depends(require_alignment_job),
 ):
     try:
+        sessions = await run_in_threadpool(
+            service.build_alignment_sessions,
+            job_id,
+            job_output_dir=_job_output_dir(authorized_job),
+        )
         return {
             "job_id": job_id,
-            "sessions": service.build_alignment_sessions(job_id, job_output_dir=_job_output_dir(authorized_job)),
+            "sessions": sessions,
         }
     except service.AlignmentSessionError as exc:
         raise _http_error(exc) from exc
@@ -135,7 +157,12 @@ async def get_alignment_session(
     authorized_job: Job = Depends(require_alignment_job),
 ):
     try:
-        return service.resolve_alignment_session(job_id, session_id, job_output_dir=_job_output_dir(authorized_job))
+        return await run_in_threadpool(
+            service.resolve_alignment_session,
+            job_id,
+            session_id,
+            job_output_dir=_job_output_dir(authorized_job),
+        )
     except service.AlignmentSessionError as exc:
         raise _http_error(exc) from exc
 
@@ -148,12 +175,36 @@ async def get_alignment_artifact(
     authorized_job: Job = Depends(require_alignment_job),
 ):
     try:
-        path, metadata = service._resolve_internal_artifact(
+        path, metadata = await run_in_threadpool(
+            service._resolve_internal_artifact,
             job_id,
             artifact_id,
             job_output_dir=_job_output_dir(authorized_job),
         )
-        return _serve_artifact(path, metadata, request)
+        return await _serve_artifact(path, metadata, request)
+    except service.AlignmentSessionError as exc:
+        raise _http_error(exc) from exc
+
+
+@router.get("/jobs/{job_id}/alignment-session-artifacts/{mode}/{role}/{sha256}")
+async def get_alignment_session_artifact(
+    job_id: str,
+    mode: str,
+    role: str,
+    sha256: str,
+    request: Request,
+    authorized_job: Job = Depends(require_alignment_job),
+):
+    try:
+        path, metadata = await run_in_threadpool(
+            service.resolve_alignment_artifact_by_role,
+            job_id,
+            mode,
+            role,
+            sha256,
+            job_output_dir=_job_output_dir(authorized_job),
+        )
+        return await _serve_artifact(path, metadata, request)
     except service.AlignmentSessionError as exc:
         raise _http_error(exc) from exc
 
@@ -172,8 +223,14 @@ async def list_alignment_reads(
     authorized_job: Job = Depends(require_alignment_job),
 ):
     try:
-        bam = service.resolve_session_bam(job_id, session_id, job_output_dir=_job_output_dir(authorized_job))
-        return service.read_bam_page(
+        bam = await run_in_threadpool(
+            service.resolve_session_bam,
+            job_id,
+            session_id,
+            job_output_dir=_job_output_dir(authorized_job),
+        )
+        return await run_in_threadpool(
+            service.read_bam_page,
             bam,
             contig=contig,
             start=start,
@@ -200,8 +257,20 @@ async def get_alignment_read(
     if not read_id or len(read_id) > 255:
         raise HTTPException(status_code=400, detail="invalid read ID")
     try:
-        bam = service.resolve_session_bam(job_id, session_id, job_output_dir=_job_output_dir(authorized_job))
-        payload = service.read_bam_exact(bam, read_id, contig=contig, start=start, end=end)
+        bam = await run_in_threadpool(
+            service.resolve_session_bam,
+            job_id,
+            session_id,
+            job_output_dir=_job_output_dir(authorized_job),
+        )
+        payload = await run_in_threadpool(
+            service.read_bam_exact,
+            bam,
+            read_id,
+            contig=contig,
+            start=start,
+            end=end,
+        )
     except service.AlignmentSessionError as exc:
         raise _http_error(exc) from exc
     if payload["read"] is not None:

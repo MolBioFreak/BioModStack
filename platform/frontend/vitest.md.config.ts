@@ -26,6 +26,7 @@ export default defineConfig({
             './tests/vitest/projectManagerApi.test.ts',
             './tests/vitest/projectManagerPage.test.tsx',
             './tests/vitest/projectReturnBanner.test.tsx',
+            './tests/vitest/ngsResultRoutingMounted.test.tsx',
         ],
     },
 });

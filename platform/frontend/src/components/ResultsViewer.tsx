@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 
 import { buildFileDownloadUrl, buildFileStreamUrl, fetchJobs, fetchJobById, fetchDesignById, fetchDesigns, fetchDesignAnalysis, triggerDesignAnalysis, fetchBackboneSummary, launchAntibodyIteration, launchManualMutagenesis, saveReviewFilterSet, deleteReviewFilterSet, continueProteinLocalReview, fetchChainPairIptm } from '../lib/api';
+import { isNgsJob, ngsResultHref } from '../lib/ngsResultRouting';
 import type {
     AntibodyData,
     AntibodyCdrIndelConfig,
@@ -475,17 +476,6 @@ const compareRfEngagement = (
     ((b.rfa_hotspot_covered_count ?? 0) - (a.rfa_hotspot_covered_count ?? 0)) ||
     ((b.plddt_overall ?? 0) - (a.plddt_overall ?? 0))
 );
-
-const isNgsJob = (job: Pick<Job, 'model_id' | 'mode'>): boolean => {
-    const modelId = (job.model_id || '').toLowerCase();
-    const mode = (job.mode || '').toLowerCase();
-    return (
-        modelId === 'nanopore' ||
-        modelId.includes('nanopore') ||
-        mode === 'methylation_analysis' ||
-        mode === 'nanopore_methylation'
-    );
-};
 
 const inferPreferredOutputSource = (job: Job | null | undefined): OutputSourceFilter => inferJobOutputSource(job);
 
@@ -1677,6 +1667,7 @@ const buildBoltzgenClusters = (designs: Design[], mode: BoltzgenClusterMode): Bo
 export function ResultsViewer() {
     const { jobId } = useParams();
     const navigate = useNavigate();
+    const location = useLocation();
     const frustrampnnIntegrationQuery = useModelIntegrationConfig('frustrampnn');
     const queryClient = useQueryClient();
 
@@ -2156,6 +2147,10 @@ export function ResultsViewer() {
 
     // Sync URL with selection
     useEffect(() => {
+        if (jobId && routedJob && isNgsJob(routedJob)) {
+            navigate(ngsResultHref(routedJob.id, location.search), { replace: true });
+            return;
+        }
         if (nonNgsJobs.length === 0) {
             if (jobsLoading || (jobId && routedJobLoading)) {
                 return;
@@ -2196,7 +2191,17 @@ export function ResultsViewer() {
             setSelectedJobId('');
             setSelectedDesignId('');
         }
-    }, [jobId, nonNgsJobs, selectedJobId, activeJob, navigate, jobsLoading, routedJobLoading]);
+    }, [
+        jobId,
+        routedJob,
+        nonNgsJobs,
+        selectedJobId,
+        activeJob,
+        navigate,
+        jobsLoading,
+        routedJobLoading,
+        location.search,
+    ]);
 
     useEffect(() => {
         if (!activeJob?.parent_job_id || !activeParentJob) return;
