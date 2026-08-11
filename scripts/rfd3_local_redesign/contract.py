@@ -301,26 +301,10 @@ def _complete_partial_fixed_atom_map(
     if design_chains and any(identity[0] not in design_chains for identity in editable):
         raise ContractError("redesign_ranges must stay within design_chains")
 
-    explicit = _normalize_atom_map(params.get("select_fixed_atoms"), "select_fixed_atoms")
+    fixed_atom_override = params.get("select_fixed_atoms")
+    if fixed_atom_override is not None and fixed_atom_override != "" and fixed_atom_override != {}:
+        raise ContractError("custom select_fixed_atoms overrides are not exposed by this typed local-redesign contract")
     explicit_by_identity: dict[tuple[str, int, str], list[str]] = {}
-    for selector, atoms in explicit.items():
-        matched = _resolve_residue_selectors(
-            selector,
-            field="select_fixed_atoms",
-            identities=source_identities,
-            default_chains=design_chains,
-        )
-        for identity in matched:
-            if identity not in editable and atoms != ["ALL"]:
-                raise ContractError(
-                    f"select_fixed_atoms cannot unfix source residue '{identity[0]}{identity[1]}{identity[2]}' outside the editable region"
-                )
-            previous = explicit_by_identity.get(identity)
-            if previous is not None and previous != atoms:
-                raise ContractError(
-                    f"select_fixed_atoms assigns conflicting atom selections to '{identity[0]}{identity[1]}{identity[2]}'"
-                )
-            explicit_by_identity[identity] = atoms
 
     result: dict[str, list[str]] = {}
     for identity in source_identities:
@@ -355,6 +339,54 @@ def _normalize_contig(value: Any, field: str = "contig") -> str | None:
         return None
     normalized = ["/0" if token == "0" else token for token in tokens]
     return ",".join(normalized)
+
+
+def _minimal_insertion_contig(
+    params: Mapping[str, Any], source_identities: list[tuple[str, int, str]]
+) -> tuple[str, int, int]:
+    design_chains = _string_list(params.get("design_chains"), "design_chains")
+    if len(design_chains) != 1:
+        raise ContractError("minimal_insertion requires exactly one design chain")
+    anchor_matches = _resolve_residue_selectors(
+        params.get("insertion_anchor"),
+        field="insertion_anchor",
+        identities=source_identities,
+        default_chains=design_chains,
+    )
+    if len(anchor_matches) != 1:
+        raise ContractError("insertion_anchor must select exactly one source residue")
+    anchor = next(iter(anchor_matches))
+    if anchor[0] != design_chains[0]:
+        raise ContractError("insertion_anchor must belong to the design chain")
+    minimum = _positive_int(params.get("insertion_min_length"), "insertion_min_length")
+    maximum = _positive_int(params.get("insertion_max_length"), "insertion_max_length")
+    if maximum < minimum:
+        raise ContractError("insertion_max_length must be greater than or equal to insertion_min_length")
+
+    by_chain: dict[str, list[tuple[str, int, str]]] = {}
+    for identity in source_identities:
+        by_chain.setdefault(identity[0], []).append(identity)
+    design_residues = by_chain.get(design_chains[0], [])
+    try:
+        anchor_index = design_residues.index(anchor)
+    except ValueError as exc:
+        raise ContractError("insertion_anchor is absent from the design chain") from exc
+
+    def token(identity: tuple[str, int, str], *, include_chain: bool = True) -> str:
+        return f"{identity[0] if include_chain else ''}{identity[1]}{identity[2]}"
+
+    def chain_range(residues: list[tuple[str, int, str]]) -> str:
+        first, last = residues[0], residues[-1]
+        return token(first) if first == last else f"{token(first)}-{token(last, include_chain=False)}"
+
+    parts = [chain_range(design_residues[: anchor_index + 1]), f"{minimum}-{maximum}"]
+    if anchor_index + 1 < len(design_residues):
+        parts.append(chain_range(design_residues[anchor_index + 1 :]))
+    context_chains = _string_list(params.get("context_chains"), "context_chains")
+    context_ranges = [chain_range(by_chain[chain]) for chain in context_chains if by_chain.get(chain)]
+    if context_ranges:
+        parts.extend(["/0", *context_ranges])
+    return ",".join(parts), minimum, maximum
 
 
 def _normalize_length(value: Any) -> int | list[int] | None:
@@ -421,8 +453,10 @@ def _build_native_spec(
         if contig is not None:
             raise ContractError("partial_diffusion uses the supplied input structure and does not accept contig")
     elif mode == "minimal_insertion":
-        if not contig:
-            raise ContractError("minimal_insertion requires a dialect-2 contig")
+        expected_contig, _minimum, _maximum = _minimal_insertion_contig(params, source_identities)
+        if contig is not None and contig != expected_contig:
+            raise ContractError("minimal_insertion contig does not match the declared anchor and length bounds")
+        contig = expected_contig
         if fixed_atoms:
             raise ContractError(
                 "minimal_insertion fixes all supplied source atoms by omission and does not accept select_fixed_atoms"
@@ -505,7 +539,7 @@ def build_request(
     residue_identities = params.get("source_residue_identities")
     normalized_residue_identities: list[dict[str, Any]] = []
     source_identities: list[tuple[str, int, str]] = []
-    if residue_identities is not None or mode == "partial_diffusion":
+    if residue_identities is not None or mode in {"partial_diffusion", "minimal_insertion"}:
         normalized_residue_identities, source_identities = _normalize_source_residue_identities(
             residue_identities
         )
@@ -538,13 +572,8 @@ def build_request(
             selection[field] = values
     if normalized_residue_identities:
         selection["source_residue_identities"] = normalized_residue_identities
-    insertion_min = params.get("insertion_min_length")
-    insertion_max = params.get("insertion_max_length")
-    if insertion_min is not None or insertion_max is not None:
-        normalized_min = _positive_int(insertion_min, "insertion_min_length")
-        normalized_max = _positive_int(insertion_max, "insertion_max_length")
-        if normalized_max < normalized_min:
-            raise ContractError("insertion_max_length must be greater than or equal to insertion_min_length")
+    if mode == "minimal_insertion":
+        _expected_contig, normalized_min, normalized_max = _minimal_insertion_contig(params, source_identities)
         selection["insertion_min_length"] = normalized_min
         selection["insertion_max_length"] = normalized_max
 
@@ -590,6 +619,8 @@ def build_request(
             "acceptance_context": params.get("acceptance_context") or {},
         },
     }
+    if request["execution"]["write_full_json"] is not True:
+        raise ContractError("write_full_json is required for typed RFD3 result ingestion")
     return request
 
 

@@ -93,8 +93,8 @@ export function RFD3LocalRedesignResultsPane({ jobId }: RFD3LocalRedesignResults
 
             <section className="rounded-2xl border border-slate-700 bg-slate-900/50 p-5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                    <h3 className="text-lg font-semibold text-white">Input language and preservation map</h3>
-                    <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-200">Native sequence preserved by contract</span>
+                    <h3 className="text-lg font-semibold text-white">Producer input and fixed-coordinate map</h3>
+                    <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-200">Sequence design not requested</span>
                 </div>
                 <div className="mt-4 grid gap-4 lg:grid-cols-2">
                     <div className="space-y-2 text-sm">

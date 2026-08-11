@@ -21,6 +21,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from services.nextflow import build_nextflow_command
 from services import rfd3_local_redesign as rfd3_service
+from services.result_ingester import _local_redesign_validate_native_request_artifact
 from scripts.rfd3_local_redesign.contract import ContractError, build_request, request_sha256, write_request
 
 
@@ -42,6 +43,32 @@ SOURCE_IDENTITIES = [
 ]
 
 
+def test_native_request_artifact_must_equal_the_immutable_request(tmp_path: Path) -> None:
+    immutable = {
+        "schema": "bms.rfd3.local-redesign.request.v1",
+        "request_id": "bound",
+        "input": {"path": "/tmp/β-structure.cif"},
+    }
+    artifact = tmp_path / "rfd3_local_redesign_request.json"
+    write_request(artifact, immutable)
+    _local_redesign_validate_native_request_artifact(
+        artifact,
+        request_payload=immutable,
+        request_sha256=request_sha256(immutable),
+    )
+    artifact.write_text(
+        json.dumps({**immutable, "request_id": "altered"}, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="native request artifact binding is invalid"):
+        _local_redesign_validate_native_request_artifact(
+            artifact,
+            request_payload=immutable,
+            request_sha256=request_sha256(immutable),
+        )
+
+
 def test_partial_diffusion_fixes_every_atom_outside_the_editable_region() -> None:
     request = build_request(
         {
@@ -50,7 +77,6 @@ def test_partial_diffusion_fixes_every_atom_outside_the_editable_region() -> Non
             "design_chains": ["A"],
             "redesign_ranges": "A2",
             "source_residue_identities": SOURCE_IDENTITIES,
-            "select_fixed_atoms": {"A2": []},
         }
     )
 
@@ -62,8 +88,8 @@ def test_partial_diffusion_fixes_every_atom_outside_the_editable_region() -> Non
     }
 
 
-def test_partial_diffusion_rejects_unfixing_outside_the_editable_region() -> None:
-    with pytest.raises(ContractError, match="outside the editable region"):
+def test_partial_diffusion_rejects_custom_fixed_atom_overrides() -> None:
+    with pytest.raises(ContractError, match="not exposed"):
         build_request(
             {
                 "input_structure": "/tmp/input.pdb",
@@ -82,8 +108,43 @@ def test_minimal_insertion_rejects_partial_fixed_atom_maps() -> None:
             {
                 "input_structure": "/tmp/source.pdb",
                 "redesign_mode": "minimal_insertion",
-                "contig": "A1-2,1-3,A3-4",
+                "design_chains": ["A"],
+                "insertion_anchor": "A2",
+                "insertion_min_length": 1,
+                "insertion_max_length": 3,
                 "select_fixed_atoms": {"A1": ["ALL"]},
+                "source_residue_identities": SOURCE_IDENTITIES,
+            }
+        )
+
+
+def test_minimal_insertion_contig_is_source_derived_and_claim_bound() -> None:
+    request = build_request(
+        {
+            "input_structure": "/tmp/source.pdb",
+            "redesign_mode": "minimal_insertion",
+            "design_chains": ["A"],
+            "context_chains": ["B"],
+            "insertion_anchor": "A2",
+            "insertion_min_length": 1,
+            "insertion_max_length": 3,
+            "source_residue_identities": SOURCE_IDENTITIES,
+        }
+    )
+    assert request["rfd3"]["contig"] == "A1-2,1-3,A3,/0,B1"
+    assert request["selection"]["insertion_anchor"] == "A2"
+
+    with pytest.raises(ContractError, match="does not match"):
+        build_request(
+            {
+                "input_structure": "/tmp/source.pdb",
+                "redesign_mode": "minimal_insertion",
+                "design_chains": ["A"],
+                "context_chains": ["B"],
+                "insertion_anchor": "A2",
+                "insertion_min_length": 1,
+                "insertion_max_length": 3,
+                "contig": "A1,9-9,A2-3,/0,B1",
                 "source_residue_identities": SOURCE_IDENTITIES,
             }
         )
@@ -101,6 +162,7 @@ def test_api_derives_fixed_scaffold_from_the_bound_source_structure(
         encoding="utf-8",
     )
     monkeypatch.setattr(rfd3_service, "resolve_runtime_data_path", lambda _value: source)
+    monkeypatch.setattr(rfd3_service, "get_data_root", lambda: tmp_path)
 
     normalized, request, _digest = rfd3_service.normalize_local_redesign_params(
         {
@@ -126,6 +188,29 @@ def test_api_derives_fixed_scaffold_from_the_bound_source_structure(
     }
 
 
+def test_api_rejects_source_outside_the_active_data_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = tmp_path / "outside.pdb"
+    source.write_text(
+        "ATOM      1  CA  GLY A   1       0.000   0.000   0.000  1.00 10.00           C\nEND\n",
+        encoding="utf-8",
+    )
+    allowed_root = tmp_path / "allowed"
+    allowed_root.mkdir()
+    monkeypatch.setattr(rfd3_service, "resolve_runtime_data_path", lambda _value: source)
+    monkeypatch.setattr(rfd3_service, "get_data_root", lambda: allowed_root)
+
+    with pytest.raises(ContractError, match="active BioModStack data root"):
+        rfd3_service.normalize_local_redesign_params(
+            {
+                "input_structure": str(source),
+                "redesign_mode": "partial_diffusion",
+                "design_chains": ["A"],
+                "redesign_ranges": "A1",
+            },
+            job_name="outside-root",
+        )
+
+
 def test_api_rejects_tampered_current_revision_request_replay(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -137,6 +222,7 @@ def test_api_rejects_tampered_current_revision_request_replay(
         encoding="utf-8",
     )
     monkeypatch.setattr(rfd3_service, "resolve_runtime_data_path", lambda _value: source)
+    monkeypatch.setattr(rfd3_service, "get_data_root", lambda: tmp_path)
     params = {
         "input_structure": str(source),
         "redesign_mode": "partial_diffusion",
@@ -303,22 +389,22 @@ def test_build_nextflow_command_maps_protein_local_redesign_params() -> None:
     assert "--plr_num_designs 12" in joined
     assert "--plr_seed 23" in joined
     assert "--plr_dump_trajectories true" in joined
-    assert "--plr_write_full_json false" in joined
+    assert "--plr_write_full_json true" in joined
     assert "--rfd3_batches_per_design 12" in joined
     assert "--rfd3_batches_per_design 99" not in joined
-    assert "--plr_seq_method fampnn" in joined
-    assert "--plr_fix_fixed_sidechains true" in joined
-    assert "--plr_run_boltz_validation true" in joined
-    assert "--interactive_gating true" in joined
-    assert "--interactive_gate_stage post_fampnn" in joined
-    assert "--plr_backbone_input_pdbs /tmp/plr_backbones" in joined
-    assert "--plr_region_manifest /tmp/region_manifest.json" in joined
-    assert "--plr_final_candidate_dir /tmp/final_candidates" in joined
+    assert "--plr_seq_method skip" in joined
+    assert "--plr_fix_fixed_sidechains" not in joined
+    assert "--plr_run_boltz_validation false" in joined
+    assert "--interactive_gating" not in joined
+    assert "--interactive_gate_stage" not in joined
+    assert "--plr_backbone_input_pdbs" not in joined
+    assert "--plr_region_manifest" not in joined
+    assert "--plr_final_candidate_dir" not in joined
     assert "--rfd_num_designs 12" in joined
     assert "--rfd_mode protein_local_redesign" in joined
-    assert "--seqs_per_design 6" in joined
-    assert "--boltz_sampling_steps 150" in joined
-    assert "--boltz_recycling_steps 4" in joined
+    assert "--seqs_per_design" not in joined
+    assert "--boltz_sampling_steps" not in joined
+    assert "--boltz_recycling_steps" not in joined
     assert "--input_pdb /tmp/input.pdb" not in joined
     assert "--design_chains A" not in joined
 
@@ -629,7 +715,7 @@ def test_native_rfd3_registry_matches_the_canonical_launch_contract() -> None:
     params = {entry["name"]: entry for entry in registry["params"]}
 
     assert params["redesign_mode"]["enum"] == ["partial_diffusion", "minimal_insertion"]
-    assert params["select_fixed_atoms"]["required"] is False
+    assert "select_fixed_atoms" not in mode_params
     assert "select_unfixed_sequence" not in mode_params
     assert "select_unfixed_sequence" not in params
     assert {
@@ -640,8 +726,9 @@ def test_native_rfd3_registry_matches_the_canonical_launch_contract() -> None:
         "insertion_anchor",
         "insertion_min_length",
         "insertion_max_length",
-        "write_full_json",
     }.issubset(mode_params)
+    assert "contig" not in mode_params
+    assert "write_full_json" not in mode_params
 
 
 def test_native_rfd3_read_model_does_not_expose_host_storage_paths() -> None:
@@ -650,6 +737,8 @@ def test_native_rfd3_read_model_does_not_expose_host_storage_paths() -> None:
     projected = _rfd3_public_json(
         {
             "request_path": "/home/operator/work/rfd3_request.json",
+            "input_structure": "/home/operator/inputs/source.pdb",
+            "plr_input_pdb": "/home/operator/inputs/source.pdb",
             "native_rfd3": {"input": "/home/operator/inputs/source.pdb"},
             "records": [{"output_path": "/mnt/results/candidate.cif.gz"}],
             "trajectory_paths": ["/mnt/results/noisy.cif.gz", "/mnt/results/denoised.cif.gz"],
@@ -664,6 +753,8 @@ def test_native_rfd3_read_model_does_not_expose_host_storage_paths() -> None:
     )
     assert projected == {
         "request_path": "rfd3_request.json",
+        "input_structure": "source.pdb",
+        "plr_input_pdb": "source.pdb",
         "native_rfd3": {"input": "source.pdb"},
         "records": [{"output_path": "candidate.cif.gz"}],
         "trajectory_paths": ["noisy.cif.gz", "denoised.cif.gz"],
@@ -684,6 +775,10 @@ def test_native_rfd3_read_model_does_not_expose_host_storage_paths() -> None:
     assert '"request_path_scope": "basename"' in route_source
     assert '"provenance_path_scope": "basename"' in route_source
     assert '"storage_path": row.storage_path' not in route_source
+    assert "params=job.params" not in router_source
+    assert "params=existing_child.params" not in router_source
+    assert "params=first_job.params" not in router_source
+    assert "RFD3 local-redesign source artifact path binding is invalid" in router_source
 
 
 def test_native_rfd3_ingester_requires_exact_candidate_assignment_and_receipt() -> None:
@@ -695,3 +790,4 @@ def test_native_rfd3_ingester_requires_exact_candidate_assignment_and_receipt() 
     assert "RFD3 local-redesign preparation receipt is unavailable" in ingester_source
     assert '"native_producer_input"' in ingester_source
     assert "RFD3 local-redesign native producer input path is invalid" in ingester_source
+    assert "not source.is_relative_to(data_root)" in ingester_source

@@ -5060,7 +5060,7 @@ async def list_jobs(
             status=job.status,
             model_id=job.model_id,
             mode=job.mode,
-            params={} if summary else job.params,
+            params={} if summary else _public_job_params(job),
             created_at=job.created_at,
             started_at=job.started_at,
             completed_at=job.completed_at,
@@ -5147,7 +5147,7 @@ async def import_proteinbase_bundle_job(
         status=job.status,
         model_id=job.model_id,
         mode=job.mode,
-        params=job.params,
+        params=_public_job_params(job),
         created_at=job.created_at,
         started_at=job.started_at,
         completed_at=job.completed_at,
@@ -5441,7 +5441,7 @@ async def create_job(
                 status=existing_child.status,
                 model_id=existing_child.model_id,
                 mode=existing_child.mode,
-                params=existing_child.params,
+                params=_public_job_params(existing_child),
                 created_at=existing_child.created_at,
                 started_at=existing_child.started_at,
                 completed_at=existing_child.completed_at,
@@ -6059,7 +6059,7 @@ async def create_job(
         status=first_job.status,
         model_id=first_job.model_id,
         mode=first_job.mode,
-        params=first_job.params,
+        params=_public_job_params(first_job),
         created_at=first_job.created_at,
         started_at=first_job.started_at,
         completed_at=first_job.completed_at,
@@ -6331,6 +6331,11 @@ def _rfd3_public_json(value: Any, *, field: str | None = None) -> Any:
     field_name = str(field or "").lower()
     is_path_field = field_name in {
         "input",
+        "input_structure",
+        "input_pdb",
+        "input_cif",
+        "plr_input_pdb",
+        "rfd3_request_path",
         "path",
         "paths",
         "file",
@@ -6363,6 +6368,13 @@ def _rfd3_public_json(value: Any, *, field: str | None = None) -> Any:
         if candidate.is_absolute():
             return candidate.name
     return value
+
+
+def _public_job_params(job: Any) -> dict[str, Any]:
+    params = job.params if isinstance(job.params, dict) else {}
+    if str(job.model_id or "").strip().lower() == "protein_local_redesign":
+        return _rfd3_public_json(params)
+    return params
 
 
 @router.get("/{job_id}/rfd3-local-redesign")
@@ -6504,7 +6516,13 @@ async def get_rfd3_local_redesign_artifact(
         raise HTTPException(status_code=404, detail="RFD3 local-redesign artifact not found")
 
     if artifact.role == "source_structure":
-        path = resolve_runtime_data_path(artifact.storage_path)
+        stored_source = Path(artifact.storage_path).expanduser()
+        if stored_source.is_symlink():
+            raise HTTPException(status_code=409, detail="RFD3 local-redesign source artifact path contains a symlink")
+        path = resolve_runtime_data_path(stored_source)
+        data_root = get_data_root().resolve()
+        if not path.is_relative_to(data_root) or path != stored_source.resolve():
+            raise HTTPException(status_code=409, detail="RFD3 local-redesign source artifact path binding is invalid")
     else:
         output_root = resolve_runtime_data_path(str(job.output_dir or ""))
         relative = Path(artifact.relative_path)
@@ -6577,7 +6595,7 @@ async def get_job(
         status=job.status,
         model_id=job.model_id,
         mode=job.mode,
-        params=job.params,
+        params=_public_job_params(job),
         created_at=job.created_at,
         started_at=job.started_at,
         completed_at=job.completed_at,

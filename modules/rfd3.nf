@@ -43,11 +43,11 @@ process RunRFD3 {
 
     script:
     def extra_config = params.rfd3_extra_config ?: ''
-    def nativeRequest = params.rfd3_request_path && params.plr_redesign_mode
+    def nativeRequest = params.rfd3_request_path ? true : false
     def num_designs = nativeRequest ? (params.plr_num_designs ?: 1) : (params.rfd3_batches_per_design ?: 1)
     def seed = params.plr_seed == null ? 'null' : params.plr_seed
     def dumpTrajectories = params.plr_dump_trajectories == true
-    def writeFullJson = params.plr_write_full_json != false
+    def writeFullJson = true
     def executionConfig = nativeRequest
         ? "diffusion_batch_size=1 seed=${seed} dump_trajectories=${dumpTrajectories} output_full_json=${writeFullJson}"
         : extra_config

@@ -138,7 +138,31 @@ async def test_native_rfd3_completion_uses_typed_candidates_without_generic_desi
     structure = output_dir / "run" / "rfd3" / "candidate.cif.gz"
     structure.parent.mkdir(parents=True)
     structure.write_bytes(b"native-rfd3-candidate")
+    metadata = structure.with_name("candidate.json")
+    metadata.write_text("{}", encoding="utf-8")
     content_sha256 = hashlib.sha256(structure.read_bytes()).hexdigest()
+    metadata_sha256 = hashlib.sha256(metadata.read_bytes()).hexdigest()
+    candidate_descriptors = [
+        {
+            "role": "structure",
+            "relative_path": "run/rfd3/candidate.cif.gz",
+            "storage_path": str(structure),
+            "sha256": content_sha256,
+            "bytes": structure.stat().st_size,
+            "media_type": "chemical/x-mmcif+gzip",
+        },
+        {
+            "role": "native_prediction_metadata",
+            "relative_path": "run/rfd3/candidate.json",
+            "storage_path": str(metadata),
+            "sha256": metadata_sha256,
+            "bytes": metadata.stat().st_size,
+            "media_type": "application/json",
+        },
+    ]
+    artifact_manifest_sha256 = hashlib.sha256(
+        json.dumps(candidate_descriptors, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
     async with factory() as session:
         job = _job(
@@ -156,7 +180,10 @@ async def test_native_rfd3_completion_uses_typed_candidates_without_generic_desi
             redesign_mode="partial_diffusion",
             sequence_policy="skip",
             status="generated",
-            request_json={"schema": "bms.rfd3.local-redesign.request.v1"},
+            request_json={
+                "schema": "bms.rfd3.local-redesign.request.v1",
+                "execution": {"dump_trajectories": False, "num_designs": 2},
+            },
         )
         session.add_all([job, request])
         await session.commit()
@@ -172,9 +199,9 @@ async def test_native_rfd3_completion_uses_typed_candidates_without_generic_desi
                         result_set="rfd3_local_redesign_candidates",
                         stage="backbone",
                         status="generated",
-                        artifact_manifest_sha256="3" * 64,
+                        artifact_manifest_sha256=artifact_manifest_sha256,
                         metrics_json={},
-                        metadata_json={},
+                        metadata_json={"request_sha256": request.request_sha256},
                     ),
                     RFD3LocalRedesignArtifact(
                         artifact_id="native-structure-artifact",
@@ -188,12 +215,49 @@ async def test_native_rfd3_completion_uses_typed_candidates_without_generic_desi
                         media_type="chemical/x-mmcif+gzip",
                         metadata_json={},
                     ),
+                    RFD3LocalRedesignArtifact(
+                        artifact_id="native-metadata-artifact",
+                        request_id=request.request_id,
+                        candidate_id="candidate",
+                        role="native_prediction_metadata",
+                        relative_path="run/rfd3/candidate.json",
+                        storage_path=str(metadata),
+                        content_sha256=metadata_sha256,
+                        size_bytes=metadata.stat().st_size,
+                        media_type="application/json",
+                        metadata_json={},
+                    ),
                 ]
             )
             await ingest_session.flush()
             return 1
 
-        result = await finalize_successful_job(job, str(output_dir), session, ingest_fn=ingest)
+        cardinality_failure = await finalize_successful_job(job, str(output_dir), session, ingest_fn=ingest)
+        await session.refresh(job)
+        assert cardinality_failure.completed is False
+        assert job.status == "failed"
+
+        request = (
+            await session.execute(
+                select(RFD3LocalRedesignRequest).where(
+                    RFD3LocalRedesignRequest.request_id == "native-request"
+                )
+            )
+        ).scalar_one()
+        request.request_json = {
+            **request.request_json,
+            "execution": {"dump_trajectories": False, "num_designs": 1},
+        }
+        job.status = "running"
+        job.queue_status = "running"
+        await session.commit()
+
+        result = await finalize_successful_job(
+            job,
+            str(output_dir),
+            session,
+            ingest_fn=ingest,
+        )
         await session.refresh(job)
 
         assert result.completed is True
@@ -201,6 +265,50 @@ async def test_native_rfd3_completion_uses_typed_candidates_without_generic_desi
         assert job.status == "completed"
         assert job.provenance["result_integrity"]["result_kind"] == "rfd3_local_redesign_candidate"
         assert (await session.execute(select(Design).where(Design.job_id == job.id))).scalars().all() == []
+
+        metadata_artifact = (
+            await session.execute(
+                select(RFD3LocalRedesignArtifact).where(
+                    RFD3LocalRedesignArtifact.request_id == request.request_id,
+                    RFD3LocalRedesignArtifact.role == "native_prediction_metadata",
+                )
+            )
+        ).scalar_one()
+        await session.delete(metadata_artifact)
+        await session.commit()
+        report = await repair_result_state(session, apply=True)
+        repaired_job = (await session.execute(select(Job).where(Job.id == job.id))).scalar_one()
+        assert any(change.code == "completed_without_usable_rfd3_results" for change in report.changes)
+        assert repaired_job.status == "failed"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_repair_rejects_completed_native_rfd3_job_without_usable_typed_candidates(tmp_path: Path) -> None:
+    factory, engine = await _session_factory(tmp_path)
+    output_dir = tmp_path / "native-rfd3-empty"
+    output_dir.mkdir()
+
+    async with factory() as session:
+        job = _job(
+            "native-rfd3-empty",
+            model_id="protein_local_redesign",
+            output_dir=str(output_dir),
+            status="completed",
+            queue_status="completed",
+        )
+        session.add(job)
+        await session.commit()
+        job_id = job.id
+
+        report = await repair_result_state(session, apply=True)
+        job = (await session.execute(select(Job).where(Job.id == job_id))).scalar_one()
+
+        assert any(change.code == "completed_without_usable_rfd3_results" for change in report.changes)
+        assert job.status == "failed"
+        assert job.queue_status == "failed"
+        assert job.provenance["result_integrity"]["state"] == "ingestion_failed"
 
     await engine.dispose()
 

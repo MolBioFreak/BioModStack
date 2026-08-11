@@ -636,6 +636,15 @@ def _has_terminal_nextflow_history(history_entry: Any) -> bool:
     return str(status or "").strip().upper() in {"OK", "ERR"}
 
 
+def _job_requires_result_output_for_terminal_history(job: Any) -> bool:
+    from services.result_state_integrity import (
+        job_expects_design_results,
+        job_expects_rfd3_local_redesign_candidates,
+    )
+
+    return job_expects_design_results(job) or job_expects_rfd3_local_redesign_candidates(job)
+
+
 def _reconcile_terminal_history_without_process(
     job: Any,
     *,
@@ -2776,9 +2785,12 @@ class GPUOrchestrator:
                                         reconciled += 1
                                         continue
                                 else:
-                                    from services.result_state_integrity import job_expects_design_results
+                                    from services.result_state_integrity import (
+                                        job_expects_design_results,
+                                        job_expects_rfd3_local_redesign_candidates,
+                                    )
 
-                                    if job_expects_design_results(job):
+                                    if job_expects_design_results(job) or job_expects_rfd3_local_redesign_candidates(job):
                                         job.status = "failed"
                                         job.queue_status = "failed"
                                         job.current_stage = "Result Ingestion Failed"
@@ -2880,8 +2892,6 @@ class GPUOrchestrator:
                                 history_status = nextflow_history_status(job)
                                 gate_present = has_stage_gate(job)
                                 result_output_dir = job.child_output_dir or job.output_dir
-                                from services.result_state_integrity import job_expects_design_results
-
                                 is_md_parent = job.model_id == "molecular_dynamics" and job.mode == "simulate"
                                 if history_status == "OK" and is_md_parent and not result_output_dir:
                                     job.status = "failed"
@@ -2892,7 +2902,11 @@ class GPUOrchestrator:
                                     job.completed_at = datetime.utcnow()
                                     reconciled += 1
                                     continue
-                                if history_status == "OK" and job_expects_design_results(job) and not result_output_dir:
+                                if (
+                                    history_status == "OK"
+                                    and _job_requires_result_output_for_terminal_history(job)
+                                    and not result_output_dir
+                                ):
                                     job.status = "failed"
                                     job.queue_status = "failed"
                                     job.current_stage = "Result Ingestion Failed"

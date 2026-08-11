@@ -323,19 +323,18 @@ export function ProteinLocalRedesignTemplate({
     const [nativeRedesignMode, setNativeRedesignMode] = useState<NativeRedesignMode>('partial_diffusion');
     const [nativeProfileId, setNativeProfileId] = useState('generic_local_redesign_v1');
     const [nativePartialT, setNativePartialT] = useState(2.0);
-    const [nativeContig, setNativeContig] = useState('');
+
     const [nativeInsertionAnchor, setNativeInsertionAnchor] = useState('');
     const [nativeInsertionMinLength, setNativeInsertionMinLength] = useState('3');
     const [nativeInsertionMaxLength, setNativeInsertionMaxLength] = useState('6');
-    const [nativeFixedAtomSpec, setNativeFixedAtomSpec] = useState('');
-    const [nativeUnfixedSequence, setNativeUnfixedSequence] = useState('');
+
     const [nativeLigand, setNativeLigand] = useState('');
     const [nativeHotspots, setNativeHotspots] = useState('');
     const [nativeHbondDonors, setNativeHbondDonors] = useState('');
     const [nativeHbondAcceptors, setNativeHbondAcceptors] = useState('');
     const [nativeSeed, setNativeSeed] = useState('');
     const [nativeDumpTrajectories, setNativeDumpTrajectories] = useState(false);
-    const [nativeWriteFullJson, setNativeWriteFullJson] = useState(true);
+
     const [rfdMinHelices, setRfdMinHelices] = useState('');
     const [rfdMaxHelices, setRfdMaxHelices] = useState('');
     const [rfdMinStrands, setRfdMinStrands] = useState('');
@@ -407,19 +406,18 @@ export function ProteinLocalRedesignTemplate({
         if (initialValues.redesign_mode === 'partial_diffusion' || initialValues.redesign_mode === 'minimal_insertion') setNativeRedesignMode(initialValues.redesign_mode);
         if (initialValues.profile_id === 'generic_local_redesign_v1' || initialValues.profile_id === 'drt4_datp_gate_v1') setNativeProfileId(initialValues.profile_id);
         if (typeof initialValues.partial_t === 'number') setNativePartialT(initialValues.partial_t);
-        if (typeof initialValues.contig === 'string') setNativeContig(initialValues.contig);
+
         if (typeof initialValues.insertion_anchor === 'string') setNativeInsertionAnchor(initialValues.insertion_anchor);
         if (typeof initialValues.insertion_min_length === 'number') setNativeInsertionMinLength(String(initialValues.insertion_min_length));
         if (typeof initialValues.insertion_max_length === 'number') setNativeInsertionMaxLength(String(initialValues.insertion_max_length));
-        if (initialValues.select_fixed_atoms && typeof initialValues.select_fixed_atoms === 'object') setNativeFixedAtomSpec(JSON.stringify(initialValues.select_fixed_atoms, null, 2));
-        if (typeof initialValues.select_unfixed_sequence === 'string') setNativeUnfixedSequence(initialValues.select_unfixed_sequence);
+
         if (typeof initialValues.ligand === 'string') setNativeLigand(initialValues.ligand);
         if (typeof initialValues.select_hotspots === 'string') setNativeHotspots(initialValues.select_hotspots);
         if (typeof initialValues.select_hbond_donor === 'string') setNativeHbondDonors(initialValues.select_hbond_donor);
         if (typeof initialValues.select_hbond_acceptor === 'string') setNativeHbondAcceptors(initialValues.select_hbond_acceptor);
         if (typeof initialValues.seed === 'number') setNativeSeed(String(initialValues.seed));
         if (typeof initialValues.dump_trajectories === 'boolean') setNativeDumpTrajectories(initialValues.dump_trajectories);
-        if (typeof initialValues.write_full_json === 'boolean') setNativeWriteFullJson(initialValues.write_full_json);
+
         if (typeof initialValues.rfd_min_helices === 'number') setRfdMinHelices(String(initialValues.rfd_min_helices));
         if (typeof initialValues.rfd_max_helices === 'number') setRfdMaxHelices(String(initialValues.rfd_max_helices));
         if (typeof initialValues.rfd_min_strands === 'number') setRfdMinStrands(String(initialValues.rfd_min_strands));
@@ -826,27 +824,12 @@ export function ProteinLocalRedesignTemplate({
         }
 
         if (isNativeLocalRedesign) {
-            let fixedAtoms: Record<string, unknown> = {};
-            if (nativeRedesignMode === 'partial_diffusion' && nativeFixedAtomSpec.trim()) {
-                try {
-                    const parsed = JSON.parse(nativeFixedAtomSpec);
-                    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('fixed atom map must be a JSON object');
-                    fixedAtoms = parsed as Record<string, unknown>;
-                } catch (err: unknown) {
-                    setError(err instanceof Error ? `Fixed atom map: ${err.message}` : 'Fixed atom map must be valid JSON.');
-                    return;
-                }
-            }
             if (nativeRedesignMode === 'partial_diffusion' && !effectiveRanges) {
                 setError('Partial diffusion requires at least one selected editable residue.');
                 return;
             }
-            if (nativeRedesignMode === 'minimal_insertion' && !nativeContig.trim()) {
-                setError('Minimal insertion requires a dialect-2 contig such as A1-310,3-6,A311-540,/0,B1-5.');
-                return;
-            }
-            if (nativeUnfixedSequence.trim()) {
-                setError('The initial local-redesign modes preserve native sequence. Leave select_unfixed_sequence empty.');
+            if (nativeRedesignMode === 'minimal_insertion' && !generatedInsertionContig) {
+                setError('Minimal insertion requires a valid source-bound anchor and insertion length range.');
                 return;
             }
 
@@ -867,8 +850,6 @@ export function ProteinLocalRedesignTemplate({
                 })),
                 profile_id: nativeProfileId,
                 sequence_policy: 'skip',
-                select_fixed_atoms: nativeRedesignMode === 'partial_diffusion' && Object.keys(fixedAtoms).length > 0 ? fixedAtoms : undefined,
-                contig: nativeRedesignMode === 'minimal_insertion' ? nativeContig.trim() : undefined,
                 insertion_anchor: nativeRedesignMode === 'minimal_insertion' ? nativeInsertionAnchor.trim() || undefined : undefined,
                 insertion_min_length: nativeRedesignMode === 'minimal_insertion' ? Number.parseInt(nativeInsertionMinLength, 10) : undefined,
                 insertion_max_length: nativeRedesignMode === 'minimal_insertion' ? Number.parseInt(nativeInsertionMaxLength, 10) : undefined,
@@ -879,11 +860,8 @@ export function ProteinLocalRedesignTemplate({
                 select_hbond_acceptor: nativeHbondAcceptors.split(',').map((value) => value.trim()).filter(Boolean),
                 num_designs: numDesigns,
                 seed: parseOptionalIntegerInput(nativeSeed),
-                seq_method: seqMethod,
-                seqs_per_design: seqsPerDesign,
-                run_boltz_validation: false,
                 dump_trajectories: nativeDumpTrajectories,
-                write_full_json: nativeWriteFullJson,
+                write_full_json: true,
             };
             await submitMutation.mutateAsync({
                 name: jobName.trim(),
@@ -968,7 +946,7 @@ export function ProteinLocalRedesignTemplate({
                             <div>
                                 <div className="text-sm font-semibold">Native RFD3 redesign contract</div>
                                 <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
-                                    Native sequence identities stay fixed unless a later explicit sequence-design stage unlocks them. The first round uses partial diffusion or a minimal insertion.
+                                    Sequence design is not requested in this lane. RFD3 receives a source-bound partial-diffusion or minimal-insertion contract.
                                 </p>
                             </div>
                             <div className="grid gap-3 md:grid-cols-3">
@@ -991,13 +969,7 @@ export function ProteinLocalRedesignTemplate({
                                     <input className="w-full rounded-lg border px-3 py-2 text-sm" style={themedInputStyle} type="number" min="0" step="0.1" value={nativePartialT} onChange={(event) => setNativePartialT(Number(event.target.value))} disabled={nativeRedesignMode !== 'partial_diffusion'} />
                                 </label>
                             </div>
-                            {nativeRedesignMode === 'partial_diffusion' && (
-                            <label className="block space-y-1 text-xs font-medium">
-                                Fixed atom map JSON
-                                <textarea className="min-h-24 w-full rounded-lg border px-3 py-2 font-mono text-xs" style={themedInputStyle} value={nativeFixedAtomSpec} onChange={(event) => setNativeFixedAtomSpec(event.target.value)} placeholder={'{"A310-311":["BKBN"],"A312-318":[],"A319-320":["BKBN"]}'} />
-                                <span className="block text-[var(--text-secondary)]">Optional atom-level constraints apply only inside the visual editable region. The API fixes every source atom outside that region.</span>
-                            </label>
-                            )}
+
                             {nativeRedesignMode === 'minimal_insertion' && (
                                 <>
                                     <div className="grid gap-3 md:grid-cols-3">
@@ -1014,12 +986,9 @@ export function ProteinLocalRedesignTemplate({
                                             <input className="w-full rounded-lg border px-3 py-2 text-sm" style={themedInputStyle} type="number" min="1" value={nativeInsertionMaxLength} onChange={(event) => setNativeInsertionMaxLength(event.target.value)} />
                                         </label>
                                     </div>
-                                    <button type="button" disabled={!generatedInsertionContig} onClick={() => setNativeContig(generatedInsertionContig)} className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-100 disabled:cursor-not-allowed disabled:opacity-40">Use generated dialect-2 contig</button>
-                                    {generatedInsertionContig && <div className="rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 font-mono text-xs text-emerald-100">{generatedInsertionContig}</div>}
-                                    <label className="block space-y-1 text-xs font-medium">
-                                        Dialect-2 contig
-                                        <input className="w-full rounded-lg border px-3 py-2 font-mono text-sm" style={themedInputStyle} value={nativeContig} onChange={(event) => setNativeContig(event.target.value)} placeholder="A1-310,3-6,A311-540,/0,B1-5" />
-                                    </label>
+                                    <div className="rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 font-mono text-xs text-emerald-100">
+                                        {generatedInsertionContig || 'Select a valid source residue anchor.'}
+                                    </div>
                                 </>
                             )}
                             <div className="grid gap-3 md:grid-cols-2">
@@ -1050,10 +1019,7 @@ export function ProteinLocalRedesignTemplate({
                                         <input type="checkbox" checked={nativeDumpTrajectories} onChange={(event) => setNativeDumpTrajectories(event.target.checked)} />
                                         Retain noisy and denoised RFD3 trajectories
                                     </label>
-                                    <label className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
-                                        <input type="checkbox" checked={nativeWriteFullJson} onChange={(event) => setNativeWriteFullJson(event.target.checked)} />
-                                        Retain full native JSON metadata
-                                    </label>
+                                    <div className="text-xs text-[var(--text-secondary)]">Native JSON metadata is required for typed result ingestion.</div>
                                 </div>
                             </div>
                             <div className="rounded-lg border px-3 py-2 text-xs text-[var(--text-secondary)]" style={themedMutedInsetStyle}>
@@ -1598,7 +1564,7 @@ export function ProteinLocalRedesignTemplate({
                             <h2 className="text-lg font-semibold">{proteinLocalRedesignUiState.sequenceSectionLabel}</h2>
                             <p className="mt-1 text-sm text-[var(--text-secondary)]">
                                 {isNativeLocalRedesign
-                                    ? 'Native RFD3 preserves the supplied sequence. Keep Skip selected for the first round, or explicitly add a sequence-design stage.'
+                                    ? 'Sequence design is not requested or run by the native RFD3 lane.'
                                     : 'Choose the redesign backend and sampling depth for the remodeled backbones.'}
                             </p>
                         </div>
@@ -1609,12 +1575,18 @@ export function ProteinLocalRedesignTemplate({
                                 <select
                                     value={seqMethod}
                                     onChange={(event) => setSeqMethod(event.target.value as SequenceMethod)}
+                                    disabled={isNativeLocalRedesign}
                                     className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
                                     style={themedInputStyle}
                                 >
-                                    {isNativeLocalRedesign && <option value="skip">Skip sequence redesign</option>}
-                                    <option value="fampnn">FA-MPNN</option>
-                                    <option value="mpnn">ProteinMPNN</option>
+                                    {isNativeLocalRedesign ? (
+                                        <option value="skip">Skip sequence redesign</option>
+                                    ) : (
+                                        <>
+                                            <option value="fampnn">FA-MPNN</option>
+                                            <option value="mpnn">ProteinMPNN</option>
+                                        </>
+                                    )}
                                 </select>
                             </div>
 

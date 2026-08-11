@@ -11,7 +11,7 @@ from typing import Any, Mapping
 
 from Bio.PDB import MMCIFParser, PDBParser
 
-from paths import resolve_runtime_data_path
+from paths import get_data_root, resolve_runtime_data_path
 from scripts.rfd3_local_redesign.contract import (
     CONTRACT_REVISION,
     ContractError,
@@ -81,11 +81,58 @@ def normalize_local_redesign_params(
 ) -> tuple[dict[str, Any], dict[str, Any], str]:
     """Resolve the source and build the immutable request before queueing."""
     normalized = dict(params)
-    input_value = normalized.get("input_structure") or normalized.get("input_pdb") or normalized.get("input_cif")
+    allowed_keys = {
+        "input_structure",
+        "input_pdb",
+        "input_cif",
+        "input",
+        "redesign_mode",
+        "design_chains",
+        "context_chains",
+        "redesign_ranges",
+        "region_mode",
+        "sequence_policy",
+        "insertion_anchor",
+        "insertion_min_length",
+        "insertion_max_length",
+        "partial_t",
+        "ligand",
+        "select_hotspots",
+        "select_hbond_donor",
+        "select_hbond_acceptor",
+        "num_designs",
+        "seed",
+        "dump_trajectories",
+        "write_full_json",
+        "profile_id",
+        "source_residue_identities",
+        "rfd3_request",
+    }
+    unexpected = sorted(str(key) for key in normalized if key not in allowed_keys)
+    if unexpected:
+        raise ContractError(f"unsupported local-redesign parameters: {', '.join(unexpected)}")
+    if normalized.get("sequence_policy") not in {None, "", "skip"}:
+        raise ContractError("native local redesign requires sequence_policy=skip")
+    normalized["sequence_policy"] = "skip"
+    normalized["write_full_json"] = True
+    input_value = (
+        normalized.get("input_structure")
+        or normalized.get("input_pdb")
+        or normalized.get("input_cif")
+        or normalized.get("input")
+    )
     if not input_value:
         raise ContractError("input_structure is required")
+    raw_source_path = Path(str(input_value)).expanduser()
+    if raw_source_path.exists() and raw_source_path.is_symlink():
+        raise ContractError("input_structure must not be a symbolic link")
     source_path = resolve_runtime_data_path(str(input_value))
-    if not source_path.is_file():
+    data_root = get_data_root().resolve()
+    try:
+        source_path.relative_to(data_root)
+    except ValueError as exc:
+        raise ContractError("input_structure must be contained within the active BioModStack data root") from exc
+    if not source_path.is_file() or source_path.is_symlink():
         raise ContractError(f"input structure does not exist: {source_path}")
     if source_path.suffix.lower() not in {".pdb", ".cif", ".gz"}:
         raise ContractError("input_structure must be a PDB or mmCIF file")
@@ -118,8 +165,10 @@ def normalize_local_redesign_params(
     normalized["plr_dump_trajectories"] = request["execution"]["dump_trajectories"]
     normalized["plr_write_full_json"] = request["execution"]["write_full_json"]
     normalized["rfd3_batches_per_design"] = request["execution"]["num_designs"]
-    normalized.setdefault("plr_seq_method", "skip")
-    normalized.setdefault("plr_run_boltz_validation", False)
+    normalized["plr_seq_method"] = "skip"
+    normalized["seq_method"] = "skip"
+    normalized["plr_run_boltz_validation"] = False
+    normalized["run_boltz_validation"] = False
     return normalized, request, digest
 
 

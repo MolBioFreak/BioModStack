@@ -4,7 +4,7 @@ version: "1.0.0"
 category: generative_design
 description: >
   First-class structure-conditioned local redesign using native RFdiffusion3
-  selections, explicit sequence preservation, and typed result provenance.
+  selections, explicit sequence-design omission, and typed result provenance.
 container: foundry.sif
 
 ui_icon: microscope
@@ -22,7 +22,7 @@ outputs:
 modes:
   - id: local_redesign
     name: Local Redesign
-    description: Explore a selected local region while preserving the supplied scaffold by default.
+    description: Explore a selected local region while leaving sequence design unrequested.
     params:
       - input_structure
       - redesign_mode
@@ -30,36 +30,18 @@ modes:
       - context_chains
       - redesign_ranges
       - sequence_policy
-      - select_fixed_atoms
-      - contig
       - insertion_anchor
       - insertion_min_length
       - insertion_max_length
       - partial_t
       - ligand
-      - select_buried
-      - select_exposed
-      - select_partially_buried
       - select_hbond_donor
       - select_hbond_acceptor
       - select_hotspots
-      - ori_token
-      - unindex
-      - length
       - num_designs
       - seed
       - dump_trajectories
-      - write_full_json
-      - evaluation_states
       - profile_id
-      - plr_design_chains
-      - plr_context_chains
-      - plr_region_mode
-      - plr_redesign_ranges
-      - plr_interface_cutoff
-      - plr_region_padding
-      - plr_seq_method
-      - plr_run_boltz_validation
 
 params:
   - name: input_structure

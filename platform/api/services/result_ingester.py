@@ -41,6 +41,10 @@ from database import (
     RFD3LocalRedesignArtifact,
 )
 from paths import get_data_root, resolve_runtime_data_path
+from scripts.rfd3_local_redesign.contract import (
+    canonical_json as rfd3_canonical_json,
+    request_sha256 as rfd3_request_sha256,
+)
 from services.rfantibody_metadata import load_rfantibody_trb_summary
 from services.cdr_annotator import extract_sequence_from_pdb, identify_binder_chains
 from .aligned_error_utils import detect_aligned_error_artifact, load_aligned_error_artifact
@@ -2797,6 +2801,24 @@ def _local_redesign_canonical_sha(payload: Any) -> str:
     ).hexdigest()
 
 
+def _local_redesign_validate_native_request_artifact(
+    path: Path,
+    *,
+    request_payload: Mapping[str, Any],
+    request_sha256: str,
+) -> None:
+    expected_text = rfd3_canonical_json(request_payload) + "\n"
+    try:
+        artifact_text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError("RFD3 local-redesign native request artifact is unavailable") from exc
+    if (
+        artifact_text != expected_text
+        or rfd3_request_sha256(request_payload) != request_sha256
+    ):
+        raise RuntimeError("RFD3 local-redesign native request artifact binding is invalid")
+
+
 def _local_redesign_safe_job_artifact(output_root: Path, relative_path: str) -> Path:
     relative = Path(relative_path)
     if (
@@ -2820,10 +2842,19 @@ def _local_redesign_safe_job_artifact(output_root: Path, relative_path: str) -> 
 
 
 def _local_redesign_external_source(path_value: str) -> Path:
-    source = resolve_runtime_data_path(path_value)
-    if not source.is_file() or source.is_symlink():
+    stored_source = Path(path_value).expanduser()
+    if stored_source.is_symlink():
         raise RuntimeError("RFD3 local-redesign source structure is missing or unsafe")
-    return source.resolve()
+    source = resolve_runtime_data_path(stored_source)
+    data_root = get_data_root().resolve()
+    if (
+        not source.is_file()
+        or source.is_symlink()
+        or not source.is_relative_to(data_root)
+        or source != stored_source.resolve()
+    ):
+        raise RuntimeError("RFD3 local-redesign source structure is missing or unsafe")
+    return source
 
 
 def _local_redesign_validate_artifact(
@@ -2950,6 +2981,17 @@ async def _ingest_rfd3_local_redesign_manifest(
     }
     if any(role_counts.get(role) != 1 for role in required_roles):
         raise RuntimeError("RFD3 local-redesign result lacks required source or runtime evidence")
+    native_request_descriptor = next(
+        descriptor for descriptor in descriptor_by_path.values() if descriptor.get("role") == "native_request"
+    )
+    native_request_path = _local_redesign_safe_job_artifact(
+        output_root, str(native_request_descriptor["relative_path"])
+    )
+    _local_redesign_validate_native_request_artifact(
+        native_request_path,
+        request_payload=request_payload,
+        request_sha256=request.request_sha256,
+    )
 
     execution = request_payload.get("execution")
     execution_evidence = manifest.get("execution_evidence")

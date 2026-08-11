@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import datetime
 import hashlib
+import json
 import math
 from pathlib import Path
 import re
@@ -25,6 +26,7 @@ from database import (
     RFD3LocalRedesignCandidate,
     RFD3LocalRedesignRequest,
 )
+from scripts.rfd3_local_redesign.contract import canonical_json as rfd3_canonical_json
 
 
 @dataclass(frozen=True)
@@ -169,45 +171,104 @@ async def _rfd3_candidate_count(session: AsyncSession, job_id: str) -> int:
 
 
 async def _rfd3_candidates_are_usable(session: AsyncSession, job_id: str, output_dir: str) -> bool:
-    rows = list(
+    request = (
+        await session.execute(
+            select(RFD3LocalRedesignRequest).where(RFD3LocalRedesignRequest.job_id == job_id)
+        )
+    ).scalar_one_or_none()
+    if request is None or not isinstance(request.request_json, dict):
+        return False
+    candidates = list(
         (
             await session.execute(
-                select(RFD3LocalRedesignCandidate, RFD3LocalRedesignArtifact)
-                .join(
-                    RFD3LocalRedesignRequest,
-                    RFD3LocalRedesignCandidate.request_id == RFD3LocalRedesignRequest.request_id,
+                select(RFD3LocalRedesignCandidate).where(
+                    RFD3LocalRedesignCandidate.request_id == request.request_id
                 )
-                .join(
-                    RFD3LocalRedesignArtifact,
-                    (
-                        (RFD3LocalRedesignArtifact.request_id == RFD3LocalRedesignCandidate.request_id)
-                        & (RFD3LocalRedesignArtifact.candidate_id == RFD3LocalRedesignCandidate.candidate_id)
-                        & (RFD3LocalRedesignArtifact.role == "structure")
-                    ),
-                )
-                .where(RFD3LocalRedesignRequest.job_id == job_id)
             )
-        ).all()
+        ).scalars().all()
     )
-    candidate_count = await _rfd3_candidate_count(session, job_id)
-    if candidate_count == 0 or len(rows) != candidate_count:
+    if not candidates:
         return False
+    artifacts = list(
+        (
+            await session.execute(
+                select(RFD3LocalRedesignArtifact).where(
+                    RFD3LocalRedesignArtifact.request_id == request.request_id,
+                    RFD3LocalRedesignArtifact.candidate_id.is_not(None),
+                )
+            )
+        ).scalars().all()
+    )
+    artifacts_by_candidate: dict[str, list[RFD3LocalRedesignArtifact]] = {}
+    for artifact in artifacts:
+        artifacts_by_candidate.setdefault(str(artifact.candidate_id), []).append(artifact)
+
+    execution = request.request_json.get("execution")
+    expected_num_designs = execution.get("num_designs") if isinstance(execution, dict) else None
+    if (
+        not isinstance(expected_num_designs, int)
+        or isinstance(expected_num_designs, bool)
+        or expected_num_designs < 1
+        or len(candidates) != expected_num_designs
+    ):
+        return False
+    trajectories_requested = isinstance(execution, dict) and execution.get("dump_trajectories") is True
+    role_order = ["structure", "native_prediction_metadata"]
+    if trajectories_requested:
+        role_order.extend(["denoised_trajectory", "noisy_trajectory"])
+    expected_roles = set(role_order)
     output_root = Path(output_dir).expanduser().resolve()
-    for candidate, artifact in rows:
-        if candidate.status != "generated" or not str(candidate.artifact_manifest_sha256 or "").strip():
+
+    for candidate in candidates:
+        if (
+            candidate.status != "generated"
+            or candidate.result_set != "rfd3_local_redesign_candidates"
+            or candidate.metadata_json.get("request_sha256") != request.request_sha256
+        ):
             return False
-        storage_path = Path(str(artifact.storage_path or "")).expanduser().resolve()
-        if not storage_path.is_relative_to(output_root) or not storage_path.is_file():
+        candidate_artifacts = artifacts_by_candidate.get(candidate.candidate_id, [])
+        artifact_by_role = {artifact.role: artifact for artifact in candidate_artifacts}
+        if len(artifact_by_role) != len(candidate_artifacts) or set(artifact_by_role) != expected_roles:
             return False
-        if storage_path.stat().st_size != artifact.size_bytes:
+        descriptors: list[dict[str, Any]] = []
+        for role in role_order:
+            artifact = artifact_by_role[role]
+            raw_storage_path = Path(str(artifact.storage_path or "")).expanduser()
+            storage_path = raw_storage_path.resolve()
+            if (
+                raw_storage_path.is_symlink()
+                or not storage_path.is_relative_to(output_root)
+                or not storage_path.is_file()
+                or storage_path.stat().st_size != artifact.size_bytes
+            ):
+                return False
+            digest = hashlib.sha256()
+            with storage_path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            if digest.hexdigest() != artifact.content_sha256:
+                return False
+            descriptors.append(
+                {
+                    "role": artifact.role,
+                    "relative_path": artifact.relative_path,
+                    "storage_path": artifact.storage_path,
+                    "sha256": artifact.content_sha256,
+                    "bytes": artifact.size_bytes,
+                    "media_type": artifact.media_type,
+                }
+            )
+        metadata_path = Path(artifact_by_role["native_prediction_metadata"].storage_path)
+        try:
+            native_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
             return False
-        digest = hashlib.sha256()
-        with storage_path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-        if digest.hexdigest() != artifact.content_sha256:
+        if not isinstance(native_metadata, dict):
             return False
-    return True
+        descriptor_digest = hashlib.sha256(rfd3_canonical_json(descriptors).encode("utf-8")).hexdigest()
+        if descriptor_digest != candidate.artifact_manifest_sha256:
+            return False
+    return len(artifacts_by_candidate) == len(candidates)
 
 
 async def _authoritative_result_count(session: AsyncSession, job: Job) -> int:
@@ -675,7 +736,26 @@ async def repair_result_state(session: AsyncSession, *, apply: bool = False) -> 
                 detail = "no gate snapshot exists; marked explicit integrity failure"
         elif job.status == "completed":
             count = design_counts.get(str(job.id), 0)
-            if job_expects_design_results(job) and count == 0:
+            result_invalid = False
+            if job_expects_rfd3_local_redesign_candidates(job):
+                rfd3_count = await _rfd3_candidate_count(session, str(job.id))
+                rfd3_output_dir = str(job.child_output_dir or job.output_dir or "")
+                rfd3_usable = bool(rfd3_output_dir) and await _rfd3_candidates_are_usable(
+                    session, str(job.id), rfd3_output_dir
+                )
+                if not rfd3_usable:
+                    result_invalid = True
+                    code = "completed_without_usable_rfd3_results"
+                    detail = "completed native RFD3 workflow lacks hash-valid typed candidates"
+                    _set_integrity_failure(
+                        after,
+                        job,
+                        error="State repair: completed native RFD3 workflow has no usable typed candidates/results",
+                        partial=rfd3_count > 0,
+                        design_count=rfd3_count,
+                    )
+            elif job_expects_design_results(job) and count == 0:
+                result_invalid = True
                 code = "completed_without_results"
                 detail = "completed design workflow has no ingested designs"
                 _set_integrity_failure(
@@ -685,7 +765,7 @@ async def repair_result_state(session: AsyncSession, *, apply: bool = False) -> 
                     partial=False,
                     design_count=0,
                 )
-            else:
+            if not result_invalid:
                 if job.completed_at is None:
                     timestamp = getattr(job, "updated_at", None) or job.created_at
                     code = "completed_without_timestamp"

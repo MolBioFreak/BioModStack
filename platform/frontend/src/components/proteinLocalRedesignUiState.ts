@@ -11,7 +11,7 @@ export const getProteinLocalRedesignUiState = (
     isNativeLocalRedesign: boolean,
     sequenceMethod: ProteinLocalRedesignSequenceMethod,
 ): ProteinLocalRedesignUiState => {
-    const sequenceDesignEnabled = sequenceMethod !== 'skip';
+    const sequenceDesignEnabled = !isNativeLocalRedesign && sequenceMethod !== 'skip';
 
     return {
         sequenceDesignEnabled,

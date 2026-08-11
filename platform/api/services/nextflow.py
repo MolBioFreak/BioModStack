@@ -3638,6 +3638,25 @@ def build_nextflow_command(
             params['rfd_num_designs'] = params['plr_num_designs']
         if model_id == 'protein_local_redesign':
             params['rfd3_batches_per_design'] = params.get('plr_num_designs', 1)
+            params['plr_write_full_json'] = True
+            params['plr_seq_method'] = 'skip'
+            params['seq_method'] = 'skip'
+            params['plr_run_boltz_validation'] = False
+            for disabled_key in (
+                'plr_fix_fixed_sidechains',
+                'seqs_per_design',
+                'boltz_sampling_steps',
+                'boltz_recycling_steps',
+                'interactive_gating',
+                'interactive_gate_stage',
+                'interactive_gate_continue',
+                'plr_backbone_input_pdbs',
+                'plr_sequence_input_pdbs',
+                'plr_validation_input_pdbs',
+                'plr_region_manifest',
+                'plr_final_candidate_dir',
+            ):
+                params.pop(disabled_key, None)
         if 'plr_seq_method' in params and 'seq_method' not in params:
             params['seq_method'] = params['plr_seq_method']
         if not params.get('rfd_mode'):

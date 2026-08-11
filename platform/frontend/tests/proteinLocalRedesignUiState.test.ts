@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { getProteinLocalRedesignUiState } from '../src/components/proteinLocalRedesignUiState';
 
-test('native local redesign defaults to a compact sequence-preserving lane', () => {
+test('native local redesign defaults to a compact sequence-design-disabled lane', () => {
     assert.deepEqual(
         getProteinLocalRedesignUiState(true, 'skip'),
         {
@@ -15,12 +15,12 @@ test('native local redesign defaults to a compact sequence-preserving lane', () 
     );
 });
 
-test('native local redesign reveals sampling controls only after explicit sequence selection', () => {
+test('native local redesign ignores downstream sequence selection', () => {
     assert.deepEqual(
         getProteinLocalRedesignUiState(true, 'fampnn'),
         {
-            sequenceDesignEnabled: true,
-            showSequenceSampling: true,
+            sequenceDesignEnabled: false,
+            showSequenceSampling: false,
             showLegacyOptionalStages: false,
             sequenceSectionLabel: 'Optional Sequence Redesign',
         },

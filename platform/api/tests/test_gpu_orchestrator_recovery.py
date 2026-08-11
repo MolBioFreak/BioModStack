@@ -20,6 +20,7 @@ from database import Base, Job, MdRun
 from services.gpu_orchestrator import (
     _commit_reconciled_job_mutations,
     _has_terminal_nextflow_history,
+    _job_requires_result_output_for_terminal_history,
     _recover_rfantibody_parent_after_child_wait,
     _reconcile_terminal_history_without_process,
 )
@@ -126,6 +127,16 @@ def test_terminal_nextflow_history_overrides_gpu_activity_liveness_hint() -> Non
     assert _has_terminal_nextflow_history(("OK", "36.6s")) is True
     assert _has_terminal_nextflow_history(("ERR", "4.2s")) is True
     assert _has_terminal_nextflow_history(None) is False
+
+
+def test_terminal_history_requires_output_root_for_native_rfd3() -> None:
+    job = SimpleNamespace(
+        model_id="protein_local_redesign",
+        mode="partial_diffusion",
+        params={"redesign_mode": "partial_diffusion"},
+    )
+
+    assert _job_requires_result_output_for_terminal_history(job) is True
 
 
 @pytest.mark.asyncio

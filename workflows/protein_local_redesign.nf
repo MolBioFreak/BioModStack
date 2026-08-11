@@ -6,6 +6,10 @@ include { RunFAMPNN ; FilterFAMPNN } from '../modules/fampnn.nf'
 include { RunMPNN ; FilterMPNN } from '../modules/proteinmpnn.nf'
 include { PrepBoltz ; RunBoltz } from '../modules/boltz.nf'
 
+def shellQuote(value) {
+    return "'" + value.toString().replace("'", "'\"'\"'") + "'"
+}
+
 def loadProteinLocalDesignArtifacts(rawDir) {
     def resolvedDir = file(rawDir.toString())
     def pdbs = resolvedDir.exists()
@@ -149,10 +153,13 @@ process PrepareProteinLocalNativeRFD3Input {
     path 'rfd3_preparation_receipt.json', emit: receipt
 
     script:
+    def codeRootArg = shellQuote(params.code_root)
+    def requestArg = shellQuote(request_json)
+    def inputStructureArg = shellQuote(input_structure)
     """
-    python3 ${params.code_root}/scripts/rfd3_local_redesign/prepare_native_input.py \\
-        --request ${request_json} \\
-        --input-structure ${input_structure} \\
+    python3 ${codeRootArg}/scripts/rfd3_local_redesign/prepare_native_input.py \\
+        --request ${requestArg} \\
+        --input-structure ${inputStructureArg} \\
         --design-id protein_local_redesign_0 \\
         --output-native rfd3_input_protein_local_redesign_0.json \\
         --output-receipt rfd3_preparation_receipt.json
@@ -177,24 +184,37 @@ process BuildProteinLocalRFD3ResultManifest {
     path 'rfd3_result_manifest.json', emit: manifest
 
     script:
-    def cifArgs = cif_files.collect { path -> "--cif-file ${path}" }.join(' ')
-    def jsonArgs = json_files.collect { path -> "--json-file ${path}" }.join(' ')
+    def cifArgs = cif_files.collect { path -> "--cif-file ${shellQuote(path)}" }.join(' ')
+    def jsonArgs = json_files.collect { path -> "--json-file ${shellQuote(path)}" }.join(' ')
+    def codeRootArg = shellQuote(params.code_root)
+    def requestArg = shellQuote(request_json)
+    def nativeInputArg = shellQuote(native_input_json)
+    def nativeInputStorageArg = shellQuote("${params.out_dir}/collected/protein_local_redesign/${native_input_json.name}")
+    def trajectoryDirArg = shellQuote(trajectory_dir)
+    def preparationReceiptArg = shellQuote(preparation_receipt)
+    def producerLogArg = shellQuote(producer_log)
+    def producerMetadataArg = shellQuote(producer_metadata_jsonl)
+    def storageRootArg = shellQuote("${params.out_dir}/run/rfd3")
+    def requestStorageArg = shellQuote(params.rfd3_request_path)
+    def sourceFileArg = shellQuote(source_structure)
+    def sourceStorageArg = shellQuote(params.plr_input_pdb)
+    def preparationReceiptStorageArg = shellQuote("${params.out_dir}/collected/protein_local_redesign/rfd3_preparation_receipt.json")
     """
-    python3 ${params.code_root}/scripts/rfd3_local_redesign/build_result_manifest.py \\
-        --request ${request_json} \\
+    python3 ${codeRootArg}/scripts/rfd3_local_redesign/build_result_manifest.py \\
+        --request ${requestArg} \\
         ${cifArgs} \\
         ${jsonArgs} \\
-        --native-input ${native_input_json} \\
-        --native-input-storage-path "${params.out_dir}/collected/protein_local_redesign/${native_input_json.name}" \\
-        --trajectory-dir ${trajectory_dir} \\
-        --preparation-receipt ${preparation_receipt} \\
-        --log-file ${producer_log} \\
-        --metadata-jsonl ${producer_metadata_jsonl} \\
-        --storage-root "${params.out_dir}/run/rfd3" \\
-        --request-storage-path "${params.rfd3_request_path}" \\
-        --source-file ${source_structure} \\
-        --source-storage-path "${params.plr_input_pdb}" \\
-        --preparation-receipt-storage-path "${params.out_dir}/collected/protein_local_redesign/rfd3_preparation_receipt.json" \\
+        --native-input ${nativeInputArg} \\
+        --native-input-storage-path ${nativeInputStorageArg} \\
+        --trajectory-dir ${trajectoryDirArg} \\
+        --preparation-receipt ${preparationReceiptArg} \\
+        --log-file ${producerLogArg} \\
+        --metadata-jsonl ${producerMetadataArg} \\
+        --storage-root ${storageRootArg} \\
+        --request-storage-path ${requestStorageArg} \\
+        --source-file ${sourceFileArg} \\
+        --source-storage-path ${sourceStorageArg} \\
+        --preparation-receipt-storage-path ${preparationReceiptStorageArg} \\
         --output rfd3_result_manifest.json
     """
 }
@@ -332,8 +352,17 @@ workflow PROTEIN_LOCAL_REDESIGN {
     if (!params.containsKey('interactive_gate_stage') || !params.interactive_gate_stage) params.interactive_gate_stage = 'post_structure_validation'
     if (!params.containsKey('interactive_gate_continue')) params.interactive_gate_continue = false
 
-    def nativeRfd3Request = params.rfd3_request_path && params.plr_redesign_mode
-    def nativeSequenceMethod = params.plr_seq_method ?: (nativeRfd3Request ? 'skip' : 'fampnn')
+    def nativeRfd3Request = params.rfd3_request_path ? true : false
+    if (nativeRfd3Request && params.plr_seq_method && params.plr_seq_method != 'skip') {
+        error('Native RFD3 local redesign requires plr_seq_method=skip')
+    }
+    if (nativeRfd3Request && (params.plr_backbone_input_pdbs || params.plr_sequence_input_pdbs || params.plr_validation_input_pdbs)) {
+        error('Native RFD3 local redesign does not accept resume inputs')
+    }
+    if (nativeRfd3Request && params.interactive_gating == true) {
+        error('Native RFD3 local redesign does not accept interactive gating')
+    }
+    def nativeSequenceMethod = nativeRfd3Request ? 'skip' : (params.plr_seq_method ?: 'fampnn')
     if (!params.plr_input_pdb && !nativeRfd3Request) {
         error('Missing required parameter: plr_input_pdb or rfd3_request_path')
     }
@@ -430,8 +459,8 @@ workflow PROTEIN_LOCAL_REDESIGN {
         return
     }
 
-    def sequenceMethod = params.plr_seq_method ?: (nativeRfd3Request ? 'skip' : 'fampnn')
-    if (nativeRfd3Request && sequenceMethod == 'skip') {
+    def sequenceMethod = nativeRfd3Request ? 'skip' : (params.plr_seq_method ?: 'fampnn')
+    if (nativeRfd3Request) {
         println('Native RFD3 local-redesign backbone stage complete; sequence design is explicitly skipped')
         return
     }
