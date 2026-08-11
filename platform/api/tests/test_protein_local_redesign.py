@@ -404,7 +404,7 @@ def test_build_nextflow_command_maps_protein_local_redesign_params() -> None:
     assert "--plr_seq_method skip" in joined
     assert "--plr_fix_fixed_sidechains" not in joined
     assert "--plr_run_boltz_validation false" in joined
-    assert "--interactive_gating" not in joined
+    assert "--interactive_gating false" in joined
     assert "--interactive_gate_stage" not in joined
     assert "--plr_backbone_input_pdbs" not in joined
     assert "--plr_region_manifest" not in joined

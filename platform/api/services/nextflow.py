@@ -3657,6 +3657,7 @@ def build_nextflow_command(
                 'plr_final_candidate_dir',
             ):
                 params.pop(disabled_key, None)
+            params['interactive_gating'] = False
         if 'plr_seq_method' in params and 'seq_method' not in params:
             params['seq_method'] = params['plr_seq_method']
         if not params.get('rfd_mode'):
