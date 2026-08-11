@@ -69,6 +69,15 @@ def test_native_request_artifact_must_equal_the_immutable_request(tmp_path: Path
         )
 
 
+def test_native_job_ingress_bypasses_antibody_defaults_before_contract_validation() -> None:
+    jobs_source = (API_ROOT / "routers" / "jobs.py").read_text(encoding="utf-8")
+    expected = '''if not (normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign"):
+            job_data.params = _normalize_antibody_job_params(job_data.params)
+
+        if normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign":'''
+    assert expected in jobs_source
+
+
 def test_partial_diffusion_fixes_every_atom_outside_the_editable_region() -> None:
     request = build_request(
         {
