@@ -36,7 +36,7 @@ import FrustraMpnnLandscapeOverview from './FrustraMpnnLandscapeOverview.js';
 import FrustraMpnnPlotlyAnalytics from './FrustraMpnnPlotlyAnalytics.js';
 import FrustraMpnnCrossDatasetExplorer from './FrustraMpnnCrossDatasetExplorer.js';
 import FrustraMpnnComparisonWorkbench from './FrustraMpnnComparisonWorkbench.js';
-import FrustraMpnnCandidateHandoffPanel from './FrustraMpnnCandidateHandoffPanel.js';
+
 import { buildFrustraMpnnCoverageReadiness } from './frustraMpnnCoverageModel.js';
 import { FrustraMpnnSettingsPanel } from './frustrampnn/FrustraMpnnSettingsPanel.js';
 import { CANONICAL_FRUSTRAMPNN_SETTINGS } from './frustrampnn/frustraMpnnSettingsState.js';
@@ -444,11 +444,6 @@ export default function FrustraMpnnResultsViewer({
                             referenceInvocationId={selectedInvocation}
                         />}
 
-                        {selectedInvocation && <FrustraMpnnCandidateHandoffPanel
-                            parentJobId={job.id}
-                            parentInvocationId={selectedInvocation}
-                            parentLandscapeSha256={detail.data.summary.landscape_sha256}
-                        />}
 
                         {allResidues.length > 0 && <FrustraMpnnPlotlyAnalytics
                             residues={allResidues}

@@ -36,6 +36,8 @@ test('direct and conformational-mapping results mount the same global FrustraMPN
     assert.match(resultSurface, /restoredPresentation=\{restoredPresentation\}/);
     assert.doesNotMatch(resultSurface, /pendingRestorePresentation/);
     assert.doesNotMatch(resultSurface, /<MolstarViewer/);
+    assert.doesNotMatch(resultSurface, /FrustraMpnnCandidateHandoffPanel/);
+    assert.doesNotMatch(resultSurface, /type=["']file["']/);
     assert.match(reviewExport, /sceneController\.capturePresentation\(\)/);
     assert.doesNotMatch(reviewExport, /sceneController\?\.currentScene\?\.presentation/);
     assert.match(reviewExport, /Save review/);
