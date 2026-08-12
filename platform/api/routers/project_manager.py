@@ -35,6 +35,7 @@ from experiment_services import (
     NotFound,
     RevisionConflict,
     ValidationFailure,
+    prepare_workflow,
 )
 from services.global_experiments.adapters import AdapterError, registry
 from services.global_experiments.launch_contexts import (
@@ -119,10 +120,25 @@ async def _project_bound_job(session: AsyncSession, context: ExperimentLaunchCon
             ExperimentWorkflowRevisionNode(revision_id=revision_id, ordinal=0, node_id="bound-job", node_kind="bound_core_job", node_json=json.dumps(payload["nodes"][0], sort_keys=True, separators=(",", ":"))),
             ExperimentLineageEdge(id=_bound_id("lineage", context.launch_context_id), workspace_id=context.project_id, source_resource_id=context.domain_experiment_id, target_resource_id=workflow_id, edge_mode="owns", edge_key=f"owns:{context.domain_experiment_id}:{workflow_id}", metadata_json="{}", created_at=timestamp),
         ])
-    preparation_id = _bound_id("preparation", context.launch_context_id)
+    is_native_rfd3 = job.model_id == "protein_local_redesign" and job.mode == "local_redesign"
+    native_preparation = None
+    if is_native_rfd3:
+        native_preparation = await prepare_workflow(session, revision_id, {})
+        if native_preparation.validation_status != "valid":
+            raise ValidationFailure("projected native RFD3 workflow preparation is invalid")
+        preparation_id = native_preparation.resource_id
+    else:
+        preparation_id = _bound_id("preparation", context.launch_context_id)
     run_group_id = _bound_id("run-group", context.launch_context_id)
     attempt_id = _bound_id("attempt", context.launch_context_id)
-    for resource_id, kind, owner in ((preparation_id, "workflow_preparation", workflow_id), (run_group_id, "run_group", workflow_id), (run_id, "workflow_run", workflow_id), (attempt_id, "run_attempt", run_id)):
+    projected_resources = [
+        (run_group_id, "run_group", workflow_id),
+        (run_id, "workflow_run", workflow_id),
+        (attempt_id, "run_attempt", run_id),
+    ]
+    if native_preparation is None:
+        projected_resources.insert(0, (preparation_id, "workflow_preparation", workflow_id))
+    for resource_id, kind, owner in projected_resources:
         session.add(ExperimentResource(id=resource_id, kind=kind, workspace_id=context.project_id, lifecycle_owner_id=owner, created_at=timestamp))
     await session.flush()
     status_value = str(job.status).lower()
@@ -138,10 +154,18 @@ async def _project_bound_job(session: AsyncSession, context: ExperimentLaunchCon
     if job.model_id == "protein_local_redesign":
         request_payload["pinned_gpu"] = job.pinned_gpu
     request_json = json.dumps(request_payload, sort_keys=True, separators=(",", ":"))
-    session.add_all([
-        ExperimentWorkflowPreparation(resource_id=preparation_id, workspace_id=context.project_id, workflow_revision_id=revision_id, normalized_request_json=request_json, normalized_request_sha256=hashlib.sha256(request_json.encode()).hexdigest(), scheduler_payload_json=request_json, validation_status="valid", validation_receipt_json=json.dumps({"schema": "bms.bound-job-preparation.v1", "verified": True}), expected_cardinality=1, created_at=timestamp, prepared_at=timestamp),
-        ExperimentRunGroup(resource_id=run_group_id, workspace_id=context.project_id, launch_idempotency_key=f"launch-context:{context.launch_context_id}", request_sha256=hashlib.sha256(request_json.encode()).hexdigest(), state=run_state, generation=1, created_at=timestamp, updated_at=timestamp),
-    ])
+    request_sha256 = (
+        native_preparation.normalized_request_sha256
+        if native_preparation is not None
+        else hashlib.sha256(request_json.encode()).hexdigest()
+    )
+    if native_preparation is None:
+        session.add(
+            ExperimentWorkflowPreparation(resource_id=preparation_id, workspace_id=context.project_id, workflow_revision_id=revision_id, normalized_request_json=request_json, normalized_request_sha256=request_sha256, scheduler_payload_json=request_json, validation_status="valid", validation_receipt_json=json.dumps({"schema": "bms.bound-job-preparation.v1", "verified": True}), expected_cardinality=1, created_at=timestamp, prepared_at=timestamp)
+        )
+    session.add(
+        ExperimentRunGroup(resource_id=run_group_id, workspace_id=context.project_id, launch_idempotency_key=f"launch-context:{context.launch_context_id}", request_sha256=request_sha256, state=run_state, generation=1, created_at=timestamp, updated_at=timestamp)
+    )
     await session.flush()
     session.add_all([
         ExperimentRunGroupPreparation(run_group_id=run_group_id, preparation_id=preparation_id, ordinal=0),
@@ -319,6 +343,10 @@ async def bind_launch_context_to_job(
             "project_projection": projection,
             "return_uri": context.return_uri,
         }
+    except ExperimentServiceError as exc:
+        await session.rollback()
+        await core_session.rollback()
+        raise _service_error(exc) from exc
     except (LaunchContextError, json.JSONDecodeError) as exc:
         await session.rollback()
         await core_session.rollback()
