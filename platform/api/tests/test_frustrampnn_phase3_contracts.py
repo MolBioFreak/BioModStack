@@ -136,6 +136,7 @@ def _artifacts():
         target_id="target-1",
         parent_job_id="job-1",
         candidate_id="candidate-1",
+        source_artifact_sha256=effective.resolution_identity.source_artifact_sha256,
     )
     bindings = {
         key: landscape[key]

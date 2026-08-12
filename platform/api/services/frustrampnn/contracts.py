@@ -330,9 +330,30 @@ def _validate_request_v2(instance: Mapping[str, Any]) -> None:
             "capability inventory byte SHA-256 does not match effective settings"
         )
     resolution = effective.resolution_identity
-    if instance["source_artifact"]["sha256"] != resolution.source_artifact_sha256:
+    producer_provenance = instance.get("producer_provenance")
+    source_binding = (
+        producer_provenance.get("source_to_normalized_binding")
+        if isinstance(producer_provenance, Mapping)
+        else None
+    )
+    allowed_source_sha256 = {resolution.source_artifact_sha256}
+    if isinstance(source_binding, Mapping):
+        if not isinstance(producer_provenance, Mapping):
+            raise ContractValidationError("producer provenance is not an exact mapping")
+        if (
+            producer_provenance.get("original_source_sha256")
+            != source_binding.get("source_sha256")
+            or source_binding.get("source_sha256") != resolution.source_artifact_sha256
+            or source_binding.get("normalized_pdb_sha256")
+            != resolution.normalized_pdb_sha256
+        ):
+            raise ContractValidationError(
+                "producer source-to-normalized binding does not match effective resolution identity"
+            )
+        allowed_source_sha256.add(resolution.normalized_pdb_sha256)
+    if instance["source_artifact"]["sha256"] not in allowed_source_sha256:
         raise ContractValidationError(
-            "source artifact SHA-256 does not match effective resolution identity"
+            "source artifact SHA-256 does not match its declared representation authority"
         )
     if instance["structure_map_sha256"] != resolution.structure_map_sha256:
         raise ContractValidationError(

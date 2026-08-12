@@ -137,13 +137,13 @@ def publish(*, source_bundle: Path, allowed_root: Path, destination: Path, marke
         else:
             source_target = root / source_relative
             _contained_destination(root, source_target)
-            normalized_pdb_sha256 = request.get("normalized_pdb_sha256")
+            expected_source_sha256 = request.get("source_artifact", {}).get("sha256")
             if (
-                not isinstance(normalized_pdb_sha256, str)
+                not isinstance(expected_source_sha256, str)
                 or hashlib.sha256(_read_regular(root, source_relative)).hexdigest()
-                != normalized_pdb_sha256
+                != expected_source_sha256
             ):
-                raise ValueError("existing canonical v2 source contradicts normalized source authority")
+                raise ValueError("existing canonical v2 source contradicts declared source authority")
         result = {
             # Stage-report authority is always relative to the exact job root.
             # This remains stable whether Nextflow passed an absolute out_dir or

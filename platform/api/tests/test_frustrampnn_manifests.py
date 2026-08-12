@@ -420,7 +420,7 @@ def test_atomic_publisher_accepts_complete_v2_and_preserves_original_source_auth
     allowed = tmp_path / "published"
     canonical_source = allowed / "inputs/original.pdb"
     canonical_source.parent.mkdir(parents=True)
-    canonical_source.write_bytes((source_bundle / "normalized_input.pdb").read_bytes())
+    canonical_source.write_bytes(original_source.read_bytes())
     destination = allowed / "frustrampnn/results/candidate-v2"
     marker = tmp_path / "v2-published.json"
 
@@ -437,7 +437,7 @@ def test_atomic_publisher_accepts_complete_v2_and_preserves_original_source_auth
         "source": "inputs/original.pdb",
         "statistics": "frustrampnn/results/candidate-v2/frustrampnn_statistics_v1.json",
     }
-    assert canonical_source.read_bytes() == (source_bundle / "normalized_input.pdb").read_bytes()
+    assert canonical_source.read_bytes() == original_source.read_bytes()
     assert canonical_json_loads(marker.read_bytes()) == result
     manifest_bytes = (source_bundle / "frustrampnn_result_manifest_v2.json").read_bytes()
     assert (allowed / result["manifest"]).read_bytes() == manifest_bytes

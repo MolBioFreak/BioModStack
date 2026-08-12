@@ -1209,12 +1209,31 @@ def validate_v2_input_closure(
     if structure_sha256 != request["structure_map_sha256"]:
         raise ManifestValidationError("physical structure-map hash disagrees with v2 request")
     resolution = effective.resolution_identity
+    producer_provenance = request.get("producer_provenance")
+    source_binding = (
+        producer_provenance.get("source_to_normalized_binding")
+        if isinstance(producer_provenance, Mapping)
+        else None
+    )
+    source_hashes_closed = (
+        structure["source_sha256"] == resolution.source_artifact_sha256
+    )
+    if isinstance(source_binding, Mapping):
+        source_hashes_closed = source_hashes_closed and (
+            source_binding.get("source_sha256") == structure["source_sha256"]
+            and source_binding.get("normalized_pdb_sha256") == normalized_sha256
+            and request["source_artifact"]["sha256"]
+            in {structure["source_sha256"], normalized_sha256}
+        )
+    else:
+        source_hashes_closed = source_hashes_closed and (
+            request["source_artifact"]["sha256"] == structure["source_sha256"]
+        )
     if (
         normalized_sha256 != structure["normalized_pdb_sha256"]
         or normalized_sha256 != resolution.normalized_pdb_sha256
         or structure_sha256 != resolution.structure_map_sha256
-        or structure["source_sha256"] != request["source_artifact"]["sha256"]
-        or structure["source_sha256"] != resolution.source_artifact_sha256
+        or not source_hashes_closed
     ):
         raise ManifestValidationError("v2 source/map/normalized resolution hashes are not closed")
     if (
@@ -1429,6 +1448,7 @@ def _validate_v2_closure(
             target_id=structure["target_id"],
             parent_job_id=request["parent_job_id"],
             candidate_id=request["candidate_id"],
+            source_artifact_sha256=request["source_artifact"]["sha256"],
         )
     except Exception as exc:
         raise ManifestValidationError(f"v2 raw/landscape recomputation failed: {exc}") from exc

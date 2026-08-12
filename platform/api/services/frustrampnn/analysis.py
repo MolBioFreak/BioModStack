@@ -224,6 +224,7 @@ def finalize_landscape_v2(
     target_id: str,
     parent_job_id: str,
     candidate_id: str,
+    source_artifact_sha256: str,
 ) -> tuple[bytes, dict[str, Any]]:
     """Build the selected v2 landscape after a complete canonical shard merge."""
 
@@ -247,6 +248,14 @@ def finalize_landscape_v2(
         target_id, parent_job_id, candidate_id,
     )):
         raise LandscapeValidationError("v2 landscape identities must be non-empty strings")
+    resolution = effective.resolution_identity
+    if source_artifact_sha256 not in {
+        resolution.source_artifact_sha256,
+        resolution.normalized_pdb_sha256,
+    }:
+        raise LandscapeValidationError(
+            "v2 landscape source artifact SHA-256 is outside the effective source authorities"
+        )
 
     merged = merge_raw_frustrampnn_shards(tuple(shard_payloads), effective)
     rows = _raw_rows(merged)
@@ -289,7 +298,6 @@ def finalize_landscape_v2(
             **residue.model_dump(mode="json", exclude_none=False),
             "slots": slots,
         })
-    resolution = effective.resolution_identity
     landscape = {
         "schema_name": "frustrampnn_landscape",
         "schema_version": 2,
@@ -301,7 +309,7 @@ def finalize_landscape_v2(
         "target_id": target_id,
         "parent_job_id": parent_job_id,
         "candidate_id": candidate_id,
-        "source_artifact_sha256": resolution.source_artifact_sha256,
+        "source_artifact_sha256": source_artifact_sha256,
         "structure_map_sha256": resolution.structure_map_sha256,
         "normalized_pdb_sha256": resolution.normalized_pdb_sha256,
         "raw_csv_sha256": hashlib.sha256(merged).hexdigest(),

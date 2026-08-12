@@ -385,6 +385,7 @@ def test_v2_shard_merge_is_selected_exact_stable_and_classifies_custom_boundarie
         target_id="target-1",
         parent_job_id="job-1",
         candidate_id="candidate-1",
+        source_artifact_sha256=effective.resolution_identity.source_artifact_sha256,
     )
 
     merged_rows = list(csv.DictReader(merged.decode("utf-8").splitlines()))

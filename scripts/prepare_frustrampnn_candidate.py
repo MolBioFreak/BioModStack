@@ -338,6 +338,8 @@ def _prepare_candidate_v2(
             "source_format",
         }
         if producer_fields <= set(metadata):
+            request["source_artifact"]["sha256"] = normalized_sha
+            request["source_artifact"]["media_type"] = "chemical/x-pdb"
             request["producer_provenance"] = {
                 "producer_method": metadata["producer_method"],
                 "producer_sample": metadata["producer_sample"],

@@ -72,9 +72,9 @@ def _validate_closed_marker(
     if paths["source"].as_posix() != request["source_artifact"]["relative_path"]:
         raise ValueError("marker source does not match the manifest-attested request authority")
     source_payload = _read_regular(job_root, paths["source"].as_posix())
-    normalized_sha256 = request["effective_settings"]["resolution_identity"]["normalized_pdb_sha256"]
-    if hashlib.sha256(source_payload).hexdigest() != normalized_sha256:
-        raise ValueError("marker source bytes contradict the manifest-attested normalized source authority")
+    expected_source_sha256 = request["source_artifact"]["sha256"]
+    if hashlib.sha256(source_payload).hexdigest() != expected_source_sha256:
+        raise ValueError("marker source bytes contradict the manifest-attested source authority")
 
     return (
         paths["result"].as_posix(),

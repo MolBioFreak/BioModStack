@@ -914,6 +914,7 @@ def _run_component_v2(
                 target_id=structure["target_id"],
                 parent_job_id=request["parent_job_id"],
                 candidate_id=request["candidate_id"],
+                source_artifact_sha256=request["source_artifact"]["sha256"],
             )
             summary = summarize_landscape_v2(landscape, effective)
         except (LandscapeValidationError, ManifestValidationError) as exc:
