@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import copy
+import csv
 import importlib
+import io
 import json
 from pathlib import Path
 
@@ -357,8 +359,17 @@ def _summary_v2() -> dict:
 
     effective = _effective()
     configuration = execution_configuration(effective)
+    source = io.StringIO(_raw().decode("utf-8"))
+    rows = list(csv.DictReader(source))
+    for row in rows:
+        if row["mutation"] == row["wildtype"]:
+            row["frustration_pred"] = "-2.0"
+    rewritten = io.StringIO(newline="")
+    writer = csv.DictWriter(rewritten, fieldnames=list(rows[0]))
+    writer.writeheader()
+    writer.writerows(rows)
     _, landscape = finalize_landscape_v2(
-        (_raw(),),
+        (rewritten.getvalue().encode("utf-8"),),
         effective,
         execution_configuration=configuration,
         target_id="target-1",
@@ -420,6 +431,8 @@ async def test_backfill_projects_v2_summary_metrics() -> None:
     import database
 
     summary = _summary_v2()
+    assert summary["native_slot_counts"]["high"] == 1
+    assert summary["native_slot_fractions"]["high"] == 1.0
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     try:
         async with engine.begin() as connection:

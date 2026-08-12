@@ -183,23 +183,33 @@ def _replace_journal_at(output_parent_fd:int,value:Mapping[str,Any])->None:
     _fsync_fd(output_parent_fd)
 
 
-def _recover_journal_replacement_at(output_parent_fd:int,job_id:str,request_sha256:str)->None:
+def _recover_journal_replacement_at(output_parent_fd:int)->None:
+    """Discard an interrupted next-state write; the durable journal remains authoritative."""
     kind=_entry_kind_at(output_parent_fd,"import-journal-v1.replacement")
     if kind is None: return
-    if kind!="file" or _entry_kind_at(output_parent_fd,"import-journal-v1.json")!="file":
+    if kind!="file":
         raise CMLegacyFrustraMPNNImportError("compatibility journal replacement state is unsafe")
-    current=_json_payload(_read_file_at(output_parent_fd,"import-journal-v1.json"),"compatibility journal")
-    replacement=_json_payload(_read_file_at(output_parent_fd,"import-journal-v1.replacement"),"compatibility journal replacement")
-    states={"preparing":0,"staged":1,"database_committed":2,"complete":3}
-    if (
-        current.get("schema_name")!="cm_legacy_frustrampnn_import_journal"
-        or replacement.get("schema_name")!="cm_legacy_frustrampnn_import_journal"
-        or current.get("job_id")!=job_id or replacement.get("job_id")!=job_id
-        or current.get("request_sha256")!=request_sha256 or replacement.get("request_sha256")!=request_sha256
-        or states.get(str(replacement.get("state")))!=states.get(str(current.get("state")),-2)+1
-    ): raise CMLegacyFrustraMPNNImportError("compatibility journal replacement differs from owned state progression")
-    os.replace("import-journal-v1.replacement","import-journal-v1.json",src_dir_fd=output_parent_fd,dst_dir_fd=output_parent_fd)
+    journal_kind=_entry_kind_at(output_parent_fd,"import-journal-v1.json")
+    staged_kind=_entry_kind_at(output_parent_fd,"results.staging")
+    output_kind=_entry_kind_at(output_parent_fd,"results")
+    if journal_kind not in {None,"file"}:
+        raise CMLegacyFrustraMPNNImportError("compatibility journal state is unsafe")
+    if journal_kind is None and (staged_kind is not None or output_kind is not None):
+        raise CMLegacyFrustraMPNNImportError("orphaned compatibility journal replacement is ambiguous")
+    os.unlink("import-journal-v1.replacement",dir_fd=output_parent_fd)
     _fsync_fd(output_parent_fd)
+
+
+def _journal_value(*,state:str,job_id:str,request_sha256:str,candidates:list[dict[str,Any]])->dict[str,Any]:
+    return {"schema_name":"cm_legacy_frustrampnn_import_journal","schema_version":1,"state":state,
+            "job_id":job_id,"request_sha256":request_sha256,"candidates":candidates}
+
+
+def _require_exact_journal_at(output_parent_fd:int,expected:Mapping[str,Any])->dict[str,Any]:
+    value=_json_payload(_read_file_at(output_parent_fd,"import-journal-v1.json"),"compatibility journal")
+    if value!=dict(expected):
+        raise CMLegacyFrustraMPNNImportError("compatibility journal differs from rederived authority")
+    return value
 
 
 def _read_bundle_file_at(staged_fd:int,candidate_id:str,name:str)->bytes:
@@ -431,7 +441,7 @@ async def import_legacy_cm_frustrampnn(session:AsyncSession,*,job_id:str)->int:
     job_fd=os.open(job_root,os.O_RDONLY|os.O_DIRECTORY|getattr(os,"O_NOFOLLOW",0))
     compatibility_fd=_mkdir_open_at(job_fd,"compatibility",exist_ok=True)
     output_parent_fd=_mkdir_open_at(compatibility_fd,"frustrampnn",exist_ok=True)
-    _recover_journal_replacement_at(output_parent_fd,job_id,str(request.request_sha256))
+    _recover_journal_replacement_at(output_parent_fd)
     existing=list((await session.scalars(select(FrustraMPNNResult).where(FrustraMPNNResult.parent_job_id==job_id))).all())
     if existing:
         existing_by_candidate={str(row.candidate_id):row for row in existing}
@@ -443,20 +453,21 @@ async def import_legacy_cm_frustrampnn(session:AsyncSession,*,job_id:str)->int:
             raise CMLegacyFrustraMPNNImportError("existing compatibility publication cardinality is incomplete")
         published_by_invocation:dict[str,list[FrustraMPNNArtifact]]=defaultdict(list)
         for artifact in published_artifacts: published_by_invocation[str(artifact.invocation_id)].append(artifact)
+        expected_journal_candidates=[
+            {"candidate_id":candidate_id,"manifest_sha256":existing_by_candidate[candidate_id].manifest_sha256,
+             "row_count":len(cm_rows_by_candidate[candidate_id])}
+            for candidate_id in candidate_ids
+        ]
         staged_kind=_entry_kind_at(output_parent_fd,"results.staging")
         output_kind=_entry_kind_at(output_parent_fd,"results")
         journal_kind=_entry_kind_at(output_parent_fd,"import-journal-v1.json")
         if staged_kind=="directory" and output_kind is None and journal_kind=="file":
             journal_value=_json_payload(_read_file_at(output_parent_fd,"import-journal-v1.json"),"compatibility journal")
-            if journal_value.get("state") not in {"staged","database_committed"} or journal_value.get("job_id")!=job_id:
+            state=str(journal_value.get("state"))
+            if state not in {"staged","database_committed"}:
                 raise CMLegacyFrustraMPNNImportError("compatibility recovery journal is invalid")
-            expected_journal_candidates=[
-                {"candidate_id":candidate_id,"manifest_sha256":existing_by_candidate[candidate_id].manifest_sha256,
-                 "row_count":len(cm_rows_by_candidate[candidate_id])}
-                for candidate_id in candidate_ids
-            ]
-            if journal_value.get("request_sha256")!=request.request_sha256 or journal_value.get("candidates")!=expected_journal_candidates:
-                raise CMLegacyFrustraMPNNImportError("compatibility recovery journal differs from database authority")
+            _require_exact_journal_at(output_parent_fd,_journal_value(state=state,job_id=job_id,
+                request_sha256=str(request.request_sha256),candidates=expected_journal_candidates))
             staged_fd=_open_dir_at(output_parent_fd,"results.staging")
             try:
                 for artifact in published_artifacts:
@@ -473,14 +484,23 @@ async def import_legacy_cm_frustrampnn(session:AsyncSession,*,job_id:str)->int:
         elif output_kind=="directory" and journal_kind=="file":
             journal_value=_json_payload(_read_file_at(output_parent_fd,"import-journal-v1.json"),"compatibility journal")
             if journal_value.get("state")=="database_committed":
+                _require_exact_journal_at(output_parent_fd,_journal_value(state="database_committed",job_id=job_id,
+                    request_sha256=str(request.request_sha256),candidates=expected_journal_candidates))
                 journal_value["state"]="complete"; _replace_journal_at(output_parent_fd,journal_value)
-            elif journal_value.get("state")!="complete":
-                raise CMLegacyFrustraMPNNImportError("published compatibility journal is invalid")
+            else:
+                _require_exact_journal_at(output_parent_fd,_journal_value(state="complete",job_id=job_id,
+                    request_sha256=str(request.request_sha256),candidates=expected_journal_candidates))
         if output_kind!="directory": raise CMLegacyFrustraMPNNImportError("published compatibility tree is unavailable")
-        for artifact in published_artifacts:
-            payload=_regular_file(Path(artifact.storage_path),root=output_root)
-            if _digest(payload)!=artifact.content_sha256 or len(payload)!=artifact.size_bytes:
-                raise CMLegacyFrustraMPNNImportError("published compatibility artifact bytes have drifted")
+        output_fd=_open_dir_at(output_parent_fd,"results")
+        try:
+            for artifact in published_artifacts:
+                relative=Path(artifact.storage_path).relative_to(output_root)
+                if len(relative.parts)!=2 or relative.parts[0] not in candidate_ids or relative.parts[1] not in _ARTIFACTS:
+                    raise CMLegacyFrustraMPNNImportError("published compatibility artifact path is invalid")
+                payload=_read_bundle_file_at(output_fd,relative.parts[0],relative.parts[1])
+                if _digest(payload)!=artifact.content_sha256 or len(payload)!=artifact.size_bytes:
+                    raise CMLegacyFrustraMPNNImportError("published compatibility artifact bytes have drifted")
+        finally: os.close(output_fd)
         expected_rows_by_id:dict[str,dict[str,Any]]={}; cm_provenance_by_candidate:dict[str,dict[str,str]]={}
         for candidate_id in candidate_ids:
             result=existing_by_candidate[candidate_id]; invocation_id=f"frustrampnn:{job_id}:{candidate_id}"
@@ -572,10 +592,11 @@ async def import_legacy_cm_frustrampnn(session:AsyncSession,*,job_id:str)->int:
     staged_kind=_entry_kind_at(output_parent_fd,"results.staging"); output_kind=_entry_kind_at(output_parent_fd,"results")
     journal_kind=_entry_kind_at(output_parent_fd,"import-journal-v1.json")
     if staged_kind is None and output_kind is None and journal_kind=="file":
-        journal_value=_json_payload(_read_file_at(output_parent_fd,"import-journal-v1.json"),"compatibility journal")
-        if journal_value=={"schema_name":"cm_legacy_frustrampnn_import_journal","schema_version":1,"state":"preparing",
-                           "job_id":job_id,"request_sha256":request.request_sha256,"candidates":[]}:
-            os.unlink("import-journal-v1.json",dir_fd=output_parent_fd); _fsync_fd(output_parent_fd); journal_kind=None
+        # No database or filesystem publication exists. This reserved file can only
+        # be an interrupted initial marker, including a truncated first write.
+        os.unlink("import-journal-v1.json",dir_fd=output_parent_fd)
+        _fsync_fd(output_parent_fd)
+        journal_kind=None
     if staged_kind=="directory" and journal_kind=="file" and output_kind is None:
         journal_value=_json_payload(_read_file_at(output_parent_fd,"import-journal-v1.json"),"compatibility journal")
         if journal_value.get("state") in {"preparing","staged"} and journal_value.get("job_id")==job_id and journal_value.get("request_sha256")==request.request_sha256:
