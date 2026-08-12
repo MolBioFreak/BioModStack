@@ -23,12 +23,17 @@ from database import (
     ConformationalMappingLandscapeRow,
     ConformationalMappingRecord,
     ConformationalMappingRequest,
+    ConformationalMappingSource,
     FrustraMPNNArtifact,
     FrustraMPNNLandscapeRow,
     FrustraMPNNResult,
     Job,
 )
-from services.conformational_mapping.contracts import canonical_json_bytes, canonical_sha256, validate_schema as validate_cm_schema
+from services.conformational_mapping.contracts import (
+    canonical_json_bytes,
+    canonical_sha256,
+    validate_schema as validate_cm_schema,
+)
 from services.conformational_mapping.request_builder import validate_materialized_coordinate_plan
 from services.frustrampnn.contracts import AA_ORDER, validate_schema
 
@@ -164,6 +169,30 @@ def _read_file_at(parent_fd:int,name:str)->bytes:
             raise CMLegacyFrustraMPNNImportError("compatibility authority changed during read")
         return payload
     finally: os.close(fd)
+
+
+def _read_relative_file(root: Path, relative_value: str) -> bytes:
+    relative = Path(relative_value)
+    if relative.is_absolute() or not relative.parts or any(
+        part in {"", ".", ".."} for part in relative.parts
+    ):
+        raise CMLegacyFrustraMPNNImportError("registered CM source path is unsafe")
+    root_fd = os.open(
+        root,
+        os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+    )
+    directory_fd = root_fd
+    try:
+        for component in relative.parts[:-1]:
+            next_fd = _open_dir_at(directory_fd, component)
+            if directory_fd != root_fd:
+                os.close(directory_fd)
+            directory_fd = next_fd
+        return _read_file_at(directory_fd, relative.parts[-1])
+    finally:
+        if directory_fd != root_fd:
+            os.close(directory_fd)
+        os.close(root_fd)
 
 
 def _entry_kind_at(parent_fd:int,name:str)->str|None:
@@ -391,6 +420,27 @@ async def import_legacy_cm_frustrampnn(session:AsyncSession,*,job_id:str)->int:
     if request.coordinate_plan_sha256!=expected_plan_sha256 or request.coordinate_plan_json.get("coordinate_plan_sha256")!=expected_plan_sha256:
         raise CMLegacyFrustraMPNNImportError("persisted CM coordinate-plan hash is invalid")
     if expected_cardinality!=5: raise CMLegacyFrustraMPNNImportError("this governed compatibility import requires the retained five-candidate DRT4 result")
+    snapshot_id=str(request.request_json.get("protenix_snapshot_id") or "")
+    source=await session.get(ConformationalMappingSource,snapshot_id)
+    if (
+        not snapshot_id
+        or source is None
+        or source.source_kind!="complex_snapshot"
+        or not bool(source.immutable)
+    ):
+        raise CMLegacyFrustraMPNNImportError("persisted immutable CM complex snapshot authority is unavailable")
+    source_root=_real_directory(Path(str(source.storage_root)),"persisted CM source root")
+    snapshot_bytes=_read_relative_file(source_root,str(source.relative_path))
+    if _digest(snapshot_bytes)!=source.content_sha256 or len(snapshot_bytes)!=source.size_bytes:
+        raise CMLegacyFrustraMPNNImportError("persisted CM complex snapshot bytes differ from source registry")
+    try:
+        snapshot_wrapper=json.loads(snapshot_bytes)
+    except Exception as exc:
+        raise CMLegacyFrustraMPNNImportError("persisted CM complex snapshot is malformed JSON") from exc
+    if not isinstance(snapshot_wrapper,list) or len(snapshot_wrapper)!=1 or not isinstance(snapshot_wrapper[0],dict):
+        raise CMLegacyFrustraMPNNImportError("persisted CM complex snapshot wrapper is invalid")
+    snapshot=dict(snapshot_wrapper[0])
+    validate_cm_schema("cm_complex_snapshot_v1",snapshot)
     job_root=_real_directory(Path(str(job.output_dir)),"persisted job output root")
     canonical_root=_real_directory(job_root/"final/conformational_mapping/canonical_protenix/canonical_result","canonical CM result root")
     output_parent=job_root/"compatibility/frustrampnn"; output_root=output_parent/"results"; staged=output_parent/"results.staging"; journal=output_parent/"import-journal-v1.json"
@@ -399,6 +449,15 @@ async def import_legacy_cm_frustrampnn(session:AsyncSession,*,job_id:str)->int:
     if len(ensemble_rows)!=1 or canonical_sha256(ensemble_rows[0].payload_json)!=ensemble_rows[0].content_sha256:
         raise CMLegacyFrustraMPNNImportError("persisted CM ensemble authority is unavailable")
     ensemble=dict(ensemble_rows[0].payload_json); validate_cm_schema("cm_ensemble_v1",ensemble)
+    if ensemble.get("source_snapshot_sha256")!=canonical_sha256(snapshot_wrapper):
+        raise CMLegacyFrustraMPNNImportError("persisted CM ensemble source snapshot hash mismatch")
+    request_target_ids={str(value["target_id"]) for value in request.request_json.get("targets") or []}
+    ensemble_targets={str(value["backend_coordinates"]["target_id"]) for value in ensemble.get("candidates") or []}
+    if (
+        snapshot.get("target_id") not in request_target_ids
+        or ensemble_targets!={str(snapshot.get("target_id"))}
+    ):
+        raise CMLegacyFrustraMPNNImportError("persisted CM request, source snapshot, and ensemble are not exactly bound")
     if (
         ensemble.get("request_id")!=request.request_id
         or ensemble.get("request_sha256")!=request.request_sha256
