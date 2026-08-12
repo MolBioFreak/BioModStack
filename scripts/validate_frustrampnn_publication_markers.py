@@ -59,7 +59,8 @@ def _validate_closed_marker(
     job_root: Path,
     marker: Path,
 ) -> tuple[str, str, str, str]:
-    marker_payload = canonical_json_loads(_read_regular(marker.parent, marker.name))
+    marker_root = marker.parent if marker.parent != Path(".") else Path.cwd()
+    marker_payload = canonical_json_loads(_read_regular(marker_root, marker.name))
     paths = validate_marker(marker_payload)
     bundle_root = job_root.joinpath(*paths["manifest"].parent.parts)
     manifest = load_result_manifest(bundle_root)

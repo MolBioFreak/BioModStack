@@ -21,16 +21,19 @@ def _run_validator(
     tmp_path: Path,
     job_root: Path,
     payload: dict[str, str],
+    *,
+    bare_marker: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     marker = tmp_path / "published_candidate.json"
     marker.write_text(json.dumps(payload), encoding="utf-8")
+    marker_argument = marker.name if bare_marker else str(marker)
     return subprocess.run(
         [
             sys.executable,
             str(VALIDATOR),
             "--job-root",
             str(job_root),
-            str(marker),
+            marker_argument,
         ],
         cwd=tmp_path,
         text=True,
@@ -67,6 +70,23 @@ def test_v2_publication_marker_validator_accepts_closed_publisher_shape(
     job_root, payload = _published_v2(tmp_path, monkeypatch)
 
     completed = _run_validator(tmp_path, job_root, payload)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.splitlines() == [
+        payload["result"],
+        payload["manifest"],
+        payload["source"],
+        payload["statistics"],
+    ]
+
+
+def test_v2_publication_marker_validator_accepts_bare_marker_from_work_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_root, payload = _published_v2(tmp_path, monkeypatch)
+
+    completed = _run_validator(tmp_path, job_root, payload, bare_marker=True)
 
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.splitlines() == [
