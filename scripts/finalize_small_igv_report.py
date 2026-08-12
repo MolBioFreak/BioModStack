@@ -48,7 +48,7 @@ ALLOWED_SHELL_RESOURCES = frozenset(
     {"https://cdn.jsdelivr.net/npm/igv@3.5.2/dist/igv.min.js"}
 )
 URL_ATTRIBUTES = frozenset({"src", "href", "poster", "action", "formaction", "data", "srcset", "xlink:href"})
-IGV_REPORT_INLINE_SCRIPT_SHA256 = "389b3ee1a0204ad4c0f578a396dc7bde725e8f86de36bbc13f172f556b0999fc"
+IGV_REPORT_INLINE_SCRIPT_SHA256 = "1cec7f4f0367d1ced846fd55cf862e0a43c80617732d3d9696c122c71c630e58"
 INLINE_JSON_PREFIXES = ("const tableJson = ", "const locusDictionary = ", OPTIONS_PREFIX)
 ALLOWED_NORMALIZED_REPORT_SHA256 = frozenset(
     {
