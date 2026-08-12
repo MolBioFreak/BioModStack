@@ -50,6 +50,10 @@ def _write_manifest(
             {"kind": "alignment_bai", "path": f"{prefix}.bam.bai", "required": False, "state": "present"},
         ],
     }
+    if "dimer" in directory.name:
+        payload["alignment_session"]["source_reference_sequence_sha256"] = hashlib.sha256(
+            b"ACGTACGT"
+        ).hexdigest()
     for artifact in payload["artifacts"]:
         path = directory / artifact["path"]
         artifact["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -71,7 +75,7 @@ def test_manifest_schema_and_job_binding_are_required(
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")
     monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
 
-    sessions = service.build_alignment_sessions("job-a", results_dir=tmp_path)
+    sessions = service.build_alignment_sessions("job-a", source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)
     primary = next(item for item in sessions if item["mode"] == "primary")
     assert primary["ready"] is False
     assert "manifest job_id does not match requested job" in primary["unavailable_reason"]
@@ -91,7 +95,7 @@ def test_duplicate_artifact_role_is_fail_closed(
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")
     monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
 
-    sessions = service.build_alignment_sessions("job-a", results_dir=tmp_path)
+    sessions = service.build_alignment_sessions("job-a", source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)
     primary = next(item for item in sessions if item["mode"] == "primary")
     assert primary["ready"] is False
     assert "duplicate artifact role: alignment" in primary["unavailable_reason"]
@@ -120,7 +124,7 @@ def test_manifest_schema_version_is_fail_closed(
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")
     monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
 
-    sessions = service.build_alignment_sessions("job-a", results_dir=tmp_path)
+    sessions = service.build_alignment_sessions("job-a", source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)
     primary = next(item for item in sessions if item["mode"] == "primary")
     assert primary["ready"] is False
     assert "manifest schema" in primary["unavailable_reason"]
@@ -141,13 +145,13 @@ def test_generic_artifact_resolution_rejects_unready_manifest_artifact(
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")
     monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
 
-    sessions = service.build_alignment_sessions("job-a", results_dir=tmp_path)
+    sessions = service.build_alignment_sessions("job-a", source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)
     primary = next(item for item in sessions if item["mode"] == "primary")
     artifact_id = primary["artifacts"]["alignment"]["artifact_id"]
     assert primary["ready"] is False
 
     with pytest.raises(service.AlignmentSessionError, match="not found"):
-        service.resolve_alignment_artifact("job-a", artifact_id, results_dir=tmp_path)
+        service.resolve_alignment_artifact("job-a", artifact_id, source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)
 
 
 def test_primary_session_is_opaque_job_scoped_and_ready(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -156,7 +160,7 @@ def test_primary_session_is_opaque_job_scoped_and_ready(tmp_path: Path, monkeypa
     _write_manifest(tmp_path / "job-a" / "fastq_qc")
     monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
 
-    sessions = service.build_alignment_sessions("job-a", results_dir=tmp_path)
+    sessions = service.build_alignment_sessions("job-a", source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)
     primary = next(item for item in sessions if item["mode"] == "primary")
     assert primary["ready"] is True
     assert primary["reference_contig"] == "ref"
@@ -185,7 +189,7 @@ def test_dimer_kind_cannot_enter_primary_or_contradict_declared_mode(
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")
     monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
 
-    sessions = service.build_alignment_sessions("job-a", results_dir=tmp_path)
+    sessions = service.build_alignment_sessions("job-a", source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)
     primary = next(item for item in sessions if item["mode"] == "primary")
     assert "alignment" not in primary["artifacts"]
     assert primary["ready"] is False
@@ -207,7 +211,7 @@ def test_explicit_primary_mode_rejects_dimer_path_heuristic_conflict(
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")
     monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
 
-    sessions = service.build_alignment_sessions("job-a", results_dir=tmp_path)
+    sessions = service.build_alignment_sessions("job-a", source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)
     primary = next(item for item in sessions if item["mode"] == "primary")
 
     assert primary["ready"] is False
@@ -230,6 +234,7 @@ def test_persisted_production_output_directory_resolves_sessions_and_stays_confi
 
     sessions = service.build_alignment_sessions(
         "opaque-job-uuid",
+        source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(),
         results_dir=results,
         job_output_dir=output_dir,
     )
@@ -239,6 +244,7 @@ def test_persisted_production_output_directory_resolves_sessions_and_stays_confi
     app.include_router(routes.router, prefix="/api")
     app.dependency_overrides[routes.require_alignment_job] = lambda: SimpleNamespace(
         child_output_dir=None,
+        params={"reference_sequence_sha256": hashlib.sha256(b"ACGTACGT").hexdigest()},
         output_dir=str(output_dir),
     )
     response = TestClient(app).get("/api/jobs/opaque-job-uuid/alignment-sessions")
@@ -250,6 +256,7 @@ def test_persisted_production_output_directory_resolves_sessions_and_stays_confi
     with pytest.raises(service.AlignmentSessionError, match="unsafe job root"):
         service.build_alignment_sessions(
             "opaque-job-uuid",
+            source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(),
             results_dir=results,
             job_output_dir=outside,
         )
@@ -334,7 +341,7 @@ def test_manifest_assigns_distinct_opaque_roles_without_treating_generic_coverag
     (manifest_dir / "qc_manifest.json").write_text(json.dumps(payload), encoding="utf-8")
     monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
 
-    primary = service.build_alignment_sessions("job-a", results_dir=tmp_path)[0]
+    primary = service.build_alignment_sessions("job-a", source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)[0]
 
     expected_roles = {
         "coverage_depth": "igv_coverage_depth.bedgraph",
@@ -354,7 +361,7 @@ def test_manifest_assigns_distinct_opaque_roles_without_treating_generic_coverag
         assert descriptor["url"].startswith("/api/jobs/job-a/alignment-artifacts/")
         assert "path" not in descriptor
         assert service.resolve_alignment_artifact(
-            "job-a", descriptor["artifact_id"], results_dir=tmp_path
+            "job-a", descriptor["artifact_id"], source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path
         ).name == expected_name
 
 
@@ -365,14 +372,14 @@ def test_primary_never_mixes_dimer_sidecars(tmp_path: Path, monkeypatch: pytest.
     _write_manifest(tmp_path / "job-a" / "dimer_qc", prefix="dimer_candidates")
     monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
 
-    sessions = service.build_alignment_sessions("job-a", results_dir=tmp_path)
+    sessions = service.build_alignment_sessions("job-a", source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)
     primary = next(item for item in sessions if item["mode"] == "primary")
     dimer = next(item for item in sessions if item["mode"] == "dimer_candidates")
     assert primary["session_id"] != dimer["session_id"]
     primary_id = primary["artifacts"]["alignment"]["artifact_id"]
     dimer_id = dimer["artifacts"]["alignment"]["artifact_id"]
-    assert service.resolve_alignment_artifact("job-a", primary_id, results_dir=tmp_path).name == "aligned.bam"
-    assert service.resolve_alignment_artifact("job-a", dimer_id, results_dir=tmp_path).name == "dimer_candidates.bam"
+    assert service.resolve_alignment_artifact("job-a", primary_id, source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path).name == "aligned.bam"
+    assert service.resolve_alignment_artifact("job-a", dimer_id, source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path).name == "dimer_candidates.bam"
 
 
 def test_artifact_id_cannot_cross_jobs_or_accept_path_injection(
@@ -383,14 +390,14 @@ def test_artifact_id_cannot_cross_jobs_or_accept_path_injection(
     _write_manifest(tmp_path / "job-a" / "fastq_qc")
     _write_manifest(tmp_path / "job-b" / "fastq_qc")
     monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
-    artifact_id = service.build_alignment_sessions("job-a", results_dir=tmp_path)[0]["artifacts"]["alignment"][
+    artifact_id = service.build_alignment_sessions("job-a", source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)[0]["artifacts"]["alignment"][
         "artifact_id"
     ]
 
     with pytest.raises(service.AlignmentSessionError, match="not found"):
-        service.resolve_alignment_artifact("job-b", artifact_id, results_dir=tmp_path)
+        service.resolve_alignment_artifact("job-b", artifact_id, source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)
     with pytest.raises(service.AlignmentSessionError, match="unsafe"):
-        service.build_alignment_sessions("../job-a", results_dir=tmp_path)
+        service.build_alignment_sessions("../job-a", source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)
 
 
 def test_symlink_or_special_file_never_becomes_ready(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -404,7 +411,7 @@ def test_symlink_or_special_file_never_becomes_ready(tmp_path: Path, monkeypatch
     (manifest_dir / "aligned.bam").symlink_to(target)
     monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
 
-    primary = service.build_alignment_sessions("job-a", results_dir=tmp_path)[0]
+    primary = service.build_alignment_sessions("job-a", source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)[0]
     assert primary["ready"] is False
     assert "unsafe" in primary["unavailable_reason"].lower()
 
@@ -422,7 +429,7 @@ def test_symlink_or_special_file_never_becomes_ready(tmp_path: Path, monkeypatch
     real_job.mkdir()
     (tmp_path / "job-symlink").symlink_to(real_job, target_is_directory=True)
     with pytest.raises(service.AlignmentSessionError, match="symlink job root"):
-        service.build_alignment_sessions("job-symlink", results_dir=tmp_path)
+        service.build_alignment_sessions("job-symlink", source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)
 
 
 def test_semantic_role_resolver_requires_ready_exact_mode_role_and_digest(
@@ -433,7 +440,7 @@ def test_semantic_role_resolver_requires_ready_exact_mode_role_and_digest(
 
     _write_manifest(tmp_path / "job-a" / "fastq_qc")
     monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
-    primary = service.build_alignment_sessions("job-a", results_dir=tmp_path)[0]
+    primary = service.build_alignment_sessions("job-a", source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)[0]
     alignment = primary["artifacts"]["alignment"]
 
     path, metadata = service.resolve_alignment_artifact_by_role(
@@ -441,6 +448,7 @@ def test_semantic_role_resolver_requires_ready_exact_mode_role_and_digest(
         "primary",
         "alignment",
         alignment["sha256"],
+        source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(),
         results_dir=tmp_path,
     )
 
@@ -453,7 +461,9 @@ def test_semantic_role_resolver_requires_ready_exact_mode_role_and_digest(
     ):
         with pytest.raises(service.AlignmentSessionError, match="not found"):
             service.resolve_alignment_artifact_by_role(
-                "job-a", mode, role, digest, results_dir=tmp_path
+                "job-a", mode, role, digest,
+                source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(),
+                results_dir=tmp_path
             )
 
 
@@ -509,6 +519,7 @@ def test_generic_alignment_routes_offload_blocking_service_calls(
     app.include_router(routes.router, prefix="/api")
     app.dependency_overrides[routes.require_alignment_job] = lambda: SimpleNamespace(
         child_output_dir=None,
+        params={"reference_sequence_sha256": hashlib.sha256(b"ACGTACGT").hexdigest()},
         output_dir="/tmp/job-a-run",
     )
     client = TestClient(app)
@@ -558,6 +569,7 @@ def test_semantic_role_route_is_capability_scoped_and_range_capable(
     app.include_router(routes.router, prefix="/api")
     app.dependency_overrides[routes.require_alignment_job] = lambda: SimpleNamespace(
         child_output_dir=None,
+        params={"reference_sequence_sha256": hashlib.sha256(b"ACGTACGT").hexdigest()},
         output_dir="/tmp/job-a-run",
     )
     client = TestClient(app)
@@ -615,6 +627,7 @@ def test_semantic_role_route_rejects_resolver_to_descriptor_open_replacement(
     app.include_router(routes.router, prefix="/api")
     app.dependency_overrides[routes.require_alignment_job] = lambda: SimpleNamespace(
         child_output_dir=None,
+        params={"reference_sequence_sha256": hashlib.sha256(b"ACGTACGT").hexdigest()},
         output_dir="/tmp/job-a-run",
     )
 
@@ -665,7 +678,7 @@ def test_job_scoped_artifact_route_supports_ranges_and_etags(
     )
     app = FastAPI()
     app.include_router(routes.router, prefix="/api")
-    app.dependency_overrides[routes.require_alignment_job] = lambda: SimpleNamespace(output_dir="/tmp/job-a-run")
+    app.dependency_overrides[routes.require_alignment_job] = lambda: SimpleNamespace(params={"reference_sequence_sha256": hashlib.sha256(b"ACGTACGT").hexdigest()}, output_dir="/tmp/job-a-run")
     client = TestClient(app)
 
     ranged = client.get(
@@ -706,7 +719,7 @@ def test_reads_route_requires_a_ready_session_and_never_returns_a_full_file(
     )
     app = FastAPI()
     app.include_router(routes.router, prefix="/api")
-    app.dependency_overrides[routes.require_alignment_job] = lambda: SimpleNamespace(output_dir="/tmp/job-a-run")
+    app.dependency_overrides[routes.require_alignment_job] = lambda: SimpleNamespace(params={"reference_sequence_sha256": hashlib.sha256(b"ACGTACGT").hexdigest()}, output_dir="/tmp/job-a-run")
     client = TestClient(app)
     response = client.get("/api/jobs/job-a/reads?session_id=s1&limit=25")
     assert response.status_code == 200
@@ -1178,7 +1191,7 @@ def test_manifest_declared_integrity_is_preserved_and_mismatch_is_not_ready(
     (manifest_dir / "qc_manifest.json").write_text(json.dumps(payload), encoding="utf-8")
     monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
 
-    primary = service.build_alignment_sessions("job-a", results_dir=tmp_path)[0]
+    primary = service.build_alignment_sessions("job-a", source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)[0]
 
     assert primary["ready"] is False
     alignment = primary["artifacts"]["alignment"]
@@ -1200,7 +1213,7 @@ def test_exact_read_detail_scan_exhaustion_is_not_reported_as_404(monkeypatch: p
     )
     app = FastAPI()
     app.include_router(routes.router, prefix="/api")
-    app.dependency_overrides[routes.require_alignment_job] = lambda: SimpleNamespace(output_dir="/tmp/job-a-run")
+    app.dependency_overrides[routes.require_alignment_job] = lambda: SimpleNamespace(params={"reference_sequence_sha256": hashlib.sha256(b"ACGTACGT").hexdigest()}, output_dir="/tmp/job-a-run")
 
     response = TestClient(app).get("/api/jobs/job-a/reads/target?session_id=session-a")
 

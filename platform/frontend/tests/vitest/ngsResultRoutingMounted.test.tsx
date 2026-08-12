@@ -96,6 +96,9 @@ afterEach(async () => {
 describe('completed NGS result routing', () => {
     it('maps NGS deep links to the Run Inspector view', () => {
         expect(isNgsJob({ model_id: 'nanopore', mode: 'ont_fastq_qc' })).toBe(true);
+        for (const modelId of ['ont_fastq_qc', 'ont_plasmid_qc', 'ont_construct_screening', 'wf_clone_validation']) {
+            expect(isNgsJob({ model_id: modelId, mode: 'completed' })).toBe(true);
+        }
         expect(ngsResultHref('job 123')).toBe('/ngs?section=analyses&job_id=job%20123');
         expect(ngsResultHref(
             'job 123',

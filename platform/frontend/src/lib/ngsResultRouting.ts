@@ -12,6 +12,7 @@ export function isNgsJob(job: Pick<NgsJobRouteIdentity, 'model_id' | 'mode'>): b
     return (
         modelId === 'nanopore'
         || modelId.includes('nanopore')
+        || ['ont_fastq_qc', 'ont_plasmid_qc', 'ont_construct_screening', 'wf_clone_validation'].includes(modelId)
         || mode === 'methylation_analysis'
         || mode === 'nanopore_methylation'
     );
