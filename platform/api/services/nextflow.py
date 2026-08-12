@@ -38,6 +38,58 @@ NEXTFLOW_LOG_TAIL_MAX_LINES = 2_048
 NEXTFLOW_ATTEMPT_LOG_MAX_LINES = 1_024
 NEXTFLOW_LOG_MAX_LINE_CHARS = 16_384
 FRUSTRAMPNN_SETTINGS_MAX_BYTES = 64 * 1024
+GPU_REQUIRED_MODEL_IDS = {"protein_local_redesign"}
+
+
+def _parse_gpu_authority(raw_value: Any) -> int:
+    if isinstance(raw_value, int) and not isinstance(raw_value, bool):
+        value = raw_value
+    elif isinstance(raw_value, str):
+        token = raw_value.strip()
+        if not token or any(character not in "0123456789" for character in token):
+            raise ValueError("GPU authority must be a non-negative integer")
+        value = int(token)
+    else:
+        raise ValueError("GPU authority must be a non-negative integer")
+    if value < 0:
+        raise ValueError("GPU authority must be a non-negative integer")
+    return value
+
+
+def _resolve_launch_gpu_id(job: Any, launch_params: Dict[str, Any], model_id: str) -> Optional[int]:
+    """Resolve the physical GPU from durable scheduler authority."""
+    normalized_model_id = str(model_id or "").strip().lower()
+    gpu_required = normalized_model_id in GPU_REQUIRED_MODEL_IDS
+    raw_assigned = getattr(job, "assigned_gpu", None)
+    raw_pinned = getattr(job, "pinned_gpu", None)
+    raw_launch = launch_params.get("gpu_id")
+
+    if raw_assigned in (None, ""):
+        if gpu_required:
+            raise RuntimeError("GPU-required workflow has no authoritative scheduler GPU assignment")
+        return None
+
+    try:
+        assigned_gpu = _parse_gpu_authority(raw_assigned)
+    except ValueError as exc:
+        raise RuntimeError("Workflow has an invalid Job.assigned_gpu scheduler authority") from exc
+
+    if gpu_required and raw_pinned in (None, ""):
+        raise RuntimeError("GPU-required workflow has no authoritative pinned GPU")
+
+    for field, raw_expected in (("pinned_gpu", raw_pinned), ("launch gpu_id", raw_launch)):
+        if raw_expected in (None, ""):
+            continue
+        try:
+            expected_gpu = _parse_gpu_authority(raw_expected)
+        except ValueError as exc:
+            raise RuntimeError(f"Workflow has an invalid {field} GPU authority") from exc
+        if expected_gpu != assigned_gpu:
+            raise RuntimeError(
+                f"Assigned GPU {assigned_gpu} does not match authoritative {field}={expected_gpu}"
+            )
+
+    return assigned_gpu
 
 
 def _bounded_env_int(name: str, default: int, minimum: int) -> int:
@@ -1832,8 +1884,9 @@ async def launch_nextflow_job(
         failed_job,
         *,
         stale_log_message: str,
+        exit_code: int | None = None,
     ) -> bool:
-        """Publish an active job failure and its CM receipt in one transaction."""
+        """Publish an active Job failure and typed receipts in one transaction."""
 
         changes = {
             attribute.key: attribute.value
@@ -1860,8 +1913,16 @@ async def launch_nextflow_job(
             from services.conformational_mapping.persistence import (
                 terminalize_failed_request_for_job,
             )
+            from services.rfd3_local_redesign import (
+                terminalize_failed_request_for_job as terminalize_failed_rfd3_request_for_job,
+            )
 
             await terminalize_failed_request_for_job(failure_session, job_id=job_id)
+            await terminalize_failed_rfd3_request_for_job(
+                failure_session,
+                job_id=job_id,
+                exit_code=exit_code,
+            )
         await failure_session.commit()
         if not published.rowcount:
             logger.info(stale_log_message, job_id)
@@ -2019,8 +2080,12 @@ async def launch_nextflow_job(
             # ═══════════════════════════════════════════════════════════════
             # GPU ASSIGNMENT: Set CUDA_VISIBLE_DEVICES from orchestrator
             # ═══════════════════════════════════════════════════════════════
-            # Extract gpu_id from params (set by orchestrator)
-            gpu_id = launch_params.get('gpu_id')
+            # The transient runner reloads the Job after adapter handoff. Resolve
+            # the physical GPU from the persisted assignment when the scheduler
+            # parameter is absent, and fail closed for GPU-required workflows.
+            gpu_id = _resolve_launch_gpu_id(job, launch_params, model_id)
+            if gpu_id is not None:
+                launch_params["gpu_id"] = gpu_id
 
             # Build environment with GPU pinning
             env = {**os.environ, "NXF_ANSI_LOG": "false"}
@@ -2067,7 +2132,8 @@ async def launch_nextflow_job(
                 env["CUDA_VISIBLE_DEVICES"] = gpu_id_str
                 logger.info(f"[GPU] Job {job_id} pinned to GPU {gpu_id_str} via CUDA_VISIBLE_DEVICES")
             else:
-                logger.warning(f"[GPU] Job {job_id} has no valid gpu_id - using default GPU selection")
+                env.pop("CUDA_VISIBLE_DEVICES", None)
+                logger.info(f"[GPU] Job {job_id} has no scheduler GPU assignment; CUDA visibility cleared")
             if is_protenix:
                 # Reduces allocator fragmentation spikes on large pair/MSA tensors.
                 env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
@@ -2624,28 +2690,6 @@ async def launch_nextflow_job(
                         # Log last few lines
                         if job.status == JobStatus.FAILED.value:
                             logger.error(f"Tail of log:\n{''.join(full_log.tail(20))}")
-                if str(getattr(job, "model_id", model_id) or model_id).strip().lower() == "protein_local_redesign":
-                    from database import RFD3LocalRedesignRequest
-
-                    local_request_row = (
-                        await session.execute(
-                            select(RFD3LocalRedesignRequest).where(RFD3LocalRedesignRequest.job_id == str(job.id))
-                        )
-                    ).scalar_one_or_none()
-                    if local_request_row is not None:
-                        if job.status in {JobStatus.FAILED.value, JobStatus.CANCELLED.value}:
-                            local_request_row.status = "failed" if job.status == JobStatus.FAILED.value else "cancelled"
-                            local_request_row.failure_receipt_json = {
-                                "schema": "bms.rfd3.local-redesign.failure-receipt.v1",
-                                "job_id": str(job.id),
-                                "status": job.status,
-                                "error_message": job.error_message,
-                                "exit_code": exit_code,
-                            }
-                        elif job.status == JobStatus.AWAITING_INPUT.value:
-                            local_request_row.status = "awaiting_input"
-                        local_request_row.updated_at = datetime.utcnow()
-
                 md_analysis_parent_id = (
                     str(job.parent_job_id)
                     if job.model_id == "molecular_dynamics" and job.mode == "analyze" and job.parent_job_id
@@ -2690,8 +2734,16 @@ async def launch_nextflow_job(
                         from services.conformational_mapping.persistence import (
                             terminalize_failed_request_for_job,
                         )
+                        from services.rfd3_local_redesign import (
+                            terminalize_failed_request_for_job as terminalize_failed_rfd3_request_for_job,
+                        )
 
                         await terminalize_failed_request_for_job(session, job_id=job_id)
+                        await terminalize_failed_rfd3_request_for_job(
+                            session,
+                            job_id=job_id,
+                            exit_code=exit_code,
+                        )
                     await session.commit()
                     if not published.rowcount:
                         logger.info("Skipped stale Nextflow terminal publication for job %s", job_id)

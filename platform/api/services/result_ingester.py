@@ -3174,9 +3174,15 @@ async def _ingest_rfd3_local_redesign_manifest(
         request.preparation_receipt_json = preparation_receipt
 
     request.result_manifest_sha256 = claimed_manifest_sha
-    request.status = "completed"
-    request.updated_at = datetime.utcnow()
-    request.terminal_at = datetime.utcnow()
+    now = datetime.utcnow()
+    job_status = str(job.status or "").strip().lower()
+    if job_status == "completed":
+        request.status = "completed"
+        request.terminal_at = request.terminal_at or now
+    elif job_status in {"queued", "running", "awaiting_input"}:
+        request.status = "generated"
+        request.terminal_at = None
+    request.updated_at = now
 
     manifest_descriptor = {
         "role": "rfd3_result_manifest",

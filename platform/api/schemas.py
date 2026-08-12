@@ -2,7 +2,7 @@
 Pydantic schemas for API request/response validation.
 """
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 from typing import Optional, List, Any, Literal
 from datetime import datetime
 from enum import Enum
@@ -48,6 +48,19 @@ class JobCreate(BaseModel):
         max_length=128,
         description="Opaque server-owned Project launch context; hierarchy identity is never accepted here",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def require_native_rfd3_gpu_pin(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        model_id = str(data.get("model_id") or "").strip().lower()
+        mode = str(data.get("mode") or "").strip().lower()
+        if model_id == "protein_local_redesign" and mode == "local_redesign":
+            pinned_gpu = data.get("pinned_gpu")
+            if isinstance(pinned_gpu, bool) or not isinstance(pinned_gpu, int) or pinned_gpu < 0:
+                raise ValueError("native RFD3 local redesign requires one explicit non-negative integer pinned_gpu")
+        return data
     
     model_config = ConfigDict(
         json_schema_extra={
@@ -105,6 +118,7 @@ class JobResponse(BaseModel):
     provenance: Optional[dict] = None
     saved_selection_sets: Optional[List[dict]] = None
     # GPU assignment
+    pinned_gpu: Optional[int] = None
     assigned_gpu: Optional[int] = None
     vram_estimate_mb: Optional[int] = None
     # Stage tracking for multi-stage pipelines
@@ -160,6 +174,7 @@ class LaunchContextResponse(BaseModel):
     domain_experiment_id: str
     workflow_id: Optional[str]
     workflow_revision_id: Optional[str]
+    pinned_gpu: Optional[int]
     return_uri: str
     source_receipt_id: str
     state: Literal["issued", "claimed", "consumed"]

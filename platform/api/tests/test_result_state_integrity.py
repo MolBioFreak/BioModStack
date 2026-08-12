@@ -244,12 +244,17 @@ async def test_native_rfd3_completion_uses_typed_candidates_without_generic_desi
                 )
             )
         ).scalar_one()
+        assert request.status == "failed"
+        assert request.terminal_at is not None
         request.request_json = {
             **request.request_json,
             "execution": {"dump_trajectories": False, "num_designs": 1},
         }
         job.status = "running"
         job.queue_status = "running"
+        request.status = "generated"
+        request.failure_receipt_json = None
+        request.terminal_at = None
         await session.commit()
 
         result = await finalize_successful_job(
@@ -259,10 +264,13 @@ async def test_native_rfd3_completion_uses_typed_candidates_without_generic_desi
             ingest_fn=ingest,
         )
         await session.refresh(job)
+        await session.refresh(request)
 
         assert result.completed is True
         assert result.design_count == 1
         assert job.status == "completed"
+        assert request.status == "completed"
+        assert request.terminal_at is not None
         assert job.provenance["result_integrity"]["result_kind"] == "rfd3_local_redesign_candidate"
         assert (await session.execute(select(Design).where(Design.job_id == job.id))).scalars().all() == []
 
@@ -278,8 +286,12 @@ async def test_native_rfd3_completion_uses_typed_candidates_without_generic_desi
         await session.commit()
         report = await repair_result_state(session, apply=True)
         repaired_job = (await session.execute(select(Job).where(Job.id == job.id))).scalar_one()
+        await session.refresh(request)
         assert any(change.code == "completed_without_usable_rfd3_results" for change in report.changes)
         assert repaired_job.status == "failed"
+        assert request.status == "failed"
+        assert request.failure_receipt_json is not None
+        assert request.failure_receipt_json["error_message"] == repaired_job.error_message
 
     await engine.dispose()
 
@@ -298,17 +310,37 @@ async def test_repair_rejects_completed_native_rfd3_job_without_usable_typed_can
             status="completed",
             queue_status="completed",
         )
-        session.add(job)
+        request = RFD3LocalRedesignRequest(
+            request_id="native-rfd3-empty-request",
+            job_id=job.id,
+            schema_version=1,
+            request_sha256="1" * 64,
+            profile_id="generic_local_redesign_v1",
+            profile_registry_sha256="2" * 64,
+            redesign_mode="partial_diffusion",
+            sequence_policy="skip",
+            status="completed",
+            request_json={
+                "schema": "bms.rfd3.local-redesign.request.v1",
+                "execution": {"dump_trajectories": False, "num_designs": 1},
+            },
+            terminal_at=datetime.utcnow(),
+        )
+        session.add_all([job, request])
         await session.commit()
         job_id = job.id
 
         report = await repair_result_state(session, apply=True)
         job = (await session.execute(select(Job).where(Job.id == job_id))).scalar_one()
+        await session.refresh(request)
 
         assert any(change.code == "completed_without_usable_rfd3_results" for change in report.changes)
         assert job.status == "failed"
         assert job.queue_status == "failed"
         assert job.provenance["result_integrity"]["state"] == "ingestion_failed"
+        assert request.status == "failed"
+        assert request.failure_receipt_json is not None
+        assert request.failure_receipt_json["error_message"] == job.error_message
 
     await engine.dispose()
 
@@ -398,6 +430,144 @@ async def test_cancellation_during_ingestion_remains_terminal_and_skips_completi
         assert job.queue_status == "cancelled"
         assert job.completed_at == cancelled_at
         assert job.error_message == "Cancelled by user"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_native_rfd3_cancellation_before_completion_cas_blocks_typed_completion(tmp_path: Path) -> None:
+    factory, engine = await _session_factory(tmp_path)
+    output_dir = tmp_path / "rfd3-completion-cancel-race"
+    structure = output_dir / "run" / "rfd3" / "candidate.cif.gz"
+    structure.parent.mkdir(parents=True)
+    structure.write_bytes(b"native-rfd3-candidate")
+    metadata = structure.with_name("candidate.json")
+    metadata.write_text("{}", encoding="utf-8")
+    content_sha256 = hashlib.sha256(structure.read_bytes()).hexdigest()
+    metadata_sha256 = hashlib.sha256(metadata.read_bytes()).hexdigest()
+    descriptors = [
+        {
+            "role": "structure",
+            "relative_path": "run/rfd3/candidate.cif.gz",
+            "storage_path": str(structure),
+            "sha256": content_sha256,
+            "bytes": structure.stat().st_size,
+            "media_type": "chemical/x-mmcif+gzip",
+        },
+        {
+            "role": "native_prediction_metadata",
+            "relative_path": "run/rfd3/candidate.json",
+            "storage_path": str(metadata),
+            "sha256": metadata_sha256,
+            "bytes": metadata.stat().st_size,
+            "media_type": "application/json",
+        },
+    ]
+    manifest_sha256 = hashlib.sha256(
+        json.dumps(descriptors, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    cancelled_at = datetime(2026, 8, 11, 20, 45, 0)
+
+    async with factory() as session:
+        job = _job(
+            "rfd3-completion-cancel-race",
+            model_id="protein_local_redesign",
+            mode="local_redesign",
+            output_dir=str(output_dir),
+        )
+        request = RFD3LocalRedesignRequest(
+            request_id="rfd3-completion-cancel-request",
+            job_id=job.id,
+            schema_version=1,
+            request_sha256="1" * 64,
+            profile_id="generic_local_redesign_v1",
+            profile_registry_sha256="2" * 64,
+            redesign_mode="partial_diffusion",
+            sequence_policy="skip",
+            status="generated",
+            request_json={
+                "schema": "bms.rfd3.local-redesign.request.v1",
+                "execution": {"dump_trajectories": False, "num_designs": 1},
+            },
+        )
+        session.add_all(
+            [
+                job,
+                request,
+                RFD3LocalRedesignCandidate(
+                    id="rfd3-completion-cancel-candidate-row",
+                    request_id=request.request_id,
+                    candidate_id="candidate",
+                    result_set="rfd3_local_redesign_candidates",
+                    stage="backbone",
+                    status="generated",
+                    artifact_manifest_sha256=manifest_sha256,
+                    metrics_json={},
+                    metadata_json={"request_sha256": request.request_sha256},
+                ),
+                RFD3LocalRedesignArtifact(
+                    artifact_id="rfd3-completion-cancel-structure",
+                    request_id=request.request_id,
+                    candidate_id="candidate",
+                    role="structure",
+                    relative_path="run/rfd3/candidate.cif.gz",
+                    storage_path=str(structure),
+                    content_sha256=content_sha256,
+                    size_bytes=structure.stat().st_size,
+                    media_type="chemical/x-mmcif+gzip",
+                    metadata_json={},
+                ),
+                RFD3LocalRedesignArtifact(
+                    artifact_id="rfd3-completion-cancel-metadata",
+                    request_id=request.request_id,
+                    candidate_id="candidate",
+                    role="native_prediction_metadata",
+                    relative_path="run/rfd3/candidate.json",
+                    storage_path=str(metadata),
+                    content_sha256=metadata_sha256,
+                    size_bytes=metadata.stat().st_size,
+                    media_type="application/json",
+                    metadata_json={},
+                ),
+            ]
+        )
+        await session.commit()
+
+        async def ingest(_job_id: str, _output_dir: str, _session, **_kwargs) -> int:
+            # Some ingesters commit internally. Release the initial running-state
+            # transaction so a concurrent authoritative cancellation can win
+            # before the guarded completion CAS.
+            await _session.commit()
+            async with factory() as cancelling_session:
+                cancelled_job = await cancelling_session.get(Job, job.id)
+                cancelled_request = await cancelling_session.get(
+                    RFD3LocalRedesignRequest, request.request_id
+                )
+                assert cancelled_job is not None and cancelled_request is not None
+                cancelled_job.status = "cancelled"
+                cancelled_job.queue_status = "cancelled"
+                cancelled_job.completed_at = cancelled_at
+                cancelled_job.error_message = "Cancelled by user"
+                cancelled_request.status = "cancelled"
+                cancelled_request.failure_receipt_json = {
+                    "schema": "bms.rfd3.local-redesign.failure-receipt.v1",
+                    "job_id": job.id,
+                    "status": "cancelled",
+                    "error_message": "Cancelled by user",
+                }
+                cancelled_request.terminal_at = cancelled_at
+                await cancelling_session.commit()
+            return 0
+
+        result = await finalize_successful_job(job, str(output_dir), session, ingest_fn=ingest)
+        await session.refresh(job)
+        await session.refresh(request)
+
+        assert result.completed is False
+        assert result.integrity_state == "cancelled"
+        assert job.status == "cancelled"
+        assert request.status == "cancelled"
+        assert request.terminal_at == cancelled_at
 
     await engine.dispose()
 
@@ -517,6 +687,56 @@ async def test_failed_ingestion_is_explicit_and_never_cleanly_completed(tmp_path
             "result_count": 0,
             "result_kind": "design",
             "error": "broken parser",
+        }
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_native_rfd3_ingestion_failure_terminalizes_job_and_request_together(tmp_path: Path) -> None:
+    factory, engine = await _session_factory(tmp_path)
+    output_dir = tmp_path / "rfd3-failed-ingest"
+    output_dir.mkdir()
+
+    async with factory() as session:
+        job = _job(
+            "rfd3-failed-ingest",
+            model_id="protein_local_redesign",
+            mode="local_redesign",
+            output_dir=str(output_dir),
+        )
+        request = RFD3LocalRedesignRequest(
+            request_id="rfd3-failed-ingest-request",
+            job_id=job.id,
+            schema_version=1,
+            request_sha256="1" * 64,
+            profile_id="generic_local_redesign_v1",
+            profile_registry_sha256="2" * 64,
+            redesign_mode="partial_diffusion",
+            sequence_policy="skip",
+            status="running",
+            request_json={"schema": "bms.rfd3.local-redesign.request.v1"},
+        )
+        session.add_all([job, request])
+        await session.commit()
+
+        async def ingest(*_args, **_kwargs) -> int:
+            raise RuntimeError("broken native RFD3 manifest")
+
+        result = await finalize_successful_job(job, str(output_dir), session, ingest_fn=ingest)
+        await session.refresh(job)
+        await session.refresh(request)
+
+        assert result.completed is False
+        assert result.integrity_state == "ingestion_failed"
+        assert job.status == "failed"
+        assert request.status == "failed"
+        assert request.terminal_at is not None
+        assert request.failure_receipt_json == {
+            "schema": "bms.rfd3.local-redesign.failure-receipt.v1",
+            "job_id": job.id,
+            "status": "failed",
+            "error_message": "Result ingestion failed: broken native RFD3 manifest",
         }
 
     await engine.dispose()

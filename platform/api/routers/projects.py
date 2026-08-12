@@ -32,6 +32,7 @@ from experiment_services import (
     create_domain_experiment,
     create_global_experiment,
     create_project,
+    public_workflow_payload,
     restore_aggregate,
     save_hierarchy_revision,
     archive_aggregate,
@@ -287,7 +288,11 @@ async def _head_json(
         "status": "archived" if lifecycle_state == "archived" else payload.get("status", lifecycle_state),
         "name": payload.get("name", head.display_name),
         "description": payload.get("description", head.description),
-        "payload": payload or None,
+        "payload": (
+            public_workflow_payload(payload)
+            if storage_kind == "workflow"
+            else payload
+        ) or None,
         "created_at": head.created_at,
         "updated_at": head.updated_at,
     }
@@ -493,6 +498,7 @@ async def _activity(
 
 
 def _revision_json(revision: ExperimentRevision) -> dict[str, Any]:
+    payload = json.loads(revision.canonical_payload)
     return {
         "id": revision.resource_id,
         "subject_id": revision.subject_id,
@@ -500,7 +506,11 @@ def _revision_json(revision: ExperimentRevision) -> dict[str, Any]:
         "parent_revision_id": revision.parent_revision_id,
         "schema_name": revision.schema_name,
         "schema_version": revision.schema_version,
-        "payload": json.loads(revision.canonical_payload),
+        "payload": (
+            public_workflow_payload(payload)
+            if revision.schema_name.startswith("bms.workflow.")
+            else payload
+        ),
         "payload_sha256": revision.payload_sha256,
         "dependency_graph_sha256": revision.dependency_graph_sha256,
         "provenance": json.loads(revision.provenance_json),

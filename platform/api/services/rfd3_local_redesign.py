@@ -9,12 +9,17 @@ import os
 import shutil
 import uuid
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
 
 from Bio.PDB import MMCIFParser, PDBParser
 
-from paths import get_data_root, resolve_runtime_data_path
+from paths import (
+    get_allowed_roots,
+    get_data_root,
+    resolve_runtime_data_path,
+)
 from scripts.rfd3_local_redesign.contract import (
     CONTRACT_REVISION,
     ContractError,
@@ -22,6 +27,266 @@ from scripts.rfd3_local_redesign.contract import (
     request_sha256,
     write_request,
 )
+
+
+RFD3_WORKFLOW_ADAPTER_ID = "bms.core-job.protein_local_redesign.adapter.v1"
+RFD3_SCIENTIFIC_PARAM_KEYS = {
+    "input_structure",
+    "input_pdb",
+    "input_cif",
+    "input",
+    "redesign_mode",
+    "design_chains",
+    "context_chains",
+    "redesign_ranges",
+    "region_mode",
+    "sequence_policy",
+    "insertion_anchor",
+    "insertion_min_length",
+    "insertion_max_length",
+    "partial_t",
+    "ligand",
+    "select_hotspots",
+    "select_hbond_donor",
+    "select_hbond_acceptor",
+    "num_designs",
+    "seed",
+    "dump_trajectories",
+    "write_full_json",
+    "profile_id",
+    "source_residue_identities",
+    "rfd3_request",
+}
+
+
+def canonical_local_redesign_data_alias(value: Any) -> str:
+    """Return one canonical public data-root alias or fail closed."""
+    raw = str(value or "").strip()
+    candidate = Path(raw)
+    if (
+        not raw
+        or candidate.is_absolute()
+        or not candidate.parts
+        or len(candidate.parts) < 2
+        or candidate.parts[0] != "data"
+        or any(part in {"", ".", ".."} for part in candidate.parts)
+        or candidate.as_posix() != raw
+    ):
+        raise ContractError("native RFD3 workflow input_structure must be a canonical data/... alias")
+    return raw
+
+
+def validate_local_redesign_workflow_params(
+    params: Mapping[str, Any],
+    *,
+    expected_adapter_id: str = RFD3_WORKFLOW_ADAPTER_ID,
+) -> None:
+    """Validate immutable public workflow intent without opening its source."""
+    allowed = (
+        RFD3_SCIENTIFIC_PARAM_KEYS
+        - {"input", "input_pdb", "input_cif", "rfd3_request"}
+    ) | {"workflow_adapter"}
+    unexpected = sorted(str(key) for key in params if key not in allowed)
+    if unexpected:
+        raise ContractError(
+            f"unsupported native RFD3 workflow parameters: {', '.join(unexpected)}"
+        )
+    if params.get("workflow_adapter") != expected_adapter_id:
+        raise ContractError("native RFD3 workflow has no authoritative adapter")
+    canonical_local_redesign_data_alias(params.get("input_structure"))
+
+
+def local_redesign_requests_semantically_equal(
+    left: Mapping[str, Any],
+    right: Mapping[str, Any],
+) -> bool:
+    """Compare scientific request meaning across task-owned paths and display names."""
+    left_semantic = deepcopy(dict(left))
+    right_semantic = deepcopy(dict(right))
+    for request in (left_semantic, right_semantic):
+        request.pop("job_name", None)
+        input_binding = request.get("input")
+        if isinstance(input_binding, dict):
+            input_binding.pop("path", None)
+    return left_semantic == right_semantic
+
+
+def prepare_local_redesign_scheduler_params(
+    params: Mapping[str, Any],
+    *,
+    job_name: str,
+    expected_adapter_id: str = RFD3_WORKFLOW_ADAPTER_ID,
+) -> dict[str, Any]:
+    """Bind typed scheduler intent to one source-derived native RFD3 request."""
+    scientific_params = dict(params)
+    adapter_id = scientific_params.pop("workflow_adapter", None)
+    if adapter_id != expected_adapter_id:
+        raise ContractError("native RFD3 scheduler has no authoritative workflow adapter")
+    normalized, request, _digest = normalize_local_redesign_params(
+        scientific_params,
+        job_name=job_name,
+    )
+    prepared = dict(scientific_params)
+    prepared["sequence_policy"] = normalized["sequence_policy"]
+    prepared["write_full_json"] = normalized["write_full_json"]
+    prepared["rfd3_request"] = request
+    prepared["workflow_adapter"] = expected_adapter_id
+    return prepared
+
+
+def project_local_redesign_scheduler_params(params: Mapping[str, Any]) -> dict[str, Any]:
+    """Project persisted native parameters back to an executable path-safe workflow intent."""
+    projected_keys = RFD3_SCIENTIFIC_PARAM_KEYS - {
+        "input",
+        "input_structure",
+        "input_pdb",
+        "input_cif",
+        "rfd3_request",
+    }
+    projected = {key: deepcopy(value) for key, value in params.items() if key in projected_keys}
+    input_value = params.get("input_structure") or params.get("input_pdb")
+    if not isinstance(input_value, str) or not input_value.strip():
+        raise ContractError("persisted native RFD3 job has no source path for workflow projection")
+    try:
+        source = Path(input_value).resolve()
+        relative = source.relative_to(get_data_root().resolve())
+        projected["input_structure"] = canonical_local_redesign_data_alias(
+            (Path("data") / relative).as_posix()
+        )
+    except (OSError, ValueError) as exc:
+        raise ContractError("persisted native RFD3 source is outside the allowed workflow roots") from exc
+    projected["workflow_adapter"] = RFD3_WORKFLOW_ADAPTER_ID
+    return projected
+
+
+async def terminalize_failed_request_for_job(
+    session,
+    *,
+    job_id: str,
+    exit_code: int | None = None,
+) -> bool:
+    """Bind one published Job failure to its active native RFD3 request.
+
+    The caller owns the transaction and must call this only after the guarded
+    Job failure update wins. The post-CAS Job row is the receipt authority.
+    """
+
+    from sqlalchemy import select
+
+    from database import Job, RFD3LocalRedesignRequest
+
+    job = await session.get(Job, job_id)
+    if (
+        job is None
+        or str(job.model_id or "").strip().lower() != "protein_local_redesign"
+        or job.status != "failed"
+    ):
+        return False
+    request = (
+        await session.execute(
+            select(RFD3LocalRedesignRequest).where(
+                RFD3LocalRedesignRequest.job_id == job_id,
+                RFD3LocalRedesignRequest.status.in_(
+                    ("prepared", "queued", "running", "generated", "completed")
+                ),
+            )
+        )
+    ).scalar_one_or_none()
+    if request is None:
+        return False
+
+    receipt: dict[str, Any] = {
+        "schema": "bms.rfd3.local-redesign.failure-receipt.v1",
+        "job_id": str(job.id),
+        "status": "failed",
+        "error_message": str(job.error_message or "native RFD3 job failed"),
+    }
+    if exit_code is not None:
+        receipt["exit_code"] = int(exit_code)
+    now = datetime.utcnow()
+    request.status = "failed"
+    request.failure_receipt_json = receipt
+    request.updated_at = now
+    request.terminal_at = now
+    await session.flush()
+    return True
+
+
+async def terminalize_completed_request_for_job(session, *, job_id: str) -> bool:
+    """Bind one validated Job completion to its generated native request."""
+
+    from sqlalchemy import select
+
+    from database import Job, RFD3LocalRedesignRequest
+
+    job = await session.get(Job, job_id)
+    if (
+        job is None
+        or str(job.model_id or "").strip().lower() != "protein_local_redesign"
+        or job.status != "completed"
+    ):
+        return False
+    request = (
+        await session.execute(
+            select(RFD3LocalRedesignRequest).where(
+                RFD3LocalRedesignRequest.job_id == job_id,
+                RFD3LocalRedesignRequest.status == "generated",
+            )
+        )
+    ).scalar_one_or_none()
+    if request is None:
+        return False
+
+    now = datetime.utcnow()
+    request.status = "completed"
+    request.updated_at = now
+    request.terminal_at = now
+    await session.flush()
+    return True
+
+
+async def terminalize_cancelled_request_for_job(session, *, job_id: str) -> bool:
+    """Bind one authoritative completed cancellation to its native request."""
+
+    from sqlalchemy import select
+
+    from database import Job, RFD3LocalRedesignRequest
+
+    job = await session.get(Job, job_id)
+    if (
+        job is None
+        or str(job.model_id or "").strip().lower() != "protein_local_redesign"
+        or job.status != "cancelled"
+    ):
+        return False
+    request = (
+        await session.execute(
+            select(RFD3LocalRedesignRequest).where(
+                RFD3LocalRedesignRequest.job_id == job_id,
+                RFD3LocalRedesignRequest.status.in_(
+                    ("prepared", "queued", "running", "generated", "completed")
+                ),
+            )
+        )
+    ).scalar_one_or_none()
+    if request is None:
+        return False
+
+    params = dict(job.params or {}) if not isinstance(job.params, str) else {}
+    cancellation_receipt = dict(params.get("cancellation_receipt") or {})
+    now = datetime.utcnow()
+    request.status = "cancelled"
+    request.failure_receipt_json = {
+        "schema": "bms.rfd3.local-redesign.failure-receipt.v1",
+        "job_id": str(job.id),
+        "status": "cancelled",
+        "error_message": str(job.error_message or "Cancelled by user"),
+        "cancellation_receipt": cancellation_receipt,
+    }
+    request.updated_at = now
+    request.terminal_at = now
+    await session.flush()
+    return True
 
 
 def _sha256_file(path: Path) -> str:
@@ -77,6 +342,26 @@ def _source_residue_identities(path: Path) -> list[dict[str, Any]]:
     return chains
 
 
+def _resolve_local_redesign_source(value: Any) -> Path:
+    raw = str(value or "").strip()
+    if not raw:
+        raise ContractError("input_structure is required")
+    expanded = Path(os.path.expanduser(raw))
+    if expanded.is_absolute():
+        lexical = expanded
+    else:
+        parts = expanded.parts
+        if not parts:
+            raise ContractError("input_structure is required")
+        root = get_allowed_roots().get(parts[0])
+        if root is None:
+            raise ContractError("input_structure alias root is not allowed")
+        lexical = root / Path(*parts[1:])
+    if lexical.is_symlink():
+        raise ContractError("input_structure must not be a symbolic link")
+    return resolve_runtime_data_path(lexical)
+
+
 def normalize_local_redesign_params(
     params: Mapping[str, Any],
     *,
@@ -84,34 +369,7 @@ def normalize_local_redesign_params(
 ) -> tuple[dict[str, Any], dict[str, Any], str]:
     """Resolve the source and build the immutable request before queueing."""
     normalized = dict(params)
-    allowed_keys = {
-        "input_structure",
-        "input_pdb",
-        "input_cif",
-        "input",
-        "redesign_mode",
-        "design_chains",
-        "context_chains",
-        "redesign_ranges",
-        "region_mode",
-        "sequence_policy",
-        "insertion_anchor",
-        "insertion_min_length",
-        "insertion_max_length",
-        "partial_t",
-        "ligand",
-        "select_hotspots",
-        "select_hbond_donor",
-        "select_hbond_acceptor",
-        "num_designs",
-        "seed",
-        "dump_trajectories",
-        "write_full_json",
-        "profile_id",
-        "source_residue_identities",
-        "rfd3_request",
-    }
-    unexpected = sorted(str(key) for key in normalized if key not in allowed_keys)
+    unexpected = sorted(str(key) for key in normalized if key not in RFD3_SCIENTIFIC_PARAM_KEYS)
     if unexpected:
         raise ContractError(f"unsupported local-redesign parameters: {', '.join(unexpected)}")
     if normalized.get("sequence_policy") not in {None, "", "skip"}:
@@ -126,10 +384,7 @@ def normalize_local_redesign_params(
     )
     if not input_value:
         raise ContractError("input_structure is required")
-    raw_source_path = Path(str(input_value)).expanduser()
-    if raw_source_path.exists() and raw_source_path.is_symlink():
-        raise ContractError("input_structure must not be a symbolic link")
-    source_path = resolve_runtime_data_path(str(input_value))
+    source_path = _resolve_local_redesign_source(input_value)
     data_root = get_data_root().resolve()
     try:
         source_path.relative_to(data_root)

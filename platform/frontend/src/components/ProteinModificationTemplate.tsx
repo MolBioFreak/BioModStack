@@ -10,6 +10,7 @@ import { DE_NOVO_MODIFICATION_MODE_CARDS, type ModificationMode } from './protei
 interface ProteinModificationTemplateProps {
     onBack: () => void;
     initialValues?: Record<string, unknown>;
+    requiredPinnedGpu?: number | null;
 }
 
 type DeNovoBackend = 'disco' | 'laproteina';
@@ -27,7 +28,11 @@ const initialNumber = (values: Record<string, unknown> | undefined, key: string,
     return Number.isFinite(value) ? value : fallback;
 };
 
-export function ProteinModificationTemplate({ onBack, initialValues }: ProteinModificationTemplateProps) {
+export function ProteinModificationTemplate({
+    onBack,
+    initialValues,
+    requiredPinnedGpu = null,
+}: ProteinModificationTemplateProps) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const initialMode = initialValues?.modification_mode;
@@ -75,6 +80,7 @@ export function ProteinModificationTemplate({ onBack, initialValues }: ProteinMo
                 initialValues={initialValues}
                 submissionModelId="protein_local_redesign"
                 submissionMode="local_redesign"
+                requiredPinnedGpu={requiredPinnedGpu}
             />
         );
     }

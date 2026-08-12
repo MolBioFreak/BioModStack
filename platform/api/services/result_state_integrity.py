@@ -465,6 +465,9 @@ async def finalize_successful_job(
             job = await session.get(Job, job_id)
             state = "cancelled" if job is not None and job.status == "cancelled" else "awaiting_input"
             return FinalizationResult(False, count, state)
+        from services.rfd3_local_redesign import terminalize_failed_request_for_job
+
+        await terminalize_failed_request_for_job(session, job_id=job_id)
         await session.commit()
         await session.refresh(job)
         return FinalizationResult(False, count, "no_candidates" if no_candidates else "ingestion_failed")
@@ -508,6 +511,12 @@ async def finalize_successful_job(
         job = await session.get(Job, job_id)
         state = "cancelled" if job is not None and job.status == "cancelled" else "awaiting_input"
         return FinalizationResult(False, count, state)
+    if job_expects_rfd3_local_redesign_candidates(job):
+        from services.rfd3_local_redesign import terminalize_completed_request_for_job
+
+        if not await terminalize_completed_request_for_job(session, job_id=job_id):
+            await session.rollback()
+            raise RuntimeError("validated RFD3 completion has no generated native request projection")
     await session.commit()
     await session.refresh(job)
     return FinalizationResult(True, count, "validated")
@@ -597,6 +606,24 @@ def _job_state_guards(job: Job) -> tuple[Any, ...]:
     return tuple(predicates)
 
 
+def _rfd3_request_completion_guards(request: RFD3LocalRedesignRequest) -> tuple[Any, ...]:
+    """Require the typed completion-relevant snapshot to remain unchanged."""
+    fields = (
+        "job_id",
+        "status",
+        "result_manifest_sha256",
+        "failure_receipt_json",
+        "terminal_at",
+        "updated_at",
+    )
+    predicates = []
+    for field in fields:
+        column = getattr(RFD3LocalRedesignRequest, field)
+        value = getattr(request, field)
+        predicates.append(column.is_(None) if value is None else column == value)
+    return tuple(predicates)
+
+
 def _apply_job_state(job: Job, after: dict[str, Any]) -> None:
     for field in (
         "status",
@@ -650,12 +677,16 @@ async def repair_result_state(session: AsyncSession, *, apply: bool = False) -> 
             design_counts[parent_id] = design_counts.get(parent_id, 0) + design_counts.get(str(child.id), 0)
     changes: list[RepairChange] = []
     pending_repairs: list[tuple[int, Job, dict[str, Any], dict[str, Any]]] = []
+    pending_rfd3_completion_repairs: list[
+        tuple[int, Job, RFD3LocalRedesignRequest, datetime]
+    ] = []
 
     for job in jobs:
         before = _job_state(job)
         after = dict(before)
         code: Optional[str] = None
         detail = ""
+        rfd3_completion_request: RFD3LocalRedesignRequest | None = None
 
         missing_parent = bool(job.parent_job_id and str(job.parent_job_id) not in job_ids)
         disposition = "repair"
@@ -782,6 +813,30 @@ async def repair_result_state(session: AsyncSession, *, apply: bool = False) -> 
                     after["queue_status"] = "completed"
                     if code == "completed_without_timestamp":
                         detail += "; normalized contradictory queue state in the same pass"
+                if (
+                    code is None
+                    and job_expects_rfd3_local_redesign_candidates(job)
+                    and job.completed_at is not None
+                    and job.queue_status == "completed"
+                    and not job.awaiting_input
+                    and job.awaiting_stage is None
+                    and not bool(job.awaiting_payload)
+                    and not job.paused
+                    and job.assigned_gpu is None
+                ):
+                    request = (
+                        await session.execute(
+                            select(RFD3LocalRedesignRequest).where(
+                                RFD3LocalRedesignRequest.job_id == str(job.id),
+                                RFD3LocalRedesignRequest.status == "generated",
+                                RFD3LocalRedesignRequest.result_manifest_sha256.is_not(None),
+                                RFD3LocalRedesignRequest.failure_receipt_json.is_(None),
+                                RFD3LocalRedesignRequest.terminal_at.is_(None),
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if request is not None:
+                        rfd3_completion_request = request
         elif job.status == "failed" and job.queue_status != "failed":
             code = "failed_queue_mismatch"
             detail = "failed job had contradictory queue state"
@@ -814,6 +869,32 @@ async def repair_result_state(session: AsyncSession, *, apply: bool = False) -> 
                 # Keep the loaded ORM row clean. A conditional SQL update below
                 # makes a concurrent operator action authoritative.
                 pending_repairs.append((len(changes) - 1, job, before, after))
+
+        if rfd3_completion_request is not None:
+            terminal_at = job.completed_at
+            assert terminal_at is not None
+            changes.append(
+                RepairChange(
+                    "completed_rfd3_request_not_terminal",
+                    "rfd3_local_redesign_request",
+                    str(rfd3_completion_request.request_id),
+                    {
+                        "job_id": str(job.id),
+                        "status": "generated",
+                        "terminal_at": None,
+                    },
+                    {
+                        "job_id": str(job.id),
+                        "status": "completed",
+                        "terminal_at": terminal_at.isoformat(),
+                    },
+                    "hash-valid completed native RFD3 job had a stale generated typed projection",
+                )
+            )
+            if apply:
+                pending_rfd3_completion_repairs.append(
+                    (len(changes) - 1, job, rfd3_completion_request, terminal_at)
+                )
 
     orphan_design_ids = list(
         (
@@ -849,7 +930,21 @@ async def repair_result_state(session: AsyncSession, *, apply: bool = False) -> 
                 .where(Job.id == job_id, *guards)
                 .values(**values)
             )
-            if result.rowcount != 1:
+            if result.rowcount == 1 and job_expects_rfd3_local_redesign_candidates(job):
+                repaired_status = str(after.get("status", before.get("status")) or "").strip().lower()
+                if repaired_status == "failed":
+                    from services.rfd3_local_redesign import terminalize_failed_request_for_job
+
+                    await terminalize_failed_request_for_job(session, job_id=job_id)
+                elif repaired_status == "cancelled":
+                    from services.rfd3_local_redesign import terminalize_cancelled_request_for_job
+
+                    await terminalize_cancelled_request_for_job(session, job_id=job_id)
+                elif repaired_status == "completed":
+                    from services.rfd3_local_redesign import terminalize_completed_request_for_job
+
+                    await terminalize_completed_request_for_job(session, job_id=job_id)
+            elif result.rowcount != 1:
                 change = changes[index]
                 current = await session.get(Job, job_id)
                 if current is not None and (current.status == "cancelled" or current.awaiting_input):
@@ -860,6 +955,60 @@ async def repair_result_state(session: AsyncSession, *, apply: bool = False) -> 
                     disposition = "unresolved"
                 else:
                     detail = f"{change.detail}; guarded repair was not published because the record changed concurrently"
+                    disposition = "unresolved"
+                changes[index] = RepairChange(
+                    change.code,
+                    change.record_type,
+                    change.record_id,
+                    change.before,
+                    change.after,
+                    detail,
+                    disposition,
+                )
+        for index, job, request, terminal_at in pending_rfd3_completion_repairs:
+            job_id = str(job.id)
+            request_id = str(request.request_id)
+            job_snapshot_exists = (
+                select(Job.id)
+                .where(Job.id == job_id, *_job_state_guards(job))
+                .exists()
+            )
+            result = await session.execute(
+                update(RFD3LocalRedesignRequest)
+                .where(
+                    RFD3LocalRedesignRequest.request_id == request_id,
+                    *_rfd3_request_completion_guards(request),
+                    job_snapshot_exists,
+                )
+                .values(
+                    status="completed",
+                    updated_at=datetime.utcnow(),
+                    terminal_at=terminal_at,
+                )
+            )
+            if result.rowcount != 1:
+                change = changes[index]
+                session.expire_all()
+                current_job = await session.get(Job, job_id)
+                current_request = await session.get(RFD3LocalRedesignRequest, request_id)
+                if (
+                    current_job is not None
+                    and (
+                        current_job.status == "cancelled"
+                        or current_job.awaiting_input
+                        or (
+                            current_request is not None
+                            and current_request.status in {"failed", "cancelled", "completed"}
+                        )
+                    )
+                ):
+                    detail = f"{change.detail}; superseded by concurrent authoritative state"
+                    disposition = "superseded"
+                elif current_job is None or current_request is None:
+                    detail = f"{change.detail}; projection disappeared before guarded repair publication"
+                    disposition = "unresolved"
+                else:
+                    detail = f"{change.detail}; guarded repair was not published because a projection changed concurrently"
                     disposition = "unresolved"
                 changes[index] = RepairChange(
                     change.code,

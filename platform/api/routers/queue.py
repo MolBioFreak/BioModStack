@@ -706,31 +706,38 @@ async def retry_job(job_id: str, session: AsyncSession = Depends(get_session)):
 
 @router.delete("/clear-all")
 async def cancel_all_queued(session: AsyncSession = Depends(get_session)):
-    """Cancel ALL queued/paused jobs (not running jobs)."""
+    """Cancel all queued/paused non-MD jobs through the canonical lifecycle."""
     result = await session.execute(
-        select(Job).where(Job.queue_status.in_(['queued', 'paused']))
+        select(Job).where(Job.queue_status.in_(["queued", "paused"]))
     )
     jobs = result.scalars().all()
     md_owned = await get_md_owned_job_ids(session)
     jobs = [job for job in jobs if job.id not in md_owned]
-    
-    cancelled_count = 0
-    cancelled_names = []
+    selected_ids = {str(job.id) for job in jobs}
+
+    cancelled_ids: set[str] = set()
+    cancelled_names: list[str] = []
     for job in jobs:
-        job.queue_status = 'failed'
-        job.paused = False
-        job.status = 'cancelled'
-        job.error_message = 'Bulk cancelled by user'
-        cancelled_count += 1
-        cancelled_names.append(job.name)
-    
+        if str(job.id) in cancelled_ids:
+            continue
+        _, lineage = await cancel_job_lineage(
+            str(job.id),
+            session,
+            error_message="Bulk cancelled by user",
+        )
+        for member in lineage:
+            member_id = str(member.id)
+            if member_id in selected_ids and member_id not in cancelled_ids:
+                cancelled_ids.add(member_id)
+                cancelled_names.append(str(member.name))
+
     await session.commit()
-    
+
     return {
         "success": True,
-        "cancelled_count": cancelled_count,
+        "cancelled_count": len(cancelled_ids),
         "cancelled_jobs": cancelled_names[:10],  # First 10 for display
-        "message": f"Cancelled {cancelled_count} jobs"
+        "message": f"Cancelled {len(cancelled_ids)} jobs",
     }
 
 

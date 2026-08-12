@@ -639,7 +639,7 @@ def _verify_rfd3_result_manifest(
 
 
 class Rfd3LocalRedesignAdapter:
-    adapter_id = "bms.rfd3.local-redesign-reference.adapter.v1"
+    adapter_id = "bms.core-job.protein_local_redesign.adapter.v1"
     adapter_version = 1
     display_name = "RFD3 local redesign request/result"
     entity_kind = "rfd3_local_redesign_request"

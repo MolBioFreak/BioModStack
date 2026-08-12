@@ -65,14 +65,18 @@ from services.proteinbase_importer import import_proteinbase_bundle
 from services.rfd3_local_redesign import (
     normalize_local_redesign_params,
     materialize_local_redesign_request,
+    prepare_local_redesign_scheduler_params,
 )
 from services.global_experiments.launch_contexts import (
     LaunchContextError,
     claim_launch_context,
     consume_launch_context,
     release_launch_context_claim,
+    resolve_launch_context,
     resolve_launch_context_for_display,
     validate_bound_job,
+    validate_bound_job_request,
+    workflow_pinned_gpu,
 )
 from scripts.rfd3_local_redesign.contract import ContractError, request_sha256
 from services.frustrampnn.settings import (
@@ -5085,7 +5089,7 @@ async def list_jobs(
             created_at=job.created_at,
             started_at=job.started_at,
             completed_at=job.completed_at,
-            output_dir=job.output_dir,
+            output_dir=_public_job_output_dir(job),
             error_message=job.error_message,
             design_count=design_count,  # Now joined from DB
             requested_design_count=None if summary else _resolve_requested_design_count(job),
@@ -5109,6 +5113,7 @@ async def list_jobs(
             selected_loop_scope=None if summary else job.selected_loop_scope,
             provenance=None if summary else job.provenance,
             saved_selection_sets=None if summary else _serialized_saved_review_filter_sets(job),
+            pinned_gpu=job.pinned_gpu,
             current_stage=job.current_stage,
             completed_stages=completed_stages,
             stage_outputs={} if summary else stage_outputs,
@@ -5177,7 +5182,7 @@ async def import_proteinbase_bundle_job(
         created_at=job.created_at,
         started_at=job.started_at,
         completed_at=job.completed_at,
-        output_dir=job.output_dir,
+        output_dir=_public_job_output_dir(job),
         error_message=job.error_message,
         design_count=design_count or 0,
         requested_design_count=_resolve_requested_design_count(job),
@@ -5201,6 +5206,7 @@ async def import_proteinbase_bundle_job(
         selected_loop_scope=job.selected_loop_scope,
         provenance=job.provenance,
         saved_selection_sets=_serialized_saved_review_filter_sets(job),
+        pinned_gpu=job.pinned_gpu,
         current_stage=job.current_stage,
         completed_stages=job.completed_stages,
         stage_outputs=job.stage_outputs,
@@ -5267,6 +5273,7 @@ async def _create_job(
     _commit: Any = Depends(lambda: True),
     _md_output_creation: Any = Depends(lambda: None),
     _md_input_resolver: Any = Depends(lambda: None),
+    _trusted_workflow_adapter: Any = Depends(lambda: False),
 ):
     """Create and queue a new pipeline job."""
     require_molecular_dynamics_feature(job_data.model_id)
@@ -5286,6 +5293,38 @@ async def _create_job(
     }
     normalized_model_id = str(job_data.model_id or "").strip().lower()
     normalized_mode = str(job_data.mode or "").strip().lower()
+    if normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign":
+        if "workflow_adapter" in (job_data.params or {}) and _trusted_workflow_adapter is not True:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "local_redesign_contract_error": "workflow_adapter is server-owned for native RFD3"
+                },
+            )
+        pinned_gpu = job_data.pinned_gpu
+        if isinstance(pinned_gpu, bool) or not isinstance(pinned_gpu, int) or pinned_gpu < 0:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "local_redesign_contract_error": (
+                        "native RFD3 local redesign requires one explicit non-negative pinned_gpu"
+                    )
+                },
+            )
+        from routers.gpu import get_gpu_stats_with_error
+
+        live_gpus, gpu_error = await asyncio.to_thread(get_gpu_stats_with_error, True)
+        valid_gpu_indices = sorted({int(gpu.index) for gpu in live_gpus})
+        if gpu_error or pinned_gpu not in valid_gpu_indices:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "local_redesign_contract_error": "native RFD3 pinned_gpu is absent from an error-free live physical GPU inventory",
+                    "pinned_gpu": pinned_gpu,
+                    "valid_gpu_indices": valid_gpu_indices,
+                    "gpu_error": gpu_error,
+                },
+            )
     if normalized_model_id == "frustrampnn":
         raise HTTPException(
             status_code=422,
@@ -5371,10 +5410,16 @@ async def _create_job(
 
         if normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign":
             try:
-                normalized_local_params, _local_request, _local_digest = normalize_local_redesign_params(
-                    job_data.params,
-                    job_name=job_data.name,
-                )
+                if "workflow_adapter" in job_data.params:
+                    normalized_local_params = prepare_local_redesign_scheduler_params(
+                        job_data.params,
+                        job_name=job_data.name,
+                    )
+                else:
+                    normalized_local_params, _local_request, _local_digest = normalize_local_redesign_params(
+                        job_data.params,
+                        job_name=job_data.name,
+                    )
             except ContractError as exc:
                 raise HTTPException(status_code=422, detail={"local_redesign_contract_error": str(exc)}) from exc
             job_data.params = normalized_local_params
@@ -5471,7 +5516,7 @@ async def _create_job(
                 created_at=existing_child.created_at,
                 started_at=existing_child.started_at,
                 completed_at=existing_child.completed_at,
-                output_dir=existing_child.output_dir,
+                output_dir=_public_job_output_dir(existing_child),
                 error_message=existing_child.error_message,
                 design_count=0,
                 batch_id=existing_child.batch_id,
@@ -5494,6 +5539,7 @@ async def _create_job(
                 selected_loop_scope=existing_child.selected_loop_scope,
                 provenance=existing_child.provenance,
                 saved_selection_sets=_serialized_saved_review_filter_sets(existing_child),
+                pinned_gpu=existing_child.pinned_gpu,
                 awaiting_input=existing_child.awaiting_input,
                 awaiting_stage=existing_child.awaiting_stage,
                 awaiting_payload=existing_child.awaiting_payload,
@@ -6089,7 +6135,7 @@ async def _create_job(
         created_at=first_job.created_at,
         started_at=first_job.started_at,
         completed_at=first_job.completed_at,
-        output_dir=first_job.output_dir,
+        output_dir=_public_job_output_dir(first_job),
         error_message=first_job.error_message,
         design_count=0,
         batch_id=first_job.batch_id,
@@ -6112,6 +6158,7 @@ async def _create_job(
         selected_loop_scope=first_job.selected_loop_scope,
         provenance=first_job.provenance,
         saved_selection_sets=_serialized_saved_review_filter_sets(first_job),
+        pinned_gpu=first_job.pinned_gpu,
         awaiting_input=first_job.awaiting_input,
         awaiting_stage=first_job.awaiting_stage,
         awaiting_payload=first_job.awaiting_payload,
@@ -6162,6 +6209,16 @@ async def create_job(
         )
 
     try:
+        preview_context = await resolve_launch_context(experiment_session, launch_context_id)
+        job_data.params = await validate_bound_job_request(
+            experiment_session,
+            preview_context,
+            job_name=job_data.name,
+            model_id=job_data.model_id,
+            mode=job_data.mode,
+            params=dict(job_data.params or {}),
+            pinned_gpu=job_data.pinned_gpu,
+        )
         context, claim_token = await claim_launch_context(experiment_session, launch_context_id)
         await experiment_session.commit()
     except LaunchContextError as exc:
@@ -6177,6 +6234,9 @@ async def create_job(
                     await _project_bound_job(experiment_session, context, existing_job, binding)
                     await experiment_session.commit()
                     return JobResponse.model_validate(existing_job).model_copy(update={
+                        "params": _public_job_params(existing_job),
+                        "output_dir": _public_job_output_dir(existing_job),
+                        "pinned_gpu": existing_job.pinned_gpu,
                         "launch_context_id": context.launch_context_id,
                         "launch_context_binding": binding,
                         "return_uri": context.return_uri,
@@ -6200,6 +6260,9 @@ async def create_job(
                 await _project_bound_job(experiment_session, context, existing_job, binding)
                 await experiment_session.commit()
                 return JobResponse.model_validate(existing_job).model_copy(update={
+                    "params": _public_job_params(existing_job),
+                    "output_dir": _public_job_output_dir(existing_job),
+                    "pinned_gpu": existing_job.pinned_gpu,
                     "launch_context_id": context.launch_context_id,
                     "launch_context_binding": binding,
                     "return_uri": context.return_uri,
@@ -6214,6 +6277,8 @@ async def create_job(
             _preallocated_job_id,
             _commit,
             _skip_parent_lineage_update,
+            None,
+            True,
         )
     except HTTPException:
         await session.rollback()
@@ -6552,9 +6617,19 @@ def _rfd3_public_json(value: Any, *, field: str | None = None) -> Any:
     return value
 
 
+def _is_native_rfd3_job(job: Any) -> bool:
+    return str(job.model_id or "").strip().lower() == "protein_local_redesign"
+
+
+def _public_job_output_dir(job: Any) -> str | None:
+    if _is_native_rfd3_job(job):
+        return None
+    return job.output_dir
+
+
 def _public_job_params(job: Any) -> dict[str, Any]:
     params = job.params if isinstance(job.params, dict) else {}
-    if str(job.model_id or "").strip().lower() == "protein_local_redesign":
+    if _is_native_rfd3_job(job):
         return _rfd3_public_json(params)
     return params
 
@@ -6784,7 +6859,7 @@ async def get_job(
         created_at=job.created_at,
         started_at=job.started_at,
         completed_at=job.completed_at,
-        output_dir=job.output_dir,
+        output_dir=_public_job_output_dir(job),
         error_message=job.error_message,
         design_count=design_count or 0,
         requested_design_count=_resolve_requested_design_count(job),
@@ -6808,6 +6883,7 @@ async def get_job(
         selected_loop_scope=job.selected_loop_scope,
         provenance=job.provenance,
         saved_selection_sets=_serialized_saved_review_filter_sets(job),
+        pinned_gpu=job.pinned_gpu,
         current_stage=job.current_stage,
         completed_stages=completed_stages,
         stage_outputs=stage_outputs,

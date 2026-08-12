@@ -135,6 +135,50 @@ API_ROOT = Path(__file__).resolve().parents[1]
 _CLAIM_LOCKS: dict[tuple[str, str], asyncio.Lock] = {}
 
 
+def _parse_gpu_authority(raw_value: Any, *, field: str) -> int:
+    if isinstance(raw_value, int) and not isinstance(raw_value, bool):
+        value = raw_value
+    elif isinstance(raw_value, str):
+        token = raw_value.strip()
+        if not token or any(character not in "0123456789" for character in token):
+            raise HTTPException(status_code=409, detail=f"{field} must be a non-negative integer")
+        value = int(token)
+    else:
+        raise HTTPException(status_code=409, detail=f"{field} must be a non-negative integer")
+    if value < 0:
+        raise HTTPException(status_code=409, detail=f"{field} must be a non-negative integer")
+    return value
+
+
+def _bind_scheduler_gpu_assignment(
+    job: Any,
+    authoritative_params: dict[str, Any],
+    launch_params: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist the scheduler GPU before the detached runner reloads the job."""
+    raw_gpu_id = launch_params.get("gpu_id")
+    if raw_gpu_id in (None, ""):
+        return authoritative_params
+    gpu_id = _parse_gpu_authority(raw_gpu_id, field="Launch gpu_id")
+
+    for field in ("pinned_gpu", "assigned_gpu"):
+        expected = getattr(job, field, None)
+        if expected is None:
+            continue
+        expected_gpu = _parse_gpu_authority(expected, field=f"Job.{field}")
+        if expected_gpu != gpu_id:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Launch gpu_id {gpu_id} does not match authoritative Job.{field}={expected_gpu}",
+            )
+
+    updated = dict(authoritative_params)
+    updated["gpu_id"] = gpu_id
+    job.params = updated
+    job.assigned_gpu = gpu_id
+    return updated
+
+
 class _AsyncWorkflowClaimLock:
     def __init__(self, process_lock: asyncio.Lock, state_dir: Path, lane: str, job_id: str) -> None:
         self.process_lock = process_lock
@@ -389,7 +433,7 @@ async def _publish_interrupted_owner(
     receipt: dict[str, Any],
     *,
     reason: str,
-) -> None:
+) -> bool:
     lane, generation, attempt, unit_name, owner_nonce = _attempt_identity(receipt)
     params = update_execution_attempt(
         job.params,
@@ -405,12 +449,33 @@ async def _publish_interrupted_owner(
             "detail": str(reason)[:2000],
         },
     )
-    job.params = params
-    if str(getattr(job, "status", "")).lower() not in TERMINAL_JOB_STATUSES:
-        job.status = "failed"
-        job.queue_status = "failed"
-        job.error_message = f"INTERRUPTED_OWNER: {str(reason)[:1800]}"
-        job.completed_at = datetime.utcnow()
+    job_id = str(job.id)
+    error_message = f"INTERRUPTED_OWNER: {str(reason)[:1800]}"
+    published = await session.execute(
+        sqlalchemy.update(database.Job)
+        .where(
+            database.Job.id == job_id,
+            database.Job.status.notin_(TERMINAL_JOB_STATUSES),
+            database.Job.queue_status.notin_({"cancelling", "cancelled"}),
+            database.Job.awaiting_input.is_(False),
+        )
+        .values(
+            params=params,
+            status="failed",
+            queue_status="failed",
+            error_message=error_message,
+            completed_at=datetime.utcnow(),
+            assigned_gpu=None,
+        )
+    )
+    if published.rowcount != 1:
+        return False
+
+    await session.refresh(job)
+    from services.rfd3_local_redesign import terminalize_failed_request_for_job
+
+    await terminalize_failed_request_for_job(session, job_id=job_id)
+    return True
 
 
 async def _publish_owner_conflict(
@@ -468,8 +533,8 @@ async def reconcile_workflow_adapter_startup() -> dict[str, int]:
                     exc,
                 )
                 counts["critical"] += 1
-                await _publish_interrupted_owner(session, job, receipt, reason=str(exc))
-                counts["interrupted"] += 1
+                if await _publish_interrupted_owner(session, job, receipt, reason=str(exc)):
+                    counts["interrupted"] += 1
                 continue
 
             active = properties.active_state in {"active", "activating", "reloading"}
@@ -533,13 +598,13 @@ async def reconcile_workflow_adapter_startup() -> dict[str, int]:
                 job.id,
             )
             counts["critical"] += 1
-            await _publish_interrupted_owner(
+            if await _publish_interrupted_owner(
                 session,
                 job,
                 receipt,
                 reason=f"owner unit {unit_name} is {properties.active_state}/{properties.sub_state}",
-            )
-            counts["interrupted"] += 1
+            ):
+                counts["interrupted"] += 1
         await session.commit()
     return counts
 
@@ -690,7 +755,11 @@ async def workflow_adapter_launch(
                     detail=f"Job {payload.job_id} is already terminal with status {status}",
                 )
 
-            params = params_mapping(getattr(job, "params", {}))
+            params = _bind_scheduler_gpu_assignment(
+                job,
+                params_mapping(getattr(job, "params", {})),
+                payload.params,
+            )
             latest = latest_execution_attempt(params)
             if latest is not None and not execution_attempt_is_terminal(latest):
                 latest_lane = str(latest.get("lane", ""))

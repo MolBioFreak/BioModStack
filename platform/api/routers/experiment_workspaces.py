@@ -52,6 +52,8 @@ from experiment_services import (
     archive_aggregate,
     clone_workflow,
     prepare_workflow,
+    public_preparation_scheduler,
+    public_workflow_payload,
     save_dataset_revision,
     save_workflow_draft,
     save_workflow_revision,
@@ -283,6 +285,7 @@ def _head_json(head: ExperimentAggregateHead) -> dict[str, Any]:
 
 
 def _revision_json(revision: ExperimentRevision) -> dict[str, Any]:
+    payload = json.loads(revision.canonical_payload)
     return {
         "id": revision.resource_id,
         "subject_id": revision.subject_id,
@@ -290,7 +293,11 @@ def _revision_json(revision: ExperimentRevision) -> dict[str, Any]:
         "parent_revision_id": revision.parent_revision_id,
         "schema_name": revision.schema_name,
         "schema_version": revision.schema_version,
-        "payload": json.loads(revision.canonical_payload),
+        "payload": (
+            public_workflow_payload(payload)
+            if revision.schema_name.startswith("bms.workflow.")
+            else payload
+        ),
         "payload_sha256": revision.payload_sha256,
         "dependency_graph_sha256": revision.dependency_graph_sha256,
         "provenance": json.loads(revision.provenance_json),
@@ -539,7 +546,7 @@ async def save_workflow_draft_route(
             "id": draft.resource_id,
             "workflow_id": draft.workflow_id,
             "generation": draft.generation,
-            "payload": json.loads(draft.canonical_payload),
+            "payload": public_workflow_payload(json.loads(draft.canonical_payload)),
             "updated_at": draft.updated_at,
         }
     except ExperimentServiceError as exc:
@@ -711,7 +718,9 @@ async def prepare_workspace_workflow(
             "validation_status": preparation.validation_status,
             "validation_receipt": json.loads(preparation.validation_receipt_json),
             "normalized_request_sha256": preparation.normalized_request_sha256,
-            "scheduler_payload": json.loads(preparation.scheduler_payload_json),
+            "scheduler_payload": public_preparation_scheduler(
+                json.loads(preparation.scheduler_payload_json)
+            ),
             "prepared_at": preparation.prepared_at,
         }
     except ExperimentServiceError as exc:
@@ -736,7 +745,9 @@ async def get_workspace_preparation(
         "validation_resource_id": preparation.validation_resource_id,
         "validation_receipt": json.loads(preparation.validation_receipt_json),
         "normalized_request_sha256": preparation.normalized_request_sha256,
-        "scheduler_payload": json.loads(preparation.scheduler_payload_json),
+        "scheduler_payload": public_preparation_scheduler(
+            json.loads(preparation.scheduler_payload_json)
+        ),
         "prepared_at": preparation.prepared_at,
     }
 
