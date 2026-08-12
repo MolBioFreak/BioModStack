@@ -73,9 +73,19 @@ async def test_unknown_vram_is_estimated_and_pinned_while_explicit_zero_stays_cp
         lambda: {"global": {"enabled": True, "target_vram_fill": 0.9}, "concurrency_limits": {}},
     )
     launched: list[dict[str, Any]] = []
+    durable_assignments: list[tuple[int | None, object]] = []
 
     async def launch(**kwargs: Any) -> None:
         launched.append(kwargs)
+        if kwargs["job_id"] == "gpu-job":
+            async with factory() as handoff_session:
+                persisted_job = await handoff_session.get(Job, "gpu-job")
+                durable_assignments.append(
+                    (
+                        persisted_job.assigned_gpu if persisted_job is not None else None,
+                        persisted_job.params.get("gpu_id") if persisted_job is not None else None,
+                    )
+                )
 
     gpu = SimpleNamespace(
         index=2,
@@ -92,10 +102,12 @@ async def test_unknown_vram_is_estimated_and_pinned_while_explicit_zero_stays_cp
     by_id = {str(item["job_id"]): item for item in launched}
     assert "gpu_id" not in by_id["cpu-job"]["params"]
     assert by_id["gpu-job"]["params"]["gpu_id"] == 2
+    assert durable_assignments == [(2, 2)]
     async with factory() as session:
         gpu_job = await session.get(Job, "gpu-job")
         cpu_job = await session.get(Job, "cpu-job")
         assert gpu_job is not None and gpu_job.assigned_gpu == 2
+        assert gpu_job.params["gpu_id"] == 2
         assert gpu_job.vram_estimate_mb is not None and gpu_job.vram_estimate_mb > 0
         assert cpu_job is not None and cpu_job.assigned_gpu is None
     await engine.dispose()
