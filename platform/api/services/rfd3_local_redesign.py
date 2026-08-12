@@ -59,6 +59,72 @@ RFD3_SCIENTIFIC_PARAM_KEYS = {
 }
 
 
+async def requeue_failed_request_for_job(session, *, job_id: str) -> bool:
+    """Reset one failed typed request when its owning Job is admitted for retry."""
+    from sqlalchemy import select
+
+    from database import Job, RFD3LocalRedesignRequest
+
+    job = await session.get(Job, job_id)
+    if (
+        job is None
+        or str(job.model_id or "").strip().lower() != "protein_local_redesign"
+        or job.status != "queued"
+        or job.queue_status != "queued"
+    ):
+        return False
+    request = (
+        await session.execute(
+            select(RFD3LocalRedesignRequest).where(
+                RFD3LocalRedesignRequest.job_id == job_id,
+                RFD3LocalRedesignRequest.status == "failed",
+            )
+        )
+    ).scalar_one_or_none()
+    if request is None:
+        return False
+
+    request.status = "queued"
+    request.failure_receipt_json = None
+    request.terminal_at = None
+    request.updated_at = datetime.utcnow()
+    await session.flush()
+    return True
+
+
+async def start_request_for_job(session, *, job_id: str) -> bool:
+    """Advance one admitted typed request with its authoritative running Job."""
+    from sqlalchemy import select
+
+    from database import Job, RFD3LocalRedesignRequest
+
+    job = await session.get(Job, job_id)
+    if (
+        job is None
+        or str(job.model_id or "").strip().lower() != "protein_local_redesign"
+        or job.status != "running"
+        or job.started_at is None
+    ):
+        return False
+    request = (
+        await session.execute(
+            select(RFD3LocalRedesignRequest).where(
+                RFD3LocalRedesignRequest.job_id == job_id,
+                RFD3LocalRedesignRequest.status.in_(("prepared", "queued", "running")),
+            )
+        )
+    ).scalar_one_or_none()
+    if request is None:
+        return False
+
+    request.status = "running"
+    request.failure_receipt_json = None
+    request.terminal_at = None
+    request.updated_at = datetime.utcnow()
+    await session.flush()
+    return True
+
+
 def canonical_local_redesign_data_alias(value: Any) -> str:
     """Return one canonical public data-root alias or fail closed."""
     raw = str(value or "").strip()

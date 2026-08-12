@@ -408,7 +408,8 @@ export function Dashboard() {
             name: `${detailedJob.name}_clone`,
             model_id: detailedJob.model_id,
             mode: detailedJob.mode,
-            params: detailedJob.params || {}
+            params: detailedJob.params || {},
+            pinned_gpu: detailedJob.pinned_gpu ?? null,
         };
         localStorage.setItem('clonedJobData', JSON.stringify(cloneData));
         // Navigate to submit page

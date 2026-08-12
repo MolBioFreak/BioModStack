@@ -34,6 +34,7 @@ export function RFD3LocalRedesignResultsPane({ jobId }: RFD3LocalRedesignResults
     });
     const result = resultQuery.data?.data;
     const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
+    const [selectedTrajectoryRole, setSelectedTrajectoryRole] = useState<'denoised_trajectory' | 'noisy_trajectory'>('denoised_trajectory');
     const requestView = resolveRFD3LocalRedesignRequestView(result);
     const request = requestView.request;
     const fixedAtoms = request?.rfd3 && typeof request.rfd3 === 'object'
@@ -66,6 +67,9 @@ export function RFD3LocalRedesignResultsPane({ jobId }: RFD3LocalRedesignResults
         : result.candidates[0]?.candidate_id;
     const activeStructure = result.artifacts.find(
         (artifact) => artifact.candidate_id === activeCandidateId && artifact.role === 'structure',
+    );
+    const activeTrajectory = result.artifacts.find(
+        (artifact) => artifact.candidate_id === activeCandidateId && artifact.role === selectedTrajectoryRole,
     );
     const sourceArtifact = result.artifacts.find((artifact) => artifact.role === 'source_structure');
     const sourceFormat = sourceArtifact?.media_type.includes('mmcif') ? 'cif' : 'pdb';
@@ -172,6 +176,46 @@ export function RFD3LocalRedesignResultsPane({ jobId }: RFD3LocalRedesignResults
                     />
                 </div>
             </section>
+
+            {result.capabilities.trajectories.requested && (
+                <section className="rounded-2xl border border-slate-700 bg-slate-900/50 p-5">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                            <h3 className="text-lg font-semibold text-white">Native diffusion trajectory</h3>
+                            <p className="mt-1 text-xs text-slate-500">Mol* loads the producer multi-model mmCIF trajectory for the selected candidate.</p>
+                        </div>
+                        {result.capabilities.trajectories.available && (
+                            <div className="flex gap-2">
+                                {(['denoised_trajectory', 'noisy_trajectory'] as const).map((role) => (
+                                    <button
+                                        key={role}
+                                        type="button"
+                                        onClick={() => setSelectedTrajectoryRole(role)}
+                                        className={`rounded-lg border px-3 py-1.5 text-xs ${selectedTrajectoryRole === role ? 'border-cyan-400/60 bg-cyan-500/15 text-cyan-100' : 'border-slate-700 text-slate-400 hover:border-slate-500'}`}
+                                    >
+                                        {role === 'denoised_trajectory' ? 'Denoised' : 'Noisy'}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                    {!result.capabilities.trajectories.available || !activeTrajectory ? (
+                        <div role="status" className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100">
+                            Requested trajectory artifacts are unavailable for this candidate.
+                        </div>
+                    ) : (
+                        <div className="mt-4 overflow-hidden rounded-xl border border-slate-800">
+                            <MolstarViewer
+                                structureUrl={artifactUrl(activeTrajectory.artifact_id)}
+                                format="cif"
+                                height={560}
+                                label={`${activeCandidateId} ${selectedTrajectoryRole}`}
+                                showSequenceTrack
+                            />
+                        </div>
+                    )}
+                </section>
+            )}
 
             <section className="rounded-2xl border border-slate-700 bg-slate-900/50 p-5">
                 <h3 className="text-lg font-semibold text-white">Immutable artifacts</h3>

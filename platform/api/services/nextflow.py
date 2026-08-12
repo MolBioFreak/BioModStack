@@ -1990,20 +1990,17 @@ async def launch_nextflow_job(
             logger.info(f"Job {job_id} was cancelled before starting, aborting launch")
             return
         
-        if job.status != JobStatus.RUNNING.value or job.started_at is None:
+        needs_running_transition = job.status != JobStatus.RUNNING.value or job.started_at is None
+        if needs_running_transition:
             job.status = JobStatus.RUNNING.value
             job.started_at = datetime.utcnow()
-            if str(getattr(job, "model_id", model_id) or model_id).strip().lower() == "protein_local_redesign":
-                from database import RFD3LocalRedesignRequest
+        is_native_rfd3 = str(getattr(job, "model_id", model_id) or model_id).strip().lower() == "protein_local_redesign"
+        if is_native_rfd3:
+            from services.rfd3_local_redesign import start_request_for_job
 
-                local_request_row = (
-                    await session.execute(
-                        select(RFD3LocalRedesignRequest).where(RFD3LocalRedesignRequest.job_id == str(job.id))
-                    )
-                ).scalar_one_or_none()
-                if local_request_row is not None:
-                    local_request_row.status = "running"
-                    local_request_row.updated_at = datetime.utcnow()
+            if not await start_request_for_job(session, job_id=str(job.id)):
+                raise RuntimeError("RFD3 local-redesign request is not ready for launch")
+        if needs_running_transition or is_native_rfd3:
             await session.commit()
         
         # Re-check cancellation status right before spawning (minimize race window)
