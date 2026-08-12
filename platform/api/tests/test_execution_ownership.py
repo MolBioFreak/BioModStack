@@ -93,8 +93,8 @@ def test_workflow_slices_render_one_global_aggregate_limit_with_lane_children(tm
     assert services.PRODUCTION_WORKFLOW_SLICE.startswith("biomodstack-workflows-")
     assert "Environment=BMS_WORKFLOW_ADAPTER_URL=http://127.0.0.1:18001" in development[services.API_SERVICE]
     assert "Environment=BMS_WORKFLOW_ADAPTER_URL=http://127.0.0.1:18101" in production[services.CORE_RUNTIME_SERVICE]
-    assert "Environment=BMS_CONTAINER_DIR=/mnt/BioModStack/dev/apptainer" in development[services.API_SERVICE]
-    assert "Environment=BMS_CONTAINER_DIR=/mnt/BioModStack/dev/apptainer" in development[
+    assert "Environment=BMS_CONTAINER_DIR=/mnt/BioModStack/apptainer" in development[services.API_SERVICE]
+    assert "Environment=BMS_CONTAINER_DIR=/mnt/BioModStack/apptainer" in development[
         services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE
     ]
     assert "Environment=BMS_CONTAINER_DIR=/mnt/BioModStack/apptainer" in production[

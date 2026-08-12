@@ -1273,7 +1273,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     dev_msa_cache_dir = str(resolved.get("dev_msa_cache_dir", Path(dev_data_root) / "msa_cache"))
     dev_sabdab_cache_dir = str(resolved.get("dev_sabdab_cache_dir", Path(dev_data_root) / "sabdab_cache"))
     dev_container_dir = str(
-        resolved.get("dev_container_dir", shared_data_root / "dev" / "apptainer")
+        resolved.get("dev_container_dir", shared_data_root / "apptainer")
     )
     dev_adapter_limits = render_systemd_resource_boundaries(DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE).replace(
         "\n", "\n            "
