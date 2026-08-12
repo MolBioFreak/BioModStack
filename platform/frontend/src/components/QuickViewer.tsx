@@ -146,13 +146,21 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
         queryFn: () => fetchJobs({ status: 'completed', limit: 100, summary: true }),
         refetchInterval: (query) => jobPollingInterval(3000, query),
     });
+    const { data: selectedJobData } = useQuery({
+        queryKey: ['quick-viewer-selected-job', selectedJobId],
+        queryFn: () => fetchJobs({ q: selectedJobId as string, limit: 100, summary: true }),
+        enabled: Boolean(selectedJobId),
+    });
 
     // Get completed jobs with structures
     const allJobs = jobsData?.data?.jobs || [];
     const completedJobs = allJobs.filter(
         (job: Job) => job.status === 'completed' && !isMolecularDynamicsJob(job) && !isNgsJob(job)
     );
-    const selectedJobIsExcluded = allJobs.some(
+    const selectedJobRecord = selectedJobData?.data?.jobs.find((job) => job.id === selectedJobId);
+    const selectedJobIsExcluded = Boolean(selectedJobRecord && (
+        isMolecularDynamicsJob(selectedJobRecord) || isNgsJob(selectedJobRecord)
+    )) || allJobs.some(
         (job: Job) => job.id === selectedJobId && (isMolecularDynamicsJob(job) || isNgsJob(job))
     );
     const quickViewerJobId = selectedJobIsExcluded ? null : selectedJobId;

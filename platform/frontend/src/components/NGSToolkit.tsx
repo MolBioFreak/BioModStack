@@ -2210,7 +2210,22 @@ export function NGSToolkit() {
         error: jobsQueryError,
     } = useQuery({
         queryKey: ['jobs', 'ngs'],
-        queryFn: () => fetchJobs({ include_children: true, limit: 100, summary: true }),
+        queryFn: async () => {
+            const responses = await Promise.all(
+                ['nanopore', 'ont_fastq_qc', 'ont_plasmid_qc', 'ont_construct_screening', 'wf_clone_validation']
+                    .map((model_id) => fetchJobs({ include_children: true, model_id, limit: 100, summary: true })),
+            );
+            return {
+                data: {
+                    ...responses[0].data,
+                    jobs: Array.from(
+                        new Map(
+                            responses.flatMap((response) => response.data.jobs).map((job) => [job.id, job]),
+                        ).values(),
+                    ),
+                },
+            };
+        },
         refetchInterval: (query) => jobPollingInterval(5000, query),
     });
 
@@ -2245,7 +2260,7 @@ export function NGSToolkit() {
             return ngsJobShouldPoll(status) ? jobPollingInterval(4000, query) : false;
         },
     });
-    const selectedJob = fullJobQuery.data ?? null;
+    const selectedJob = fullJobQuery.data && isNgsJob(fullJobQuery.data) ? fullJobQuery.data : null;
 
     useEffect(() => {
         if (requestedJobId) {

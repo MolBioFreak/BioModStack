@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pathlib import Path
 from datetime import datetime
 import mimetypes
+import json
 import shutil
 from typing import Iterator
 
@@ -136,6 +137,30 @@ def is_path_allowed(path: Path) -> bool:
         return False
 
 
+def _is_governed_ngs_artifact(path: Path) -> bool:
+    resolved = path.resolve()
+    for parent in resolved.parents:
+        manifest = parent / "qc_manifest.json"
+        if not manifest.is_file() or manifest.is_symlink():
+            continue
+        try:
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+            if payload.get("schema") != "sequence_qc.manifest.v1":
+                continue
+            for artifact in payload.get("artifacts", []):
+                if isinstance(artifact, dict) and isinstance(artifact.get("path"), str):
+                    if (manifest.parent / artifact["path"]).resolve() == resolved:
+                        return True
+        except (OSError, ValueError, json.JSONDecodeError):
+            return True
+    return False
+
+
+def _reject_governed_ngs_artifact(path: Path) -> None:
+    if _is_governed_ngs_artifact(path):
+        raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
+
+
 @router.get("/browse")
 async def browse_directory(path: str = "") -> DirectoryListing:
     """Browse a directory within allowed paths."""
@@ -223,6 +248,7 @@ async def download_file(file_path: str, request: Request):
     
     if not full_path.is_file():
         raise HTTPException(status_code=400, detail="Path is not a file")
+    _reject_governed_ngs_artifact(full_path)
     
     return _serve_file_response(full_path, request, as_attachment=True)
 
@@ -240,6 +266,7 @@ async def stream_file(file_path: str, request: Request):
 
     if not full_path.is_file():
         raise HTTPException(status_code=400, detail="Path is not a file")
+    _reject_governed_ngs_artifact(full_path)
 
     return _serve_file_response(full_path, request, as_attachment=False)
 
