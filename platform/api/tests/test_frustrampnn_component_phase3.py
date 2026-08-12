@@ -171,7 +171,7 @@ def _mock_v2_runtime(
     calls: list[list[str]] = []
     monkeypatch.setattr(runtime, "validate_configured_container_path", lambda *_args, **_kwargs: str(container))
 
-    def open_container(*_args, **_kwargs):
+    def open_container(_path, _expected_sha256):
         return runtime.PinnedContainer(
             os.open(container, os.O_RDONLY),
             FRUSTRAMPNN_RUNTIME_IDENTITY.sif_sha256,

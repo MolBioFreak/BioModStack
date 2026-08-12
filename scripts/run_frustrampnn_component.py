@@ -818,7 +818,9 @@ def _run_component_v2(
             configured_container = _runtime.validate_configured_container_path(
                 container, identity=runtime_identity
             )
-            pinned = _runtime.open_verified_container(configured_container, identity=runtime_identity)
+            pinned = _runtime.open_verified_container(
+                configured_container, runtime_identity.sif_sha256
+            )
             assets = _runtime.verify_container_assets(
                 apptainer, pinned, identity=runtime_identity
             )
