@@ -42,8 +42,8 @@ MIGRATION_V7_CHECKSUM = "828bcc8e2b8cde1e131ec2f1ced9193ed001e1dfcb2b607e499a6a9
 MIGRATION_V8_CHECKSUM = "bf11980a720aad2b0f62fcbea055a3d2e1181b1b41449cc62c0455b70b9c92dc"
 MIGRATION_V9_CHECKSUM = "469240fb73fb6d7be9bf80412ccfd52cc81d14e91bf6bedb8881ffeb1c9b7bd0"
 MIGRATION_V10_CHECKSUM = "b36656f82945b839e573990255ecedbeb902608d2b329df0ebb0ce85dbea73e8"
-FINAL_SCHEMA_MANIFEST_CHECKSUM = "95f912b48576069390c9e3f17c09e4e6a57d847752421adf5c23d2456aa95354"
-LEGACY_FINAL_SCHEMA_MANIFEST_CHECKSUM = "11fcf5ccc1429dca85f1b68bf67831279cb441ed44b63abb266f2ebba0069aa2"
+FINAL_SCHEMA_MANIFEST_CHECKSUM = "53959a558aa10198b3af475820275bce4d966fbcf43043d0138098aa918dfe3a"
+LEGACY_FINAL_SCHEMA_MANIFEST_CHECKSUM = "88dc6501b92d0119b5e4bdca9df48275834e51a669c472e716c8a8adfbde5ceb"
 
 MIGRATION_SQL = r'''
 CREATE TABLE IF NOT EXISTS resources (
@@ -195,9 +195,9 @@ CREATE TABLE IF NOT EXISTS run_attempts (
     scheduler_job_id TEXT NOT NULL,
     state TEXT NOT NULL CHECK (state IN ('pending', 'dispatching', 'dispatched', 'running', 'completed', 'failed', 'cancelled')),
     external_binding_receipt_json TEXT,
+    created_at TEXT NOT NULL,
     runtime_identity_json TEXT,
     terminal_receipt_json TEXT,
-    created_at TEXT NOT NULL,
     UNIQUE(workflow_run_id, attempt_number),
     UNIQUE(scheduler_job_id)
 );
@@ -1553,6 +1553,8 @@ _LEGACY_FINAL_TABLE_SQL = {
         created_at TEXT NOT NULL,
         "runtime_identity_json" TEXT,
         "terminal_receipt_json" TEXT,
+        terminal_receipt_sha256 TEXT
+        CHECK (terminal_receipt_sha256 IS NULL OR length(terminal_receipt_sha256) = 64),
         UNIQUE(workflow_run_id, attempt_number),
         UNIQUE(scheduler_job_id)
     )""",
