@@ -9,6 +9,7 @@ import os
 import shutil
 import uuid
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -22,6 +23,136 @@ from scripts.rfd3_local_redesign.contract import (
     request_sha256,
     write_request,
 )
+
+
+async def terminalize_failed_request_for_job(
+    session,
+    *,
+    job_id: str,
+    exit_code: int | None = None,
+) -> bool:
+    """Bind one published Job failure to its active native RFD3 request.
+
+    The caller owns the transaction and must call this only after the guarded
+    Job failure update wins. The post-CAS Job row is the receipt authority.
+    """
+
+    from sqlalchemy import select
+
+    from database import Job, RFD3LocalRedesignRequest
+
+    job = await session.get(Job, job_id)
+    if (
+        job is None
+        or str(job.model_id or "").strip().lower() != "protein_local_redesign"
+        or job.status != "failed"
+    ):
+        return False
+    request = (
+        await session.execute(
+            select(RFD3LocalRedesignRequest).where(
+                RFD3LocalRedesignRequest.job_id == job_id,
+                RFD3LocalRedesignRequest.status.in_(
+                    ("prepared", "queued", "running", "generated", "completed")
+                ),
+            )
+        )
+    ).scalar_one_or_none()
+    if request is None:
+        return False
+
+    receipt: dict[str, Any] = {
+        "schema": "bms.rfd3.local-redesign.failure-receipt.v1",
+        "job_id": str(job.id),
+        "status": "failed",
+        "error_message": str(job.error_message or "native RFD3 job failed"),
+    }
+    if exit_code is not None:
+        receipt["exit_code"] = int(exit_code)
+    now = datetime.utcnow()
+    request.status = "failed"
+    request.failure_receipt_json = receipt
+    request.updated_at = now
+    request.terminal_at = now
+    await session.flush()
+    return True
+
+
+async def terminalize_completed_request_for_job(session, *, job_id: str) -> bool:
+    """Bind one validated Job completion to its generated native request."""
+
+    from sqlalchemy import select
+
+    from database import Job, RFD3LocalRedesignRequest
+
+    job = await session.get(Job, job_id)
+    if (
+        job is None
+        or str(job.model_id or "").strip().lower() != "protein_local_redesign"
+        or job.status != "completed"
+    ):
+        return False
+    request = (
+        await session.execute(
+            select(RFD3LocalRedesignRequest).where(
+                RFD3LocalRedesignRequest.job_id == job_id,
+                RFD3LocalRedesignRequest.status == "generated",
+            )
+        )
+    ).scalar_one_or_none()
+    if request is None:
+        return False
+
+    now = datetime.utcnow()
+    request.status = "completed"
+    request.updated_at = now
+    request.terminal_at = now
+    await session.flush()
+    return True
+
+
+async def terminalize_cancelled_request_for_job(session, *, job_id: str) -> bool:
+    """Bind one authoritative completed cancellation to its native request."""
+
+    from sqlalchemy import select
+
+    from database import Job, RFD3LocalRedesignRequest
+
+    job = await session.get(Job, job_id)
+    if (
+        job is None
+        or str(job.model_id or "").strip().lower() != "protein_local_redesign"
+        or job.status != "cancelled"
+    ):
+        return False
+    request = (
+        await session.execute(
+            select(RFD3LocalRedesignRequest).where(
+                RFD3LocalRedesignRequest.job_id == job_id,
+                RFD3LocalRedesignRequest.status.in_(
+                    ("prepared", "queued", "running", "generated", "completed")
+                ),
+            )
+        )
+    ).scalar_one_or_none()
+    if request is None:
+        return False
+
+    params = dict(job.params or {}) if not isinstance(job.params, str) else {}
+    cancellation_receipt = dict(params.get("cancellation_receipt") or {})
+    now = datetime.utcnow()
+    request.status = "cancelled"
+    request.failure_receipt_json = {
+        "schema": "bms.rfd3.local-redesign.failure-receipt.v1",
+        "job_id": str(job.id),
+        "status": "cancelled",
+        "error_message": str(job.error_message or "Cancelled by user"),
+        "cancellation_receipt": cancellation_receipt,
+    }
+    request.updated_at = now
+    request.terminal_at = now
+    await session.flush()
+    return True
 
 
 def _sha256_file(path: Path) -> str:

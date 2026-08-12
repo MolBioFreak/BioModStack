@@ -16,6 +16,7 @@ for root in (API_ROOT, REPO_ROOT):
         sys.path.insert(0, str(root))
 
 from routers import workflow_adapter
+from services import nextflow
 
 
 def build_client() -> TestClient:
@@ -96,3 +97,109 @@ def test_runner_environment_owns_development_stage_callback_url(monkeypatch) -> 
     )
 
     assert environment["API_BASE_URL"] == "http://127.0.0.1:18002"
+
+
+def test_adapter_persists_scheduler_gpu_before_detached_runner() -> None:
+    job = SimpleNamespace(params={"num_designs": 1}, pinned_gpu=2, assigned_gpu=None)
+
+    params = workflow_adapter._bind_scheduler_gpu_assignment(  # noqa: SLF001 - authority handoff under test.
+        job,
+        dict(job.params),
+        {"num_designs": 1, "gpu_id": 2},
+    )
+
+    assert params == {"num_designs": 1, "gpu_id": 2}
+    assert job.params == params
+    assert job.assigned_gpu == 2
+
+
+def test_adapter_rejects_scheduler_gpu_that_conflicts_with_pin() -> None:
+    job = SimpleNamespace(params={}, pinned_gpu=2, assigned_gpu=None)
+
+    with pytest.raises(workflow_adapter.HTTPException) as exc_info:
+        workflow_adapter._bind_scheduler_gpu_assignment(  # noqa: SLF001 - authority handoff under test.
+            job,
+            {},
+            {"gpu_id": 0},
+        )
+
+    assert exc_info.value.status_code == 409
+    assert "pinned_gpu=2" in str(exc_info.value.detail)
+    assert job.params == {}
+    assert job.assigned_gpu is None
+
+
+@pytest.mark.parametrize("invalid_gpu_id", [True, -1, 2.0, 2.7, "-1", "+2", "2.7", "gpu2"])
+def test_adapter_rejects_noncanonical_gpu_identifiers(invalid_gpu_id: object) -> None:
+    job = SimpleNamespace(params={}, pinned_gpu=None, assigned_gpu=None)
+
+    with pytest.raises(workflow_adapter.HTTPException) as exc_info:
+        workflow_adapter._bind_scheduler_gpu_assignment(  # noqa: SLF001 - authority handoff under test.
+            job,
+            {},
+            {"gpu_id": invalid_gpu_id},
+        )
+
+    assert exc_info.value.status_code == 409
+    assert job.params == {}
+    assert job.assigned_gpu is None
+
+
+@pytest.mark.parametrize("field", ["pinned_gpu", "assigned_gpu"])
+@pytest.mark.parametrize("invalid_gpu_id", [True, -1, 2.0, 2.7, "-1", "+2", "2.7", "gpu2"])
+def test_adapter_rejects_noncanonical_persisted_gpu_authority(
+    field: str,
+    invalid_gpu_id: object,
+) -> None:
+    values = {"params": {}, "pinned_gpu": None, "assigned_gpu": None}
+    values[field] = invalid_gpu_id
+    job = SimpleNamespace(**values)
+
+    with pytest.raises(workflow_adapter.HTTPException) as exc_info:
+        workflow_adapter._bind_scheduler_gpu_assignment(  # noqa: SLF001
+            job,
+            {},
+            {"gpu_id": 2},
+        )
+
+    assert exc_info.value.status_code == 409
+    assert job.params == {}
+
+
+def test_detached_native_rfd3_runner_uses_durable_gpu_assignment() -> None:
+    job = SimpleNamespace(assigned_gpu=2, pinned_gpu=2)
+
+    assert nextflow._resolve_launch_gpu_id(job, {}, "protein_local_redesign") == 2  # noqa: SLF001
+
+
+def test_native_rfd3_runner_rejects_missing_gpu_authority() -> None:
+    job = SimpleNamespace(assigned_gpu=None, pinned_gpu=None)
+
+    with pytest.raises(RuntimeError, match="no authoritative scheduler GPU assignment"):
+        nextflow._resolve_launch_gpu_id(job, {}, "protein_local_redesign")  # noqa: SLF001
+
+
+@pytest.mark.parametrize("invalid_gpu_id", [True, -1, 2.0, 2.7, "-1", "+2", "2.7", "gpu2"])
+def test_native_rfd3_runner_rejects_noncanonical_gpu_identifiers(invalid_gpu_id: object) -> None:
+    job = SimpleNamespace(assigned_gpu=None, pinned_gpu=None)
+
+    with pytest.raises(RuntimeError, match="invalid scheduler GPU assignment"):
+        nextflow._resolve_launch_gpu_id(  # noqa: SLF001 - detached authority handoff under test.
+            job,
+            {"gpu_id": invalid_gpu_id},
+            "protein_local_redesign",
+        )
+
+
+@pytest.mark.parametrize("field", ["pinned_gpu", "assigned_gpu"])
+@pytest.mark.parametrize("invalid_gpu_id", [True, -1, 2.0, 2.7, "-1", "+2", "2.7", "gpu2"])
+def test_native_rfd3_runner_rejects_noncanonical_persisted_gpu_authority(
+    field: str,
+    invalid_gpu_id: object,
+) -> None:
+    values: dict[str, object] = {"pinned_gpu": 2, "assigned_gpu": 2}
+    values[field] = invalid_gpu_id
+    job = SimpleNamespace(**values)
+
+    with pytest.raises(RuntimeError, match="invalid scheduler GPU assignment"):
+        nextflow._resolve_launch_gpu_id(job, {"gpu_id": 2}, "protein_local_redesign")  # noqa: SLF001

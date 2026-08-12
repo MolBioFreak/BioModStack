@@ -776,6 +776,7 @@ async def test_launch_nextflow_job_routes_to_adapter_before_local_subprocess(mon
 
     job = SimpleNamespace(
         id="job-123",
+        model_id="boltz2",
         status="queued",
         started_at=None,
         params={},
@@ -1092,7 +1093,9 @@ def test_workflow_adapter_launch_endpoint_claims_transient_unit_and_persists_rec
         id="job-123",
         model_id="boltz2",
         mode="predict",
-        params={"gpu_id": 1},
+        params={},
+        pinned_gpu=1,
+        assigned_gpu=None,
         output_dir="/tmp/job-123",
         status="queued",
         queue_status="queued",
@@ -1154,6 +1157,8 @@ def test_workflow_adapter_launch_endpoint_claims_transient_unit_and_persists_rec
         "production",
     ]
     attempts = job.params[execution_ownership.EXECUTION_ATTEMPTS_PARAM]
+    assert job.params["gpu_id"] == 1
+    assert job.assigned_gpu == 1
     assert len(attempts) == 1
     assert attempts[0]["state"] == "started"
     assert attempts[0]["invocation_id"] == "invocation-1"

@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { fetchRFD3LocalRedesign } from '../lib/api';
 import type { RFD3LocalRedesignReadModel } from '../lib/api';
 import MolstarViewer from './MolstarViewer';
+import { resolveRFD3LocalRedesignRequestView } from './rfd3LocalRedesignResultsView';
 
 interface RFD3LocalRedesignResultsPaneProps {
     jobId: string;
@@ -33,7 +34,8 @@ export function RFD3LocalRedesignResultsPane({ jobId }: RFD3LocalRedesignResults
     });
     const result = resultQuery.data?.data;
     const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
-    const request = result?.request.request;
+    const requestView = resolveRFD3LocalRedesignRequestView(result);
+    const request = requestView.request;
     const fixedAtoms = request?.rfd3 && typeof request.rfd3 === 'object'
         ? (request.rfd3 as Record<string, unknown>).select_fixed_atoms
         : undefined;
@@ -78,15 +80,15 @@ export function RFD3LocalRedesignResultsPane({ jobId }: RFD3LocalRedesignResults
                         <p className="mt-1 text-sm text-slate-300">Sequence policy: <span className="font-mono text-emerald-200">{request?.sequence_policy}</span></p>
                     </div>
                     <div className="rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-right text-xs text-slate-400">
-                        <div>Status: <span className="text-white">{request?.status}</span></div>
-                        <div className="font-mono">Request {request?.request_sha256.slice(0, 16)}…</div>
+                        <div>Status: <span className="text-white">{requestView.status || '—'}</span></div>
+                        <div className="font-mono">Request {requestView.requestSha256 ? `${requestView.requestSha256.slice(0, 16)}…` : '—'}</div>
                     </div>
                 </div>
                 <div className="mt-4 grid gap-3 md:grid-cols-4">
-                    <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3"><div className="text-[10px] uppercase text-slate-500">Profile</div><div className="mt-1 text-sm text-white">{request?.profile_id}</div></div>
+                    <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3"><div className="text-[10px] uppercase text-slate-500">Profile</div><div className="mt-1 text-sm text-white">{requestView.profileId || '—'}</div></div>
                     <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3"><div className="text-[10px] uppercase text-slate-500">Designs</div><div className="mt-1 text-sm text-white">{formatValue(execution.num_designs)}</div></div>
                     <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3"><div className="text-[10px] uppercase text-slate-500">Seed</div><div className="mt-1 text-sm text-white">{formatValue(execution.seed)}</div></div>
-                    <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3"><div className="text-[10px] uppercase text-slate-500">Profile registry</div><div className="mt-1 font-mono text-xs text-white">{request?.profile_registry_sha256.slice(0, 16)}…</div></div>
+                    <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3"><div className="text-[10px] uppercase text-slate-500">Profile registry</div><div className="mt-1 font-mono text-xs text-white">{requestView.profileRegistrySha256 ? `${requestView.profileRegistrySha256.slice(0, 16)}…` : '—'}</div></div>
                     <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3"><div className="text-[10px] uppercase text-slate-500">Candidates</div><div className="mt-1 text-sm text-white">{result.candidates.length}</div></div>
                 </div>
             </section>
@@ -98,8 +100,8 @@ export function RFD3LocalRedesignResultsPane({ jobId }: RFD3LocalRedesignResults
                 </div>
                 <div className="mt-4 grid gap-4 lg:grid-cols-2">
                     <div className="space-y-2 text-sm">
-                        <div><span className="text-slate-500">Input:</span> <span className="font-mono text-slate-200">{formatValue(request?.request.input)}</span></div>
-                        <div><span className="text-slate-500">Contig dialect:</span> <span className="font-mono text-slate-200">{formatValue(request?.request.contig_dialect)}</span></div>
+                        <div><span className="text-slate-500">Input:</span> <span className="font-mono text-slate-200">{formatValue(request?.input)}</span></div>
+                        <div><span className="text-slate-500">Contig dialect:</span> <span className="font-mono text-slate-200">{formatValue(request?.contig_dialect)}</span></div>
                         <div><span className="text-slate-500">Contig:</span> <span className="font-mono text-slate-200">{formatValue(rfd3.contig)}</span></div>
                         <div><span className="text-slate-500">Partial t:</span> <span className="font-mono text-slate-200">{formatValue(rfd3.partial_t)}</span></div>
                         <div><span className="text-slate-500">Ligand:</span> <span className="font-mono text-slate-200">{formatValue(rfd3.ligand)}</span></div>
