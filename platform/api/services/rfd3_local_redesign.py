@@ -15,7 +15,12 @@ from typing import Any, Mapping
 
 from Bio.PDB import MMCIFParser, PDBParser
 
-from paths import get_data_root, resolve_runtime_data_path
+from paths import (
+    get_allowed_roots,
+    get_data_root,
+    resolve_runtime_data_path,
+    to_allowed_relative,
+)
 from scripts.rfd3_local_redesign.contract import (
     CONTRACT_REVISION,
     ContractError,
@@ -94,9 +99,22 @@ def prepare_local_redesign_scheduler_params(
 
 
 def project_local_redesign_scheduler_params(params: Mapping[str, Any]) -> dict[str, Any]:
-    """Project persisted native parameters back to an executable typed workflow intent."""
-    projected_keys = RFD3_SCIENTIFIC_PARAM_KEYS - {"input", "input_pdb", "input_cif", "rfd3_request"}
+    """Project persisted native parameters back to an executable path-safe workflow intent."""
+    projected_keys = RFD3_SCIENTIFIC_PARAM_KEYS - {
+        "input",
+        "input_structure",
+        "input_pdb",
+        "input_cif",
+        "rfd3_request",
+    }
     projected = {key: deepcopy(value) for key, value in params.items() if key in projected_keys}
+    input_value = params.get("input_structure") or params.get("input_pdb")
+    if not isinstance(input_value, str) or not input_value.strip():
+        raise ContractError("persisted native RFD3 job has no source path for workflow projection")
+    try:
+        projected["input_structure"] = to_allowed_relative(Path(input_value))
+    except (OSError, ValueError) as exc:
+        raise ContractError("persisted native RFD3 source is outside the allowed workflow roots") from exc
     projected["workflow_adapter"] = RFD3_WORKFLOW_ADAPTER_ID
     return projected
 
@@ -284,6 +302,26 @@ def _source_residue_identities(path: Path) -> list[dict[str, Any]]:
     return chains
 
 
+def _resolve_local_redesign_source(value: Any) -> Path:
+    raw = str(value or "").strip()
+    if not raw:
+        raise ContractError("input_structure is required")
+    expanded = Path(os.path.expanduser(raw))
+    if expanded.is_absolute():
+        lexical = expanded
+    else:
+        parts = expanded.parts
+        if not parts:
+            raise ContractError("input_structure is required")
+        root = get_allowed_roots().get(parts[0])
+        if root is None:
+            raise ContractError("input_structure alias root is not allowed")
+        lexical = root / Path(*parts[1:])
+    if lexical.is_symlink():
+        raise ContractError("input_structure must not be a symbolic link")
+    return resolve_runtime_data_path(lexical)
+
+
 def normalize_local_redesign_params(
     params: Mapping[str, Any],
     *,
@@ -306,10 +344,7 @@ def normalize_local_redesign_params(
     )
     if not input_value:
         raise ContractError("input_structure is required")
-    raw_source_path = Path(str(input_value)).expanduser()
-    if raw_source_path.exists() and raw_source_path.is_symlink():
-        raise ContractError("input_structure must not be a symbolic link")
-    source_path = resolve_runtime_data_path(str(input_value))
+    source_path = _resolve_local_redesign_source(input_value)
     data_root = get_data_root().resolve()
     try:
         source_path.relative_to(data_root)
