@@ -118,6 +118,17 @@ def test_fastq_qc_requires_exact_job_identity() -> None:
     assert 'str(job_id or "unknown")' not in manifest
 
 
+def test_fastq_qc_manifest_uses_persisted_workflow_and_input_authority() -> None:
+    fastq = (ROOT / "modules/ngs/fastq_plasmid_qc.nf").read_text(encoding="utf-8")
+    assert "params.workflow_id ?: params.ont_workflow_id" in fastq
+    assert "['ont_fastq_qc', 'ont_plasmid_qc', 'ont_construct_screening', 'wf_clone_validation']" in fastq
+    assert "params.input_mode ?: params.ont_input_mode" in fastq
+    assert "['fastq', 'bam', 'pod5']" in fastq
+    assert "--workflow-id ${workflowIdArg}" in fastq
+    assert "--input-mode ${inputModeArg}" in fastq
+    assert "--workflow-id ont_fastq_qc" not in fastq
+
+
 def test_dimer_manifest_binds_exact_job_identity_and_canonical_schema() -> None:
     dimer = (ROOT / "modules/ngs/fastq_dimer_qc.nf").read_text(encoding="utf-8")
     manifest = (ROOT / "scripts/build_alignment_session_manifest.sh").read_text(encoding="utf-8")
@@ -133,17 +144,19 @@ def test_dimer_manifest_binds_exact_job_identity_and_canonical_schema() -> None:
     assert 'job_id="${1:?exact job_id is required}"' in manifest
     assert 'expected_source_reference_sha256="${2:?authorized source reference SHA-256 is required}"' in manifest
     assert 'workflow_id="${3:?canonical workflow_id is required}"' in manifest
+    assert 'input_mode="${4:?canonical input_mode is required}"' in manifest
     assert 'schema:"sequence_qc.manifest.v1"' in manifest
     assert 'workflow_id:$workflow_id' in manifest
-    assert 'input_mode:"fastq"' in manifest
+    assert 'input_mode:$input_mode' in manifest
     assert 'analysis_status:"completed"' in manifest
     assert 'job_id:$job_id' in manifest
     assert 'parser.add_argument("--job-id", required=True)' in python_manifest
     assert 'parser.add_argument("--expected-source-reference-sha256", required=True)' in python_manifest
     assert 'parser.add_argument("--workflow-id", required=True)' in python_manifest
+    assert 'parser.add_argument("--input-mode", choices=("fastq", "bam", "pod5"), required=True)' in python_manifest
     assert '"schema": "sequence_qc.manifest.v1"' in python_manifest
     assert '"workflow_id": args.workflow_id' in python_manifest
-    assert '"input_mode": "fastq"' in python_manifest
+    assert '"input_mode": args.input_mode' in python_manifest
     assert '"analysis_status": "completed"' in python_manifest
     assert '"job_id": args.job_id' in python_manifest
 

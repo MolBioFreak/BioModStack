@@ -185,11 +185,16 @@ process FastqDimerAnalysis {
     }
     def manifestJobIdArg = shellQuote(manifestJobId)
     def referenceSequenceSha256Arg = shellQuote(declaredReferenceSha256)
-    def workflowId = ((params.workflow_id ?: 'ont_fastq_qc') as String).trim()
+    def workflowId = ((params.workflow_id ?: params.ont_workflow_id ?: 'ont_fastq_qc') as String).trim()
     if (!(workflowId in ['ont_fastq_qc', 'ont_plasmid_qc', 'ont_construct_screening', 'wf_clone_validation'])) {
         error('FASTQ dimer analysis requires a canonical workflow_id')
     }
     def workflowIdArg = shellQuote(workflowId)
+    def inputMode = ((params.input_mode ?: params.ont_input_mode ?: 'fastq') as String).trim()
+    if (!(inputMode in ['fastq', 'bam', 'pod5'])) {
+        error('FASTQ dimer analysis requires a canonical input_mode')
+    }
+    def inputModeArg = shellQuote(inputMode)
     """
     set -euo pipefail
 
@@ -1408,7 +1413,8 @@ process FastqDimerAnalysis {
     bash "${codeRoot}/scripts/build_alignment_session_manifest.sh" \
         ${manifestJobIdArg} \
         ${referenceSequenceSha256Arg} \
-        ${workflowIdArg}
+        ${workflowIdArg} \
+        ${inputModeArg}
         """
     }
 process BuildDimerCanonicalOutputs {

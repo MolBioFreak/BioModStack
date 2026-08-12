@@ -5,7 +5,8 @@ set -euo pipefail
 job_id="${1:?exact job_id is required}"
 expected_source_reference_sha256="${2:?authorized source reference SHA-256 is required}"
 workflow_id="${3:?canonical workflow_id is required}"
-out="${4:-qc_manifest.json}"
+input_mode="${4:?canonical input_mode is required}"
+out="${5:-qc_manifest.json}"
 if [[ ! "$job_id" =~ ^[A-Za-z0-9][A-Za-z0-9._\ -]{0,255}$ || "$job_id" == *..* ]]; then
     echo "exact safe job_id is required" >&2
     exit 1
@@ -14,6 +15,10 @@ fi
 case "$workflow_id" in
     ont_fastq_qc|ont_plasmid_qc|ont_construct_screening|wf_clone_validation) ;;
     *) echo "canonical workflow_id is invalid" >&2; exit 1 ;;
+esac
+case "$input_mode" in
+    fastq|bam|pod5) ;;
+    *) echo "canonical input_mode is invalid" >&2; exit 1 ;;
 esac
 reference="dimer_reference.fasta"
 [[ -f "$reference" && ! -L "$reference" ]] || { echo "alignment-session manifest requires a regular reference artifact" >&2; exit 1; }
@@ -53,7 +58,8 @@ append_artifact dimer_analysis_summary dimer_analysis_summary.tsv false
 jq -n \
     --arg job_id "$job_id" \
     --arg workflow_id "$workflow_id" \
+    --arg input_mode "$input_mode" \
     --arg reference_sha "$normalized_reference_sha256" \
     --arg source_reference_sha "$expected_source_reference_sha256" \
     --argjson artifacts "$artifacts" \
-    '{artifact_schema_version:2,schema:"sequence_qc.manifest.v1",workflow_id:$workflow_id,job_id:$job_id,input_mode:"fastq",analysis_status:"completed",alignment_session:{mode:"dimer_candidates",reference_sequence_sha256:$reference_sha,source_reference_sequence_sha256:$source_reference_sha,binding:"authorized source reference binds an exact tandem dimer reference plus BAM and index digests"},artifacts:$artifacts}' > "$out"
+    '{artifact_schema_version:2,schema:"sequence_qc.manifest.v1",workflow_id:$workflow_id,job_id:$job_id,input_mode:$input_mode,analysis_status:"completed",alignment_session:{mode:"dimer_candidates",reference_sequence_sha256:$reference_sha,source_reference_sequence_sha256:$source_reference_sha,binding:"authorized source reference binds an exact tandem dimer reference plus BAM and index digests"},artifacts:$artifacts}' > "$out"

@@ -65,6 +65,16 @@ process FastqPlasmidQC {
         throw new IllegalArgumentException('reference_sequence_sha256 must be exactly 64 hexadecimal characters')
     }
     def referenceSequenceSha256 = shellQuote(declaredReferenceSha256)
+    def workflowId = ((params.workflow_id ?: params.ont_workflow_id ?: 'ont_fastq_qc') as String).trim()
+    if (!(workflowId in ['ont_fastq_qc', 'ont_plasmid_qc', 'ont_construct_screening', 'wf_clone_validation'])) {
+        error('FASTQ plasmid QC requires a canonical workflow_id')
+    }
+    def workflowIdArg = shellQuote(workflowId)
+    def inputMode = ((params.input_mode ?: params.ont_input_mode ?: 'fastq') as String).trim()
+    if (!(inputMode in ['fastq', 'bam', 'pod5'])) {
+        error('FASTQ plasmid QC requires a canonical input_mode')
+    }
+    def inputModeArg = shellQuote(inputMode)
     """
     set -euo pipefail
 
@@ -463,8 +473,8 @@ process FastqPlasmidQC {
     "\${PYTHON_CMD[@]}" "${codeRoot}/scripts/build_sequence_qc_manifest.py" \\
         --out qc_manifest.json \\
         --job-id "${manifestJobId}" \\
-        --workflow-id ont_fastq_qc \\
-        --input-mode fastq \\
+        --workflow-id ${workflowIdArg} \\
+        --input-mode ${inputModeArg} \\
         --sample-name "fastq_plasmid_qc" \\
         --reference-fasta reference_qc.fasta \\
         --expected-sha256 ${referenceSequenceSha256} \\

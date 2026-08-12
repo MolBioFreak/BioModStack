@@ -42,6 +42,7 @@ def main() -> int:
     parser.add_argument("--job-id", required=True)
     parser.add_argument("--expected-source-reference-sha256", required=True)
     parser.add_argument("--workflow-id", required=True)
+    parser.add_argument("--input-mode", choices=("fastq", "bam", "pod5"), required=True)
     parser.add_argument("--out", type=Path, default=Path("qc_manifest.json"))
     parser.add_argument("--mode", choices=("primary", "dimer_candidates"), default="dimer_candidates")
     parser.add_argument(
@@ -112,7 +113,7 @@ def main() -> int:
         "schema": "sequence_qc.manifest.v1",
         "workflow_id": args.workflow_id,
         "job_id": args.job_id,
-        "input_mode": "fastq",
+        "input_mode": args.input_mode,
         "analysis_status": "completed",
         "alignment_session": {
             "mode": args.mode,
