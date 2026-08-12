@@ -8,20 +8,16 @@ const source = readFileSync(resolve('src/components/BioXpCockpit.tsx'), 'utf8');
 test('main Z controls use stable provider-owned semantic actions', () => {
   for (const action of [
     'meta.activate_motion',
-    'oem.z.prepare',
-    'oem.z.reconcile_switch_masks',
-    'oem.z.set_home',
     'oem.z.manual_home',
-    'oem.z.diagnostic_home_axis',
     'oem.z.move_steps',
     'oem.z.move_absolute',
     'oem.z.clear',
     'oem.z.stop',
     'oem.z.abort',
   ]) assert.match(source, new RegExp(action.replaceAll('.', '\\.')));
-  assert.match(source, /operatorActionById\('oem\.z\.manual_home'\)/);
-  assert.match(source, /operatorActionById\('oem\.z\.move_steps'\)/);
-  assert.match(source, /operatorActionById\('oem\.z\.move_absolute'\)/);
+  assert.match(source, /invokeAction\('oem\.z\.manual_home', \{\}\)/);
+  assert.match(source, /invokeAction\('oem\.z\.move_steps', \{ steps:/);
+  assert.match(source, /invokeAction\('oem\.z\.move_absolute', \{ position_steps:/);
 });
 
 test('main Z minus and plus preserve opposite signed payloads', () => {
@@ -41,9 +37,10 @@ test('main Z surface keeps pseudo-home authority on the robot', () => {
   assert.doesNotMatch(source, /No tips · 65,000/);
 });
 
-test('main Z surface exposes every disabled reason', () => {
-  assert.match(source, /zPrimaryDisabledReasons/);
-  assert.match(source, /Absolute move', zAbsoluteDisabledReason/);
+test('main Z surface exposes current disabled reasons', () => {
+  assert.match(source, /zAbsoluteAction\.provider_unavailable_reason \?\? 'Robot action unavailable\.'/);
+  assert.match(source, /zAbsoluteStaticBlocker\.reason \?\? zAbsoluteAction\.disabled_reason/);
+  assert.match(source, /title=\{axis === 'z' \? zAbsoluteDisabledReason \?\? 'Robot-owned exact OEM absolute move' : undefined\}/);
   assert.match(source, /Activate: \{operatorActionById\('meta\.activate_motion'\)\?\.disabled_reason/);
 });
 
@@ -56,12 +53,11 @@ test('typed Z absolute target uses local catalog bounds before robot revalidatio
   assert.doesNotMatch(source, /axis === 'z' \? operatorActionById\('oem\.z\.move_absolute'\)\?\.enabled !== true/);
 });
 
-test('set-home requires a known stationary provider state', () => {
-  assert.match(source, /zStatus\?\.position_steps == null/);
-  assert.match(source, /zStatus\.speed_steps_s !== 0/);
-  assert.match(source, /Set Home is unavailable until the provider reports the current Z position/);
-  assert.match(source, /Set Home is unavailable until Z is confirmed stationary/);
-  assert.match(source, /invokeAction\('oem\.z\.set_home', \{\}\)/);
+test('manual Home and Clear remain distinct robot-owned operations', () => {
+  assert.match(source, /invokeAction\('oem\.z\.manual_home', \{\}\)/);
+  assert.match(source, /invokeAction\('oem\.z\.clear', \{\}\)/);
+  assert.match(source, /Manual Home follows the OEM homing sequence and establishes controller coordinate 0/);
+  assert.match(source, /Z Clear returns to the selected pseudo-home/);
 });
 
 test('Z stop and abort use the independent emergency mutation lane', () => {
@@ -77,5 +73,6 @@ test('Z dashboard and robot receipt truth remain visible newest-first', () => {
   assert.match(source, /right_switch_disabled/);
   assert.match(source, /controller_acknowledged/);
   assert.match(source, /physical_effect_verified/);
-  assert.match(source, /receipts \?\? \[\]\)\.slice\(0, 8\)/);
+  assert.match(source, /historyQuery\.data\?\.receipts \?\? \[\]/);
+  assert.match(source, /\.slice\(0, 8\)/);
 });
