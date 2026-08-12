@@ -1223,8 +1223,6 @@ export interface SequenceQcManifest {
 export const fetchSequenceQcManifest = (jobId: string) =>
     api.get<SequenceQcManifest>(`/api/sequence-qc/jobs/${jobId}/manifest`);
 
-export const fetchSequenceQcManifestByPath = (path: string) =>
-    api.get<SequenceQcManifest>('/api/sequence-qc/manifest', { params: { path } });
 
 // Get job logs with parsed errors
 export const fetchJobLogs = (jobId: string): Promise<{ data: JobLogs }> => {

@@ -51,13 +51,19 @@ def _job_output_dir(job: Job) -> str | None:
     return getattr(job, "child_output_dir", None) or job.output_dir
 
 
-def _source_reference_sha256(job: Job) -> str:
+def _job_authority(job: Job) -> dict[str, str]:
     params = getattr(job, "params", None)
     params = params if isinstance(params, dict) else {}
-    value = params.get("reference_sequence_sha256")
-    if not isinstance(value, str):
-        raise service.AlignmentSessionError("authorized source reference identity is required")
-    return value
+    source_reference_sha256 = params.get("reference_sequence_sha256")
+    workflow_id = params.get("ont_workflow_id") or params.get("workflow_id")
+    input_mode = params.get("ont_input_mode") or params.get("input_mode")
+    if not all(isinstance(value, str) and value for value in (source_reference_sha256, workflow_id, input_mode)):
+        raise service.AlignmentSessionError("authorized alignment job provenance is required")
+    return {
+        "source_reference_sha256": str(source_reference_sha256),
+        "workflow_id": str(workflow_id),
+        "input_mode": str(input_mode),
+    }
 
 
 def _parse_range(value: str, size: int) -> tuple[int, int]:
@@ -149,7 +155,7 @@ async def list_alignment_sessions(
         sessions = await run_in_threadpool(
             service.build_alignment_sessions,
             job_id,
-            source_reference_sha256=_source_reference_sha256(authorized_job),
+            **_job_authority(authorized_job),
             job_output_dir=_job_output_dir(authorized_job),
         )
         return {
@@ -171,7 +177,7 @@ async def get_alignment_session(
             service.resolve_alignment_session,
             job_id,
             session_id,
-            source_reference_sha256=_source_reference_sha256(authorized_job),
+            **_job_authority(authorized_job),
             job_output_dir=_job_output_dir(authorized_job),
         )
     except service.AlignmentSessionError as exc:
@@ -190,7 +196,7 @@ async def get_alignment_artifact(
             service._resolve_internal_artifact,
             job_id,
             artifact_id,
-            source_reference_sha256=_source_reference_sha256(authorized_job),
+            **_job_authority(authorized_job),
             job_output_dir=_job_output_dir(authorized_job),
         )
         return await _serve_artifact(path, metadata, request)
@@ -214,7 +220,7 @@ async def get_alignment_session_artifact(
             mode,
             role,
             sha256,
-            source_reference_sha256=_source_reference_sha256(authorized_job),
+            **_job_authority(authorized_job),
             job_output_dir=_job_output_dir(authorized_job),
         )
         return await _serve_artifact(path, metadata, request)
@@ -240,7 +246,7 @@ async def list_alignment_reads(
             service.resolve_session_bam,
             job_id,
             session_id,
-            source_reference_sha256=_source_reference_sha256(authorized_job),
+            **_job_authority(authorized_job),
             job_output_dir=_job_output_dir(authorized_job),
         )
         return await run_in_threadpool(
@@ -275,7 +281,7 @@ async def get_alignment_read(
             service.resolve_session_bam,
             job_id,
             session_id,
-            source_reference_sha256=_source_reference_sha256(authorized_job),
+            **_job_authority(authorized_job),
             job_output_dir=_job_output_dir(authorized_job),
         )
         payload = await run_in_threadpool(

@@ -450,6 +450,8 @@ def _manifest_records(job_id: str, job_root: Path) -> list[dict[str, Any]]:
                     "declared_path": declared.as_posix(),
                     "declared_sha256": item.get("sha256"),
                     "declared_size_bytes": item.get("size_bytes"),
+                    "workflow_id": payload.get("workflow_id"),
+                    "input_mode": payload.get("input_mode"),
                     "session_mode": (
                         payload.get("alignment_session", {}).get("mode")
                         if isinstance(payload.get("alignment_session"), dict)
@@ -732,10 +734,21 @@ def _session_records(
     job_id: str,
     job_root: Path,
     source_reference_sha256: str,
+    workflow_id: str,
+    input_mode: str,
 ) -> list[dict[str, Any]]:
     if re.fullmatch(r"[0-9a-f]{64}", source_reference_sha256) is None:
         raise AlignmentSessionError("authorized source reference identity is required")
     records = _manifest_records(job_id, job_root)
+    for record in records:
+        if record.get("manifest_error"):
+            continue
+        if record.get("workflow_id") != workflow_id:
+            record["error"] = "manifest workflow_id does not match authorized job provenance"
+            record["manifest_error"] = record["error"]
+        elif record.get("input_mode") != input_mode:
+            record["error"] = "manifest input_mode does not match authorized job provenance"
+            record["manifest_error"] = record["error"]
     modes = ["primary"]
     if any(_is_dimer(record) for record in records):
         modes.append("dimer_candidates")
@@ -821,13 +834,15 @@ def build_alignment_sessions(
     job_id: str,
     *,
     source_reference_sha256: str,
+    workflow_id: str = "ont_fastq_qc",
+    input_mode: str = "fastq",
     results_dir: str | Path | None = None,
     job_output_dir: str | Path | None = None,
 ) -> list[dict[str, Any]]:
     safe_job_id, job_root = _safe_job_root(job_id, results_dir, job_output_dir)
     return [
         _public_session(session)
-        for session in _session_records(safe_job_id, job_root, source_reference_sha256)
+        for session in _session_records(safe_job_id, job_root, source_reference_sha256, workflow_id, input_mode)
     ]
 
 
@@ -836,11 +851,13 @@ def resolve_alignment_session(
     session_id: str,
     *,
     source_reference_sha256: str,
+    workflow_id: str = "ont_fastq_qc",
+    input_mode: str = "fastq",
     results_dir: str | Path | None = None,
     job_output_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     safe_job_id, job_root = _safe_job_root(job_id, results_dir, job_output_dir)
-    for session in _session_records(safe_job_id, job_root, source_reference_sha256):
+    for session in _session_records(safe_job_id, job_root, source_reference_sha256, workflow_id, input_mode):
         if session["session_id"] == session_id:
             return _public_session(session)
     raise AlignmentSessionError(f"alignment session not found for job_id: {safe_job_id}")
@@ -851,13 +868,15 @@ def _resolve_internal_artifact(
     artifact_id: str,
     *,
     source_reference_sha256: str,
+    workflow_id: str = "ont_fastq_qc",
+    input_mode: str = "fastq",
     results_dir: str | Path | None = None,
     job_output_dir: str | Path | None = None,
 ) -> tuple[Path, dict[str, Any]]:
     if not re.fullmatch(r"[0-9a-f]{64}", artifact_id):
         raise AlignmentSessionError("alignment artifact not found")
     safe_job_id, job_root = _safe_job_root(job_id, results_dir, job_output_dir)
-    for session in _session_records(safe_job_id, job_root, source_reference_sha256):
+    for session in _session_records(safe_job_id, job_root, source_reference_sha256, workflow_id, input_mode):
         if session["ready"] is not True:
             continue
         for artifact in session["artifacts"].values():
@@ -871,6 +890,8 @@ def resolve_alignment_artifact(
     artifact_id: str,
     *,
     source_reference_sha256: str,
+    workflow_id: str = "ont_fastq_qc",
+    input_mode: str = "fastq",
     results_dir: str | Path | None = None,
     job_output_dir: str | Path | None = None,
 ) -> Path:
@@ -878,6 +899,8 @@ def resolve_alignment_artifact(
         job_id,
         artifact_id,
         source_reference_sha256=source_reference_sha256,
+        workflow_id=workflow_id,
+        input_mode=input_mode,
         results_dir=results_dir,
         job_output_dir=job_output_dir,
     )[0]
@@ -890,6 +913,8 @@ def resolve_alignment_artifact_by_role(
     sha256: str,
     *,
     source_reference_sha256: str,
+    workflow_id: str = "ont_fastq_qc",
+    input_mode: str = "fastq",
     results_dir: str | Path | None = None,
     job_output_dir: str | Path | None = None,
 ) -> tuple[Path, dict[str, Any]]:
@@ -901,7 +926,7 @@ def resolve_alignment_artifact_by_role(
     ):
         raise AlignmentSessionError("alignment artifact not found")
     safe_job_id, job_root = _safe_job_root(job_id, results_dir, job_output_dir)
-    for session in _session_records(safe_job_id, job_root, source_reference_sha256):
+    for session in _session_records(safe_job_id, job_root, source_reference_sha256, workflow_id, input_mode):
         if session["mode"] != mode or session["ready"] is not True:
             continue
         artifact = session["artifacts"].get(role)
@@ -919,11 +944,13 @@ def resolve_session_bam(
     session_id: str,
     *,
     source_reference_sha256: str,
+    workflow_id: str = "ont_fastq_qc",
+    input_mode: str = "fastq",
     results_dir: str | Path | None = None,
     job_output_dir: str | Path | None = None,
 ) -> Path:
     safe_job_id, job_root = _safe_job_root(job_id, results_dir, job_output_dir)
-    for session in _session_records(safe_job_id, job_root, source_reference_sha256):
+    for session in _session_records(safe_job_id, job_root, source_reference_sha256, workflow_id, input_mode):
         if session["session_id"] == session_id and session["ready"]:
             return session["artifacts"]["alignment"]["_path"]
     raise AlignmentSessionError("ready alignment session not found")

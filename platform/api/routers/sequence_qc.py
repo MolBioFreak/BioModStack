@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from fastapi import APIRouter, Depends, HTTPException
+from database import Job
+from routers.ngs_alignment_sessions import require_alignment_job
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from database import Job, get_session
-from paths import resolve_allowed_path
 from services.job_result_roots import JobResultRootError, resolve_persisted_job_result_root
 from services.sequence_qc_manifest import (
     SequenceQcManifestError,
@@ -30,31 +27,20 @@ def _error_to_http(exc: SequenceQcManifestError) -> HTTPException:
 @router.get("/jobs/{job_id}/manifest")
 async def get_sequence_qc_manifest_for_job(
     job_id: str,
-    session: AsyncSession = Depends(get_session),
+    job: Job = Depends(require_alignment_job),
 ):
     """Return the typed sequence-QC manifest for a completed BMS job."""
-    job = await session.get(Job, job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="job not found")
+
     try:
         result_root = resolve_persisted_job_result_root(job)
         manifest_path = find_manifest_in_result_root(result_root)
-        return load_sequence_qc_manifest(manifest_path)
+        params = job.params if isinstance(job.params, dict) else {}
+        return load_sequence_qc_manifest(
+            manifest_path,
+            expected_job_id=job.id,
+            expected_workflow_id=str(params.get("ont_workflow_id") or params.get("workflow_id") or ""),
+            expected_input_mode=str(params.get("ont_input_mode") or params.get("input_mode") or ""),
+            expected_analysis_status="completed",
+        )
     except (JobResultRootError, SequenceQcManifestError) as exc:
-        raise _error_to_http(exc) from exc
-
-
-@router.get("/manifest")
-async def get_sequence_qc_manifest_by_path(
-    path: str = Query(..., description="Allowed-root relative manifest path, e.g. bms_results/job/fastq_qc/qc_manifest.json"),
-):
-    """Return a typed sequence-QC manifest by an allowed-root relative path."""
-    try:
-        manifest_path = resolve_allowed_path(path)
-        if Path(manifest_path).name != "qc_manifest.json":
-            raise SequenceQcManifestError("path must point to qc_manifest.json")
-        return load_sequence_qc_manifest(manifest_path)
-    except ValueError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except SequenceQcManifestError as exc:
         raise _error_to_http(exc) from exc

@@ -8,6 +8,7 @@ import json
 import os
 import re
 import tempfile
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
@@ -42,13 +43,43 @@ GOVERNED_URL_RE = re.compile(
     r"^/api/jobs/(?P<job>[^/]+)/alignment-session-artifacts/"
     r"(?P<mode>primary|dimer_candidates)/(?P<role>[a-z_]+)/(?P<digest>[0-9a-f]{64})$"
 )
-HTML_RESOURCE_RE = re.compile(
-    r"\b(?:src|href|poster|action)\s*=\s*['\"](?P<attribute>[^'\"]+)['\"]|\burl\s*\(\s*['\"]?(?P<css>[^)'\"\s]+)",
-    re.IGNORECASE,
-)
 ALLOWED_SHELL_RESOURCES = frozenset(
     {"https://cdn.jsdelivr.net/npm/igv@3.5.2/dist/igv.min.js"}
 )
+URL_ATTRIBUTES = frozenset({"src", "href", "poster", "action", "formaction", "data", "srcset", "xlink:href"})
+
+
+class _ResourceParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.resources: set[str] = set()
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        del tag
+        self._handle_attrs(attrs)
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        del tag
+        self._handle_attrs(attrs)
+
+    def _handle_attrs(self, attrs: list[tuple[str, str | None]]) -> None:
+        for name, value in attrs:
+            normalized = name.casefold()
+            if normalized in URL_ATTRIBUTES:
+                if value is None or normalized == "srcset":
+                    raise ValueError("IGV report contains an unsupported HTML resource attribute")
+                self.resources.add(value)
+            if normalized == "style" and value and re.search(r"(?:url\s*\(|@import)", value, re.IGNORECASE):
+                raise ValueError("IGV report contains an undeclared HTML resource")
+
+
+def _shell_resources(text: str) -> set[str]:
+    if re.search(r"<style\b[^>]*>.*?(?:url\s*\(|@import)", text, re.IGNORECASE | re.DOTALL):
+        raise ValueError("IGV report contains an undeclared HTML resource")
+    parser = _ResourceParser()
+    parser.feed(text)
+    parser.close()
+    return parser.resources
 
 
 def _read_json(path: str | Path) -> Any:
@@ -134,10 +165,7 @@ def finalize_report(
     folded_text = text.casefold()
     if "data:" in folded_text or ";base64," in folded_text:
         raise ValueError("IGV report contains an embedded data URI")
-    shell_resources = {
-        match.group("attribute") or match.group("css")
-        for match in HTML_RESOURCE_RE.finditer(text)
-    }
+    shell_resources = _shell_resources(text)
     if not shell_resources <= ALLOWED_SHELL_RESOURCES:
         raise ValueError("IGV report contains an undeclared HTML resource")
 

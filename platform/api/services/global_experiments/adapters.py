@@ -1726,6 +1726,8 @@ class NgsAlignmentViewerReferenceAdapter:
             sessions = build_alignment_sessions(
                 job.id,
                 source_reference_sha256=str(job.params.get("reference_sequence_sha256") or ""),
+                workflow_id=str(job.params.get("ont_workflow_id") or job.params.get("workflow_id") or ""),
+                input_mode=str(job.params.get("ont_input_mode") or job.params.get("input_mode") or ""),
                 job_output_dir=job.child_output_dir or job.output_dir,
             )
         except (AlignmentSessionError, OSError, ValueError) as exc:

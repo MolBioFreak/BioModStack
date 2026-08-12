@@ -186,6 +186,8 @@ def test_rejects_embedded_or_undeclared_resources(tmp_path: Path) -> None:
         '<img src="file:///tmp/plot.png">',
         '<iframe src="/unmanaged/viewer"></iframe>',
         '<style>body { background-image: url(https://example.invalid/bg.png); }</style>',
+        '<object data=https://example.invalid/object></object>',
+        '<form><button formaction=https://example.invalid/post></button></form>',
     ):
         report.write_text(original.replace("</html>", f"{injected}</html>"), encoding="utf-8")
         with pytest.raises(ValueError, match="undeclared HTML resource"):

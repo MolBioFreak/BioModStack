@@ -81,6 +81,28 @@ def test_manifest_schema_and_job_binding_are_required(
     assert "manifest job_id does not match requested job" in primary["unavailable_reason"]
 
 
+def test_manifest_workflow_and_input_mode_must_match_authorized_job_provenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services import ngs_alignment_sessions as service
+
+    manifest_dir = tmp_path / "job-a" / "fastq_qc"
+    _write_manifest(manifest_dir)
+    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
+
+    sessions = service.build_alignment_sessions(
+        "job-a",
+        source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(),
+        workflow_id="ont_plasmid_qc",
+        input_mode="pod5",
+        results_dir=tmp_path,
+    )
+    primary = next(item for item in sessions if item["mode"] == "primary")
+    assert primary["ready"] is False
+    assert "workflow_id does not match authorized job provenance" in primary["unavailable_reason"]
+
+
 def test_duplicate_artifact_role_is_fail_closed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -244,7 +266,7 @@ def test_persisted_production_output_directory_resolves_sessions_and_stays_confi
     app.include_router(routes.router, prefix="/api")
     app.dependency_overrides[routes.require_alignment_job] = lambda: SimpleNamespace(
         child_output_dir=None,
-        params={"reference_sequence_sha256": hashlib.sha256(b"ACGTACGT").hexdigest()},
+        params={"reference_sequence_sha256": hashlib.sha256(b"ACGTACGT").hexdigest(), "ont_workflow_id": "ont_fastq_qc", "ont_input_mode": "fastq"},
         output_dir=str(output_dir),
     )
     response = TestClient(app).get("/api/jobs/opaque-job-uuid/alignment-sessions")
@@ -519,7 +541,7 @@ def test_generic_alignment_routes_offload_blocking_service_calls(
     app.include_router(routes.router, prefix="/api")
     app.dependency_overrides[routes.require_alignment_job] = lambda: SimpleNamespace(
         child_output_dir=None,
-        params={"reference_sequence_sha256": hashlib.sha256(b"ACGTACGT").hexdigest()},
+        params={"reference_sequence_sha256": hashlib.sha256(b"ACGTACGT").hexdigest(), "ont_workflow_id": "ont_fastq_qc", "ont_input_mode": "fastq"},
         output_dir="/tmp/job-a-run",
     )
     client = TestClient(app)
@@ -569,7 +591,7 @@ def test_semantic_role_route_is_capability_scoped_and_range_capable(
     app.include_router(routes.router, prefix="/api")
     app.dependency_overrides[routes.require_alignment_job] = lambda: SimpleNamespace(
         child_output_dir=None,
-        params={"reference_sequence_sha256": hashlib.sha256(b"ACGTACGT").hexdigest()},
+        params={"reference_sequence_sha256": hashlib.sha256(b"ACGTACGT").hexdigest(), "ont_workflow_id": "ont_fastq_qc", "ont_input_mode": "fastq"},
         output_dir="/tmp/job-a-run",
     )
     client = TestClient(app)
@@ -627,7 +649,7 @@ def test_semantic_role_route_rejects_resolver_to_descriptor_open_replacement(
     app.include_router(routes.router, prefix="/api")
     app.dependency_overrides[routes.require_alignment_job] = lambda: SimpleNamespace(
         child_output_dir=None,
-        params={"reference_sequence_sha256": hashlib.sha256(b"ACGTACGT").hexdigest()},
+        params={"reference_sequence_sha256": hashlib.sha256(b"ACGTACGT").hexdigest(), "ont_workflow_id": "ont_fastq_qc", "ont_input_mode": "fastq"},
         output_dir="/tmp/job-a-run",
     )
 
@@ -678,7 +700,7 @@ def test_job_scoped_artifact_route_supports_ranges_and_etags(
     )
     app = FastAPI()
     app.include_router(routes.router, prefix="/api")
-    app.dependency_overrides[routes.require_alignment_job] = lambda: SimpleNamespace(params={"reference_sequence_sha256": hashlib.sha256(b"ACGTACGT").hexdigest()}, output_dir="/tmp/job-a-run")
+    app.dependency_overrides[routes.require_alignment_job] = lambda: SimpleNamespace(params={"reference_sequence_sha256": hashlib.sha256(b"ACGTACGT").hexdigest(), "ont_workflow_id": "ont_fastq_qc", "ont_input_mode": "fastq"}, output_dir="/tmp/job-a-run")
     client = TestClient(app)
 
     ranged = client.get(
@@ -719,7 +741,7 @@ def test_reads_route_requires_a_ready_session_and_never_returns_a_full_file(
     )
     app = FastAPI()
     app.include_router(routes.router, prefix="/api")
-    app.dependency_overrides[routes.require_alignment_job] = lambda: SimpleNamespace(params={"reference_sequence_sha256": hashlib.sha256(b"ACGTACGT").hexdigest()}, output_dir="/tmp/job-a-run")
+    app.dependency_overrides[routes.require_alignment_job] = lambda: SimpleNamespace(params={"reference_sequence_sha256": hashlib.sha256(b"ACGTACGT").hexdigest(), "ont_workflow_id": "ont_fastq_qc", "ont_input_mode": "fastq"}, output_dir="/tmp/job-a-run")
     client = TestClient(app)
     response = client.get("/api/jobs/job-a/reads?session_id=s1&limit=25")
     assert response.status_code == 200
@@ -1213,7 +1235,7 @@ def test_exact_read_detail_scan_exhaustion_is_not_reported_as_404(monkeypatch: p
     )
     app = FastAPI()
     app.include_router(routes.router, prefix="/api")
-    app.dependency_overrides[routes.require_alignment_job] = lambda: SimpleNamespace(params={"reference_sequence_sha256": hashlib.sha256(b"ACGTACGT").hexdigest()}, output_dir="/tmp/job-a-run")
+    app.dependency_overrides[routes.require_alignment_job] = lambda: SimpleNamespace(params={"reference_sequence_sha256": hashlib.sha256(b"ACGTACGT").hexdigest(), "ont_workflow_id": "ont_fastq_qc", "ont_input_mode": "fastq"}, output_dir="/tmp/job-a-run")
 
     response = TestClient(app).get("/api/jobs/job-a/reads/target?session_id=session-a")
 
