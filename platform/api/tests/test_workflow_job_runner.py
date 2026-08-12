@@ -14,7 +14,11 @@ for root in (API_ROOT, REPO_ROOT):
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
 
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
+
 import database
+from database import Base, Job
 from routers import workflow_adapter as adapter_router
 from services import execution_ownership as ownership
 from services import nextflow
@@ -58,7 +62,7 @@ def _unit(lane: str = "development", job_id: str = "job-1") -> str:
     return ownership.deterministic_unit_name(lane, job_id, 1)
 
 
-def _job(*, status: str = "running", model_id: str = "boltz2", job_id: str = "job-1"):
+def _job(*, status: str = "running", model_id: str = "boltz2", job_id: str = "job-1", receipt_state: str = "started"):
     unit = _unit(job_id=job_id)
     receipt = ownership.planned_execution_attempt(
         lane="development",
@@ -69,7 +73,9 @@ def _job(*, status: str = "running", model_id: str = "boltz2", job_id: str = "jo
         owner_nonce="nonce-1",
         request_fingerprint_value="fingerprint-1",
     )
-    receipt.update({"state": "started", "invocation_id": "invocation-1"})
+    receipt.update({"state": receipt_state})
+    if receipt_state == "started":
+        receipt.update({"invocation_id": "invocation-1", "started_at": ownership.utc_timestamp()})
     return SimpleNamespace(
         id=job_id,
         model_id=model_id,
@@ -96,6 +102,36 @@ def transient_identity(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setenv("BMS_TRANSIENT_WORKFLOW_UNIT_NAME", _unit())
     monkeypatch.setenv("BMS_TRANSIENT_WORKFLOW_OWNER_NONCE", "nonce-1")
     monkeypatch.setenv("INVOCATION_ID", "invocation-1")
+
+
+def test_runner_starts_from_planned_receipt_without_adapter_wait(
+    monkeypatch: pytest.MonkeyPatch,
+    transient_identity,
+) -> None:
+    job = _job(receipt_state="planned")
+    monkeypatch.setattr(database, "async_session", lambda: _Session(job))
+    properties = ownership.UnitProperties(
+        "active",
+        "running",
+        "",
+        "42",
+        "0",
+        "success",
+        ownership.workflow_slice_for_lane("development"),
+        "invocation-1",
+    )
+    monkeypatch.setattr(runner, "show_unit_properties", lambda *_args: properties)
+    launch_calls = []
+
+    async def fake_launch(**kwargs):
+        launch_calls.append(kwargs)
+        job.status = "completed"
+        job.queue_status = "completed"
+
+    monkeypatch.setattr(nextflow, "launch_nextflow_job", fake_launch)
+    assert asyncio.run(runner.run_workflow_job("job-1", "development")) == 0
+    assert launch_calls
+    assert ownership.latest_execution_attempt(job.params)["state"] == "completed"
 
 
 def test_runner_completion_does_not_depend_on_adapter_lifecycle(
@@ -169,6 +205,101 @@ def test_runner_uses_authoritative_msa_job_and_keeps_it_inside_unit(
 
 
 @pytest.mark.asyncio
+async def test_runner_completion_cannot_overwrite_concurrent_operator_cancellation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'runner-cancel.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    started_job = _job(job_id="runner-cancel")
+    async with factory() as session:
+        session.add(
+            Job(
+                id=started_job.id,
+                name="runner-cancel",
+                model_id=started_job.model_id,
+                mode=started_job.mode,
+                params=started_job.params,
+                output_dir=started_job.output_dir,
+                status="running",
+                queue_status="running",
+                nextflow_run_id=started_job.nextflow_run_id,
+                assigned_gpu=2,
+            )
+        )
+        await session.commit()
+
+    worker_read = asyncio.Event()
+    operator_done = asyncio.Event()
+
+    class RacingSession(AsyncSession):
+        async def execute(self, statement, *args, **kwargs):
+            result = await super().execute(statement, *args, **kwargs)
+            if "SELECT" in str(statement).upper() and "jobs" in str(statement).lower():
+                worker_read.set()
+                await asyncio.sleep(0.05)
+            return result
+
+    racing_factory = sessionmaker(engine, class_=RacingSession, expire_on_commit=False)
+    monkeypatch.setattr(database, "async_session", racing_factory)
+
+    async def cancel_after_worker_read() -> None:
+        await worker_read.wait()
+        async with factory() as operator_session:
+            job = await operator_session.get(Job, "runner-cancel")
+            assert job is not None
+            params = ownership.update_execution_attempt(
+                job.params,
+                lane="development",
+                generation=1,
+                attempt=1,
+                unit=_unit(job_id="runner-cancel"),
+                owner_nonce="nonce-1",
+                changes={
+                    "state": "cancelled",
+                    "invocation_id": "invocation-1",
+                    "terminal_at": ownership.utc_timestamp(),
+                    "terminal_reason": "operator cancellation",
+                },
+            )
+            job.params = ownership.release_scheduler_gpu_assignment(params)
+            job.status = "cancelled"
+            job.queue_status = "cancelled"
+            job.assigned_gpu = None
+            job.error_message = "cancelled by operator"
+            await operator_session.commit()
+        operator_done.set()
+
+    cancel_task = asyncio.create_task(cancel_after_worker_read())
+    state = await runner._finish_attempt(
+        job_id="runner-cancel",
+        lane="development",
+        unit_name=_unit(job_id="runner-cancel"),
+        owner_nonce="nonce-1",
+        invocation_id="invocation-1",
+        state="completed",
+        reason="late worker completion",
+    )
+    await cancel_task
+    assert state == "completed"
+
+    async with factory() as session:
+        persisted = await session.get(Job, "runner-cancel")
+        assert persisted is not None
+        receipt = ownership.latest_execution_attempt(persisted.params)
+        assert receipt is not None
+        assert receipt["state"] == "cancelled"
+        assert receipt["terminal_reason"] == "operator cancellation"
+        assert persisted.status == "cancelled"
+        assert persisted.queue_status == "cancelled"
+        assert persisted.error_message == "cancelled by operator"
+        assert persisted.assigned_gpu is None
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_duplicate_launch_returns_same_live_unit_without_spawning(
     monkeypatch: pytest.MonkeyPatch,
     transient_identity,
@@ -234,6 +365,54 @@ async def test_startup_reconciliation_retains_active_runner_after_adapter_restar
     assert report["active"] == 1
     assert report["interrupted"] == 0
     assert job.status == "running"
+
+
+@pytest.mark.asyncio
+async def test_startup_reconciliation_adopts_active_invocation_for_planned_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+    transient_identity,
+) -> None:
+    job = _job(receipt_state="planned")
+    monkeypatch.setattr(database, "async_session", lambda: _Session(job, [job]))
+    properties = ownership.UnitProperties(
+        "active",
+        "running",
+        "",
+        "42",
+        "0",
+        "success",
+        ownership.workflow_slice_for_lane("development"),
+        "invocation-1",
+    )
+    monkeypatch.setattr(adapter_router, "show_unit_properties", lambda *_args: properties)
+
+    report = await adapter_router.reconcile_workflow_adapter_startup()
+
+    assert report == {"active": 1, "interrupted": 0, "critical": 0}
+    receipt = ownership.latest_execution_attempt(job.params)
+    assert receipt is not None
+    assert receipt["state"] == "started"
+    assert receipt["invocation_id"] == "invocation-1"
+
+
+@pytest.mark.asyncio
+async def test_finish_attempt_rejects_mismatched_invocation(monkeypatch: pytest.MonkeyPatch) -> None:
+    job = _job()
+    monkeypatch.setattr(database, "async_session", lambda: _Session(job))
+
+    await runner._finish_attempt(
+        job_id="job-1",
+        lane="development",
+        unit_name=_unit(),
+        owner_nonce="nonce-1",
+        invocation_id="different-invocation",
+        state="completed",
+    )
+
+    receipt = ownership.latest_execution_attempt(job.params)
+    assert receipt is not None
+    assert receipt["state"] == "started"
+    assert receipt["invocation_id"] == "invocation-1"
 
 
 @pytest.mark.asyncio

@@ -249,6 +249,84 @@ async def test_core_scheduler_explicitly_allows_durably_prestarted_job_handoff(
     ]
 
 
+@pytest.mark.asyncio
+async def test_detached_launcher_retains_task_until_completion(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("BMS_CORE_RUNTIME_MODE", raising=False)
+    nextflow._detached_launch_tasks.clear()
+    release = asyncio.Event()
+
+    async def fake_launch(**_kwargs):
+        await release.wait()
+
+    monkeypatch.setattr(nextflow, "launch_nextflow_job", fake_launch)
+    task = nextflow.launch_nextflow_job_detached(
+        job_id="job-retained",
+        model_id="boltz2",
+        mode="predict",
+        params={"gpu_id": 2},
+        output_dir="/tmp/job-retained",
+        allow_running_job=True,
+    )
+    await asyncio.sleep(0)
+    assert task in nextflow._detached_launch_tasks
+    release.set()
+    await task
+    await asyncio.sleep(0)
+    assert task not in nextflow._detached_launch_tasks
+
+
+@pytest.mark.asyncio
+async def test_detached_launcher_keeps_job_active_until_all_launchers_finish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("BMS_CORE_RUNTIME_MODE", raising=False)
+    nextflow._detached_launch_tasks.clear()
+    nextflow._launching_jobs.clear()
+    nextflow._launching_job_counts.clear()
+    first_release = asyncio.Event()
+    second_release = asyncio.Event()
+    started = 0
+
+    async def fake_launch(**_kwargs):
+        nonlocal started
+        started += 1
+        if started == 1:
+            await first_release.wait()
+        else:
+            await second_release.wait()
+
+    monkeypatch.setattr(nextflow, "launch_nextflow_job", fake_launch)
+
+    first = nextflow.launch_nextflow_job_detached(
+        job_id="job-123",
+        model_id="boltz2",
+        mode="predict",
+        params={},
+        output_dir="/tmp/job-123",
+    )
+    second = nextflow.launch_nextflow_job_detached(
+        job_id="job-123",
+        model_id="boltz2",
+        mode="predict",
+        params={},
+        output_dir="/tmp/job-123",
+    )
+    await asyncio.sleep(0)
+
+    assert "job-123" in nextflow._launching_jobs
+    assert nextflow._launching_job_counts["job-123"] == 2
+
+    first_release.set()
+    await first
+    assert "job-123" in nextflow._launching_jobs
+    assert nextflow._launching_job_counts["job-123"] == 1
+
+    second_release.set()
+    await second
+    assert "job-123" not in nextflow._launching_jobs
+    assert "job-123" not in nextflow._launching_job_counts
+
+
 
 def test_cancel_request_posts_expected_payload_to_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BMS_WORKFLOW_ADAPTER_URL", "http://127.0.0.1:8001")
@@ -1081,6 +1159,83 @@ def test_workflow_adapter_launch_endpoint_claims_transient_unit_and_persists_rec
     assert attempts[0]["invocation_id"] == "invocation-1"
     assert attempts[0]["unit"] == unit
     assert job.nextflow_run_id == unit
+
+
+def test_workflow_adapter_does_not_downgrade_runner_terminal_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+    production_adapter_identity: None,
+) -> None:
+    import workflow_adapter_app
+    from routers import workflow_adapter as workflow_adapter_router
+
+    unit = execution_ownership.deterministic_unit_name("production", "job-terminal", 1)
+    job = SimpleNamespace(
+        id="job-terminal",
+        model_id="boltz2",
+        mode="predict",
+        params={"gpu_id": 1},
+        output_dir="/tmp/job-terminal",
+        status="running",
+        queue_status="running",
+        started_at=datetime.utcnow(),
+        nextflow_run_id=None,
+        completed_at=None,
+        error_message=None,
+    )
+    session = _FakeAsyncSession(job)
+    monkeypatch.setattr(database, "async_session", lambda: session)
+    monkeypatch.setattr(workflow_adapter_router, "create_systemd_workflow_unit", lambda _command: unit)
+
+    def finish_before_adapter_commit(*_args):
+        receipt = execution_ownership.latest_execution_attempt(job.params)
+        assert receipt is not None
+        job.params = execution_ownership.update_execution_attempt(
+            job.params,
+            lane="production",
+            generation=int(receipt["generation"]),
+            attempt=int(receipt["attempt"]),
+            unit=unit,
+            owner_nonce=str(receipt["owner_nonce"]),
+            changes={
+                "state": "completed",
+                "invocation_id": "invocation-terminal",
+                "terminal_at": execution_ownership.utc_timestamp(),
+            },
+        )
+        job.status = "completed"
+        job.queue_status = "completed"
+        return execution_ownership.UnitProperties(
+            "inactive",
+            "dead",
+            "",
+            "0",
+            "0",
+            "success",
+            execution_ownership.workflow_slice_for_lane("production"),
+            "invocation-terminal",
+        )
+
+    monkeypatch.setattr(workflow_adapter_router, "wait_for_unit_invocation", finish_before_adapter_commit)
+
+    client = TestClient(workflow_adapter_app.app)
+    response = client.post(
+        "/api/workflow-adapter/launch",
+        json={
+            "job_id": "job-terminal",
+            "model_id": "boltz2",
+            "mode": "predict",
+            "params": {"gpu_id": 1},
+            "output_dir": "/tmp/job-terminal",
+        },
+    )
+
+    assert response.status_code == 202, response.text
+    receipt = execution_ownership.latest_execution_attempt(job.params)
+    assert receipt is not None
+    assert receipt["state"] == "completed"
+    assert receipt["invocation_id"] == "invocation-terminal"
+    assert job.status == "completed"
+    assert job.queue_status == "completed"
 
 
 @pytest.mark.asyncio

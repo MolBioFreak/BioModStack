@@ -40,6 +40,7 @@ from services.execution_ownership import (
     ExecutionOwnershipError,
     latest_started_execution_attempt,
     parse_unit_identity,
+    release_scheduler_gpu_assignment,
     show_unit_properties,
     unit_has_empty_cgroup,
 )
@@ -601,6 +602,11 @@ async def _commit_reconciled_job_mutations(session: Any) -> int:
             for attribute in state.attrs
             if attribute.history.has_changes()
         }
+        if str(getattr(candidate, "status", "") or "").lower() in {"completed", "failed", "cancelled", "awaiting_input"} or str(
+            getattr(candidate, "queue_status", "") or ""
+        ).lower() in {"completed", "failed", "cancelled"}:
+            values["params"] = release_scheduler_gpu_assignment(getattr(candidate, "params", {}))
+            values["assigned_gpu"] = None
         if values:
             pending.append((str(candidate.id), values))
         session.expunge(candidate)
@@ -1132,19 +1138,69 @@ def _collect_live_vram_by_job_for_scheduler(running_jobs: List[Any], gpu_stats: 
 
 
 def _normalize_job_params(raw_params: Any) -> Dict[str, Any]:
-    """Ensure job params are a dict, handling JSON-encoded strings safely."""
+    """Ensure job params are a copied dict, handling JSON-encoded strings."""
     if raw_params is None:
         return {}
     if isinstance(raw_params, dict):
-        return raw_params
+        return dict(raw_params)
     if isinstance(raw_params, str):
         try:
             import json
             loaded = json.loads(raw_params)
-            return loaded if isinstance(loaded, dict) else {}
+            return dict(loaded) if isinstance(loaded, dict) else {}
         except Exception:
             return {}
     return {}
+
+
+async def _claim_job_for_gpu(
+    session: Any,
+    job: Any,
+    gpu_id: int,
+    vram_estimate_mb: int,
+) -> Dict[str, Any] | None:
+    """Atomically claim a queued job before crossing into the launch boundary."""
+    from sqlalchemy import update
+    from database import Job
+    from services.execution_ownership import attach_scheduler_gpu_assignment
+
+    original = _normalize_job_params(getattr(job, "params", None))
+    try:
+        scheduler_params = attach_scheduler_gpu_assignment(original, int(gpu_id))
+    except ExecutionOwnershipError:
+        return None
+    transition = await session.execute(
+        update(Job)
+        .where(
+            Job.id == str(job.id),
+            Job.status == "queued",
+            Job.queue_status == "queued",
+            Job.paused.is_(False),
+            Job.assigned_gpu.is_(None),
+            Job.started_at.is_(None),
+            Job.nextflow_run_id.is_(None),
+        )
+        .values(
+            status="running",
+            queue_status="running",
+            started_at=datetime.utcnow(),
+            assigned_gpu=int(gpu_id),
+            vram_estimate_mb=int(vram_estimate_mb),
+            params=scheduler_params,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if int(transition.rowcount or 0) != 1:
+        await session.rollback()
+        await session.refresh(job)
+        return None
+    job.params = scheduler_params
+    job.assigned_gpu = int(gpu_id)
+    job.vram_estimate_mb = int(vram_estimate_mb)
+    job.status = "running"
+    job.queue_status = "running"
+    job.started_at = job.started_at or datetime.utcnow()
+    return scheduler_params
 
 
 def _md_analysis_has_gpu_assignment(job: Any) -> bool:
@@ -2484,19 +2540,17 @@ class GPUOrchestrator:
                 if i > 0:
                     await asyncio.sleep(0.5)
                 
-                original_params = dict(job.params or {})
-                scheduler_params = {**original_params, "gpu_id": int(gpu_id)}
+                scheduler_params = await _claim_job_for_gpu(
+                    session,
+                    job,
+                    int(gpu_id),
+                    int(job_info.vram_estimate_mb),
+                )
+                if scheduler_params is None:
+                    logger.info("[LAUNCH SKIPPED] %s lost its queued-to-running claim", job.name)
+                    continue
+                await session.commit()
                 try:
-                    # Persist the scheduler-owned assignment before handing the job
-                    # to a transient adapter. The adapter runner reloads Job.params
-                    # from the shared database, so an in-memory-only gpu_id is lost
-                    # at that boundary.
-                    job.params = scheduler_params
-                    job.assigned_gpu = int(gpu_id)
-                    job.vram_estimate_mb = job_info.vram_estimate_mb
-                    await session.commit()
-
-                    # Launch Nextflow with the same scheduler-owned assignment.
                     await self.launch_nextflow_job(
                         job_id=job.id,
                         model_id=job.model_id,
@@ -2525,18 +2579,30 @@ class GPUOrchestrator:
                     
                 except Exception as e:
                     logger.error(f"[LAUNCH FAILED] {job.name}: {e}")
-                    await session.refresh(job)
-                    job.queue_status = "failed"
+                    # Reopen this publication under an immediate SQLite write
+                    # lock. A cancellation or input gate that committed first
+                    # remains authoritative; one that starts later serializes
+                    # after this terminal publication.
+                    await session.rollback()
+                    from sqlalchemy import text
+
+                    await session.execute(text("BEGIN IMMEDIATE"))
+                    failed_result = await session.execute(
+                        select(Job)
+                        .where(Job.id == job.id)
+                        .execution_options(populate_existing=True)
+                    )
+                    job = failed_result.scalar_one_or_none()
+                    if job is None:
+                        continue
+                    terminal_statuses = {"cancelled", "completed", "failed", "awaiting_input"}
+                    if str(job.status or "").lower() not in terminal_statuses:
+                        job.status = "failed"
+                        job.queue_status = "failed"
+                        job.completed_at = datetime.utcnow()
+                        job.error_message = str(e)
                     job.assigned_gpu = None
-                    job.error_message = str(e)
-                    if "gpu_id" not in original_params:
-                        restored_params = dict(job.params or {})
-                        restored_params.pop("gpu_id", None)
-                        job.params = restored_params
-                    else:
-                        restored_params = dict(job.params or {})
-                        restored_params["gpu_id"] = original_params["gpu_id"]
-                        job.params = restored_params
+                    job.params = release_scheduler_gpu_assignment(job.params)
 
             if used_quick_enable_gpu_ids:
                 def consume_quick_enable_tokens(latest_config: Dict[str, Any]) -> None:

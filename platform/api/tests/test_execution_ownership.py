@@ -311,6 +311,48 @@ def test_latest_started_execution_attempt_requires_complete_canonical_receipt(
         )
 
 
+def test_scheduler_gpu_assignment_round_trip() -> None:
+    assigned = ownership.attach_scheduler_gpu_assignment({"gpu_id": 7, "run_frustrampnn": True}, 2)
+    assert assigned["gpu_id"] == 2
+    assert ownership.release_scheduler_gpu_assignment(assigned) == {
+        "gpu_id": 7,
+        "run_frustrampnn": True,
+    }
+
+
+def test_terminal_execution_attempt_cannot_return_to_started() -> None:
+    unit = ownership.deterministic_unit_name(ownership.DEVELOPMENT_LANE, "job-1", 1)
+    planned = ownership.planned_execution_attempt(
+        lane=ownership.DEVELOPMENT_LANE,
+        job_id="job-1",
+        generation=1,
+        attempt=1,
+        unit=unit,
+        owner_nonce="nonce-1",
+        request_fingerprint_value="fingerprint-1",
+    )
+    params = ownership.append_execution_attempt({}, planned)
+    params = ownership.update_execution_attempt(
+        params,
+        lane=ownership.DEVELOPMENT_LANE,
+        generation=1,
+        attempt=1,
+        unit=unit,
+        owner_nonce="nonce-1",
+        changes={"state": "completed", "invocation_id": "invocation-1"},
+    )
+    with pytest.raises(ownership.ExecutionOwnershipError, match="terminal"):
+        ownership.update_execution_attempt(
+            params,
+            lane=ownership.DEVELOPMENT_LANE,
+            generation=1,
+            attempt=1,
+            unit=unit,
+            owner_nonce="nonce-1",
+            changes={"state": "started"},
+        )
+
+
 def test_transient_runner_command_has_only_job_and_lane_arguments() -> None:
     source = (API_ROOT / "workflow_job_runner.py").read_text(encoding="utf-8")
     assert "--job-id" in source

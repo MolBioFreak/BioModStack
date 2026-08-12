@@ -48,6 +48,8 @@ EXECUTION_ATTEMPT_IMMUTABLE_FIELDS = frozenset(
         "planned_at",
     }
 )
+SCHEDULER_GPU_ASSIGNMENT_PARAM = "_scheduler_gpu_assignment"
+SCHEDULER_GPU_ASSIGNMENT_SCHEMA = "bms.scheduler-gpu-assignment.v1"
 
 LANE_ADAPTER_PORTS: dict[str, int] = {
     DEVELOPMENT_LANE: 18001,
@@ -278,6 +280,40 @@ def params_mapping(value: object) -> dict[str, Any]:
     return {str(key): item for key, item in parsed.items()}
 
 
+def attach_scheduler_gpu_assignment(params: object, gpu_id: int) -> dict[str, Any]:
+    """Add a scheduler GPU and retain the user value for terminal cleanup."""
+    original = params_mapping(params)
+    if SCHEDULER_GPU_ASSIGNMENT_PARAM in original:
+        raise ExecutionOwnershipError("scheduler GPU assignment metadata already exists")
+    had_user_value = "gpu_id" in original
+    assigned = dict(original)
+    assigned["gpu_id"] = int(gpu_id)
+    assigned[SCHEDULER_GPU_ASSIGNMENT_PARAM] = {
+        "schema": SCHEDULER_GPU_ASSIGNMENT_SCHEMA,
+        "assigned_gpu": int(gpu_id),
+        "original_gpu_id_present": had_user_value,
+        "original_gpu_id": original.get("gpu_id") if had_user_value else None,
+    }
+    return assigned
+
+
+def release_scheduler_gpu_assignment(params: object) -> dict[str, Any]:
+    """Remove scheduler ownership and restore any user-supplied GPU value."""
+    normalized = params_mapping(params)
+    marker = normalized.pop(SCHEDULER_GPU_ASSIGNMENT_PARAM, None)
+    if marker is None:
+        return normalized
+    if not isinstance(marker, Mapping) or marker.get("schema") != SCHEDULER_GPU_ASSIGNMENT_SCHEMA:
+        raise ExecutionOwnershipError("scheduler GPU assignment metadata is invalid")
+    if bool(marker.get("original_gpu_id_present")):
+        if "original_gpu_id" not in marker:
+            raise ExecutionOwnershipError("scheduler GPU assignment lacks its original value")
+        normalized["gpu_id"] = marker["original_gpu_id"]
+    else:
+        normalized.pop("gpu_id", None)
+    return normalized
+
+
 def execution_attempts(params: object) -> list[dict[str, Any]]:
     values = params_mapping(params).get(EXECUTION_ATTEMPTS_PARAM, [])
     if not isinstance(values, list):
@@ -469,7 +505,13 @@ def update_execution_attempt(
     for field in illegal:
         if str(changes[field]) != str(normalized_entries[target_index].get(field)):  # type: ignore[union-attr]
             raise ExecutionOwnershipError(f"Execution attempt identity field is immutable: {field}")
-    updated = dict(normalized_entries[target_index])  # type: ignore[arg-type]
+    updated: dict[str, Any] = dict(normalized_entries[target_index])  # type: ignore[arg-type]
+    current_state = str(updated.get("state", "")).strip().lower()
+    requested_state = str(changes.get("state", current_state)).strip().lower()
+    if current_state in EXECUTION_ATTEMPT_TERMINAL_STATES and requested_state != current_state:
+        raise ExecutionOwnershipError(
+            f"Execution attempt is terminal and cannot transition from {current_state!r} to {requested_state!r}"
+        )
     updated.update(dict(changes))
     normalized_entries[target_index] = updated
     normalized[EXECUTION_ATTEMPTS_PARAM] = normalized_entries
@@ -481,6 +523,7 @@ def strip_execution_metadata(params: object) -> dict[str, Any]:
     normalized = params_mapping(params)
     normalized.pop(EXECUTION_ATTEMPTS_PARAM, None)
     normalized.pop("cancellation_receipt", None)
+    normalized.pop(SCHEDULER_GPU_ASSIGNMENT_PARAM, None)
     return normalized
 
 

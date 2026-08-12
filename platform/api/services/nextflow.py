@@ -255,6 +255,8 @@ def preflight_nextflow_java(env: Dict[str, str]) -> Tuple[bool, str]:
 _running_processes: Dict[str, asyncio.subprocess.Process] = {}
 _running_units: Dict[str, str] = {}
 _launching_jobs: Set[str] = set()
+_launching_job_counts: Dict[str, int] = {}
+_detached_launch_tasks: Set[asyncio.Task] = set()
 
 from paths import (
     get_code_root,
@@ -303,6 +305,7 @@ from .execution_ownership import (
     discover_active_workflow_units,
     is_legacy_numeric_run_id,
     owner_receipt,
+    release_scheduler_gpu_assignment,
     show_unit_properties,
     unit_has_empty_cgroup,
     TRANSIENT_WORKFLOW_UNIT_ENV,
@@ -1837,8 +1840,11 @@ async def launch_nextflow_job(
             for attribute in inspect(failed_job).attrs
             if attribute.history.has_changes()
         }
-        if not changes:
-            return False
+        if "params" in changes:
+            changes["params"] = release_scheduler_gpu_assignment(changes["params"])
+        else:
+            changes["params"] = release_scheduler_gpu_assignment(getattr(failed_job, "params", {}))
+        changes["assigned_gpu"] = None
         failure_session.expunge(failed_job)
         published = await failure_session.execute(
             update(Job)
@@ -1926,7 +1932,7 @@ async def launch_nextflow_job(
         if job.status != JobStatus.RUNNING.value or job.started_at is None:
             job.status = JobStatus.RUNNING.value
             job.started_at = datetime.utcnow()
-            if str(job.model_id or "").strip().lower() == "protein_local_redesign":
+            if str(getattr(job, "model_id", model_id) or model_id).strip().lower() == "protein_local_redesign":
                 from database import RFD3LocalRedesignRequest
 
                 local_request_row = (
@@ -2618,7 +2624,7 @@ async def launch_nextflow_job(
                         # Log last few lines
                         if job.status == JobStatus.FAILED.value:
                             logger.error(f"Tail of log:\n{''.join(full_log.tail(20))}")
-                if str(job.model_id or "").strip().lower() == "protein_local_redesign":
+                if str(getattr(job, "model_id", model_id) or model_id).strip().lower() == "protein_local_redesign":
                     from database import RFD3LocalRedesignRequest
 
                     local_request_row = (
@@ -2645,8 +2651,20 @@ async def launch_nextflow_job(
                     if job.model_id == "molecular_dynamics" and job.mode == "analyze" and job.parent_job_id
                     else None
                 )
-                job.completed_at = datetime.utcnow()
                 terminalizing_cm_failure = job.status == JobStatus.FAILED.value
+                if str(getattr(job, "status", "") or "").lower() in {
+                    JobStatus.COMPLETED.value,
+                    JobStatus.FAILED.value,
+                    JobStatus.CANCELLED.value,
+                    JobStatus.AWAITING_INPUT.value,
+                } or str(getattr(job, "queue_status", "") or "").lower() in {
+                    "completed",
+                    "failed",
+                    "cancelled",
+                }:
+                    job.params = release_scheduler_gpu_assignment(job.params)
+                    job.assigned_gpu = None
+                job.completed_at = datetime.utcnow()
                 changes = {
                     attribute.key: attribute.value
                     for attribute in inspect(job).attrs
@@ -2777,6 +2795,7 @@ def launch_nextflow_job_detached(
             job_id,
         )
 
+    _launching_job_counts[job_id] = _launching_job_counts.get(job_id, 0) + 1
     _launching_jobs.add(job_id)
 
     async def _runner() -> None:
@@ -2790,9 +2809,17 @@ def launch_nextflow_job_detached(
                 allow_running_job=allow_running_job,
             )
         finally:
-            _launching_jobs.discard(job_id)
+            remaining = _launching_job_counts.get(job_id, 1) - 1
+            if remaining > 0:
+                _launching_job_counts[job_id] = remaining
+            else:
+                _launching_job_counts.pop(job_id, None)
+                _launching_jobs.discard(job_id)
 
-    return asyncio.create_task(_runner())
+    task = asyncio.create_task(_runner())
+    _detached_launch_tasks.add(task)
+    task.add_done_callback(_detached_launch_tasks.discard)
+    return task
 
 
 def resolve_nextflow_executable() -> str:

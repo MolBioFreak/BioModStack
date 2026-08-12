@@ -26,6 +26,7 @@ from services.execution_ownership import (
     execution_attempt_is_terminal,
     latest_execution_attempt,
     params_mapping,
+    release_scheduler_gpu_assignment,
     show_unit_properties,
     strip_execution_metadata,
     update_execution_attempt,
@@ -83,50 +84,54 @@ async def _load_authoritative_attempt(
     owner_nonce: str,
     invocation_id: str,
 ) -> tuple[Any, dict[str, Any], dict[str, Any]]:
-    """Wait briefly for the adapter's post-acceptance receipt commit."""
-    deadline = asyncio.get_running_loop().time() + _positive_float_env(
-        "BMS_TRANSIENT_WORKFLOW_RECEIPT_WAIT_SECONDS",
-        30.0,
-    )
-    while True:
-        async with database.async_session() as session:
-            result = await session.execute(
-                sqlalchemy.select(database.Job).where(database.Job.id == job_id)
-            )
-            job = result.scalar_one_or_none()
-            if job is None:
-                raise ExecutionOwnershipError(f"Authoritative workflow job {job_id} was not found")
-            params = params_mapping(getattr(job, "params", {}))
-            receipt = latest_execution_attempt(params)
-            if receipt is not None and str(receipt.get("lane", "")) == lane:
-                if str(receipt.get("unit", "")) != unit_name:
-                    raise ExecutionOwnershipError(
-                        f"Authoritative receipt unit {receipt.get('unit')!r} does not match {unit_name!r}"
-                    )
-                if str(receipt.get("owner_nonce", "")) != owner_nonce:
-                    raise ExecutionOwnershipError("Transient workflow owner nonce does not match the receipt")
-                state = str(receipt.get("state", "")).strip().lower()
-                stored_invocation_id = str(receipt.get("invocation_id", "")).strip()
-                if state == "started" and stored_invocation_id == invocation_id:
-                    properties = await asyncio.to_thread(show_unit_properties, unit_name, lane)
-                    if properties.invocation_id != invocation_id:
-                        raise ExecutionOwnershipError(
-                            "systemd InvocationID changed after adapter acceptance"
-                        )
-                    return job, params, receipt
-                if state in EXECUTION_ATTEMPT_TERMINAL_STATES:
-                    raise ExecutionOwnershipError(
-                        f"Transient workflow receipt became terminal before runner start: {state}"
-                    )
-            elif receipt is not None:
-                raise ExecutionOwnershipError(
-                    f"Latest authoritative execution receipt belongs to another lane: {receipt.get('lane')!r}"
-                )
-        if asyncio.get_running_loop().time() >= deadline:
-            raise ExecutionOwnershipError(
-                f"Timed out waiting for the adapter to persist the started receipt for {unit_name}"
-            )
-        await asyncio.sleep(0.05)
+    """Prove the planned receipt and publish the started state from the runner."""
+    async with database.async_session() as session:
+        await session.execute(sqlalchemy.text("BEGIN IMMEDIATE"))
+        result = await session.execute(sqlalchemy.select(database.Job).where(database.Job.id == job_id))
+        job = result.scalar_one_or_none()
+        if job is None:
+            raise ExecutionOwnershipError(f"Authoritative workflow job {job_id} was not found")
+        params = params_mapping(getattr(job, "params", {}))
+        receipt = latest_execution_attempt(params)
+        if receipt is None or str(receipt.get("lane", "")) != lane:
+            raise ExecutionOwnershipError("Authoritative planned workflow receipt is missing")
+        if str(receipt.get("unit", "")) != unit_name:
+            raise ExecutionOwnershipError("Authoritative receipt unit does not match the transient unit")
+        if str(receipt.get("owner_nonce", "")) != owner_nonce:
+            raise ExecutionOwnershipError("Transient workflow owner nonce does not match the receipt")
+        state = str(receipt.get("state", "")).strip().lower()
+        if state in EXECUTION_ATTEMPT_TERMINAL_STATES:
+            raise ExecutionOwnershipError(f"Transient workflow receipt became terminal before runner start: {state}")
+        properties = await asyncio.to_thread(show_unit_properties, unit_name, lane)
+        if properties.invocation_id != invocation_id:
+            raise ExecutionOwnershipError("systemd InvocationID does not match the transient runner")
+        if state == "started":
+            if str(receipt.get("invocation_id", "")) != invocation_id:
+                raise ExecutionOwnershipError("Started workflow receipt has a different InvocationID")
+            return job, params, receipt
+        if state != "planned":
+            raise ExecutionOwnershipError(f"Transient workflow receipt has invalid startup state: {state}")
+        params = update_execution_attempt(
+            params,
+            lane=lane,
+            generation=int(receipt["generation"]),
+            attempt=int(receipt["attempt"]),
+            unit=unit_name,
+            owner_nonce=owner_nonce,
+            changes={
+                "state": "started",
+                "invocation_id": invocation_id,
+                "started_at": utc_timestamp(),
+            },
+        )
+        job.params = params
+        if str(getattr(job, "status", "") or "").lower() not in {"completed", "failed", "cancelled"}:
+            job.status = "running"
+            job.queue_status = "running"
+            if getattr(job, "started_at", None) is None:
+                job.started_at = datetime.utcnow()
+        await session.commit()
+        return job, params, latest_execution_attempt(params) or receipt
 
 
 async def _finish_attempt(
@@ -140,6 +145,7 @@ async def _finish_attempt(
     reason: str | None = None,
 ) -> str:
     async with database.async_session() as session:
+        await session.execute(sqlalchemy.text("BEGIN IMMEDIATE"))
         result = await session.execute(
             sqlalchemy.select(database.Job).where(database.Job.id == job_id)
         )
@@ -151,6 +157,14 @@ async def _finish_attempt(
         if receipt is None or str(receipt.get("lane", "")) != lane:
             return state
         if str(receipt.get("unit", "")) != unit_name or str(receipt.get("owner_nonce", "")) != owner_nonce:
+            return state
+        if str(receipt.get("invocation_id", "")) != invocation_id:
+            logger.error(
+                "Refused terminal workflow receipt for %s: InvocationID mismatch receipt=%r runner=%r",
+                job_id,
+                receipt.get("invocation_id"),
+                invocation_id,
+            )
             return state
         # Startup reconciliation can terminalize an ownership record while an
         # old runner is still draining.  That terminal decision is authoritative
@@ -177,7 +191,9 @@ async def _finish_attempt(
         except (KeyError, TypeError, ValueError, ExecutionOwnershipError):
             logger.exception("Could not publish terminal workflow receipt for %s", job_id)
             return state
-        job.params = params
+        job.params = release_scheduler_gpu_assignment(params)
+        if state in {"completed", "failed", "interrupted_owner", "cancelled"}:
+            job.assigned_gpu = None
         if state in {"failed", "interrupted_owner"} and str(getattr(job, "status", "") or "").lower() not in {
             "completed",
             "cancelled",

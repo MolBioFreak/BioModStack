@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -21,6 +22,7 @@ from database import Base, Job, MdRun
 import services.gpu_orchestrator as gpu_module
 from services.gpu_orchestrator import (
     GPUOrchestrator,
+    _claim_job_for_gpu,
     _commit_reconciled_job_mutations,
     _has_terminal_nextflow_history,
     _job_requires_result_output_for_terminal_history,
@@ -110,6 +112,111 @@ async def test_unknown_vram_is_estimated_and_pinned_while_explicit_zero_stays_cp
         assert gpu_job.params["gpu_id"] == 2
         assert gpu_job.vram_estimate_mb is not None and gpu_job.vram_estimate_mb > 0
         assert cpu_job is not None and cpu_job.assigned_gpu is None
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_gpu_claim_loses_to_second_session_cancellation_without_launch(tmp_path: Path) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'claim.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as session:
+        job = Job(
+            id="claim-job",
+            name="claim-job",
+            status="queued",
+            queue_status="queued",
+            model_id="protein_local_redesign",
+            mode="local_redesign",
+            params={"gpu_id": 7},
+            output_dir=str(tmp_path / "output"),
+        )
+        session.add(job)
+        await session.commit()
+        await session.refresh(job)
+        async with factory() as operator_session:
+            operator_job = await operator_session.get(Job, "claim-job")
+            assert operator_job is not None
+            operator_job.status = "cancelled"
+            operator_job.queue_status = "cancelled"
+            operator_job.completed_at = datetime.utcnow()
+            await operator_session.commit()
+        claimed = await _claim_job_for_gpu(session, job, 2, 4096)
+        assert claimed is None
+    async with factory() as session:
+        persisted = await session.get(Job, "claim-job")
+        assert persisted is not None
+        assert persisted.status == "cancelled"
+        assert persisted.queue_status == "cancelled"
+        assert persisted.assigned_gpu is None
+        assert persisted.params == {"gpu_id": 7}
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_launch_failure_after_operator_cancellation_preserves_terminal_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'launch-cancel.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as session:
+        session.add(
+            Job(
+                id="launch-cancel-job",
+                name="launch-cancel-job",
+                status="queued",
+                queue_status="queued",
+                model_id="protein_local_redesign",
+                mode="local_redesign",
+                params={"gpu_id": 7},
+                output_dir=str(tmp_path / "output"),
+                vram_estimate_mb=4096,
+                pinned_gpu=2,
+            )
+        )
+        await session.commit()
+
+    monkeypatch.setattr(
+        gpu_module,
+        "read_scheduler_config",
+        lambda: {"global": {"enabled": True, "target_vram_fill": 0.9}, "concurrency_limits": {}},
+    )
+
+    async def cancel_then_fail(**_kwargs: Any) -> None:
+        async with factory() as operator_session:
+            operator_job = await operator_session.get(Job, "launch-cancel-job")
+            assert operator_job is not None
+            operator_job.status = "cancelled"
+            operator_job.queue_status = "cancelled"
+            operator_job.error_message = "cancelled by operator"
+            operator_job.completed_at = datetime.utcnow()
+            await operator_session.commit()
+        raise RuntimeError("stale launcher failure")
+
+    gpu = SimpleNamespace(
+        index=2,
+        name="GPU 2",
+        memory_used_mb=0,
+        memory_total_mb=32607,
+        memory_free_mb=32607,
+        utilization=0,
+        temperature=30,
+    )
+    orchestrator = GPUOrchestrator(factory, lambda: [gpu], cancel_then_fail)
+    await orchestrator._process_cycle()
+
+    async with factory() as session:
+        persisted = await session.get(Job, "launch-cancel-job")
+        assert persisted is not None
+        assert persisted.status == "cancelled"
+        assert persisted.queue_status == "cancelled"
+        assert persisted.error_message == "cancelled by operator"
+        assert persisted.assigned_gpu is None
+        assert persisted.params == {"gpu_id": 7}
     await engine.dispose()
 
 

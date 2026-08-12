@@ -49,6 +49,7 @@ from services.execution_ownership import (
     AdapterIdentity,
     DuplicateUnitError,
     ExecutionOwnershipError,
+    EXECUTION_ATTEMPT_TERMINAL_STATES,
     LaneIdentityError,
     LaneMismatchError,
     adapter_identity_from_environment,
@@ -445,6 +446,7 @@ async def reconcile_workflow_adapter_startup() -> dict[str, int]:
     identity = _require_adapter_identity()
     counts = {"active": 0, "interrupted": 0, "critical": 0}
     async with database.async_session() as session:
+        await session.execute(sqlalchemy.text("BEGIN IMMEDIATE"))
         result = await session.execute(sqlalchemy.select(database.Job))
         jobs = list(result.scalars().all())
         for job in jobs:
@@ -474,6 +476,27 @@ async def reconcile_workflow_adapter_startup() -> dict[str, int]:
             if active:
                 expected_invocation = str(receipt.get("invocation_id") or "")
                 actual_invocation = str(properties.invocation_id or "")
+                if str(receipt.get("state") or "").strip().lower() == "planned" and not expected_invocation and actual_invocation:
+                    lane, generation, attempt, receipt_unit, owner_nonce = _attempt_identity(receipt)
+                    job.params = update_execution_attempt(
+                        job.params,
+                        lane=lane,
+                        generation=generation,
+                        attempt=attempt,
+                        unit=receipt_unit,
+                        owner_nonce=owner_nonce,
+                        changes={
+                            "state": "started",
+                            "started_at": utc_timestamp(),
+                            "invocation_id": actual_invocation,
+                        },
+                    )
+                    job.status = "running"
+                    job.queue_status = "running"
+                    if getattr(job, "started_at", None) is None:
+                        job.started_at = datetime.utcnow()
+                    counts["active"] += 1
+                    continue
                 if not expected_invocation or not actual_invocation or expected_invocation != actual_invocation:
                     logger.critical(
                         "Workflow owner InvocationID mismatch for job %s unit %s: receipt=%r systemd=%r; retaining active unit",
@@ -633,12 +656,7 @@ async def workflow_adapter_launch(
     # race a second spawn; systemd remains the final atomic claim authority.
     async with _claim_lock(identity.lane, payload.job_id, identity.state_dir):
         async with database.async_session() as session:
-            try:
-                await session.execute(sqlalchemy.text("BEGIN IMMEDIATE"))
-            except Exception:
-                # PostgreSQL and test session doubles may already have an
-                # implicit transaction.  The unit claim below remains atomic.
-                logger.debug("Could not explicitly begin the workflow claim transaction", exc_info=True)
+            await session.execute(sqlalchemy.text("BEGIN IMMEDIATE"))
             result = await session.execute(
                 sqlalchemy.select(database.Job).where(database.Job.id == payload.job_id)
             )
@@ -817,10 +835,7 @@ async def workflow_adapter_launch(
             raise HTTPException(status_code=503, detail="systemd accepted the unit without an InvocationID")
 
         async with database.async_session() as session:
-            try:
-                await session.execute(sqlalchemy.text("BEGIN IMMEDIATE"))
-            except Exception:
-                logger.debug("Could not explicitly begin the workflow start transaction", exc_info=True)
+            await session.execute(sqlalchemy.text("BEGIN IMMEDIATE"))
             result = await session.execute(
                 sqlalchemy.select(database.Job).where(database.Job.id == payload.job_id)
             )
@@ -828,20 +843,30 @@ async def workflow_adapter_launch(
             if job is None:
                 raise HTTPException(status_code=404, detail=f"Job {payload.job_id} disappeared during launch")
             current_params = params_mapping(getattr(job, "params", {}))
-            current_params = update_execution_attempt(
-                current_params,
-                lane=identity.lane,
-                generation=generation,
-                attempt=attempt,
-                unit=unit_name,
-                owner_nonce=owner_nonce,
-                changes={
-                    "state": "started",
-                    "invocation_id": invocation_id,
-                    "started_at": utc_timestamp(),
-                },
-            )
-            job.params = current_params
+            current_receipt = latest_execution_attempt(current_params)
+            current_state = str((current_receipt or {}).get("state", "")).strip().lower()
+            current_invocation_id = str((current_receipt or {}).get("invocation_id", ""))
+            if current_state == "started" or current_state in EXECUTION_ATTEMPT_TERMINAL_STATES:
+                if current_invocation_id != invocation_id:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Workflow receipt has a different InvocationID",
+                    )
+            else:
+                current_params = update_execution_attempt(
+                    current_params,
+                    lane=identity.lane,
+                    generation=generation,
+                    attempt=attempt,
+                    unit=unit_name,
+                    owner_nonce=owner_nonce,
+                    changes={
+                        "state": "started",
+                        "invocation_id": invocation_id,
+                        "started_at": utc_timestamp(),
+                    },
+                )
+                job.params = current_params
             job.nextflow_run_id = unit_name
             if str(getattr(job, "status", "queued") or "queued").lower() not in TERMINAL_JOB_STATUSES:
                 job.status = "running"
