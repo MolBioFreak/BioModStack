@@ -19,7 +19,6 @@ from paths import (
     get_allowed_roots,
     get_data_root,
     resolve_runtime_data_path,
-    to_allowed_relative,
 )
 from scripts.rfd3_local_redesign.contract import (
     CONTRACT_REVISION,
@@ -58,6 +57,43 @@ RFD3_SCIENTIFIC_PARAM_KEYS = {
     "source_residue_identities",
     "rfd3_request",
 }
+
+
+def canonical_local_redesign_data_alias(value: Any) -> str:
+    """Return one canonical public data-root alias or fail closed."""
+    raw = str(value or "").strip()
+    candidate = Path(raw)
+    if (
+        not raw
+        or candidate.is_absolute()
+        or not candidate.parts
+        or len(candidate.parts) < 2
+        or candidate.parts[0] != "data"
+        or any(part in {"", ".", ".."} for part in candidate.parts)
+        or candidate.as_posix() != raw
+    ):
+        raise ContractError("native RFD3 workflow input_structure must be a canonical data/... alias")
+    return raw
+
+
+def validate_local_redesign_workflow_params(
+    params: Mapping[str, Any],
+    *,
+    expected_adapter_id: str = RFD3_WORKFLOW_ADAPTER_ID,
+) -> None:
+    """Validate immutable public workflow intent without opening its source."""
+    allowed = (
+        RFD3_SCIENTIFIC_PARAM_KEYS
+        - {"input", "input_pdb", "input_cif", "rfd3_request"}
+    ) | {"workflow_adapter"}
+    unexpected = sorted(str(key) for key in params if key not in allowed)
+    if unexpected:
+        raise ContractError(
+            f"unsupported native RFD3 workflow parameters: {', '.join(unexpected)}"
+        )
+    if params.get("workflow_adapter") != expected_adapter_id:
+        raise ContractError("native RFD3 workflow has no authoritative adapter")
+    canonical_local_redesign_data_alias(params.get("input_structure"))
 
 
 def local_redesign_requests_semantically_equal(
@@ -112,7 +148,11 @@ def project_local_redesign_scheduler_params(params: Mapping[str, Any]) -> dict[s
     if not isinstance(input_value, str) or not input_value.strip():
         raise ContractError("persisted native RFD3 job has no source path for workflow projection")
     try:
-        projected["input_structure"] = to_allowed_relative(Path(input_value))
+        source = Path(input_value).resolve()
+        relative = source.relative_to(get_data_root().resolve())
+        projected["input_structure"] = canonical_local_redesign_data_alias(
+            (Path("data") / relative).as_posix()
+        )
     except (OSError, ValueError) as exc:
         raise ContractError("persisted native RFD3 source is outside the allowed workflow roots") from exc
     projected["workflow_adapter"] = RFD3_WORKFLOW_ADAPTER_ID
