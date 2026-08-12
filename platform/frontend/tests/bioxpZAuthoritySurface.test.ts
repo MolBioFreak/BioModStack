@@ -32,8 +32,11 @@ test('main Z minus and plus preserve opposite signed payloads', () => {
 test('main Z surface keeps pseudo-home authority on the robot', () => {
   assert.match(source, /invokeAction\('oem\.z\.clear', \{\}\)/);
   assert.match(source, /Z Clear \(automatic OEM position\)/);
-  assert.match(source, /The robot owns the current OEM PSUDO_Z_HOME/);
-  assert.match(source, /Requests below that value are clamped by the OEM moveZ contract/);
+  assert.match(source, /OEM moveZ applies the robot-owned PSUDO_Z_HOME as a dynamic minimum target/);
+  assert.match(source, /A request below the current value is replaced with that value before dispatch/);
+  assert.match(source, /Z does not automatically return to pseudo-home after every movement/);
+  assert.match(source, /Z Clear returns to the selected pseudo-home/);
+  assert.match(source, /Manual Home follows the OEM homing sequence and establishes controller coordinate 0/);
   assert.doesNotMatch(source, /Tips loaded · 500/);
   assert.doesNotMatch(source, /No tips · 65,000/);
 });
