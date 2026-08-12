@@ -20,6 +20,7 @@ import {
 } from '../lib/ngsAlignmentViewer';
 import { fetchAlignmentSessions, type AlignmentSession } from '../lib/ngsAlignmentSession';
 import {
+    isNgsJob,
     ngsJobShouldPoll,
     ngsToolkitSearchForView,
     ngsToolkitViewFromSearch,
@@ -2209,17 +2210,13 @@ export function NGSToolkit() {
         error: jobsQueryError,
     } = useQuery({
         queryKey: ['jobs', 'ngs'],
-        queryFn: () => fetchJobs({ include_children: true, model_id: 'nanopore', limit: 100, summary: true }),
+        queryFn: () => fetchJobs({ include_children: true, limit: 100, summary: true }),
         refetchInterval: (query) => jobPollingInterval(5000, query),
     });
 
     const nanoporeJobs = useMemo(() => {
         const jobs = jobsData?.data.jobs || [];
-        return jobs.filter((j) =>
-            j.model_id === 'nanopore' ||
-            j.mode === 'methylation_analysis' ||
-            j.mode === 'nanopore_methylation'
-        );
+        return jobs.filter(isNgsJob);
     }, [jobsData]);
 
     const filteredJobs = useMemo(() => {
