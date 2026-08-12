@@ -99,6 +99,8 @@ describe('completed NGS result routing', () => {
         for (const modelId of ['ont_fastq_qc', 'ont_plasmid_qc', 'ont_construct_screening', 'wf_clone_validation']) {
             expect(isNgsJob({ model_id: modelId, mode: 'completed' })).toBe(true);
         }
+        expect(isNgsJob({ model_id: 'mynanopore', mode: 'ont_fastq_qc' })).toBe(false);
+        expect(isNgsJob({ model_id: 'unrelated', mode: 'nanopore_methylation' })).toBe(false);
         expect(ngsResultHref('job 123')).toBe('/ngs?section=analyses&job_id=job%20123');
         expect(ngsResultHref(
             'job 123',

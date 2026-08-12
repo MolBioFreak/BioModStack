@@ -8,14 +8,7 @@ export type NgsToolkitView = 'launch' | 'instrument' | 'runs';
 
 export function isNgsJob(job: Pick<NgsJobRouteIdentity, 'model_id' | 'mode'>): boolean {
     const modelId = (job.model_id || '').toLowerCase();
-    const mode = (job.mode || '').toLowerCase();
-    return (
-        modelId === 'nanopore'
-        || modelId.includes('nanopore')
-        || ['ont_fastq_qc', 'ont_plasmid_qc', 'ont_construct_screening', 'wf_clone_validation'].includes(modelId)
-        || mode === 'methylation_analysis'
-        || mode === 'nanopore_methylation'
-    );
+    return ['nanopore', 'ont_fastq_qc', 'ont_plasmid_qc', 'ont_construct_screening', 'wf_clone_validation'].includes(modelId);
 }
 
 export function ngsResultHref(jobId: string, currentSearch = ''): string {
