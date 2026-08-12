@@ -69,9 +69,10 @@ def _v2_inputs(
     residues: list[tuple[str, int]],
     selected: list[tuple[str, int]],
     thresholds: tuple[float, float] = (-0.5, 0.5),
+    source_suffix: bytes = b"",
 ) -> tuple[dict[str, object], Path, Path, dict[str, object]]:
     source = tmp_path / "source.pdb"
-    source.write_bytes(_multi_residue_pdb(residues))
+    source.write_bytes(_multi_residue_pdb(residues) + source_suffix)
     normalized = tmp_path / "normalized_input.pdb"
     structure_map_path = tmp_path / "frustrampnn_structure_map_v1.json"
     structure_map = normalize_structure(

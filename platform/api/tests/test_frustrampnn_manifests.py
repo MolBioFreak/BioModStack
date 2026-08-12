@@ -244,6 +244,7 @@ def _v2_bundle(root: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[dict, Path]
         inputs,
         residues=[("A", 1)],
         selected=[("A", 0)],
+        source_suffix=b"REMARK original-source-only metadata\n",
     )
     _mock_v2_runtime(component, monkeypatch, inputs)
     manifest = component.run_component(
@@ -419,7 +420,7 @@ def test_atomic_publisher_accepts_complete_v2_and_preserves_original_source_auth
     allowed = tmp_path / "published"
     canonical_source = allowed / "inputs/original.pdb"
     canonical_source.parent.mkdir(parents=True)
-    canonical_source.write_bytes(original_source.read_bytes())
+    canonical_source.write_bytes((source_bundle / "normalized_input.pdb").read_bytes())
     destination = allowed / "frustrampnn/results/candidate-v2"
     marker = tmp_path / "v2-published.json"
 
@@ -436,7 +437,7 @@ def test_atomic_publisher_accepts_complete_v2_and_preserves_original_source_auth
         "source": "inputs/original.pdb",
         "statistics": "frustrampnn/results/candidate-v2/frustrampnn_statistics_v1.json",
     }
-    assert canonical_source.read_bytes() == original_source.read_bytes()
+    assert canonical_source.read_bytes() == (source_bundle / "normalized_input.pdb").read_bytes()
     assert canonical_json_loads(marker.read_bytes()) == result
     manifest_bytes = (source_bundle / "frustrampnn_result_manifest_v2.json").read_bytes()
     assert (allowed / result["manifest"]).read_bytes() == manifest_bytes
@@ -479,7 +480,7 @@ def test_atomic_publisher_rejects_incomplete_or_mixed_v2_bundle(
     allowed = tmp_path / "published"
     canonical_source = allowed / "inputs/original.pdb"
     canonical_source.parent.mkdir(parents=True)
-    canonical_source.write_bytes(original_source.read_bytes())
+    canonical_source.write_bytes((source_bundle / "normalized_input.pdb").read_bytes())
     destination = allowed / "frustrampnn/results/candidate-v2"
     marker = tmp_path / "must-not-exist.json"
 
@@ -549,7 +550,7 @@ def test_atomic_publisher_rejects_tampered_or_rehashed_inconsistent_v2_statistic
     allowed = tmp_path / "published"
     canonical_source = allowed / "inputs/original.pdb"
     canonical_source.parent.mkdir(parents=True)
-    canonical_source.write_bytes(original_source.read_bytes())
+    canonical_source.write_bytes((source_bundle / "normalized_input.pdb").read_bytes())
     destination = allowed / "frustrampnn/results/candidate-v2"
     marker = tmp_path / "must-not-exist.json"
 
