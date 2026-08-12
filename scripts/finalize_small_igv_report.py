@@ -50,6 +50,12 @@ ALLOWED_SHELL_RESOURCES = frozenset(
 URL_ATTRIBUTES = frozenset({"src", "href", "poster", "action", "formaction", "data", "srcset", "xlink:href"})
 IGV_REPORT_INLINE_SCRIPT_SHA256 = "389b3ee1a0204ad4c0f578a396dc7bde725e8f86de36bbc13f172f556b0999fc"
 INLINE_JSON_PREFIXES = ("const tableJson = ", "const locusDictionary = ", OPTIONS_PREFIX)
+ALLOWED_NORMALIZED_REPORT_SHA256 = frozenset(
+    {
+        "9749be0e531af9e0703f47c5b4aa4227ff60e30d89ee8d1eaf01b6c75a215692",
+        "bb8ab62a8e16fcecc959b268e6bdb4e636323f470b86a2f4b4e499cc4f8c4e38",
+    }
+)
 
 
 class _ResourceParser(HTMLParser):
@@ -90,7 +96,7 @@ class _ResourceParser(HTMLParser):
                 if value is None or normalized == "srcset":
                     raise ValueError("IGV report contains an unsupported HTML resource attribute")
                 self.resources.add(value)
-            if normalized.startswith("on"):
+            if normalized == "srcdoc" or normalized.startswith("on"):
                 raise ValueError("IGV report contains an undeclared HTML resource")
             if normalized == "style" and value and re.search(r"(?:url\s*\(|@import)", value, re.IGNORECASE):
                 raise ValueError("IGV report contains an undeclared HTML resource")
@@ -127,6 +133,28 @@ def _validate_inline_scripts(scripts: list[str]) -> None:
     normalized = "\n".join(normalized_lines)
     if hashlib.sha256(normalized.encode("utf-8")).hexdigest() != IGV_REPORT_INLINE_SCRIPT_SHA256:
         raise ValueError("IGV report contains an unexpected inline script")
+
+
+def _validate_report_template(text: str) -> None:
+    normalized_lines: list[str] = []
+    observed_prefixes: list[str] = []
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        prefix = next((candidate for candidate in INLINE_JSON_PREFIXES if stripped.startswith(candidate)), None)
+        if prefix is None:
+            normalized_lines.append(line)
+            continue
+        try:
+            json.loads(stripped[len(prefix):])
+        except json.JSONDecodeError as exc:
+            raise ValueError("IGV report template contains invalid JSON") from exc
+        observed_prefixes.append(prefix)
+        normalized_lines.append(f"<{prefix}JSON>")
+    if observed_prefixes not in ([OPTIONS_PREFIX], list(INLINE_JSON_PREFIXES)):
+        raise ValueError("IGV report does not match the approved template")
+    normalized = "\n".join(normalized_lines)
+    if hashlib.sha256(normalized.encode("utf-8")).hexdigest() not in ALLOWED_NORMALIZED_REPORT_SHA256:
+        raise ValueError("IGV report does not match the approved template")
 
 
 def _shell_resources(text: str) -> set[str]:
@@ -283,6 +311,7 @@ def finalize_report(
     observed_urls = _declared_urls(options["reference"], options["tracks"])
     if observed_urls != declared_urls:
         raise ValueError("IGV report resources do not match declared inputs")
+    _validate_report_template(text)
 
     newline = "\r\n" if line.endswith("\r\n") else "\n"
     lines[option_index] = (
