@@ -10,6 +10,7 @@ import mimetypes
 import json
 import os
 import shutil
+import stat
 from typing import Iterator
 
 from schemas import DirectoryListing, DirectoryEntry
@@ -20,6 +21,37 @@ from paths import (
 )
 
 router = APIRouter()
+
+
+def _read_json_nofollow(path: Path, *, max_bytes: int = 10 * 1024 * 1024) -> dict:
+    descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        absolute = Path(os.path.abspath(path))
+        for index, component in enumerate(absolute.parts[1:]):
+            final = index == len(absolute.parts[1:]) - 1
+            flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+            if not final:
+                flags |= os.O_DIRECTORY
+            next_descriptor = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = next_descriptor
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > max_bytes:
+            raise ValueError("manifest is unsafe")
+        raw = b""
+        while len(raw) <= max_bytes:
+            chunk = os.read(descriptor, min(1024 * 1024, max_bytes + 1 - len(raw)))
+            if not chunk:
+                break
+            raw += chunk
+        if len(raw) > max_bytes:
+            raise ValueError("manifest is too large")
+        payload = json.loads(raw.decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("manifest root is invalid")
+        return payload
+    finally:
+        os.close(descriptor)
 
 
 def _parse_byte_range(range_header: str, file_size: int) -> tuple[int, int]:
@@ -145,7 +177,7 @@ def _is_governed_ngs_artifact(path: Path) -> bool:
         if not manifest.is_file() or manifest.is_symlink():
             continue
         try:
-            payload = json.loads(manifest.read_text(encoding="utf-8"))
+            payload = _read_json_nofollow(manifest)
             if payload.get("schema") == "sequence_qc.manifest.v1":
                 return True
         except (OSError, ValueError, json.JSONDecodeError):

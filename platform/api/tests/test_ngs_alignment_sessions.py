@@ -561,7 +561,7 @@ def test_manifest_schema_and_job_binding_are_required(
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     payload["job_id"] = "job-b"
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")
-    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
+    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_args, **_kwargs: (True, None))
 
     sessions = service.build_alignment_sessions("job-a", source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)
     primary = next(item for item in sessions if item["mode"] == "primary")
@@ -577,7 +577,7 @@ def test_manifest_workflow_and_input_mode_must_match_authorized_job_provenance(
 
     manifest_dir = tmp_path / "job-a" / "fastq_qc"
     _write_manifest(manifest_dir)
-    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
+    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_args, **_kwargs: (True, None))
 
     sessions = service.build_alignment_sessions(
         "job-a",
@@ -605,7 +605,7 @@ def test_canonical_input_modes_can_become_ready(
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     payload["input_mode"] = input_mode
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")
-    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
+    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_args, **_kwargs: (True, None))
 
     sessions = service.build_alignment_sessions(
         "job-a",
@@ -630,7 +630,7 @@ def test_duplicate_artifact_role_is_fail_closed(
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     payload["artifacts"].append(dict(payload["artifacts"][2]))
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")
-    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
+    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_args, **_kwargs: (True, None))
 
     sessions = service.build_alignment_sessions("job-a", source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)
     primary = next(item for item in sessions if item["mode"] == "primary")
@@ -659,7 +659,7 @@ def test_manifest_schema_version_is_fail_closed(
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     payload[field] = value
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")
-    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
+    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_args, **_kwargs: (True, None))
 
     sessions = service.build_alignment_sessions("job-a", source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)
     primary = next(item for item in sessions if item["mode"] == "primary")
@@ -680,7 +680,7 @@ def test_generic_artifact_resolution_rejects_unready_manifest_artifact(
     alignment = next(item for item in payload["artifacts"] if item["kind"] == "alignment_bam")
     alignment["sha256"] = "0" * 64
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")
-    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
+    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_args, **_kwargs: (True, None))
 
     sessions = service.build_alignment_sessions("job-a", source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)
     primary = next(item for item in sessions if item["mode"] == "primary")
@@ -695,7 +695,7 @@ def test_primary_session_is_opaque_job_scoped_and_ready(tmp_path: Path, monkeypa
     from services import ngs_alignment_sessions as service
 
     _write_manifest(tmp_path / "job-a" / "fastq_qc")
-    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
+    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_args, **_kwargs: (True, None))
 
     sessions = service.build_alignment_sessions("job-a", source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)
     primary = next(item for item in sessions if item["mode"] == "primary")
@@ -724,7 +724,7 @@ def test_dimer_kind_cannot_enter_primary_or_contradict_declared_mode(
     payload["artifacts"][2]["kind"] = "dimer_alignment_bam"
     payload["artifacts"][3]["kind"] = "dimer_alignment_bai"
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")
-    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
+    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_args, **_kwargs: (True, None))
 
     sessions = service.build_alignment_sessions("job-a", source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)
     primary = next(item for item in sessions if item["mode"] == "primary")
@@ -746,7 +746,7 @@ def test_explicit_primary_mode_rejects_dimer_path_heuristic_conflict(
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     payload["alignment_session"]["mode"] = "primary"
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")
-    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
+    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_args, **_kwargs: (True, None))
 
     sessions = service.build_alignment_sessions("job-a", source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)
     primary = next(item for item in sessions if item["mode"] == "primary")
@@ -767,7 +767,7 @@ def test_persisted_production_output_directory_resolves_sessions_and_stays_confi
     output_dir = results / "submitted-name_20260719_040000"
     _write_manifest(output_dir / "fastq_qc", job_id="opaque-job-uuid")
     monkeypatch.setattr(service, "get_results_dir", lambda: results)
-    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
+    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_args, **_kwargs: (True, None))
 
     sessions = service.build_alignment_sessions(
         "opaque-job-uuid",
@@ -876,7 +876,7 @@ def test_manifest_assigns_distinct_opaque_roles_without_treating_generic_coverag
             }
         )
     (manifest_dir / "qc_manifest.json").write_text(json.dumps(payload), encoding="utf-8")
-    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
+    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_args, **_kwargs: (True, None))
 
     primary = service.build_alignment_sessions("job-a", source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)[0]
 
@@ -907,7 +907,7 @@ def test_primary_never_mixes_dimer_sidecars(tmp_path: Path, monkeypatch: pytest.
 
     _write_manifest(tmp_path / "job-a" / "fastq_qc", prefix="aligned")
     _write_manifest(tmp_path / "job-a" / "dimer_qc", prefix="dimer_candidates")
-    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
+    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_args, **_kwargs: (True, None))
 
     sessions = service.build_alignment_sessions("job-a", source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)
     primary = next(item for item in sessions if item["mode"] == "primary")
@@ -926,7 +926,7 @@ def test_artifact_id_cannot_cross_jobs_or_accept_path_injection(
 
     _write_manifest(tmp_path / "job-a" / "fastq_qc")
     _write_manifest(tmp_path / "job-b" / "fastq_qc")
-    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
+    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_args, **_kwargs: (True, None))
     artifact_id = service.build_alignment_sessions("job-a", source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)[0]["artifacts"]["alignment"][
         "artifact_id"
     ]
@@ -946,7 +946,7 @@ def test_symlink_or_special_file_never_becomes_ready(tmp_path: Path, monkeypatch
     _write_manifest(manifest_dir)
     (manifest_dir / "aligned.bam").unlink()
     (manifest_dir / "aligned.bam").symlink_to(target)
-    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
+    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_args, **_kwargs: (True, None))
 
     primary = service.build_alignment_sessions("job-a", source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)[0]
     assert primary["ready"] is False
@@ -976,7 +976,7 @@ def test_semantic_role_resolver_requires_ready_exact_mode_role_and_digest(
     from services import ngs_alignment_sessions as service
 
     _write_manifest(tmp_path / "job-a" / "fastq_qc")
-    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
+    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_args, **_kwargs: (True, None))
     primary = service.build_alignment_sessions("job-a", source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)[0]
     alignment = primary["artifacts"]["alignment"]
 
@@ -1908,7 +1908,7 @@ def test_manifest_declared_integrity_is_preserved_and_mismatch_is_not_ready(
         artifact["size_bytes"] = path.stat().st_size
     payload["artifacts"][2]["sha256"] = "0" * 64
     (manifest_dir / "qc_manifest.json").write_text(json.dumps(payload), encoding="utf-8")
-    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
+    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_args, **_kwargs: (True, None))
 
     primary = service.build_alignment_sessions("job-a", source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)[0]
 

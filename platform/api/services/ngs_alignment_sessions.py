@@ -735,8 +735,19 @@ def _fasta_contigs_from_handle(handle: BinaryIO) -> tuple[dict[str, tuple[int, s
     return contigs, bytes(normalized_reference)
 
 
-def _fasta_contigs(reference: Path) -> dict[str, tuple[int, str]]:
-    handle = _open_regular_file_no_symlinks(reference)
+def _fasta_contigs(
+    reference: Path,
+    *,
+    expected_sha256: str | None = None,
+    expected_size: int | None = None,
+) -> dict[str, tuple[int, str]]:
+    if expected_sha256 is None or expected_size is None:
+        expected_sha256, expected_size = _sha256_file_and_size(reference)
+    handle = open_verified_artifact_snapshot(
+        reference,
+        expected_size=expected_size,
+        expected_sha256=expected_sha256,
+    )
     try:
         contigs, _normalized_reference = _fasta_contigs_from_handle(handle)
         return contigs
@@ -751,13 +762,22 @@ def _validate_alignment_bundle(
     manifest_reference_sha256: str | None,
     source_reference_sha256: str | None = None,
     mode: str = "primary",
+    bam_sha256: str | None = None,
+    bam_size: int | None = None,
+    index_sha256: str | None = None,
+    index_size: int | None = None,
+    reference_sha256: str | None = None,
+    reference_size: int | None = None,
 ) -> tuple[bool, str | None]:
     samtools = _samtools_command()
     snapshots: list[BinaryIO] = []
     try:
-        bam_sha256, bam_size = _sha256_file_and_size(bam)
-        index_sha256, index_size = _sha256_file_and_size(index)
-        reference_sha256, reference_size = _sha256_file_and_size(reference)
+        if bam_sha256 is None or bam_size is None:
+            bam_sha256, bam_size = _sha256_file_and_size(bam)
+        if index_sha256 is None or index_size is None:
+            index_sha256, index_size = _sha256_file_and_size(index)
+        if reference_sha256 is None or reference_size is None:
+            reference_sha256, reference_size = _sha256_file_and_size(reference)
         bam_snapshot = open_verified_artifact_snapshot(bam, expected_size=bam_size, expected_sha256=bam_sha256)
         snapshots.append(bam_snapshot)
         index_snapshot = open_verified_artifact_snapshot(index, expected_size=index_size, expected_sha256=index_sha256)
@@ -929,6 +949,12 @@ def _session_records(
                 bundle["alignment"].get("reference_sequence_sha256"),
                 source_reference_sha256,
                 mode,
+                bam_sha256=artifacts["alignment"]["sha256"],
+                bam_size=artifacts["alignment"]["size_bytes"],
+                index_sha256=artifacts["alignment_index"]["sha256"],
+                index_size=artifacts["alignment_index"]["size_bytes"],
+                reference_sha256=artifacts["reference"]["sha256"],
+                reference_size=artifacts["reference"]["size_bytes"],
             )
             if not valid:
                 errors.append(reason or "alignment bundle validation failed")
@@ -936,7 +962,11 @@ def _session_records(
         reference_artifact = artifacts.get("reference")
         if reference_artifact is not None:
             try:
-                reference_contigs = _fasta_contigs(reference_artifact["_path"])
+                reference_contigs = _fasta_contigs(
+                    reference_artifact["_path"],
+                    expected_sha256=reference_artifact["sha256"],
+                    expected_size=reference_artifact["size_bytes"],
+                )
                 if len(reference_contigs) == 1:
                     reference_contig = next(iter(reference_contigs))
                 elif not errors:

@@ -274,6 +274,8 @@ async def get_job_scoped_sequence_qc_manifest(
             expected_input_mode=authority["input_mode"],
             expected_analysis_status="completed",
         )
+    except service.AlignmentSessionError as exc:
+        raise _http_error(exc) from exc
     except (JobResultRootError, SequenceQcManifestError) as exc:
         raise _http_error(service.AlignmentSessionError(str(exc))) from exc
 
