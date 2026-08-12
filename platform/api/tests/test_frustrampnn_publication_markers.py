@@ -51,10 +51,10 @@ def _published_v2(
     job_root = tmp_path / "job"
     bundle = job_root / "frustrampnn/results/candidate"
     bundle.parent.mkdir(parents=True)
-    _, original_source = _v2_bundle(bundle, monkeypatch)
+    _v2_bundle(bundle, monkeypatch)
     canonical_source = job_root / "inputs/original.pdb"
     canonical_source.parent.mkdir(parents=True)
-    canonical_source.write_bytes(original_source.read_bytes())
+    canonical_source.write_bytes((bundle / "normalized_input.pdb").read_bytes())
     return job_root, {
         "manifest": "frustrampnn/results/candidate/frustrampnn_result_manifest_v2.json",
         "result": "frustrampnn/results/candidate/workflow_component_result_v2.json",
