@@ -65,6 +65,7 @@ from services.proteinbase_importer import import_proteinbase_bundle
 from services.rfd3_local_redesign import (
     normalize_local_redesign_params,
     materialize_local_redesign_request,
+    prepare_local_redesign_scheduler_params,
 )
 from services.global_experiments.launch_contexts import (
     LaunchContextError,
@@ -74,6 +75,7 @@ from services.global_experiments.launch_contexts import (
     resolve_launch_context,
     resolve_launch_context_for_display,
     validate_bound_job,
+    validate_bound_job_request,
     workflow_pinned_gpu,
 )
 from scripts.rfd3_local_redesign.contract import ContractError, request_sha256
@@ -5271,6 +5273,7 @@ async def _create_job(
     _commit: Any = Depends(lambda: True),
     _md_output_creation: Any = Depends(lambda: None),
     _md_input_resolver: Any = Depends(lambda: None),
+    _trusted_workflow_adapter: Any = Depends(lambda: False),
 ):
     """Create and queue a new pipeline job."""
     require_molecular_dynamics_feature(job_data.model_id)
@@ -5291,6 +5294,13 @@ async def _create_job(
     normalized_model_id = str(job_data.model_id or "").strip().lower()
     normalized_mode = str(job_data.mode or "").strip().lower()
     if normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign":
+        if "workflow_adapter" in (job_data.params or {}) and _trusted_workflow_adapter is not True:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "local_redesign_contract_error": "workflow_adapter is server-owned for native RFD3"
+                },
+            )
         pinned_gpu = job_data.pinned_gpu
         if isinstance(pinned_gpu, bool) or not isinstance(pinned_gpu, int) or pinned_gpu < 0:
             raise HTTPException(
@@ -5301,16 +5311,18 @@ async def _create_job(
                     )
                 },
             )
-        from routers.gpu import _valid_gpu_indices_for_mutation
+        from routers.gpu import get_gpu_stats_with_error
 
-        valid_gpu_indices = _valid_gpu_indices_for_mutation()
-        if pinned_gpu not in valid_gpu_indices:
+        live_gpus, gpu_error = await asyncio.to_thread(get_gpu_stats_with_error, True)
+        valid_gpu_indices = sorted({int(gpu.index) for gpu in live_gpus})
+        if gpu_error or pinned_gpu not in valid_gpu_indices:
             raise HTTPException(
                 status_code=422,
                 detail={
-                    "local_redesign_contract_error": "native RFD3 pinned_gpu is absent from the live physical GPU inventory",
+                    "local_redesign_contract_error": "native RFD3 pinned_gpu is absent from an error-free live physical GPU inventory",
                     "pinned_gpu": pinned_gpu,
                     "valid_gpu_indices": valid_gpu_indices,
+                    "gpu_error": gpu_error,
                 },
             )
     if normalized_model_id == "frustrampnn":
@@ -5398,10 +5410,16 @@ async def _create_job(
 
         if normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign":
             try:
-                normalized_local_params, _local_request, _local_digest = normalize_local_redesign_params(
-                    job_data.params,
-                    job_name=job_data.name,
-                )
+                if "workflow_adapter" in job_data.params:
+                    normalized_local_params = prepare_local_redesign_scheduler_params(
+                        job_data.params,
+                        job_name=job_data.name,
+                    )
+                else:
+                    normalized_local_params, _local_request, _local_digest = normalize_local_redesign_params(
+                        job_data.params,
+                        job_name=job_data.name,
+                    )
             except ContractError as exc:
                 raise HTTPException(status_code=422, detail={"local_redesign_contract_error": str(exc)}) from exc
             job_data.params = normalized_local_params
@@ -6192,13 +6210,15 @@ async def create_job(
 
     try:
         preview_context = await resolve_launch_context(experiment_session, launch_context_id)
-        expected_pinned_gpu = await workflow_pinned_gpu(experiment_session, preview_context)
-        if expected_pinned_gpu is not None and job_data.pinned_gpu != expected_pinned_gpu:
-            raise LaunchContextError(
-                "launch_context_workflow_mismatch",
-                "Job pinned GPU does not match the bound Workflow Revision.",
-                status_code=409,
-            )
+        job_data.params = await validate_bound_job_request(
+            experiment_session,
+            preview_context,
+            job_name=job_data.name,
+            model_id=job_data.model_id,
+            mode=job_data.mode,
+            params=dict(job_data.params or {}),
+            pinned_gpu=job_data.pinned_gpu,
+        )
         context, claim_token = await claim_launch_context(experiment_session, launch_context_id)
         await experiment_session.commit()
     except LaunchContextError as exc:
@@ -6214,6 +6234,9 @@ async def create_job(
                     await _project_bound_job(experiment_session, context, existing_job, binding)
                     await experiment_session.commit()
                     return JobResponse.model_validate(existing_job).model_copy(update={
+                        "params": _public_job_params(existing_job),
+                        "output_dir": _public_job_output_dir(existing_job),
+                        "pinned_gpu": existing_job.pinned_gpu,
                         "launch_context_id": context.launch_context_id,
                         "launch_context_binding": binding,
                         "return_uri": context.return_uri,
@@ -6237,6 +6260,9 @@ async def create_job(
                 await _project_bound_job(experiment_session, context, existing_job, binding)
                 await experiment_session.commit()
                 return JobResponse.model_validate(existing_job).model_copy(update={
+                    "params": _public_job_params(existing_job),
+                    "output_dir": _public_job_output_dir(existing_job),
+                    "pinned_gpu": existing_job.pinned_gpu,
                     "launch_context_id": context.launch_context_id,
                     "launch_context_binding": binding,
                     "return_uri": context.return_uri,
@@ -6251,6 +6277,8 @@ async def create_job(
             _preallocated_job_id,
             _commit,
             _skip_parent_lineage_update,
+            None,
+            True,
         )
     except HTTPException:
         await session.rollback()

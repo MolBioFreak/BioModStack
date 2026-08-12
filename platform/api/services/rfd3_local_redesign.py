@@ -25,6 +25,82 @@ from scripts.rfd3_local_redesign.contract import (
 )
 
 
+RFD3_WORKFLOW_ADAPTER_ID = "bms.core-job.protein_local_redesign.adapter.v1"
+RFD3_SCIENTIFIC_PARAM_KEYS = {
+    "input_structure",
+    "input_pdb",
+    "input_cif",
+    "input",
+    "redesign_mode",
+    "design_chains",
+    "context_chains",
+    "redesign_ranges",
+    "region_mode",
+    "sequence_policy",
+    "insertion_anchor",
+    "insertion_min_length",
+    "insertion_max_length",
+    "partial_t",
+    "ligand",
+    "select_hotspots",
+    "select_hbond_donor",
+    "select_hbond_acceptor",
+    "num_designs",
+    "seed",
+    "dump_trajectories",
+    "write_full_json",
+    "profile_id",
+    "source_residue_identities",
+    "rfd3_request",
+}
+
+
+def local_redesign_requests_semantically_equal(
+    left: Mapping[str, Any],
+    right: Mapping[str, Any],
+) -> bool:
+    """Compare scientific request meaning across task-owned paths and display names."""
+    left_semantic = deepcopy(dict(left))
+    right_semantic = deepcopy(dict(right))
+    for request in (left_semantic, right_semantic):
+        request.pop("job_name", None)
+        input_binding = request.get("input")
+        if isinstance(input_binding, dict):
+            input_binding.pop("path", None)
+    return left_semantic == right_semantic
+
+
+def prepare_local_redesign_scheduler_params(
+    params: Mapping[str, Any],
+    *,
+    job_name: str,
+    expected_adapter_id: str = RFD3_WORKFLOW_ADAPTER_ID,
+) -> dict[str, Any]:
+    """Bind typed scheduler intent to one source-derived native RFD3 request."""
+    scientific_params = dict(params)
+    adapter_id = scientific_params.pop("workflow_adapter", None)
+    if adapter_id != expected_adapter_id:
+        raise ContractError("native RFD3 scheduler has no authoritative workflow adapter")
+    normalized, request, _digest = normalize_local_redesign_params(
+        scientific_params,
+        job_name=job_name,
+    )
+    prepared = dict(scientific_params)
+    prepared["sequence_policy"] = normalized["sequence_policy"]
+    prepared["write_full_json"] = normalized["write_full_json"]
+    prepared["rfd3_request"] = request
+    prepared["workflow_adapter"] = expected_adapter_id
+    return prepared
+
+
+def project_local_redesign_scheduler_params(params: Mapping[str, Any]) -> dict[str, Any]:
+    """Project persisted native parameters back to an executable typed workflow intent."""
+    projected_keys = RFD3_SCIENTIFIC_PARAM_KEYS - {"input", "input_pdb", "input_cif", "rfd3_request"}
+    projected = {key: deepcopy(value) for key, value in params.items() if key in projected_keys}
+    projected["workflow_adapter"] = RFD3_WORKFLOW_ADAPTER_ID
+    return projected
+
+
 async def terminalize_failed_request_for_job(
     session,
     *,
@@ -215,34 +291,7 @@ def normalize_local_redesign_params(
 ) -> tuple[dict[str, Any], dict[str, Any], str]:
     """Resolve the source and build the immutable request before queueing."""
     normalized = dict(params)
-    allowed_keys = {
-        "input_structure",
-        "input_pdb",
-        "input_cif",
-        "input",
-        "redesign_mode",
-        "design_chains",
-        "context_chains",
-        "redesign_ranges",
-        "region_mode",
-        "sequence_policy",
-        "insertion_anchor",
-        "insertion_min_length",
-        "insertion_max_length",
-        "partial_t",
-        "ligand",
-        "select_hotspots",
-        "select_hbond_donor",
-        "select_hbond_acceptor",
-        "num_designs",
-        "seed",
-        "dump_trajectories",
-        "write_full_json",
-        "profile_id",
-        "source_residue_identities",
-        "rfd3_request",
-    }
-    unexpected = sorted(str(key) for key in normalized if key not in allowed_keys)
+    unexpected = sorted(str(key) for key in normalized if key not in RFD3_SCIENTIFIC_PARAM_KEYS)
     if unexpected:
         raise ContractError(f"unsupported local-redesign parameters: {', '.join(unexpected)}")
     if normalized.get("sequence_policy") not in {None, "", "skip"}:

@@ -304,7 +304,7 @@ export function ProteinLocalRedesignTemplate({
         gpuOptions,
         isLoading: gpuCatalogLoading,
         isError: gpuCatalogError,
-    } = useLiveGpuCatalog();
+    } = useLiveGpuCatalog({ requireFresh: true });
     const isNativeLocalRedesign = submissionModelId === 'protein_local_redesign';
 
     const [jobName, setJobName] = useState('protein_local_redesign');
