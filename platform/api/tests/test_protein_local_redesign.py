@@ -480,6 +480,12 @@ def test_native_rfd3_command_uses_exact_canonical_execution_controls() -> None:
     assert "seed=${seed}" in module_text
     assert "dump_trajectories=${dumpTrajectories}" in module_text
     assert "output_full_json=${writeFullJson}" in module_text
+    assert (
+        "publishDir \"${params.out_dir}/run/rfd3\", mode: 'copy', "
+        "pattern: \"rfd3_trajectories\", saveAs: { ignored -> 'trajectories' }"
+    ) in module_text
+    assert 'pattern: "rfd3_trajectories/*.cif.gz"' not in module_text
+    assert "trajectory_inventory.json" not in module_text
 
 
 def test_native_manifest_separates_candidates_trajectories_and_runtime_evidence(tmp_path: Path) -> None:
