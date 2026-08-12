@@ -11,12 +11,14 @@ import { componentIdFromIndex } from './ligandSelectorData';
 import { ModelDocumentationLinks } from './ModelDocumentationLinks';
 import { getModelByNumber, parseStructureFile, type Chain, type ParsedPDB } from '../utils/pdbUtils';
 import { getProteinLocalRedesignUiState } from './proteinLocalRedesignUiState';
+import { useLiveGpuCatalog } from './useLiveGpuCatalog';
 
 interface ProteinLocalRedesignTemplateProps {
     onBack: () => void;
     initialValues?: Record<string, unknown>;
     submissionModelId?: string;
     submissionMode?: string;
+    requiredPinnedGpu?: number | null;
 }
 
 type RegionMode = 'manual_ranges' | 'interface_shell';
@@ -228,6 +230,9 @@ const parseOptionalNumberInput = (value: string): number | undefined => {
     const parsed = Number(trimmed);
     return Number.isFinite(parsed) ? parsed : undefined;
 };
+const parseExplicitGpuPin = (value: unknown): number | null => (
+    typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null
+);
 
 const buildSourceComplexComponents = (
     sourcePrimaryChainId: string,
@@ -291,9 +296,15 @@ export function ProteinLocalRedesignTemplate({
     initialValues,
     submissionModelId = 'protein_local_redesign',
     submissionMode = 'local_redesign',
+    requiredPinnedGpu = null,
 }: ProteinLocalRedesignTemplateProps) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
+    const {
+        gpuOptions,
+        isLoading: gpuCatalogLoading,
+        isError: gpuCatalogError,
+    } = useLiveGpuCatalog();
     const isNativeLocalRedesign = submissionModelId === 'protein_local_redesign';
 
     const [jobName, setJobName] = useState('protein_local_redesign');
@@ -334,6 +345,10 @@ export function ProteinLocalRedesignTemplate({
     const [nativeHbondAcceptors, setNativeHbondAcceptors] = useState('');
     const [nativeSeed, setNativeSeed] = useState('');
     const [nativeDumpTrajectories, setNativeDumpTrajectories] = useState(false);
+    const [nativePinnedGpu, setNativePinnedGpu] = useState<number | null>(() => (
+        parseExplicitGpuPin(initialValues?.pinned_gpu)
+    ));
+    const effectiveNativePinnedGpu = requiredPinnedGpu ?? nativePinnedGpu;
 
     const [rfdMinHelices, setRfdMinHelices] = useState('');
     const [rfdMaxHelices, setRfdMaxHelices] = useState('');
@@ -417,6 +432,8 @@ export function ProteinLocalRedesignTemplate({
         if (typeof initialValues.select_hbond_acceptor === 'string') setNativeHbondAcceptors(initialValues.select_hbond_acceptor);
         if (typeof initialValues.seed === 'number') setNativeSeed(String(initialValues.seed));
         if (typeof initialValues.dump_trajectories === 'boolean') setNativeDumpTrajectories(initialValues.dump_trajectories);
+        const initialPinnedGpu = parseExplicitGpuPin(initialValues.pinned_gpu);
+        if (initialPinnedGpu !== null) setNativePinnedGpu(initialPinnedGpu);
 
         if (typeof initialValues.rfd_min_helices === 'number') setRfdMinHelices(String(initialValues.rfd_min_helices));
         if (typeof initialValues.rfd_max_helices === 'number') setRfdMaxHelices(String(initialValues.rfd_max_helices));
@@ -427,6 +444,7 @@ export function ProteinLocalRedesignTemplate({
         if (typeof initialValues.rfd_min_rog === 'number') setRfdMinRog(String(initialValues.rfd_min_rog));
         if (typeof initialValues.rfd_max_rog === 'number') setRfdMaxRog(String(initialValues.rfd_max_rog));
     }, [initialValues]);
+
 
     useEffect(() => {
         if (runBoltzValidation) return;
@@ -799,6 +817,16 @@ export function ProteinLocalRedesignTemplate({
             setError('Choose a source complex before submitting.');
             return;
         }
+        if (isNativeLocalRedesign) {
+            if (effectiveNativePinnedGpu === null) {
+                setError('Choose one physical GPU for native RFD3 before submitting.');
+                return;
+            }
+            if (!gpuOptions.some((gpu) => gpu.index === effectiveNativePinnedGpu)) {
+                setError('The selected native RFD3 GPU is absent from the live GPU inventory.');
+                return;
+            }
+        }
 
         const effectiveRanges = (manualRangesText || derivedManualRanges).trim();
         if (!isNativeLocalRedesign && regionMode === 'manual_ranges' && !effectiveRanges) {
@@ -867,6 +895,7 @@ export function ProteinLocalRedesignTemplate({
                 name: jobName.trim(),
                 model_id: 'protein_local_redesign',
                 mode: 'local_redesign',
+                pinned_gpu: effectiveNativePinnedGpu,
                 params: nativeParams,
             });
             return;
@@ -1009,10 +1038,41 @@ export function ProteinLocalRedesignTemplate({
                                     <input className="w-full rounded-lg border px-3 py-2 text-sm" style={themedInputStyle} value={nativeHbondAcceptors} onChange={(event) => setNativeHbondAcceptors(event.target.value)} placeholder="DATP_ID:N6" />
                                 </label>
                             </div>
-                            <div className="grid gap-3 md:grid-cols-2">
+                            <div className="grid gap-3 md:grid-cols-3">
                                 <label className="space-y-1 text-xs font-medium">
                                     Seed
                                     <input className="w-full rounded-lg border px-3 py-2 text-sm" style={themedInputStyle} type="number" min="0" value={nativeSeed} onChange={(event) => setNativeSeed(event.target.value)} placeholder="RFD3 default" />
+                                </label>
+                                <label className="space-y-1 text-xs font-medium">
+                                    Physical GPU (required)
+                                    <select
+                                        className="w-full rounded-lg border px-3 py-2 text-sm"
+                                        style={themedInputStyle}
+                                        value={effectiveNativePinnedGpu ?? ''}
+                                        onChange={(event) => setNativePinnedGpu(
+                                            event.target.value === '' ? null : parseExplicitGpuPin(Number(event.target.value))
+                                        )}
+                                        disabled={
+                                            requiredPinnedGpu !== null
+                                            || gpuCatalogLoading
+                                            || gpuCatalogError
+                                            || gpuOptions.length === 0
+                                        }
+                                    >
+                                        <option value="">Select GPU</option>
+                                        {gpuOptions.map((gpu) => (
+                                            <option key={gpu.index} value={gpu.index}>
+                                                GPU {gpu.index} · {gpu.label}
+                                            </option>
+                                        ))}
+                                    </select>
+                                    <span className="block text-[11px] text-[var(--text-secondary)]">
+                                        {gpuCatalogLoading
+                                            ? 'Loading the live physical GPU inventory.'
+                                            : gpuCatalogError || gpuOptions.length === 0
+                                                ? 'Live physical GPU inventory unavailable. Submission is blocked.'
+                                                : 'Scheduler assignment must match this exact physical GPU.'}
+                                    </span>
                                 </label>
                                 <div className="space-y-2 rounded-lg border px-3 py-2" style={themedMutedInsetStyle}>
                                     <label className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
@@ -1906,7 +1966,14 @@ export function ProteinLocalRedesignTemplate({
                 </button>
                 <button
                     onClick={() => void handleSubmit()}
-                    disabled={submitMutation.isPending}
+                    disabled={submitMutation.isPending || (
+                        isNativeLocalRedesign && (
+                            gpuCatalogLoading
+                            || gpuCatalogError
+                            || effectiveNativePinnedGpu === null
+                            || !gpuOptions.some((gpu) => gpu.index === effectiveNativePinnedGpu)
+                        )
+                    )}
                     className="rounded-lg border px-5 py-3 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50"
                     style={themedSelectedStyle('var(--accent-primary)')}
                 >

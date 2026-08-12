@@ -239,6 +239,15 @@ def _validate_workflow_payload(payload: dict[str, Any]) -> None:
             raise ValidationFailure("typed core workflow scheduler params must be an object")
         if scheduler["params"].get("workflow_adapter") != adapter_id:
             raise ValidationFailure("typed core workflow scheduler adapter identity disagrees")
+        if expected_model_id == "protein_local_redesign":
+            if scheduler.get("mode") != "local_redesign":
+                raise ValidationFailure("native RFD3 typed workflow requires local_redesign mode")
+            resources = scheduler.get("resources")
+            pinned_gpu = resources.get("pinned_gpu") if isinstance(resources, dict) else None
+            if isinstance(pinned_gpu, bool) or not isinstance(pinned_gpu, int) or pinned_gpu < 0:
+                raise ValidationFailure(
+                    "native RFD3 typed workflow requires scheduler.resources.pinned_gpu as a non-negative integer"
+                )
     if family == "conformational_mapping":
         stage = payload.get("stage")
         stage_by_adapter = {
@@ -2348,9 +2357,28 @@ class ExistingJobMaterializer:
             expected_mode = str(scheduler.get("mode") or "run")
             if scheduler.get("model_id") != expected_model_id:
                 raise DispatchFailure("typed workflow adapter and scheduler model_id disagree")
+            pinned_gpu: int | None = None
+            if expected_model_id == "protein_local_redesign":
+                resources = scheduler.get("resources")
+                raw_pinned_gpu = resources.get("pinned_gpu") if isinstance(resources, dict) else None
+                if (
+                    isinstance(raw_pinned_gpu, bool)
+                    or not isinstance(raw_pinned_gpu, int)
+                    or raw_pinned_gpu < 0
+                ):
+                    raise DispatchFailure("native RFD3 dispatch has no authoritative pinned GPU")
+                pinned_gpu = raw_pinned_gpu
             existing_job = await self.core_session.get(Job, attempt_id)
             if existing_job is not None:
-                if existing_job.model_id != expected_model_id or existing_job.mode != expected_mode or dict(existing_job.params or {}) != params:
+                if (
+                    existing_job.model_id != expected_model_id
+                    or existing_job.mode != expected_mode
+                    or dict(existing_job.params or {}) != params
+                    or (
+                        expected_model_id == "protein_local_redesign"
+                        and existing_job.pinned_gpu != pinned_gpu
+                    )
+                ):
                     raise DispatchFailure("preallocated Job identity conflicts with typed dispatch replay")
                 job = existing_job
             else:
@@ -2363,6 +2391,7 @@ class ExistingJobMaterializer:
                     model_id=expected_model_id,
                     mode=expected_mode,
                     params=params,
+                    pinned_gpu=pinned_gpu,
                 )
                 await _create_job(
                     request,
@@ -2386,6 +2415,7 @@ class ExistingJobMaterializer:
                     "external_model_id": job.model_id,
                     "external_mode": job.mode,
                     "external_state": job.status,
+                    "pinned_gpu": job.pinned_gpu,
                 },
             }
         if adapter_id not in self._CM_MATERIALIZERS:

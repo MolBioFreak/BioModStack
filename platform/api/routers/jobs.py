@@ -71,8 +71,10 @@ from services.global_experiments.launch_contexts import (
     claim_launch_context,
     consume_launch_context,
     release_launch_context_claim,
+    resolve_launch_context,
     resolve_launch_context_for_display,
     validate_bound_job,
+    workflow_pinned_gpu,
 )
 from scripts.rfd3_local_redesign.contract import ContractError, request_sha256
 from services.frustrampnn.settings import (
@@ -5109,6 +5111,7 @@ async def list_jobs(
             selected_loop_scope=None if summary else job.selected_loop_scope,
             provenance=None if summary else job.provenance,
             saved_selection_sets=None if summary else _serialized_saved_review_filter_sets(job),
+            pinned_gpu=job.pinned_gpu,
             current_stage=job.current_stage,
             completed_stages=completed_stages,
             stage_outputs={} if summary else stage_outputs,
@@ -5201,6 +5204,7 @@ async def import_proteinbase_bundle_job(
         selected_loop_scope=job.selected_loop_scope,
         provenance=job.provenance,
         saved_selection_sets=_serialized_saved_review_filter_sets(job),
+        pinned_gpu=job.pinned_gpu,
         current_stage=job.current_stage,
         completed_stages=job.completed_stages,
         stage_outputs=job.stage_outputs,
@@ -5286,6 +5290,29 @@ async def _create_job(
     }
     normalized_model_id = str(job_data.model_id or "").strip().lower()
     normalized_mode = str(job_data.mode or "").strip().lower()
+    if normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign":
+        pinned_gpu = job_data.pinned_gpu
+        if isinstance(pinned_gpu, bool) or not isinstance(pinned_gpu, int) or pinned_gpu < 0:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "local_redesign_contract_error": (
+                        "native RFD3 local redesign requires one explicit non-negative pinned_gpu"
+                    )
+                },
+            )
+        from routers.gpu import _valid_gpu_indices_for_mutation
+
+        valid_gpu_indices = _valid_gpu_indices_for_mutation()
+        if pinned_gpu not in valid_gpu_indices:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "local_redesign_contract_error": "native RFD3 pinned_gpu is absent from the live physical GPU inventory",
+                    "pinned_gpu": pinned_gpu,
+                    "valid_gpu_indices": valid_gpu_indices,
+                },
+            )
     if normalized_model_id == "frustrampnn":
         raise HTTPException(
             status_code=422,
@@ -5494,6 +5521,7 @@ async def _create_job(
                 selected_loop_scope=existing_child.selected_loop_scope,
                 provenance=existing_child.provenance,
                 saved_selection_sets=_serialized_saved_review_filter_sets(existing_child),
+                pinned_gpu=existing_child.pinned_gpu,
                 awaiting_input=existing_child.awaiting_input,
                 awaiting_stage=existing_child.awaiting_stage,
                 awaiting_payload=existing_child.awaiting_payload,
@@ -6112,6 +6140,7 @@ async def _create_job(
         selected_loop_scope=first_job.selected_loop_scope,
         provenance=first_job.provenance,
         saved_selection_sets=_serialized_saved_review_filter_sets(first_job),
+        pinned_gpu=first_job.pinned_gpu,
         awaiting_input=first_job.awaiting_input,
         awaiting_stage=first_job.awaiting_stage,
         awaiting_payload=first_job.awaiting_payload,
@@ -6162,6 +6191,14 @@ async def create_job(
         )
 
     try:
+        preview_context = await resolve_launch_context(experiment_session, launch_context_id)
+        expected_pinned_gpu = await workflow_pinned_gpu(experiment_session, preview_context)
+        if expected_pinned_gpu is not None and job_data.pinned_gpu != expected_pinned_gpu:
+            raise LaunchContextError(
+                "launch_context_workflow_mismatch",
+                "Job pinned GPU does not match the bound Workflow Revision.",
+                status_code=409,
+            )
         context, claim_token = await claim_launch_context(experiment_session, launch_context_id)
         await experiment_session.commit()
     except LaunchContextError as exc:
@@ -6818,6 +6855,7 @@ async def get_job(
         selected_loop_scope=job.selected_loop_scope,
         provenance=job.provenance,
         saved_selection_sets=_serialized_saved_review_filter_sets(job),
+        pinned_gpu=job.pinned_gpu,
         current_stage=job.current_stage,
         completed_stages=completed_stages,
         stage_outputs=stage_outputs,

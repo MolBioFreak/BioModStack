@@ -313,6 +313,7 @@ export interface LaunchContext {
     domain_experiment_id: string;
     workflow_id: string | null;
     workflow_revision_id: string | null;
+    pinned_gpu: number | null;
     return_uri: string;
     source_receipt_id: string;
     state: 'issued' | 'claimed' | 'consumed';
@@ -782,7 +783,9 @@ export function normalizeProjectManagerReadModel(value: unknown): ProjectManager
 
 export function parseLaunchContext(value: unknown): LaunchContext {
     const label = 'launch context';
-    const record = exactRecord(value, label, ['schema', 'launch_context_id', 'project_id', 'global_experiment_id', 'domain_experiment_id', 'workflow_id', 'workflow_revision_id', 'return_uri', 'source_receipt_id', 'state', 'issued_at', 'expires_at'], ['canonical_job_id', 'recovery_job_id', 'binding_receipt']);
+    const record = exactRecord(value, label, ['schema', 'launch_context_id', 'project_id', 'global_experiment_id', 'domain_experiment_id', 'workflow_id', 'workflow_revision_id', 'pinned_gpu', 'return_uri', 'source_receipt_id', 'state', 'issued_at', 'expires_at'], ['canonical_job_id', 'recovery_job_id', 'binding_receipt']);
+    const pinnedGpu = record.pinned_gpu === null ? null : requireInteger(record.pinned_gpu, `${label}.pinned_gpu`);
+    if (pinnedGpu !== null && pinnedGpu < 0) throw new Error(`${label}.pinned_gpu must be non-negative.`);
     return {
         schema: requireLiteral(record.schema, `${label}.schema`, ['bms.launch-context.v1']),
         launch_context_id: requireString(record.launch_context_id, `${label}.launch_context_id`),
@@ -791,6 +794,7 @@ export function parseLaunchContext(value: unknown): LaunchContext {
         domain_experiment_id: requireString(record.domain_experiment_id, `${label}.domain_experiment_id`),
         workflow_id: requireNullableString(record.workflow_id, `${label}.workflow_id`),
         workflow_revision_id: requireNullableString(record.workflow_revision_id, `${label}.workflow_revision_id`),
+        pinned_gpu: pinnedGpu,
         return_uri: requireString(record.return_uri, `${label}.return_uri`),
         source_receipt_id: requireString(record.source_receipt_id, `${label}.source_receipt_id`),
         state: requireLiteral(record.state, `${label}.state`, ['issued', 'claimed', 'consumed']),
