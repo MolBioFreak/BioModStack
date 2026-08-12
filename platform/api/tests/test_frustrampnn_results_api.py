@@ -20,7 +20,7 @@ from database import (
     Job,
     get_session,
 )
-from routers.frustrampnn import router
+from routers.frustrampnn import FrustraMPNNHistoricalSummaryV1Document, router
 from services.frustrampnn.analytics import comparison_compatibility_id
 from services.frustrampnn.contracts import canonical_json_bytes, load_schema
 from services.frustrampnn.manifests import MANIFEST_PATH, build_result_manifest
@@ -42,6 +42,23 @@ def _fixture_module():
 
 
 MANIFEST_FIXTURE = _fixture_module()
+
+
+def test_historical_summary_accepts_only_the_persisted_transitional_policy_identity(tmp_path: Path) -> None:
+    root = tmp_path / "historical-summary"
+    root.mkdir()
+    MANIFEST_FIXTURE._bundle(root)
+    summary = json.loads((root / "frustrampnn_summary_v1.json").read_text(encoding="utf-8"))
+    transitional_policy = {"id": "frustrampnn_threshold_v1", "high_max": -1.0, "minimal_min": 0.58}
+    summary["threshold_policy"] = transitional_policy
+    summary["threshold_policy_sha256"] = hashlib.sha256(canonical_json_bytes(transitional_policy)).hexdigest()
+    parsed = FrustraMPNNHistoricalSummaryV1Document.model_validate(summary)
+    assert parsed.root == summary
+
+    unsafe = json.loads(json.dumps(summary))
+    unsafe["threshold_policy"]["minimal_min"] = 0.59
+    with pytest.raises(ValueError):
+        FrustraMPNNHistoricalSummaryV1Document.model_validate(unsafe)
 
 
 def _bundle(

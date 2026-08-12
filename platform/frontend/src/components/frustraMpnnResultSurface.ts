@@ -1,6 +1,7 @@
 export interface FrustraMpnnSurfaceJob {
     readonly model_id?: string | null;
     readonly params?: unknown;
+    readonly frustrampnn_result_count?: number | null;
 }
 
 export interface FrustraMpnnResultContext {
@@ -20,6 +21,7 @@ const asRecord = (value: unknown): Record<string, unknown> | null => (
 export const hasFrustraMpnnResultSurface = (job: FrustraMpnnSurfaceJob | null | undefined): boolean => {
     if (!job) return false;
     if ((job.model_id ?? '').trim().toLowerCase() === 'frustrampnn') return true;
+    if (Number.isInteger(job.frustrampnn_result_count) && Number(job.frustrampnn_result_count) > 0) return true;
     return asRecord(job.params)?.run_frustrampnn === true;
 };
 

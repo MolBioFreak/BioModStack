@@ -4,7 +4,7 @@ Database models and initialization for BioModStack Control Platform.
 Uses SQLAlchemy with async SQLite.
 """
 
-from sqlalchemy import CheckConstraint, Column, String, Text, Integer, Float, Boolean, DateTime, Index, JSON, ForeignKey, ForeignKeyConstraint, UniqueConstraint, text, event, func, select
+from sqlalchemy import CheckConstraint, Column, String, Text, Integer, Float, Boolean, DateTime, Index, JSON, LargeBinary, ForeignKey, ForeignKeyConstraint, UniqueConstraint, text, event, func, select
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import Session, sessionmaker, declarative_base, relationship
 from sqlalchemy.types import TypeDecorator
@@ -937,6 +937,83 @@ class FrustraMPNNResult(Base):
     statistics_sha256 = Column(String(64), nullable=True)
     statistics_json = Column(JSON, nullable=True)
     comparison_compatibility_id = Column(String(64), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class FrustraMPNNReview(Base):
+    """Durable operator interpretation bound to persisted FrustraMPNN results."""
+
+    __tablename__ = "frustrampnn_reviews"
+    __table_args__ = (
+        Index("ix_frustrampnn_reviews_parent_job_id", "parent_job_id"),
+        Index("ix_frustrampnn_reviews_owner_job", "created_by", "parent_job_id"),
+        Index("ix_frustrampnn_reviews_created_at", "created_at"),
+    )
+
+    review_id = Column(String(36), primary_key=True)
+    parent_job_id = Column(String(36), ForeignKey("jobs.id"), nullable=False)
+    invocation_id = Column(String(128), nullable=False)
+    landscape_sha256 = Column(String(64), nullable=False)
+    effective_settings_sha256 = Column(String(64), nullable=False)
+    review_sha256 = Column(String(64), nullable=False, unique=True)
+    supersedes_review_id = Column(String(36), ForeignKey("frustrampnn_reviews.review_id"), nullable=True)
+    created_by = Column(String(128), nullable=False)
+    title = Column(String(160), nullable=False)
+    notes = Column(Text, nullable=False, default="")
+    result_references_json = Column(JSON, nullable=False)
+    selected_residues_json = Column(JSON, nullable=False, default=list)
+    filters_json = Column(JSON, nullable=False, default=dict)
+    viewer_state_json = Column(JSON, nullable=False, default=dict)
+    tags_json = Column(JSON, nullable=False, default=list)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+
+class FrustraMPNNExport(Base):
+    """Persisted bounded export over authoritative FrustraMPNN rows."""
+
+    __tablename__ = "frustrampnn_exports"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["parent_job_id", "invocation_id"],
+            ["frustrampnn_results.parent_job_id", "frustrampnn_results.invocation_id"],
+            name="fk_frustrampnn_exports_result",
+        ),
+        Index("ix_frustrampnn_exports_owner_job", "created_by", "parent_job_id"),
+    )
+
+    export_id = Column(String(36), primary_key=True)
+    review_id = Column(String(36), ForeignKey("frustrampnn_reviews.review_id"), nullable=False)
+    parent_job_id = Column(String(36), nullable=False)
+    invocation_id = Column(String(128), nullable=False)
+    created_by = Column(String(128), nullable=False)
+    format = Column(String(8), nullable=False)
+    content_sha256 = Column(String(64), nullable=False)
+    row_count = Column(Integer, nullable=False)
+    total_matching_rows = Column(Integer, nullable=False)
+    complete = Column(Boolean, nullable=False)
+    payload_json = Column(JSON, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class FrustraMPNNReviewArtifact(Base):
+    """Verified capture bytes bound to one saved FrustraMPNN review."""
+
+    __tablename__ = "frustrampnn_review_artifacts"
+    __table_args__ = (
+        Index("ix_frustrampnn_review_artifacts_owner_review", "created_by", "review_id"),
+    )
+
+    artifact_id = Column(String(36), primary_key=True)
+    review_id = Column(String(36), ForeignKey("frustrampnn_reviews.review_id"), nullable=False)
+    parent_job_id = Column(String(36), ForeignKey("jobs.id"), nullable=False)
+    created_by = Column(String(128), nullable=False)
+    role = Column(String(32), nullable=False)
+    media_type = Column(String(64), nullable=False)
+    content_sha256 = Column(String(64), nullable=False)
+    size_bytes = Column(Integer, nullable=False)
+    payload_blob = Column(LargeBinary, nullable=False)
+    generation_json = Column(JSON, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 

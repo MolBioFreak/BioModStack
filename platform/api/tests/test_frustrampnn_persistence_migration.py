@@ -288,13 +288,14 @@ def test_migration_is_idempotent_and_preserves_legacy_frustration_data(tmp_path:
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
-def test_runner_registers_frustrampnn_statistics_as_version_26_last() -> None:
+def test_runner_registers_frustrampnn_reviews_as_version_27_last() -> None:
     identities = [(migration.version, migration.name) for migration in runner.MIGRATIONS]
-    assert identities[-4:] == [
+    assert identities[-5:] == [
         (23, "add_frustrampnn_persistence"),
         (24, "add_ngs_reference_sets"),
         (25, "add_pooled_ont_reference_assignment"),
         (26, "add_frustrampnn_statistics"),
+        (27, "add_frustrampnn_reviews"),
     ]
     assert [version for version, _name in identities] == sorted(
         version for version, _name in identities

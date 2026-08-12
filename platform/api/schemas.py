@@ -118,6 +118,8 @@ class JobResponse(BaseModel):
     launch_context_id: Optional[str] = None
     launch_context_binding: Optional[dict] = None
     return_uri: Optional[str] = None
+    frustrampnn_result_count: int = 0
+    frustrampnn_reopen_destination: Optional[dict] = None
     
     model_config = ConfigDict(from_attributes=True)
     

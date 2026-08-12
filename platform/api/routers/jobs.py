@@ -37,7 +37,7 @@ from antibody_pipeline_contract import (
     normalize_antibody_artifact_class,
     normalize_antibody_pipeline_contract_version,
 )
-from database import current_launch_context_id, get_session, Job, Design, RFD3LocalRedesignRequest, RFD3LocalRedesignCandidate, RFD3LocalRedesignArtifact
+from database import current_launch_context_id, get_session, Job, Design, FrustraMPNNResult, RFD3LocalRedesignRequest, RFD3LocalRedesignCandidate, RFD3LocalRedesignArtifact
 from experiment_database import get_experiment_session
 from services.result_contracts import build_review_artifact_manifest, resolve_result_contract
 from paths import (
@@ -5021,6 +5021,17 @@ async def list_jobs(
         rows = result.all()
 
     listed_job_ids = [job.id for job, _design_count in rows]
+    frustrampnn_count_by_job: dict[str, int] = {}
+    if listed_job_ids:
+        frustrampnn_counts = await session.execute(
+            select(FrustraMPNNResult.parent_job_id, func.count(FrustraMPNNResult.invocation_id))
+            .where(FrustraMPNNResult.parent_job_id.in_(listed_job_ids))
+            .group_by(FrustraMPNNResult.parent_job_id)
+        )
+        frustrampnn_count_by_job = {
+            str(parent_job_id): int(result_count)
+            for parent_job_id, result_count in frustrampnn_counts.all()
+        }
     child_design_count_by_parent: dict[str, int] = {}
     if listed_job_ids:
         child_count_result = await session.execute(
@@ -5052,6 +5063,7 @@ async def list_jobs(
     
     job_responses = []
     for job, design_count in rows:
+        frustrampnn_result_count = frustrampnn_count_by_job.get(job.id, 0)
         completed_stages = _dedupe_preserve_order(list(job.completed_stages or []))
         stage_outputs = {} if summary else dict(job.stage_outputs or {})
         if not summary and job.status in {JobStatus.COMPLETED.value, JobStatus.AWAITING_INPUT.value}:
@@ -5104,6 +5116,11 @@ async def list_jobs(
             awaiting_stage=job.awaiting_stage,
             awaiting_payload={} if summary else job.awaiting_payload,
             decision_history=[] if summary else job.decision_history,
+            frustrampnn_result_count=frustrampnn_result_count,
+            frustrampnn_reopen_destination=(
+                {"surface": "frustrampnn-workbench", "params": {"job_id": job.id}}
+                if frustrampnn_result_count else None
+            ),
         ))
     
     return JobList(jobs=job_responses, total=total)
@@ -6753,6 +6770,9 @@ async def get_job(
     if (design_count or 0) == 0 and job.status in [JobStatus.COMPLETED.value, JobStatus.AWAITING_INPUT.value] and result_output_dir:
         design_count = count_structure_files(result_output_dir)
     completed_stages, stage_outputs = _resolve_stage_state_for_response(job)
+    frustrampnn_result_count = int((await session.execute(
+        select(func.count(FrustraMPNNResult.invocation_id)).where(FrustraMPNNResult.parent_job_id == job.id)
+    )).scalar_one())
 
     return JobResponse(
         id=job.id,
@@ -6795,6 +6815,11 @@ async def get_job(
         awaiting_stage=job.awaiting_stage,
         awaiting_payload=job.awaiting_payload,
         decision_history=job.decision_history,
+        frustrampnn_result_count=frustrampnn_result_count,
+        frustrampnn_reopen_destination=(
+            {"surface": "frustrampnn-workbench", "params": {"job_id": job.id}}
+            if frustrampnn_result_count else None
+        ),
     )
 
 

@@ -67,3 +67,11 @@ test('direct adapter uses Molstar 4.5 GRO/XTC state transforms and bounded displ
     assert.match(source, /modelIndex:\s*displayFrame/);
     assert.doesNotMatch(source, /modelIndex:\s*.*sourceFrame/);
 });
+
+test('direct presentation forwards representations and applies analytical layer visibility and opacity', () => {
+    const source = readFileSync('src/structureViewer/runtime/MolstarDirectSceneEngineAdapter.ts', 'utf8');
+    assert.match(source, /representations:\s*state\.presentation\?\.representations/);
+    assert.match(source, /activeLayer\?\.visible/);
+    assert.match(source, /opacity:\s*activeLayer\.opacity/);
+    assert.match(source, /this\.adapter\.capturePresentation\(\)/);
+});

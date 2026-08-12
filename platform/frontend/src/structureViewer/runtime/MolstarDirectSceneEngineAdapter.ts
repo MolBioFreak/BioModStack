@@ -4,7 +4,7 @@ import {
     type MolstarDirectPresentation,
     type MolstarDirectQuery,
 } from '../adapters/MolstarDirectAdapter';
-import type { StructureComponentType, StructurePresentationQuery } from '../contracts/scenePresentation.js';
+import type { StructureComponentType, StructurePresentationQuery, StructureScenePresentation } from '../contracts/scenePresentation.js';
 import type { StructureSceneState } from '../contracts/sceneState.js';
 import type { MDPlaybackState, MDSourceFrameRef } from '../contracts/mdTrajectory.js';
 import type { SpatialVolumeDescriptorV1, VolumePresentationStateV1, VolumeRegistrationV1, VolumeSegmentationV1 } from '../contracts/spatialVolumes.js';
@@ -40,19 +40,25 @@ const toDirectQuery = (query: StructurePresentationQuery): MolstarDirectQuery =>
 
 const STRUCTURE_COMPONENT_TYPES: readonly StructureComponentType[] = ['protein', 'dna', 'rna', 'ligand', 'glycan', 'ion', 'water', 'unknown'];
 
-const toDirectPresentation = (state: StructureSceneState): MolstarDirectPresentation => {
+export const toDirectPresentation = (state: StructureSceneState): MolstarDirectPresentation => {
     const visibleTypes = state.presentation?.filters?.entityTypes;
     const visible = new Set(visibleTypes ?? STRUCTURE_COMPONENT_TYPES);
     const hiddenTypes = visibleTypes === undefined
         ? []
         : STRUCTURE_COMPONENT_TYPES.filter((componentType) => !visible.has(componentType));
+    const activeLayer = [...(state.presentation?.layers ?? [])].sort((left, right) => right.order - left.order)[0];
+    const colorQueries = activeLayer && !activeLayer.visible ? [] : (state.presentation?.colorQueries ?? []);
     return {
-        colorSelections: state.presentation?.colorQueries?.map(toDirectQuery) ?? [],
+        colorSelections: colorQueries.map((query) => toDirectQuery({
+            ...query,
+            ...(activeLayer?.visible ? { opacity: activeLayer.opacity } : {}),
+        })),
         tooltipSelections: state.presentation?.tooltipQueries?.map(toDirectQuery) ?? [],
         hiddenSelections: [
             ...(state.presentation?.hiddenQueries?.map(toDirectQuery) ?? []),
             ...(hiddenTypes.length > 0 ? [{ component_types: hiddenTypes }] : []),
         ],
+        representations: state.presentation?.representations,
         nonSelectedColor: state.presentation?.nonSelectedColor,
     };
 };
@@ -200,6 +206,10 @@ export class MolstarDirectSceneEngineAdapter implements MolstarEngineAdapter {
 
     async applyVolumeSegmentation(segmentation: VolumeSegmentationV1, signal: AbortSignal): Promise<ViewerResult<void>> {
         return this.adapter.applyVolumeSegmentation(segmentation, signal);
+    }
+
+    capturePresentation(): ViewerResult<StructureScenePresentation> {
+        return this.adapter.capturePresentation();
     }
 
     async capturePng(signal: AbortSignal): Promise<ViewerResult<Blob>> {

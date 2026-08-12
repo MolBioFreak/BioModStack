@@ -13,6 +13,7 @@ import {
     parseFrustraMpnnComparison,
     parseFrustraMpnnGuidance,
     parseFrustraMpnnResultDetail,
+    parseFrustraMpnnSavedReview,
     parseFrustraMpnnStatisticsQueryResponse,
     parseFrustraMpnnStatisticsResponse,
 } from '../src/lib/frustraMpnnApi.js';
@@ -120,6 +121,7 @@ const resultDetail = {
     runtime_identity_sha256: hashes.g,
     gpu_provenance: { physical_device_id: '0', task_visible_device_index: 0 },
     failure_class: null,
+    reopen_destination: { surface: 'frustrampnn-workbench', params: { job_id: 'job-1', invocation_id: 'invoke-1' } },
     summary: {
         schema_name: 'frustrampnn_summary', schema_version: 2,
         execution_configuration_id: 'frustrampnn_execution_configuration_v2',
@@ -851,6 +853,7 @@ test('all standard launch surfaces own one typed settings panel and the typed st
     const analysisSource = readFileSync('src/components/FrustraMpnnAnalysisControls.tsx', 'utf8');
     const uploadSource = readFileSync('src/components/FrustraMpnnUploadAnalysisPanel.tsx', 'utf8');
     const resultsViewerSource = readFileSync('src/components/ResultsViewer.tsx', 'utf8');
+    const dataViewerLandingSource = readFileSync('src/components/DataViewerLanding.tsx', 'utf8');
     const resultSource = readFileSync('src/components/FrustraMpnnResultsViewer.tsx', 'utf8');
     const handoffSource = readFileSync('src/components/FrustraMpnnCandidateHandoffPanel.tsx', 'utf8');
     const panelSource = readFileSync('src/components/frustrampnn/FrustraMpnnSettingsPanel.tsx', 'utf8');
@@ -869,7 +872,8 @@ test('all standard launch surfaces own one typed settings panel and the typed st
     assert.doesNotMatch(apiSource, /['"]\/api\/frustrampnn\/settings\/validate['"]/);
     assert.equal((analysisSource.match(/<FrustraMpnnSettingsPanel/g) || []).length, 1);
     assert.equal((uploadSource.match(/<FrustraMpnnSettingsPanel/g) || []).length, 1);
-    assert.match(resultsViewerSource, /<FrustraMpnnUploadAnalysisPanel\s+onOpenJob=\{handleSelectJob\}/);
+    assert.doesNotMatch(resultsViewerSource, /<FrustraMpnnUploadAnalysisPanel/);
+    assert.match(dataViewerLandingSource, /<FrustraMpnnUploadAnalysisPanel\s+onOpenJob=\{onSelectJob\}/);
     assert.equal((resultSource.match(/<FrustraMpnnSettingsPanel/g) || []).length, 1);
     assert.equal((handoffSource.match(/<FrustraMpnnSettingsPanel/g) || []).length, 1);
     assert.equal((structureSource.match(/<FrustraMpnnSettingsPanel/g) || []).length, 1);
@@ -887,4 +891,24 @@ test('all standard launch surfaces own one typed settings panel and the typed st
     for (const source of [analysisSource, resultSource, handoffSource, structureSource]) {
         assert.doesNotMatch(source, /raw\s*json|textarea[^>]*frustra|runtime command|scheduler field|storage path/i);
     }
+});
+
+test('saved review parser preserves the closed persisted contract and rejects nested state', () => {
+    const value = {
+        schema_name: 'frustrampnn_saved_review', schema_version: 1,
+        review_id: 'review-1', parent_job_id: 'job-1', invocation_id: 'inv-1',
+        landscape_sha256: 'a'.repeat(64), effective_settings_sha256: 'b'.repeat(64), review_sha256: 'c'.repeat(64), supersedes_review_id: null,
+        title: 'Review', notes: '',
+        result_references: [{ parent_job_id: 'job-1', invocation_id: 'inv-1' }],
+        selected_residues: [{ auth_asym_id: 'A', auth_seq_id: '42', insertion_code: '' }],
+        filters: { chain: 'A', mutation: 'W' },
+        viewer_state: { active_metric_id: 'frustrampnn-native-index', landscape_offset: 0, metric_workbench_open: true, chart_x_axis: 'sequence_index', chart_y_axis: 'score', structure_camera: null, structure_representations: [], structure_layers: [] },
+        tags: ['confirmed'], created_at: '2026-08-11T00:00:00',
+    };
+    assert.deepEqual(parseFrustraMpnnSavedReview(value), value);
+    assert.throws(() => parseFrustraMpnnSavedReview({ ...value, viewer_state: [] }), /must be an object/);
+    assert.throws(() => parseFrustraMpnnSavedReview({ ...value, viewer_state: { ...value.viewer_state, structure_camera: { mode: 'perspective', target: [0, 1] } } }), /target/);
+    assert.throws(() => parseFrustraMpnnSavedReview({ ...value, viewer_state: { ...value.viewer_state, structure_representations: [{ representationId: 'r', documentId: 'primary', kind: 'invalid', visible: true, opacity: 1 }] } }), /kind/);
+    assert.throws(() => parseFrustraMpnnSavedReview({ ...value, viewer_state: { ...value.viewer_state, structure_layers: [{ layerId: 'l', visible: true, opacity: 2, order: 0 }] } }), /opacity/);
+    assert.throws(() => parseFrustraMpnnSavedReview({ ...value, unexpected: true }), /unknown or missing keys/);
 });

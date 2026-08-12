@@ -111,7 +111,7 @@ export function JobDetailPage() {
     }
 
     if (isConformationalMappingJob) {
-        return <ConformationalMappingViewer requestId={job.id} title={job.name} />;
+        return <ConformationalMappingViewer requestId={job.id} title={job.name} job={job} />;
     }
 
     return (

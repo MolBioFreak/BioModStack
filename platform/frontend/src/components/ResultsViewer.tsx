@@ -59,8 +59,7 @@ import MDResultsPane from './MDResultsPane';
 import RFD3LocalRedesignResultsPane from './RFD3LocalRedesignResultsPane';
 import { ConformationalMappingViewer } from './conformationalMapping/ConformationalMappingViewer';
 import FrustraMpnnAnalysisControls from './FrustraMpnnAnalysisControls';
-import FrustraMpnnUploadAnalysisPanel from './FrustraMpnnUploadAnalysisPanel';
-import FrustraMpnnResultsViewer from './FrustraMpnnResultsViewer';
+import FrustraMpnnWorkbench from './frustrampnn/FrustraMpnnWorkbench';
 import { hasFrustraMpnnResultSurface } from './frustraMpnnResultSurface';
 import { ModelIntegrationControl, useModelIntegrationConfig } from './ModelIntegrationControl';
 import {
@@ -5018,10 +5017,10 @@ export function ResultsViewer() {
         .filter((design): design is Design => Boolean(design));
 
     if (activeJob?.model_id === 'conformational_mapping' || activeJob?.model_id === 'confornets_experimental') {
-        return <ConformationalMappingViewer requestId={activeJob.id} title={activeJob.name} />;
+        return <ConformationalMappingViewer requestId={activeJob.id} title={activeJob.name} job={activeJob} />;
     }
     if (activeJob && frustraMpnnSurfaceAvailable && resultSurface === 'frustrampnn') {
-        return <FrustraMpnnResultsViewer
+        return <FrustraMpnnWorkbench
             key={activeJob.id}
             job={activeJob}
             onBack={activeJob.model_id === 'frustrampnn'
@@ -5350,10 +5349,6 @@ export function ResultsViewer() {
                             <div role="alert" className="mb-4 rounded-lg border border-amber-500/50 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
                                 {clientDerivedResultsPolicy.message}
                             </div>
-                        )}
-
-                        {activeJob && (
-                            <FrustraMpnnUploadAnalysisPanel onOpenJob={handleSelectJob} />
                         )}
 
                         {activeJob && selectedFrustraMpnnDesigns.length > 0 && (

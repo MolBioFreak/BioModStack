@@ -11,12 +11,14 @@ import logging
 import os
 import stat
 import tempfile
+from io import BytesIO
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal, Mapping, Optional
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -27,16 +29,20 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from PIL import Image, UnidentifiedImageError
 
 from database import (
     FrustraMPNNArtifact,
     FrustraMPNNComparison,
     FrustraMPNNComparisonRow,
+    FrustraMPNNExport,
     FrustraMPNNGuidancePlan,
     FrustraMPNNLandscapeRow,
     FrustraMPNNResult,
+    FrustraMPNNReview,
+    FrustraMPNNReviewArtifact,
     Job,
     get_session,
 )
@@ -57,6 +63,7 @@ from services.frustrampnn.derived import (
 )
 from services.frustrampnn.guidance import GuidanceValidationError, build_guidance_plan
 from services.frustrampnn.contracts import (
+    ContractValidationError,
     canonical_json_bytes,
     canonical_json_loads,
     canonical_sha256,
@@ -91,6 +98,7 @@ from services.frustrampnn.structure import (
     inspect_and_normalize_structure_bytes,
     read_structure_bytes,
 )
+from routers.viewer_resources import _principal
 
 router = APIRouter(prefix="/api/frustrampnn", tags=["frustrampnn"])
 logger = logging.getLogger(__name__)
@@ -131,6 +139,113 @@ class ReanalyzeRequest(BaseModel):
         if value is None:
             return None
         return validate_complete_requested_settings(value)
+
+
+class FrustraMPNNReviewResultReference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    parent_job_id: str = Field(min_length=1, max_length=36)
+    invocation_id: str = Field(min_length=1, max_length=128)
+
+
+class FrustraMPNNReviewResidue(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    auth_asym_id: str = Field(min_length=1, max_length=128)
+    auth_seq_id: str = Field(min_length=1, max_length=64)
+    insertion_code: str = Field(default="", max_length=16)
+
+
+class FrustraMPNNReviewCamera(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["perspective", "orthographic"]
+    target: tuple[float, float, float] | None = None
+    position: tuple[float, float, float] | None = None
+    up: tuple[float, float, float] | None = None
+    radius: float | None = Field(default=None, gt=0)
+
+
+class FrustraMPNNReviewRepresentation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    representationId: str = Field(min_length=1, max_length=128)
+    documentId: str = Field(min_length=1, max_length=128)
+    kind: Literal["cartoon", "surface", "ball-and-stick", "spacefill", "line", "gaussian-surface"]
+    visible: bool
+    opacity: float = Field(ge=0, le=1)
+    selectionSetId: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class FrustraMPNNReviewLayer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    layerId: str = Field(min_length=1, max_length=128)
+    metricId: str | None = Field(default=None, min_length=1, max_length=128)
+    selectionSetId: str | None = Field(default=None, min_length=1, max_length=128)
+    visible: bool
+    opacity: float = Field(ge=0, le=1)
+    order: int = Field(ge=0, le=10000)
+    palette: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class FrustraMPNNReviewViewState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    active_metric_id: str = Field(max_length=128)
+    landscape_offset: int = Field(ge=0)
+    metric_workbench_open: bool
+    chart_x_axis: str = Field(default="sequence_index", max_length=128)
+    chart_y_axis: str = Field(default="score", max_length=128)
+    structure_camera: FrustraMPNNReviewCamera | None = None
+    structure_representations: list[FrustraMPNNReviewRepresentation] = Field(default_factory=list, max_length=100)
+    structure_layers: list[FrustraMPNNReviewLayer] = Field(default_factory=list, max_length=100)
+
+
+class FrustraMPNNSavedReviewWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=160)
+    notes: str = Field(default="", max_length=20000)
+    result_references: list[FrustraMPNNReviewResultReference] = Field(min_length=1, max_length=1)
+    selected_residues: list[FrustraMPNNReviewResidue] = Field(default_factory=list, max_length=1000)
+    filters: dict[str, JsonValue] = Field(default_factory=dict)
+    viewer_state: FrustraMPNNReviewViewState
+    tags: list[str] = Field(default_factory=list, max_length=50)
+    supersedes_review_id: str | None = Field(default=None, max_length=36)
+
+    @field_validator("filters")
+    @classmethod
+    def _bounded_scalar_state(cls, value: dict[str, JsonValue]) -> dict[str, JsonValue]:
+        if len(value) > 100 or any(len(key) > 128 for key in value):
+            raise ValueError("review state exceeds bounded key limits")
+        if any(item is not None and not isinstance(item, (str, int, float, bool)) for item in value.values()):
+            raise ValueError("review state values must be scalar")
+        if len(canonical_json_bytes(value)) > 16 * 1024:
+            raise ValueError("review state must contain at most 16 KiB")
+        return value
+
+    @field_validator("tags")
+    @classmethod
+    def _validate_tags(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip() for value in values]
+        if any(not value or len(value) > 64 for value in normalized):
+            raise ValueError("tags must contain non-empty values of at most 64 characters")
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("tags must be unique")
+        return normalized
+
+
+class FrustraMPNNExportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    invocation_id: str = Field(min_length=1, max_length=128)
+    review_id: str = Field(min_length=1, max_length=36)
+    format: Literal["json", "csv"]
+    limit: int = Field(default=10_000, ge=1, le=10_000)
+    auth_asym_id: str | None = Field(default=None, max_length=128)
+    mutation_aa: str | None = Field(default=None, pattern=r"^[ACDEFGHIKLMNPQRSTVWY]$")
+    status: str | None = Field(default=None, max_length=32)
 
 
 class FrustraMPNNGpuProvenanceResponse(BaseModel):
@@ -316,8 +431,30 @@ class FrustraMPNNHistoricalSummaryV1Document(RootModel[dict[str, JsonValue]]):
     @model_validator(mode="before")
     @classmethod
     def validate_summary_schema(cls, value: Any) -> Any:
-        validate_schema("frustrampnn_summary_v1", value)
-        return value
+        try:
+            validate_schema("frustrampnn_summary_v1", value)
+            return value
+        except ContractValidationError:
+            if not isinstance(value, Mapping):
+                raise
+            threshold_policy = value.get("threshold_policy")
+            if not isinstance(threshold_policy, Mapping):
+                raise
+            if (
+                threshold_policy.get("id") != "frustrampnn_threshold_v1"
+                or threshold_policy.get("high_max") != -1.0
+                or threshold_policy.get("minimal_min") != 0.58
+            ):
+                raise
+            canonicalized_policy = {
+                **dict(threshold_policy),
+                "id": "frustrampnn_class_v1",
+            }
+            canonicalized = dict(value)
+            canonicalized["threshold_policy"] = canonicalized_policy
+            canonicalized["threshold_policy_sha256"] = canonical_sha256(canonicalized_policy)
+            validate_schema("frustrampnn_summary_v1", canonicalized)
+            return value
 
     @classmethod
     def __get_pydantic_json_schema__(
@@ -832,6 +969,7 @@ class FrustraMPNNResultItemResponse(BaseModel):
     runtime_identity_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     gpu_provenance: FrustraMPNNGpuProvenanceResponse | None = None
     failure_class: str | None
+    reopen_destination: dict[str, Any]
 
 
 class FrustraMPNNResultDetailResponse(FrustraMPNNResultItemResponse):
@@ -2736,6 +2874,10 @@ def _safe_execution_receipt(
 def _result_payload(result: FrustraMPNNResult, *, detail: bool = False) -> dict[str, Any]:
     payload = {name: getattr(result, name) for name in _RESULT_FIELDS}
     payload.update(_result_authority(result))
+    payload["reopen_destination"] = {
+        "surface": "frustrampnn-workbench",
+        "params": {"job_id": result.parent_job_id, "invocation_id": result.invocation_id},
+    }
     terminal = (
         result.terminal_result_json
         if isinstance(result.terminal_result_json, Mapping)
@@ -3609,4 +3751,396 @@ async def download_artifact(
         status_code=status_code,
         media_type=artifact.media_type,
         headers=headers,
+    )
+
+
+async def _review_authority(
+    job_id: str,
+    payload: FrustraMPNNSavedReviewWrite,
+    actor: str,
+    session: AsyncSession,
+) -> tuple[FrustraMPNNResult, FrustraMPNNArtifact, dict[str, Any], str]:
+    reference = payload.result_references[0]
+    if reference.parent_job_id != job_id:
+        raise HTTPException(status_code=422, detail="saved review result reference is not persisted for this job")
+    result = await session.get(FrustraMPNNResult, (job_id, reference.invocation_id))
+    if result is None:
+        raise HTTPException(status_code=422, detail="saved review result reference is not persisted for this job")
+    if not result.effective_settings_sha256:
+        raise HTTPException(status_code=422, detail="new saved reviews require persisted effective settings identity")
+    landscape = (await session.execute(select(FrustraMPNNArtifact).where(
+        FrustraMPNNArtifact.parent_job_id == job_id,
+        FrustraMPNNArtifact.invocation_id == reference.invocation_id,
+        FrustraMPNNArtifact.role == "landscape",
+    ))).scalar_one_or_none()
+    if landscape is None:
+        raise HTTPException(status_code=422, detail="new saved reviews require persisted landscape identity")
+    if payload.supersedes_review_id:
+        previous = await _saved_review(job_id, payload.supersedes_review_id, actor, session)
+        if previous.invocation_id != reference.invocation_id:
+            raise HTTPException(status_code=422, detail="review revision must preserve invocation authority")
+    authority = {
+        "schema_name": "frustrampnn_review_revision",
+        "schema_version": 1,
+        "parent_job_id": job_id,
+        "invocation_id": reference.invocation_id,
+        "landscape_sha256": landscape.content_sha256,
+        "effective_settings_sha256": result.effective_settings_sha256,
+        "supersedes_review_id": payload.supersedes_review_id,
+        "title": payload.title,
+        "notes": payload.notes,
+        "result_references": [reference.model_dump(mode="json")],
+        "selected_residues": [item.model_dump(mode="json") for item in payload.selected_residues],
+        "filters": payload.filters,
+        "viewer_state": payload.viewer_state.model_dump(mode="json", exclude_none=True),
+        "tags": payload.tags,
+    }
+    return result, landscape, authority, hashlib.sha256(canonical_json_bytes(authority)).hexdigest()
+
+
+def _serialize_saved_review(review: FrustraMPNNReview) -> dict[str, Any]:
+    return {
+        "schema_name": "frustrampnn_saved_review",
+        "schema_version": 1,
+        "review_id": review.review_id,
+        "parent_job_id": review.parent_job_id,
+        "invocation_id": review.invocation_id,
+        "landscape_sha256": review.landscape_sha256,
+        "effective_settings_sha256": review.effective_settings_sha256,
+        "review_sha256": review.review_sha256,
+        "supersedes_review_id": review.supersedes_review_id,
+        "title": review.title,
+        "notes": review.notes,
+        "result_references": review.result_references_json,
+        "selected_residues": review.selected_residues_json,
+        "filters": review.filters_json,
+        "viewer_state": review.viewer_state_json,
+        "tags": review.tags_json,
+        "created_at": review.created_at.isoformat(),
+    }
+
+
+async def _saved_review(job_id: str, review_id: str, actor: str, session: AsyncSession) -> FrustraMPNNReview:
+    review = await session.get(FrustraMPNNReview, review_id)
+    if review is None or review.parent_job_id != job_id or review.created_by != actor:
+        raise HTTPException(status_code=404, detail="FrustraMPNN saved review not found")
+    return review
+
+
+@router.post("/jobs/{job_id}/reviews", status_code=status.HTTP_201_CREATED)
+async def create_saved_review(
+    job_id: str,
+    payload: FrustraMPNNSavedReviewWrite,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    actor = _principal(request)
+    _result, landscape, authority, review_sha256 = await _review_authority(job_id, payload, actor, session)
+    existing = (await session.execute(select(FrustraMPNNReview).where(
+        FrustraMPNNReview.review_sha256 == review_sha256,
+        FrustraMPNNReview.created_by == actor,
+    ))).scalar_one_or_none()
+    if existing is not None:
+        return _serialize_saved_review(existing)
+    review = FrustraMPNNReview(
+        review_id=str(uuid4()), parent_job_id=job_id,
+        invocation_id=authority["invocation_id"], landscape_sha256=landscape.content_sha256,
+        effective_settings_sha256=authority["effective_settings_sha256"], review_sha256=review_sha256,
+        supersedes_review_id=payload.supersedes_review_id, created_by=actor,
+        title=payload.title, notes=payload.notes,
+        result_references_json=authority["result_references"],
+        selected_residues_json=authority["selected_residues"], filters_json=payload.filters,
+        viewer_state_json=authority["viewer_state"], tags_json=payload.tags,
+        created_at=datetime.utcnow(),
+    )
+    session.add(review)
+    await session.commit()
+    await session.refresh(review)
+    return _serialize_saved_review(review)
+
+
+@router.get("/jobs/{job_id}/reviews")
+async def list_saved_reviews(
+    job_id: str,
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    actor = _principal(request)
+    rows = (
+        await session.execute(
+            select(FrustraMPNNReview)
+            .where(
+                FrustraMPNNReview.parent_job_id == job_id,
+                FrustraMPNNReview.created_by == actor,
+            )
+            .order_by(FrustraMPNNReview.created_at.desc(), FrustraMPNNReview.review_id.asc())
+            .limit(limit)
+            .offset(offset)
+        )
+    ).scalars().all()
+    return {
+        "schema_name": "frustrampnn_saved_review_list",
+        "schema_version": 1,
+        "items": [_serialize_saved_review(row) for row in rows],
+        "next_offset": offset + len(rows) if len(rows) == limit else None,
+    }
+
+
+
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+_MAX_CAPTURE_BYTES = 10 * 1024 * 1024
+
+
+@router.post("/jobs/{job_id}/reviews/{review_id}/captures", status_code=201)
+async def create_review_capture(
+    job_id: str,
+    review_id: str,
+    request: Request,
+    expected_sha256: str = Query(pattern=r"^[0-9a-f]{64}$"),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    actor = _principal(request)
+    review = await _saved_review(job_id, review_id, actor, session)
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "image/png":
+        raise HTTPException(status_code=415, detail="FrustraMPNN review capture must be image/png")
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            declared_size = int(content_length)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="FrustraMPNN review capture content length is invalid") from exc
+        if declared_size < 1 or declared_size > _MAX_CAPTURE_BYTES:
+            raise HTTPException(status_code=413, detail="FrustraMPNN review capture exceeds the byte limit")
+    chunks: list[bytes] = []
+    size_bytes = 0
+    async for chunk in request.stream():
+        size_bytes += len(chunk)
+        if size_bytes > _MAX_CAPTURE_BYTES:
+            raise HTTPException(status_code=413, detail="FrustraMPNN review capture exceeds the byte limit")
+        chunks.append(chunk)
+    payload = b"".join(chunks)
+    if not payload or not payload.startswith(_PNG_SIGNATURE):
+        raise HTTPException(status_code=422, detail="FrustraMPNN review capture bytes are invalid")
+    try:
+        with Image.open(BytesIO(payload)) as image:
+            if image.format != "PNG":
+                raise HTTPException(status_code=422, detail="FrustraMPNN review capture must decode as PNG")
+            image.verify()
+        with Image.open(BytesIO(payload)) as image:
+            image.load()
+    except (UnidentifiedImageError, OSError, SyntaxError) as exc:
+        raise HTTPException(status_code=422, detail="FrustraMPNN review capture must decode as PNG") from exc
+    actual_sha256 = hashlib.sha256(payload).hexdigest()
+    if actual_sha256 != expected_sha256:
+        raise HTTPException(status_code=409, detail="FrustraMPNN review capture digest mismatch")
+    artifact = FrustraMPNNReviewArtifact(
+        artifact_id=str(uuid4()),
+        review_id=review.review_id,
+        parent_job_id=job_id,
+        created_by=actor,
+        role="structure_view_capture",
+        media_type="image/png",
+        content_sha256=actual_sha256,
+        size_bytes=len(payload),
+        payload_blob=payload,
+        generation_json={
+            "schema_name": "frustrampnn_review_capture",
+            "schema_version": 1,
+            "review_id": review.review_id,
+            "review_sha256": review.review_sha256,
+            "landscape_sha256": review.landscape_sha256,
+            "effective_settings_sha256": review.effective_settings_sha256,
+            "result_references": review.result_references_json,
+            "viewer_state": review.viewer_state_json,
+        },
+    )
+    session.add(artifact)
+    await session.commit()
+    return {
+        "schema_name": "frustrampnn_review_capture_receipt",
+        "schema_version": 1,
+        "artifact_id": artifact.artifact_id,
+        "review_id": artifact.review_id,
+        "parent_job_id": artifact.parent_job_id,
+        "role": artifact.role,
+        "media_type": artifact.media_type,
+        "content_sha256": artifact.content_sha256,
+        "size_bytes": artifact.size_bytes,
+        "download_url": f"/api/frustrampnn/jobs/{job_id}/reviews/{review_id}/captures/{artifact.artifact_id}",
+    }
+
+
+@router.get("/jobs/{job_id}/reviews/{review_id}/captures/{artifact_id}")
+async def download_review_capture(
+    job_id: str,
+    review_id: str,
+    artifact_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    actor = _principal(request)
+    await _saved_review(job_id, review_id, actor, session)
+    artifact = await session.get(FrustraMPNNReviewArtifact, artifact_id)
+    if artifact is None or artifact.parent_job_id != job_id or artifact.review_id != review_id or artifact.created_by != actor:
+        raise HTTPException(status_code=404, detail="FrustraMPNN review capture not found")
+    payload = bytes(artifact.payload_blob)
+    if len(payload) != artifact.size_bytes or hashlib.sha256(payload).hexdigest() != artifact.content_sha256:
+        raise HTTPException(status_code=409, detail="FrustraMPNN review capture integrity check failed")
+    return Response(
+        content=payload,
+        media_type="image/png",
+        headers={
+            "Content-Disposition": f'attachment; filename="frustrampnn-review-{review_id}-{artifact_id}.png"',
+            "X-Content-SHA256": artifact.content_sha256,
+        },
+    )
+
+
+_EXPORT_FIELDS = (
+    "target_id", "entity_instance_id", "auth_asym_id", "auth_seq_id",
+    "insertion_code", "sequence_index", "wt", "mutation_aa", "score",
+    "score_class", "scoreable", "status", "reason",
+)
+
+
+def _csv_safe(value: Any) -> str:
+    rendered = "" if value is None else str(value)
+    if rendered.lstrip("\t\r\n ").startswith(("=", "+", "-", "@")):
+        rendered = "'" + rendered
+    return '"' + rendered.replace('"', '""') + '"'
+
+
+def _export_content(export_payload: dict[str, Any], export_format: str) -> tuple[bytes, str, str]:
+    if export_format == "json":
+        return canonical_json_bytes(export_payload), "application/json", "json"
+    metadata = [
+        f"# parent_job_id={export_payload['parent_job_id']}",
+        f"# invocation_id={export_payload['invocation_id']}",
+        f"# row_count={export_payload['row_count']}",
+        f"# total_matching_rows={export_payload['total_matching_rows']}",
+        f"# complete={str(export_payload['complete']).lower()}",
+        f"# source_artifact_sha256={export_payload['source_artifact_sha256']}",
+        f"# effective_settings_sha256={export_payload['effective_settings_sha256'] or 'historical_unavailable'}",
+    ]
+    fields = list(_EXPORT_FIELDS)
+    table = [",".join(_csv_safe(field) for field in fields)]
+    table.extend(",".join(_csv_safe(row.get(field)) for field in fields) for row in export_payload["rows"])
+    return ("\n".join(metadata + table) + "\n").encode("utf-8"), "text/csv", "csv"
+
+
+@router.post("/jobs/{job_id}/exports", status_code=status.HTTP_201_CREATED)
+async def create_governed_export(
+    job_id: str,
+    payload: FrustraMPNNExportRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    actor = _principal(request)
+    review = await _saved_review(job_id, payload.review_id, actor, session)
+    if review.invocation_id != payload.invocation_id:
+        raise HTTPException(status_code=422, detail="export invocation does not match review authority")
+    result = await _scoped_result(payload.invocation_id, job_id, session)
+    filters = [
+        FrustraMPNNLandscapeRow.parent_job_id == job_id,
+        FrustraMPNNLandscapeRow.invocation_id == payload.invocation_id,
+    ]
+    for field in ("auth_asym_id", "mutation_aa", "status"):
+        value = getattr(payload, field)
+        if value is not None:
+            filters.append(getattr(FrustraMPNNLandscapeRow, field) == value)
+    total = int((await session.execute(
+        select(func.count()).select_from(FrustraMPNNLandscapeRow).where(*filters)
+    )).scalar_one())
+    rows = (await session.execute(
+        select(FrustraMPNNLandscapeRow)
+        .where(*filters)
+        .order_by(
+            FrustraMPNNLandscapeRow.entity_instance_id.asc(),
+            FrustraMPNNLandscapeRow.sequence_index.asc(),
+            FrustraMPNNLandscapeRow.mutation_aa.asc(),
+            FrustraMPNNLandscapeRow.id.asc(),
+        )
+        .limit(payload.limit)
+    )).scalars().all()
+    exported_rows = [
+        {field: getattr(row, field) for field in _EXPORT_FIELDS}
+        for row in rows
+    ]
+    export_payload = {
+        "schema_name": "frustrampnn_governed_export",
+        "schema_version": 1,
+        "parent_job_id": job_id,
+        "invocation_id": payload.invocation_id,
+        "review_id": review.review_id,
+        "review_sha256": review.review_sha256,
+        "landscape_sha256": review.landscape_sha256,
+        "candidate_id": result.candidate_id,
+        "source_artifact_sha256": result.source_artifact_sha256,
+        "manifest_sha256": result.manifest_sha256,
+        "summary_sha256": result.summary_sha256,
+        "effective_settings_sha256": result.effective_settings_sha256,
+        "filters": {field: getattr(payload, field) for field in ("auth_asym_id", "mutation_aa", "status") if getattr(payload, field) is not None},
+        "row_count": len(exported_rows),
+        "total_matching_rows": total,
+        "complete": len(exported_rows) == total,
+        "rows": exported_rows,
+    }
+    export_content, _media_type, _suffix = _export_content(export_payload, payload.format)
+    content_sha256 = hashlib.sha256(export_content).hexdigest()
+    record = FrustraMPNNExport(
+        export_id=str(uuid4()), review_id=review.review_id, parent_job_id=job_id, invocation_id=payload.invocation_id,
+        created_by=actor, format=payload.format, content_sha256=content_sha256,
+        row_count=len(exported_rows), total_matching_rows=total,
+        complete=len(exported_rows) == total, payload_json=export_payload,
+        created_at=datetime.utcnow(),
+    )
+    artifact = FrustraMPNNReviewArtifact(
+        artifact_id=str(uuid4()), review_id=review.review_id, parent_job_id=job_id,
+        created_by=actor, role=f"governed_{payload.format}_export", media_type=_media_type,
+        content_sha256=content_sha256, size_bytes=len(export_content), payload_blob=export_content,
+        generation_json={
+            "schema_name": "frustrampnn_review_export", "schema_version": 1,
+            "review_id": review.review_id, "review_sha256": review.review_sha256,
+            "landscape_sha256": review.landscape_sha256,
+            "effective_settings_sha256": review.effective_settings_sha256,
+            "query": export_payload["filters"], "row_count": len(exported_rows),
+            "total_matching_rows": total,
+        },
+    )
+    session.add_all([record, artifact])
+    await session.commit()
+    return {
+        "schema_name": "frustrampnn_export_receipt", "schema_version": 1,
+        "export_id": record.export_id, "artifact_id": artifact.artifact_id,
+        "review_id": review.review_id, "review_sha256": review.review_sha256, "parent_job_id": job_id,
+        "invocation_id": record.invocation_id, "format": record.format,
+        "content_sha256": content_sha256, "row_count": record.row_count,
+        "total_matching_rows": total, "complete": record.complete,
+        "download_url": f"/api/frustrampnn/jobs/{job_id}/exports/{record.export_id}",
+    }
+
+
+@router.get("/jobs/{job_id}/exports/{export_id}")
+async def download_governed_export(
+    job_id: str,
+    export_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    actor = _principal(request)
+    record = await session.get(FrustraMPNNExport, export_id)
+    if record is None or record.parent_job_id != job_id or record.created_by != actor:
+        raise HTTPException(status_code=404, detail="FrustraMPNN export not found")
+    content, media_type, suffix = _export_content(dict(record.payload_json), record.format)
+    if hashlib.sha256(content).hexdigest() != record.content_sha256:
+        raise HTTPException(status_code=409, detail="FrustraMPNN export byte identity is unavailable")
+    return Response(
+        content=content, media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="frustrampnn-{export_id}.{suffix}"',
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-cache",
+        },
     )

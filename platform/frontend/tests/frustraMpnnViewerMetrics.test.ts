@@ -181,15 +181,13 @@ test('complete landscape collection follows bounded monotonic pages and validate
     await assert.rejects(() => collectCompleteFrustraMpnnLandscape(async () => ({ ...pages[0], next_offset: null, rows: [...rows, ...rows] }), 20), /bounded/i);
 });
 
-test('canonical conformational viewer uses the shared metric workbench, not a global substitution dropdown', () => {
+test('canonical conformational viewer delegates FrustraMPNN numerical authority to the global workbench', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/components/conformationalMapping/ConformationalMappingViewer.tsx'), 'utf8');
     assert.doesNotMatch(source, /landscapeMutation|Landscape substitution/);
-    assert.match(source, /collectCompleteFrustraMpnnLandscape/);
-    assert.match(source, /metricLayers=\{frustraMpnnMetrics\?\.layers\}/);
-    assert.match(source, /showMetricWorkbench=\{metricWorkbenchOpen\}/);
-    assert.match(source, /showSequenceTrack=\{metricWorkbenchOpen\}/);
-    assert.match(source, /onMetricSelection=\{setFrustraMpnnSelection\}/);
-    assert.match(source, /Exact-20 residue profile/);
+    assert.doesNotMatch(source, /collectCompleteFrustraMpnnLandscape|metricLayers=\{frustraMpnnMetrics|setFrustraMpnnSelection|Exact-20 residue profile/);
+    assert.match(source, /showMetricWorkbench=\{false\}/);
+    assert.match(source, /showSequenceTrack=\{false\}/);
+    assert.match(source, /<FrustraWorkbench/);
 });
 
 test('generic structure viewer cannot reactivate the retired position-guessed frustration layer', () => {

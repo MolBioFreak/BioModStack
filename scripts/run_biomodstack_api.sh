@@ -121,6 +121,11 @@ fi
 cd "$PROJECT_DIR/platform/api"
 bms_api_port="${BMS_API_BIND_PORT:-${BMS_DEV_API_HOST_PORT:-18002}}"
 export API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:${bms_api_port}}"
+
+# Apply every registered forward migration before the API can accept traffic.
+# A migration failure aborts the managed start and preserves the previous owner.
+uv run --frozen python run_migrations.py
+
 cmd=(uv run uvicorn main:app --port "$bms_api_port" --host 127.0.0.1 --no-access-log)
 case "$(api_mode)" in
     dev)
