@@ -48,6 +48,17 @@ export interface AlignmentSessionResponse {
     sessions: AlignmentSession[];
 }
 
+export interface AlignmentAccessRotationResponse {
+    job_id: string;
+    rotated: true;
+    scheme: 'opaque_job_capability_v1';
+    rotation_count: number;
+}
+
+export function isAlignmentAccessDenied(reason: unknown): boolean {
+    return (reason as { response?: { status?: unknown } } | null)?.response?.status === 403;
+}
+
 export interface AlignmentRead {
     read_id: string;
     length: number | null;
@@ -177,6 +188,13 @@ export async function fetchAlignmentSessions(jobId: string): Promise<AlignmentSe
         `/api/jobs/${encodeURIComponent(jobId)}/alignment-sessions`,
     );
     return normalizeAlignmentSessions(response.data, jobId);
+}
+
+export async function rotateAlignmentAccess(jobId: string): Promise<AlignmentAccessRotationResponse> {
+    const response = await api.post<AlignmentAccessRotationResponse>(
+        `/api/jobs/${encodeURIComponent(jobId)}/alignment-access/rotate`,
+    );
+    return response.data;
 }
 
 export async function fetchAlignmentReads(

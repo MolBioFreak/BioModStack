@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
 import type { Data, Layout, PlotMouseEvent } from 'plotly.js';
 import type { IGV as IgvLibrary } from 'igv';
@@ -18,7 +18,12 @@ import {
     type AlignmentReadLocus,
     type PendingSessionNavigation,
 } from '../lib/ngsAlignmentViewer';
-import { fetchAlignmentSessions, type AlignmentSession } from '../lib/ngsAlignmentSession';
+import {
+    fetchAlignmentSessions,
+    isAlignmentAccessDenied,
+    rotateAlignmentAccess,
+    type AlignmentSession,
+} from '../lib/ngsAlignmentSession';
 import {
     isNgsJob,
     ngsJobShouldPoll,
@@ -2089,6 +2094,7 @@ function formatParamValue(value: unknown): string {
 }
 
 export function NGSToolkit() {
+    const queryClient = useQueryClient();
     const { updateQueryParams, contextHref } = useGlobalExperimentContext();
     const location = useLocation();
     const navigate = useNavigate();
@@ -2312,6 +2318,7 @@ export function NGSToolkit() {
     const {
         data: alignmentSessions = [],
         error: alignmentSessionsError,
+        refetch: refetchAlignmentSessions,
     } = useQuery<AlignmentSession[]>({
         queryKey: ['ngs-alignment-sessions', selectedJobId],
         queryFn: () => fetchAlignmentSessions(selectedJobId as string),
@@ -2319,6 +2326,26 @@ export function NGSToolkit() {
         retry: false,
         staleTime: 30_000,
     });
+    const [alignmentAccessRecoveryPending, setAlignmentAccessRecoveryPending] = useState(false);
+    const [alignmentAccessRecoveryError, setAlignmentAccessRecoveryError] = useState<string | null>(null);
+    const alignmentAccessDenied = isAlignmentAccessDenied(alignmentSessionsError);
+    const restoreAlignmentAccess = useCallback(async () => {
+        if (!selectedJobId || alignmentAccessRecoveryPending) return;
+        setAlignmentAccessRecoveryPending(true);
+        setAlignmentAccessRecoveryError(null);
+        try {
+            await rotateAlignmentAccess(selectedJobId);
+            const refreshed = await refetchAlignmentSessions({ throwOnError: true });
+            if (refreshed.error) throw refreshed.error;
+            await queryClient.invalidateQueries({ queryKey: ['sequence-qc-manifest', selectedJobId] });
+        } catch (reason: unknown) {
+            setAlignmentAccessRecoveryError(
+                reason instanceof Error ? reason.message : String(reason),
+            );
+        } finally {
+            setAlignmentAccessRecoveryPending(false);
+        }
+    }, [alignmentAccessRecoveryPending, queryClient, refetchAlignmentSessions, selectedJobId]);
 
     const stats = useMemo(() => {
         return {
@@ -4272,9 +4299,26 @@ export function NGSToolkit() {
                                         </div>
                                     </div>
                                     {!igvReady && (
-                                        <p className="text-xs text-[var(--text-secondary)]">
-                                            IGV unavailable: {igvMissingReason}
-                                        </p>
+                                        <div className="space-y-2">
+                                            <p className="text-xs text-[var(--text-secondary)]">
+                                                IGV unavailable: {igvMissingReason}
+                                            </p>
+                                            {alignmentAccessDenied && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void restoreAlignmentAccess()}
+                                                    disabled={alignmentAccessRecoveryPending}
+                                                    className="px-2.5 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] disabled:opacity-50"
+                                                >
+                                                    {alignmentAccessRecoveryPending ? 'Restoring access…' : 'Restore this browser’s access'}
+                                                </button>
+                                            )}
+                                            {alignmentAccessRecoveryError && (
+                                                <p role="alert" className="text-xs text-rose-300">
+                                                    {alignmentAccessRecoveryError}
+                                                </p>
+                                            )}
+                                        </div>
                                     )}
                                     {(igvReportDownloadHref || igvTrackConfigDownloadHref) && (
                                         <div className="flex flex-wrap items-center gap-2 pt-1">

@@ -11,6 +11,7 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 
+
 import pytest
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -21,6 +22,426 @@ if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
 from routers import files as files_router  # noqa: E402
+
+
+def test_samtools_command_uses_pinned_no_network_ont_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services import ngs_alignment_sessions as service
+
+    container_dir = tmp_path / "apptainer"
+    container_dir.mkdir()
+    image = container_dir / "dorado-v1.3.1-samtools-v1.24.sif"
+    image.write_bytes(b"pinned-runtime")
+    results_dir = tmp_path / "results"
+    results_dir.mkdir()
+    monkeypatch.setenv("BMS_NGS_RUNTIME_SIF", str(image))
+    monkeypatch.setenv("BMS_RESULTS_DIR", str(results_dir))
+    monkeypatch.setattr(
+        service.shutil,
+        "which",
+        lambda command: "/usr/bin/apptainer" if command == "apptainer" else None,
+    )
+    monkeypatch.setattr(
+        service,
+        "_ngs_runtime_identity",
+        lambda: (hashlib.sha256(image.read_bytes()).hexdigest(), "1.24"),
+    )
+    observed = {}
+
+    def fake_run(command, **kwargs):
+        observed["command"] = command
+        observed["kwargs"] = kwargs
+        return SimpleNamespace(stdout="samtools 1.24\nUsing htslib 1.24\n")
+
+    monkeypatch.setattr(service.subprocess, "run", fake_run)
+    service._clear_samtools_runtime_cache()
+    try:
+        command = service._samtools_command()
+        assert tuple(command) == (
+            "/usr/bin/apptainer",
+            "exec",
+            "--no-home",
+            "--pid",
+            "--net",
+            "--network",
+            "none",
+            "--bind",
+            f"{results_dir}:{results_dir}:ro",
+            f"/proc/self/fd/{command.pass_fds[0]}",
+            "samtools",
+        )
+        assert observed["command"] == [*command, "--version"]
+        assert observed["kwargs"]["pass_fds"] == command.pass_fds
+    finally:
+        service._clear_samtools_runtime_cache()
+
+
+@pytest.mark.parametrize("unsafe", ["digest", "version", "runtime_symlink", "parent_symlink", "bind_symlink", "bind_colon"])
+def test_samtools_runtime_rejects_unpinned_or_unsafe_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    unsafe: str,
+) -> None:
+    from services import ngs_alignment_sessions as service
+
+    real = tmp_path / "real"
+    real.mkdir()
+    image = real / "dorado.sif"
+    image.write_bytes(b"approved")
+    results = real / "results"
+    results.mkdir()
+    runtime_path = image
+    results_path = results
+    expected_digest = hashlib.sha256(image.read_bytes()).hexdigest()
+    expected_version = "1.24"
+    if unsafe == "digest":
+        expected_digest = "0" * 64
+    elif unsafe == "version":
+        expected_version = "1.23"
+    elif unsafe == "runtime_symlink":
+        runtime_path = tmp_path / "runtime-link.sif"
+        runtime_path.symlink_to(image)
+    elif unsafe == "parent_symlink":
+        linked_parent = tmp_path / "linked-parent"
+        linked_parent.symlink_to(real, target_is_directory=True)
+        runtime_path = linked_parent / image.name
+    elif unsafe == "bind_symlink":
+        results_path = tmp_path / "results-link"
+        results_path.symlink_to(results, target_is_directory=True)
+    elif unsafe == "bind_colon":
+        results_path = tmp_path / "results:unsafe"
+        results_path.mkdir()
+    monkeypatch.setenv("BMS_NGS_RUNTIME_SIF", str(runtime_path))
+    monkeypatch.setenv("BMS_RESULTS_DIR", str(results_path))
+    monkeypatch.setattr(service.shutil, "which", lambda _command: "/usr/bin/apptainer")
+    monkeypatch.setattr(service, "_ngs_runtime_identity", lambda: (expected_digest, expected_version))
+    monkeypatch.setattr(
+        service.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(stdout="samtools 1.24\nUsing htslib 1.24\n"),
+    )
+    service._clear_samtools_runtime_cache()
+    try:
+        with pytest.raises(service.AlignmentSessionError):
+            service._samtools_command()
+    finally:
+        service._clear_samtools_runtime_cache()
+
+
+def test_samtools_runtime_lease_rejects_results_root_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services import ngs_alignment_sessions as service
+
+    image = tmp_path / "dorado.sif"
+    image.write_bytes(b"approved")
+    results = tmp_path / "results"
+    results.mkdir()
+    monkeypatch.setenv("BMS_NGS_RUNTIME_SIF", str(image))
+    monkeypatch.setenv("BMS_RESULTS_DIR", str(results))
+    monkeypatch.setattr(service.shutil, "which", lambda _command: "/usr/bin/apptainer")
+    monkeypatch.setattr(
+        service,
+        "_ngs_runtime_identity",
+        lambda: (hashlib.sha256(image.read_bytes()).hexdigest(), "1.24"),
+    )
+    monkeypatch.setattr(
+        service.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(stdout="samtools 1.24\nUsing htslib 1.24\n"),
+    )
+    service._clear_samtools_runtime_cache()
+    try:
+        command = service._samtools_command()
+        results.rename(tmp_path / "old-results")
+        results.mkdir()
+        with pytest.raises(service.AlignmentSessionError, match="changed after validation"):
+            command.verify_results_root()
+    finally:
+        service._clear_samtools_runtime_cache()
+
+
+def test_samtools_runtime_rejects_wrong_observed_version(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services import ngs_alignment_sessions as service
+
+    image = tmp_path / "dorado.sif"
+    image.write_bytes(b"approved")
+    results = tmp_path / "results"
+    results.mkdir()
+    monkeypatch.setenv("BMS_NGS_RUNTIME_SIF", str(image))
+    monkeypatch.setenv("BMS_RESULTS_DIR", str(results))
+    monkeypatch.setattr(service.shutil, "which", lambda _command: "/usr/bin/apptainer")
+    monkeypatch.setattr(
+        service,
+        "_ngs_runtime_identity",
+        lambda: (hashlib.sha256(image.read_bytes()).hexdigest(), "1.24"),
+    )
+    monkeypatch.setattr(
+        service.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(stdout="samtools 1.23.1\nUsing htslib 1.23.1\n"),
+    )
+    service._clear_samtools_runtime_cache()
+    try:
+        with pytest.raises(service.AlignmentSessionError, match="version mismatch"):
+            service._samtools_command()
+    finally:
+        service._clear_samtools_runtime_cache()
+
+
+def test_completed_nanopore_alignment_access_can_rotate_only_through_local_dev_browser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from routers import ngs_alignment_sessions as router
+    from services import alignment_access
+
+    old_token = "old-completed-job-capability"
+    job = SimpleNamespace(
+        id="job-rotate",
+        status="completed",
+        model_id="nanopore",
+        output_dir="/tmp/job-rotate",
+        child_output_dir=None,
+        params={
+            "reference_sequence_sha256": "a" * 64,
+            "ont_workflow_id": "ont_fastq_qc",
+            "ont_input_mode": "fastq",
+        },
+        provenance={
+            alignment_access.PROVENANCE_DIGEST_KEY: alignment_access.token_sha256(old_token),
+            alignment_access.PROVENANCE_SCHEME_KEY: alignment_access.SCHEME,
+        },
+    )
+
+    class SelectResult:
+        def scalar_one_or_none(self):
+            return job
+
+    class UpdateResult:
+        rowcount = 1
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.execute_count = 0
+            self.commits = 0
+            self.rollbacks = 0
+            self.updated_provenance = None
+
+        async def execute(self, statement):
+            self.execute_count += 1
+            if self.execute_count == 1:
+                return SelectResult()
+            params = statement.compile().params
+            self.updated_provenance = next(
+                value
+                for value in params.values()
+                if isinstance(value, dict)
+                and alignment_access.PROVENANCE_DIGEST_KEY in value
+            )
+            return UpdateResult()
+
+        async def commit(self) -> None:
+            self.commits += 1
+
+        async def rollback(self) -> None:
+            self.rollbacks += 1
+
+    session = FakeSession()
+    monkeypatch.setenv("BMS_RUNTIME_MODE", "dev")
+    monkeypatch.setenv("BMS_FRONTEND_HEALTH_URL", "http://127.0.0.1:18082/")
+    monkeypatch.setattr(router, "LOCAL_DEVELOPMENT_ADMIN_HOSTS", frozenset({"testclient"}))
+    monkeypatch.setattr(
+        router.service,
+        "build_alignment_sessions",
+        lambda *_args, **_kwargs: [{"mode": "primary", "ready": True}],
+    )
+    app = FastAPI()
+    app.include_router(router.router, prefix="/api")
+    app.dependency_overrides[router.get_session] = lambda: session
+    headers = {
+        "Origin": "http://127.0.0.1:18082",
+        "Sec-Fetch-Site": "same-origin",
+    }
+
+    with TestClient(app) as client:
+        rejected = client.post("/api/jobs/job-rotate/alignment-access/rotate")
+        response = client.post(
+            "/api/jobs/job-rotate/alignment-access/rotate",
+            headers=headers,
+        )
+        rotated_token = client.cookies.get(alignment_access.cookie_name(job.id))
+
+    assert rejected.status_code == 403
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "job_id": job.id,
+        "rotated": True,
+        "scheme": alignment_access.SCHEME,
+        "rotation_count": 1,
+    }
+    assert rotated_token and rotated_token not in response.text
+    assert session.updated_provenance is not None
+    assert alignment_access.capability_matches(
+        rotated_token,
+        session.updated_provenance[alignment_access.PROVENANCE_DIGEST_KEY],
+    )
+    assert not alignment_access.capability_matches(
+        old_token,
+        session.updated_provenance[alignment_access.PROVENANCE_DIGEST_KEY],
+    )
+    cookie = response.headers["set-cookie"].lower()
+    assert "httponly" in cookie
+    assert "samesite=strict" in cookie
+    assert "path=/api/jobs/job-rotate" in cookie
+    assert session.commits == 1
+    assert session.rollbacks == 0
+
+
+@pytest.mark.parametrize(
+    ("runtime_mode", "headers"),
+    [
+        ("container", {"Origin": "http://127.0.0.1:18082", "Sec-Fetch-Site": "same-origin"}),
+        ("dev", {"Origin": "http://evil.invalid", "Sec-Fetch-Site": "same-origin"}),
+        ("dev", {"Origin": "http://127.0.0.1:18082", "Sec-Fetch-Site": "cross-site"}),
+    ],
+)
+def test_alignment_access_rotation_denials_do_not_reach_persistence(
+    monkeypatch: pytest.MonkeyPatch,
+    runtime_mode: str,
+    headers: dict[str, str],
+) -> None:
+    from routers import ngs_alignment_sessions as router
+
+    class NoPersistenceSession:
+        async def execute(self, _statement):
+            raise AssertionError("denied rotation reached persistence")
+
+    monkeypatch.setenv("BMS_RUNTIME_MODE", runtime_mode)
+    monkeypatch.setenv("BMS_FRONTEND_HEALTH_URL", "http://127.0.0.1:18082/")
+    monkeypatch.setattr(router, "LOCAL_DEVELOPMENT_ADMIN_HOSTS", frozenset({"testclient"}))
+    app = FastAPI()
+    app.include_router(router.router, prefix="/api")
+    app.dependency_overrides[router.get_session] = lambda: NoPersistenceSession()
+
+    response = TestClient(app).post(
+        "/api/jobs/job-rotate/alignment-access/rotate",
+        headers=headers,
+    )
+
+    assert response.status_code == 403
+
+
+def test_alignment_access_rotation_conflict_rolls_back_without_cookie(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from routers import ngs_alignment_sessions as router
+    from services import alignment_access
+
+    job = SimpleNamespace(
+        id="job-conflict",
+        status="completed",
+        model_id="nanopore",
+        output_dir="/tmp/job-conflict",
+        child_output_dir=None,
+        params={
+            "reference_sequence_sha256": "a" * 64,
+            "ont_workflow_id": "ont_fastq_qc",
+            "ont_input_mode": "fastq",
+        },
+        provenance={
+            alignment_access.PROVENANCE_DIGEST_KEY: "b" * 64,
+            alignment_access.PROVENANCE_SCHEME_KEY: alignment_access.SCHEME,
+        },
+    )
+
+    class Result:
+        def __init__(self, rowcount=None):
+            self.rowcount = rowcount
+
+        def scalar_one_or_none(self):
+            return job
+
+    class ConflictSession:
+        def __init__(self):
+            self.calls = 0
+            self.commits = 0
+            self.rollbacks = 0
+
+        async def execute(self, _statement):
+            self.calls += 1
+            return Result() if self.calls == 1 else Result(rowcount=0)
+
+        async def commit(self):
+            self.commits += 1
+
+        async def rollback(self):
+            self.rollbacks += 1
+
+    session = ConflictSession()
+    monkeypatch.setenv("BMS_RUNTIME_MODE", "dev")
+    monkeypatch.setenv("BMS_FRONTEND_HEALTH_URL", "http://127.0.0.1:18082/")
+    monkeypatch.setattr(router, "LOCAL_DEVELOPMENT_ADMIN_HOSTS", frozenset({"testclient"}))
+    monkeypatch.setattr(
+        router.service,
+        "build_alignment_sessions",
+        lambda *_args, **_kwargs: [{"mode": "primary", "ready": True}],
+    )
+    app = FastAPI()
+    app.include_router(router.router, prefix="/api")
+    app.dependency_overrides[router.get_session] = lambda: session
+
+    response = TestClient(app).post(
+        "/api/jobs/job-conflict/alignment-access/rotate",
+        headers={"Origin": "http://127.0.0.1:18082", "Sec-Fetch-Site": "same-origin"},
+    )
+
+    assert response.status_code == 409
+    assert "set-cookie" not in response.headers
+    assert session.commits == 0
+    assert session.rollbacks == 1
+
+
+def test_sequence_qc_manifest_is_available_below_job_scoped_cookie_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from routers import ngs_alignment_sessions as router
+
+    job = SimpleNamespace(
+        id="job-manifest",
+        params={
+            "reference_sequence_sha256": "a" * 64,
+            "ont_workflow_id": "ont_fastq_qc",
+            "ont_input_mode": "fastq",
+        },
+        output_dir="/tmp/job-manifest",
+        child_output_dir=None,
+    )
+    monkeypatch.setattr(router, "resolve_persisted_job_result_root", lambda _job: Path("/tmp/job-manifest"))
+    monkeypatch.setattr(router, "find_manifest_in_result_root", lambda _root: Path("/tmp/job-manifest/qc_manifest.json"))
+    monkeypatch.setattr(
+        router,
+        "load_sequence_qc_manifest",
+        lambda *_args, **kwargs: {"schema": "sequence_qc.manifest.v1", "authority": kwargs},
+    )
+    app = FastAPI()
+    app.include_router(router.router, prefix="/api")
+    app.dependency_overrides[router.require_alignment_job] = lambda: job
+
+    response = TestClient(app).get("/api/jobs/job-manifest/sequence-qc-manifest")
+
+    assert response.status_code == 200
+    assert response.json()["authority"] == {
+        "expected_job_id": "job-manifest",
+        "expected_workflow_id": "ont_fastq_qc",
+        "expected_input_mode": "fastq",
+        "expected_analysis_status": "completed",
+    }
 
 
 def test_generic_file_routes_hide_governed_ngs_tree(
@@ -733,6 +1154,110 @@ def test_semantic_role_route_rejects_resolver_to_descriptor_open_replacement(
     assert response.json() == {"detail": "artifact integrity digest mismatch"}
 
 
+def test_ngs_package_inventory_covers_persisted_fastq_qc_and_verification_artifacts() -> None:
+    from services import ngs_alignment_sessions as service
+
+    job_id = "5dceb3d6-0ac7-4058-96b4-b7d1aff6a8fa"
+    output_dir = Path(
+        "/home/dalab/.biomodstack-dev/bms_results/"
+        "public_zenodo_7595170_AAZ605_pGM12_fastq_qc_racefix_rerun_20260810T024400Z_20260809_214452"
+    )
+    if not output_dir.is_dir():
+        pytest.skip("Development acceptance package is unavailable")
+    artifacts = service.build_ngs_package_artifacts(
+        job_id,
+        source_reference_sha256="b4c4f948cca0e583d9a7183fef975f54557c4c0dc925bfc940148ea3a9f2cf69",
+        workflow_id="ont_fastq_qc",
+        input_mode="fastq",
+        results_dir=Path("/home/dalab/.biomodstack-dev/bms_results"),
+        job_output_dir=output_dir,
+    )
+    by_kind = {artifact["kind"]: artifact for artifact in artifacts}
+    for kind in (
+        "source_reads_fastq",
+        "alignment_bam",
+        "alignment_bai",
+        "reference",
+        "reference_index",
+        "consensus",
+        "consensus_index",
+        "summary",
+        "per_base_support",
+        "log",
+        "sequence_qc_manifest",
+        "construct_verification_manifest",
+        "verification_summary",
+        "human_evidence_report",
+        "source_read_provenance",
+    ):
+        assert by_kind[kind]["state"] == "present"
+        assert by_kind[kind]["range_capable"] is True
+        assert by_kind[kind]["url"].startswith(f"/api/jobs/{job_id}/ngs-artifacts/")
+    assert by_kind["source_reads_fastq"]["sha256"] == "d55928dfe4bd161ad3e0b1a29fcd3f0fff273d9243386d281fd94df0e61d149e"
+    assert by_kind["source_reads_fastq"]["size_bytes"] == 51_826_738
+    assert by_kind["signal_data"] == {
+        "kind": "signal_data",
+        "source": "input_mode",
+        "relative_path": None,
+        "state": "not_applicable_to_input_mode",
+        "sha256": None,
+        "size_bytes": None,
+        "mime_type": None,
+        "url": None,
+        "range_capable": False,
+        "unavailable_reason": "FASTQ input has no retained raw signal artifact",
+    }
+
+
+def test_ngs_package_routes_support_authenticated_inventory_and_http_range(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from routers import ngs_alignment_sessions as routes
+    from services import ngs_alignment_sessions as service
+
+    artifact = tmp_path / "reads.fastq.gz"
+    artifact.write_bytes(b"abcdefghij")
+    digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    descriptor = {
+        "kind": "source_reads_fastq",
+        "source": "construct_verification_input",
+        "relative_path": "reads.fastq.gz",
+        "state": "present",
+        "sha256": digest,
+        "size_bytes": 10,
+        "mime_type": "application/gzip",
+        "url": f"/api/jobs/job-a/ngs-artifacts/{digest}",
+        "range_capable": True,
+    }
+    monkeypatch.setattr(service, "build_ngs_package_artifacts", lambda *_args, **_kwargs: [descriptor])
+    monkeypatch.setattr(service, "resolve_ngs_package_artifact", lambda *_args, **_kwargs: (artifact, descriptor))
+    app = FastAPI()
+    app.include_router(routes.router, prefix="/api")
+    app.dependency_overrides[routes.require_alignment_job] = lambda: SimpleNamespace(
+        child_output_dir=None,
+        params={
+            "reference_sequence_sha256": hashlib.sha256(b"ACGTACGT").hexdigest(),
+            "ont_workflow_id": "ont_fastq_qc",
+            "ont_input_mode": "fastq",
+        },
+        output_dir=str(tmp_path),
+    )
+    client = TestClient(app)
+    inventory = client.get("/api/jobs/job-a/ngs-artifacts")
+    assert inventory.status_code == 200
+    assert inventory.json() == {"job_id": "job-a", "artifacts": [descriptor]}
+    ranged = client.get(
+        f"/api/jobs/job-a/ngs-artifacts/{digest}",
+        headers={"Range": "bytes=2-5"},
+    )
+    assert ranged.status_code == 206
+    assert ranged.content == b"cdef"
+    assert ranged.headers["content-range"] == "bytes 2-5/10"
+    assert ranged.headers["accept-ranges"] == "bytes"
+    assert ranged.headers["etag"] == f'"{digest}"'
+
+
 def test_paginated_bam_reads_are_bounded_and_sequences_are_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
     from services import ngs_alignment_sessions as service
 
@@ -1252,6 +1777,13 @@ def test_equal_length_wrong_reference_fails_exact_identity_validation(
         return SimpleNamespace(stdout=stdout, stderr="", returncode=0)
 
     monkeypatch.setattr(service.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        service,
+        "_samtools_command",
+        lambda: service._PinnedSamtoolsCommand(
+            ("samtools",), (), os.fspath(tmp_path), (tmp_path.stat().st_dev, tmp_path.stat().st_ino),
+        ),
+    )
     valid, reason = service._validate_alignment_bundle(bam, index, reference, None)
 
     assert valid is False
@@ -1276,6 +1808,13 @@ def test_missing_m5_accepts_only_matching_server_manifest_reference_binding(
         return SimpleNamespace(stdout=stdout, stderr="", returncode=0)
 
     monkeypatch.setattr(service.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        service,
+        "_samtools_command",
+        lambda: service._PinnedSamtoolsCommand(
+            ("samtools",), (), os.fspath(tmp_path), (tmp_path.stat().st_dev, tmp_path.stat().st_ino),
+        ),
+    )
     expected = hashlib.sha256(b"ACGTACGT").hexdigest()
 
     assert service._validate_alignment_bundle(bam, index, reference, expected) == (True, None)

@@ -3,11 +3,18 @@ import test from 'node:test';
 
 import {
     AlignmentReadScanTruncatedError,
+    isAlignmentAccessDenied,
     isAlignmentReadScanTruncatedError,
     normalizeAlignmentSessions,
     type AlignmentSessionArtifact,
     type AlignmentSessionResponse,
 } from '../src/lib/ngsAlignmentSession.js';
+
+test('alignment access recovery is offered only for an HTTP 403 denial', () => {
+    assert.equal(isAlignmentAccessDenied({ response: { status: 403 } }), true);
+    assert.equal(isAlignmentAccessDenied({ response: { status: 404 } }), false);
+    assert.equal(isAlignmentAccessDenied(new Error('alignment access denied')), false);
+});
 
 function artifact(artifactId: string, sha256: string, sizeBytes: number, mimeType = 'application/octet-stream'): AlignmentSessionArtifact {
     return {

@@ -9,6 +9,11 @@ const ngsApiMocks = vi.hoisted(() => ({
     fetchJobStages: vi.fn(),
     fetchJobs: vi.fn(),
 }));
+const alignmentMocks = vi.hoisted(() => ({
+    fetchAlignmentSessions: vi.fn(),
+    isAlignmentAccessDenied: vi.fn(),
+    rotateAlignmentAccess: vi.fn(),
+}));
 
 vi.mock('../../src/lib/api', async (importOriginal) => ({
     ...(await importOriginal<typeof import('../../src/lib/api')>()),
@@ -28,7 +33,7 @@ vi.mock('../../src/components/useThemeColors', () => ({
     useThemePlotlyLayout: () => ({}),
 }));
 vi.mock('../../src/lib/ngsAlignmentSession', () => ({
-    fetchAlignmentSessions: vi.fn(async () => []),
+    ...alignmentMocks,
 }));
 
 vi.mock('../../src/components/MolstarViewer', () => ({ default: () => <div>Molstar</div> }));
@@ -79,6 +84,17 @@ beforeEach(() => {
     ngsApiMocks.fetchFullJob.mockReset();
     ngsApiMocks.fetchJobStages.mockReset();
     ngsApiMocks.fetchJobs.mockReset();
+    alignmentMocks.fetchAlignmentSessions.mockReset();
+    alignmentMocks.fetchAlignmentSessions.mockResolvedValue([]);
+    alignmentMocks.isAlignmentAccessDenied.mockReset();
+    alignmentMocks.isAlignmentAccessDenied.mockReturnValue(false);
+    alignmentMocks.rotateAlignmentAccess.mockReset();
+    alignmentMocks.rotateAlignmentAccess.mockResolvedValue({
+        job_id: 'job-123',
+        rotated: true,
+        scheme: 'opaque_job_capability_v1',
+        rotation_count: 1,
+    });
     client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -232,5 +248,113 @@ describe('completed NGS result routing', () => {
                 );
         });
         expect(requested).not.toContain('/api/jobs/job-123/structure-files');
+    });
+
+    it('restores a denied completed-job capability and retries the selected session query', async () => {
+        const completedJob = {
+            id: 'job-123',
+            name: 'AAZ605 FASTQ QC',
+            model_id: 'nanopore',
+            mode: 'ont_fastq_qc',
+            status: 'completed',
+            created_at: '2026-08-10T00:00:00Z',
+            output_dir: '/results/job-123',
+            params: { fastq_path: '/inputs/AAZ605.fastq' },
+        };
+        const denial = { response: { status: 403 } };
+        ngsApiMocks.fetchJobs.mockResolvedValue({ data: { jobs: [completedJob], total: 1 } });
+        ngsApiMocks.fetchFullJob.mockResolvedValue(completedJob);
+        ngsApiMocks.fetchJobStages.mockResolvedValue({ data: { stages: [] } });
+        alignmentMocks.fetchAlignmentSessions
+            .mockRejectedValueOnce(denial)
+            .mockResolvedValue([]);
+        alignmentMocks.isAlignmentAccessDenied.mockImplementation((reason) => reason === denial);
+        client.setQueryData(['sequence-qc-manifest', 'job-123'], { schema: 'sequence_qc.manifest.v1' });
+
+        await act(async () => {
+            root.render(
+                <QueryClientProvider client={client}>
+                    <MemoryRouter initialEntries={['/ngs?section=analyses&job_id=job-123']}>
+                        <Routes>
+                            <Route path="/ngs" element={<NGSToolkit />} />
+                        </Routes>
+                    </MemoryRouter>
+                </QueryClientProvider>,
+            );
+        });
+        await waitUntil(() => {
+            expect(container.textContent).toContain('Restore this browser’s access');
+        });
+        const restore = [...container.querySelectorAll('button')].find(
+            (button) => button.textContent === 'Restore this browser’s access',
+        );
+        expect(restore).toBeTruthy();
+
+        await act(async () => {
+            restore?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        });
+        await waitUntil(() => {
+            expect(alignmentMocks.rotateAlignmentAccess).toHaveBeenCalledWith('job-123');
+            expect(alignmentMocks.fetchAlignmentSessions).toHaveBeenCalledTimes(2);
+        });
+        expect(client.getQueryState(['sequence-qc-manifest', 'job-123'])?.isInvalidated).toBe(true);
+    });
+
+    it('does not offer recovery for non-403 session failures', async () => {
+        const completedJob = {
+            id: 'job-123', name: 'AAZ605 FASTQ QC', model_id: 'nanopore', mode: 'ont_fastq_qc',
+            status: 'completed', created_at: '2026-08-10T00:00:00Z', output_dir: '/results/job-123', params: {},
+        };
+        ngsApiMocks.fetchJobs.mockResolvedValue({ data: { jobs: [completedJob], total: 1 } });
+        ngsApiMocks.fetchFullJob.mockResolvedValue(completedJob);
+        ngsApiMocks.fetchJobStages.mockResolvedValue({ data: { stages: [] } });
+        alignmentMocks.fetchAlignmentSessions.mockRejectedValue(new Error('manifest failed'));
+        alignmentMocks.isAlignmentAccessDenied.mockReturnValue(false);
+
+        await act(async () => {
+            root.render(
+                <QueryClientProvider client={client}>
+                    <MemoryRouter initialEntries={['/ngs?section=analyses&job_id=job-123']}>
+                        <Routes><Route path="/ngs" element={<NGSToolkit />} /></Routes>
+                    </MemoryRouter>
+                </QueryClientProvider>,
+            );
+        });
+        await waitUntil(() => expect(alignmentMocks.fetchAlignmentSessions).toHaveBeenCalled());
+        expect(container.textContent).not.toContain('Restore this browser’s access');
+    });
+
+    it('shows a failed post-rotation session refetch and leaves the manifest query valid', async () => {
+        const completedJob = {
+            id: 'job-123', name: 'AAZ605 FASTQ QC', model_id: 'nanopore', mode: 'ont_fastq_qc',
+            status: 'completed', created_at: '2026-08-10T00:00:00Z', output_dir: '/results/job-123', params: {},
+        };
+        const denial = { response: { status: 403 } };
+        const postRotationFailure = new Error('post-rotation session failed');
+        ngsApiMocks.fetchJobs.mockResolvedValue({ data: { jobs: [completedJob], total: 1 } });
+        ngsApiMocks.fetchFullJob.mockResolvedValue(completedJob);
+        ngsApiMocks.fetchJobStages.mockResolvedValue({ data: { stages: [] } });
+        alignmentMocks.fetchAlignmentSessions
+            .mockRejectedValueOnce(denial)
+            .mockRejectedValueOnce(postRotationFailure);
+        alignmentMocks.isAlignmentAccessDenied.mockImplementation((reason) => reason === denial);
+        client.setQueryData(['sequence-qc-manifest', 'job-123'], { schema: 'sequence_qc.manifest.v1' });
+
+        await act(async () => {
+            root.render(
+                <QueryClientProvider client={client}>
+                    <MemoryRouter initialEntries={['/ngs?section=analyses&job_id=job-123']}>
+                        <Routes><Route path="/ngs" element={<NGSToolkit />} /></Routes>
+                    </MemoryRouter>
+                </QueryClientProvider>,
+            );
+        });
+        await waitUntil(() => expect(container.textContent).toContain('Restore this browser’s access'));
+        const restore = [...container.querySelectorAll('button')].find(
+            (button) => button.textContent === 'Restore this browser’s access',
+        );
+        await act(async () => restore?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+        await waitUntil(() => expect(container.textContent).toContain('post-rotation session failed'));
+        expect(client.getQueryState(['sequence-qc-manifest', 'job-123'])?.isInvalidated).toBe(false);
     });
 });

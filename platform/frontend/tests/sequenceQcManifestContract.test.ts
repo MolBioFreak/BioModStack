@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
@@ -18,9 +19,8 @@ test('sequence QC manifest API helpers target the typed manifest routes', () => 
 
     assert.match(api, /export interface SequenceQcManifest/u);
     assert.match(api, /fetchSequenceQcManifest = \(jobId: string\)/u);
-    assert.match(api, /`\/api\/sequence-qc\/jobs\/\$\{jobId\}\/manifest`/u);
-    assert.match(api, /fetchSequenceQcManifestByPath = \(path: string\)/u);
-    assert.match(api, /'\/api\/sequence-qc\/manifest'/u);
+    assert.match(api, /`\/api\/jobs\/\$\{encodeURIComponent\(jobId\)\}\/sequence-qc-manifest`/u);
+    assert.doesNotMatch(api, /fetchSequenceQcManifestByPath/u);
 });
 
 test('missing sequence QC manifest is classified as an old-run unavailable state, not a workflow failure', () => {
@@ -117,11 +117,18 @@ test('real verification fields render top-level provenance and variant support e
         }],
         artifacts: [],
     };
-    const html = renderToStaticMarkup(React.createElement(SequenceQcManifestPanel, {
-        status: 'available',
-        manifest,
-        message: null,
-    }));
+    const queryClient = new QueryClient();
+    const html = renderToStaticMarkup(
+        React.createElement(
+            QueryClientProvider,
+            { client: queryClient },
+            React.createElement(SequenceQcManifestPanel, {
+                status: 'available',
+                manifest,
+                message: null,
+            }),
+        ),
+    );
 
     assert.match(html, /Verification provenance/u);
     assert.match(html, /reads-digest-visible/u);

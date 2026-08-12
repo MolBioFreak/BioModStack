@@ -2,20 +2,29 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import BinaryIO, Iterator
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
 from database import Job, get_session
 from services import alignment_access
 from services import ngs_alignment_sessions as service
+from services.job_result_roots import JobResultRootError, resolve_persisted_job_result_root
+from services.sequence_qc_manifest import (
+    SequenceQcManifestError,
+    find_manifest_in_result_root,
+    load_sequence_qc_manifest,
+)
 
 router = APIRouter()
+LOCAL_DEVELOPMENT_ADMIN_HOSTS = frozenset({None, "127.0.0.1", "::1", "localhost", "testclient"})
 
 
 async def require_alignment_job(
@@ -63,6 +72,82 @@ def _job_authority(job: Job) -> dict[str, str]:
         "source_reference_sha256": str(source_reference_sha256),
         "workflow_id": str(workflow_id),
         "input_mode": str(input_mode),
+    }
+
+
+def _require_local_development_browser(request: Request) -> None:
+    client_host = request.client.host if request.client is not None else None
+    if client_host not in LOCAL_DEVELOPMENT_ADMIN_HOSTS or os.environ.get("BMS_RUNTIME_MODE") != "dev":
+        raise HTTPException(status_code=403, detail="alignment capability rotation is limited to local Development")
+    configured = urlsplit(os.environ.get("BMS_FRONTEND_HEALTH_URL", ""))
+    supplied = urlsplit(request.headers.get("origin", ""))
+    if (
+        request.headers.get("sec-fetch-site", "").lower() != "same-origin"
+        or configured.scheme not in {"http", "https"}
+        or not configured.netloc
+        or (supplied.scheme, supplied.netloc) != (configured.scheme, configured.netloc)
+    ):
+        raise HTTPException(status_code=403, detail="same-origin Development browser authorization is required")
+
+
+@router.post("/jobs/{job_id}/alignment-access/rotate")
+async def rotate_alignment_access(
+    job_id: str,
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    _require_local_development_browser(request)
+    result = await session.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if job.model_id != "nanopore" or job.status != "completed":
+        raise HTTPException(status_code=409, detail="alignment access can rotate only for completed nanopore jobs")
+    try:
+        sessions = await run_in_threadpool(
+            service.build_alignment_sessions,
+            job_id,
+            **_job_authority(job),
+            job_output_dir=_job_output_dir(job),
+        )
+    except service.AlignmentSessionError as exc:
+        raise _http_error(exc) from exc
+    if not any(item.get("mode") == "primary" and item.get("ready") is True for item in sessions):
+        raise HTTPException(status_code=409, detail="no ready primary alignment session is available")
+    previous = job.provenance if isinstance(job.provenance, dict) else {}
+    previous_digest = previous.get(alignment_access.PROVENANCE_DIGEST_KEY)
+    if not isinstance(previous_digest, str):
+        raise HTTPException(status_code=409, detail="persisted alignment capability authority is missing")
+    token, token_digest = alignment_access.issue_alignment_access_token()
+    rotation_count = int(previous.get("alignment_access_rotation_count") or 0) + 1
+    updated = {
+        **previous,
+        alignment_access.PROVENANCE_DIGEST_KEY: token_digest,
+        alignment_access.PROVENANCE_SCHEME_KEY: alignment_access.SCHEME,
+        "alignment_access_rotation_count": rotation_count,
+    }
+    changed = await session.execute(
+        update(Job)
+        .where(
+            Job.id == job_id,
+            Job.status == "completed",
+            Job.model_id == "nanopore",
+            Job.provenance[alignment_access.PROVENANCE_DIGEST_KEY].as_string() == previous_digest,
+        )
+        .values(provenance=updated)
+        .execution_options(synchronize_session=False)
+    )
+    if changed.rowcount != 1:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="alignment capability authority changed concurrently")
+    await session.commit()
+    alignment_access.set_alignment_access_cookie(job_id, token, response, request)
+    return {
+        "job_id": job_id,
+        "rotated": True,
+        "scheme": alignment_access.SCHEME,
+        "rotation_count": rotation_count,
     }
 
 
@@ -168,6 +253,26 @@ async def list_alignment_sessions(
         raise _http_error(exc) from exc
 
 
+@router.get("/jobs/{job_id}/sequence-qc-manifest")
+async def get_job_scoped_sequence_qc_manifest(
+    job_id: str,
+    authorized_job: Job = Depends(require_alignment_job),
+):
+    try:
+        result_root = resolve_persisted_job_result_root(authorized_job)
+        manifest_path = find_manifest_in_result_root(result_root)
+        authority = _job_authority(authorized_job)
+        return load_sequence_qc_manifest(
+            manifest_path,
+            expected_job_id=job_id,
+            expected_workflow_id=authority["workflow_id"],
+            expected_input_mode=authority["input_mode"],
+            expected_analysis_status="completed",
+        )
+    except (JobResultRootError, SequenceQcManifestError) as exc:
+        raise _http_error(service.AlignmentSessionError(str(exc))) from exc
+
+
 @router.get("/jobs/{job_id}/alignment-sessions/{session_id}")
 async def get_alignment_session(
     job_id: str,
@@ -182,6 +287,43 @@ async def get_alignment_session(
             **_job_authority(authorized_job),
             job_output_dir=_job_output_dir(authorized_job),
         )
+    except service.AlignmentSessionError as exc:
+        raise _http_error(exc) from exc
+
+
+@router.get("/jobs/{job_id}/ngs-artifacts")
+async def list_ngs_package_artifacts(
+    job_id: str,
+    authorized_job: Job = Depends(require_alignment_job),
+):
+    try:
+        artifacts = await run_in_threadpool(
+            service.build_ngs_package_artifacts,
+            job_id,
+            **_job_authority(authorized_job),
+            job_output_dir=_job_output_dir(authorized_job),
+        )
+        return {"job_id": job_id, "artifacts": artifacts}
+    except service.AlignmentSessionError as exc:
+        raise _http_error(exc) from exc
+
+
+@router.get("/jobs/{job_id}/ngs-artifacts/{sha256}")
+async def get_ngs_package_artifact(
+    job_id: str,
+    sha256: str,
+    request: Request,
+    authorized_job: Job = Depends(require_alignment_job),
+):
+    try:
+        path, metadata = await run_in_threadpool(
+            service.resolve_ngs_package_artifact,
+            job_id,
+            sha256,
+            **_job_authority(authorized_job),
+            job_output_dir=_job_output_dir(authorized_job),
+        )
+        return await _serve_artifact(path, metadata, request)
     except service.AlignmentSessionError as exc:
         raise _http_error(exc) from exc
 

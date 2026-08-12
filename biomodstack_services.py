@@ -1275,6 +1275,13 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     dev_container_dir = str(
         resolved.get("dev_container_dir", shared_data_root / "apptainer")
     )
+    dev_ngs_runtime_sif = str(
+        os.environ.get("BMS_DEV_NGS_RUNTIME_SIF")
+        or resolved.get(
+            "dev_ngs_runtime_sif",
+            shared_data_root / "dev" / "apptainer" / "dorado-v1.3.1-samtools-v1.24.sif",
+        )
+    )
     dev_adapter_limits = render_systemd_resource_boundaries(DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE).replace(
         "\n", "\n            "
     )
@@ -1379,6 +1386,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment=BMS_RESULTS_DIR={dev_results_root}
         Environment=BMS_RESULTS_ROOT={dev_results_root}
         Environment=BMS_CONTAINER_DIR={dev_container_dir}
+        Environment=BMS_NGS_RUNTIME_SIF={dev_ngs_runtime_sif}
         Environment=BMS_WEIGHTS={dev_weights_root}
         Environment=BMS_COLABFOLD_DB={dev_colabfold_db}
         Environment=BMS_MSA_CACHE={dev_msa_cache_dir}

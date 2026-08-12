@@ -7,16 +7,19 @@ import json
 import mimetypes
 import os
 import re
+import shutil
 import stat
 import subprocess
 import tempfile
 import threading
+from dataclasses import dataclass
 from collections import OrderedDict
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, BinaryIO, Iterator, cast
 
 from paths import get_results_dir
+from services.ont_ngs_contract import DORADO_LOCK_PATH
 
 SAFE_JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]{0,255}$")
 SAFE_CONTIG_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,255}$")
@@ -558,13 +561,175 @@ def _pick_bundle(records: list[dict[str, Any]], mode: str) -> tuple[dict[str, di
     return {}, None
 
 
-def _bam_header_contigs(bam: Path, samtools: str) -> dict[str, tuple[int, str | None]]:
+@dataclass(frozen=True)
+class _PinnedSamtoolsCommand:
+    argv: tuple[str, ...]
+    pass_fds: tuple[int, ...]
+    results_root: str
+    results_identity: tuple[int, int]
+
+    def __iter__(self):
+        return iter(self.argv)
+
+    def verify_results_root(self) -> None:
+        metadata = os.stat(self.results_root, follow_symlinks=False)
+        if not stat.S_ISDIR(metadata.st_mode) or (metadata.st_dev, metadata.st_ino) != self.results_identity:
+            raise AlignmentSessionError("NGS results bind root changed after validation")
+
+
+_samtools_runtime_lock = threading.RLock()
+_samtools_runtime_cache: dict[tuple[str, str], _PinnedSamtoolsCommand] = {}
+
+
+def _clear_samtools_runtime_cache() -> None:
+    with _samtools_runtime_lock:
+        commands = tuple(_samtools_runtime_cache.values())
+        _samtools_runtime_cache.clear()
+    for command in commands:
+        for descriptor in command.pass_fds:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def _open_nofollow(path: Path, *, directory: bool, label: str) -> int:
+    raw = os.fspath(path)
+    if not path.is_absolute() or not raw or "\x00" in raw:
+        raise AlignmentSessionError(f"{label} path is invalid")
+    directory_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    leaf_flags = directory_flags if directory else (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    current = os.open(os.sep, directory_flags)
+    try:
+        for component in path.parts[1:-1]:
+            child = os.open(component, directory_flags, dir_fd=current)
+            os.close(current)
+            current = child
+        descriptor = os.open(path.parts[-1], leaf_flags, dir_fd=current)
+    except OSError as exc:
+        raise AlignmentSessionError(f"{label} cannot be opened without following symlinks") from exc
+    finally:
+        os.close(current)
+    metadata = os.fstat(descriptor)
+    expected_type = stat.S_ISDIR if directory else stat.S_ISREG
+    if not expected_type(metadata.st_mode):
+        os.close(descriptor)
+        raise AlignmentSessionError(f"{label} has the wrong file type")
+    return descriptor
+
+
+def _sha256_descriptor(descriptor: int) -> str:
+    digest = hashlib.sha256()
+    offset = 0
+    while chunk := os.pread(descriptor, 1024 * 1024, offset):
+        digest.update(chunk)
+        offset += len(chunk)
+    return digest.hexdigest()
+
+
+def _ngs_runtime_identity() -> tuple[str, str]:
+    try:
+        lock = json.loads(DORADO_LOCK_PATH.read_text(encoding="utf-8"))
+        expected_digest = lock["dorado"]["sif_sha256"]
+        expected_version = lock["scientific_tools"]["samtools"]["version"]
+    except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise AlignmentSessionError("canonical NGS runtime lock is unavailable") from exc
+    if not isinstance(expected_digest, str) or re.fullmatch(r"[0-9a-f]{64}", expected_digest) is None:
+        raise AlignmentSessionError("canonical NGS runtime digest is invalid")
+    if expected_version != "1.24":
+        raise AlignmentSessionError("canonical NGS samtools version is not 1.24")
+    return expected_digest, expected_version
+
+
+def _samtools_command() -> _PinnedSamtoolsCommand:
+    runtime_raw = os.environ.get("BMS_NGS_RUNTIME_SIF", "").strip()
+    results_configured = os.environ.get("BMS_RESULTS_DIR") or os.environ.get("BMS_RESULTS_ROOT")
+    runtime_sif = Path(runtime_raw).expanduser()
+    results_dir = (
+        Path(results_configured).expanduser()
+        if results_configured
+        else get_results_dir().expanduser()
+    )
+    if not runtime_sif.is_absolute():
+        raise AlignmentSessionError("pinned NGS samtools runtime path is invalid")
+    results_raw = os.fspath(results_dir)
+    if not results_dir.is_absolute() or any(character in results_raw for character in ("\x00", ":", ",", "\n", "\r")):
+        raise AlignmentSessionError("NGS results bind root is unsafe")
+    key = (os.fspath(runtime_sif), results_raw)
+    with _samtools_runtime_lock:
+        cached = _samtools_runtime_cache.get(key)
+        if cached is not None:
+            return cached
+        apptainer = shutil.which("apptainer")
+        if not apptainer:
+            raise AlignmentSessionError("Apptainer is unavailable for the pinned NGS runtime")
+        expected_digest, expected_version = _ngs_runtime_identity()
+        runtime_fd = _open_nofollow(runtime_sif, directory=False, label="pinned NGS runtime")
+        results_fd = -1
+        try:
+            if _sha256_descriptor(runtime_fd) != expected_digest:
+                raise AlignmentSessionError("pinned NGS runtime digest does not match the canonical lock")
+            results_fd = _open_nofollow(results_dir, directory=True, label="NGS results bind root")
+            command = _PinnedSamtoolsCommand(
+                argv=(
+                    apptainer,
+                    "exec",
+                    "--no-home",
+                    "--pid",
+                    "--net",
+                    "--network",
+                    "none",
+                    "--bind",
+                    f"{results_raw}:{results_raw}:ro",
+                    f"/proc/self/fd/{runtime_fd}",
+                    "samtools",
+                ),
+                pass_fds=(runtime_fd, results_fd),
+                results_root=results_raw,
+                results_identity=(os.fstat(results_fd).st_dev, os.fstat(results_fd).st_ino),
+            )
+            try:
+                command.verify_results_root()
+                probe = subprocess.run(
+                    [*command, "--version"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    pass_fds=command.pass_fds,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise AlignmentSessionError("pinned NGS runtime samtools probe failed") from exc
+            if not probe.stdout.startswith(f"samtools {expected_version}\n"):
+                raise AlignmentSessionError("pinned NGS runtime samtools version mismatch")
+            _samtools_runtime_cache[key] = command
+            return command
+        except Exception:
+            os.close(runtime_fd)
+            if results_fd >= 0:
+                os.close(results_fd)
+            raise
+
+
+def _bam_header_contigs(bam: Path, samtools: _PinnedSamtoolsCommand) -> dict[str, tuple[int, str | None]]:
+    samtools.verify_results_root()
     result = subprocess.run(
-        [samtools, "view", "-H", str(bam)],
+        [*samtools, "view", "-H", str(bam)],
         check=True,
         capture_output=True,
         text=True,
         timeout=30,
+        pass_fds=samtools.pass_fds,
     )
     contigs: dict[str, tuple[int, str | None]] = {}
     for line in result.stdout.splitlines():
@@ -613,19 +778,27 @@ def _validate_alignment_bundle_cached(
     manifest_reference_sha256: str | None,
     source_reference_sha256: str | None,
     mode: str,
-    samtools: str,
+    samtools: _PinnedSamtoolsCommand,
 ) -> tuple[bool, str | None]:
     del bam_signature, index_signature, reference_signature
     bam = Path(bam_text)
     index = Path(index_text)
     reference = Path(reference_text)
     try:
-        subprocess.run([samtools, "quickcheck", "-v", str(bam)], check=True, capture_output=True, timeout=30)
+        samtools.verify_results_root()
         subprocess.run(
-            [samtools, "idxstats", "-X", str(bam), str(index)],
+            [*samtools, "quickcheck", "-v", str(bam)],
             check=True,
             capture_output=True,
             timeout=30,
+            pass_fds=samtools.pass_fds,
+        )
+        subprocess.run(
+            [*samtools, "idxstats", "-X", str(bam), str(index)],
+            check=True,
+            capture_output=True,
+            timeout=30,
+            pass_fds=samtools.pass_fds,
         )
         bam_contigs = _bam_header_contigs(bam, samtools)
         reference_contigs = _fasta_contigs(reference)
@@ -677,7 +850,7 @@ def _validate_alignment_bundle(
     source_reference_sha256: str | None = None,
     mode: str = "primary",
 ) -> tuple[bool, str | None]:
-    samtools = os.environ.get("SAMTOOLS", "samtools")
+    samtools = _samtools_command()
     signatures = []
     for path in (bam, index, reference):
         file_stat = path.stat()
@@ -907,6 +1080,305 @@ def resolve_alignment_artifact(
     )[0]
 
 
+def _package_artifact_descriptor(
+    job_id: str,
+    job_root: Path,
+    path: Path,
+    *,
+    kind: str,
+    source: str,
+    declared_sha256: str | None = None,
+    declared_size_bytes: int | None = None,
+    observed_sha256: str | None = None,
+    observed_size_bytes: int | None = None,
+) -> dict[str, Any]:
+    try:
+        relative_path = path.relative_to(job_root)
+    except ValueError as exc:
+        raise AlignmentSessionError("NGS package artifact escapes the persisted job root") from exc
+    if any(part in {"", ".", ".."} for part in relative_path.parts):
+        raise AlignmentSessionError("NGS package artifact path is unsafe")
+    relative = relative_path.as_posix()
+    if observed_sha256 is None or observed_size_bytes is None:
+        observed_sha256, observed_size = _sha256_file_and_size(path)
+    else:
+        observed_size = observed_size_bytes
+    if declared_sha256 is not None and declared_sha256 != observed_sha256:
+        raise AlignmentSessionError(f"NGS package artifact digest mismatch: {kind}")
+    if declared_size_bytes is not None and declared_size_bytes != observed_size:
+        raise AlignmentSessionError(f"NGS package artifact size mismatch: {kind}")
+    mime_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    return {
+        "kind": kind,
+        "source": source,
+        "relative_path": relative,
+        "state": "present",
+        "sha256": observed_sha256,
+        "size_bytes": observed_size,
+        "mime_type": mime_type,
+        "url": f"/api/jobs/{job_id}/ngs-artifacts/{observed_sha256}",
+        "range_capable": True,
+        "_path": path,
+    }
+
+
+def _read_bounded_json_nofollow(
+    path: Path,
+    *,
+    label: str,
+    max_bytes: int = 10 * 1024 * 1024,
+) -> tuple[dict[str, Any], bytes, str, int]:
+    handle = _open_regular_file_no_symlinks(path)
+    try:
+        size_bytes = os.fstat(handle.fileno()).st_size
+        if size_bytes < 2 or size_bytes > max_bytes:
+            raise AlignmentSessionError(f"{label} size is invalid")
+        raw_bytes = handle.read(max_bytes + 1)
+    finally:
+        handle.close()
+    if len(raw_bytes) != size_bytes:
+        raise AlignmentSessionError(f"{label} changed while it was read")
+    try:
+        payload = json.loads(raw_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AlignmentSessionError(f"{label} is invalid JSON") from exc
+    if not isinstance(payload, dict):
+        raise AlignmentSessionError(f"{label} must be a JSON object")
+    return payload, raw_bytes, hashlib.sha256(raw_bytes).hexdigest(), size_bytes
+
+
+def _manifest_package_artifacts(
+    job_id: str,
+    job_root: Path,
+    manifest_path: Path,
+    manifest: dict[str, Any],
+    *,
+    source: str,
+    manifest_sha256: str,
+    manifest_size_bytes: int,
+) -> list[dict[str, Any]]:
+    descriptors = [
+        _package_artifact_descriptor(
+            job_id,
+            job_root,
+            manifest_path,
+            kind=f"{source}_manifest",
+            source=source,
+            observed_sha256=manifest_sha256,
+            observed_size_bytes=manifest_size_bytes,
+        )
+    ]
+    for artifact in manifest.get("artifacts", []):
+        if not isinstance(artifact, dict):
+            continue
+        if artifact.get("state") != "present":
+            descriptors.append(
+                {
+                    "kind": str(artifact.get("kind") or "artifact"),
+                    "source": source,
+                    "relative_path": None,
+                    "state": str(artifact.get("state") or "unavailable"),
+                    "sha256": None,
+                    "size_bytes": None,
+                    "mime_type": None,
+                    "url": None,
+                    "range_capable": False,
+                    "unavailable_reason": artifact.get("unavailable_reason") or artifact.get("missing_reason"),
+                }
+            )
+            continue
+        if artifact.get("integrity_valid") is not True:
+            raise AlignmentSessionError(f"NGS package artifact integrity is invalid: {artifact.get('kind')}")
+        raw_path = artifact.get("path")
+        if not isinstance(raw_path, str) or not raw_path:
+            raise AlignmentSessionError("present NGS package artifact has no path")
+        descriptors.append(
+            _package_artifact_descriptor(
+                job_id,
+                job_root,
+                manifest_path.parent / raw_path,
+                kind=str(artifact.get("kind") or "artifact"),
+                source=source,
+                declared_sha256=artifact.get("declared_sha256"),
+                declared_size_bytes=artifact.get("declared_size_bytes"),
+            )
+        )
+    return descriptors
+
+
+def build_ngs_package_artifacts(
+    job_id: str,
+    *,
+    source_reference_sha256: str,
+    workflow_id: str,
+    input_mode: str,
+    results_dir: str | Path | None = None,
+    job_output_dir: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    """Build a digest-bound inventory from canonical persisted NGS manifests."""
+    from services.sequence_qc_manifest import SequenceQcManifestError, load_sequence_qc_manifest
+
+    safe_job_id, job_root = _safe_job_root(job_id, results_dir, job_output_dir)
+    if re.fullmatch(r"[0-9a-f]{64}", source_reference_sha256) is None:
+        raise AlignmentSessionError("authorized source reference identity is required")
+    sequence_candidates = (job_root / "fastq_qc" / "qc_manifest.json", job_root / "qc_manifest.json")
+    sequence_path = next((path for path in sequence_candidates if path.is_file() and not path.is_symlink()), None)
+    if sequence_path is None:
+        raise AlignmentSessionError("canonical sequence-QC manifest is unavailable")
+    sequence_document, sequence_bytes, sequence_digest, sequence_size = _read_bounded_json_nofollow(
+        sequence_path,
+        label="canonical sequence-QC manifest",
+    )
+    try:
+        sequence_manifest = load_sequence_qc_manifest(
+            sequence_path,
+            raw_bytes=sequence_bytes,
+            manifest_document=sequence_document,
+            expected_job_id=safe_job_id,
+            expected_workflow_id=workflow_id,
+            expected_input_mode=input_mode,
+            expected_analysis_status="completed",
+        )
+    except SequenceQcManifestError as exc:
+        raise AlignmentSessionError(str(exc)) from exc
+    reference_binding = sequence_manifest.get("alignment_session")
+    if (
+        not isinstance(reference_binding, dict)
+        or reference_binding.get("reference_sequence_sha256") != source_reference_sha256
+    ):
+        raise AlignmentSessionError("sequence-QC reference identity does not match persisted Job")
+    descriptors = _manifest_package_artifacts(
+        safe_job_id,
+        job_root,
+        sequence_path,
+        sequence_manifest,
+        source="sequence_qc",
+        manifest_sha256=sequence_digest,
+        manifest_size_bytes=sequence_size,
+    )
+
+    verification_path = job_root / "verification" / "qc_manifest.json"
+    if verification_path.is_file() and not verification_path.is_symlink():
+        verification_document, verification_bytes, verification_digest, verification_size = _read_bounded_json_nofollow(
+            verification_path,
+            label="construct-verification manifest",
+        )
+        try:
+            verification_manifest = load_sequence_qc_manifest(
+                verification_path,
+                raw_bytes=verification_bytes,
+                manifest_document=verification_document,
+            )
+        except SequenceQcManifestError as exc:
+            raise AlignmentSessionError(str(exc)) from exc
+        if (
+            verification_manifest.get("schema") != "biomodstack.construct_verification.v2"
+            or verification_manifest.get("artifact_schema_version") != 2
+            or "MALFORMED_VERIFICATION_MANIFEST" in verification_manifest.get("reason_codes", [])
+        ):
+            raise AlignmentSessionError("construct-verification manifest schema is invalid")
+        descriptors.extend(
+            _manifest_package_artifacts(
+                safe_job_id,
+                job_root,
+                verification_path,
+                verification_manifest,
+                source="construct_verification",
+                manifest_sha256=verification_digest,
+                manifest_size_bytes=verification_size,
+            )
+        )
+
+    observed_state_path = job_root / "fastq_qc" / "construct_verification_input" / "observed_state.json"
+    if observed_state_path.is_file() and not observed_state_path.is_symlink():
+        observed_state, _observed_bytes, observed_digest, observed_size = _read_bounded_json_nofollow(
+            observed_state_path,
+            label="source-read provenance",
+            max_bytes=1024 * 1024,
+        )
+        descriptors.append(
+            _package_artifact_descriptor(
+                safe_job_id,
+                job_root,
+                observed_state_path,
+                kind="source_read_provenance",
+                source="construct_verification_input",
+                observed_sha256=observed_digest,
+                observed_size_bytes=observed_size,
+            )
+        )
+        reads_path = observed_state.get("source_reads_path") if isinstance(observed_state, dict) else None
+        reads_digest = observed_state.get("source_reads_sha256") if isinstance(observed_state, dict) else None
+        if input_mode == "fastq":
+            reads_relative = Path(reads_path) if isinstance(reads_path, str) else None
+            if (
+                reads_relative is None
+                or reads_relative.is_absolute()
+                or any(part in {"", ".", ".."} for part in reads_relative.parts)
+                or not isinstance(reads_digest, str)
+                or re.fullmatch(r"[0-9a-f]{64}", reads_digest) is None
+            ):
+                raise AlignmentSessionError("retained FASTQ provenance is incomplete")
+            descriptors.append(
+                _package_artifact_descriptor(
+                    safe_job_id,
+                    job_root,
+                    observed_state_path.parent / reads_relative,
+                    kind="source_reads_fastq",
+                    source="construct_verification_input",
+                    declared_sha256=reads_digest,
+                )
+            )
+
+    if input_mode == "fastq":
+        descriptors.append(
+            {
+                "kind": "signal_data",
+                "source": "input_mode",
+                "relative_path": None,
+                "state": "not_applicable_to_input_mode",
+                "sha256": None,
+                "size_bytes": None,
+                "mime_type": None,
+                "url": None,
+                "range_capable": False,
+                "unavailable_reason": "FASTQ input has no retained raw signal artifact",
+            }
+        )
+    deduplicated: dict[tuple[str, str | None, str | None], dict[str, Any]] = {}
+    for descriptor in descriptors:
+        key = (str(descriptor["kind"]), descriptor.get("sha256"), descriptor.get("state"))
+        deduplicated.setdefault(key, descriptor)
+    return [
+        {key: value for key, value in descriptor.items() if key != "_path"}
+        for descriptor in deduplicated.values()
+    ]
+
+
+def resolve_ngs_package_artifact(
+    job_id: str,
+    sha256: str,
+    **authority: Any,
+) -> tuple[Path, dict[str, Any]]:
+    if re.fullmatch(r"[0-9a-f]{64}", sha256) is None:
+        raise AlignmentSessionError("NGS package artifact not found")
+    inventory = build_ngs_package_artifacts(job_id, **authority)
+    for artifact in inventory:
+        if artifact.get("sha256") != sha256 or artifact.get("state") != "present":
+            continue
+        _, job_root = _safe_job_root(
+            job_id,
+            authority.get("results_dir"),
+            authority.get("job_output_dir"),
+        )
+        relative = artifact.get("relative_path")
+        if not isinstance(relative, str):
+            break
+        path = job_root / relative
+        return path, artifact
+    raise AlignmentSessionError("NGS package artifact not found")
+
+
 def resolve_alignment_artifact_by_role(
     job_id: str,
     mode: str,
@@ -964,8 +1436,9 @@ def _iter_sam_lines(
     start: int | None = None,
     end: int | None = None,
 ) -> Iterator[str]:
-    samtools = os.environ.get("SAMTOOLS", "samtools")
-    command = [samtools, "view", str(bam)]
+    samtools = _samtools_command()
+    samtools.verify_results_root()
+    command = [*samtools, "view", str(bam)]
     if contig is not None:
         if not SAFE_CONTIG_RE.fullmatch(contig):
             raise AlignmentSessionError("unsafe contig")
@@ -975,7 +1448,13 @@ def _iter_sam_lines(
             command.append(f"{contig}:{start}-{end}")
         else:
             command.append(contig)
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        pass_fds=samtools.pass_fds,
+    )
     assert process.stdout is not None
     completed = False
     try:

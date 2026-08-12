@@ -97,6 +97,10 @@ def test_workflow_slices_render_one_global_aggregate_limit_with_lane_children(tm
     assert "Environment=BMS_CONTAINER_DIR=/mnt/BioModStack/apptainer" in development[
         services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE
     ]
+    assert (
+        "Environment=BMS_NGS_RUNTIME_SIF=/mnt/BioModStack/dev/apptainer/dorado-v1.3.1-samtools-v1.24.sif"
+        in development[services.API_SERVICE]
+    )
     assert "Environment=BMS_CONTAINER_DIR=/mnt/BioModStack/apptainer" in production[
         services.PRODUCTION_WORKFLOW_ADAPTER_SERVICE
     ]
