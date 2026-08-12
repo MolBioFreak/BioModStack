@@ -78,12 +78,11 @@ test('Nanopore control surface does not expose raw Nextflow arguments', () => {
     assert.doesNotMatch(template, /nextflow run workflows\/ngs\/ont_fastq_qc\.nf/u);
 });
 
-test('Nanopore submit success navigates to the live job-detail route', () => {
+test('Nanopore submit success navigates to the context-preserving NGS inspector', () => {
     const template = readSource('src/components/NanoporeTemplate.tsx');
-    const app = readSource('src/App.tsx');
 
-    assert.match(app, /<Route path="\/jobs\/:jobId" element=\{<JobDetailPage \/>\}/u);
-    assert.match(template, /navigate\(`\/jobs\/\$\{[^}`]+\}`\)/u);
+    assert.match(template, /navigate\(contextHref\('\/ngs', \{ section: 'analyses', job_id: submittedJobId \}\)\)/u);
+    assert.doesNotMatch(template, /navigate\(`\/jobs\/\$\{[^}`]+\}`\)/u);
     assert.doesNotMatch(template, /navigate\(`\/results\/\$\{response\.data\.job_id\}`\)/u);
 });
 

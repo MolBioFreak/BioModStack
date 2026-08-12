@@ -85,7 +85,8 @@ def _shell_resources(text: str) -> set[str]:
     parser.close()
     if re.search(
         r"\b(?:fetch|importScripts|Worker|SharedWorker|WebSocket|EventSource)\s*\(|"
-        r"\bimport\s*\(|\bXMLHttpRequest\b|\blocation\s*=|\.src\s*=",
+        r"\bimport\s*\(|\bXMLHttpRequest\b|\blocation\s*=|\.src\s*=|"
+        r"\[\s*['\"](?:src|href|action|formaction|data|poster|srcset|xlink:href)['\"]\s*\]\s*=",
         text,
         re.IGNORECASE,
     ):
