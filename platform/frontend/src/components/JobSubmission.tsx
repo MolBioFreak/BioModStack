@@ -3,7 +3,8 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchModels, fetchFiles, submitJob, uploadFile, fetchTemplates, fetchTemplateById, fetchInputPresets } from '../lib/api';
+import { completeCurrentLaunchContext, fetchModels, fetchFiles, submitJob, uploadFile, fetchTemplates, fetchTemplateById, fetchInputPresets, type Job } from '../lib/api';
+import { getLaunchContext } from '../lib/projectManager';
 import { SequenceManagerModal } from './SequenceManagerModal';
 import { SequenceManager } from './SequenceManager';
 import { TemplateManagerModal } from './TemplateManagerModal';
@@ -698,6 +699,22 @@ export function JobSubmission() {
     const queryClient = useQueryClient();
     const navigate = useNavigate();
     const [searchParams, setSearchParams] = useSearchParams();
+    const launchContextId = searchParams.get('launch_context_id');
+    const launchContextQuery = useQuery({
+        queryKey: ['launch-context', launchContextId],
+        queryFn: ({ signal }) => getLaunchContext(launchContextId as string, signal),
+        enabled: Boolean(launchContextId),
+        retry: false,
+    });
+    const recoveredLaunchRef = useRef<string | null>(null);
+    useEffect(() => {
+        const recoveryJobId = launchContextQuery.data?.recovery_job_id;
+        if (!recoveryJobId || recoveredLaunchRef.current === recoveryJobId) return;
+        recoveredLaunchRef.current = recoveryJobId;
+        void completeCurrentLaunchContext({ id: recoveryJobId }).then((returnUri) => {
+            if (returnUri) navigate(returnUri);
+        });
+    }, [launchContextQuery.data?.recovery_job_id, navigate]);
     const [wizardMode, setWizardMode] = useState<'templates' | 'experimental' | 'manual'>('templates');
 
     // Read template from URL, allows page refresh and bookmarking
@@ -711,12 +728,14 @@ export function JobSubmission() {
     const setSelectedTemplateId = useCallback((id: string | null) => {
         const canonicalId = id === 'confornets_experimental' ? 'conformational_mapping' : id;
         setSelectedTemplateIdInternal(canonicalId);
+        const next = new URLSearchParams(searchParams);
         if (canonicalId) {
-            setSearchParams({ template: canonicalId }, { replace: true });
+            next.set('template', canonicalId);
         } else {
-            setSearchParams({}, { replace: true });
+            next.delete('template');
         }
-    }, [setSearchParams]);
+        setSearchParams(next, { replace: true });
+    }, [searchParams, setSearchParams]);
     const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
     const [selectedModeId, setSelectedModeId] = useState<string | null>(null);
     const [jobName, setJobName] = useState('');
@@ -1062,10 +1081,15 @@ export function JobSubmission() {
     const ligandPresets = ligandPresetsData?.data ?? [];
 
     const submitMutation = useMutation({
-        mutationFn: submitJob,
-        onSuccess: () => {
+        mutationFn: (jobData: Partial<Job>) => submitJob(jobData),
+        onSuccess: (response) => {
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
-            navigate('/');
+            const returnUri = response.data?.return_uri;
+            if (typeof returnUri === 'string' && returnUri.startsWith('/projects/') && !returnUri.startsWith('//')) {
+                navigate(returnUri);
+            } else {
+                navigate('/');
+            }
         },
         onError: (error: UntypedApiValue) => {
             console.error('Job submission failed:', error);
@@ -1565,6 +1589,20 @@ export function JobSubmission() {
 
     return (
         <div className="min-h-screen bg-slate-950 p-6">
+            {launchContextId && (
+                <aside className="mb-4 rounded-lg border border-blue-500/40 bg-blue-950/40 px-4 py-3 text-sm text-blue-100" aria-label="Project launch destination">
+                    {launchContextQuery.isLoading && 'Resolving Project launch destination…'}
+                    {launchContextQuery.isError && 'Project launch destination is invalid, expired, claimed, or unavailable.'}
+                    {launchContextQuery.data && (
+                        <>
+                            <div className="font-semibold">Verified Project launch destination</div>
+                            <div className="mt-1 font-mono text-xs">
+                                Project {launchContextQuery.data.project_id} · Global Experiment {launchContextQuery.data.global_experiment_id} · Domain Experiment {launchContextQuery.data.domain_experiment_id}
+                            </div>
+                        </>
+                    )}
+                </aside>
+            )}
             {/* Main header - hidden when dedicated templates are active */}
             {showMainHeader && (
                 <header className="mb-8 flex items-center gap-4">
@@ -1671,7 +1709,6 @@ export function JobSubmission() {
                                                 params: batchParams
                                             });
                                             queryClient.invalidateQueries({ queryKey: ['jobs'] });
-                                            navigate('/');
                                         } catch (error) {
                                             console.error("[MUTAGENESIS BATCH] Submission failed", error);
                                         }

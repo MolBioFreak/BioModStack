@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
 import type { Data, Layout, PlotMouseEvent } from 'plotly.js';
 import type { IGV as IgvLibrary } from 'igv';
-import { fetchFullJob, fetchJobLogs, fetchJobStages, fetchJobs, type Job, type JobLogs } from '../lib/api';
+import { api, fetchFullJob, fetchJobLogs, fetchJobStages, fetchJobs, fetchPooledAssignmentManifest, type Job, type JobLogs } from '../lib/api';
 import {
     awaitCurrentGeneration,
     createGenerationBoundResourceWithTimeout,
@@ -2085,7 +2085,29 @@ export function NGSToolkit() {
     const { updateQueryParams, contextHref } = useGlobalExperimentContext();
     const location = useLocation();
     const navigate = useNavigate();
-    const [view, setView] = useState<ToolkitView>('launch');
+    const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
+    const requestedJobId = searchParams.get('job_id');
+    const requestedRunId = searchParams.get('run_id');
+    const requestedReferenceSetId = searchParams.get('reference_set_id');
+    const requestedAssignmentId = searchParams.get('assignment_id');
+    const requestedRunQuery = useQuery({
+        queryKey: ['ont-run', requestedRunId],
+        queryFn: () => api.get<Record<string, unknown>>(`/api/ont/runs/${encodeURIComponent(requestedRunId as string)}`),
+        enabled: Boolean(requestedRunId),
+    });
+    const requestedReferenceSetQuery = useQuery({
+        queryKey: ['ont-reference-set', requestedJobId, requestedReferenceSetId],
+        queryFn: () => api.get<Record<string, unknown>>(
+            `/api/jobs/${encodeURIComponent(requestedJobId as string)}/reference-sets/${encodeURIComponent(requestedReferenceSetId as string)}`,
+        ),
+        enabled: Boolean(requestedJobId && requestedReferenceSetId),
+    });
+    const requestedAssignmentQuery = useQuery({
+        queryKey: ['ont-pooled-assignment', requestedJobId, requestedAssignmentId],
+        queryFn: () => fetchPooledAssignmentManifest(requestedJobId as string),
+        enabled: Boolean(requestedJobId && requestedAssignmentId),
+    });
+    const [view, setView] = useState<ToolkitView>(requestedJobId ? 'runs' : 'launch');
     const [initialValues, setInitialValues] = useState<Record<string, unknown> | undefined>(undefined);
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
@@ -2208,6 +2230,9 @@ export function NGSToolkit() {
     const selectedJob = fullJobQuery.data ?? null;
 
     useEffect(() => {
+        if (requestedJobId) {
+            return;
+        }
         if (!selectedJobId && filteredJobs.length > 0) {
             updateQueryParams({ job_id: filteredJobs[0].id }, { replace: true });
         }
@@ -3748,6 +3773,26 @@ export function NGSToolkit() {
 
     return (
         <div className="min-h-screen bg-[var(--bg-primary)] p-6 space-y-6 text-[var(--text-primary)]">
+            {(requestedJobId || requestedRunId || requestedReferenceSetId || requestedAssignmentId) && (
+                <aside className="rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-secondary)] px-4 py-3 text-xs" aria-label="Exact NGS source context">
+                    {requestedJobId && <span className="mr-3">Job <code>{requestedJobId}</code></span>}
+                    {requestedRunId && (
+                        <span className="mr-3">Run <code>{requestedRunId}</code>{' '}
+                            <strong>{requestedRunQuery.data ? 'loaded' : requestedRunQuery.isError ? 'unavailable' : 'loading'}</strong>
+                        </span>
+                    )}
+                    {requestedReferenceSetId && (
+                        <span className="mr-3">Reference set <code>{requestedReferenceSetId}</code>{' '}
+                            <strong>{requestedReferenceSetQuery.data ? 'loaded' : requestedReferenceSetQuery.isError ? 'unavailable' : 'loading'}</strong>
+                        </span>
+                    )}
+                    {requestedAssignmentId && (
+                        <span>Assignment <code>{requestedAssignmentId}</code>{' '}
+                            <strong>{requestedAssignmentQuery.data?.data.manifest_id === requestedAssignmentId ? 'loaded' : requestedAssignmentQuery.isError || requestedAssignmentQuery.data ? 'unavailable' : 'loading'}</strong>
+                        </span>
+                    )}
+                </aside>
+            )}
             <header className="space-y-2">
                 <div className="flex items-center justify-between">
                     <div>

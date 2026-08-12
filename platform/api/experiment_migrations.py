@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import re
 import sqlite3
+from functools import lru_cache
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -12,8 +15,35 @@ from migrations.sqlite_sha256 import register_sqlite_sha256
 LEGACY_MIGRATION_VERSION = 1
 LEGACY_MIGRATION_NAME = "global_experiment_workspace_foundation"
 LEGACY_MIGRATION_CHECKSUM = "987620af4200932c8fffb282c5655d21aefc29a1a98cbfc3b54f3a734dfe6c10"
-MIGRATION_VERSION = 2
-MIGRATION_NAME = "global_experiment_workspace_receipts_and_projections"
+MIGRATION_V2_VERSION = 2
+MIGRATION_V2_NAME = "global_experiment_workspace_receipts_and_projections"
+MIGRATION_V3_VERSION = 3
+MIGRATION_V3_NAME = "global_project_hierarchy_and_research_records"
+MIGRATION_V4_VERSION = 4
+MIGRATION_V4_NAME = "immutable_external_entity_receipts"
+MIGRATION_V5_VERSION = 5
+MIGRATION_V5_NAME = "aggregate_head_revision_lifecycle_consistency"
+MIGRATION_V6_VERSION = 6
+MIGRATION_V6_NAME = "domain_owned_workflow_and_dataset_aggregates"
+MIGRATION_V7_VERSION = 7
+MIGRATION_V7_NAME = "project_scoped_revisioned_external_entity_receipts"
+MIGRATION_V8_VERSION = 8
+MIGRATION_V8_NAME = "opaque_launch_context_receipts"
+MIGRATION_V9_VERSION = 9
+MIGRATION_V9_NAME = "immutable_preparations_and_dataset_members"
+MIGRATION_VERSION = 10
+MIGRATION_NAME = "scientific_lineage_vocabulary"
+MIGRATION_V2_CHECKSUM = "db24d1ef056e560f10eb2fe9f8ef4dac0d4e4dbe90fd0a49efed88f0d111935c"
+MIGRATION_V3_CHECKSUM = "46f1a1d28a02334e87d628070e2bd9c6d78e158caa23d583951fdc582e7b11d2"
+MIGRATION_V4_CHECKSUM = "ec2966efee9129f8890019bee0d569de2cdf8d2a9fc4bb2e05138839880f375b"
+MIGRATION_V5_CHECKSUM = "6df15ae6c5e2761070ff9714a48ff44aad1e47aed590558f6f1d6d3af9fc2eec"
+MIGRATION_V6_CHECKSUM = "b93ba493759c7b8ba14820500f14ef7588308651e892fdfaccf388ed4330d705"
+MIGRATION_V7_CHECKSUM = "828bcc8e2b8cde1e131ec2f1ced9193ed001e1dfcb2b607e499a6a994acad1d9"
+MIGRATION_V8_CHECKSUM = "bf11980a720aad2b0f62fcbea055a3d2e1181b1b41449cc62c0455b70b9c92dc"
+MIGRATION_V9_CHECKSUM = "469240fb73fb6d7be9bf80412ccfd52cc81d14e91bf6bedb8881ffeb1c9b7bd0"
+MIGRATION_V10_CHECKSUM = "b36656f82945b839e573990255ecedbeb902608d2b329df0ebb0ce85dbea73e8"
+FINAL_SCHEMA_MANIFEST_CHECKSUM = "95f912b48576069390c9e3f17c09e4e6a57d847752421adf5c23d2456aa95354"
+LEGACY_FINAL_SCHEMA_MANIFEST_CHECKSUM = "11fcf5ccc1429dca85f1b68bf67831279cb441ed44b63abb266f2ebba0069aa2"
 
 MIGRATION_SQL = r'''
 CREATE TABLE IF NOT EXISTS resources (
@@ -228,6 +258,7 @@ CREATE TABLE IF NOT EXISTS external_entity_receipts (
     generation_or_revision TEXT NOT NULL,
     content_digest TEXT NOT NULL CHECK (length(content_digest) = 64),
     availability TEXT NOT NULL CHECK (availability IN ('unknown', 'available', 'unavailable')),
+    verification_authority TEXT NOT NULL DEFAULT 'legacy_unverified' CHECK (length(verification_authority) > 0),
     acknowledgement_json TEXT,
     created_at TEXT NOT NULL,
     UNIQUE(store_id, entity_kind, entity_id, generation_or_revision, content_digest)
@@ -517,6 +548,758 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_experiment_run_events_idempotency
     ON run_events(workflow_run_id, idempotency_key);
 '''
 
+MIGRATION_V3_SQL = r'''
+DROP INDEX IF EXISTS ix_experiment_aggregate_heads_workspace_kind;
+ALTER TABLE aggregate_heads RENAME TO aggregate_heads_v2;
+CREATE TABLE aggregate_heads (
+    aggregate_id TEXT PRIMARY KEY NOT NULL REFERENCES resources(id),
+    aggregate_kind TEXT NOT NULL CHECK (aggregate_kind IN ('workspace', 'experiment', 'domain_experiment', 'workflow', 'dataset')),
+    workspace_id TEXT NOT NULL REFERENCES resources(id),
+    parent_id TEXT REFERENCES resources(id),
+    current_revision_id TEXT REFERENCES resources(id),
+    head_generation INTEGER NOT NULL DEFAULT 0 CHECK (head_generation >= 0),
+    lifecycle_state TEXT NOT NULL DEFAULT 'draft',
+    display_name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+INSERT INTO aggregate_heads(
+    aggregate_id, aggregate_kind, workspace_id, parent_id, current_revision_id,
+    head_generation, lifecycle_state, display_name, description, created_at, updated_at
+)
+SELECT
+    aggregate_id, aggregate_kind, workspace_id, parent_id, current_revision_id,
+    head_generation, lifecycle_state, display_name, description, created_at, updated_at
+FROM aggregate_heads_v2;
+DROP TABLE aggregate_heads_v2;
+CREATE INDEX IF NOT EXISTS ix_experiment_aggregate_heads_workspace_kind
+    ON aggregate_heads(workspace_id, aggregate_kind, lifecycle_state);
+
+DROP TRIGGER IF EXISTS trg_experiment_lineage_same_workspace;
+DROP TRIGGER IF EXISTS trg_experiment_lineage_owns_no_cycle;
+DROP INDEX IF EXISTS ix_experiment_lineage_edges_source;
+DROP INDEX IF EXISTS ix_experiment_lineage_edges_target;
+ALTER TABLE lineage_edges RENAME TO lineage_edges_v2;
+CREATE TABLE lineage_edges (
+    id TEXT PRIMARY KEY NOT NULL,
+    workspace_id TEXT NOT NULL REFERENCES resources(id),
+    source_resource_id TEXT NOT NULL REFERENCES resources(id),
+    target_resource_id TEXT NOT NULL REFERENCES resources(id),
+    edge_mode TEXT NOT NULL CHECK (edge_mode IN (
+        'owns', 'pins', 'derives_from', 'contains', 'consumes', 'produces', 'retry_of',
+        'refines', 'validates', 'promotes_to_dataset', 'imports_from', 'forked_from',
+        'references', 'uses_input', 'produced', 'validated_by'
+    )),
+    edge_key TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    UNIQUE(source_resource_id, target_resource_id, edge_mode, edge_key)
+);
+INSERT INTO lineage_edges(
+    id, workspace_id, source_resource_id, target_resource_id, edge_mode,
+    edge_key, metadata_json, created_at
+)
+SELECT
+    id, workspace_id, source_resource_id, target_resource_id, edge_mode,
+    edge_key, metadata_json, created_at
+FROM lineage_edges_v2;
+DROP TABLE lineage_edges_v2;
+CREATE INDEX ix_experiment_lineage_edges_source ON lineage_edges(source_resource_id, edge_mode);
+CREATE INDEX ix_experiment_lineage_edges_target ON lineage_edges(target_resource_id, edge_mode);
+CREATE TRIGGER trg_experiment_lineage_same_workspace
+BEFORE INSERT ON lineage_edges
+WHEN NEW.source_resource_id = NEW.target_resource_id
+  OR (CASE WHEN (SELECT kind FROM resources WHERE id = NEW.source_resource_id) = 'workspace' THEN NEW.source_resource_id ELSE (SELECT workspace_id FROM resources WHERE id = NEW.source_resource_id) END) IS NOT NEW.workspace_id
+  OR (CASE WHEN (SELECT kind FROM resources WHERE id = NEW.target_resource_id) = 'workspace' THEN NEW.target_resource_id ELSE (SELECT workspace_id FROM resources WHERE id = NEW.target_resource_id) END) IS NOT NEW.workspace_id
+BEGIN
+    SELECT RAISE(ABORT, 'lineage edge is self-referential or crosses workspace');
+END;
+CREATE TRIGGER trg_experiment_lineage_owns_no_cycle
+BEFORE INSERT ON lineage_edges
+WHEN NEW.edge_mode = 'owns'
+ AND EXISTS (
+   WITH RECURSIVE reachable(id) AS (
+       SELECT target_resource_id FROM lineage_edges WHERE source_resource_id = NEW.target_resource_id AND edge_mode = 'owns'
+       UNION ALL
+       SELECT lineage_edges.target_resource_id
+       FROM lineage_edges JOIN reachable ON lineage_edges.source_resource_id = reachable.id
+       WHERE lineage_edges.edge_mode = 'owns'
+   )
+   SELECT 1 FROM reachable WHERE id = NEW.source_resource_id
+ )
+BEGIN
+    SELECT RAISE(ABORT, 'lineage ownership cycle');
+END;
+
+CREATE TEMP TABLE hierarchy_migration_payloads (
+    aggregate_id TEXT PRIMARY KEY,
+    schema_name TEXT NOT NULL,
+    canonical_payload TEXT NOT NULL,
+    legacy_lifecycle_state TEXT NOT NULL
+);
+INSERT INTO hierarchy_migration_payloads(aggregate_id, schema_name, canonical_payload, legacy_lifecycle_state)
+SELECT
+    aggregate_id,
+    'bms.project.v1',
+    json_object(
+        'schema', 'bms.project.v1',
+        'name', display_name,
+        'description', description,
+        'research_objective', '',
+        'owner', NULL,
+        'contributors', json('[]'),
+        'tags', json('[]'),
+        'status', CASE WHEN lifecycle_state IN ('draft', 'active', 'on_hold', 'completed', 'archived') THEN lifecycle_state ELSE 'draft' END,
+        'start_date', NULL,
+        'target_end_date', NULL,
+        'external_references', json('[]'),
+        'created_by', NULL,
+        'change_summary', 'migrated from legacy workspace',
+        'needs_metadata_review', json('true')
+    ),
+    lifecycle_state
+FROM aggregate_heads
+WHERE aggregate_kind = 'workspace' AND current_revision_id IS NULL;
+INSERT INTO hierarchy_migration_payloads(aggregate_id, schema_name, canonical_payload, legacy_lifecycle_state)
+SELECT
+    aggregate_id,
+    'bms.global-experiment.v1',
+    json_object(
+        'schema', 'bms.global-experiment.v1',
+        'name', display_name,
+        'objective', '',
+        'scientific_question', description,
+        'hypothesis', NULL,
+        'description', description,
+        'status', CASE
+            WHEN lifecycle_state = 'completed' THEN 'review'
+            WHEN lifecycle_state IN ('draft', 'planned', 'active', 'analysis', 'review', 'blocked', 'archived') THEN lifecycle_state
+            ELSE 'draft'
+        END,
+        'priority', 'normal',
+        'tags', json('[]'),
+        'shared_source_receipt_ids', json('[]'),
+        'shared_dataset_ids', json('[]'),
+        'comparison_plan', NULL,
+        'success_criteria', json('[]'),
+        'review_summary', NULL,
+        'conclusion', NULL,
+        'created_by', NULL,
+        'change_summary', 'migrated from legacy experiment',
+        'needs_metadata_review', json('true')
+    ),
+    lifecycle_state
+FROM aggregate_heads
+WHERE aggregate_kind = 'experiment' AND current_revision_id IS NULL;
+INSERT INTO resources(id, kind, workspace_id, lifecycle_owner_id, created_at)
+SELECT
+    'migration-v3-revision:' || payload.aggregate_id,
+    'revision',
+    head.workspace_id,
+    payload.aggregate_id,
+    head.created_at
+FROM hierarchy_migration_payloads AS payload
+JOIN aggregate_heads AS head ON head.aggregate_id = payload.aggregate_id;
+INSERT INTO revisions(
+    resource_id, subject_id, revision_number, parent_revision_id, schema_name,
+    schema_version, canonical_payload, payload_sha256, dependency_graph_sha256,
+    provenance_json, created_at
+)
+SELECT
+    'migration-v3-revision:' || payload.aggregate_id,
+    payload.aggregate_id,
+    1,
+    NULL,
+    payload.schema_name,
+    '1',
+    payload.canonical_payload,
+    sha256(payload.canonical_payload),
+    sha256('{"edges":[],"nodes":[]}'),
+    json_object(
+        'legacy_lifecycle_state', payload.legacy_lifecycle_state,
+        'migration', 'v3',
+        'needs_metadata_review', json('true')
+    ),
+    head.created_at
+FROM hierarchy_migration_payloads AS payload
+JOIN aggregate_heads AS head ON head.aggregate_id = payload.aggregate_id;
+UPDATE aggregate_heads
+SET current_revision_id = 'migration-v3-revision:' || aggregate_id,
+    head_generation = 1,
+    lifecycle_state = json_extract(
+        (SELECT canonical_payload FROM hierarchy_migration_payloads WHERE aggregate_id = aggregate_heads.aggregate_id),
+        '$.status'
+    )
+WHERE aggregate_id IN (SELECT aggregate_id FROM hierarchy_migration_payloads);
+INSERT INTO audit_events(id, workspace_id, resource_id, event_type, generation, payload_json, created_at)
+SELECT
+    'migration-v3-audit:' || payload.aggregate_id,
+    head.workspace_id,
+    payload.aggregate_id,
+    'hierarchy_revision_migrated',
+    1,
+    json_object(
+        'revision_id', 'migration-v3-revision:' || payload.aggregate_id,
+        'needs_metadata_review', json('true'),
+        'legacy_lifecycle_state', payload.legacy_lifecycle_state,
+        'migrated_lifecycle_state', json_extract(payload.canonical_payload, '$.status')
+    ),
+    head.created_at
+FROM hierarchy_migration_payloads AS payload
+JOIN aggregate_heads AS head ON head.aggregate_id = payload.aggregate_id;
+DROP TABLE hierarchy_migration_payloads;
+
+CREATE TABLE IF NOT EXISTS research_records (
+    resource_id TEXT PRIMARY KEY NOT NULL REFERENCES resources(id),
+    workspace_id TEXT NOT NULL REFERENCES resources(id),
+    subject_resource_id TEXT NOT NULL REFERENCES resources(id),
+    record_kind TEXT NOT NULL CHECK (record_kind IN ('note', 'observation', 'decision', 'conclusion')),
+    body TEXT NOT NULL,
+    author TEXT,
+    source_receipt_ids_json TEXT NOT NULL DEFAULT '[]',
+    supersedes_record_id TEXT REFERENCES research_records(resource_id),
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_experiment_research_records_subject_created
+    ON research_records(subject_resource_id, created_at, resource_id);
+CREATE INDEX IF NOT EXISTS ix_experiment_research_records_workspace_kind
+    ON research_records(workspace_id, record_kind, created_at);
+
+CREATE TABLE IF NOT EXISTS domain_adapter_receipts (
+    resource_id TEXT PRIMARY KEY NOT NULL REFERENCES resources(id),
+    workspace_id TEXT NOT NULL REFERENCES resources(id),
+    domain_experiment_id TEXT NOT NULL REFERENCES resources(id),
+    adapter_id TEXT NOT NULL,
+    adapter_version TEXT NOT NULL,
+    operation_kind TEXT NOT NULL,
+    normalized_request_sha256 TEXT NOT NULL CHECK (length(normalized_request_sha256) = 64),
+    receipt_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_experiment_domain_adapter_receipts_domain_created
+    ON domain_adapter_receipts(domain_experiment_id, created_at, resource_id);
+CREATE INDEX IF NOT EXISTS ix_experiment_domain_adapter_receipts_workspace
+    ON domain_adapter_receipts(workspace_id, created_at);
+
+CREATE TRIGGER IF NOT EXISTS trg_experiment_aggregate_parent_integrity_insert
+BEFORE INSERT ON aggregate_heads
+WHEN (NEW.aggregate_kind = 'workspace' AND NEW.parent_id IS NOT NULL)
+  OR (NEW.aggregate_kind <> 'workspace' AND NEW.parent_id IS NULL)
+  OR (
+      NEW.parent_id IS NOT NULL
+      AND (CASE WHEN (SELECT kind FROM resources WHERE id = NEW.parent_id) = 'workspace'
+                THEN NEW.parent_id
+                ELSE (SELECT workspace_id FROM resources WHERE id = NEW.parent_id)
+           END) IS NOT NEW.workspace_id
+  )
+  OR (
+      NEW.aggregate_kind = 'experiment'
+      AND (SELECT kind FROM resources WHERE id = NEW.parent_id) <> 'workspace'
+  )
+  OR (
+      NEW.aggregate_kind = 'domain_experiment'
+      AND (SELECT kind FROM resources WHERE id = NEW.parent_id) <> 'experiment'
+  )
+  OR (
+      NEW.aggregate_kind IN ('workflow', 'dataset')
+      AND (SELECT kind FROM resources WHERE id = NEW.parent_id) NOT IN ('workspace', 'experiment')
+  )
+BEGIN
+    SELECT RAISE(ABORT, 'aggregate parent is invalid or crosses workspace');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_experiment_aggregate_parent_immutable_update
+BEFORE UPDATE OF aggregate_id, aggregate_kind, workspace_id, parent_id ON aggregate_heads
+WHEN NEW.aggregate_id IS NOT OLD.aggregate_id
+  OR NEW.aggregate_kind IS NOT OLD.aggregate_kind
+  OR NEW.workspace_id IS NOT OLD.workspace_id
+  OR NEW.parent_id IS NOT OLD.parent_id
+BEGIN
+    SELECT RAISE(ABORT, 'aggregate identity and parent are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_experiment_research_record_same_workspace_insert
+BEFORE INSERT ON research_records
+WHEN (CASE WHEN (SELECT kind FROM resources WHERE id = NEW.subject_resource_id) = 'workspace'
+           THEN NEW.subject_resource_id
+           ELSE (SELECT workspace_id FROM resources WHERE id = NEW.subject_resource_id)
+      END) IS NOT NEW.workspace_id
+BEGIN
+    SELECT RAISE(ABORT, 'research record subject must belong to workspace');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_experiment_research_record_replacement_same_subject
+BEFORE INSERT ON research_records
+WHEN NEW.supersedes_record_id IS NOT NULL
+ AND (SELECT subject_resource_id FROM research_records WHERE resource_id = NEW.supersedes_record_id) IS NOT NEW.subject_resource_id
+BEGIN
+    SELECT RAISE(ABORT, 'research record replacement must keep the same subject');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_experiment_research_record_immutable_update
+BEFORE UPDATE ON research_records
+BEGIN
+    SELECT RAISE(ABORT, 'research record is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_experiment_research_record_immutable_delete
+BEFORE DELETE ON research_records
+BEGIN
+    SELECT RAISE(ABORT, 'research record is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_experiment_domain_adapter_receipt_same_workspace_insert
+BEFORE INSERT ON domain_adapter_receipts
+WHEN (SELECT workspace_id FROM resources WHERE id = NEW.domain_experiment_id) IS NOT NEW.workspace_id
+BEGIN
+    SELECT RAISE(ABORT, 'domain adapter receipt must belong to workspace');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_experiment_domain_adapter_receipt_immutable_update
+BEFORE UPDATE ON domain_adapter_receipts
+BEGIN
+    SELECT RAISE(ABORT, 'domain adapter receipt is immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_experiment_domain_adapter_receipt_immutable_delete
+BEFORE DELETE ON domain_adapter_receipts
+BEGIN
+    SELECT RAISE(ABORT, 'domain adapter receipt is immutable');
+END;
+'''
+
+MIGRATION_V4_SQL = r'''
+CREATE TRIGGER trg_experiment_external_entity_receipt_immutable_update
+BEFORE UPDATE ON external_entity_receipts
+BEGIN
+    SELECT RAISE(ABORT, 'external entity receipt is immutable');
+END;
+
+CREATE TRIGGER trg_experiment_external_entity_receipt_immutable_delete
+BEFORE DELETE ON external_entity_receipts
+BEGIN
+    SELECT RAISE(ABORT, 'external entity receipt is immutable');
+END;
+'''
+
+MIGRATION_V5_SQL = r'''
+CREATE TEMP TABLE aggregate_head_revision_consistency_guard (
+    consistent INTEGER NOT NULL CHECK (consistent = 1)
+);
+INSERT INTO aggregate_head_revision_consistency_guard(consistent)
+SELECT 0
+FROM aggregate_heads AS head
+LEFT JOIN revisions AS revision ON revision.resource_id = head.current_revision_id
+WHERE head.aggregate_kind IN ('workspace', 'experiment', 'domain_experiment')
+  AND (
+      head.current_revision_id IS NULL
+      OR revision.subject_id IS NOT head.aggregate_id
+      OR CASE
+             WHEN json_valid(revision.canonical_payload)
+             THEN json_extract(revision.canonical_payload, '$.status')
+             ELSE NULL
+         END IS NOT head.lifecycle_state
+  )
+LIMIT 1;
+DROP TABLE aggregate_head_revision_consistency_guard;
+
+CREATE TRIGGER trg_experiment_aggregate_head_revision_consistency_insert
+BEFORE INSERT ON aggregate_heads
+WHEN NEW.aggregate_kind IN ('workspace', 'experiment', 'domain_experiment')
+ AND NEW.current_revision_id IS NOT NULL
+ AND NOT EXISTS (
+     SELECT 1
+     FROM revisions AS revision
+     WHERE revision.resource_id = NEW.current_revision_id
+       AND revision.subject_id = NEW.aggregate_id
+       AND CASE
+               WHEN json_valid(revision.canonical_payload)
+               THEN json_extract(revision.canonical_payload, '$.status')
+               ELSE NULL
+           END IS NEW.lifecycle_state
+ )
+BEGIN
+    SELECT RAISE(ABORT, 'aggregate head lifecycle must match current revision status');
+END;
+
+CREATE TRIGGER trg_experiment_aggregate_head_revision_consistency_update
+BEFORE UPDATE ON aggregate_heads
+WHEN NEW.aggregate_kind IN ('workspace', 'experiment', 'domain_experiment')
+ AND (
+     NEW.current_revision_id IS NULL
+     OR NOT EXISTS (
+         SELECT 1
+         FROM revisions AS revision
+         WHERE revision.resource_id = NEW.current_revision_id
+           AND revision.subject_id = NEW.aggregate_id
+           AND CASE
+                   WHEN json_valid(revision.canonical_payload)
+                   THEN json_extract(revision.canonical_payload, '$.status')
+                   ELSE NULL
+               END IS NEW.lifecycle_state
+     )
+ )
+BEGIN
+    SELECT RAISE(ABORT, 'aggregate head lifecycle must match current revision status');
+END;
+'''
+
+MIGRATION_V6_SQL = r'''
+DROP TRIGGER trg_experiment_aggregate_parent_integrity_insert;
+CREATE TRIGGER trg_experiment_aggregate_parent_integrity_insert
+BEFORE INSERT ON aggregate_heads
+WHEN (NEW.aggregate_kind = 'workspace' AND NEW.parent_id IS NOT NULL)
+  OR (NEW.aggregate_kind <> 'workspace' AND NEW.parent_id IS NULL)
+  OR (
+      NEW.parent_id IS NOT NULL
+      AND (CASE WHEN (SELECT kind FROM resources WHERE id = NEW.parent_id) = 'workspace'
+                THEN NEW.parent_id
+                ELSE (SELECT workspace_id FROM resources WHERE id = NEW.parent_id)
+           END) IS NOT NEW.workspace_id
+  )
+  OR (
+      NEW.aggregate_kind = 'experiment'
+      AND (SELECT kind FROM resources WHERE id = NEW.parent_id) <> 'workspace'
+  )
+  OR (
+      NEW.aggregate_kind = 'domain_experiment'
+      AND (SELECT kind FROM resources WHERE id = NEW.parent_id) <> 'experiment'
+  )
+  OR (
+      NEW.aggregate_kind IN ('workflow', 'dataset')
+      AND (SELECT kind FROM resources WHERE id = NEW.parent_id) <> 'domain_experiment'
+  )
+BEGIN
+    SELECT RAISE(ABORT, 'aggregate parent is invalid or crosses workspace');
+END;
+'''
+
+MIGRATION_V7_SQL = r'''
+DROP TRIGGER trg_experiment_external_entity_receipt_immutable_update;
+DROP TRIGGER trg_experiment_external_entity_receipt_immutable_delete;
+ALTER TABLE external_entity_receipts RENAME TO external_entity_receipts_v6;
+CREATE TABLE external_entity_receipts (
+    id TEXT PRIMARY KEY NOT NULL REFERENCES resources(id),
+    workspace_id TEXT NOT NULL REFERENCES resources(id),
+    resource_id TEXT NOT NULL REFERENCES resources(id),
+    store_id TEXT NOT NULL,
+    entity_kind TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    generation_or_revision TEXT NOT NULL,
+    content_digest TEXT NOT NULL CHECK (length(content_digest) = 64),
+    availability TEXT NOT NULL CHECK (availability IN ('unknown', 'available', 'unavailable')),
+    verification_authority TEXT NOT NULL DEFAULT 'legacy_unverified' CHECK (length(verification_authority) > 0),
+    acknowledgement_json TEXT,
+    contract_digest TEXT GENERATED ALWAYS AS (
+        CASE
+            WHEN json_valid(acknowledgement_json)
+            THEN COALESCE(
+                CAST(json_extract(acknowledgement_json, '$.contract_digest') AS TEXT),
+                CAST(json_extract(acknowledgement_json, '$.claimed_contract_digest') AS TEXT),
+                ''
+            )
+            ELSE ''
+        END
+    ) STORED,
+    created_at TEXT NOT NULL,
+    UNIQUE(
+        workspace_id, store_id, entity_kind, entity_id,
+        generation_or_revision, content_digest, contract_digest, availability
+    )
+);
+INSERT INTO external_entity_receipts(
+    id, workspace_id, resource_id, store_id, entity_kind, entity_id,
+    generation_or_revision, content_digest, availability,
+    verification_authority, acknowledgement_json, created_at
+)
+SELECT
+    id, workspace_id, resource_id, store_id, entity_kind, entity_id,
+    generation_or_revision, content_digest, availability,
+    verification_authority, acknowledgement_json, created_at
+FROM external_entity_receipts_v6;
+DROP TABLE external_entity_receipts_v6;
+CREATE TRIGGER trg_experiment_external_entity_receipt_immutable_update
+BEFORE UPDATE ON external_entity_receipts
+BEGIN
+    SELECT RAISE(ABORT, 'external entity receipt is immutable');
+END;
+CREATE TRIGGER trg_experiment_external_entity_receipt_immutable_delete
+BEFORE DELETE ON external_entity_receipts
+BEGIN
+    SELECT RAISE(ABORT, 'external entity receipt is immutable');
+END;
+'''
+
+MIGRATION_V8_SQL = r'''
+ALTER TABLE dispatch_outbox ADD COLUMN lease_owner TEXT;
+ALTER TABLE dispatch_outbox ADD COLUMN lease_acquired_at TEXT;
+ALTER TABLE dispatch_outbox ADD COLUMN lease_expires_at TEXT;
+ALTER TABLE run_attempts ADD COLUMN terminal_receipt_sha256 TEXT
+    CHECK (terminal_receipt_sha256 IS NULL OR length(terminal_receipt_sha256) = 64);
+UPDATE run_attempts
+SET terminal_receipt_sha256 = sha256(terminal_receipt_json)
+WHERE terminal_receipt_json IS NOT NULL;
+
+CREATE TRIGGER trg_experiment_run_attempt_terminal_receipt_insert
+BEFORE INSERT ON run_attempts
+WHEN (NEW.terminal_receipt_json IS NULL AND NEW.terminal_receipt_sha256 IS NOT NULL)
+  OR (
+      NEW.terminal_receipt_json IS NOT NULL
+      AND (
+          NEW.terminal_receipt_sha256 IS NULL
+          OR NEW.terminal_receipt_sha256 != sha256(NEW.terminal_receipt_json)
+      )
+  )
+BEGIN
+    SELECT RAISE(ABORT, 'terminal receipt digest mismatch');
+END;
+
+CREATE TRIGGER trg_experiment_run_attempt_terminal_receipt_update
+BEFORE UPDATE OF terminal_receipt_json, terminal_receipt_sha256 ON run_attempts
+WHEN (
+    OLD.terminal_receipt_json IS NOT NULL
+    AND (
+        NEW.terminal_receipt_json IS NOT OLD.terminal_receipt_json
+        OR NEW.terminal_receipt_sha256 IS NOT OLD.terminal_receipt_sha256
+    )
+) OR (
+    OLD.terminal_receipt_json IS NULL
+    AND (
+        (NEW.terminal_receipt_json IS NULL AND NEW.terminal_receipt_sha256 IS NOT NULL)
+        OR (
+            NEW.terminal_receipt_json IS NOT NULL
+            AND (
+                NEW.terminal_receipt_sha256 IS NULL
+                OR NEW.terminal_receipt_sha256 != sha256(NEW.terminal_receipt_json)
+            )
+        )
+    )
+)
+BEGIN
+    SELECT RAISE(ABORT, 'terminal receipt is immutable or digest-mismatched');
+END;
+
+CREATE TRIGGER trg_experiment_run_events_immutable_update
+BEFORE UPDATE ON run_events
+BEGIN
+    SELECT RAISE(ABORT, 'run event is immutable');
+END;
+
+CREATE TRIGGER trg_experiment_run_events_immutable_delete
+BEFORE DELETE ON run_events
+BEGIN
+    SELECT RAISE(ABORT, 'run event is immutable');
+END;
+
+DROP TRIGGER IF EXISTS trg_experiment_lineage_same_workspace;
+DROP TRIGGER IF EXISTS trg_experiment_lineage_owns_no_cycle;
+DROP INDEX IF EXISTS ix_experiment_lineage_edges_source;
+DROP INDEX IF EXISTS ix_experiment_lineage_edges_target;
+ALTER TABLE lineage_edges RENAME TO lineage_edges_v7;
+CREATE TABLE lineage_edges (
+    id TEXT PRIMARY KEY NOT NULL,
+    workspace_id TEXT NOT NULL REFERENCES resources(id),
+    source_resource_id TEXT NOT NULL REFERENCES resources(id),
+    target_resource_id TEXT NOT NULL REFERENCES resources(id),
+    edge_mode TEXT NOT NULL CHECK (edge_mode IN (
+        'owns', 'pins', 'derives_from', 'contains', 'consumes', 'produces', 'retry_of',
+        'refines', 'validates', 'promotes_to_dataset', 'imports_from', 'forked_from',
+        'references', 'uses_input', 'produced', 'validated_by',
+        'retried_from', 'resubmitted_from'
+    )),
+    edge_key TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    UNIQUE(source_resource_id, target_resource_id, edge_mode, edge_key)
+);
+INSERT INTO lineage_edges(
+    id, workspace_id, source_resource_id, target_resource_id, edge_mode,
+    edge_key, metadata_json, created_at
+)
+SELECT
+    id, workspace_id, source_resource_id, target_resource_id, edge_mode,
+    edge_key, metadata_json, created_at
+FROM lineage_edges_v7;
+DROP TABLE lineage_edges_v7;
+CREATE INDEX ix_experiment_lineage_edges_source ON lineage_edges(source_resource_id, edge_mode);
+CREATE INDEX ix_experiment_lineage_edges_target ON lineage_edges(target_resource_id, edge_mode);
+CREATE TRIGGER trg_experiment_lineage_same_workspace
+BEFORE INSERT ON lineage_edges
+WHEN NEW.source_resource_id = NEW.target_resource_id
+  OR (CASE WHEN (SELECT kind FROM resources WHERE id = NEW.source_resource_id) = 'workspace' THEN NEW.source_resource_id ELSE (SELECT workspace_id FROM resources WHERE id = NEW.source_resource_id) END) IS NOT NEW.workspace_id
+  OR (CASE WHEN (SELECT kind FROM resources WHERE id = NEW.target_resource_id) = 'workspace' THEN NEW.target_resource_id ELSE (SELECT workspace_id FROM resources WHERE id = NEW.target_resource_id) END) IS NOT NEW.workspace_id
+BEGIN
+    SELECT RAISE(ABORT, 'lineage edge is self-referential or crosses workspace');
+END;
+CREATE TRIGGER trg_experiment_lineage_owns_no_cycle
+BEFORE INSERT ON lineage_edges
+WHEN NEW.edge_mode = 'owns'
+ AND EXISTS (
+   WITH RECURSIVE reachable(id) AS (
+       SELECT target_resource_id FROM lineage_edges WHERE source_resource_id = NEW.target_resource_id AND edge_mode = 'owns'
+       UNION ALL
+       SELECT lineage_edges.target_resource_id
+       FROM lineage_edges JOIN reachable ON lineage_edges.source_resource_id = reachable.id
+       WHERE lineage_edges.edge_mode = 'owns'
+   )
+   SELECT 1 FROM reachable WHERE id = NEW.source_resource_id
+ )
+BEGIN
+    SELECT RAISE(ABORT, 'lineage ownership cycle');
+END;
+
+CREATE TABLE launch_contexts (
+    launch_context_id TEXT PRIMARY KEY NOT NULL,
+    project_id TEXT NOT NULL REFERENCES resources(id),
+    global_experiment_id TEXT NOT NULL REFERENCES resources(id),
+    domain_experiment_id TEXT NOT NULL REFERENCES resources(id),
+    workflow_id TEXT REFERENCES resources(id),
+    workflow_revision_id TEXT REFERENCES revisions(resource_id),
+    source_receipt_id TEXT NOT NULL REFERENCES resources(id),
+    return_uri TEXT NOT NULL CHECK (length(return_uri) > 0),
+    state TEXT NOT NULL DEFAULT 'issued' CHECK (state IN ('issued', 'claimed', 'consumed')),
+    claim_token TEXT,
+    canonical_job_id TEXT UNIQUE,
+    binding_receipt_json TEXT,
+    issued_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    claimed_at TEXT,
+    consumed_at TEXT,
+    CHECK (expires_at > issued_at),
+    CHECK (workflow_revision_id IS NULL OR workflow_id IS NOT NULL),
+    CHECK (
+        (state = 'issued' AND claim_token IS NULL AND claimed_at IS NULL
+            AND canonical_job_id IS NULL AND binding_receipt_json IS NULL AND consumed_at IS NULL)
+        OR
+        (state = 'claimed' AND claim_token IS NOT NULL AND claimed_at IS NOT NULL
+            AND canonical_job_id IS NULL AND binding_receipt_json IS NULL AND consumed_at IS NULL)
+        OR
+        (state = 'consumed' AND claim_token IS NOT NULL AND claimed_at IS NOT NULL
+            AND canonical_job_id IS NOT NULL AND binding_receipt_json IS NOT NULL
+            AND json_valid(binding_receipt_json) AND consumed_at IS NOT NULL)
+    )
+);
+CREATE INDEX ix_experiment_launch_contexts_state_expiry
+    ON launch_contexts(state, expires_at);
+CREATE INDEX ix_experiment_launch_contexts_domain_issued
+    ON launch_contexts(domain_experiment_id, issued_at);
+
+CREATE TRIGGER trg_experiment_launch_context_identity_immutable
+BEFORE UPDATE OF launch_context_id, project_id, global_experiment_id, domain_experiment_id,
+                 workflow_id, workflow_revision_id, source_receipt_id, return_uri, issued_at, expires_at
+ON launch_contexts
+BEGIN
+    SELECT RAISE(ABORT, 'launch context identity is immutable');
+END;
+
+CREATE TRIGGER trg_experiment_launch_context_state_transition
+BEFORE UPDATE OF state ON launch_contexts
+WHEN NOT (
+    (OLD.state = 'issued' AND NEW.state = 'claimed')
+    OR (OLD.state = 'claimed' AND NEW.state = 'issued')
+    OR (OLD.state = 'claimed' AND NEW.state = 'consumed')
+)
+BEGIN
+    SELECT RAISE(ABORT, 'invalid launch context state transition');
+END;
+
+CREATE TRIGGER trg_experiment_launch_context_consumed_immutable
+BEFORE UPDATE ON launch_contexts
+WHEN OLD.state = 'consumed'
+BEGIN
+    SELECT RAISE(ABORT, 'consumed launch context is immutable');
+END;
+
+CREATE TRIGGER trg_experiment_launch_context_delete_forbidden
+BEFORE DELETE ON launch_contexts
+BEGIN
+    SELECT RAISE(ABORT, 'launch contexts are durable receipts');
+END;
+'''
+
+MIGRATION_V9_SQL = r'''
+CREATE TRIGGER trg_experiment_preparation_immutable_update
+BEFORE UPDATE ON workflow_preparations
+WHEN OLD.validation_resource_id IS NOT NULL
+BEGIN
+    SELECT RAISE(ABORT, 'workflow preparation is immutable');
+END;
+CREATE TRIGGER trg_experiment_preparation_immutable_delete
+BEFORE DELETE ON workflow_preparations
+BEGIN
+    SELECT RAISE(ABORT, 'workflow preparation is immutable');
+END;
+CREATE TRIGGER trg_experiment_dataset_member_digest_insert
+BEFORE INSERT ON dataset_revision_members
+WHEN sha256(NEW.value_json) <> lower(NEW.content_sha256)
+BEGIN
+    SELECT RAISE(ABORT, 'dataset member digest mismatch');
+END;
+CREATE TRIGGER trg_experiment_dataset_member_immutable_update
+BEFORE UPDATE ON dataset_revision_members
+BEGIN
+    SELECT RAISE(ABORT, 'dataset revision member is immutable');
+END;
+CREATE TRIGGER trg_experiment_dataset_member_immutable_delete
+BEFORE DELETE ON dataset_revision_members
+BEGIN
+    SELECT RAISE(ABORT, 'dataset revision member is immutable');
+END;
+'''
+
+MIGRATION_V10_SQL = r'''
+DROP TRIGGER IF EXISTS trg_experiment_lineage_same_workspace;
+DROP TRIGGER IF EXISTS trg_experiment_lineage_owns_no_cycle;
+DROP INDEX IF EXISTS ix_experiment_lineage_edges_source;
+DROP INDEX IF EXISTS ix_experiment_lineage_edges_target;
+ALTER TABLE lineage_edges RENAME TO lineage_edges_v10;
+CREATE TABLE lineage_edges (
+    id TEXT PRIMARY KEY NOT NULL,
+    workspace_id TEXT NOT NULL REFERENCES resources(id),
+    source_resource_id TEXT NOT NULL REFERENCES resources(id),
+    target_resource_id TEXT NOT NULL REFERENCES resources(id),
+    edge_mode TEXT NOT NULL CHECK (edge_mode IN (
+        'owns', 'pins', 'derives_from', 'derived_from', 'contains', 'consumes', 'produces', 'retry_of',
+        'refines', 'validates', 'promotes_to_dataset', 'imports_from', 'forked_from',
+        'references', 'uses_input', 'produced', 'validated_by', 'compared_with',
+        'retried_from', 'resubmitted_from'
+    )),
+    edge_key TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    UNIQUE(source_resource_id, target_resource_id, edge_mode, edge_key)
+);
+INSERT INTO lineage_edges SELECT * FROM lineage_edges_v10;
+DROP TABLE lineage_edges_v10;
+CREATE INDEX ix_experiment_lineage_edges_source ON lineage_edges(source_resource_id, edge_mode);
+CREATE INDEX ix_experiment_lineage_edges_target ON lineage_edges(target_resource_id, edge_mode);
+CREATE TRIGGER trg_experiment_lineage_same_workspace
+BEFORE INSERT ON lineage_edges
+WHEN NEW.source_resource_id = NEW.target_resource_id
+  OR (CASE WHEN (SELECT kind FROM resources WHERE id = NEW.source_resource_id) = 'workspace' THEN NEW.source_resource_id ELSE (SELECT workspace_id FROM resources WHERE id = NEW.source_resource_id) END) IS NOT NEW.workspace_id
+  OR (CASE WHEN (SELECT kind FROM resources WHERE id = NEW.target_resource_id) = 'workspace' THEN NEW.target_resource_id ELSE (SELECT workspace_id FROM resources WHERE id = NEW.target_resource_id) END) IS NOT NEW.workspace_id
+BEGIN
+    SELECT RAISE(ABORT, 'lineage edge is self-referential or crosses workspace');
+END;
+CREATE TRIGGER trg_experiment_lineage_owns_no_cycle
+BEFORE INSERT ON lineage_edges
+WHEN NEW.edge_mode = 'owns'
+ AND EXISTS (
+   WITH RECURSIVE reachable(id) AS (
+       SELECT target_resource_id FROM lineage_edges WHERE source_resource_id = NEW.target_resource_id AND edge_mode = 'owns'
+       UNION ALL
+       SELECT lineage_edges.target_resource_id
+       FROM lineage_edges JOIN reachable ON lineage_edges.source_resource_id = reachable.id
+       WHERE lineage_edges.edge_mode = 'owns'
+   )
+   SELECT 1 FROM reachable WHERE id = NEW.source_resource_id
+ )
+BEGIN
+    SELECT RAISE(ABORT, 'lineage ownership cycle');
+END;
+'''
+
 _MIGRATION_TRIGGER_NAMES = (
     "trg_experiment_resource_owner_same_workspace_insert",
     "trg_experiment_resource_owner_same_workspace_update",
@@ -539,11 +1322,88 @@ _MIGRATION_TRIGGER_NAMES = (
     "trg_experiment_outbox_payload_immutable",
     "trg_experiment_validation_immutable_update",
     "trg_experiment_validation_immutable_delete",
+    "trg_experiment_research_record_same_workspace_insert",
+    "trg_experiment_research_record_replacement_same_subject",
+    "trg_experiment_research_record_immutable_update",
+    "trg_experiment_research_record_immutable_delete",
+    "trg_experiment_domain_adapter_receipt_same_workspace_insert",
+    "trg_experiment_domain_adapter_receipt_immutable_update",
+    "trg_experiment_domain_adapter_receipt_immutable_delete",
+    "trg_experiment_aggregate_parent_integrity_insert",
+    "trg_experiment_aggregate_parent_immutable_update",
+    "trg_experiment_external_entity_receipt_immutable_update",
+    "trg_experiment_external_entity_receipt_immutable_delete",
+    "trg_experiment_aggregate_head_revision_consistency_insert",
+    "trg_experiment_aggregate_head_revision_consistency_update",
+    "trg_experiment_run_attempt_terminal_receipt_insert",
+    "trg_experiment_run_attempt_terminal_receipt_update",
+    "trg_experiment_run_events_immutable_update",
+    "trg_experiment_run_events_immutable_delete",
+    "trg_experiment_launch_context_identity_immutable",
+    "trg_experiment_launch_context_state_transition",
+    "trg_experiment_launch_context_consumed_immutable",
+    "trg_experiment_launch_context_delete_forbidden",
+    "trg_experiment_preparation_immutable_update",
+    "trg_experiment_preparation_immutable_delete",
+    "trg_experiment_dataset_member_digest_insert",
+    "trg_experiment_dataset_member_immutable_update",
+    "trg_experiment_dataset_member_immutable_delete",
 )
 
 
 def migration_checksum() -> str:
-    return hashlib.sha256(MIGRATION_V2_SQL.encode("utf-8")).hexdigest()
+    return MIGRATION_V10_CHECKSUM
+
+
+def _migration_v9_checksum() -> str:
+    return MIGRATION_V9_CHECKSUM
+
+
+def _migration_v8_checksum() -> str:
+    return MIGRATION_V8_CHECKSUM
+
+
+def _migration_v7_checksum() -> str:
+    return MIGRATION_V7_CHECKSUM
+
+
+def _migration_v6_checksum() -> str:
+    return MIGRATION_V6_CHECKSUM
+
+
+def _migration_v5_checksum() -> str:
+    return MIGRATION_V5_CHECKSUM
+
+
+def _migration_v4_checksum() -> str:
+    return MIGRATION_V4_CHECKSUM
+
+
+def _migration_v3_checksum() -> str:
+    return MIGRATION_V3_CHECKSUM
+
+
+def _migration_v2_checksum() -> str:
+    """Return the frozen checksum for the pre-hierarchy migration."""
+    return MIGRATION_V2_CHECKSUM
+
+
+def _verify_frozen_migration_sources() -> None:
+    issued = (
+        (2, MIGRATION_V2_SQL, MIGRATION_V2_CHECKSUM),
+        (3, MIGRATION_V3_SQL, MIGRATION_V3_CHECKSUM),
+        (4, MIGRATION_V4_SQL, MIGRATION_V4_CHECKSUM),
+        (5, MIGRATION_V5_SQL, MIGRATION_V5_CHECKSUM),
+        (6, MIGRATION_V6_SQL, MIGRATION_V6_CHECKSUM),
+        (7, MIGRATION_V7_SQL, MIGRATION_V7_CHECKSUM),
+        (8, MIGRATION_V8_SQL, MIGRATION_V8_CHECKSUM),
+        (9, MIGRATION_V9_SQL, MIGRATION_V9_CHECKSUM),
+        (10, MIGRATION_V10_SQL, MIGRATION_V10_CHECKSUM),
+    )
+    for version, sql, expected in issued:
+        actual = hashlib.sha256(sql.encode("utf-8")).hexdigest()
+        if actual != expected:
+            raise RuntimeError(f"frozen migration v{version} checksum mismatch")
 
 
 _REQUIRED_SCHEMA_COLUMNS: dict[str, set[str]] = {
@@ -558,11 +1418,11 @@ _REQUIRED_SCHEMA_COLUMNS: dict[str, set[str]] = {
     "run_groups": {"resource_id", "workspace_id", "launch_idempotency_key", "request_sha256", "state", "generation", "created_at", "updated_at"},
     "run_group_preparations": {"run_group_id", "preparation_id", "ordinal"},
     "workflow_runs": {"resource_id", "workspace_id", "run_group_id", "preparation_id", "node_id", "requiredness", "state", "generation", "created_at"},
-    "run_attempts": {"resource_id", "workspace_id", "workflow_run_id", "attempt_number", "scheduler_job_id", "state", "external_binding_receipt_json", "runtime_identity_json", "terminal_receipt_json", "created_at"},
-    "dispatch_outbox": {"id", "workspace_id", "run_attempt_id", "event_type", "payload_json", "payload_sha256", "status", "dispatch_attempts", "lease_token", "last_error", "acknowledgement_json", "created_at", "updated_at"},
+    "run_attempts": {"resource_id", "workspace_id", "workflow_run_id", "attempt_number", "scheduler_job_id", "state", "external_binding_receipt_json", "runtime_identity_json", "terminal_receipt_json", "terminal_receipt_sha256", "created_at"},
+    "dispatch_outbox": {"id", "workspace_id", "run_attempt_id", "event_type", "payload_json", "payload_sha256", "status", "dispatch_attempts", "lease_token", "lease_owner", "lease_acquired_at", "lease_expires_at", "last_error", "acknowledgement_json", "created_at", "updated_at"},
     "run_events": {"id", "workspace_id", "workflow_run_id", "sequence_number", "expected_generation", "resulting_generation", "idempotency_key", "event_type", "payload_json", "created_at"},
     "idempotency_claims": {"scope", "idempotency_key", "request_sha256", "result_resource_id", "response_json", "created_at"},
-    "external_entity_receipts": {"id", "workspace_id", "resource_id", "store_id", "entity_kind", "entity_id", "generation_or_revision", "content_digest", "availability", "acknowledgement_json", "created_at"},
+    "external_entity_receipts": {"id", "workspace_id", "resource_id", "store_id", "entity_kind", "entity_id", "generation_or_revision", "content_digest", "contract_digest", "availability", "verification_authority", "acknowledgement_json", "created_at"},
     "lineage_edges": {"id", "workspace_id", "source_resource_id", "target_resource_id", "edge_mode", "edge_key", "metadata_json", "created_at"},
     "workflow_revision_nodes": {"revision_id", "ordinal", "node_id", "node_kind", "node_json"},
     "workflow_revision_edges": {"revision_id", "ordinal", "source_node_id", "target_node_id", "edge_json"},
@@ -573,12 +1433,185 @@ _REQUIRED_SCHEMA_COLUMNS: dict[str, set[str]] = {
     "log_chunks": {"stream_id", "sequence_number", "content_sha256", "artifact_blob_sha256", "content_text", "created_at"},
     "audit_events": {"id", "workspace_id", "resource_id", "event_type", "generation", "payload_json", "created_at"},
     "sync_state": {"state_key", "local_generation", "remote_generation", "pending_changes", "last_success_at", "last_error", "updated_at"},
+    "research_records": {"resource_id", "workspace_id", "subject_resource_id", "record_kind", "body", "author", "source_receipt_ids_json", "supersedes_record_id", "created_at"},
+    "domain_adapter_receipts": {"resource_id", "workspace_id", "domain_experiment_id", "adapter_id", "adapter_version", "operation_kind", "normalized_request_sha256", "receipt_json", "created_at"},
+    "launch_contexts": {"launch_context_id", "project_id", "global_experiment_id", "domain_experiment_id", "workflow_id", "workflow_revision_id", "source_receipt_id", "return_uri", "state", "claim_token", "canonical_job_id", "binding_receipt_json", "issued_at", "expires_at", "claimed_at", "consumed_at"},
 }
-_REQUIRED_INDEXES = {"ux_experiment_run_events_idempotency"}
+_REQUIRED_INDEXES = {
+    "ux_experiment_run_events_idempotency",
+    "ix_experiment_research_records_subject_created",
+    "ix_experiment_domain_adapter_receipts_domain_created",
+    "ix_experiment_launch_contexts_state_expiry",
+    "ix_experiment_launch_contexts_domain_issued",
+}
+
+
+def _accepted_migration_ledgers() -> tuple[list[tuple[int, str, str]], ...]:
+    v2 = (MIGRATION_V2_VERSION, MIGRATION_V2_NAME, _migration_v2_checksum())
+    v3 = (MIGRATION_V3_VERSION, MIGRATION_V3_NAME, _migration_v3_checksum())
+    v4 = (MIGRATION_V4_VERSION, MIGRATION_V4_NAME, _migration_v4_checksum())
+    v5 = (MIGRATION_V5_VERSION, MIGRATION_V5_NAME, _migration_v5_checksum())
+    v6 = (MIGRATION_V6_VERSION, MIGRATION_V6_NAME, _migration_v6_checksum())
+    v7 = (MIGRATION_V7_VERSION, MIGRATION_V7_NAME, _migration_v7_checksum())
+    v8 = (MIGRATION_V8_VERSION, MIGRATION_V8_NAME, _migration_v8_checksum())
+    v9 = (MIGRATION_V9_VERSION, MIGRATION_V9_NAME, _migration_v9_checksum())
+    v10 = (MIGRATION_VERSION, MIGRATION_NAME, migration_checksum())
+    v1 = (LEGACY_MIGRATION_VERSION, LEGACY_MIGRATION_NAME, LEGACY_MIGRATION_CHECKSUM)
+    return ([v2, v3, v4, v5, v6, v7, v8, v9, v10], [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10])
+
+
+def _normalize_schema_sql(sql: str) -> str:
+    quoted_sql = re.compile(
+        r"('(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|`(?:``|[^`])*`|\[(?:\]\]|[^\]])*\])",
+        re.DOTALL,
+    )
+    normalized_parts: list[str] = []
+    for index, part in enumerate(quoted_sql.split(sql.strip())):
+        if index % 2:
+            normalized_parts.append(part)
+            continue
+        syntax = re.sub(r"\s+", " ", part).lower()
+        normalized_parts.append(re.sub(r"\s*([(),])\s*", r"\1", syntax))
+    return "".join(normalized_parts)
+
+
+def _schema_definition_manifest(connection: sqlite3.Connection) -> dict[str, str]:
+    table_names = tuple(sorted(_REQUIRED_SCHEMA_COLUMNS))
+    placeholders = ",".join("?" for _ in table_names)
+    rows = connection.execute(
+        f"""
+        SELECT type, name, tbl_name, sql
+        FROM sqlite_master
+        WHERE sql IS NOT NULL
+          AND (
+              (type = 'table' AND name IN ({placeholders}))
+              OR (type = 'trigger' AND name LIKE 'trg_experiment_%')
+              OR (type = 'index' AND (name LIKE 'ix_experiment_%' OR name LIKE 'ux_experiment_%'))
+          )
+        ORDER BY type, name
+        """,
+        table_names,
+    ).fetchall()
+    return {
+        f"{row[0]}:{row[1]}:{row[2]}": hashlib.sha256(
+            _normalize_schema_sql(str(row[3])).encode("utf-8")
+        ).hexdigest()
+        for row in rows
+    }
+
+
+def _schema_manifest_checksum(manifest: dict[str, str]) -> str:
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+_LEGACY_FINAL_TABLE_SQL = {
+    "experiment_schema_migrations": """CREATE TABLE experiment_schema_migrations (
+        version INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        checksum TEXT NOT NULL,
+        applied_at TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT ''
+    )""",
+    "revisions": """CREATE TABLE revisions (
+        resource_id TEXT PRIMARY KEY NOT NULL REFERENCES resources(id),
+        subject_id TEXT NOT NULL REFERENCES resources(id),
+        revision_number INTEGER NOT NULL CHECK (revision_number > 0),
+        parent_revision_id TEXT REFERENCES resources(id),
+        schema_name TEXT NOT NULL,
+        schema_version TEXT NOT NULL,
+        canonical_payload TEXT NOT NULL,
+        payload_sha256 TEXT NOT NULL CHECK (length(payload_sha256) = 64),
+        dependency_graph_sha256 TEXT NOT NULL CHECK (length(dependency_graph_sha256) = 64),
+        created_at TEXT NOT NULL,
+        "provenance_json" TEXT NOT NULL DEFAULT '{}',
+        UNIQUE(subject_id, revision_number),
+        UNIQUE(subject_id, payload_sha256, dependency_graph_sha256)
+    )""",
+    "workflow_preparations": """CREATE TABLE workflow_preparations (
+        resource_id TEXT PRIMARY KEY NOT NULL REFERENCES resources(id),
+        workspace_id TEXT NOT NULL REFERENCES resources(id),
+        workflow_revision_id TEXT NOT NULL REFERENCES revisions(resource_id),
+        normalized_request_json TEXT NOT NULL,
+        normalized_request_sha256 TEXT NOT NULL CHECK (length(normalized_request_sha256) = 64),
+        scheduler_payload_json TEXT NOT NULL DEFAULT '{}',
+        validation_status TEXT NOT NULL CHECK (validation_status IN ('pending', 'valid', 'invalid')),
+        validation_receipt_json TEXT NOT NULL,
+        expected_cardinality INTEGER,
+        created_at TEXT NOT NULL,
+        prepared_at TEXT,
+        "validation_resource_id" TEXT REFERENCES resources(id)
+    )""",
+    "run_attempts": """CREATE TABLE run_attempts (
+        resource_id TEXT PRIMARY KEY NOT NULL REFERENCES resources(id),
+        workspace_id TEXT NOT NULL REFERENCES resources(id),
+        workflow_run_id TEXT NOT NULL REFERENCES workflow_runs(resource_id),
+        attempt_number INTEGER NOT NULL CHECK (attempt_number > 0),
+        scheduler_job_id TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('pending', 'dispatching', 'dispatched', 'running', 'completed', 'failed', 'cancelled')),
+        external_binding_receipt_json TEXT,
+        created_at TEXT NOT NULL,
+        "runtime_identity_json" TEXT,
+        "terminal_receipt_json" TEXT,
+        UNIQUE(workflow_run_id, attempt_number),
+        UNIQUE(scheduler_job_id)
+    )""",
+    "run_events": """CREATE TABLE run_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        workspace_id TEXT NOT NULL REFERENCES resources(id),
+        workflow_run_id TEXT NOT NULL REFERENCES workflow_runs(resource_id),
+        sequence_number INTEGER NOT NULL,
+        event_type TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        "expected_generation" INTEGER NOT NULL DEFAULT 0,
+        "resulting_generation" INTEGER NOT NULL DEFAULT 0,
+        "idempotency_key" TEXT NOT NULL DEFAULT '',
+        UNIQUE(workflow_run_id, sequence_number)
+    )""",
+}
+
+
+@lru_cache(maxsize=2)
+def _expected_schema_definition_manifest(*, legacy_lineage: bool = False) -> dict[str, str]:
+    expected = sqlite3.connect(":memory:")
+    register_sqlite_sha256(expected)
+    expected.execute("PRAGMA foreign_keys = ON")
+    try:
+        expected.execute(
+            """
+            CREATE TABLE IF NOT EXISTS experiment_schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                checksum TEXT NOT NULL,
+                description TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        expected.executescript(MIGRATION_SQL)
+        _apply_hierarchy_upgrade(expected)
+        _apply_receipt_immutability_upgrade(expected)
+        _apply_lifecycle_consistency_upgrade(expected)
+        _apply_domain_owned_aggregate_upgrade(expected)
+        _apply_receipt_identity_upgrade(expected)
+        _apply_launch_context_upgrade(expected)
+        _apply_authority_immutability_upgrade(expected)
+        _apply_scientific_lineage_upgrade(expected)
+        manifest = _schema_definition_manifest(expected)
+        if legacy_lineage:
+            for table_name, definition in _LEGACY_FINAL_TABLE_SQL.items():
+                key = f"table:{table_name}:{table_name}"
+                manifest[key] = hashlib.sha256(
+                    _normalize_schema_sql(definition).encode("utf-8")
+                ).hexdigest()
+        return manifest
+    finally:
+        expected.close()
 
 
 def attest_schema(connection: sqlite3.Connection) -> dict[str, object]:
-    """Verify required structure independently of the migration ledger."""
+    """Verify the exact ledger and complete migration-owned SQLite definitions."""
     missing_tables: list[str] = []
     missing_columns: dict[str, list[str]] = {}
     for table, columns in _REQUIRED_SCHEMA_COLUMNS.items():
@@ -604,18 +1637,71 @@ def attest_schema(connection: sqlite3.Connection) -> dict[str, object]:
     }
     missing_triggers = sorted(set(_MIGRATION_TRIGGER_NAMES) - actual_triggers)
     foreign_key_errors = [list(row) for row in connection.execute("PRAGMA foreign_key_check")]
+    ledger = [
+        (int(row[0]), str(row[1]), str(row[2]))
+        for row in connection.execute(
+            "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
+        )
+    ]
+    ledger_valid = ledger in _accepted_migration_ledgers()
+    legacy_lineage = bool(ledger and ledger[0][0] == LEGACY_MIGRATION_VERSION)
+    expected_definitions = _expected_schema_definition_manifest(legacy_lineage=legacy_lineage)
+    actual_definitions = _schema_definition_manifest(connection)
+    actual_tables = {
+        str(row[0])
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+        )
+    }
+    unexpected_tables = sorted(actual_tables - set(_REQUIRED_SCHEMA_COLUMNS))
+    missing_definitions = sorted(set(expected_definitions) - set(actual_definitions))
+    unexpected_definitions = sorted(set(actual_definitions) - set(expected_definitions))
+    mismatched_definitions = sorted(
+        name
+        for name in set(expected_definitions) & set(actual_definitions)
+        if expected_definitions[name] != actual_definitions[name]
+    )
+    definition_errors = [
+        *(f"unexpected table: {name}" for name in unexpected_tables),
+        *(f"missing definition: {name}" for name in missing_definitions),
+        *(f"unexpected definition: {name}" for name in unexpected_definitions),
+        *(f"definition digest mismatch: {name}" for name in mismatched_definitions),
+    ]
+    frozen_manifest_checksum = (
+        LEGACY_FINAL_SCHEMA_MANIFEST_CHECKSUM if legacy_lineage else FINAL_SCHEMA_MANIFEST_CHECKSUM
+    )
+    if _schema_manifest_checksum(actual_definitions) != frozen_manifest_checksum:
+        definition_errors.append("frozen schema definition manifest checksum mismatch")
+    ok = not (
+        missing_tables
+        or missing_columns
+        or missing_indexes
+        or missing_triggers
+        or foreign_key_errors
+        or definition_errors
+        or not ledger_valid
+    )
     return {
-        "ok": not (missing_tables or missing_columns or missing_indexes or missing_triggers or foreign_key_errors),
+        "ok": ok,
         "missing_tables": missing_tables,
         "missing_columns": missing_columns,
         "missing_indexes": missing_indexes,
         "missing_triggers": missing_triggers,
         "foreign_key_errors": foreign_key_errors,
+        "migration_ledger": [list(row) for row in ledger],
+        "migration_ledger_valid": ledger_valid,
+        "definition_errors": definition_errors,
+        "expected_definition_manifest_sha256": hashlib.sha256(
+            "\n".join(f"{name}:{digest}" for name, digest in sorted(expected_definitions.items())).encode("utf-8")
+        ).hexdigest(),
+        "actual_definition_manifest_sha256": hashlib.sha256(
+            "\n".join(f"{name}:{digest}" for name, digest in sorted(actual_definitions.items())).encode("utf-8")
+        ).hexdigest(),
     }
 
 
 def _table_columns(connection: sqlite3.Connection, table: str) -> set[str]:
-    return {row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')}
+    return {row[1] for row in connection.execute(f'PRAGMA table_xinfo("{table}")')}
 
 
 def _connect(path: Path) -> sqlite3.Connection:
@@ -711,10 +1797,10 @@ def _apply_legacy_upgrade(connection: sqlite3.Connection) -> None:
             INSERT INTO external_entity_receipts(
                 id, workspace_id, resource_id, store_id, entity_kind, entity_id,
                 generation_or_revision, content_digest, availability,
-                acknowledgement_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                verification_authority, acknowledgement_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            receipt,
+            (*receipt[:8], "unavailable", "legacy_unverified", receipt[9], receipt[10]),
         )
     if legacy_receipts_table_renamed:
         connection.execute("DROP TABLE external_entity_receipts_v1")
@@ -733,10 +1819,450 @@ def _cleanup_legacy_receipt_table(connection: sqlite3.Connection) -> None:
     connection.execute("DROP TABLE external_entity_receipts_v1")
 
 
+def _upgrade_v2_receipt_authority(connection: sqlite3.Connection) -> None:
+    """Rebuild the genuine v2 receipt table with fail-closed server authority."""
+    if "verification_authority" in _table_columns(connection, "external_entity_receipts"):
+        return
+    script = r'''
+BEGIN IMMEDIATE;
+ALTER TABLE external_entity_receipts RENAME TO external_entity_receipts_v2;
+CREATE TABLE IF NOT EXISTS external_entity_receipts (
+    id TEXT PRIMARY KEY NOT NULL REFERENCES resources(id),
+    workspace_id TEXT NOT NULL REFERENCES resources(id),
+    resource_id TEXT NOT NULL REFERENCES resources(id),
+    store_id TEXT NOT NULL,
+    entity_kind TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    generation_or_revision TEXT NOT NULL,
+    content_digest TEXT NOT NULL CHECK (length(content_digest) = 64),
+    availability TEXT NOT NULL CHECK (availability IN ('unknown', 'available', 'unavailable')),
+    verification_authority TEXT NOT NULL DEFAULT 'legacy_unverified' CHECK (length(verification_authority) > 0),
+    acknowledgement_json TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(store_id, entity_kind, entity_id, generation_or_revision, content_digest)
+);
+INSERT INTO external_entity_receipts(
+    id, workspace_id, resource_id, store_id, entity_kind, entity_id,
+    generation_or_revision, content_digest, availability,
+    verification_authority, acknowledgement_json, created_at
+)
+SELECT
+    id, workspace_id, resource_id, store_id, entity_kind, entity_id,
+    generation_or_revision, content_digest, availability,
+    'legacy_unverified', acknowledgement_json, created_at
+FROM external_entity_receipts_v2;
+DROP TABLE external_entity_receipts_v2;
+COMMIT;
+'''
+    try:
+        connection.executescript(script)
+    except Exception:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
+
+
+def _apply_hierarchy_upgrade(connection: sqlite3.Connection) -> None:
+    """Apply hierarchy tables and the v3 ledger row in one SQLite transaction."""
+    checksum = _migration_v3_checksum()
+    description = "Global Project hierarchy and append-only research records"
+    script = (
+        "BEGIN IMMEDIATE;\n"
+        + MIGRATION_V3_SQL
+        + "\nINSERT OR IGNORE INTO experiment_schema_migrations("
+        + "version, name, checksum, description, applied_at) VALUES ("
+        + f"{MIGRATION_V3_VERSION}, '{MIGRATION_V3_NAME}', '{checksum}', "
+        + f"'{description}', '{datetime.now(timezone.utc).isoformat()}');\n"
+        + "COMMIT;\n"
+    )
+    try:
+        connection.executescript(script)
+    except Exception:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
+
+
+def _apply_receipt_immutability_upgrade(connection: sqlite3.Connection) -> None:
+    """Install exact append-only receipt guards and ledger them atomically."""
+    checksum = _migration_v4_checksum()
+    description = "Immutable external entity receipts at the SQLite boundary"
+    script = (
+        "BEGIN IMMEDIATE;\n"
+        + MIGRATION_V4_SQL
+        + "\nINSERT INTO experiment_schema_migrations("
+        + "version, name, checksum, description, applied_at) VALUES ("
+        + f"{MIGRATION_V4_VERSION}, '{MIGRATION_V4_NAME}', '{checksum}', "
+        + f"'{description}', '{datetime.now(timezone.utc).isoformat()}');\n"
+        + "COMMIT;\n"
+    )
+    try:
+        connection.executescript(script)
+    except Exception:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
+
+
+def _apply_lifecycle_consistency_upgrade(connection: sqlite3.Connection) -> None:
+    """Install aggregate-head/current-revision lifecycle consistency guards atomically."""
+    checksum = _migration_v5_checksum()
+    description = "Aggregate head lifecycle matches canonical current revision status"
+    script = (
+        "BEGIN IMMEDIATE;\n"
+        + MIGRATION_V5_SQL
+        + "\nINSERT INTO experiment_schema_migrations("
+        + "version, name, checksum, description, applied_at) VALUES ("
+        + f"{MIGRATION_V5_VERSION}, '{MIGRATION_V5_NAME}', '{checksum}', "
+        + f"'{description}', '{datetime.now(timezone.utc).isoformat()}');\n"
+        + "COMMIT;\n"
+    )
+    try:
+        connection.executescript(script)
+    except Exception:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
+
+
+def _apply_domain_owned_aggregate_upgrade(connection: sqlite3.Connection) -> None:
+    """Allow workflow and dataset aggregates to belong to Domain Experiments."""
+    checksum = _migration_v6_checksum()
+    description = "Domain-owned workflow and dataset aggregate parents"
+    script = (
+        "BEGIN IMMEDIATE;\n"
+        + MIGRATION_V6_SQL
+        + "\nINSERT INTO experiment_schema_migrations("
+        + "version, name, checksum, description, applied_at) VALUES ("
+        + f"{MIGRATION_V6_VERSION}, '{MIGRATION_V6_NAME}', '{checksum}', "
+        + f"'{description}', '{datetime.now(timezone.utc).isoformat()}');\n"
+        + "COMMIT;\n"
+    )
+    try:
+        connection.executescript(script)
+    except Exception:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
+
+
+def _migration_id(prefix: str, *parts: str) -> str:
+    digest = hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()[:32]
+    return f"{prefix}-{digest}"
+
+
+def _migrate_classifiable_domain_ownership(connection: sqlite3.Connection) -> None:
+    """Bind registered CM workflows; leave every unclassifiable legacy row explicit."""
+    cm_adapter_ids = (
+        "bms.cm.protenix_v2.adapter.v1",
+        "bms.cm.confornets.adapter.v1",
+        "bms.cm.frustrampnn.adapter.v1",
+        "bms.cm.comparison.adapter.v1",
+    )
+    placeholders = ",".join("?" for _ in cm_adapter_ids)
+    rows = connection.execute(
+        f"""
+        SELECT head.aggregate_id, head.workspace_id, head.parent_id
+        FROM aggregate_heads AS head
+        JOIN resources AS parent ON parent.id = head.parent_id
+        WHERE head.aggregate_kind = 'workflow'
+          AND parent.kind = 'experiment'
+          AND (
+              lower(head.description) IN ({placeholders})
+              OR EXISTS (
+                  SELECT 1
+                  FROM workflow_revision_nodes AS node
+                  WHERE node.revision_id = head.current_revision_id
+                    AND json_extract(node.node_json, '$.adapter_id') IN ({placeholders})
+              )
+          )
+        ORDER BY head.parent_id, head.aggregate_id
+        """,
+        (*cm_adapter_ids, *cm_adapter_ids),
+    ).fetchall()
+    now_value = datetime.now(timezone.utc).isoformat()
+    domains: dict[str, str] = {}
+    for workflow_id, project_id, global_experiment_id in rows:
+        domain_id = domains.get(global_experiment_id)
+        if domain_id is None:
+            domain_id = _migration_id("domain-cm", project_id, global_experiment_id)
+            revision_id = _migration_id("revision-cm", domain_id)
+            payload = {
+                "schema": "bms.domain-experiment.v1",
+                "domain_kind": "protein_in_silico",
+                "domain_contract_version": "1",
+                "name": "Migrated Conformational Mapping",
+                "objective": "Preserve deterministic ownership for an existing Conformational Mapping workflow",
+                "status": "draft",
+                "tags": ["migration", "conformational_mapping"],
+                "source_receipt_ids": [],
+                "dataset_ids": [],
+                "domain_payload": {
+                    "schema": "bms.protein-in-silico-experiment.v1",
+                    "experiment_mode": "analysis",
+                    "targets": [],
+                    "scientific_objective": "Preserve the existing Conformational Mapping workflow",
+                    "design_constraints": {},
+                    "planned_capabilities": ["conformational_mapping"],
+                    "comparison_groups": [],
+                    "validation_strategy": [],
+                },
+                "created_by": "migration:v7",
+                "change_summary": "Deterministically bound existing CM workflow ownership",
+            }
+            payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+            empty_graph = json.dumps(
+                {"edges": [], "nodes": [], "references": []},
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+            connection.execute(
+                "INSERT INTO resources(id, kind, workspace_id, lifecycle_owner_id, created_at) VALUES (?, 'domain_experiment', ?, ?, ?)",
+                (domain_id, project_id, global_experiment_id, now_value),
+            )
+            connection.execute(
+                "INSERT INTO resources(id, kind, workspace_id, lifecycle_owner_id, created_at) VALUES (?, 'revision', ?, ?, ?)",
+                (revision_id, project_id, domain_id, now_value),
+            )
+            connection.execute(
+                """
+                INSERT INTO revisions(
+                    resource_id, subject_id, revision_number, parent_revision_id,
+                    schema_name, schema_version, canonical_payload, payload_sha256,
+                    dependency_graph_sha256, provenance_json, created_at
+                ) VALUES (?, ?, 1, NULL, 'bms.domain-experiment.v1', '1', ?, ?, ?, ?, ?)
+                """,
+                (
+                    revision_id,
+                    domain_id,
+                    payload_json,
+                    hashlib.sha256(payload_json.encode("utf-8")).hexdigest(),
+                    hashlib.sha256(empty_graph.encode("utf-8")).hexdigest(),
+                    json.dumps({"migration": "v7", "authority": "registered_cm_adapter"}, sort_keys=True, separators=(",", ":")),
+                    now_value,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO aggregate_heads(
+                    aggregate_id, aggregate_kind, workspace_id, parent_id,
+                    current_revision_id, head_generation, lifecycle_state,
+                    display_name, description, created_at, updated_at
+                ) VALUES (?, 'domain_experiment', ?, ?, ?, 1, 'draft', ?, ?, ?, ?)
+                """,
+                (
+                    domain_id,
+                    project_id,
+                    global_experiment_id,
+                    revision_id,
+                    payload["name"],
+                    payload["objective"],
+                    now_value,
+                    now_value,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO lineage_edges(
+                    id, workspace_id, source_resource_id, target_resource_id,
+                    edge_mode, edge_key, metadata_json, created_at
+                ) VALUES (?, ?, ?, ?, 'owns', 'migration:v7:cm-domain', ?, ?)
+                """,
+                (
+                    _migration_id("lineage-cm-domain", global_experiment_id),
+                    project_id,
+                    global_experiment_id,
+                    domain_id,
+                    json.dumps({"migration": "v7", "classification": "registered_cm_adapter"}, sort_keys=True, separators=(",", ":")),
+                    now_value,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO audit_events(id, workspace_id, resource_id, event_type, generation, payload_json, created_at)
+                VALUES (?, ?, ?, 'legacy_cm_domain_created', 1, ?, ?)
+                """,
+                (
+                    _migration_id("audit-cm-domain", domain_id),
+                    project_id,
+                    domain_id,
+                    json.dumps({"global_experiment_id": global_experiment_id}, sort_keys=True, separators=(",", ":")),
+                    now_value,
+                ),
+            )
+            domains[global_experiment_id] = domain_id
+
+        connection.execute("DROP TRIGGER IF EXISTS trg_experiment_resource_identity_immutable")
+        connection.execute("DROP TRIGGER IF EXISTS trg_experiment_aggregate_parent_immutable_update")
+        connection.execute(
+            "UPDATE resources SET lifecycle_owner_id = ? WHERE id = ? AND kind = 'workflow'",
+            (domain_id, workflow_id),
+        )
+        connection.execute(
+            "UPDATE aggregate_heads SET parent_id = ? WHERE aggregate_id = ? AND aggregate_kind = 'workflow'",
+            (domain_id, workflow_id),
+        )
+        connection.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_experiment_resource_identity_immutable
+            BEFORE UPDATE OF id, kind, workspace_id, lifecycle_owner_id ON resources
+            BEGIN
+                SELECT RAISE(ABORT, 'resource identity is immutable');
+            END
+            """
+        )
+        connection.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_experiment_aggregate_parent_immutable_update
+            BEFORE UPDATE OF aggregate_id, aggregate_kind, workspace_id, parent_id ON aggregate_heads
+            WHEN NEW.aggregate_id IS NOT OLD.aggregate_id
+              OR NEW.aggregate_kind IS NOT OLD.aggregate_kind
+              OR NEW.workspace_id IS NOT OLD.workspace_id
+              OR NEW.parent_id IS NOT OLD.parent_id
+            BEGIN
+                SELECT RAISE(ABORT, 'aggregate identity and parent are immutable');
+            END
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO lineage_edges(
+                id, workspace_id, source_resource_id, target_resource_id,
+                edge_mode, edge_key, metadata_json, created_at
+            ) VALUES (?, ?, ?, ?, 'owns', 'migration:v7:cm-workflow', ?, ?)
+            """,
+            (
+                _migration_id("lineage-cm-workflow", workflow_id),
+                project_id,
+                domain_id,
+                workflow_id,
+                json.dumps({"migration": "v7", "previous_parent_id": global_experiment_id}, sort_keys=True, separators=(",", ":")),
+                now_value,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO audit_events(id, workspace_id, resource_id, event_type, generation, payload_json, created_at)
+            VALUES (?, ?, ?, 'legacy_cm_workflow_bound', 0, ?, ?)
+            """,
+            (
+                _migration_id("audit-cm-workflow", workflow_id),
+                project_id,
+                workflow_id,
+                json.dumps({"domain_experiment_id": domain_id, "previous_parent_id": global_experiment_id}, sort_keys=True, separators=(",", ":")),
+                now_value,
+            ),
+        )
+
+    connection.execute(
+        """
+        UPDATE aggregate_heads
+        SET lifecycle_state = 'needs_domain_assignment'
+        WHERE aggregate_kind IN ('workflow', 'dataset')
+          AND (SELECT kind FROM resources WHERE id = aggregate_heads.parent_id) IS NOT 'domain_experiment'
+        """
+    )
+
+
+def _apply_receipt_identity_upgrade(connection: sqlite3.Connection) -> None:
+    """Scope immutable receipt identity and bind classifiable legacy workflows."""
+    checksum = _migration_v7_checksum()
+    description = "Project-scoped immutable external receipt identity and deterministic legacy domain assignment"
+    try:
+        connection.executescript("BEGIN IMMEDIATE;\n" + MIGRATION_V7_SQL)
+        _migrate_classifiable_domain_ownership(connection)
+        connection.execute(
+            """
+            INSERT INTO experiment_schema_migrations(
+                version, name, checksum, description, applied_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                MIGRATION_V7_VERSION,
+                MIGRATION_V7_NAME,
+                checksum,
+                description,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        connection.commit()
+    except Exception:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
+
+
+def _apply_launch_context_upgrade(connection: sqlite3.Connection) -> None:
+    """Install durable opaque launcher handoff receipts atomically."""
+    checksum = _migration_v8_checksum()
+    description = "Durable opaque launch contexts with claim, consume, and canonical Job bindings"
+    script = (
+        "BEGIN IMMEDIATE;\n"
+        + MIGRATION_V8_SQL
+        + "\nINSERT INTO experiment_schema_migrations("
+        + "version, name, checksum, description, applied_at) VALUES ("
+        + f"{MIGRATION_V8_VERSION}, '{MIGRATION_V8_NAME}', '{checksum}', "
+        + f"'{description}', '{datetime.now(timezone.utc).isoformat()}');\n"
+        + "COMMIT;\n"
+    )
+    try:
+        connection.executescript(script)
+    except Exception:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
+
+
+def _apply_authority_immutability_upgrade(connection: sqlite3.Connection) -> None:
+    """Make accepted preparations and dataset membership append-only."""
+    checksum = _migration_v9_checksum()
+    description = "Immutable workflow preparations and digest-bound dataset revision members"
+    script = (
+        "BEGIN IMMEDIATE;\n" + MIGRATION_V9_SQL
+        + "\nINSERT INTO experiment_schema_migrations("
+        + "version, name, checksum, description, applied_at) VALUES ("
+        + f"{MIGRATION_V9_VERSION}, '{MIGRATION_V9_NAME}', '{checksum}', "
+        + f"'{description}', '{datetime.now(timezone.utc).isoformat()}');\n"
+        + "COMMIT;\n"
+    )
+    try:
+        connection.executescript(script)
+    except Exception:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
+
+
+def _apply_scientific_lineage_upgrade(connection: sqlite3.Connection) -> None:
+    """Add exact scientific lineage vocabulary without rewriting V1-V9."""
+    checksum = migration_checksum()
+    description = "Exact derived_from and compared_with scientific lineage modes"
+    script = ("BEGIN IMMEDIATE;\n" + MIGRATION_V10_SQL + "\nINSERT INTO experiment_schema_migrations("
+        + "version, name, checksum, description, applied_at) VALUES ("
+        + f"{MIGRATION_VERSION}, '{MIGRATION_NAME}', '{checksum}', "
+        + f"'{description}', '{datetime.now(timezone.utc).isoformat()}');\nCOMMIT;\n")
+    try:
+        connection.executescript(script)
+    except Exception:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
+
+
 def run_all(db_path: str | Path) -> None:
+    _verify_frozen_migration_sources()
     path = Path(db_path).expanduser().resolve()
     connection = _connect(path)
-    checksum = migration_checksum()
+    v1 = (LEGACY_MIGRATION_VERSION, LEGACY_MIGRATION_NAME, LEGACY_MIGRATION_CHECKSUM)
+    v2 = (MIGRATION_V2_VERSION, MIGRATION_V2_NAME, _migration_v2_checksum())
+    v3 = (MIGRATION_V3_VERSION, MIGRATION_V3_NAME, _migration_v3_checksum())
+    v4 = (MIGRATION_V4_VERSION, MIGRATION_V4_NAME, _migration_v4_checksum())
+    v5 = (MIGRATION_V5_VERSION, MIGRATION_V5_NAME, _migration_v5_checksum())
+    v6 = (MIGRATION_V6_VERSION, MIGRATION_V6_NAME, _migration_v6_checksum())
+    v7 = (MIGRATION_V7_VERSION, MIGRATION_V7_NAME, _migration_v7_checksum())
+    v8 = (MIGRATION_V8_VERSION, MIGRATION_V8_NAME, _migration_v8_checksum())
+    v9 = (MIGRATION_V9_VERSION, MIGRATION_V9_NAME, _migration_v9_checksum())
     try:
         connection.execute(
             """
@@ -749,6 +2275,7 @@ def run_all(db_path: str | Path) -> None:
             )
             """
         )
+
         rows = connection.execute(
             "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
         ).fetchall()
@@ -761,15 +2288,13 @@ def run_all(db_path: str | Path) -> None:
                 ) VALUES (?, ?, ?, ?, ?)
                 """,
                 (
-                    MIGRATION_VERSION,
-                    MIGRATION_NAME,
-                    checksum,
+                    *v2,
                     "Global workspace/experiment receipts and projections",
                     datetime.now(timezone.utc).isoformat(),
                 ),
             )
             connection.commit()
-        elif rows == [(LEGACY_MIGRATION_VERSION, LEGACY_MIGRATION_NAME, LEGACY_MIGRATION_CHECKSUM)]:
+        elif rows == [v1]:
             _apply_legacy_upgrade(connection)
             connection.execute(
                 "UPDATE experiment_schema_migrations SET description = ? WHERE version = ?",
@@ -782,23 +2307,68 @@ def run_all(db_path: str | Path) -> None:
                 ) VALUES (?, ?, ?, ?, ?)
                 """,
                 (
-                    MIGRATION_VERSION,
-                    MIGRATION_NAME,
-                    checksum,
+                    *v2,
                     "Global workspace/experiment receipts and projections",
                     datetime.now(timezone.utc).isoformat(),
                 ),
             )
             connection.commit()
-        elif rows in (
-            [(MIGRATION_VERSION, MIGRATION_NAME, checksum)],
-            [
-                (LEGACY_MIGRATION_VERSION, LEGACY_MIGRATION_NAME, LEGACY_MIGRATION_CHECKSUM),
-                (MIGRATION_VERSION, MIGRATION_NAME, checksum),
-            ],
-        ):
+
+        rows = connection.execute(
+            "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
+        ).fetchall()
+        if rows in ([v2], [v1, v2]):
+            _upgrade_v2_receipt_authority(connection)
+            _apply_hierarchy_upgrade(connection)
+
+        rows = connection.execute(
+            "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
+        ).fetchall()
+        if rows in ([v2, v3], [v1, v2, v3]):
             _cleanup_legacy_receipt_table(connection)
-        else:
+            connection.commit()
+            _apply_receipt_immutability_upgrade(connection)
+
+        rows = connection.execute(
+            "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
+        ).fetchall()
+        if rows in ([v2, v3, v4], [v1, v2, v3, v4]):
+            _apply_lifecycle_consistency_upgrade(connection)
+
+        rows = connection.execute(
+            "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
+        ).fetchall()
+        if rows in ([v2, v3, v4, v5], [v1, v2, v3, v4, v5]):
+            _apply_domain_owned_aggregate_upgrade(connection)
+
+        rows = connection.execute(
+            "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
+        ).fetchall()
+        if rows in ([v2, v3, v4, v5, v6], [v1, v2, v3, v4, v5, v6]):
+            _apply_receipt_identity_upgrade(connection)
+
+        rows = connection.execute(
+            "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
+        ).fetchall()
+        if rows in ([v2, v3, v4, v5, v6, v7], [v1, v2, v3, v4, v5, v6, v7]):
+            _apply_launch_context_upgrade(connection)
+
+        rows = connection.execute(
+            "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
+        ).fetchall()
+        if rows in ([v2, v3, v4, v5, v6, v7, v8], [v1, v2, v3, v4, v5, v6, v7, v8]):
+            _apply_authority_immutability_upgrade(connection)
+
+        rows = connection.execute(
+            "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
+        ).fetchall()
+        if rows in ([v2, v3, v4, v5, v6, v7, v8, v9], [v1, v2, v3, v4, v5, v6, v7, v8, v9]):
+            _apply_scientific_lineage_upgrade(connection)
+
+        rows = connection.execute(
+            "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
+        ).fetchall()
+        if rows not in _accepted_migration_ledgers():
             raise RuntimeError(f"experiment migration ledger mismatch: {rows!r}")
         connection.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS ux_experiment_run_events_idempotency "
@@ -848,4 +2418,27 @@ def health(db_path: str | Path) -> dict[str, object]:
         connection.close()
 
 
-__all__ = ["MIGRATION_VERSION", "MIGRATION_NAME", "MIGRATION_SQL", "migration_checksum", "attest_schema", "run_all", "health"]
+__all__ = [
+    "MIGRATION_VERSION",
+    "MIGRATION_NAME",
+    "MIGRATION_V8_VERSION",
+    "MIGRATION_V8_NAME",
+    "MIGRATION_V9_VERSION",
+    "MIGRATION_V9_NAME",
+    "MIGRATION_V4_VERSION",
+    "MIGRATION_V4_NAME",
+    "MIGRATION_SQL",
+    "MIGRATION_V2_SQL",
+    "MIGRATION_V3_SQL",
+    "MIGRATION_V4_SQL",
+    "MIGRATION_V5_SQL",
+    "MIGRATION_V6_SQL",
+    "MIGRATION_V7_SQL",
+    "MIGRATION_V8_SQL",
+    "MIGRATION_V9_SQL",
+    "MIGRATION_V10_SQL",
+    "migration_checksum",
+    "attest_schema",
+    "run_all",
+    "health",
+]

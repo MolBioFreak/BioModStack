@@ -9,6 +9,20 @@ export const api = axios.create({
     baseURL: API_BASE,
 });
 
+api.interceptors.request.use((config) => {
+    if (config.headers.get('X-BMS-Skip-Launch-Context') === '1') {
+        config.headers.delete('X-BMS-Skip-Launch-Context');
+        return config;
+    }
+    const launchContextId = typeof window !== 'undefined'
+        ? new URLSearchParams(window.location.search).get('launch_context_id')
+        : null;
+    if (launchContextId) {
+        config.headers.set('X-BMS-Launch-Context-ID', launchContextId);
+    }
+    return config;
+});
+
 // Types
 export interface Job {
     id: string;
@@ -17,6 +31,7 @@ export interface Job {
     model_id: string;
     mode: string;
     params: Record<string, UntypedApiValue>;
+    launch_context_id?: string | null;
     created_at: string;
     design_count: number;
     requested_design_count?: number | null;
@@ -552,8 +567,49 @@ export const extractChain = async (
 };
 
 // Start a job
-export const submitJob = (jobData: Partial<Job>) => {
-    return api.post('/api/jobs', jobData);
+export const submitJob = (jobData: Partial<Job>, options: { launchContext?: boolean } = {}) => {
+    const useLaunchContext = options.launchContext !== false;
+    const launchContextId = typeof window !== 'undefined' && useLaunchContext
+        ? new URLSearchParams(window.location.search).get('launch_context_id')
+        : null;
+    const payload = launchContextId && !jobData.launch_context_id
+        ? { ...jobData, launch_context_id: launchContextId }
+        : jobData;
+    return api.post('/api/jobs', payload, useLaunchContext
+        ? undefined
+        : { headers: { 'X-BMS-Skip-Launch-Context': '1' } });
+};
+
+export const completeCurrentLaunchContext = async (responseData: unknown): Promise<string | null> => {
+    const data = responseData && typeof responseData === 'object'
+        ? responseData as Record<string, unknown>
+        : {};
+    const directReturn = data.return_uri;
+    if (typeof directReturn === 'string' && directReturn.startsWith('/') && !directReturn.startsWith('//')) {
+        return directReturn;
+    }
+    const launchContextId = typeof window !== 'undefined'
+        ? new URLSearchParams(window.location.search).get('launch_context_id')
+        : null;
+    const launchedJob = data.launched_job && typeof data.launched_job === 'object'
+        ? data.launched_job as Record<string, unknown>
+        : null;
+    const jobId = typeof data.id === 'string'
+        ? data.id
+        : typeof data.job_id === 'string'
+            ? data.job_id
+            : typeof launchedJob?.id === 'string'
+                ? launchedJob.id
+                : null;
+    if (!launchContextId || !jobId) return null;
+    const binding = await api.post<{ return_uri: string }>(
+        `/api/launch-contexts/${encodeURIComponent(launchContextId)}/bind`,
+        { job_id: jobId },
+    );
+    const returnUri = binding.data.return_uri;
+    return typeof returnUri === 'string' && returnUri.startsWith('/') && !returnUri.startsWith('//')
+        ? returnUri
+        : null;
 };
 
 export interface ShapeGeometrySummary {
@@ -4420,7 +4476,7 @@ export interface PcrOperationRequest {
 }
 
 export interface PcrOperationResponse {
-    sequence: NucleotideSequenceResponse | null;
+    sequence: NucleotideSequence | null;
     product: {
         sequence: string;
         start: number;

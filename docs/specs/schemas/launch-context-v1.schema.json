@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.launch-context.v1",
+  "title": "BioModStack Launch Context",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "launch_context_id",
+    "project_id",
+    "global_experiment_id",
+    "domain_experiment_id",
+    "workflow_id",
+    "workflow_revision_id",
+    "return_uri",
+    "source_receipt_id",
+    "state",
+    "issued_at",
+    "expires_at"
+  ],
+  "properties": {
+    "schema": {"const": "bms.launch-context.v1"},
+    "launch_context_id": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "global_experiment_id": {"type": "string", "minLength": 1},
+    "domain_experiment_id": {"type": "string", "minLength": 1},
+    "workflow_id": {"type": ["string", "null"]},
+    "workflow_revision_id": {"type": ["string", "null"]},
+    "return_uri": {"type": "string", "minLength": 1},
+    "source_receipt_id": {"type": "string", "minLength": 1},
+    "state": {"enum": ["issued", "claimed", "consumed"]},
+    "canonical_job_id": {"type": ["string", "null"]},
+    "recovery_job_id": {"type": ["string", "null"]},
+    "binding_receipt": {"type": ["object", "null"]},
+    "issued_at": {"type": "string", "format": "date-time"},
+    "expires_at": {"type": "string", "format": "date-time"}
+  }
+}

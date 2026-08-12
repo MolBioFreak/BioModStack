@@ -632,7 +632,12 @@ export function MolBioToolkitV2() {
     const [exactMolecularRevision, setExactMolecularRevision] = useState<MolecularRevision | null>(null);
     const [exactMolecularLoading, setExactMolecularLoading] = useState(false);
     const [exactMolecularError, setExactMolecularError] = useState<string | null>(null);
-
+    const deepLinkSequenceId = queryParams.get('sequence_id')?.trim() || requestedMolecularSequenceId;
+    const deepLinkRevisionId = queryParams.get('revision_id')?.trim() || requestedMolecularRevisionId;
+    const deepLinkOperationId = queryParams.get('operation_id')?.trim() || null;
+    const deepLinkReceiptId = queryParams.get('receipt_id')?.trim() || null;
+    const [deepLinkOperationState, setDeepLinkOperationState] = useState<'loading' | 'loaded' | 'unavailable' | null>(null);
+    const openedDeepLinkRef = useRef<string | null>(null);
     // State
     const [sequences, setSequences] = useState<NucleotideSequenceListItem[]>([]);
     const [selectedSequenceId, setSelectedSequenceId] = useState<string | null>(null);
@@ -1090,6 +1095,86 @@ export function MolBioToolkitV2() {
         });
         void loadSequence(sequenceId);
     }, [activeExactMolecularRevision?.sequence_id, loadSequence, requestedMolecularSequenceId, updateQueryParams]);
+
+    useEffect(() => {
+        if (!deepLinkSequenceId) return;
+        const identity = `${deepLinkSequenceId}:${deepLinkRevisionId ?? 'current'}`;
+        if (openedDeepLinkRef.current === identity) return;
+        openedDeepLinkRef.current = identity;
+        let cancelled = false;
+        const openDeepLink = async () => {
+            try {
+                if (!deepLinkRevisionId) {
+                    await loadSequence(deepLinkSequenceId);
+                    return;
+                }
+                const [current, response] = await Promise.all([
+                    getSequence(deepLinkSequenceId),
+                    fetch(
+                        `/api/molbio/sequences/${encodeURIComponent(deepLinkSequenceId)}/revisions/${encodeURIComponent(deepLinkRevisionId)}`,
+                    ),
+                ]);
+                if (!current || !response.ok) throw new Error('Exact molecular revision is unavailable.');
+                const detail = await response.json() as { revision_id?: string; sequence_id?: string; snapshot?: Record<string, unknown> };
+                if (
+                    detail.revision_id !== deepLinkRevisionId
+                    || detail.sequence_id !== deepLinkSequenceId
+                    || !detail.snapshot
+                ) {
+                    throw new Error('Molecular revision identity does not match the requested record.');
+                }
+                if (cancelled) return;
+                const converted = sequenceDataFromApiRecord({
+                    ...current,
+                    ...detail.snapshot,
+                    id: deepLinkSequenceId,
+                });
+                openWorkspace(converted, {
+                    sequenceId: deepLinkSequenceId,
+                    dirty: false,
+                    label: `Open revision ${deepLinkRevisionId}`,
+                });
+            } catch (error) {
+                console.error('Failed to reopen exact molecular record:', error);
+            }
+        };
+        void openDeepLink();
+        return () => { cancelled = true; };
+    }, [deepLinkRevisionId, deepLinkSequenceId, getSequence, loadSequence, openWorkspace]);
+
+    useEffect(() => {
+        if (!deepLinkOperationId) {
+            setDeepLinkOperationState(null);
+            return;
+        }
+        let cancelled = false;
+        setDeepLinkOperationState('loading');
+        void fetch(`/api/molbio/operations/${encodeURIComponent(deepLinkOperationId)}`)
+            .then(async (response) => {
+                if (!response.ok) throw new Error('operation unavailable');
+                const detail = await response.json() as {
+                    operation_id?: string;
+                    inputs?: Array<{ revision_id?: string }>;
+                    outputs?: Array<{ revision_id?: string }>;
+                };
+                const linkedRevisionIds = [...(detail.inputs ?? []), ...(detail.outputs ?? [])]
+                    .map((item) => item.revision_id)
+                    .filter(Boolean);
+                if (
+                    detail.operation_id !== deepLinkOperationId
+                    || (deepLinkRevisionId && !linkedRevisionIds.includes(deepLinkRevisionId))
+                ) {
+                    throw new Error('operation identity mismatch');
+                }
+                if (!cancelled) setDeepLinkOperationState('loaded');
+            })
+            .catch(() => {
+                if (!cancelled) setDeepLinkOperationState('unavailable');
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [deepLinkOperationId, deepLinkRevisionId]);
 
     // Load demo plasmid (no API, direct)
     const loadDemo = useCallback((demo: SequenceData) => {
@@ -2150,6 +2235,24 @@ export function MolBioToolkitV2() {
 
     return (
         <>
+            {(deepLinkOperationId || deepLinkReceiptId) && (
+                <aside className="border-b border-slate-700 bg-slate-950 px-4 py-2 text-xs text-slate-200" aria-label="Exact MolBio source context">
+                    {deepLinkOperationId && (
+                        <span className="mr-3">Operation <code>{deepLinkOperationId}</code>{' '}
+                            <strong>{deepLinkOperationState ?? 'loading'}</strong>
+                        </span>
+                    )}
+                    {deepLinkReceiptId && (
+                        <span>Receipt <code>{deepLinkReceiptId}</code>{' '}
+                            <strong>{
+                                deepLinkReceiptId === deepLinkRevisionId || deepLinkReceiptId === deepLinkOperationId
+                                    ? 'loaded'
+                                    : 'unavailable'
+                            }</strong>
+                        </span>
+                    )}
+                </aside>
+            )}
             <div
                 ref={toolkitRootRef}
                 tabIndex={-1}

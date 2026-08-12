@@ -37,6 +37,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build qc_manifest.json for FASTQ plasmid QC")
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--job-id", required=True)
+    parser.add_argument("--workflow-id", required=True)
+    parser.add_argument("--input-mode", required=True)
     parser.add_argument("--sample-name", required=False, default=None)
     parser.add_argument("--reference-fasta", required=True, type=Path)
     parser.add_argument(
@@ -197,6 +199,8 @@ def build_manifest(
     consensus_fasta: Path | None,
     consensus_status: str,
     artifacts: Iterable[ArtifactSpec],
+    workflow_id: str = "ont_fastq_qc",
+    input_mode: str = "fastq",
     expected_sha256: str | None = None,
     workflow_status: str | None = None,
     verification_status: str | None = None,
@@ -205,6 +209,10 @@ def build_manifest(
     normalized_job_id = str(job_id or "").strip()
     if not normalized_job_id or normalized_job_id.lower() == "unknown":
         raise ValueError("sequence-QC manifest requires an exact non-placeholder job identity")
+    normalized_workflow_id = str(workflow_id or "").strip()
+    normalized_input_mode = str(input_mode or "").strip()
+    if not normalized_workflow_id or not normalized_input_mode:
+        raise ValueError("sequence-QC manifest requires workflow_id and input_mode")
     manifest_dir = out.parent.resolve()
     manifest_dir.mkdir(parents=True, exist_ok=True)
     ref_name, ref_seq = read_first_fasta_record(reference_fasta)
@@ -233,8 +241,12 @@ def build_manifest(
         verification_reason_codes=verification_reason_codes,
     )
     payload: dict[str, Any] = {
+        "schema": "sequence_qc.manifest.v1",
         "artifact_schema_version": MANIFEST_SCHEMA_VERSION,
+        "workflow_id": normalized_workflow_id,
         "job_id": normalized_job_id,
+        "input_mode": normalized_input_mode,
+        "analysis_status": normalized_workflow_status,
         "sample_name": sample_name or normalized_job_id,
         "workflow_status": normalized_workflow_status,
         "verification_status": normalized_verification_status,
@@ -294,6 +306,9 @@ def build_manifest(
         if artifact is not None:
             payload["artifacts"].append(artifact)
 
+    payload["manifest_sha256"] = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
     out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return payload
 
@@ -352,6 +367,8 @@ def main() -> int:
     build_manifest(
         out=args.out,
         job_id=args.job_id,
+        workflow_id=args.workflow_id,
+        input_mode=args.input_mode,
         sample_name=args.sample_name,
         reference_fasta=args.reference_fasta,
         consensus_fasta=args.consensus,

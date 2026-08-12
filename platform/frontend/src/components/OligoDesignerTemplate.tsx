@@ -16,7 +16,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { submitJob } from '../lib/api';
+import { completeCurrentLaunchContext, submitJob } from '../lib/api';
 import { PhysicsRefinementPanel, type PhysicsRefinementSettings } from './PhysicsRefinementPanel';
 import { DEFAULT_SETTINGS as PHYSICS_DEFAULTS } from './physicsRefinementSettings';
 import { TargetAntigenSelector, type SelectedTarget } from './TargetAntigenSelector';
@@ -457,9 +457,10 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
 
             return submitJob(jobPayload);
         },
-        onSuccess: (response) => {
+        onSuccess: async (response) => {
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
-            navigate(`/results/${response.data.job_id}`);
+            const returnUri = await completeCurrentLaunchContext(response.data);
+            navigate(returnUri ?? `/results/${response.data.job_id}`);
         },
         onError: (err: Error) => {
             setError(err.message);

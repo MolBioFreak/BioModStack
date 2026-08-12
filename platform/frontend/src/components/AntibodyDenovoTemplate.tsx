@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { submitJob, uploadFile, extractChain, annotateFrameworkCdrs, downloadSabdabFramework, launchAntibodyIteration, launchManualMutagenesis, previewBoltzGenDesignSpec, type BoltzGenPreviewResponse, type CDRAnnotationResponse, type RfScreeningScope } from '../lib/api';
+import { completeCurrentLaunchContext, submitJob, uploadFile, extractChain, annotateFrameworkCdrs, downloadSabdabFramework, launchAntibodyIteration, launchManualMutagenesis, previewBoltzGenDesignSpec, type BoltzGenPreviewResponse, type CDRAnnotationResponse, type RfScreeningScope } from '../lib/api';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { getModelByNumber, parsePDBFile, type Chain, type ParsedPDB } from '../utils/pdbUtils';
 import { EpitopeSelector } from './EpitopeSelector';
@@ -980,10 +980,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
     const submitMutation = useMutation({
         mutationFn: async (data: UntypedApiValue) => submitJob(data),
-        onSuccess: () => {
+        onSuccess: async (response) => {
             clearAntibodyRefinementLaunchState();
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
-            navigate('/');
+            navigate(await completeCurrentLaunchContext(response.data) ?? '/');
         }
     });
 
@@ -1007,10 +1007,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
     const launchMutagenesisMutation = useMutation({
         mutationFn: async (data: UntypedApiValue) => launchManualMutagenesis(data),
-        onSuccess: () => {
+        onSuccess: async (response) => {
             clearAntibodyRefinementLaunchState();
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
-            navigate('/');
+            navigate(await completeCurrentLaunchContext(response.data) ?? '/');
         },
     });
 
@@ -2123,7 +2123,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             return;
                         }
 
-                        await launchAntibodyIteration({
+                        const response = await launchAntibodyIteration({
                             source_job_id: refinementParentJobId,
                             action: mutagenesisLaunchMode === 'seeded_refinement' ? 'mutation_seeded_refinement' : 'cdr_indel_round',
                             design_ids: refinementDesignIds ?? [],
@@ -2133,7 +2133,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         });
                         clearAntibodyRefinementLaunchState();
                         queryClient.invalidateQueries({ queryKey: ['jobs'] });
-                        navigate('/');
+                        navigate(await completeCurrentLaunchContext(response.data) ?? '/');
                         return;
                     }
 
@@ -2147,7 +2147,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     }
 
                     if (mutagenesisLaunchMode === 'seeded_refinement') {
-                        await launchAntibodyIteration({
+                        const response = await launchAntibodyIteration({
                             source_job_id: refinementParentJobId,
                             action: 'mutation_seeded_refinement',
                             design_ids: refinementDesignIds ?? [],
@@ -2162,7 +2162,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         });
                         clearAntibodyRefinementLaunchState();
                         queryClient.invalidateQueries({ queryKey: ['jobs'] });
-                        navigate('/');
+                        navigate(await completeCurrentLaunchContext(response.data) ?? '/');
                         return;
                     }
 
@@ -2181,7 +2181,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     return;
                 }
 
-                await launchAntibodyIteration({
+                const response = await launchAntibodyIteration({
                     source_job_id: refinementParentJobId,
                     action: 'ui_refinement',
                     design_ids: refinementDesignIds ?? [],
@@ -2190,7 +2190,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 });
                 clearAntibodyRefinementLaunchState();
                 queryClient.invalidateQueries({ queryKey: ['jobs'] });
-                navigate('/');
+                navigate(await completeCurrentLaunchContext(response.data) ?? '/');
                 return;
             }
 

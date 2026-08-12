@@ -14,6 +14,7 @@ import pytest_asyncio
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.routing import APIRoute
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from experiment_database import ExperimentBase, create_experiment_engine, create_experiment_session_factory
@@ -34,9 +35,13 @@ from experiment_services import (
     ExistingJobMaterializer,
     IdempotencyConflict,
     RevisionConflict,
+    ValidationFailure,
     add_audit_event,
+    canonical_json,
     create_dataset,
+    create_domain_experiment,
     create_experiment_workspace,
+    create_global_experiment,
     create_workflow,
     create_run_group,
     clone_workflow,
@@ -81,6 +86,61 @@ def _workflow_payload() -> dict:
             "params": {"seed": 101},
         },
     }
+
+
+async def _domain_parent(session: AsyncSession, workspace_id: str, label: str):
+    global_experiment = await create_global_experiment(
+        session,
+        workspace_id,
+        {
+            "schema": "bms.global-experiment.v1",
+            "name": f"{label} global",
+            "objective": "Test global hierarchy",
+            "scientific_question": "Does the hierarchy remain authoritative?",
+            "description": "Hierarchy fixture",
+            "status": "draft",
+            "priority": "normal",
+            "tags": [],
+            "shared_source_receipt_ids": [],
+            "shared_dataset_ids": [],
+            "success_criteria": ["verified"],
+            "created_by": "test",
+            "change_summary": "created",
+        },
+    )
+    return await create_domain_experiment(
+        session,
+        workspace_id,
+        global_experiment.id,
+        {
+            "schema": "bms.domain-experiment.v1",
+            "domain_kind": "protein_in_silico",
+            "domain_contract_version": "1",
+            "name": f"{label} domain",
+            "objective": "Test domain hierarchy",
+            "status": "draft",
+            "tags": [],
+            "source_receipt_ids": [],
+            "dataset_ids": [],
+            "created_by": "test",
+            "change_summary": "created",
+            "domain_payload": {
+                "schema": "bms.protein-in-silico-experiment.v1",
+                "experiment_mode": "design",
+                "targets": [{
+                    "target_id": "target-1",
+                    "label": "Target 1",
+                    "entity_receipt_ids": [],
+                    "role": "target",
+                }],
+                "scientific_objective": "Test domain hierarchy",
+                "design_constraints": [],
+                "planned_capabilities": ["rfd3_local_redesign"],
+                "comparison_groups": [],
+                "validation_strategy": ["boltz2"],
+            },
+        },
+    )
 
 
 def _mutation_request(
@@ -151,14 +211,20 @@ async def test_global_cm_mutation_owner_fails_closed_for_ownerless_and_foreign_r
         owned_workspace = await create_experiment_workspace(session, "owned")
         ownerless_workspace = await create_experiment_workspace(session, "ownerless")
         foreign_workspace = await create_experiment_workspace(session, "foreign")
+        owned_domain = await _domain_parent(session, owned_workspace.id, "owned")
+        ownerless_domain = await _domain_parent(session, ownerless_workspace.id, "ownerless")
+        foreign_domain = await _domain_parent(session, foreign_workspace.id, "foreign")
         owned_workflow = await create_workflow(
             session, owned_workspace.id, "owned workflow", "generic_test",
+            experiment_id=owned_domain.id,
         )
         ownerless_workflow = await create_workflow(
             session, ownerless_workspace.id, "ownerless workflow", "generic_test",
+            experiment_id=ownerless_domain.id,
         )
         foreign_workflow = await create_workflow(
             session, foreign_workspace.id, "foreign workflow", "generic_test",
+            experiment_id=foreign_domain.id,
         )
         for workspace, principal_id in (
             (owned_workspace, "alice"),
@@ -193,6 +259,7 @@ _MUTATING_METHODS = {"POST", "PATCH", "PUT", "DELETE"}
 _GLOBAL_OPERATOR_PATHS = {
     "/api/experiment-workspaces/ops/backup",
     "/api/experiment-workspaces/dispatch/once",
+    "/api/experiment-workspaces/{workspace_id}/run-groups/{run_group_id}/reconcile",
 }
 
 
@@ -231,7 +298,11 @@ _MUTATION_HTTP_CASES = {
     ),
     "create_workspace_workflow": (
         "/api/experiment-workspaces/workspace/workflows",
-        {"name": "workflow", "workflow_family": "generic_test"},
+        {
+            "name": "workflow",
+            "workflow_family": "generic_test",
+            "domain_experiment_id": "domain",
+        },
         None,
     ),
     "save_workflow_draft_route": (
@@ -249,7 +320,11 @@ _MUTATION_HTTP_CASES = {
     ),
     "create_workspace_dataset": (
         "/api/experiment-workspaces/workspace/datasets",
-        {"name": "dataset", "dataset_kind": "generic_inputs"},
+        {
+            "name": "dataset",
+            "dataset_kind": "generic_inputs",
+            "domain_experiment_id": "domain",
+        },
         None,
     ),
     "save_dataset_revision_route": (
@@ -273,6 +348,11 @@ _MUTATION_HTTP_CASES = {
     "retry_workspace_run_group": (
         "/api/experiment-workspaces/workspace/run-groups/group/retry",
         {"idempotency_key": "retry"},
+        None,
+    ),
+    "resubmit_workspace_run_group": (
+        "/api/experiment-workspaces/workspace/run-groups/group/resubmit",
+        {"idempotency_key": "resubmit"},
         None,
     ),
     "create_experiment_backup": (
@@ -328,7 +408,6 @@ async def test_every_global_cm_mutation_http_route_rejects_missing_authenticatio
         yield StubSession()
 
     app.dependency_overrides[workspace_router.get_experiment_session] = override_session
-    app.dependency_overrides[workspace_router.get_core_session] = override_session
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         for route in routes:
@@ -350,12 +429,7 @@ async def test_global_backup_and_dispatch_http_routes_require_operator_or_admin_
         calls.append("backup")
         return {"backup_id": "operator-backup"}
 
-    async def fake_dispatch(_session, _materializer) -> int:
-        calls.append("dispatch")
-        return 1
-
     monkeypatch.setattr(workspace_router, "create_online_backup", fake_backup)
-    monkeypatch.setattr(workspace_router, "dispatch_pending_outbox", fake_dispatch)
     app = FastAPI()
 
     @app.middleware("http")
@@ -378,7 +452,6 @@ async def test_global_backup_and_dispatch_http_routes_require_operator_or_admin_
         yield StubSession()
 
     app.dependency_overrides[workspace_router.get_experiment_session] = override_session
-    app.dependency_overrides[workspace_router.get_core_session] = override_session
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         for path in _GLOBAL_OPERATOR_PATHS:
@@ -394,9 +467,8 @@ async def test_global_backup_and_dispatch_http_routes_require_operator_or_admin_
             headers={"X-Test-Role": "admin"},
         )
         assert backup.status_code == 201
-        assert dispatch.status_code == 200
-        assert dispatch.json() == {"dispatched": 1}
-        assert calls == ["backup", "dispatch"]
+        assert dispatch.status_code == 409
+        assert calls == ["backup"]
 
 
 @pytest.mark.asyncio
@@ -453,8 +525,13 @@ async def test_workflow_and_dataset_revision_save_load_prepare_is_server_backed(
     _db_path, _engine, factory = experiment_store
     async with factory() as session:
         workspace = await create_experiment_workspace(session, "CM test workspace")
-        workflow = await create_workflow(session, workspace.id, "Generic workflow", "generic_test")
-        dataset = await create_dataset(session, workspace.id, "Input dataset", "generic_inputs")
+        domain = await _domain_parent(session, workspace.id, "CM test")
+        workflow = await create_workflow(
+            session, workspace.id, "Generic workflow", "generic_test", experiment_id=domain.id,
+        )
+        dataset = await create_dataset(
+            session, workspace.id, "Input dataset", "generic_inputs", experiment_id=domain.id,
+        )
         await save_workflow_draft(session, workflow.id, _workflow_payload(), expected_generation=0)
         workflow_revision = await save_workflow_revision(
             session, workflow.id, expected_head_generation=0
@@ -506,8 +583,13 @@ async def test_revision_generation_conflict_and_run_group_idempotency(experiment
     _db_path, _engine, factory = experiment_store
     async with factory() as session:
         workspace = await create_experiment_workspace(session, "run-group workspace")
-        workflow = await create_workflow(session, workspace.id, "workflow", "generic_test")
-        dataset = await create_dataset(session, workspace.id, "dataset", "generic_inputs")
+        domain = await _domain_parent(session, workspace.id, "run-group")
+        workflow = await create_workflow(
+            session, workspace.id, "workflow", "generic_test", experiment_id=domain.id,
+        )
+        dataset = await create_dataset(
+            session, workspace.id, "dataset", "generic_inputs", experiment_id=domain.id,
+        )
         await save_workflow_draft(session, workflow.id, _workflow_payload(), expected_generation=0)
         revision = await save_workflow_revision(session, workflow.id, expected_head_generation=0)
         dataset_revision = await save_dataset_revision(
@@ -550,6 +632,29 @@ async def test_revision_generation_conflict_and_run_group_idempotency(experiment
         assert len(outbox_rows) == 1
         assert len(runs) == 1
         assert outbox_rows[0].status == "pending"
+        with pytest.raises(IntegrityError, match="workflow preparation is immutable"):
+            preparation.validation_receipt_json = canonical_json({"schema": "bms.experiment.validation.v1", "status": "valid", "tampered": True})
+            await session.flush()
+        await session.rollback()
+
+
+def test_migration_v9_makes_preparations_and_dataset_members_immutable(tmp_path) -> None:
+    from experiment_migrations import run_all
+
+    db_path = tmp_path / "authority.db"
+    run_all(db_path)
+    connection = sqlite3.connect(db_path)
+    try:
+        triggers = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
+        assert {
+            "trg_experiment_preparation_immutable_update",
+            "trg_experiment_preparation_immutable_delete",
+            "trg_experiment_dataset_member_digest_insert",
+            "trg_experiment_dataset_member_immutable_update",
+            "trg_experiment_dataset_member_immutable_delete",
+        } <= triggers
+    finally:
+        connection.close()
 
 
 class _FakeMaterializer:
@@ -574,8 +679,13 @@ async def test_outbox_dispatch_is_idempotent_and_acknowledges_external_receipt(e
 
     async with factory() as session:
         workspace = await create_experiment_workspace(session, "dispatch workspace")
-        workflow = await create_workflow(session, workspace.id, "workflow", "generic_test")
-        dataset = await create_dataset(session, workspace.id, "dataset", "generic_inputs")
+        domain = await _domain_parent(session, workspace.id, "dispatch")
+        workflow = await create_workflow(
+            session, workspace.id, "workflow", "generic_test", experiment_id=domain.id,
+        )
+        dataset = await create_dataset(
+            session, workspace.id, "dataset", "generic_inputs", experiment_id=domain.id,
+        )
         await save_workflow_draft(session, workflow.id, _workflow_payload(), expected_generation=0)
         revision = await save_workflow_revision(session, workflow.id, expected_head_generation=0)
         dataset_revision = await save_dataset_revision(
@@ -684,20 +794,43 @@ async def test_existing_job_materializer_preallocates_and_reuses_core_job_identi
             "scheduler_job_id": "12345678-1234-1234-1234-123456789012",
             "scheduler": {
                 "name": "materialized-job",
-                "model_id": "generic_test",
+                "model_id": "protenix",
                 "mode": "predict",
-                "params": {"seed": 101},
+                "params": {
+                    "seed": 101,
+                    "sequence": "ACDEFGHIKLMNPQRSTVWY",
+                    "msa_provider": "colabfold_api",
+                    "job_name": "materialized-job",
+                    "pred_method": "protenix",
+                    "structure_validator": "protenix",
+                    "workflow_adapter": "bms.core-job.protenix.adapter.v1",
+                },
             },
         }
         async with core_factory() as session:
             materializer = ExistingJobMaterializer(session)
-            first = await materializer.materialize("global-attempt-id", payload)
-            second = await materializer.materialize("global-attempt-id", payload)
+            first = await materializer.materialize("12345678-1234-5234-9234-123456789012", payload)
+            persisted = await session.get(Job, "12345678-1234-5234-9234-123456789012")
+            assert persisted is not None
+            assert dict(persisted.params or {}) == payload["scheduler"]["params"], (
+                persisted.params,
+                payload["scheduler"]["params"],
+            )
+            second = await materializer.materialize("12345678-1234-5234-9234-123456789012", payload)
             assert first == second
-            assert first["entity_id"] == payload["scheduler_job_id"]
+            assert first["external_job_id"] == "12345678-1234-5234-9234-123456789012"
             assert (await session.execute(select(Job))).scalars().all().__len__() == 1
-            conflict = {**payload, "scheduler": {**payload["scheduler"], "params": {"seed": 202}}}
+            conflict = {
+                **payload,
+                "scheduler": {
+                    **payload["scheduler"],
+                    "params": {
+                        **payload["scheduler"]["params"],
+                        "seed": 202,
+                    },
+                },
+            }
             with pytest.raises(DispatchFailure, match="conflicts"):
-                await materializer.materialize("global-attempt-id", conflict)
+                await materializer.materialize("12345678-1234-5234-9234-123456789012", conflict)
     finally:
         await core_engine.dispose()

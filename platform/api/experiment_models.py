@@ -223,6 +223,7 @@ class ExperimentRunAttempt(ExperimentBase):
     external_binding_receipt_json = Column(Text, nullable=True)
     runtime_identity_json = Column(Text, nullable=True)
     terminal_receipt_json = Column(Text, nullable=True)
+    terminal_receipt_sha256 = Column(String(64), nullable=True)
     created_at = Column(String(64), nullable=False, default=_timestamp)
 
     @property
@@ -243,6 +244,9 @@ class ExperimentDispatchOutbox(ExperimentBase):
     status = Column(String(32), nullable=False, default="pending")
     dispatch_attempts = Column(Integer, nullable=False, default=0)
     lease_token = Column(String(128), nullable=True)
+    lease_owner = Column(String(255), nullable=True)
+    lease_acquired_at = Column(String(64), nullable=True)
+    lease_expires_at = Column(String(64), nullable=True)
     last_error = Column(Text, nullable=True)
     acknowledgement_json = Column(Text, nullable=True)
     created_at = Column(String(64), nullable=False, default=_timestamp)
@@ -287,8 +291,64 @@ class ExperimentExternalEntityReceipt(ExperimentBase):
     generation_or_revision = Column(String(255), nullable=False)
     content_digest = Column(String(64), nullable=False)
     availability = Column(String(32), nullable=False, default="unknown")
+    verification_authority = Column(String(255), nullable=False, default="legacy_unverified")
     acknowledgement_json = Column(Text, nullable=True)
     created_at = Column(String(64), nullable=False, default=_timestamp)
+
+
+class ExperimentResearchRecord(ExperimentBase):
+    __tablename__ = "research_records"
+
+    resource_id = Column(String(128), ForeignKey("resources.id"), primary_key=True)
+    workspace_id = Column(String(128), ForeignKey("resources.id"), nullable=False)
+    subject_resource_id = Column(String(128), ForeignKey("resources.id"), nullable=False)
+    record_kind = Column(String(32), nullable=False)
+    body = Column(Text, nullable=False)
+    author = Column(String(255), nullable=True)
+    source_receipt_ids_json = Column(Text, nullable=False, default="[]")
+    supersedes_record_id = Column(String(128), ForeignKey("research_records.resource_id"), nullable=True)
+    created_at = Column(String(64), nullable=False, default=_timestamp)
+
+
+class ExperimentDomainAdapterReceipt(ExperimentBase):
+    __tablename__ = "domain_adapter_receipts"
+
+    resource_id = Column(String(128), ForeignKey("resources.id"), primary_key=True)
+    workspace_id = Column(String(128), ForeignKey("resources.id"), nullable=False)
+    domain_experiment_id = Column(String(128), ForeignKey("resources.id"), nullable=False)
+    adapter_id = Column(String(255), nullable=False)
+    adapter_version = Column(String(64), nullable=False)
+    operation_kind = Column(String(64), nullable=False)
+    normalized_request_sha256 = Column(String(64), nullable=False)
+    receipt_json = Column(Text, nullable=False)
+    created_at = Column(String(64), nullable=False, default=_timestamp)
+
+
+class ExperimentLaunchContext(ExperimentBase):
+    """Short-lived server-owned handoff from a Domain Experiment to a typed launcher."""
+
+    __tablename__ = "launch_contexts"
+
+    launch_context_id = Column(String(128), primary_key=True)
+    project_id = Column(String(128), ForeignKey("resources.id"), nullable=False)
+    global_experiment_id = Column(String(128), ForeignKey("resources.id"), nullable=False)
+    domain_experiment_id = Column(String(128), ForeignKey("resources.id"), nullable=False)
+    workflow_id = Column(String(128), ForeignKey("resources.id"), nullable=True)
+    workflow_revision_id = Column(String(128), ForeignKey("revisions.resource_id"), nullable=True)
+    source_receipt_id = Column(String(128), ForeignKey("resources.id"), nullable=False)
+    return_uri = Column(String(1000), nullable=False)
+    state = Column(String(32), nullable=False, default="issued")
+    claim_token = Column(String(128), nullable=True)
+    canonical_job_id = Column(String(128), nullable=True, unique=True)
+    binding_receipt_json = Column(Text, nullable=True)
+    issued_at = Column(String(64), nullable=False, default=_timestamp)
+    expires_at = Column(String(64), nullable=False)
+    claimed_at = Column(String(64), nullable=True)
+    consumed_at = Column(String(64), nullable=True)
+
+    @property
+    def id(self) -> str:
+        return self.launch_context_id
 
 
 class ExperimentArtifactBlob(ExperimentBase):

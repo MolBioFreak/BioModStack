@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { fetchDesigns, fetchJobById, submitJob, uploadFile, type Design, type Job } from '../lib/api';
+import { completeCurrentLaunchContext, fetchDesigns, fetchJobById, submitJob, uploadFile, type Design, type Job } from '../lib/api';
 import { jobPollingInterval } from '../lib/queryPolling';
 import { TargetAntigenSelector, type SelectedTarget } from './TargetAntigenSelector';
 import { EpitopeSelector } from './EpitopeSelector';
@@ -670,9 +670,9 @@ export function ProteinLocalRedesignTemplate({
 
     const submitMutation = useMutation({
         mutationFn: async (payload: Record<string, unknown>) => submitJob(payload as Partial<Job>),
-        onSuccess: () => {
+        onSuccess: async (response) => {
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
-            navigate('/');
+            navigate(await completeCurrentLaunchContext(response.data) ?? '/');
         },
         onError: (err: Error) => {
             setError(err.message || 'Failed to submit protein local redesign job');
@@ -680,7 +680,7 @@ export function ProteinLocalRedesignTemplate({
     });
 
     const sourceSimulationMutation = useMutation({
-        mutationFn: async (payload: Record<string, unknown>) => submitJob(payload as Partial<Job>),
+        mutationFn: async (payload: Record<string, unknown>) => submitJob(payload as Partial<Job>, { launchContext: false }),
         onSuccess: (response) => {
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
             const createdJob = response.data as Job | undefined;

@@ -37,7 +37,8 @@ from antibody_pipeline_contract import (
     normalize_antibody_artifact_class,
     normalize_antibody_pipeline_contract_version,
 )
-from database import get_session, Job, Design, RFD3LocalRedesignRequest, RFD3LocalRedesignCandidate, RFD3LocalRedesignArtifact
+from database import current_launch_context_id, get_session, Job, Design, RFD3LocalRedesignRequest, RFD3LocalRedesignCandidate, RFD3LocalRedesignArtifact
+from experiment_database import get_experiment_session
 from services.result_contracts import build_review_artifact_manifest, resolve_result_contract
 from paths import (
     get_code_root,
@@ -64,6 +65,14 @@ from services.proteinbase_importer import import_proteinbase_bundle
 from services.rfd3_local_redesign import (
     normalize_local_redesign_params,
     materialize_local_redesign_request,
+)
+from services.global_experiments.launch_contexts import (
+    LaunchContextError,
+    claim_launch_context,
+    consume_launch_context,
+    release_launch_context_claim,
+    resolve_launch_context_for_display,
+    validate_bound_job,
 )
 from scripts.rfd3_local_redesign.contract import ContractError, request_sha256
 from services.frustrampnn.settings import (
@@ -5233,8 +5242,7 @@ def _standard_job_output_dir(name: str, timestamp: str, preallocated_job_id: str
     return get_results_dir() / f"{name}_{timestamp}"
 
 
-@router.post("", response_model=JobResponse, status_code=201)
-async def create_job(
+async def _create_job(
     job_data: JobCreate,
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
@@ -6091,6 +6099,162 @@ async def create_job(
         awaiting_stage=first_job.awaiting_stage,
         awaiting_payload=first_job.awaiting_payload,
         decision_history=first_job.decision_history,
+    )
+
+
+def _launch_context_http_error(exc: LaunchContextError) -> HTTPException:
+    return HTTPException(
+        status_code=exc.status_code,
+        detail={"code": exc.code, "message": str(exc)},
+    )
+
+
+@router.post("", response_model=JobResponse, status_code=201)
+async def create_job(
+    job_data: JobCreate,
+    background_tasks: BackgroundTasks,
+    session: AsyncSession = Depends(get_session),
+    _preallocated_job_id: Any = Depends(lambda: None),
+    _commit: Any = Depends(lambda: True),
+    _skip_parent_lineage_update: Any = Depends(lambda: False),
+    experiment_session: AsyncSession = Depends(get_experiment_session),
+) -> JobResponse:
+    """Canonical Job submission, optionally bound by one opaque launch context."""
+    launch_context_id = str(job_data.launch_context_id or "").strip()
+    if not launch_context_id:
+        return await _create_job(
+            job_data,
+            background_tasks,
+            session,
+            _preallocated_job_id,
+            _commit,
+            _skip_parent_lineage_update,
+        )
+    if current_launch_context_id.get() != launch_context_id:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "launch_context_transport_mismatch", "message": "Launch context header and body must match."},
+        )
+    if _commit is False:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "launch_context_noncanonical_submission",
+                "message": "Launch contexts can bind only a committed canonical Job submission.",
+            },
+        )
+
+    try:
+        context, claim_token = await claim_launch_context(experiment_session, launch_context_id)
+        await experiment_session.commit()
+    except LaunchContextError as exc:
+        await experiment_session.rollback()
+        if exc.code == "launch_context_consumed":
+            context = await resolve_launch_context_for_display(experiment_session, launch_context_id)
+            if context.canonical_job_id:
+                existing_job = await session.get(Job, context.canonical_job_id)
+                if existing_job is not None:
+                    await validate_bound_job(experiment_session, context, existing_job)
+                    binding = json.loads(context.binding_receipt_json or "{}")
+                    from routers.project_manager import _project_bound_job
+                    await _project_bound_job(experiment_session, context, existing_job, binding)
+                    await experiment_session.commit()
+                    return JobResponse.model_validate(existing_job).model_copy(update={
+                        "launch_context_id": context.launch_context_id,
+                        "launch_context_binding": binding,
+                        "return_uri": context.return_uri,
+                    })
+        if exc.code == "launch_context_claimed":
+            context = await resolve_launch_context_for_display(experiment_session, launch_context_id)
+            tagged_jobs = (await session.scalars(
+                select(Job).where(func.json_extract(Job.provenance, "$.launch_context_id") == launch_context_id).limit(2)
+            )).all()
+            if len(tagged_jobs) == 1 and context.claim_token:
+                existing_job = tagged_jobs[0]
+                await validate_bound_job(experiment_session, context, existing_job)
+                context, binding = await consume_launch_context(
+                    experiment_session,
+                    launch_context_id=launch_context_id,
+                    claim_token=context.claim_token,
+                    canonical_job_id=existing_job.id,
+                    canonical_batch_id=None,
+                )
+                from routers.project_manager import _project_bound_job
+                await _project_bound_job(experiment_session, context, existing_job, binding)
+                await experiment_session.commit()
+                return JobResponse.model_validate(existing_job).model_copy(update={
+                    "launch_context_id": context.launch_context_id,
+                    "launch_context_binding": binding,
+                    "return_uri": context.return_uri,
+                })
+        raise _launch_context_http_error(exc) from exc
+
+    try:
+        response = await _create_job(
+            job_data,
+            background_tasks,
+            session,
+            _preallocated_job_id,
+            _commit,
+            _skip_parent_lineage_update,
+        )
+    except HTTPException:
+        await session.rollback()
+        try:
+            await release_launch_context_claim(
+                experiment_session,
+                launch_context_id=launch_context_id,
+                claim_token=claim_token,
+            )
+            await experiment_session.commit()
+        except Exception:
+            await experiment_session.rollback()
+            logger.exception("Failed to release launch-context claim after rejected Job submission")
+        raise
+    except Exception:
+        await session.rollback()
+        # Unknown post-commit failures keep the durable claim fail-closed.
+        raise
+
+    try:
+        created_job = await session.get(Job, str(response.id))
+        if created_job is None:
+            raise LaunchContextError("launch_context_job_unavailable", "Created Job cannot be resolved.", status_code=409)
+        await validate_bound_job(experiment_session, context, created_job)
+        consumed, binding = await consume_launch_context(
+            experiment_session,
+            launch_context_id=launch_context_id,
+            claim_token=claim_token,
+            canonical_job_id=str(response.id),
+            canonical_batch_id=response.batch_id,
+        )
+        from routers.project_manager import _project_bound_job
+        created_job = await session.get(Job, str(response.id))
+        if created_job is None:
+            raise LaunchContextError("launch_context_job_unavailable", "Created Job cannot be projected.", status_code=409)
+        await _project_bound_job(experiment_session, consumed, created_job, binding)
+        await experiment_session.commit()
+    except LaunchContextError as exc:
+        await experiment_session.rollback()
+        try:
+            await release_launch_context_claim(
+                experiment_session,
+                launch_context_id=launch_context_id,
+                claim_token=claim_token,
+            )
+            await experiment_session.commit()
+        except Exception:
+            await experiment_session.rollback()
+        # The Job may already be durable. Never claim experiment membership without
+        # the verified binding receipt; the claimed context remains fail-closed.
+        raise _launch_context_http_error(exc) from exc
+
+    return response.model_copy(
+        update={
+            "launch_context_id": consumed.launch_context_id,
+            "launch_context_binding": binding,
+            "return_uri": context.return_uri,
+        }
     )
 
 

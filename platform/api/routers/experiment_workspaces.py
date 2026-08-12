@@ -7,11 +7,10 @@ import secrets
 from typing import Any, Mapping
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import get_session as get_core_session
 from experiment_database import get_experiment_session
 from experiment_models import (
     ExperimentAggregateHead,
@@ -37,7 +36,6 @@ from experiment_operations import (
     workspace_analytics,
 )
 from experiment_services import (
-    ExistingJobMaterializer,
     ExperimentServiceError,
     IdempotencyConflict,
     NotFound,
@@ -45,12 +43,11 @@ from experiment_services import (
     ValidationFailure,
     add_audit_event,
     create_dataset,
-    create_experiment,
-    create_experiment_workspace,
+    create_global_experiment,
+    create_project,
     create_run_group,
     create_workflow,
-    dispatch_pending_outbox,
-    reconcile_run_group,
+    resubmit_run_group,
     retry_failed_run_group,
     archive_aggregate,
     clone_workflow,
@@ -59,6 +56,7 @@ from experiment_services import (
     save_workflow_draft,
     save_workflow_revision,
 )
+from services.global_experiments.worker import global_experiment_worker
 
 
 router = APIRouter(prefix="/api/experiment-workspaces", tags=["experiment-workspaces"])
@@ -158,13 +156,23 @@ class ExperimentCreateRequest(StrictRequestModel):
 class WorkflowCreateRequest(StrictRequestModel):
     name: str = Field(min_length=1, max_length=255)
     workflow_family: str = Field(min_length=1, max_length=128)
-    experiment_id: str | None = None
+    domain_experiment_id: str = Field(
+        min_length=1,
+        max_length=128,
+        validation_alias=AliasChoices("domain_experiment_id", "experiment_id"),
+        serialization_alias="domain_experiment_id",
+    )
 
 
 class DatasetCreateRequest(StrictRequestModel):
     name: str = Field(min_length=1, max_length=255)
     dataset_kind: str = Field(min_length=1, max_length=128)
-    experiment_id: str | None = None
+    domain_experiment_id: str = Field(
+        min_length=1,
+        max_length=128,
+        validation_alias=AliasChoices("domain_experiment_id", "experiment_id"),
+        serialization_alias="domain_experiment_id",
+    )
 
 
 class DraftSaveRequest(StrictRequestModel):
@@ -204,6 +212,10 @@ class RetryRunGroupRequest(StrictRequestModel):
     replacement_preparation_ids: dict[str, str] = Field(default_factory=dict)
 
 
+class ResubmitRunGroupRequest(StrictRequestModel):
+    idempotency_key: str = Field(min_length=1, max_length=255)
+
+
 class StatsHandoffRequest(StrictRequestModel):
     stats_run_id: str = Field(min_length=1, max_length=255)
     toolkit_version: str = Field(min_length=1, max_length=128)
@@ -234,6 +246,21 @@ def _error(exc: ExperimentServiceError) -> HTTPException:
     return HTTPException(status_code=400, detail=str(exc))
 
 
+def _public_receipt(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(key): _public_receipt(child)
+            for key, child in value.items()
+            if not any(
+                token in str(key).lower()
+                for token in ("path", "directory", "output_dir", "command", "executable")
+            )
+        }
+    if isinstance(value, list):
+        return [_public_receipt(child) for child in value]
+    return value
+
+
 def _head_json(head: ExperimentAggregateHead) -> dict[str, Any]:
     return {
         "id": head.aggregate_id,
@@ -247,6 +274,11 @@ def _head_json(head: ExperimentAggregateHead) -> dict[str, Any]:
         "description": head.description,
         "created_at": head.created_at,
         "updated_at": head.updated_at,
+        "deprecation": {
+            "deprecated": True,
+            "replacement": "/api/projects",
+            "storage_authority": "shared experiment services",
+        },
     }
 
 
@@ -309,7 +341,24 @@ async def create_workspace(
 ) -> dict[str, Any]:
     try:
         principal_id = _mutation_principal(request)
-        head = await create_experiment_workspace(session, payload.name, payload.description)
+        head = await create_project(
+            session,
+            {
+                "schema": "bms.project.v1",
+                "name": payload.name,
+                "description": payload.description,
+                "research_objective": "",
+                "owner": None,
+                "contributors": [],
+                "tags": [],
+                "status": "draft",
+                "start_date": None,
+                "target_end_date": None,
+                "external_references": [],
+                "created_by": None,
+                "change_summary": "created through deprecated workspace route",
+            },
+        )
         add_audit_event(
             session,
             workspace_id=head.aggregate_id,
@@ -413,7 +462,29 @@ async def create_workspace_experiment(
 ) -> dict[str, Any]:
     try:
         await _require_mutation_owner(request, session, resource_id=workspace_id)
-        head = await create_experiment(session, workspace_id, payload.name, payload.question)
+        head = await create_global_experiment(
+            session,
+            workspace_id,
+            {
+                "schema": "bms.global-experiment.v1",
+                "name": payload.name,
+                "objective": "",
+                "scientific_question": payload.question,
+                "hypothesis": None,
+                "description": payload.question,
+                "status": "draft",
+                "priority": "normal",
+                "tags": [],
+                "shared_source_receipt_ids": [],
+                "shared_dataset_ids": [],
+                "comparison_plan": None,
+                "success_criteria": [],
+                "review_summary": None,
+                "conclusion": None,
+                "created_by": None,
+                "change_summary": "created through deprecated experiment route",
+            },
+        )
         await session.commit()
         return _head_json(head)
     except ExperimentServiceError as exc:
@@ -435,7 +506,7 @@ async def create_workspace_workflow(
             workspace_id,
             payload.name,
             payload.workflow_family,
-            experiment_id=payload.experiment_id,
+            experiment_id=payload.domain_experiment_id,
         )
         await session.commit()
         return _head_json(head)
@@ -575,7 +646,7 @@ async def create_workspace_dataset(
             workspace_id,
             payload.name,
             payload.dataset_kind,
-            experiment_id=payload.experiment_id,
+            experiment_id=payload.domain_experiment_id,
         )
         await session.commit()
         return _head_json(head)
@@ -703,6 +774,11 @@ async def create_workspace_run_group(
 ) -> dict[str, Any]:
     try:
         await _require_mutation_owner(request, session, resource_id=workspace_id)
+        worker = global_experiment_worker()
+        if worker is None:
+            raise HTTPException(status_code=503, detail="managed dispatcher is not installed")
+        if not worker.ensure_dispatcher_available():
+            raise HTTPException(status_code=503, detail="managed dispatcher ownership is unavailable")
         group = await create_run_group(
             session,
             workspace_id,
@@ -753,9 +829,9 @@ async def get_workspace_run_group(
                 "attempt_number": attempt.attempt_number,
                 "scheduler_job_id": attempt.scheduler_job_id,
                 "state": attempt.state,
-                "external_binding_receipt": json.loads(attempt.external_binding_receipt_json) if attempt.external_binding_receipt_json else None,
-                "runtime_identity": json.loads(attempt.runtime_identity_json) if attempt.runtime_identity_json else None,
-                "terminal_receipt": json.loads(attempt.terminal_receipt_json) if attempt.terminal_receipt_json else None,
+                "external_binding_receipt": _public_receipt(json.loads(attempt.external_binding_receipt_json)) if attempt.external_binding_receipt_json else None,
+                "runtime_identity": _public_receipt(json.loads(attempt.runtime_identity_json)) if attempt.runtime_identity_json else None,
+                "terminal_receipt": _public_receipt(json.loads(attempt.terminal_receipt_json)) if attempt.terminal_receipt_json else None,
             }
         )
     return {
@@ -786,17 +862,12 @@ async def reconcile_workspace_run_group(
     workspace_id: str,
     run_group_id: str,
     request: Request,
-    session: AsyncSession = Depends(get_experiment_session),
-    core_session: AsyncSession = Depends(get_core_session),
 ) -> dict[str, Any]:
-    try:
-        await _require_mutation_owner(request, session, resource_id=run_group_id)
-        group = await reconcile_run_group(session, core_session, workspace_id, run_group_id)
-        await session.commit()
-        return {"id": group.resource_id, "state": group.state, "generation": group.generation}
-    except ExperimentServiceError as exc:
-        await session.rollback()
-        raise _error(exc) from exc
+    _operator_principal(request)
+    raise HTTPException(
+        status_code=409,
+        detail="run-group reconciliation is owned by the managed dispatcher/reconciler",
+    )
 
 
 @router.post("/{workspace_id}/run-groups/{run_group_id}/retry")
@@ -815,6 +886,29 @@ async def retry_workspace_run_group(
             run_group_id,
             idempotency_key=payload.idempotency_key,
             replacement_preparation_ids=payload.replacement_preparation_ids,
+        )
+        await session.commit()
+        return {"id": group.resource_id, "state": group.state, "generation": group.generation}
+    except ExperimentServiceError as exc:
+        await session.rollback()
+        raise _error(exc) from exc
+
+
+@router.post("/{workspace_id}/run-groups/{run_group_id}/resubmit", status_code=status.HTTP_201_CREATED)
+async def resubmit_workspace_run_group(
+    workspace_id: str,
+    run_group_id: str,
+    payload: ResubmitRunGroupRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    try:
+        await _require_mutation_owner(request, session, resource_id=run_group_id)
+        group = await resubmit_run_group(
+            session,
+            workspace_id,
+            run_group_id,
+            idempotency_key=payload.idempotency_key,
         )
         await session.commit()
         return {"id": group.resource_id, "state": group.state, "generation": group.generation}
@@ -987,17 +1081,22 @@ async def register_workspace_external_receipt(
 
 
 @router.post("/dispatch/once")
-async def dispatch_one_experiment_outbox(
-    request: Request,
+async def dispatch_one_experiment_outbox(request: Request) -> dict[str, Any]:
+    _operator_principal(request)
+    raise HTTPException(
+        status_code=409,
+        detail="dispatch is owned by the managed single-owner dispatcher/reconciler",
+    )
+
+
+@router.get("/ops/worker-health")
+async def experiment_worker_health(
     session: AsyncSession = Depends(get_experiment_session),
-    core_session: AsyncSession = Depends(get_core_session),
 ) -> dict[str, Any]:
-    try:
-        _operator_principal(request)
-        dispatched = await dispatch_pending_outbox(session, ExistingJobMaterializer(core_session))
-        return {"dispatched": dispatched}
-    except ExperimentServiceError as exc:
-        raise _error(exc) from exc
+    worker = global_experiment_worker()
+    if worker is None:
+        raise HTTPException(status_code=503, detail="global experiment worker is not installed")
+    return await worker.health_snapshot(session)
 
 
 __all__ = ["router"]

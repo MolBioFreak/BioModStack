@@ -5,19 +5,20 @@ Main application entry point.
 """
 
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import os
 import logging
 
-from database import init_db, async_session
-from experiment_database import init_experiment_db
+from database import async_session, current_launch_context_id, init_db
+from experiment_database import experiment_session_factory, get_experiment_db_path, init_experiment_db
 from molbio_database import init_molbio_db, molbio_health
 from molbio_ngs_database import init_molbio_ngs_db, molbio_ngs_health
 from build_identity import current_build_identity
 from readiness import collect_runtime_readiness
 from frustrampnn_upload_limit import FrustraMPNNUploadLimitMiddleware
-from routers import analyses, analytics, boltz_api_jobs, boltzgen, conformational_mapping, designs, external_imports, experiment_workspaces, files, frameworks, frustrampnn, gpu, inputs, jobs, md_results, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_ngs_experiments, molbio_ops, msa, ngs_alignment_sessions, nucleotide_sequences, ont_devices, ont_runs, queue, rcsb, ribocentre, rna_structure, sequence_qc, shape_blueprint, smiles_converter, system, templates, user_sequences, user_templates, viewer_resources
+from routers import analyses, analytics, boltz_api_jobs, boltzgen, conformational_mapping, designs, external_imports, experiment_workspaces, files, frameworks, frustrampnn, gpu, inputs, jobs, md_results, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_ngs_experiments, molbio_ops, msa, ngs_alignment_sessions, nucleotide_sequences, ont_devices, ont_runs, project_manager, projects, queue, rcsb, ribocentre, rna_structure, sequence_qc, shape_blueprint, smiles_converter, system, templates, user_sequences, user_templates, viewer_resources
 from runtime_policy import workflow_launch_block_detail, workflow_launches_allowed
 from biomodstack_runtime_profile import install_feature_enabled
 from services.analysis_worker import AnalysisWorker
@@ -25,6 +26,10 @@ from services.boltz_api_jobs import BoltzApiJobWorker
 from services.external_imports.worker import ExternalImportWorker
 from services.gpu_orchestrator import GPUOrchestrator
 from services.md.reconcile import MdReconcilerWorker
+from services.global_experiments.worker import (
+    GlobalExperimentWorker,
+    install_global_experiment_worker,
+)
 from routers.gpu import get_gpu_stats
 
 # Configure logging
@@ -37,6 +42,7 @@ _analysis_worker: AnalysisWorker = None
 _external_import_worker: ExternalImportWorker | None = None
 _boltz_api_job_worker: BoltzApiJobWorker | None = None
 _md_reconciler: MdReconcilerWorker | None = None
+_global_experiment_worker: GlobalExperimentWorker | None = None
 
 
 async def _orchestrator_launch_job(job_id, model_id, mode, params, output_dir):
@@ -62,6 +68,7 @@ async def lifespan(app: FastAPI):
     global _external_import_worker
     global _boltz_api_job_worker
     global _md_reconciler
+    global _global_experiment_worker
     bioxp_runtime = None
     
     # Initialize independently owned core, global experiment, MolBio, and MolBio/NGS state stores.
@@ -85,9 +92,22 @@ async def lifespan(app: FastAPI):
         _md_reconciler = MdReconcilerWorker(async_session, poll_interval=5.0)
         await _md_reconciler.start()
         logger.info("[STARTUP] MD lifecycle reconciler started")
+        _global_experiment_worker = GlobalExperimentWorker(
+            experiment_session_factory,
+            async_session,
+            database_path=get_experiment_db_path(),
+        )
+        install_global_experiment_worker(_global_experiment_worker)
+        await _global_experiment_worker.start()
+        logger.info(
+            "[STARTUP] Global experiment dispatcher/reconciler lease=%s",
+            _global_experiment_worker.lease_state,
+        )
     else:
         _orchestrator = None
         _md_reconciler = None
+        _global_experiment_worker = None
+        install_global_experiment_worker(None)
         logger.warning("[STARTUP] %s", workflow_launch_block_detail("start the GPU workflow scheduler"))
 
     _analysis_worker = AnalysisWorker(
@@ -133,6 +153,10 @@ async def lifespan(app: FastAPI):
     if _md_reconciler:
         await _md_reconciler.stop()
         logger.info("[SHUTDOWN] MD lifecycle reconciler stopped")
+    if _global_experiment_worker:
+        await _global_experiment_worker.stop()
+        install_global_experiment_worker(None)
+        logger.info("[SHUTDOWN] Global experiment dispatcher/reconciler stopped")
     if _analysis_worker:
         await _analysis_worker.stop()
         logger.info("[SHUTDOWN] Analysis worker stopped")
@@ -185,6 +209,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def launch_context_provenance(request: Request, call_next):
+    raw = request.headers.get("x-bms-launch-context-id")
+    if raw is not None and (len(raw) > 128 or not raw.strip() or any(char.isspace() for char in raw)):
+        return JSONResponse(status_code=400, content={"detail": "invalid launch-context header"})
+    token = current_launch_context_id.set(raw)
+    try:
+        return await call_next(request)
+    finally:
+        current_launch_context_id.reset(token)
+
 # Include routers
 app.include_router(models.router, prefix="/api/models", tags=["models"])
 app.include_router(molecular_dynamics.router)
@@ -206,6 +242,8 @@ app.include_router(user_sequences.router, prefix="/api/user-sequences", tags=["u
 app.include_router(user_templates.router, prefix="/api/user-templates", tags=["user-templates"])
 app.include_router(experiment_workspaces.router)
 app.include_router(molbio_ngs_experiments.router)
+app.include_router(projects.router)
+app.include_router(project_manager.router)
 # msa_cache router removed - now using file-based caching
 app.include_router(smiles_converter.router, prefix="/api/smiles", tags=["smiles"])
 app.include_router(queue.router, prefix="/api", tags=["queue"])  # /api/queue/*

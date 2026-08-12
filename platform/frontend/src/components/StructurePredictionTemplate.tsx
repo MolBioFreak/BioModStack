@@ -1,6 +1,6 @@
 import { useCallback, useState, useRef, useEffect, useMemo } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { submitJob, estimateBoltzApiJob, fetchBoltzApiProviderStatus, submitBoltzApiJob, fetchBoltzCpShardPlans, fetchMsaCacheInfo, uploadFile, type BoltzApiEstimateResponse, type BoltzApiProviderStatus, type BoltzCpShardPlan, type MsaCacheInfo } from '../lib/api';
+import { completeCurrentLaunchContext, submitJob, estimateBoltzApiJob, fetchBoltzApiProviderStatus, submitBoltzApiJob, fetchBoltzCpShardPlans, fetchMsaCacheInfo, uploadFile, type BoltzApiEstimateResponse, type BoltzApiProviderStatus, type BoltzCpShardPlan, type MsaCacheInfo } from '../lib/api';
 import { useNavigate } from 'react-router-dom';
 import { SequenceManager } from './SequenceManager';
 import { LigandSelector, type LigandEntry } from './LigandSelector';
@@ -395,17 +395,17 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
 
     const submitMutation = useMutation({
         mutationFn: async (data: UntypedApiValue) => submitJob(data),
-        onSuccess: () => {
+        onSuccess: async (response) => {
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
-            navigate('/');
+            navigate(await completeCurrentLaunchContext(response.data) ?? '/');
         }
     });
 
     const boltzApiSubmitMutation = useMutation({
         mutationFn: submitBoltzApiJob,
-        onSuccess: () => {
+        onSuccess: async (response) => {
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
-            navigate('/');
+            navigate(await completeCurrentLaunchContext(response.data) ?? '/');
         },
         onError: (error: UntypedApiValue) => {
             const detail = error?.response?.data?.detail;

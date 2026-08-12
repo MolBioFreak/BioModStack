@@ -4,11 +4,12 @@ Database models and initialization for BioModStack Control Platform.
 Uses SQLAlchemy with async SQLite.
 """
 
-from sqlalchemy import CheckConstraint, Column, String, Text, Integer, Float, Boolean, DateTime, Index, JSON, ForeignKey, ForeignKeyConstraint, UniqueConstraint, text, event
+from sqlalchemy import CheckConstraint, Column, String, Text, Integer, Float, Boolean, DateTime, Index, JSON, ForeignKey, ForeignKeyConstraint, UniqueConstraint, text, event, func, select
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker, declarative_base, relationship
+from sqlalchemy.orm import Session, sessionmaker, declarative_base, relationship
 from sqlalchemy.types import TypeDecorator
 from datetime import datetime
+from contextvars import ContextVar
 import json
 from types import SimpleNamespace
 from paths import get_db_path, get_db_url
@@ -18,6 +19,7 @@ from migrations.sqlite_sha256 import register_sqlite_sha256
 # Database path - resolved via paths helper (supports env overrides)
 DEFAULT_DB_PATH = get_db_path()
 DATABASE_URL = get_db_url()
+current_launch_context_id: ContextVar[str | None] = ContextVar("bms_launch_context_id", default=None)
 
 
 def _canonical_sqlite_json(value: object) -> str:
@@ -576,6 +578,28 @@ class ExternalResultImport(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
     imported_at = Column(DateTime, nullable=True)
+
+
+@event.listens_for(Session, "before_flush")
+def _bind_new_jobs_to_launch_context(session: Session, _flush_context, _instances) -> None:
+    launch_context_id = current_launch_context_id.get()
+    if launch_context_id is None:
+        return
+    for record in session.new:
+        if isinstance(record, Job):
+            provenance = dict(record.provenance or {})
+            existing = provenance.get("launch_context_id")
+            if existing is not None and existing != launch_context_id:
+                raise ValueError("Job launch-context provenance cannot change")
+            existing_job_id = session.execute(
+                select(Job.id)
+                .where(func.json_extract(Job.provenance, "$.launch_context_id") == launch_context_id)
+                .limit(1)
+            ).scalar_one_or_none()
+            if existing_job_id is not None and existing_job_id != record.id:
+                raise ValueError("launch context is already bound to a canonical Job")
+            provenance["launch_context_id"] = launch_context_id
+            record.provenance = provenance
 
 
 class Design(Base):

@@ -470,6 +470,8 @@ JSON
     "\${PYTHON_CMD[@]}" "${codeRoot}/scripts/build_sequence_qc_manifest.py" \\
         --out qc_manifest.json \\
         --job-id "${manifestJobId}" \\
+        --workflow-id ont_fastq_qc \\
+        --input-mode fastq \\
         --sample-name "fastq_plasmid_qc" \\
         --reference-fasta reference_qc.fasta \\
         --reference-index reference_qc.fasta.fai \\

@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import type { Job } from '../lib/api.js';
 import {
+    fetchFrustraMpnnComparisonById,
+    fetchFrustraMpnnGuidance,
     fetchFrustraMpnnLandscape,
     fetchFrustraMpnnReceipt,
     fetchFrustraMpnnResult,
@@ -85,7 +88,11 @@ export default function FrustraMpnnResultsViewer({
     onOpenJob: (jobId: string) => void;
 }) {
     const resultContext = getFrustraMpnnResultContext(job)!;
-    const [selectedInvocation, setSelectedInvocation] = useState<string | null>(null);
+    const [searchParams] = useSearchParams();
+    const requestedInvocationId = searchParams.get('frustrampnn_invocation_id');
+    const requestedComparisonId = searchParams.get('frustrampnn_comparison_id');
+    const requestedGuidanceId = searchParams.get('frustrampnn_guidance_id');
+    const [selectedInvocation, setSelectedInvocation] = useState<string | null>(requestedInvocationId);
     const [offset, setOffset] = useState(0);
     const [chainFilter, setChainFilter] = useState('');
     const [slotStatus, setSlotStatus] = useState<'' | 'ok' | 'missing'>('');
@@ -109,12 +116,39 @@ export default function FrustraMpnnResultsViewer({
     });
     useEffect(() => {
         const items = results.data?.items ?? [];
-        setSelectedInvocation((current) => (
-            current && items.some((item) => item.invocation_id === current)
+        setSelectedInvocation((current) => {
+            if (requestedInvocationId) {
+                return items.some((item) => item.invocation_id === requestedInvocationId)
+                    ? requestedInvocationId
+                    : null;
+            }
+            return current && items.some((item) => item.invocation_id === current)
                 ? current
-                : items[0]?.invocation_id ?? null
-        ));
-    }, [job.id, results.data?.items]);
+                : (items[0]?.invocation_id ?? null);
+        });
+    }, [job.id, requestedInvocationId, results.data?.items]);
+    const persistedComparison = useQuery({
+        queryKey: ['frustrampnn-comparison-id', requestedComparisonId],
+        queryFn: ({ signal }) => fetchFrustraMpnnComparisonById(requestedComparisonId as string, signal),
+        enabled: Boolean(requestedComparisonId),
+    });
+    const persistedGuidance = useQuery({
+        queryKey: ['frustrampnn-guidance-id', requestedGuidanceId],
+        queryFn: ({ signal }) => fetchFrustraMpnnGuidance(requestedGuidanceId as string, signal),
+        enabled: Boolean(requestedGuidanceId),
+    });
+    useEffect(() => {
+        const comparison = persistedComparison.data;
+        if (!comparison) return;
+        if (
+            comparison.reference.parent_job_id !== job.id
+            || (requestedInvocationId && comparison.reference.invocation_id !== requestedInvocationId)
+        ) {
+            setSelectedInvocation(null);
+            return;
+        }
+        setSelectedInvocation(comparison.reference.invocation_id);
+    }, [job.id, persistedComparison.data, requestedInvocationId]);
     useEffect(() => {
         setOffset(0);
         setSelectedResidue(null);
@@ -317,6 +351,13 @@ export default function FrustraMpnnResultsViewer({
                 </div>
             </header>
             <main className="mx-auto max-w-[1800px] space-y-4 p-6">
+                {(requestedInvocationId || requestedComparisonId || requestedGuidanceId) && (
+                    <aside className="rounded-xl border border-cyan-500/30 bg-cyan-500/10 p-3 text-xs text-cyan-100" aria-label="Exact FrustraMPNN source context">
+                        {requestedInvocationId && <span className="mr-3">Invocation <code>{requestedInvocationId}</code> <strong>{selectedInvocation === requestedInvocationId ? 'loaded' : 'unavailable'}</strong></span>}
+                        {requestedComparisonId && <span className="mr-3">Comparison <code>{requestedComparisonId}</code> <strong>{persistedComparison.data ? 'loaded' : persistedComparison.isError ? 'unavailable' : 'loading'}</strong></span>}
+                        {requestedGuidanceId && <span>Guidance <code>{requestedGuidanceId}</code> <strong>{persistedGuidance.data && (!requestedComparisonId || persistedGuidance.data.source_comparison_id === requestedComparisonId) ? 'loaded' : persistedGuidance.isError || persistedGuidance.data ? 'unavailable' : 'loading'}</strong></span>}
+                    </aside>
+                )}
                 {((resultContext.usesChildReceipt && receipt.isError) || results.isError) && <div role="alert" className="rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-100">{errorMessage((resultContext.usesChildReceipt ? receipt.error : null) || results.error, 'Persisted FrustraMPNN state is unavailable.')}</div>}
                 {(detail.isError || artifacts.isError || structureMap.isError) && <div role="alert" className="rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-100">{errorMessage(detail.error || artifacts.error || structureMap.error, 'Governed FrustraMPNN result authority is unavailable.')}</div>}
                 {resultContext.canReanalyzePersistedInputs && reanalysis.isError && <div role="alert" className="rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-100">{errorMessage(reanalysis.error, 'Reanalysis child could not be queued.')}</div>}

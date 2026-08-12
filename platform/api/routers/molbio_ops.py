@@ -22,6 +22,9 @@ from Bio.SeqUtils import MeltingTemp as mt
 from molbio_database import get_molbio_session
 from molbio_models import (
     MolecularDocument,
+    MolecularOperation,
+    MolecularOperationInput,
+    MolecularOperationOutput,
     MolecularRevision,
     NucleotideSequence,
     PCRExperiment,
@@ -2211,6 +2214,48 @@ async def update_pcr_experiment_review_state(
         status = 404 if "not found" in str(exc).lower() else 400
         raise HTTPException(status_code=status, detail=str(exc)) from exc
     return _pcr_revision_payload(revision)
+
+
+@router.get("/operations/{operation_id}")
+async def get_molecular_operation(
+    operation_id: str,
+    session: AsyncSession = Depends(get_molbio_session),
+) -> dict[str, Any]:
+    operation = await session.get(MolecularOperation, operation_id)
+    if operation is None:
+        raise HTTPException(status_code=404, detail="molecular operation not found")
+    inputs = list(
+        (
+            await session.scalars(
+                select(MolecularOperationInput)
+                .where(MolecularOperationInput.operation_id == operation_id)
+                .order_by(MolecularOperationInput.ordinal, MolecularOperationInput.id)
+            )
+        ).all()
+    )
+    outputs = list(
+        (
+            await session.scalars(
+                select(MolecularOperationOutput)
+                .where(MolecularOperationOutput.operation_id == operation_id)
+                .order_by(MolecularOperationOutput.ordinal, MolecularOperationOutput.id)
+            )
+        ).all()
+    )
+    return {
+        "operation_id": operation.id,
+        "operation_type": operation.operation_type,
+        "status": operation.status,
+        "request_fingerprint_sha256": operation.request_fingerprint_sha256,
+        "inputs": [
+            {"revision_id": item.revision_id, "role": item.role, "ordinal": item.ordinal}
+            for item in inputs
+        ],
+        "outputs": [
+            {"revision_id": item.revision_id, "role": item.role, "ordinal": item.ordinal}
+            for item in outputs
+        ],
+    }
 
 
 @router.post("/assembly/ligation/simulate", response_model=AssemblyOperationResponse)

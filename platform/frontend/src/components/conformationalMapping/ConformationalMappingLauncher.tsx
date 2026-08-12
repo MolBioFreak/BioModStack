@@ -27,6 +27,7 @@ import {
     type CmTask,
 } from './conformationalMappingApi';
 import { CM_SCIENTIFIC_LIMIT } from './conformationalMappingSemantics';
+import { completeCurrentLaunchContext } from '../../lib/api';
 import { ModelDocumentationLinks } from '../ModelDocumentationLinks';
 import { useModelIntegrationConfig, type ModelIntegrationLoader } from '../ModelIntegrationControl';
 import { FrustraMpnnSettingsPanel } from '../frustrampnn/FrustraMpnnSettingsPanel';
@@ -852,9 +853,10 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
 
     const submit = useMutation({
         mutationFn: async () => (services?.submitRequest || submitCmRequest)(buildPayload()),
-        onSuccess: (receipt) => {
+        onSuccess: async (receipt) => {
             setIdempotencyKey(crypto.randomUUID());
-            navigate(`/designs/${receipt.request_id}`, { state: { cmSubmissionReceipt: receipt } });
+            const returnUri = await completeCurrentLaunchContext(receipt);
+            navigate(returnUri ?? `/designs/${receipt.request_id}`, { state: { cmSubmissionReceipt: receipt } });
         },
         onError: (value) => setError(cmApiError(value, 'Conformational-mapping submission failed.')),
     });

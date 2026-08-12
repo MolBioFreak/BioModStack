@@ -16,7 +16,7 @@ from typing import Any, Iterable
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from experiment_migrations import attest_schema, health, run_all
+from experiment_migrations import MIGRATION_VERSION, attest_schema, health, run_all
 from experiment_models import (
     ExperimentAggregateHead,
     ExperimentArtifact,
@@ -24,12 +24,15 @@ from experiment_models import (
     ExperimentAuditEvent,
     ExperimentDatasetRevisionMember,
     ExperimentDispatchOutbox,
+    ExperimentDomainAdapterReceipt,
     ExperimentExternalEntityReceipt,
     ExperimentIdempotencyClaim,
     ExperimentLineageEdge,
+    ExperimentLaunchContext,
     ExperimentLogChunk,
     ExperimentLogStream,
     ExperimentResource,
+    ExperimentResearchRecord,
     ExperimentRevision,
     ExperimentRevisionEdge,
     ExperimentRunAttempt,
@@ -73,7 +76,7 @@ _WORKSPACE_TABLES: tuple[tuple[str, type[Any], str], ...] = (
     ("run_attempts", ExperimentRunAttempt, "workspace"),
     ("dispatch_outbox", ExperimentDispatchOutbox, "workspace"),
     ("run_events", ExperimentRunEvent, "workspace"),
-    ("idempotency_claims", ExperimentIdempotencyClaim, "global"),
+    ("idempotency_claims", ExperimentIdempotencyClaim, "result_resource"),
     ("external_entity_receipts", ExperimentExternalEntityReceipt, "workspace"),
     ("lineage_edges", ExperimentLineageEdge, "workspace"),
     ("workflow_revision_nodes", ExperimentWorkflowRevisionNode, "revision"),
@@ -81,8 +84,11 @@ _WORKSPACE_TABLES: tuple[tuple[str, type[Any], str], ...] = (
     ("artifacts", ExperimentArtifact, "resource"),
     ("validations", ExperimentValidation, "resource"),
     ("log_streams", ExperimentLogStream, "resource"),
-    ("log_chunks", ExperimentLogChunk, "stream"),
+    ("log_chunks", ExperimentLogChunk, "none"),
     ("audit_events", ExperimentAuditEvent, "workspace"),
+    ("research_records", ExperimentResearchRecord, "workspace"),
+    ("domain_adapter_receipts", ExperimentDomainAdapterReceipt, "workspace"),
+    ("launch_contexts", ExperimentLaunchContext, "project"),
 )
 
 
@@ -102,6 +108,45 @@ def _sha256_file(path: Path) -> tuple[str, int]:
             digest.update(chunk)
             size += len(chunk)
     return digest.hexdigest(), size
+
+
+def _source_revision() -> str:
+    revision = str(os.getenv("BMS_BUILD_SHA") or "").strip()
+    if not revision:
+        raise ExperimentOperationError("BMS_BUILD_SHA is required for provenance-bound backup and export")
+    return revision
+
+
+def _consistent_database_digest(source: Path) -> tuple[str, int]:
+    descriptor, temporary_name = tempfile.mkstemp(prefix="bms-experiment-snapshot-", suffix=".db")
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    source_connection = sqlite3.connect(str(source), timeout=30)
+    target_connection = sqlite3.connect(str(temporary), timeout=30)
+    try:
+        source_connection.backup(target_connection)
+        target_connection.commit()
+    finally:
+        target_connection.close()
+        source_connection.close()
+    try:
+        return _sha256_file(temporary)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _sqlite_object_counts(database_path: Path) -> dict[str, int]:
+    connection = sqlite3.connect(str(database_path), timeout=30)
+    try:
+        tables = [
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            )
+        ]
+        return {table: int(connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]) for table in tables}
+    finally:
+        connection.close()
 
 
 def _controlled_root(env_name: str, default_name: str) -> Path:
@@ -146,11 +191,16 @@ def create_online_backup() -> dict[str, Any]:
         source_connection.close()
     database_sha256, size_bytes = _sha256_file(target)
     source_health = health(source)
+    migration_info = source_health.get("migration")
+    schema_version = int(migration_info.get("version") or 0) if isinstance(migration_info, dict) else 0
     metadata = {
         "schema": "bms.experiment.backup.v1",
+        "schema_version": schema_version,
+        "source_revision": _source_revision(),
         "backup_id": backup_id,
         "database_sha256": database_sha256,
         "size_bytes": size_bytes,
+        "object_counts": _sqlite_object_counts(target),
         "created_at": now(),
         "source_health": source_health,
         "artifact_manifest_snapshot": _artifact_snapshot(target),
@@ -203,6 +253,14 @@ def verify_backup(backup_id: str) -> dict[str, Any]:
             "SELECT version, name, checksum, description, applied_at "
             "FROM experiment_schema_migrations ORDER BY version"
         ).fetchall()
+        actual_counts = _sqlite_object_counts(database_path)
+        provenance_valid = (
+            metadata.get("schema") == "bms.experiment.backup.v1"
+            and metadata.get("schema_version") == MIGRATION_VERSION
+            and isinstance(metadata.get("source_revision"), str)
+            and bool(metadata.get("source_revision"))
+            and metadata.get("object_counts") == actual_counts
+        )
         result = {
             "backup_id": backup_id,
             "database_sha256": actual_sha256,
@@ -211,7 +269,9 @@ def verify_backup(backup_id: str) -> dict[str, Any]:
             "foreign_key_errors": foreign_key_errors,
             "attestation": schema,
             "migration_ledger": [list(row) for row in migration_rows],
-            "verified": quick_check == "ok" and not foreign_key_errors and bool(schema["ok"]),
+            "object_counts": actual_counts,
+            "provenance_valid": provenance_valid,
+            "verified": quick_check == "ok" and not foreign_key_errors and bool(schema["ok"]) and provenance_valid,
         }
     finally:
         connection.close()
@@ -248,10 +308,14 @@ async def _workspace_resource_ids(session: AsyncSession, workspace_id: str) -> s
 
 
 async def _rows_for_scope(session: AsyncSession, model: type[Any], scope: str, resource_ids: set[str]) -> list[dict[str, Any]]:
-    if scope == "global":
-        result = await session.execute(select(model))
+    if scope == "none":
+        return []
+    if scope == "result_resource":
+        result = await session.execute(select(model).where(model.result_resource_id.in_(resource_ids)))
     elif scope == "workspace":
         result = await session.execute(select(model).where(model.workspace_id.in_(resource_ids)))
+    elif scope == "project":
+        result = await session.execute(select(model).where(model.project_id.in_(resource_ids)))
     elif scope == "resource":
         key = "resource_id" if hasattr(model, "resource_id") else "id"
         result = await session.execute(select(model).where(getattr(model, key).in_(resource_ids)))
@@ -259,8 +323,6 @@ async def _rows_for_scope(session: AsyncSession, model: type[Any], scope: str, r
         result = await session.execute(select(model).where(model.revision_id.in_(resource_ids)))
     elif scope == "run_group":
         result = await session.execute(select(model).where(model.run_group_id.in_(resource_ids)))
-    elif scope == "stream":
-        result = await session.execute(select(model))
     else:
         raise ExperimentOperationError(f"unknown export scope: {scope}")
     return [_object_row(row) for row in result.scalars().all()]
@@ -311,8 +373,15 @@ async def build_workspace_export(session: AsyncSession, workspace_id: str) -> di
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
         artifact_entries.append({"sha256": blob["sha256"], "size_bytes": size, "relative_path": f"artifacts/{blob['sha256']}", "available": True})
+    database_sha256, database_size_bytes = _consistent_database_digest(get_experiment_db_path())
+    object_counts = {table_name: len(rows) for table_name, rows in sorted(tables.items())}
     manifest = {
         "schema": "bms.experiment.workspace-export.v1",
+        "schema_version": MIGRATION_VERSION,
+        "source_revision": _source_revision(),
+        "database_sha256": database_sha256,
+        "database_size_bytes": database_size_bytes,
+        "object_counts": object_counts,
         "export_id": export_id,
         "workspace_id": workspace_id,
         "created_at": now(),
@@ -353,8 +422,33 @@ def verify_workspace_export(export_id: str) -> dict[str, Any]:
         artifact = _safe_child(directory, str(relative))
         digest, size = _sha256_file(artifact) if artifact.is_file() else (None, None)
         artifact_results.append({"sha256": entry.get("sha256"), "actual_sha256": digest, "size_bytes": size, "verified": digest == entry.get("sha256") and size == entry.get("size_bytes")})
-    verified = all(item["verified"] for item in artifact_results) and manifest.get("schema") == "bms.experiment.workspace-export.v1"
-    return {"export_id": export_id, "manifest_sha256": manifest_digest, "artifact_results": artifact_results, "verified": verified}
+    tables = manifest.get("tables")
+    actual_counts = (
+        {table_name: len(rows) for table_name, rows in sorted(tables.items())}
+        if isinstance(tables, dict) and all(isinstance(rows, list) for rows in tables.values())
+        else None
+    )
+    database_digest = manifest.get("database_sha256")
+    provenance_valid = (
+        manifest.get("schema") == "bms.experiment.workspace-export.v1"
+        and manifest.get("schema_version") == MIGRATION_VERSION
+        and isinstance(manifest.get("source_revision"), str)
+        and bool(manifest.get("source_revision"))
+        and isinstance(database_digest, str)
+        and len(database_digest) == 64
+        and all(char in "0123456789abcdef" for char in database_digest)
+        and isinstance(manifest.get("database_size_bytes"), int)
+        and manifest.get("object_counts") == actual_counts
+    )
+    verified = all(item["verified"] for item in artifact_results) and provenance_valid
+    return {
+        "export_id": export_id,
+        "manifest_sha256": manifest_digest,
+        "artifact_results": artifact_results,
+        "object_counts": actual_counts,
+        "provenance_valid": provenance_valid,
+        "verified": verified,
+    }
 
 
 async def workspace_analytics(session: AsyncSession, workspace_id: str, limit: int = 100) -> dict[str, Any]:
@@ -429,8 +523,9 @@ async def register_external_entity_receipt(
     content_digest: str,
     availability: str = "available",
     acknowledgement: dict[str, Any] | None = None,
+    verification_authority: str | None = None,
 ) -> ExperimentExternalEntityReceipt:
-    """Register one explicit, immutable bridge to another durable store."""
+    """Register an immutable bridge; only server-verifier receipts are evidence eligible."""
     if (
         len(content_digest) != 64
         or content_digest != content_digest.lower()
@@ -439,6 +534,63 @@ async def register_external_entity_receipt(
         raise ExperimentOperationError("external receipt content_digest must be a lowercase SHA-256")
     if availability not in {"unknown", "available", "unavailable"}:
         raise ExperimentOperationError("external receipt availability is invalid")
+    if not store_id or not entity_kind or not entity_id or not generation_or_revision:
+        raise ExperimentOperationError("external receipt identity is incomplete")
+    claimed_acknowledgement = acknowledgement or {}
+    claimed_contract_digest = claimed_acknowledgement.get("contract_digest")
+    if claimed_contract_digest is not None and (
+        not isinstance(claimed_contract_digest, str)
+        or len(claimed_contract_digest) != 64
+        or claimed_contract_digest != claimed_contract_digest.lower()
+        or any(char not in "0123456789abcdef" for char in claimed_contract_digest)
+    ):
+        raise ExperimentOperationError("external receipt contract_digest must be a lowercase SHA-256")
+    if verification_authority is not None:
+        if claimed_contract_digest is None:
+            raise ExperimentOperationError(
+                "server-verified receipt acknowledgement requires contract_digest"
+            )
+        if claimed_acknowledgement.get("availability") != availability:
+            raise ExperimentOperationError(
+                "server-verified receipt acknowledgement availability disagrees with persisted availability"
+            )
+        if (
+            claimed_acknowledgement.get("schema") != "bms.global.external-entity-receipt.v1"
+            or claimed_acknowledgement.get("verifier_id") != verification_authority
+            or claimed_acknowledgement.get("store_id") != store_id
+            or claimed_acknowledgement.get("entity_kind") != entity_kind
+            or claimed_acknowledgement.get("entity_id") != entity_id
+            or str(claimed_acknowledgement.get("entity_revision_id")) != generation_or_revision
+            or claimed_acknowledgement.get("content_digest") != content_digest
+            or not claimed_acknowledgement.get("source_build_revision")
+            or not claimed_acknowledgement.get("verified_at")
+            or not claimed_acknowledgement.get("reopen_uri")
+        ):
+            raise ExperimentOperationError("server-verified receipt acknowledgement is invalid")
+        effective_store_id = store_id
+        effective_availability = availability
+        effective_verification_authority = verification_authority
+        effective_acknowledgement = claimed_acknowledgement
+    else:
+        effective_store_id = f"unverified:{store_id}"
+        effective_availability = "unavailable"
+        effective_verification_authority = "caller_unverified"
+        effective_acknowledgement = {
+            "schema": "bms.global.unverified-external-reference.v1",
+            "claimed_store_id": store_id,
+            "claimed_entity_kind": entity_kind,
+            "claimed_entity_id": entity_id,
+            "claimed_generation_or_revision": generation_or_revision,
+            "claimed_content_digest": content_digest,
+            "claimed_contract_digest": claimed_contract_digest,
+            "caller_acknowledgement": claimed_acknowledgement,
+            "reason": "caller assertions are not evidence-eligible",
+        }
+    effective_contract_digest = str(
+        effective_acknowledgement.get("contract_digest")
+        or effective_acknowledgement.get("claimed_contract_digest")
+        or ""
+    )
     workspace = await session.get(ExperimentResource, workspace_id)
     if workspace is None or workspace.kind != "workspace":
         raise ExperimentOperationError(f"workspace not found: {workspace_id}")
@@ -446,13 +598,30 @@ async def register_external_entity_receipt(
         await session.execute(
             select(ExperimentExternalEntityReceipt).where(
                 ExperimentExternalEntityReceipt.workspace_id == workspace_id,
-                ExperimentExternalEntityReceipt.store_id == store_id,
+                ExperimentExternalEntityReceipt.store_id == effective_store_id,
                 ExperimentExternalEntityReceipt.entity_kind == entity_kind,
                 ExperimentExternalEntityReceipt.entity_id == entity_id,
+                ExperimentExternalEntityReceipt.generation_or_revision == generation_or_revision,
+                ExperimentExternalEntityReceipt.content_digest == content_digest,
+                ExperimentExternalEntityReceipt.availability == effective_availability,
+                func.coalesce(
+                    func.json_extract(
+                        ExperimentExternalEntityReceipt.acknowledgement_json,
+                        "$.contract_digest",
+                    ),
+                    func.json_extract(
+                        ExperimentExternalEntityReceipt.acknowledgement_json,
+                        "$.claimed_contract_digest",
+                    ),
+                    "",
+                )
+                == effective_contract_digest,
             )
         )
     ).scalar_one_or_none()
     if existing is not None:
+        if existing.verification_authority != effective_verification_authority:
+            raise IdempotencyConflict("external entity identity already exists under another verification authority")
         if existing.content_digest != content_digest or existing.generation_or_revision != generation_or_revision:
             raise IdempotencyConflict("external entity identity already exists with different content")
         return existing
@@ -463,18 +632,19 @@ async def register_external_entity_receipt(
         id=resource_id,
         workspace_id=workspace_id,
         resource_id=resource_id,
-        store_id=store_id,
+        store_id=effective_store_id,
         entity_kind=entity_kind,
         entity_id=entity_id,
         generation_or_revision=generation_or_revision,
         content_digest=content_digest,
-        availability=availability,
-        acknowledgement_json=_canonical(acknowledgement or {}),
+        availability=effective_availability,
+        verification_authority=effective_verification_authority,
+        acknowledgement_json=_canonical(effective_acknowledgement),
         created_at=now(),
     )
     session.add(receipt)
     session.add(ExperimentLineageEdge(id=new_id("owns"), workspace_id=workspace_id, source_resource_id=workspace_id, target_resource_id=resource_id, edge_mode="owns", edge_key="lifecycle-owner:external_entity_receipt", metadata_json="{}", created_at=now()))
-    session.add(ExperimentAuditEvent(id=new_id("audit"), workspace_id=workspace_id, resource_id=resource_id, event_type="external_entity_receipt_registered", generation=0, payload_json=_canonical({"store_id": store_id, "entity_kind": entity_kind, "entity_id": entity_id, "content_digest": content_digest}), created_at=now()))
+    session.add(ExperimentAuditEvent(id=new_id("audit"), workspace_id=workspace_id, resource_id=resource_id, event_type="external_entity_receipt_registered", generation=0, payload_json=_canonical({"store_id": effective_store_id, "entity_kind": entity_kind, "entity_id": entity_id, "content_digest": content_digest, "server_verified": verification_authority is not None, "verification_authority": effective_verification_authority}), created_at=now()))
     await session.flush()
     return receipt
 

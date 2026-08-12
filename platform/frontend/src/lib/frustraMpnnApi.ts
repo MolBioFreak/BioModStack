@@ -2694,7 +2694,6 @@ export const parseFrustraMpnnComparison = (value: unknown): FrustraMpnnCompariso
     };
     const comparabilityWire = fmRecord(payload.comparability, 'comparison.comparability');
     if (comparabilityWire.status !== 'comparable' && comparabilityWire.status !== 'incompatible') throw new Error('comparison.comparability.status is invalid');
-
     if (isPair) {
         const comparability = fmClosedProjection(comparabilityWire, 'comparison.comparability', ['status', 'reasons', 'reference_configuration_id', 'target_configuration_id', 'reference_configuration_sha256', 'target_configuration_sha256'], ['status', 'reasons', 'reference_configuration_id', 'target_configuration_id', 'reference_configuration_sha256', 'target_configuration_sha256']);
         const domains = parseCompatibilityDomains(payload.compatibility_domains, 'comparison.compatibility_domains');
@@ -2769,6 +2768,7 @@ export interface FrustraMpnnGuidancePlan {
     schema_version: 1;
     guidance_id: string;
     guidance_sha256: string;
+    source_comparison_id?: string;
     source_landscape_sha256: string;
     configuration_id: string;
     configuration_sha256: string;
@@ -3492,6 +3492,13 @@ export const parseFrustraMpnnComparisonRowsPage = (value: unknown): FrustraMpnnC
         next_offset: nextOffset,
     };
 };
+
+export const fetchFrustraMpnnComparisonById = async (
+    comparisonId: string,
+    signal?: AbortSignal,
+): Promise<FrustraMpnnComparison> => (
+    await api.get<FrustraMpnnComparison>(`/api/frustrampnn/comparisons/${encodeURIComponent(comparisonId)}`, { signal })
+).data;
 
 export const fetchFrustraMpnnComparisonRows = async (
     comparisonId: string,

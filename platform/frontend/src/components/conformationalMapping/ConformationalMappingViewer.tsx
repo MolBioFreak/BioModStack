@@ -57,6 +57,7 @@ import {
     createFrustraMpnnViewerMetrics,
     resolveFrustraMpnnResidueProfile,
 } from './frustraMpnnViewerMetrics';
+import { ProjectAttachmentDialog } from '../project-manager/ProjectAttachmentDialog';
 
 interface Props {
     requestId: string;
@@ -102,6 +103,7 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
     const location = useLocation();
     const queryClient = useQueryClient();
     const [selectedCandidateId, setSelectedCandidateId] = useState('');
+    const [addToProjectOpen, setAddToProjectOpen] = useState(false);
     const [overlayIds, setOverlayIds] = useState<string[]>([]);
     const [detailTab, setDetailTab] = useState<DetailTab>('ensemble');
     const [lifecycleTab, setLifecycleTab] = useState<LifecycleTab>('progress');
@@ -399,6 +401,9 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
     const supportRecords = parsed.data ? recordsByType(parsed.data.value, 'support') : [];
     const missingnessRecords = parsed.data ? recordsByType(parsed.data.value, 'missingness') : [];
     const filteredMapRows = structureMap?.rows.filter((row) => mappingFilter === 'all' || (mappingFilter === 'mapped' ? row.status === 'mapped' : row.status !== 'mapped')) || [];
+    const projectAdapterId = status.data?.backend === 'confornets'
+        ? 'bms.cm.confornets.adapter.v1'
+        : 'bms.cm.protenix_v2.adapter.v1';
 
     return (
         <div className="min-h-screen bg-slate-950 p-3 text-slate-200 sm:p-4 lg:p-6" data-bms-cm-viewer="canonical">
@@ -406,7 +411,7 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
                 <header className="rounded-2xl border border-slate-800 bg-slate-900/80 p-4 sm:p-5">
                     <div className="flex flex-wrap items-start justify-between gap-4">
                         <div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-orange-300">Canonical ensemble lens</p><h1 className="mt-1 text-2xl font-semibold text-white">{title}</h1><p className="mt-1 break-all font-mono text-xs text-slate-500">{requestId}</p></div>
-                        <div className="flex flex-wrap items-center gap-2"><button type="button" onClick={() => navigate('/designs')} className="rounded-lg border border-slate-700 px-3 py-2 text-xs hover:border-slate-500">All results</button><button type="button" onClick={() => navigate('/submit')} className="rounded-lg border border-slate-700 px-3 py-2 text-xs hover:border-slate-500">New request</button><span className={`rounded-full border px-3 py-1.5 text-xs font-medium ${statusLabel === 'completed' ? 'border-emerald-500/40 text-emerald-200' : statusLabel === 'failed' ? 'border-red-500/40 text-red-200' : 'border-slate-700 text-slate-300'}`}>{statusLabel}</span>{['prepared', 'queued', 'running'].includes(statusLabel) && <button type="button" aria-label="Cancel request" disabled={lifecycle.isPending} onClick={() => { if (window.confirm('Cancel this conformational-mapping request?')) lifecycle.mutate('cancel'); }} className="rounded-lg border border-red-500/40 px-3 py-2 text-xs text-red-200 disabled:opacity-40">Cancel request</button>}{status.data?.retry_eligible && <button type="button" aria-label="Retry request" disabled={lifecycle.isPending} onClick={() => lifecycle.mutate('retry')} className="rounded-lg border border-blue-500/40 px-3 py-2 text-xs text-blue-200 disabled:opacity-40">Retry request</button>}</div>
+                        <div className="flex flex-wrap items-center gap-2"><button type="button" onClick={() => navigate('/designs')} className="rounded-lg border border-slate-700 px-3 py-2 text-xs hover:border-slate-500">All results</button><button type="button" onClick={() => setAddToProjectOpen(true)} className="rounded-lg border border-orange-500/40 px-3 py-2 text-xs text-orange-200 hover:border-orange-400">Add to Project / Experiment</button><button type="button" onClick={() => navigate('/submit')} className="rounded-lg border border-slate-700 px-3 py-2 text-xs hover:border-slate-500">New request</button><span className={`rounded-full border px-3 py-1.5 text-xs font-medium ${statusLabel === 'completed' ? 'border-emerald-500/40 text-emerald-200' : statusLabel === 'failed' ? 'border-red-500/40 text-red-200' : 'border-slate-700 text-slate-300'}`}>{statusLabel}</span>{['prepared', 'queued', 'running'].includes(statusLabel) && <button type="button" aria-label="Cancel request" disabled={lifecycle.isPending} onClick={() => { if (window.confirm('Cancel this conformational-mapping request?')) lifecycle.mutate('cancel'); }} className="rounded-lg border border-red-500/40 px-3 py-2 text-xs text-red-200 disabled:opacity-40">Cancel request</button>}{status.data?.retry_eligible && <button type="button" aria-label="Retry request" disabled={lifecycle.isPending} onClick={() => lifecycle.mutate('retry')} className="rounded-lg border border-blue-500/40 px-3 py-2 text-xs text-blue-200 disabled:opacity-40">Retry request</button>}</div>
                     </div>
                     <p className="mt-4 rounded-lg border border-sky-500/20 bg-sky-500/5 p-3 text-xs leading-5 text-sky-100">{CM_SCIENTIFIC_LIMIT}</p>
                     {receipt && <div className="mt-3 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3"><div className="text-xs font-semibold text-emerald-200">Authenticated submission receipt</div><div className="mt-2 grid gap-2 text-[11px] sm:grid-cols-2 lg:grid-cols-4"><div>Backend: <span className="font-mono text-slate-300">{receipt.backend}</span></div><div>Cardinality: <span className="text-slate-300">{receipt.expected_cardinality}</span></div><div title={receipt.request_sha256}>Request: <span className="font-mono text-slate-300">{shortHash(receipt.request_sha256)}</span></div><div title={receipt.coordinate_plan_sha256}>Coordinate plan: <span className="font-mono text-slate-300">{shortHash(receipt.coordinate_plan_sha256)}</span></div></div></div>}
@@ -557,6 +562,11 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
                     {detailTab === 'downloads' && <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><h2 className="font-semibold text-white">Native and canonical content-addressed downloads</h2><p className="mt-1 text-xs text-slate-500">Every link uses the authenticated artifact identity returned by the canonical API. Hash, byte count, role, and candidate binding are shown verbatim.</p><div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">{parsed.data.value.artifacts.map((artifact) => <a key={artifact.artifact_id} href={cmArtifactUrl(requestId, artifact.artifact_id)} className="rounded-lg border border-slate-800 p-3 text-xs hover:border-slate-600 focus:border-orange-400"><div className="truncate font-medium text-slate-200">{artifact.relative_path}</div><div className="mt-1 text-slate-500">{artifact.role} · {artifact.bytes.toLocaleString()} bytes</div><div className="mt-1 truncate font-mono text-[10px] text-slate-600" title={artifact.sha256}>{artifact.sha256}</div><div className="mt-1 truncate font-mono text-[10px] text-slate-600">{artifact.candidate_id || 'request-level'}</div></a>)}</div></section>}
                 </>}
             </div>
+            <ProjectAttachmentDialog
+                open={addToProjectOpen}
+                source={{ adapterId: projectAdapterId, entityId: requestId, label: title, availability: 'available' }}
+                onClose={() => setAddToProjectOpen(false)}
+            />
         </div>
     );
 }

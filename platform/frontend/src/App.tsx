@@ -7,6 +7,7 @@ import DomainExperimentWorkspace from './components/molbio-ngs/DomainExperimentW
 import { useResolvedBmsFeatures } from './runtime/installFeatures';
 
 const Dashboard = lazy(() => import('./components/Dashboard').then((module) => ({ default: module.Dashboard })));
+const ProjectManager = lazy(() => import('./pages/ProjectManager').then((module) => ({ default: module.ProjectManager })));
 const JobSubmission = lazy(() => import('./components/JobSubmission').then((module) => ({ default: module.JobSubmission })));
 const ResultsViewer = lazy(() => import('./components/ResultsViewer').then((module) => ({ default: module.ResultsViewer })));
 const JobDetailPage = lazy(() => import('./components/JobDetailPage').then((module) => ({ default: module.JobDetailPage })));
@@ -34,6 +35,10 @@ function App() {
           <Suspense fallback={<RouteLoadingFallback />}>
             <Routes>
             <Route path="/" element={<Dashboard />} />
+            <Route path="/projects" element={<ProjectManager />} />
+            <Route path="/projects/:projectId" element={<ProjectManager />} />
+            <Route path="/projects/:projectId/experiments/:experimentId" element={<ProjectManager />} />
+            <Route path="/projects/:projectId/experiments/:experimentId/domains/:domainId" element={<ProjectManager />} />
             <Route path="/submit" element={<JobSubmission />} />
             <Route path="/results" element={<ResultsViewer />} />
             <Route path="/designs" element={<ResultsViewer />} />

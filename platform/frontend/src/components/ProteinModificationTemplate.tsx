@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { submitJob, type Job } from '../lib/api';
+import { completeCurrentLaunchContext, submitJob, type Job } from '../lib/api';
 import { ModelDocumentationLinks } from './ModelDocumentationLinks';
 import { ProteinLocalRedesignTemplate } from './ProteinLocalRedesignTemplate';
 import ShapeBlueprintTemplate from './ShapeBlueprintTemplate';
@@ -61,9 +61,9 @@ export function ProteinModificationTemplate({ onBack, initialValues }: ProteinMo
 
     const submitMutation = useMutation({
         mutationFn: async (payload: Partial<Job>) => submitJob(payload),
-        onSuccess: () => {
+        onSuccess: async (response) => {
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
-            navigate('/');
+            navigate(await completeCurrentLaunchContext(response.data) ?? '/');
         },
         onError: (err: Error) => setError(err.message || 'Failed to submit protein modification job'),
     });
