@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -47,20 +48,36 @@ ALLOWED_SHELL_RESOURCES = frozenset(
     {"https://cdn.jsdelivr.net/npm/igv@3.5.2/dist/igv.min.js"}
 )
 URL_ATTRIBUTES = frozenset({"src", "href", "poster", "action", "formaction", "data", "srcset", "xlink:href"})
+IGV_REPORT_INLINE_SCRIPT_SHA256 = "389b3ee1a0204ad4c0f578a396dc7bde725e8f86de36bbc13f172f556b0999fc"
+INLINE_JSON_PREFIXES = ("const tableJson = ", "const locusDictionary = ", OPTIONS_PREFIX)
 
 
 class _ResourceParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.resources: set[str] = set()
+        self.inline_scripts: list[str] = []
+        self._script_parts: list[str] | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        del tag
         self._handle_attrs(attrs)
+        if tag.casefold() == "script" and not any(name.casefold() == "src" for name, _value in attrs):
+            if self._script_parts is not None:
+                raise ValueError("IGV report contains malformed script markup")
+            self._script_parts = []
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         del tag
         self._handle_attrs(attrs)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.casefold() == "script" and self._script_parts is not None:
+            self.inline_scripts.append("".join(self._script_parts))
+            self._script_parts = None
+
+    def handle_data(self, data: str) -> None:
+        if self._script_parts is not None:
+            self._script_parts.append(data)
 
     def _handle_attrs(self, attrs: list[tuple[str, str | None]]) -> None:
         normalized_attrs = {name.casefold(): value for name, value in attrs}
@@ -73,8 +90,43 @@ class _ResourceParser(HTMLParser):
                 if value is None or normalized == "srcset":
                     raise ValueError("IGV report contains an unsupported HTML resource attribute")
                 self.resources.add(value)
+            if normalized.startswith("on"):
+                raise ValueError("IGV report contains an undeclared HTML resource")
             if normalized == "style" and value and re.search(r"(?:url\s*\(|@import)", value, re.IGNORECASE):
                 raise ValueError("IGV report contains an undeclared HTML resource")
+
+
+def _validate_inline_scripts(scripts: list[str]) -> None:
+    if len(scripts) != 1:
+        raise ValueError("IGV report contains an undeclared HTML resource")
+    script = scripts[0]
+    lines = script.splitlines()
+    normalized_lines: list[str] = []
+    observed_prefixes: list[str] = []
+    for line in lines:
+        stripped = line.lstrip()
+        prefix = next((candidate for candidate in INLINE_JSON_PREFIXES if stripped.startswith(candidate)), None)
+        if prefix is None:
+            normalized_lines.append(line)
+            continue
+        try:
+            json.loads(stripped[len(prefix):])
+        except json.JSONDecodeError as exc:
+            raise ValueError("IGV report inline script contains invalid JSON") from exc
+        observed_prefixes.append(prefix)
+        normalized_lines.append(f"<{prefix}JSON>")
+    if observed_prefixes and set(observed_prefixes) == {OPTIONS_PREFIX}:
+        if any(
+            line.strip() and line.strip() != f"<{OPTIONS_PREFIX}JSON>"
+            for line in normalized_lines
+        ):
+            raise ValueError("IGV report contains an unexpected inline script")
+        return
+    if observed_prefixes != list(INLINE_JSON_PREFIXES):
+        raise ValueError("IGV report does not contain the expected inline data objects")
+    normalized = "\n".join(normalized_lines)
+    if hashlib.sha256(normalized.encode("utf-8")).hexdigest() != IGV_REPORT_INLINE_SCRIPT_SHA256:
+        raise ValueError("IGV report contains an unexpected inline script")
 
 
 def _shell_resources(text: str) -> set[str]:
@@ -83,6 +135,7 @@ def _shell_resources(text: str) -> set[str]:
     parser = _ResourceParser()
     parser.feed(text)
     parser.close()
+    _validate_inline_scripts(parser.inline_scripts)
     if re.search(
         r"\b(?:fetch|importScripts|Worker|SharedWorker|WebSocket|EventSource)\s*\(|"
         r"\bimport\s*\(|\bXMLHttpRequest\b|\blocation\s*=|\.src\s*=|"

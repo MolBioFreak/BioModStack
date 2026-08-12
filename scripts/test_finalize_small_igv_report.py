@@ -192,6 +192,8 @@ def test_rejects_embedded_or_undeclared_resources(tmp_path: Path) -> None:
         '<script>fetch("https://example.invalid/dynamic")</script>',
         '<script>const s=document.createElement("script");s.setAttribute("src","/api/evil.js");document.body.appendChild(s)</script>',
         '<script>const s=document.createElement("script");s["src"]="/api/evil.js";document.body.appendChild(s)</script>',
+        '<script>const property=["s","r","c"].join("");const s=document.createElement("script");s[property]="/api/evil.js";document.body.appendChild(s)</script>',
+        '<img src=x onerror="const property=[\'s\',\'r\',\'c\'].join(\'\');this[property]=\'/api/evil.js\'">',
     ):
         report.write_text(original.replace("</html>", f"{injected}</html>"), encoding="utf-8")
         with pytest.raises(ValueError, match="undeclared HTML resource"):
