@@ -306,6 +306,7 @@ async def serve_pdb(file_path: str):
     
     if not full_path.suffix.lower() in ['.pdb', '.cif', '.mmcif']:
         raise HTTPException(status_code=400, detail="Not a structure file")
+    _reject_governed_ngs_artifact(full_path)
     
     return FileResponse(
         path=full_path,
@@ -347,10 +348,13 @@ async def extract_chain(
     
     if not full_input.exists():
         raise HTTPException(status_code=404, detail="Input file not found")
+    _reject_governed_ngs_artifact(full_input)
     
     # Create output filename with chain suffix
     output_name = f"{full_input.stem}_chain{chain_id}{full_input.suffix}"
     output_path = full_input.parent / output_name
+    if _is_governed_ngs_directory(output_path.parent) or _is_governed_ngs_artifact(output_path):
+        raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
     
     try:
         result = extract_chains(

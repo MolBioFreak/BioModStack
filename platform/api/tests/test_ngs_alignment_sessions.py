@@ -34,10 +34,7 @@ def test_samtools_command_uses_pinned_no_network_ont_runtime(
     container_dir.mkdir()
     image = container_dir / "dorado-v1.3.1-samtools-v1.24.sif"
     image.write_bytes(b"pinned-runtime")
-    results_dir = tmp_path / "results"
-    results_dir.mkdir()
     monkeypatch.setenv("BMS_NGS_RUNTIME_SIF", str(image))
-    monkeypatch.setenv("BMS_RESULTS_DIR", str(results_dir))
     monkeypatch.setattr(
         service.shutil,
         "which",
@@ -67,18 +64,17 @@ def test_samtools_command_uses_pinned_no_network_ont_runtime(
             "--net",
             "--network",
             "none",
-            "--bind",
-            f"{results_dir}:{results_dir}:ro",
             f"/proc/self/fd/{command.pass_fds[0]}",
             "samtools",
         )
+        assert "--bind" not in command.argv
         assert observed["command"] == [*command, "--version"]
         assert observed["kwargs"]["pass_fds"] == command.pass_fds
     finally:
         service._clear_samtools_runtime_cache()
 
 
-@pytest.mark.parametrize("unsafe", ["digest", "version", "runtime_symlink", "parent_symlink", "bind_symlink", "bind_colon"])
+@pytest.mark.parametrize("unsafe", ["digest", "version", "runtime_symlink", "parent_symlink"])
 def test_samtools_runtime_rejects_unpinned_or_unsafe_authority(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -90,10 +86,7 @@ def test_samtools_runtime_rejects_unpinned_or_unsafe_authority(
     real.mkdir()
     image = real / "dorado.sif"
     image.write_bytes(b"approved")
-    results = real / "results"
-    results.mkdir()
     runtime_path = image
-    results_path = results
     expected_digest = hashlib.sha256(image.read_bytes()).hexdigest()
     expected_version = "1.24"
     if unsafe == "digest":
@@ -107,14 +100,7 @@ def test_samtools_runtime_rejects_unpinned_or_unsafe_authority(
         linked_parent = tmp_path / "linked-parent"
         linked_parent.symlink_to(real, target_is_directory=True)
         runtime_path = linked_parent / image.name
-    elif unsafe == "bind_symlink":
-        results_path = tmp_path / "results-link"
-        results_path.symlink_to(results, target_is_directory=True)
-    elif unsafe == "bind_colon":
-        results_path = tmp_path / "results:unsafe"
-        results_path.mkdir()
     monkeypatch.setenv("BMS_NGS_RUNTIME_SIF", str(runtime_path))
-    monkeypatch.setenv("BMS_RESULTS_DIR", str(results_path))
     monkeypatch.setattr(service.shutil, "which", lambda _command: "/usr/bin/apptainer")
     monkeypatch.setattr(service, "_ngs_runtime_identity", lambda: (expected_digest, expected_version))
     monkeypatch.setattr(
@@ -130,7 +116,7 @@ def test_samtools_runtime_rejects_unpinned_or_unsafe_authority(
         service._clear_samtools_runtime_cache()
 
 
-def test_samtools_runtime_lease_rejects_results_root_replacement(
+def test_samtools_read_inspection_uses_inherited_snapshot_descriptors_without_results_bind(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -138,10 +124,7 @@ def test_samtools_runtime_lease_rejects_results_root_replacement(
 
     image = tmp_path / "dorado.sif"
     image.write_bytes(b"approved")
-    results = tmp_path / "results"
-    results.mkdir()
     monkeypatch.setenv("BMS_NGS_RUNTIME_SIF", str(image))
-    monkeypatch.setenv("BMS_RESULTS_DIR", str(results))
     monkeypatch.setattr(service.shutil, "which", lambda _command: "/usr/bin/apptainer")
     monkeypatch.setattr(
         service,
@@ -153,13 +136,34 @@ def test_samtools_runtime_lease_rejects_results_root_replacement(
         "run",
         lambda *_args, **_kwargs: SimpleNamespace(stdout="samtools 1.24\nUsing htslib 1.24\n"),
     )
+    bam = tmp_path / "aligned.bam"
+    bai = tmp_path / "aligned.bam.bai"
+    bam.write_bytes(b"bam")
+    bai.write_bytes(b"bai")
+    observed = {}
+
+    class FakeProcess:
+        stdout = io.StringIO("")
+        stderr = io.StringIO("")
+        def wait(self, timeout=None):
+            return 0
+        def poll(self):
+            return 0
+
+    def fake_popen(command, **kwargs):
+        observed["command"] = command
+        observed["pass_fds"] = kwargs["pass_fds"]
+        return FakeProcess()
+
+    monkeypatch.setattr(service.subprocess, "Popen", fake_popen)
     service._clear_samtools_runtime_cache()
     try:
-        command = service._samtools_command()
-        results.rename(tmp_path / "old-results")
-        results.mkdir()
-        with pytest.raises(service.AlignmentSessionError, match="changed after validation"):
-            command.verify_results_root()
+        list(service._iter_sam_lines(bam, index=bai))
+        assert "--bind" not in observed["command"]
+        assert "-X" in observed["command"]
+        descriptor_inputs = [item for item in observed["command"] if item.startswith("/proc/self/fd/")]
+        assert len(descriptor_inputs) == 3
+        assert set(int(item.rsplit("/", 1)[1]) for item in descriptor_inputs).issubset(set(observed["pass_fds"]))
     finally:
         service._clear_samtools_runtime_cache()
 
@@ -424,10 +428,20 @@ def test_sequence_qc_manifest_is_available_below_job_scoped_cookie_path(
     )
     monkeypatch.setattr(router, "resolve_persisted_job_result_root", lambda _job: Path("/tmp/job-manifest"))
     monkeypatch.setattr(router, "find_manifest_in_result_root", lambda _root: Path("/tmp/job-manifest/qc_manifest.json"))
+    manifest_bytes = b'{"schema":"sequence_qc.manifest.v1"}'
+    monkeypatch.setattr(
+        router.service,
+        "_read_bounded_json_nofollow",
+        lambda *_args, **_kwargs: ({"schema": "sequence_qc.manifest.v1"}, manifest_bytes, "a" * 64, len(manifest_bytes)),
+    )
     monkeypatch.setattr(
         router,
         "load_sequence_qc_manifest",
-        lambda *_args, **kwargs: {"schema": "sequence_qc.manifest.v1", "authority": kwargs},
+        lambda *_args, **kwargs: {
+            "schema": "sequence_qc.manifest.v1",
+            "authority": kwargs,
+            "raw_bytes": kwargs.get("raw_bytes"),
+        },
     )
     app = FastAPI()
     app.include_router(router.router, prefix="/api")
@@ -436,7 +450,9 @@ def test_sequence_qc_manifest_is_available_below_job_scoped_cookie_path(
     response = TestClient(app).get("/api/jobs/job-manifest/sequence-qc-manifest")
 
     assert response.status_code == 200
+    assert response.json()["raw_bytes"] == manifest_bytes.decode("utf-8")
     assert response.json()["authority"] == {
+        "raw_bytes": manifest_bytes.decode("utf-8"),
         "expected_job_id": "job-manifest",
         "expected_workflow_id": "ont_fastq_qc",
         "expected_input_mode": "fastq",
@@ -453,6 +469,8 @@ def test_generic_file_routes_hide_governed_ngs_tree(
     fastq_qc.mkdir(parents=True)
     report = fastq_qc / "igv_report.html"
     report.write_text("<html></html>", encoding="utf-8")
+    structure = fastq_qc / "governed.pdb"
+    structure.write_text("ATOM\n", encoding="utf-8")
     (fastq_qc / "qc_manifest.json").write_text(
         json.dumps({"schema": "sequence_qc.manifest.v1", "artifacts": []}),
         encoding="utf-8",
@@ -469,6 +487,12 @@ def test_generic_file_routes_hide_governed_ngs_tree(
     assert client.get("/api/files/browse", params={"path": "bms_results/result/fastq_qc"}).status_code == 403
     assert client.get("/api/files/download/bms_results/result/fastq_qc/igv_report.html").status_code == 403
     assert client.get("/api/files/stream/bms_results/result/fastq_qc/igv_report.html").status_code == 403
+    assert client.get("/api/files/pdb/bms_results/result/fastq_qc/governed.pdb").status_code == 403
+    assert client.post(
+        "/api/files/extract-chain",
+        data={"input_path": "bms_results/result/fastq_qc/governed.pdb", "chain_id": "A"},
+    ).status_code == 403
+    assert not (fastq_qc / "governed_chainA.pdb").exists()
     traversal = client.post(
         "/api/files/upload",
         data={"path": "bms_results/result"},
@@ -1001,7 +1025,14 @@ def test_generic_alignment_routes_offload_blocking_service_calls(
         "_resolve_internal_artifact",
         lambda *_args, **_kwargs: (Path("/tmp/artifact"), {"artifact_id": "artifact-a"}),
     )
-    monkeypatch.setattr(service, "resolve_session_bam", lambda *_args, **_kwargs: Path("/tmp/aligned.bam"))
+    monkeypatch.setattr(
+        service,
+        "resolve_session_alignment_bundle",
+        lambda *_args, **_kwargs: (
+            Path("/tmp/aligned.bam"), {"sha256": "a" * 64, "size_bytes": 3},
+            Path("/tmp/aligned.bam.bai"), {"sha256": "b" * 64, "size_bytes": 3},
+        ),
+    )
     monkeypatch.setattr(
         service,
         "read_bam_page",
@@ -1046,7 +1077,7 @@ def test_generic_alignment_routes_offload_blocking_service_calls(
     assert service.build_alignment_sessions in threadpool_calls
     assert service.resolve_alignment_session in threadpool_calls
     assert service._resolve_internal_artifact in threadpool_calls
-    assert service.resolve_session_bam in threadpool_calls
+    assert service.resolve_session_alignment_bundle in threadpool_calls
     assert service.read_bam_page in threadpool_calls
     assert service.read_bam_exact in threadpool_calls
 
@@ -1258,6 +1289,42 @@ def test_ngs_package_routes_support_authenticated_inventory_and_http_range(
     assert ranged.headers["etag"] == f'"{digest}"'
 
 
+def test_ngs_package_routes_deny_requests_without_job_capability() -> None:
+    from routers import ngs_alignment_sessions as routes
+    from services import alignment_access
+
+    job = SimpleNamespace(
+        id="job-denied",
+        params={
+            "reference_sequence_sha256": "a" * 64,
+            "ont_workflow_id": "ont_fastq_qc",
+            "ont_input_mode": "fastq",
+        },
+        provenance={
+            alignment_access.PROVENANCE_DIGEST_KEY: alignment_access.token_sha256("not-present"),
+            alignment_access.PROVENANCE_SCHEME_KEY: alignment_access.SCHEME,
+        },
+        output_dir="/tmp/job-denied",
+        child_output_dir=None,
+    )
+
+    class Result:
+        def scalar_one_or_none(self):
+            return job
+
+    class Session:
+        async def execute(self, _statement):
+            return Result()
+
+    app = FastAPI()
+    app.include_router(routes.router, prefix="/api")
+    app.dependency_overrides[routes.get_session] = lambda: Session()
+    client = TestClient(app)
+
+    assert client.get("/api/jobs/job-denied/ngs-artifacts").status_code == 403
+    assert client.get(f"/api/jobs/job-denied/ngs-artifacts/{'a' * 64}").status_code == 403
+
+
 def test_paginated_bam_reads_are_bounded_and_sequences_are_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
     from services import ngs_alignment_sessions as service
 
@@ -1323,7 +1390,14 @@ def test_reads_route_requires_a_ready_session_and_never_returns_a_full_file(
     from routers import ngs_alignment_sessions as routes
     from services import ngs_alignment_sessions as service
 
-    monkeypatch.setattr(service, "resolve_session_bam", lambda *_args, **_kwargs: Path("/tmp/aligned.bam"))
+    monkeypatch.setattr(
+        service,
+        "resolve_session_alignment_bundle",
+        lambda *_args, **_kwargs: (
+            Path("/tmp/aligned.bam"), {"sha256": "a" * 64, "size_bytes": 3},
+            Path("/tmp/aligned.bam.bai"), {"sha256": "b" * 64, "size_bytes": 3},
+        ),
+    )
     monkeypatch.setattr(
         service,
         "read_bam_page",
@@ -1780,9 +1854,7 @@ def test_equal_length_wrong_reference_fails_exact_identity_validation(
     monkeypatch.setattr(
         service,
         "_samtools_command",
-        lambda: service._PinnedSamtoolsCommand(
-            ("samtools",), (), os.fspath(tmp_path), (tmp_path.stat().st_dev, tmp_path.stat().st_ino),
-        ),
+        lambda: service._PinnedSamtoolsCommand(("samtools",), ()),
     )
     valid, reason = service._validate_alignment_bundle(bam, index, reference, None)
 
@@ -1811,9 +1883,7 @@ def test_missing_m5_accepts_only_matching_server_manifest_reference_binding(
     monkeypatch.setattr(
         service,
         "_samtools_command",
-        lambda: service._PinnedSamtoolsCommand(
-            ("samtools",), (), os.fspath(tmp_path), (tmp_path.stat().st_dev, tmp_path.stat().st_ino),
-        ),
+        lambda: service._PinnedSamtoolsCommand(("samtools",), ()),
     )
     expected = hashlib.sha256(b"ACGTACGT").hexdigest()
 
@@ -1853,7 +1923,14 @@ def test_exact_read_detail_scan_exhaustion_is_not_reported_as_404(monkeypatch: p
     from routers import ngs_alignment_sessions as routes
     from services import ngs_alignment_sessions as service
 
-    monkeypatch.setattr(service, "resolve_session_bam", lambda *_args, **_kwargs: Path("/tmp/aligned.bam"))
+    monkeypatch.setattr(
+        service,
+        "resolve_session_alignment_bundle",
+        lambda *_args, **_kwargs: (
+            Path("/tmp/aligned.bam"), {"sha256": "a" * 64, "size_bytes": 3},
+            Path("/tmp/aligned.bam.bai"), {"sha256": "b" * 64, "size_bytes": 3},
+        ),
+    )
     monkeypatch.setattr(
         service,
         "read_bam_exact",

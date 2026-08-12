@@ -80,6 +80,9 @@ class _SnapshotLease:
     def fileno(self) -> int:
         return self._handle.fileno()
 
+    def __iter__(self):
+        return iter(self._handle)
+
     @property
     def closed(self) -> bool:
         return self._closed
@@ -382,8 +385,11 @@ def _manifest_records(job_id: str, job_root: Path) -> list[dict[str, Any]]:
         if safe_manifest is None:
             continue
         try:
-            payload = json.loads(safe_manifest.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            payload, _raw_bytes, _digest, _size = _read_bounded_json_nofollow(
+                safe_manifest,
+                label="alignment-session manifest",
+            )
+        except AlignmentSessionError:
             continue
         rel_manifest = safe_manifest.relative_to(job_root).as_posix()
         session_metadata = payload.get("alignment_session") if isinstance(payload, dict) else None
@@ -565,16 +571,9 @@ def _pick_bundle(records: list[dict[str, Any]], mode: str) -> tuple[dict[str, di
 class _PinnedSamtoolsCommand:
     argv: tuple[str, ...]
     pass_fds: tuple[int, ...]
-    results_root: str
-    results_identity: tuple[int, int]
 
     def __iter__(self):
         return iter(self.argv)
-
-    def verify_results_root(self) -> None:
-        metadata = os.stat(self.results_root, follow_symlinks=False)
-        if not stat.S_ISDIR(metadata.st_mode) or (metadata.st_dev, metadata.st_ino) != self.results_identity:
-            raise AlignmentSessionError("NGS results bind root changed after validation")
 
 
 _samtools_runtime_lock = threading.RLock()
@@ -653,19 +652,10 @@ def _ngs_runtime_identity() -> tuple[str, str]:
 
 def _samtools_command() -> _PinnedSamtoolsCommand:
     runtime_raw = os.environ.get("BMS_NGS_RUNTIME_SIF", "").strip()
-    results_configured = os.environ.get("BMS_RESULTS_DIR") or os.environ.get("BMS_RESULTS_ROOT")
     runtime_sif = Path(runtime_raw).expanduser()
-    results_dir = (
-        Path(results_configured).expanduser()
-        if results_configured
-        else get_results_dir().expanduser()
-    )
     if not runtime_sif.is_absolute():
         raise AlignmentSessionError("pinned NGS samtools runtime path is invalid")
-    results_raw = os.fspath(results_dir)
-    if not results_dir.is_absolute() or any(character in results_raw for character in ("\x00", ":", ",", "\n", "\r")):
-        raise AlignmentSessionError("NGS results bind root is unsafe")
-    key = (os.fspath(runtime_sif), results_raw)
+    key = (os.fspath(runtime_sif), "descriptor-only")
     with _samtools_runtime_lock:
         cached = _samtools_runtime_cache.get(key)
         if cached is not None:
@@ -675,11 +665,9 @@ def _samtools_command() -> _PinnedSamtoolsCommand:
             raise AlignmentSessionError("Apptainer is unavailable for the pinned NGS runtime")
         expected_digest, expected_version = _ngs_runtime_identity()
         runtime_fd = _open_nofollow(runtime_sif, directory=False, label="pinned NGS runtime")
-        results_fd = -1
         try:
             if _sha256_descriptor(runtime_fd) != expected_digest:
                 raise AlignmentSessionError("pinned NGS runtime digest does not match the canonical lock")
-            results_fd = _open_nofollow(results_dir, directory=True, label="NGS results bind root")
             command = _PinnedSamtoolsCommand(
                 argv=(
                     apptainer,
@@ -689,17 +677,12 @@ def _samtools_command() -> _PinnedSamtoolsCommand:
                     "--net",
                     "--network",
                     "none",
-                    "--bind",
-                    f"{results_raw}:{results_raw}:ro",
                     f"/proc/self/fd/{runtime_fd}",
                     "samtools",
                 ),
-                pass_fds=(runtime_fd, results_fd),
-                results_root=results_raw,
-                results_identity=(os.fstat(results_fd).st_dev, os.fstat(results_fd).st_ino),
+                pass_fds=(runtime_fd,),
             )
             try:
-                command.verify_results_root()
                 probe = subprocess.run(
                     [*command, "--version"],
                     check=True,
@@ -716,130 +699,49 @@ def _samtools_command() -> _PinnedSamtoolsCommand:
             return command
         except Exception:
             os.close(runtime_fd)
-            if results_fd >= 0:
-                os.close(results_fd)
             raise
 
 
-def _bam_header_contigs(bam: Path, samtools: _PinnedSamtoolsCommand) -> dict[str, tuple[int, str | None]]:
-    samtools.verify_results_root()
-    result = subprocess.run(
-        [*samtools, "view", "-H", str(bam)],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        pass_fds=samtools.pass_fds,
-    )
-    contigs: dict[str, tuple[int, str | None]] = {}
-    for line in result.stdout.splitlines():
-        if not line.startswith("@SQ\t"):
-            continue
-        fields = dict(field.split(":", 1) for field in line.split("\t")[1:] if ":" in field)
-        if fields.get("SN") and fields.get("LN", "").isdigit():
-            contigs[fields["SN"]] = (int(fields["LN"]), fields.get("M5"))
-    return contigs
+def _descriptor_path(descriptor: int) -> str:
+    return f"/proc/self/fd/{descriptor}"
 
 
-def _fasta_contigs(reference: Path) -> dict[str, tuple[int, str]]:
+def _fasta_contigs_from_handle(handle: BinaryIO) -> tuple[dict[str, tuple[int, str]], bytes]:
     contigs: dict[str, tuple[int, str]] = {}
     current: str | None = None
     length = 0
     digest = hashlib.md5(usedforsecurity=False)
-    with reference.open("r", encoding="utf-8") as handle:
-        for raw_line in handle:
-            line = raw_line.strip()
-            if not line:
-                continue
-            if line.startswith(">"):
-                if current is not None:
-                    contigs[current] = (length, digest.hexdigest())
-                current = line[1:].split()[0]
-                length = 0
-                digest = hashlib.md5(usedforsecurity=False)
-            elif current is None:
-                raise AlignmentSessionError("reference FASTA sequence precedes header")
-            else:
-                normalized = line.upper().encode("ascii")
-                length += len(normalized)
-                digest.update(normalized)
+    normalized_reference = bytearray()
+    handle.seek(0)
+    for raw_line in handle:
+        line = raw_line.decode("ascii").strip()
+        if not line:
+            continue
+        if line.startswith(">"):
+            if current is not None:
+                contigs[current] = (length, digest.hexdigest())
+            current = line[1:].split()[0]
+            length = 0
+            digest = hashlib.md5(usedforsecurity=False)
+        elif current is None:
+            raise AlignmentSessionError("reference FASTA sequence precedes header")
+        else:
+            normalized = line.upper().encode("ascii")
+            length += len(normalized)
+            digest.update(normalized)
+            normalized_reference.extend(normalized)
     if current is not None:
         contigs[current] = (length, digest.hexdigest())
-    return contigs
+    return contigs, bytes(normalized_reference)
 
 
-def _validate_alignment_bundle_cached(
-    bam_text: str,
-    bam_signature: tuple[int, int],
-    index_text: str,
-    index_signature: tuple[int, int],
-    reference_text: str,
-    reference_signature: tuple[int, int],
-    manifest_reference_sha256: str | None,
-    source_reference_sha256: str | None,
-    mode: str,
-    samtools: _PinnedSamtoolsCommand,
-) -> tuple[bool, str | None]:
-    del bam_signature, index_signature, reference_signature
-    bam = Path(bam_text)
-    index = Path(index_text)
-    reference = Path(reference_text)
+def _fasta_contigs(reference: Path) -> dict[str, tuple[int, str]]:
+    handle = _open_regular_file_no_symlinks(reference)
     try:
-        samtools.verify_results_root()
-        subprocess.run(
-            [*samtools, "quickcheck", "-v", str(bam)],
-            check=True,
-            capture_output=True,
-            timeout=30,
-            pass_fds=samtools.pass_fds,
-        )
-        subprocess.run(
-            [*samtools, "idxstats", "-X", str(bam), str(index)],
-            check=True,
-            capture_output=True,
-            timeout=30,
-            pass_fds=samtools.pass_fds,
-        )
-        bam_contigs = _bam_header_contigs(bam, samtools)
-        reference_contigs = _fasta_contigs(reference)
-    except (AlignmentSessionError, OSError, subprocess.SubprocessError, UnicodeError) as exc:
-        return False, f"alignment bundle validation failed: {type(exc).__name__}"
-    if not bam_contigs or set(bam_contigs) != set(reference_contigs):
-        return False, "alignment/reference contig names or lengths do not match"
-    normalized_reference = "".join(
-        line.strip().upper()
-        for line in reference.read_text(encoding="utf-8").splitlines()
-        if line.strip() and not line.startswith(">")
-    )
-    observed_sha256 = hashlib.sha256(normalized_reference.encode("ascii")).hexdigest()
-    if manifest_reference_sha256 != observed_sha256:
-        return False, "exact reference identity manifest binding does not match the reference artifact"
-    if mode == "dimer_candidates":
-        midpoint = len(normalized_reference) // 2
-        if (
-            len(normalized_reference) % 2 != 0
-            or normalized_reference[:midpoint] != normalized_reference[midpoint:]
-            or not isinstance(source_reference_sha256, str)
-            or re.fullmatch(r"[0-9a-f]{64}", source_reference_sha256) is None
-            or hashlib.sha256(normalized_reference[:midpoint].encode("ascii")).hexdigest()
-            != source_reference_sha256
-        ):
-            return False, "dimer reference is not derived from the authorized source reference"
-    for contig, (bam_length, bam_md5) in bam_contigs.items():
-        reference_length, reference_md5 = reference_contigs[contig]
-        if bam_length != reference_length:
-            return False, "alignment/reference contig names or lengths do not match"
-        if not isinstance(bam_md5, str) or not re.fullmatch(r"[0-9a-fA-F]{32}", bam_md5):
-            if (
-                not isinstance(manifest_reference_sha256, str)
-                or re.fullmatch(r"[0-9a-f]{64}", manifest_reference_sha256) is None
-                or manifest_reference_sha256 != observed_sha256
-            ):
-                return False, f"exact reference identity cannot be proven for contig {contig}: BAM @SQ M5 and manifest binding are absent"
-            continue
-        if bam_md5.lower() != reference_md5:
-            return False, f"exact reference identity mismatch for contig {contig}"
-    return True, None
+        contigs, _normalized_reference = _fasta_contigs_from_handle(handle)
+        return contigs
+    finally:
+        handle.close()
 
 
 def _validate_alignment_bundle(
@@ -851,19 +753,85 @@ def _validate_alignment_bundle(
     mode: str = "primary",
 ) -> tuple[bool, str | None]:
     samtools = _samtools_command()
-    signatures = []
-    for path in (bam, index, reference):
-        file_stat = path.stat()
-        signatures.append((file_stat.st_size, file_stat.st_mtime_ns))
-    return _validate_alignment_bundle_cached(
-        str(bam), signatures[0],
-        str(index), signatures[1],
-        str(reference), signatures[2],
-        manifest_reference_sha256,
-        source_reference_sha256,
-        mode,
-        samtools,
-    )
+    snapshots: list[BinaryIO] = []
+    try:
+        bam_sha256, bam_size = _sha256_file_and_size(bam)
+        index_sha256, index_size = _sha256_file_and_size(index)
+        reference_sha256, reference_size = _sha256_file_and_size(reference)
+        bam_snapshot = open_verified_artifact_snapshot(bam, expected_size=bam_size, expected_sha256=bam_sha256)
+        snapshots.append(bam_snapshot)
+        index_snapshot = open_verified_artifact_snapshot(index, expected_size=index_size, expected_sha256=index_sha256)
+        snapshots.append(index_snapshot)
+        reference_snapshot = open_verified_artifact_snapshot(
+            reference,
+            expected_size=reference_size,
+            expected_sha256=reference_sha256,
+        )
+        snapshots.append(reference_snapshot)
+        bam_path = _descriptor_path(bam_snapshot.fileno())
+        index_path = _descriptor_path(index_snapshot.fileno())
+        pass_fds = (*samtools.pass_fds, *(snapshot.fileno() for snapshot in snapshots))
+        subprocess.run(
+            [*samtools, "quickcheck", "-v", bam_path],
+            check=True,
+            capture_output=True,
+            timeout=30,
+            pass_fds=pass_fds,
+        )
+        subprocess.run(
+            [*samtools, "idxstats", "-X", bam_path, index_path],
+            check=True,
+            capture_output=True,
+            timeout=30,
+            pass_fds=pass_fds,
+        )
+        header = subprocess.run(
+            [*samtools, "view", "-H", bam_path],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            pass_fds=pass_fds,
+        )
+        bam_contigs: dict[str, tuple[int, str | None]] = {}
+        for line in header.stdout.splitlines():
+            if not line.startswith("@SQ\t"):
+                continue
+            fields = dict(field.split(":", 1) for field in line.split("\t")[1:] if ":" in field)
+            if fields.get("SN") and fields.get("LN", "").isdigit():
+                bam_contigs[fields["SN"]] = (int(fields["LN"]), fields.get("M5"))
+        reference_contigs, normalized_reference = _fasta_contigs_from_handle(reference_snapshot)
+        observed_sha256 = hashlib.sha256(normalized_reference).hexdigest()
+    except (AlignmentSessionError, OSError, subprocess.SubprocessError, UnicodeError) as exc:
+        return False, f"alignment bundle validation failed: {type(exc).__name__}"
+    finally:
+        for snapshot in reversed(snapshots):
+            snapshot.close()
+    if not bam_contigs or set(bam_contigs) != set(reference_contigs):
+        return False, "alignment/reference contig names or lengths do not match"
+    if manifest_reference_sha256 != observed_sha256:
+        return False, "exact reference identity manifest binding does not match the reference artifact"
+    if mode == "dimer_candidates":
+        midpoint = len(normalized_reference) // 2
+        if (
+            len(normalized_reference) % 2 != 0
+            or normalized_reference[:midpoint] != normalized_reference[midpoint:]
+            or not isinstance(source_reference_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", source_reference_sha256) is None
+            or hashlib.sha256(normalized_reference[:midpoint]).hexdigest() != source_reference_sha256
+        ):
+            return False, "dimer reference is not derived from the authorized source reference"
+    for contig, (bam_length, bam_md5) in bam_contigs.items():
+        reference_length, reference_md5 = reference_contigs[contig]
+        if bam_length != reference_length:
+            return False, "alignment/reference contig names or lengths do not match"
+        if not isinstance(bam_md5, str) or not re.fullmatch(r"[0-9a-fA-F]{32}", bam_md5):
+            if manifest_reference_sha256 != observed_sha256:
+                return False, f"exact reference identity cannot be proven for contig {contig}"
+            continue
+        if bam_md5.lower() != reference_md5:
+            return False, f"exact reference identity mismatch for contig {contig}"
+    return True, None
 
 
 def _artifact_descriptor(job_id: str, record: dict[str, Any], role: str) -> dict[str, Any]:
@@ -1412,7 +1380,7 @@ def resolve_alignment_artifact_by_role(
     raise AlignmentSessionError("alignment artifact not found")
 
 
-def resolve_session_bam(
+def resolve_session_alignment_bundle(
     job_id: str,
     session_id: str,
     *,
@@ -1421,40 +1389,68 @@ def resolve_session_bam(
     input_mode: str = "fastq",
     results_dir: str | Path | None = None,
     job_output_dir: str | Path | None = None,
-) -> Path:
+) -> tuple[Path, dict[str, Any], Path, dict[str, Any]]:
     safe_job_id, job_root = _safe_job_root(job_id, results_dir, job_output_dir)
     for session in _session_records(safe_job_id, job_root, source_reference_sha256, workflow_id, input_mode):
         if session["session_id"] == session_id and session["ready"]:
-            return session["artifacts"]["alignment"]["_path"]
+            alignment = session["artifacts"]["alignment"]
+            index = session["artifacts"]["alignment_index"]
+            return alignment["_path"], alignment, index["_path"], index
     raise AlignmentSessionError("ready alignment session not found")
 
 
 def _iter_sam_lines(
     bam: Path,
     *,
+    bam_sha256: str | None = None,
+    bam_size_bytes: int | None = None,
+    index: Path | None = None,
+    index_sha256: str | None = None,
+    index_size_bytes: int | None = None,
     contig: str | None = None,
     start: int | None = None,
     end: int | None = None,
 ) -> Iterator[str]:
     samtools = _samtools_command()
-    samtools.verify_results_root()
-    command = [*samtools, "view", str(bam)]
-    if contig is not None:
-        if not SAFE_CONTIG_RE.fullmatch(contig):
-            raise AlignmentSessionError("unsafe contig")
-        if start is not None or end is not None:
-            if start is None or end is None or start < 1 or end < start:
-                raise AlignmentSessionError("invalid read locus")
-            command.append(f"{contig}:{start}-{end}")
+    snapshots: list[BinaryIO] = []
+    try:
+        if bam_sha256 is None or bam_size_bytes is None:
+            bam_sha256, bam_size_bytes = _sha256_file_and_size(bam)
+        bam_snapshot = open_verified_artifact_snapshot(bam, expected_size=bam_size_bytes, expected_sha256=bam_sha256)
+        snapshots.append(bam_snapshot)
+        command = [*samtools, "view"]
+        if index is not None:
+            if index_sha256 is None or index_size_bytes is None:
+                index_sha256, index_size_bytes = _sha256_file_and_size(index)
+            index_snapshot = open_verified_artifact_snapshot(
+                index,
+                expected_size=index_size_bytes,
+                expected_sha256=index_sha256,
+            )
+            snapshots.append(index_snapshot)
+            command.extend(["-X", _descriptor_path(bam_snapshot.fileno()), _descriptor_path(index_snapshot.fileno())])
         else:
-            command.append(contig)
-    process = subprocess.Popen(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        pass_fds=samtools.pass_fds,
-    )
+            command.append(_descriptor_path(bam_snapshot.fileno()))
+        if contig is not None:
+            if not SAFE_CONTIG_RE.fullmatch(contig):
+                raise AlignmentSessionError("unsafe contig")
+            if start is not None or end is not None:
+                if start is None or end is None or start < 1 or end < start:
+                    raise AlignmentSessionError("invalid read locus")
+                command.append(f"{contig}:{start}-{end}")
+            else:
+                command.append(contig)
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            pass_fds=(*samtools.pass_fds, *(snapshot.fileno() for snapshot in snapshots)),
+        )
+    except Exception:
+        for snapshot in reversed(snapshots):
+            snapshot.close()
+        raise
     assert process.stdout is not None
     completed = False
     try:
@@ -1477,6 +1473,8 @@ def _iter_sam_lines(
                 process.wait(timeout=5)
         if process.stderr is not None:
             process.stderr.close()
+        for snapshot in reversed(snapshots):
+            snapshot.close()
 
 
 def _mean_quality(quality: str) -> float | None:
@@ -1513,6 +1511,11 @@ def _sam_line_to_read(line: str, *, include_sequence: bool) -> dict[str, Any] | 
 def read_bam_page(
     bam: Path,
     *,
+    bam_sha256: str | None = None,
+    bam_size_bytes: int | None = None,
+    index: Path | None = None,
+    index_sha256: str | None = None,
+    index_size_bytes: int | None = None,
     contig: str | None = None,
     start: int | None = None,
     end: int | None = None,
@@ -1538,7 +1541,17 @@ def read_bam_page(
     scanned = 0
     has_more = False
     scan_truncated = False
-    iterator = _iter_sam_lines(bam, contig=contig, start=start, end=end)
+    iterator = _iter_sam_lines(
+        bam,
+        bam_sha256=bam_sha256,
+        bam_size_bytes=bam_size_bytes,
+        index=index,
+        index_sha256=index_sha256,
+        index_size_bytes=index_size_bytes,
+        contig=contig,
+        start=start,
+        end=end,
+    )
     try:
         for line in iterator:
             row = _sam_line_to_read(line, include_sequence=include_sequence)
@@ -1576,13 +1589,28 @@ def read_bam_exact(
     bam: Path,
     read_id: str,
     *,
+    bam_sha256: str | None = None,
+    bam_size_bytes: int | None = None,
+    index: Path | None = None,
+    index_sha256: str | None = None,
+    index_size_bytes: int | None = None,
     contig: str | None = None,
     start: int | None = None,
     end: int | None = None,
 ) -> dict[str, Any]:
     """Find one exact read name without confusing bounded scan exhaustion with absence."""
     scanned = 0
-    iterator = _iter_sam_lines(bam, contig=contig, start=start, end=end)
+    iterator = _iter_sam_lines(
+        bam,
+        bam_sha256=bam_sha256,
+        bam_size_bytes=bam_size_bytes,
+        index=index,
+        index_sha256=index_sha256,
+        index_size_bytes=index_size_bytes,
+        contig=contig,
+        start=start,
+        end=end,
+    )
     try:
         for line in iterator:
             row = _sam_line_to_read(line, include_sequence=True)

@@ -261,9 +261,14 @@ async def get_job_scoped_sequence_qc_manifest(
     try:
         result_root = resolve_persisted_job_result_root(authorized_job)
         manifest_path = find_manifest_in_result_root(result_root)
+        _manifest_document, manifest_bytes, _manifest_digest, _manifest_size = service._read_bounded_json_nofollow(
+            manifest_path,
+            label="job-scoped sequence-QC manifest",
+        )
         authority = _job_authority(authorized_job)
         return load_sequence_qc_manifest(
             manifest_path,
+            raw_bytes=manifest_bytes,
             expected_job_id=job_id,
             expected_workflow_id=authority["workflow_id"],
             expected_input_mode=authority["input_mode"],
@@ -386,8 +391,8 @@ async def list_alignment_reads(
     authorized_job: Job = Depends(require_alignment_job),
 ):
     try:
-        bam = await run_in_threadpool(
-            service.resolve_session_bam,
+        bam, bam_metadata, index, index_metadata = await run_in_threadpool(
+            service.resolve_session_alignment_bundle,
             job_id,
             session_id,
             **_job_authority(authorized_job),
@@ -396,6 +401,11 @@ async def list_alignment_reads(
         return await run_in_threadpool(
             service.read_bam_page,
             bam,
+            bam_sha256=bam_metadata["sha256"],
+            bam_size_bytes=bam_metadata["size_bytes"],
+            index=index,
+            index_sha256=index_metadata["sha256"],
+            index_size_bytes=index_metadata["size_bytes"],
             contig=contig,
             start=start,
             end=end,
@@ -421,8 +431,8 @@ async def get_alignment_read(
     if not read_id or len(read_id) > 255:
         raise HTTPException(status_code=400, detail="invalid read ID")
     try:
-        bam = await run_in_threadpool(
-            service.resolve_session_bam,
+        bam, bam_metadata, index, index_metadata = await run_in_threadpool(
+            service.resolve_session_alignment_bundle,
             job_id,
             session_id,
             **_job_authority(authorized_job),
@@ -432,6 +442,11 @@ async def get_alignment_read(
             service.read_bam_exact,
             bam,
             read_id,
+            bam_sha256=bam_metadata["sha256"],
+            bam_size_bytes=bam_metadata["size_bytes"],
+            index=index,
+            index_sha256=index_metadata["sha256"],
+            index_size_bytes=index_metadata["size_bytes"],
             contig=contig,
             start=start,
             end=end,
