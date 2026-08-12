@@ -9,7 +9,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { StructureWorkbench } from '../structureViewer/StructureWorkbench';
 import { BMS_CONTROL, BMS_CONTROL_GROUP, BMS_FULLSCREEN_FLUSH, BMS_PANEL_SURFACE, BMS_SMALL_CONTROL, BMS_VIEWER_WELL } from './ui/bmsStyle';
-import { fetchJobs } from '../lib/api';
+import { fetchFullJob, fetchJobs } from '../lib/api';
 import type { Job } from '../lib/api';
 import { jobPollingInterval } from '../lib/queryPolling';
 import { isNgsJob } from '../lib/ngsResultRouting';
@@ -148,8 +148,9 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
     });
     const { data: selectedJobData } = useQuery({
         queryKey: ['quick-viewer-selected-job', selectedJobId],
-        queryFn: () => fetchJobs({ q: selectedJobId as string, limit: 100, summary: true }),
+        queryFn: () => fetchFullJob(selectedJobId as string),
         enabled: Boolean(selectedJobId),
+        retry: false,
     });
 
     // Get completed jobs with structures
@@ -157,9 +158,10 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
     const completedJobs = allJobs.filter(
         (job: Job) => job.status === 'completed' && !isMolecularDynamicsJob(job) && !isNgsJob(job)
     );
-    const selectedJobRecord = selectedJobData?.data?.jobs.find((job) => job.id === selectedJobId);
-    const selectedJobIsExcluded = Boolean(selectedJobRecord && (
-        isMolecularDynamicsJob(selectedJobRecord) || isNgsJob(selectedJobRecord)
+    const selectedJobIsExcluded = (Boolean(selectedJobId) && (
+        !selectedJobData
+        || isMolecularDynamicsJob(selectedJobData)
+        || isNgsJob(selectedJobData)
     )) || allJobs.some(
         (job: Job) => job.id === selectedJobId && (isMolecularDynamicsJob(job) || isNgsJob(job))
     );

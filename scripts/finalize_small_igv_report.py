@@ -63,6 +63,10 @@ class _ResourceParser(HTMLParser):
         self._handle_attrs(attrs)
 
     def _handle_attrs(self, attrs: list[tuple[str, str | None]]) -> None:
+        normalized_attrs = {name.casefold(): value for name, value in attrs}
+        http_equiv = normalized_attrs.get("http-equiv")
+        if isinstance(http_equiv, str) and http_equiv.casefold() == "refresh":
+            raise ValueError("IGV report contains an undeclared HTML resource")
         for name, value in attrs:
             normalized = name.casefold()
             if normalized in URL_ATTRIBUTES:
@@ -79,6 +83,13 @@ def _shell_resources(text: str) -> set[str]:
     parser = _ResourceParser()
     parser.feed(text)
     parser.close()
+    if re.search(
+        r"\b(?:fetch|importScripts|Worker|SharedWorker|WebSocket|EventSource)\s*\(|"
+        r"\bimport\s*\(|\bXMLHttpRequest\b|\blocation\s*=|\.src\s*=",
+        text,
+        re.IGNORECASE,
+    ):
+        raise ValueError("IGV report contains an undeclared HTML resource")
     return parser.resources
 
 

@@ -20,6 +20,35 @@ API_ROOT = Path(__file__).resolve().parents[1]
 if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
+from routers import files as files_router  # noqa: E402
+
+
+def test_generic_file_routes_hide_governed_ngs_tree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result_root = tmp_path / "result"
+    fastq_qc = result_root / "fastq_qc"
+    fastq_qc.mkdir(parents=True)
+    report = fastq_qc / "igv_report.html"
+    report.write_text("<html></html>", encoding="utf-8")
+    (fastq_qc / "qc_manifest.json").write_text(
+        json.dumps({"schema": "sequence_qc.manifest.v1", "artifacts": []}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(files_router, "get_allowed_roots", lambda: {"bms_results": tmp_path})
+    monkeypatch.setattr(files_router, "resolve_allowed_path", lambda value: tmp_path / Path(value).relative_to("bms_results"))
+
+    app = FastAPI()
+    app.include_router(files_router.router, prefix="/api/files")
+    client = TestClient(app)
+    parent = client.get("/api/files/browse", params={"path": "bms_results/result"})
+    assert parent.status_code == 200
+    assert parent.json()["entries"] == []
+    assert client.get("/api/files/browse", params={"path": "bms_results/result/fastq_qc"}).status_code == 403
+    assert client.get("/api/files/download/bms_results/result/fastq_qc/igv_report.html").status_code == 403
+    assert client.get("/api/files/stream/bms_results/result/fastq_qc/igv_report.html").status_code == 403
+
 
 def _write_manifest(
     directory: Path,

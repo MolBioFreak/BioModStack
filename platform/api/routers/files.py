@@ -145,15 +145,19 @@ def _is_governed_ngs_artifact(path: Path) -> bool:
             continue
         try:
             payload = json.loads(manifest.read_text(encoding="utf-8"))
-            if payload.get("schema") != "sequence_qc.manifest.v1":
-                continue
-            for artifact in payload.get("artifacts", []):
-                if isinstance(artifact, dict) and isinstance(artifact.get("path"), str):
-                    if (manifest.parent / artifact["path"]).resolve() == resolved:
-                        return True
+            if payload.get("schema") == "sequence_qc.manifest.v1":
+                return True
         except (OSError, ValueError, json.JSONDecodeError):
             return True
     return False
+
+
+def _is_governed_ngs_directory(path: Path) -> bool:
+    resolved = path.resolve()
+    return any(
+        (candidate / "qc_manifest.json").exists()
+        for candidate in (resolved, *resolved.parents)
+    )
 
 
 def _reject_governed_ngs_artifact(path: Path) -> None:
@@ -188,9 +192,13 @@ async def browse_directory(path: str = "") -> DirectoryListing:
     
     if not full_path.is_dir():
         raise HTTPException(status_code=400, detail="Path is not a directory")
+    if _is_governed_ngs_directory(full_path):
+        raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
     
     entries = []
     for item in sorted(full_path.iterdir()):
+        if item.is_dir() and _is_governed_ngs_directory(item):
+            continue
         stat = item.stat()
         entries.append(DirectoryEntry(
             name=item.name,
@@ -223,6 +231,8 @@ async def upload_file(
             target_dir.mkdir(parents=True, exist_ok=True)
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to create directory: {e}")
+    if _is_governed_ngs_directory(target_dir):
+        raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
 
     file_path = target_dir / file.filename
     

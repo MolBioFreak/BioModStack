@@ -2211,18 +2211,36 @@ export function NGSToolkit() {
     } = useQuery({
         queryKey: ['jobs', 'ngs'],
         queryFn: async () => {
-            const responses = await Promise.all(
+            const jobsByModel = await Promise.all(
                 ['nanopore', 'ont_fastq_qc', 'ont_plasmid_qc', 'ont_construct_screening', 'wf_clone_validation']
-                    .map((model_id) => fetchJobs({ include_children: true, model_id, limit: 100, summary: true })),
+                    .map(async (model_id) => {
+                        const jobs: Job[] = [];
+                        let offset = 0;
+                        let total = 0;
+                        do {
+                            const response = await fetchJobs({
+                                include_children: true,
+                                model_id,
+                                limit: 500,
+                                offset,
+                                summary: true,
+                            });
+                            jobs.push(...response.data.jobs);
+                            total = response.data.total;
+                            if (response.data.jobs.length === 0) break;
+                            offset += response.data.jobs.length;
+                        } while (offset < total && jobs.length < total);
+                        return jobs;
+                    }),
             );
             return {
                 data: {
-                    ...responses[0].data,
                     jobs: Array.from(
                         new Map(
-                            responses.flatMap((response) => response.data.jobs).map((job) => [job.id, job]),
+                            jobsByModel.flat().map((job) => [job.id, job]),
                         ).values(),
                     ),
+                    total: jobsByModel.reduce((count, jobs) => count + jobs.length, 0),
                 },
             };
         },

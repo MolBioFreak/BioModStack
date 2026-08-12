@@ -114,6 +114,8 @@ async def _serve_artifact(path: Path, metadata: dict, request: Request) -> Respo
         "Cache-Control": "private, no-cache, must-revalidate",
         "X-Content-Type-Options": "nosniff",
     }
+    if metadata.get("role") == "report":
+        base_headers["Content-Disposition"] = f'attachment; filename="{path.name}"'
     if request.headers.get("if-none-match") == etag:
         return Response(status_code=304, headers=base_headers)
     range_header = request.headers.get("range")
