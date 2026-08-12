@@ -21,7 +21,12 @@ if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
 
-def _write_manifest(directory: Path, *, prefix: str = "aligned") -> None:
+def _write_manifest(
+    directory: Path,
+    *,
+    prefix: str = "aligned",
+    job_id: str | None = None,
+) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "reference.fasta").write_text(">ref\nACGTACGT\n", encoding="utf-8")
     (directory / "reference.fasta.fai").write_text("ref\t8\t5\t8\t9\n", encoding="utf-8")
@@ -29,6 +34,8 @@ def _write_manifest(directory: Path, *, prefix: str = "aligned") -> None:
     (directory / f"{prefix}.bam.bai").write_bytes(b"bai")
     payload = {
         "artifact_schema_version": 2,
+        "schema": "sequence_qc.manifest.v1",
+        "job_id": job_id or directory.parent.name,
         "alignment_session": {
             "mode": "dimer_candidates" if "dimer" in directory.name else "primary",
             "reference_sequence_sha256": hashlib.sha256(b"ACGTACGT").hexdigest(),
@@ -45,6 +52,79 @@ def _write_manifest(directory: Path, *, prefix: str = "aligned") -> None:
         artifact["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
         artifact["size_bytes"] = path.stat().st_size
     (directory / "qc_manifest.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_manifest_schema_and_job_binding_are_required(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services import ngs_alignment_sessions as service
+
+    manifest_dir = tmp_path / "job-a" / "fastq_qc"
+    _write_manifest(manifest_dir)
+    manifest_path = manifest_dir / "qc_manifest.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["job_id"] = "job-b"
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
+
+    sessions = service.build_alignment_sessions("job-a", results_dir=tmp_path)
+    primary = next(item for item in sessions if item["mode"] == "primary")
+    assert primary["ready"] is False
+    assert "manifest job_id does not match requested job" in primary["unavailable_reason"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("schema", "untrusted.manifest.v1"),
+        ("artifact_schema_version", 1),
+    ],
+)
+def test_manifest_schema_version_is_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+) -> None:
+    from services import ngs_alignment_sessions as service
+
+    manifest_dir = tmp_path / "job-a" / "fastq_qc"
+    _write_manifest(manifest_dir)
+    manifest_path = manifest_dir / "qc_manifest.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload[field] = value
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
+
+    sessions = service.build_alignment_sessions("job-a", results_dir=tmp_path)
+    primary = next(item for item in sessions if item["mode"] == "primary")
+    assert primary["ready"] is False
+    assert "manifest schema" in primary["unavailable_reason"]
+
+
+def test_generic_artifact_resolution_rejects_unready_manifest_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services import ngs_alignment_sessions as service
+
+    manifest_dir = tmp_path / "job-a" / "fastq_qc"
+    _write_manifest(manifest_dir)
+    manifest_path = manifest_dir / "qc_manifest.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    alignment = next(item for item in payload["artifacts"] if item["kind"] == "alignment_bam")
+    alignment["sha256"] = "0" * 64
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
+
+    sessions = service.build_alignment_sessions("job-a", results_dir=tmp_path)
+    primary = next(item for item in sessions if item["mode"] == "primary")
+    artifact_id = primary["artifacts"]["alignment"]["artifact_id"]
+    assert primary["ready"] is False
+
+    with pytest.raises(service.AlignmentSessionError, match="not found"):
+        service.resolve_alignment_artifact("job-a", artifact_id, results_dir=tmp_path)
 
 
 def test_primary_session_is_opaque_job_scoped_and_ready(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -121,7 +201,7 @@ def test_persisted_production_output_directory_resolves_sessions_and_stays_confi
 
     results = tmp_path / "results"
     output_dir = results / "submitted-name_20260719_040000"
-    _write_manifest(output_dir / "fastq_qc")
+    _write_manifest(output_dir / "fastq_qc", job_id="opaque-job-uuid")
     monkeypatch.setattr(service, "get_results_dir", lambda: results)
     monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
 

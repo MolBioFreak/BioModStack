@@ -118,6 +118,21 @@ def test_fastq_qc_requires_exact_job_identity() -> None:
     assert 'str(job_id or "unknown")' not in manifest
 
 
+def test_dimer_manifest_binds_exact_job_identity_and_canonical_schema() -> None:
+    dimer = (ROOT / "modules/ngs/fastq_dimer_qc.nf").read_text(encoding="utf-8")
+    manifest = (ROOT / "scripts/build_alignment_session_manifest.sh").read_text(encoding="utf-8")
+    python_manifest = (ROOT / "scripts/build_alignment_session_manifest.py").read_text(encoding="utf-8")
+
+    assert "manifestJobId" in dimer
+    assert 'build_alignment_session_manifest.sh" ${manifestJobIdArg}' in dimer
+    assert 'job_id="${1:?exact job_id is required}"' in manifest
+    assert 'schema:"sequence_qc.manifest.v1"' in manifest
+    assert 'job_id:$job_id' in manifest
+    assert 'parser.add_argument("--job-id", required=True)' in python_manifest
+    assert '"schema": "sequence_qc.manifest.v1"' in python_manifest
+    assert '"job_id": args.job_id' in python_manifest
+
+
 def test_dominant_dimer_consensus_fails_without_fabricating_output(tmp_path: Path) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()

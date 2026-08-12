@@ -3,6 +3,11 @@
  * Process names are preserved to avoid behavior-changing call-site churn.
  */
 
+def shellQuote(value) {
+    String text = value == null ? '' : value.toString()
+    return "'${text.replace("'", "'\"'\"'")}'"
+}
+
 process FastqMultimerQC {
     label 'local_cpu'
     publishDir "${params.out_dir}/multimer_qc", mode: 'copy'
@@ -170,6 +175,11 @@ process FastqDimerAnalysis {
     def minimapPreset = ((params.fastq_minimap2_preset ?: 'map-ont') as String).trim()
     def minimapAllowSecondary = (params.fastq_minimap2_allow_secondary == true) ? 'true' : 'false'
     def codeRoot = params.code_root ?: projectDir
+    def manifestJobId = ((params.job_id ?: '') as String).trim()
+    if (!(manifestJobId ==~ /[A-Za-z0-9][A-Za-z0-9._ -]{0,255}/) || manifestJobId.contains('..')) {
+        error('FASTQ dimer analysis requires an exact safe job_id')
+    }
+    def manifestJobIdArg = shellQuote(manifestJobId)
     """
     set -euo pipefail
 
@@ -1380,7 +1390,7 @@ process FastqDimerAnalysis {
         echo "Consensus: \${consensus_status}; dominant: \${dominant_consensus_status}"
     } > dimer_analysis.log
 
-    bash "${codeRoot}/scripts/build_alignment_session_manifest.sh"
+    bash "${codeRoot}/scripts/build_alignment_session_manifest.sh" ${manifestJobIdArg}
         """
     }
 process BuildDimerCanonicalOutputs {

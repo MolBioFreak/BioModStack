@@ -42,6 +42,8 @@ LINKED_REPORT_ROLES = frozenset(
     }
 )
 SESSION_MODES = frozenset({"primary", "dimer_candidates"})
+MANIFEST_SCHEMA = "sequence_qc.manifest.v1"
+MANIFEST_SCHEMA_VERSION = 2
 SNAPSHOT_CACHE_MAX_BYTES = 2 * 1024 * 1024 * 1024
 SNAPSHOT_CACHE_MAX_ENTRIES = 64
 SNAPSHOT_CHUNK_BYTES = 1024 * 1024
@@ -367,7 +369,7 @@ def _regular_file_inside(path: Path, job_root: Path) -> tuple[Path | None, str |
         return None, "unsafe or missing artifact"
 
 
-def _manifest_records(job_root: Path) -> list[dict[str, Any]]:
+def _manifest_records(job_id: str, job_root: Path) -> list[dict[str, Any]]:
     manifests = sorted(job_root.glob("**/qc_manifest.json"))
     if len(manifests) > MAX_MANIFESTS:
         raise AlignmentSessionError(f"too many manifests below job root ({len(manifests)} > {MAX_MANIFESTS})")
@@ -380,9 +382,41 @@ def _manifest_records(job_root: Path) -> list[dict[str, Any]]:
             payload = json.loads(safe_manifest.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        if not isinstance(payload, dict) or not isinstance(payload.get("artifacts"), list):
-            continue
         rel_manifest = safe_manifest.relative_to(job_root).as_posix()
+        session_metadata = payload.get("alignment_session") if isinstance(payload, dict) else None
+        session_mode = session_metadata.get("mode") if isinstance(session_metadata, dict) else None
+        manifest_error: str | None = None
+        if not isinstance(payload, dict):
+            manifest_error = "manifest root must be a JSON object"
+        elif payload.get("artifact_schema_version") != MANIFEST_SCHEMA_VERSION:
+            manifest_error = f"unsupported manifest schema version: {payload.get('artifact_schema_version')!r}"
+        elif payload.get("schema") != MANIFEST_SCHEMA:
+            manifest_error = "manifest schema is not the canonical sequence-QC schema"
+        elif payload.get("job_id") != job_id:
+            manifest_error = "manifest job_id does not match requested job"
+        elif not isinstance(session_metadata, dict):
+            manifest_error = "manifest alignment_session metadata is missing"
+        elif session_mode not in SESSION_MODES:
+            manifest_error = "manifest alignment_session mode is invalid"
+        elif re.fullmatch(
+            r"[0-9a-f]{64}", str(session_metadata.get("reference_sequence_sha256") or "")
+        ) is None:
+            manifest_error = "manifest reference_sequence_sha256 is invalid"
+        elif not isinstance(payload.get("artifacts"), list):
+            manifest_error = "manifest artifacts must be a list"
+        if manifest_error is not None:
+            records.append(
+                {
+                    "kind": "__manifest_error__",
+                    "manifest": rel_manifest,
+                    "declared_path": "qc_manifest.json",
+                    "session_mode": session_mode if session_mode in SESSION_MODES else "primary",
+                    "path": None,
+                    "error": manifest_error,
+                    "manifest_error": manifest_error,
+                }
+            )
+            continue
         for item in payload["artifacts"]:
             if not isinstance(item, dict):
                 continue
@@ -490,6 +524,9 @@ def _pick_bundle(records: list[dict[str, Any]], mode: str) -> tuple[dict[str, di
         by_role: dict[str, dict[str, Any]] = {}
         for record in scoped:
             if record["manifest"] != manifest:
+                continue
+            if record.get("manifest_error"):
+                unsafe_reason = str(record["manifest_error"])
                 continue
             if _dimer_mode_conflict(record):
                 unsafe_reason = "contradictory primary session mode and dimer artifact metadata"
@@ -659,7 +696,7 @@ def _artifact_descriptor(job_id: str, record: dict[str, Any], role: str) -> dict
 
 
 def _session_records(job_id: str, job_root: Path) -> list[dict[str, Any]]:
-    records = _manifest_records(job_root)
+    records = _manifest_records(job_id, job_root)
     modes = ["primary"]
     if any(_is_dimer(record) for record in records):
         modes.append("dimer_candidates")
@@ -764,8 +801,10 @@ def _resolve_internal_artifact(
         raise AlignmentSessionError("alignment artifact not found")
     safe_job_id, job_root = _safe_job_root(job_id, results_dir, job_output_dir)
     for session in _session_records(safe_job_id, job_root):
+        if session["ready"] is not True:
+            continue
         for artifact in session["artifacts"].values():
-            if artifact["artifact_id"] == artifact_id:
+            if artifact["artifact_id"] == artifact_id and artifact["integrity_valid"] is True:
                 return artifact["_path"], artifact
     raise AlignmentSessionError("alignment artifact not found")
 

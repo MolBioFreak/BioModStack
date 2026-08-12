@@ -60,7 +60,11 @@ process FastqPlasmidQC {
     if (!manifestJobId) {
         error('FASTQ plasmid QC requires an exact job_id')
     }
-    def referenceSequenceSha256 = shellQuote(params.reference_sequence_sha256 ?: '')
+    def declaredReferenceSha256 = params.reference_sequence_sha256?.toString()?.trim()?.toLowerCase() ?: ''
+    if (!(declaredReferenceSha256 ==~ /[0-9a-f]{64}/)) {
+        throw new IllegalArgumentException('reference_sequence_sha256 must be exactly 64 hexadecimal characters')
+    }
+    def referenceSequenceSha256 = shellQuote(declaredReferenceSha256)
     """
     set -euo pipefail
 
@@ -144,8 +148,36 @@ process FastqPlasmidQC {
         else printf "0"
     }')
 
-    cp "${reference}" reference_qc.fasta
+    cp --reflink=auto -- "${reference}" reference.snapshot.fasta
+    chmod 0444 reference.snapshot.fasta
+    reference_raw_sha256_before="\$(sha256sum reference.snapshot.fasta | awk '{print \$1}')"
+    normalized_reference="\$(awk '
+      BEGIN { records=0; sequence="" }
+      /^>/ {
+        records++
+        next
+      }
+      {
+        line=\$0
+        sub(/^[[:space:]]+/, "", line)
+        sub(/[[:space:]]+\$/, "", line)
+        if (line != "") sequence=sequence toupper(line)
+      }
+      END { if (records != 1 || sequence == "") exit 93; print sequence }
+    ' reference.snapshot.fasta)" || { echo 'CRITICAL_FAILURE: REFERENCE_FASTA_INVALID' >&2; exit 96; }
+    [[ "\${normalized_reference}" =~ ^[ACGTN]+\$ ]] || { echo 'CRITICAL_FAILURE: REFERENCE_FASTA_SYMBOL_INVALID' >&2; exit 96; }
+    reference_sequence_sha256="\$(printf '%s' "\${normalized_reference}" | sha256sum | awk '{print \$1}')"
+    if [[ "\${reference_sequence_sha256}" != "${declaredReferenceSha256}" ]]; then
+        echo "CRITICAL_FAILURE: REFERENCE_DIGEST_MISMATCH" >&2
+        exit 95
+    fi
+    cp --reflink=auto -- reference.snapshot.fasta reference_qc.fasta
     "\${SAMTOOLS_CMD[@]}" faidx reference_qc.fasta
+    reference_raw_sha256_after="\$(sha256sum reference.snapshot.fasta | awk '{print \$1}')"
+    if [[ "\${reference_raw_sha256_before}" != "\${reference_raw_sha256_after}" ]]; then
+        echo "CRITICAL_FAILURE: REFERENCE_SNAPSHOT_CHANGED" >&2
+        exit 94
+    fi
     reference_name=\$(head -n1 reference_qc.fasta.fai | cut -f1)
     reference_length=\$(head -n1 reference_qc.fasta.fai | cut -f2)
 
@@ -435,6 +467,7 @@ process FastqPlasmidQC {
         --input-mode fastq \\
         --sample-name "fastq_plasmid_qc" \\
         --reference-fasta reference_qc.fasta \\
+        --expected-sha256 ${referenceSequenceSha256} \\
         --reference-index reference_qc.fasta.fai \\
         --summary fastq_qc_summary.tsv \\
         --read-lengths read_lengths.tsv \\
