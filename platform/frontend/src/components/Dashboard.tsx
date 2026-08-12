@@ -18,17 +18,7 @@ import {
     isStructureReorchestrateJob,
     type StructureReorchestrateSettings,
 } from './dashboard/reorchestrateStructureSettings';
-
-const isNgsJob = (job: Pick<Job, 'model_id' | 'mode'>): boolean => {
-    const modelId = (job.model_id || '').toLowerCase();
-    const mode = (job.mode || '').toLowerCase();
-    return (
-        modelId === 'nanopore' ||
-        modelId.includes('nanopore') ||
-        mode === 'methylation_analysis' ||
-        mode === 'nanopore_methylation'
-    );
-};
+import { isNgsJob } from '../lib/ngsResultRouting';
 
 interface ResumeSettingsForm {
     rfantibodyNumDesigns: number;

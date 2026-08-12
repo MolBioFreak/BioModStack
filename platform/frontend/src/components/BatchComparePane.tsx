@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchJobs, fetchBatchAnalytics } from '../lib/api';
 import type { Job } from '../lib/api';
+import { isNgsJob } from '../lib/ngsResultRouting';
 // Remove unused DistributionChart import
 // import { DistributionChart } from './MetricCharts'; 
 
@@ -9,16 +10,6 @@ interface BatchComparePaneProps {
     initialJobId?: string;
 }
 
-const isNgsJob = (job: Pick<Job, 'model_id' | 'mode'>): boolean => {
-    const modelId = (job.model_id || '').toLowerCase();
-    const mode = (job.mode || '').toLowerCase();
-    return (
-        modelId === 'nanopore' ||
-        modelId.includes('nanopore') ||
-        mode === 'methylation_analysis' ||
-        mode === 'nanopore_methylation'
-    );
-};
 
 export function BatchComparePane({ initialJobId }: BatchComparePaneProps) {
     const [selectedJobIds, setSelectedJobIds] = useState<string[]>(initialJobId ? [initialJobId] : []);
