@@ -130,12 +130,15 @@ test('Nanopore selected workflows keep source controls contextual and require re
     assert.match(template, /const requiresReference = selectedWorkflow === 'clone'/u);
 });
 
-test('NGS runs polling is scoped to Nanopore jobs instead of pulling the whole job table', () => {
+test('NGS runs polling covers every exact canonical NGS model with bounded pagination', () => {
     const ngsToolkit = readSource('src/components/NGSToolkit.tsx');
     const api = readSource('src/lib/api.ts');
 
     assert.match(api, /model_id\?: string/u);
-    assert.match(ngsToolkit, /fetchJobs\(\{ include_children: true, model_id: 'nanopore', limit: 100, summary: true \}\)/u);
+    assert.match(ngsToolkit, /\['nanopore', 'ont_fastq_qc', 'ont_plasmid_qc', 'ont_construct_screening', 'wf_clone_validation'\]/u);
+    assert.match(ngsToolkit, /model_id,/u);
+    assert.match(ngsToolkit, /limit: 500/u);
+    assert.match(ngsToolkit, /offset/u);
     assert.doesNotMatch(ngsToolkit, /fetchJobs\(\{ include_children: true \}\)/u);
     assert.doesNotMatch(ngsToolkit, /refetchInterval: 5000/u);
     assert.match(ngsToolkit, /function ontWorkflowDisplayName/u);
@@ -191,7 +194,7 @@ test('NGS instrument control uses only opaque intent handles and has no browser 
     const panel = readSource('src/components/ngs/OntInstrumentPanel.tsx');
     const ontApi = api.slice(api.indexOf('// ONT INSTRUMENT CONTROL API'));
 
-    assert.match(ngsToolkit, /type ToolkitView = 'launch' \| 'instrument' \| 'runs'/u);
+    assert.match(ngsToolkit, /type ToolkitView = NgsToolkitView/u);
     assert.match(ngsToolkit, /Instrument intent/u);
     assert.doesNotMatch(ngsToolkit, /Start instrument run/u);
     assert.match(ngsToolkit, /<OntInstrumentPanel/u);

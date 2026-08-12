@@ -190,6 +190,7 @@ def test_rejects_embedded_or_undeclared_resources(tmp_path: Path) -> None:
         '<form><button formaction=https://example.invalid/post></button></form>',
         '<meta http-equiv="refresh" content="0;url=https://example.invalid/refresh">',
         '<script>fetch("https://example.invalid/dynamic")</script>',
+        '<script>const s=document.createElement("script");s.setAttribute("src","/api/evil.js");document.body.appendChild(s)</script>',
     ):
         report.write_text(original.replace("</html>", f"{injected}</html>"), encoding="utf-8")
         with pytest.raises(ValueError, match="undeclared HTML resource"):

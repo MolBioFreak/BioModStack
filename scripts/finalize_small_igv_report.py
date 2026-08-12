@@ -90,6 +90,12 @@ def _shell_resources(text: str) -> set[str]:
         re.IGNORECASE,
     ):
         raise ValueError("IGV report contains an undeclared HTML resource")
+    if re.search(
+        r"\bsetAttribute\s*\(\s*['\"](?:src|href|action|formaction|data|poster|srcset|xlink:href)['\"]\s*,",
+        text,
+        re.IGNORECASE,
+    ):
+        raise ValueError("IGV report contains an undeclared HTML resource")
     return parser.resources
 
 

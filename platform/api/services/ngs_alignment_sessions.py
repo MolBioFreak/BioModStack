@@ -715,6 +715,7 @@ def _artifact_descriptor(job_id: str, record: dict[str, Any], role: str) -> dict
     )
     return {
         "artifact_id": identity,
+        "role": role,
         "url": f"/api/jobs/{job_id}/alignment-artifacts/{identity}",
         "sha256": observed_digest,
         "size_bytes": observed_size,

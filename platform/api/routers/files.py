@@ -8,6 +8,7 @@ from pathlib import Path
 from datetime import datetime
 import mimetypes
 import json
+import os
 import shutil
 from typing import Iterator
 
@@ -234,15 +235,24 @@ async def upload_file(
     if _is_governed_ngs_directory(target_dir):
         raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
 
-    file_path = target_dir / file.filename
+    filename = str(file.filename or "")
+    if not filename or filename in {".", ".."} or Path(filename).name != filename:
+        raise HTTPException(status_code=400, detail="Upload filename must be one plain basename")
+    file_path = target_dir / filename
+    if _is_governed_ngs_directory(file_path.parent) or _is_governed_ngs_artifact(file_path):
+        raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
     
     try:
-        with open(file_path, "wb") as buffer:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(file_path, flags, 0o644)
+        with os.fdopen(descriptor, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to upload file: {e}")
         
-    return {"filename": file.filename, "path": to_allowed_relative(file_path), "size": file_path.stat().st_size}
+    return {"filename": filename, "path": to_allowed_relative(file_path), "size": file_path.stat().st_size}
 
 
 @router.get("/download/{file_path:path}")

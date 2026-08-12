@@ -13,7 +13,7 @@ const consumers: Record<string, RegExp> = {
   'DesignBrowser.tsx': /fetchJobs\(\{ limit: 500, summary: true \}\)/u,
   'QuickViewer.tsx': /fetchJobs\(\{ status: 'completed', limit: 100, summary: true \}\)/u,
   'ResultsViewer.tsx': /fetchJobs\(\{ include_children: true, limit: 500, summary: true \}\)/u,
-  'NGSToolkit.tsx': /fetchJobs\(\{ include_children: true, model_id: 'nanopore', limit: 100, summary: true \}\)/u,
+  'NGSToolkit.tsx': /fetchJobs\(\{[\s\S]*?include_children: true,[\s\S]*?model_id,[\s\S]*?limit: 500,[\s\S]*?offset,[\s\S]*?summary: true,[\s\S]*?\}\)/u,
 };
 
 test('every fetchJobs consumer requests a bounded SQL summary', () => {

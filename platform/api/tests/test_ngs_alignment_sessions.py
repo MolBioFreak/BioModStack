@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.testclient import TestClient
 
 API_ROOT = Path(__file__).resolve().parents[1]
@@ -48,6 +48,13 @@ def test_generic_file_routes_hide_governed_ngs_tree(
     assert client.get("/api/files/browse", params={"path": "bms_results/result/fastq_qc"}).status_code == 403
     assert client.get("/api/files/download/bms_results/result/fastq_qc/igv_report.html").status_code == 403
     assert client.get("/api/files/stream/bms_results/result/fastq_qc/igv_report.html").status_code == 403
+    traversal = client.post(
+        "/api/files/upload",
+        data={"path": "bms_results/result"},
+        files={"file": ("fastq_qc/qc_manifest.json", b"tampered", "application/json")},
+    )
+    assert traversal.status_code == 400
+    assert json.loads((fastq_qc / "qc_manifest.json").read_text(encoding="utf-8"))["schema"] == "sequence_qc.manifest.v1"
 
 
 def _write_manifest(
@@ -1122,6 +1129,24 @@ async def test_artifact_snapshot_open_runs_outside_the_event_loop(
     assert opener_thread is not None
     assert opener_thread != event_loop_thread
     await response.body_iterator.aclose()
+
+
+@pytest.mark.asyncio
+async def test_governed_report_is_forced_to_attachment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from routers import ngs_alignment_sessions as routes
+
+    report = tmp_path / "igv_report.html"
+    report.write_bytes(b"<html></html>")
+    digest = hashlib.sha256(report.read_bytes()).hexdigest()
+    monkeypatch.setattr(routes.service, "open_verified_artifact_snapshot", lambda *_args, **_kwargs: io.BytesIO(report.read_bytes()))
+    request = Request({"type": "http", "method": "GET", "path": "/artifact", "headers": []})
+    response = await routes._serve_artifact(
+        report,
+        {"role": "report", "size_bytes": report.stat().st_size, "sha256": digest, "mime_type": "text/html"},
+        request,
+    )
+    assert response.headers["content-disposition"] == 'attachment; filename="igv_report.html"'
+    assert isinstance(response, StreamingResponse)
 
 
 def test_alignment_routes_enforce_the_job_authorization_dependency(monkeypatch: pytest.MonkeyPatch) -> None:
