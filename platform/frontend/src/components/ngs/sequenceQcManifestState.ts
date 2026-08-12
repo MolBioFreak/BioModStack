@@ -5,6 +5,7 @@ export type SequenceQcManifestStatus =
     | 'unavailable-old-run'
     | 'unavailable-pending'
     | 'malformed'
+    | 'access-denied'
     | 'forbidden'
     | 'error';
 
@@ -37,6 +38,7 @@ export function classifySequenceQcManifestError(error: unknown): SequenceQcManif
     const message = getSequenceQcManifestErrorMessage(error).toLowerCase();
 
     if (status === 404 && message.includes('manifest not found')) return 'unavailable-old-run';
+    if (status === 403 && message.includes('alignment access denied')) return 'access-denied';
     if (status === 403) return 'forbidden';
     if (status === 400 || message.includes('not valid json') || message.includes('unsupported artifact_schema_version')) {
         return 'malformed';
@@ -52,6 +54,8 @@ export function sequenceQcManifestUnavailableLabel(status: SequenceQcManifestSta
             return 'manifest not available yet';
         case 'malformed':
             return 'malformed sequence-QC manifest';
+        case 'access-denied':
+            return 'manifest access requires browser authorization';
         case 'forbidden':
             return 'manifest blocked by path safety';
         case 'idle':

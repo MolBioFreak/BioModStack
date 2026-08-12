@@ -6,7 +6,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
-import { classifySequenceQcManifestError } from '../src/components/ngs/sequenceQcManifestState.js';
+import {
+    classifySequenceQcManifestError,
+    sequenceQcManifestUnavailableLabel,
+} from '../src/components/ngs/sequenceQcManifestState.js';
 import { SequenceQcManifestPanel } from '../src/components/ngs/SequenceQcManifestPanel.js';
 import type { SequenceQcManifest } from '../src/lib/api.js';
 
@@ -36,6 +39,38 @@ test('missing sequence QC manifest is classified as an old-run unavailable state
         classifySequenceQcManifestError({ response: { status: 403, data: { detail: 'Path escapes allowed root' } } }),
         'forbidden',
     );
+    assert.equal(
+        classifySequenceQcManifestError({ response: { status: 403, data: { detail: 'alignment access denied' } } }),
+        'access-denied',
+    );
+    assert.equal(
+        sequenceQcManifestUnavailableLabel('access-denied'),
+        'manifest access requires browser authorization',
+    );
+    assert.equal(
+        sequenceQcManifestUnavailableLabel('forbidden'),
+        'manifest blocked by path safety',
+    );
+});
+
+test('alignment access denial renders browser authorization copy instead of a path-safety failure', () => {
+    Reflect.set(globalThis, 'React', React);
+    const queryClient = new QueryClient();
+    const html = renderToStaticMarkup(
+        React.createElement(
+            QueryClientProvider,
+            { client: queryClient },
+            React.createElement(SequenceQcManifestPanel, {
+                status: 'access-denied',
+                manifest: null,
+                message: 'alignment access denied',
+            }),
+        ),
+    );
+
+    assert.match(html, /manifest access requires browser authorization/u);
+    assert.match(html, /alignment access denied/u);
+    assert.doesNotMatch(html, /manifest blocked by path safety/u);
 });
 
 test('NGSToolkit consumes useSequenceQcManifest and renders a manifest-first panel before path-scraped reports', () => {

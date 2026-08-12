@@ -32,7 +32,7 @@ function countArtifacts(artifacts: SequenceQcArtifact[]) {
 function statusBadgeClass(status: SequenceQcManifestStatus): string {
     if (status === 'available') return 'bg-emerald-500/20 text-emerald-400';
     if (status === 'loading') return 'bg-blue-500/20 text-blue-300';
-    if (status === 'malformed' || status === 'forbidden' || status === 'error') return 'bg-rose-500/20 text-rose-300';
+    if (status === 'malformed' || status === 'access-denied' || status === 'forbidden' || status === 'error') return 'bg-rose-500/20 text-rose-300';
     return 'bg-amber-500/20 text-amber-300';
 }
 
