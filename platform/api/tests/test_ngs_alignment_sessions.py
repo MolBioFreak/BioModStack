@@ -55,6 +55,13 @@ def test_generic_file_routes_hide_governed_ngs_tree(
     )
     assert traversal.status_code == 400
     assert json.loads((fastq_qc / "qc_manifest.json").read_text(encoding="utf-8"))["schema"] == "sequence_qc.manifest.v1"
+    direct_manifest = client.post(
+        "/api/files/upload",
+        data={"path": "bms_results/result"},
+        files={"file": ("qc_manifest.json", b"{}", "application/json")},
+    )
+    assert direct_manifest.status_code == 403
+    assert not (result_root / "qc_manifest.json").exists()
 
 
 def _write_manifest(

@@ -238,6 +238,8 @@ async def upload_file(
     filename = str(file.filename or "")
     if not filename or filename in {".", ".."} or Path(filename).name != filename:
         raise HTTPException(status_code=400, detail="Upload filename must be one plain basename")
+    if filename.casefold() == "qc_manifest.json":
+        raise HTTPException(status_code=403, detail="Canonical manifests cannot be written through the generic upload route")
     file_path = target_dir / filename
     if _is_governed_ngs_directory(file_path.parent) or _is_governed_ngs_artifact(file_path):
         raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
