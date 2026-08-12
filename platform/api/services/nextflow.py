@@ -3188,6 +3188,7 @@ def build_nextflow_command(
     if model_id == 'nanopore' or str(effective_profile).startswith('ont_') or effective_profile == 'nanopore_methylation':
         effective_profile = resolve_ont_workflow_alias(effective_profile)
         params = normalize_ont_launch_params(effective_profile, params)
+        params['workflow_id'] = effective_profile
 
     if model_id == 'molecular_dynamics' and params.get('md_job_config'):
         params = dict(params)

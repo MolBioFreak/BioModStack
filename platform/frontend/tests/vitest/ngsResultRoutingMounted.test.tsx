@@ -106,7 +106,7 @@ describe('completed NGS result routing', () => {
         expect(ngsToolkitViewFromSearch('?section=analyses&job_id=job-123')).toBe('runs');
         expect(ngsToolkitViewFromSearch('?section=evidence&job_id=job-123')).toBe('runs');
         expect(ngsToolkitViewFromSearch('?section=instrument')).toBe('instrument');
-        expect(ngsToolkitViewFromSearch('?job_id=job-123')).toBe('launch');
+        expect(ngsToolkitViewFromSearch('?job_id=job-123&launch_context_id=context-1')).toBe('runs');
     });
 
     it('keeps the URL and toolkit view synchronized', () => {

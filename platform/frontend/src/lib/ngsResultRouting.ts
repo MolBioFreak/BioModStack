@@ -28,9 +28,11 @@ export function ngsResultHref(jobId: string, currentSearch = ''): string {
 }
 
 export function ngsToolkitViewFromSearch(search: string): NgsToolkitView {
-    const section = (new URLSearchParams(search).get('section') || '').trim().toLowerCase();
+    const params = new URLSearchParams(search);
+    const section = (params.get('section') || '').trim().toLowerCase();
     if (section === 'analyses' || section === 'evidence') return 'runs';
     if (section === 'instrument') return 'instrument';
+    if ((params.get('job_id') || '').trim()) return 'runs';
     return 'launch';
 }
 

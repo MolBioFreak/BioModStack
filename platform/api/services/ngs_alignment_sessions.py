@@ -394,6 +394,12 @@ def _manifest_records(job_id: str, job_root: Path) -> list[dict[str, Any]]:
             manifest_error = "manifest schema is not the canonical sequence-QC schema"
         elif payload.get("job_id") != job_id:
             manifest_error = "manifest job_id does not match requested job"
+        elif not isinstance(payload.get("workflow_id"), str) or not payload["workflow_id"].strip():
+            manifest_error = "manifest workflow_id is missing"
+        elif payload.get("input_mode") != "fastq":
+            manifest_error = "manifest input_mode is invalid"
+        elif payload.get("analysis_status") != "completed":
+            manifest_error = "manifest analysis_status is invalid"
         elif not isinstance(session_metadata, dict):
             manifest_error = "manifest alignment_session metadata is missing"
         elif session_mode not in SESSION_MODES:
@@ -451,6 +457,11 @@ def _manifest_records(job_id: str, job_root: Path) -> list[dict[str, Any]]:
                     ),
                     "reference_sequence_sha256": (
                         payload.get("alignment_session", {}).get("reference_sequence_sha256")
+                        if isinstance(payload.get("alignment_session"), dict)
+                        else None
+                    ),
+                    "source_reference_sequence_sha256": (
+                        payload.get("alignment_session", {}).get("source_reference_sequence_sha256")
                         if isinstance(payload.get("alignment_session"), dict)
                         else None
                     ),
@@ -532,7 +543,10 @@ def _pick_bundle(records: list[dict[str, Any]], mode: str) -> tuple[dict[str, di
                 unsafe_reason = "contradictory primary session mode and dimer artifact metadata"
                 continue
             role = _artifact_role(record["kind"])
-            if role is None or role in by_role:
+            if role is None:
+                continue
+            if role in by_role:
+                unsafe_reason = f"duplicate artifact role: {role}"
                 continue
             if record.get("path") is None:
                 unsafe_reason = str(record.get("error") or "unsafe artifact")
@@ -595,6 +609,8 @@ def _validate_alignment_bundle_cached(
     reference_text: str,
     reference_signature: tuple[int, int],
     manifest_reference_sha256: str | None,
+    source_reference_sha256: str | None,
+    mode: str,
     samtools: str,
 ) -> tuple[bool, str | None]:
     del bam_signature, index_signature, reference_signature
@@ -615,17 +631,30 @@ def _validate_alignment_bundle_cached(
         return False, f"alignment bundle validation failed: {type(exc).__name__}"
     if not bam_contigs or set(bam_contigs) != set(reference_contigs):
         return False, "alignment/reference contig names or lengths do not match"
+    normalized_reference = "".join(
+        line.strip().upper()
+        for line in reference.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.startswith(">")
+    )
+    observed_sha256 = hashlib.sha256(normalized_reference.encode("ascii")).hexdigest()
+    if manifest_reference_sha256 != observed_sha256:
+        return False, "exact reference identity manifest binding does not match the reference artifact"
+    if mode == "dimer_candidates":
+        midpoint = len(normalized_reference) // 2
+        if (
+            len(normalized_reference) % 2 != 0
+            or normalized_reference[:midpoint] != normalized_reference[midpoint:]
+            or not isinstance(source_reference_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", source_reference_sha256) is None
+            or hashlib.sha256(normalized_reference[:midpoint].encode("ascii")).hexdigest()
+            != source_reference_sha256
+        ):
+            return False, "dimer reference is not derived from the authorized source reference"
     for contig, (bam_length, bam_md5) in bam_contigs.items():
         reference_length, reference_md5 = reference_contigs[contig]
         if bam_length != reference_length:
             return False, "alignment/reference contig names or lengths do not match"
         if not isinstance(bam_md5, str) or not re.fullmatch(r"[0-9a-fA-F]{32}", bam_md5):
-            normalized_reference = "".join(
-                line.strip().upper()
-                for line in reference.read_text(encoding="utf-8").splitlines()
-                if line.strip() and not line.startswith(">")
-            )
-            observed_sha256 = hashlib.sha256(normalized_reference.encode("ascii")).hexdigest()
             if (
                 not isinstance(manifest_reference_sha256, str)
                 or re.fullmatch(r"[0-9a-f]{64}", manifest_reference_sha256) is None
@@ -643,6 +672,8 @@ def _validate_alignment_bundle(
     index: Path,
     reference: Path,
     manifest_reference_sha256: str | None,
+    source_reference_sha256: str | None = None,
+    mode: str = "primary",
 ) -> tuple[bool, str | None]:
     samtools = os.environ.get("SAMTOOLS", "samtools")
     signatures = []
@@ -654,6 +685,8 @@ def _validate_alignment_bundle(
         str(index), signatures[1],
         str(reference), signatures[2],
         manifest_reference_sha256,
+        source_reference_sha256,
+        mode,
         samtools,
     )
 
@@ -723,6 +756,8 @@ def _session_records(job_id: str, job_root: Path) -> list[dict[str, Any]]:
                 artifacts["alignment_index"]["_path"],
                 artifacts["reference"]["_path"],
                 bundle["alignment"].get("reference_sequence_sha256"),
+                bundle["alignment"].get("source_reference_sequence_sha256"),
+                mode,
             )
             if not valid:
                 errors.append(reason or "alignment bundle validation failed")

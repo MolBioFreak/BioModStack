@@ -124,13 +124,50 @@ def test_dimer_manifest_binds_exact_job_identity_and_canonical_schema() -> None:
     python_manifest = (ROOT / "scripts/build_alignment_session_manifest.py").read_text(encoding="utf-8")
 
     assert "manifestJobId" in dimer
-    assert 'build_alignment_session_manifest.sh" ${manifestJobIdArg}' in dimer
+    assert 'build_alignment_session_manifest.sh" \\' in dimer
+    assert "${manifestJobIdArg}" in dimer
+    assert "declaredReferenceSha256" in dimer
+    assert "REFERENCE_DIGEST_MISMATCH" in dimer
+    assert "${referenceSequenceSha256Arg}" in dimer
+    assert "${workflowIdArg}" in dimer
     assert 'job_id="${1:?exact job_id is required}"' in manifest
+    assert 'expected_source_reference_sha256="${2:?authorized source reference SHA-256 is required}"' in manifest
+    assert 'workflow_id="${3:?canonical workflow_id is required}"' in manifest
     assert 'schema:"sequence_qc.manifest.v1"' in manifest
+    assert 'workflow_id:$workflow_id' in manifest
+    assert 'input_mode:"fastq"' in manifest
+    assert 'analysis_status:"completed"' in manifest
     assert 'job_id:$job_id' in manifest
     assert 'parser.add_argument("--job-id", required=True)' in python_manifest
+    assert 'parser.add_argument("--expected-source-reference-sha256", required=True)' in python_manifest
+    assert 'parser.add_argument("--workflow-id", required=True)' in python_manifest
     assert '"schema": "sequence_qc.manifest.v1"' in python_manifest
+    assert '"workflow_id": args.workflow_id' in python_manifest
+    assert '"input_mode": "fastq"' in python_manifest
+    assert '"analysis_status": "completed"' in python_manifest
     assert '"job_id": args.job_id' in python_manifest
+
+
+def test_nextflow_launcher_binds_canonical_ont_workflow_identity() -> None:
+    import sys
+
+    api_root = ROOT / "platform/api"
+    if str(api_root) not in sys.path:
+        sys.path.insert(0, str(api_root))
+    from services.nextflow import build_nextflow_command  # type: ignore[import-not-found]
+
+    command = build_nextflow_command(
+        "nanopore",
+        "ont_fastq_qc",
+        {
+            "fastq_path": "/tmp/reads.fastq",
+            "reference_fasta": "/tmp/reference.fasta",
+            "reference_sequence_sha256": "a" * 64,
+        },
+        "/tmp/results/job-1",
+        job_id="job-1",
+    )
+    assert command[command.index("--workflow_id") + 1] == "ont_fastq_qc"
 
 
 def test_dominant_dimer_consensus_fails_without_fabricating_output(tmp_path: Path) -> None:

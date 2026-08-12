@@ -180,6 +180,22 @@ def test_rejects_embedded_or_undeclared_resources(tmp_path: Path) -> None:
             max_bytes=1024 * 1024,
         )
 
+    for injected in (
+        '<script src="https://example.invalid/igv.js"></script>',
+        '<link rel="stylesheet" href="/tmp/report.css">',
+        '<img src="file:///tmp/plot.png">',
+        '<iframe src="/unmanaged/viewer"></iframe>',
+        '<style>body { background-image: url(https://example.invalid/bg.png); }</style>',
+    ):
+        report.write_text(original.replace("</html>", f"{injected}</html>"), encoding="utf-8")
+        with pytest.raises(ValueError, match="undeclared HTML resource"):
+            module.finalize_report(
+                report=report,
+                reference_config=reference_config,
+                track_config=track_config,
+                max_bytes=1024 * 1024,
+            )
+
 
 def test_rejects_case_variant_embedded_data_uri(tmp_path: Path) -> None:
     module = _load_module()

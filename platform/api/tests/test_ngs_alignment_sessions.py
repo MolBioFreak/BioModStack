@@ -35,7 +35,10 @@ def _write_manifest(
     payload = {
         "artifact_schema_version": 2,
         "schema": "sequence_qc.manifest.v1",
+        "workflow_id": "ont_fastq_qc",
         "job_id": job_id or directory.parent.name,
+        "input_mode": "fastq",
+        "analysis_status": "completed",
         "alignment_session": {
             "mode": "dimer_candidates" if "dimer" in directory.name else "primary",
             "reference_sequence_sha256": hashlib.sha256(b"ACGTACGT").hexdigest(),
@@ -72,6 +75,26 @@ def test_manifest_schema_and_job_binding_are_required(
     primary = next(item for item in sessions if item["mode"] == "primary")
     assert primary["ready"] is False
     assert "manifest job_id does not match requested job" in primary["unavailable_reason"]
+
+
+def test_duplicate_artifact_role_is_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services import ngs_alignment_sessions as service
+
+    manifest_dir = tmp_path / "job-a" / "fastq_qc"
+    _write_manifest(manifest_dir)
+    manifest_path = manifest_dir / "qc_manifest.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["artifacts"].append(dict(payload["artifacts"][2]))
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
+
+    sessions = service.build_alignment_sessions("job-a", results_dir=tmp_path)
+    primary = next(item for item in sessions if item["mode"] == "primary")
+    assert primary["ready"] is False
+    assert "duplicate artifact role: alignment" in primary["unavailable_reason"]
 
 
 @pytest.mark.parametrize(

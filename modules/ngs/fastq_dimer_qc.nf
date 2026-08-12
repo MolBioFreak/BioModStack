@@ -179,7 +179,17 @@ process FastqDimerAnalysis {
     if (!(manifestJobId ==~ /[A-Za-z0-9][A-Za-z0-9._ -]{0,255}/) || manifestJobId.contains('..')) {
         error('FASTQ dimer analysis requires an exact safe job_id')
     }
+    def declaredReferenceSha256 = params.reference_sequence_sha256?.toString()?.trim()?.toLowerCase() ?: ''
+    if (!(declaredReferenceSha256 ==~ /[0-9a-f]{64}/)) {
+        throw new IllegalArgumentException('reference_sequence_sha256 must be exactly 64 hexadecimal characters')
+    }
     def manifestJobIdArg = shellQuote(manifestJobId)
+    def referenceSequenceSha256Arg = shellQuote(declaredReferenceSha256)
+    def workflowId = ((params.workflow_id ?: 'ont_fastq_qc') as String).trim()
+    if (!(workflowId in ['ont_fastq_qc', 'ont_plasmid_qc', 'ont_construct_screening', 'wf_clone_validation'])) {
+        error('FASTQ dimer analysis requires a canonical workflow_id')
+    }
+    def workflowIdArg = shellQuote(workflowId)
     """
     set -euo pipefail
 
@@ -220,7 +230,12 @@ process FastqDimerAnalysis {
     ref_name=\$(head -n1 reference_input.fasta.fai | cut -f1)
     ref_len=\$(head -n1 reference_input.fasta.fai | cut -f2)
     samtools faidx reference_input.fasta "\${ref_name}" > ref_single.fasta
-    ref_seq=\$(tail -n +2 ref_single.fasta | tr -d '\\n')
+    ref_seq=\$(tail -n +2 ref_single.fasta | tr -d '\\n' | tr '[:lower:]' '[:upper:]')
+    source_reference_sha256="\$(printf '%s' "\${ref_seq}" | sha256sum | awk '{print \$1}')"
+    if [[ "\${source_reference_sha256}" != "${declaredReferenceSha256}" ]]; then
+        echo "CRITICAL_FAILURE: REFERENCE_DIGEST_MISMATCH" >&2
+        exit 95
+    fi
     printf ">%s_dimer\\n%s%s\\n" "\${ref_name}" "\${ref_seq}" "\${ref_seq}" > dimer_reference.fasta
     samtools faidx dimer_reference.fasta
     if [[ ! -f "${codeRoot}/scripts/dimer_single_ref_split_events.awk" ]]; then
@@ -1390,7 +1405,10 @@ process FastqDimerAnalysis {
         echo "Consensus: \${consensus_status}; dominant: \${dominant_consensus_status}"
     } > dimer_analysis.log
 
-    bash "${codeRoot}/scripts/build_alignment_session_manifest.sh" ${manifestJobIdArg}
+    bash "${codeRoot}/scripts/build_alignment_session_manifest.sh" \
+        ${manifestJobIdArg} \
+        ${referenceSequenceSha256Arg} \
+        ${workflowIdArg}
         """
     }
 process BuildDimerCanonicalOutputs {

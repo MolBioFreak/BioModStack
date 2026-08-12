@@ -42,6 +42,13 @@ GOVERNED_URL_RE = re.compile(
     r"^/api/jobs/(?P<job>[^/]+)/alignment-session-artifacts/"
     r"(?P<mode>primary|dimer_candidates)/(?P<role>[a-z_]+)/(?P<digest>[0-9a-f]{64})$"
 )
+HTML_RESOURCE_RE = re.compile(
+    r"\b(?:src|href|poster|action)\s*=\s*['\"](?P<attribute>[^'\"]+)['\"]|\burl\s*\(\s*['\"]?(?P<css>[^)'\"\s]+)",
+    re.IGNORECASE,
+)
+ALLOWED_SHELL_RESOURCES = frozenset(
+    {"https://cdn.jsdelivr.net/npm/igv@3.5.2/dist/igv.min.js"}
+)
 
 
 def _read_json(path: str | Path) -> Any:
@@ -127,6 +134,12 @@ def finalize_report(
     folded_text = text.casefold()
     if "data:" in folded_text or ";base64," in folded_text:
         raise ValueError("IGV report contains an embedded data URI")
+    shell_resources = {
+        match.group("attribute") or match.group("css")
+        for match in HTML_RESOURCE_RE.finditer(text)
+    }
+    if not shell_resources <= ALLOWED_SHELL_RESOURCES:
+        raise ValueError("IGV report contains an undeclared HTML resource")
 
     lines = text.splitlines(keepends=True)
     option_indexes = [
