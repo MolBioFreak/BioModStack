@@ -396,7 +396,7 @@ def _manifest_records(job_id: str, job_root: Path) -> list[dict[str, Any]]:
             manifest_error = "manifest job_id does not match requested job"
         elif not isinstance(payload.get("workflow_id"), str) or not payload["workflow_id"].strip():
             manifest_error = "manifest workflow_id is missing"
-        elif payload.get("input_mode") != "fastq":
+        elif payload.get("input_mode") not in {"fastq", "bam", "pod5"}:
             manifest_error = "manifest input_mode is invalid"
         elif payload.get("analysis_status") != "completed":
             manifest_error = "manifest analysis_status is invalid"

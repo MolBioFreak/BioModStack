@@ -139,6 +139,33 @@ def test_manifest_workflow_and_input_mode_must_match_authorized_job_provenance(
     assert "workflow_id does not match authorized job provenance" in primary["unavailable_reason"]
 
 
+@pytest.mark.parametrize("input_mode", ["fastq", "bam", "pod5"])
+def test_canonical_input_modes_can_become_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    input_mode: str,
+) -> None:
+    from services import ngs_alignment_sessions as service
+
+    manifest_dir = tmp_path / "job-a" / "fastq_qc"
+    _write_manifest(manifest_dir)
+    manifest_path = manifest_dir / "qc_manifest.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["input_mode"] = input_mode
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_: (True, None))
+
+    sessions = service.build_alignment_sessions(
+        "job-a",
+        source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(),
+        workflow_id="ont_fastq_qc",
+        input_mode=input_mode,
+        results_dir=tmp_path,
+    )
+    primary = next(item for item in sessions if item["mode"] == "primary")
+    assert primary["ready"] is True
+
+
 def test_duplicate_artifact_role_is_fail_closed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
