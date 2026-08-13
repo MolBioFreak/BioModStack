@@ -1149,6 +1149,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment=BMS_HOME={root}
         Environment=BMS_TELEMETRY_DB_PATH={telemetry_db}
         Environment=PYTHONUNBUFFERED=1
+        WorkingDirectory={root / 'platform' / 'api'}
         ExecStartPre=/usr/bin/mkdir -p {Path(telemetry_db).parent}
         ExecStart={root / 'platform' / 'api' / '.venv' / 'bin' / 'python'} {root / 'platform' / 'api' / 'tools' / 'telemetry_collector.py'}
         Restart=on-failure

@@ -648,6 +648,7 @@ def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path, mo
     telemetry_unit = units[services.TELEMETRY_SERVICE]
     assert f"ExecStart={project_root / 'platform' / 'api' / '.venv' / 'bin' / 'python'} {project_root / 'platform' / 'api' / 'tools' / 'telemetry_collector.py'}" in telemetry_unit
     assert "Environment=BMS_TELEMETRY_DB_PATH=" in telemetry_unit
+    assert f"WorkingDirectory={project_root / 'platform' / 'api'}" in telemetry_unit
     assert "Restart=on-failure" in telemetry_unit
     assert "MemoryMax=512M" in telemetry_unit
 
