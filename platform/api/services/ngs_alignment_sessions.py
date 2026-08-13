@@ -567,32 +567,64 @@ def _pick_bundle(records: list[dict[str, Any]], mode: str) -> tuple[dict[str, di
     return {}, None
 
 
+def _runtime_stat_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
 @dataclass(frozen=True)
 class _PinnedSamtoolsCommand:
     argv: tuple[str, ...]
     pass_fds: tuple[int, ...]
     runtime_sha256: str | None
-    runtime_identity: tuple[int, int, int, int, int] | None
+    runtime_size: int | None
+    runtime_path: Path | None = None
+    runtime_identity: tuple[int, int, int, int, int] | None = None
+    runtime_directory_fd: int | None = None
+    runtime_directory_identity: tuple[int, int, int, int, int] | None = None
 
     def __iter__(self):
         return iter(self.argv)
 
     def verify_runtime(self) -> None:
-        if self.runtime_sha256 is None and self.runtime_identity is None and not self.pass_fds:
+        authority = (
+            self.runtime_sha256,
+            self.runtime_size,
+            self.runtime_path,
+            self.runtime_identity,
+            self.runtime_directory_fd,
+            self.runtime_directory_identity,
+        )
+        if all(value is None for value in authority) and not self.pass_fds:
             return
-        if self.runtime_sha256 is None or self.runtime_identity is None or not self.pass_fds:
+        if any(value is None for value in authority) or not self.pass_fds:
             raise AlignmentSessionError("pinned NGS runtime authority is incomplete")
+        assert self.runtime_path is not None
+        assert self.runtime_identity is not None
+        assert self.runtime_directory_fd is not None
+        assert self.runtime_directory_identity is not None
         runtime_fd = self.pass_fds[0]
         metadata = os.fstat(runtime_fd)
-        identity = (
-            metadata.st_dev,
-            metadata.st_ino,
-            metadata.st_size,
-            metadata.st_mtime_ns,
-            metadata.st_ctime_ns,
-        )
-        if not stat.S_ISREG(metadata.st_mode) or identity != self.runtime_identity:
-            raise AlignmentSessionError("pinned NGS runtime changed after validation")
+        path_metadata = os.stat(self.runtime_path, follow_symlinks=False)
+        directory_metadata = os.fstat(self.runtime_directory_fd)
+        directory_path_metadata = os.stat(self.runtime_path.parent, follow_symlinks=False)
+        if (
+            _runtime_stat_identity(metadata) != self.runtime_identity
+            or _runtime_stat_identity(path_metadata) != self.runtime_identity
+            or not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_size != self.runtime_size
+            or stat.S_IMODE(metadata.st_mode) & 0o222
+            or _runtime_stat_identity(directory_metadata) != self.runtime_directory_identity
+            or _runtime_stat_identity(directory_path_metadata) != self.runtime_directory_identity
+            or not stat.S_ISDIR(directory_metadata.st_mode)
+            or stat.S_IMODE(directory_metadata.st_mode) & 0o222
+        ):
+            raise AlignmentSessionError("private pinned NGS runtime snapshot is unsafe")
 
 
 _samtools_runtime_lock = threading.RLock()
@@ -607,6 +639,11 @@ def _clear_samtools_runtime_cache() -> None:
         for descriptor in command.pass_fds:
             try:
                 os.close(descriptor)
+            except OSError:
+                pass
+        if command.runtime_directory_fd is not None:
+            try:
+                os.close(command.runtime_directory_fd)
             except OSError:
                 pass
 
@@ -655,6 +692,117 @@ def _sha256_descriptor(descriptor: int) -> str:
     return digest.hexdigest()
 
 
+def _private_runtime_snapshot(
+    source_fd: int,
+    *,
+    directory: Path,
+    expected_digest: str,
+) -> tuple[int, int, Path, tuple[int, int, int, int, int], int, tuple[int, int, int, int, int]]:
+    """Copy one stable source generation into one private named read-only image."""
+    metadata_before = os.fstat(source_fd)
+    process_directory = directory / f".bms-ngs-runtime-{expected_digest}"
+    runtime_path = process_directory / "runtime.sif"
+    if process_directory.exists():
+        source_digest = _sha256_descriptor(source_fd)
+        metadata_after = os.fstat(source_fd)
+        if (
+            _runtime_stat_identity(metadata_before) != _runtime_stat_identity(metadata_after)
+            or source_digest != expected_digest
+        ):
+            raise AlignmentSessionError("pinned NGS runtime digest does not match the canonical lock")
+        runtime_fd = _open_nofollow(runtime_path, directory=False, label="private pinned NGS runtime")
+        directory_fd = _open_nofollow(
+            process_directory,
+            directory=True,
+            label="private pinned NGS runtime directory",
+        )
+        try:
+            private_metadata = os.fstat(runtime_fd)
+            directory_metadata = os.fstat(directory_fd)
+            if (
+                _sha256_descriptor(runtime_fd) != expected_digest
+                or not stat.S_ISREG(private_metadata.st_mode)
+                or private_metadata.st_size != metadata_after.st_size
+                or stat.S_IMODE(private_metadata.st_mode) & 0o222
+                or not stat.S_ISDIR(directory_metadata.st_mode)
+                or stat.S_IMODE(directory_metadata.st_mode) & 0o222
+            ):
+                raise AlignmentSessionError("private pinned NGS runtime snapshot is unsafe")
+            return (
+                runtime_fd,
+                private_metadata.st_size,
+                runtime_path,
+                _runtime_stat_identity(private_metadata),
+                directory_fd,
+                _runtime_stat_identity(directory_metadata),
+            )
+        except Exception:
+            os.close(runtime_fd)
+            os.close(directory_fd)
+            raise
+    digest = hashlib.sha256()
+    size = 0
+    staging_directory = Path(
+        tempfile.mkdtemp(prefix=f".bms-ngs-runtime-{expected_digest}.partial-", dir=directory)
+    )
+    os.chmod(staging_directory, 0o700)
+    temporary_path = staging_directory / "runtime.sif"
+    runtime_fd: int | None = None
+    directory_fd: int | None = None
+    try:
+        with temporary_path.open("xb") as snapshot:
+            while chunk := os.pread(source_fd, SNAPSHOT_CHUNK_BYTES, size):
+                snapshot.write(chunk)
+                digest.update(chunk)
+                size += len(chunk)
+            snapshot.flush()
+            os.fsync(snapshot.fileno())
+            metadata_after = os.fstat(source_fd)
+            if _runtime_stat_identity(metadata_before) != _runtime_stat_identity(metadata_after):
+                raise AlignmentSessionError("pinned NGS runtime changed during snapshot validation")
+            if size != metadata_after.st_size or digest.hexdigest() != expected_digest:
+                raise AlignmentSessionError("pinned NGS runtime digest does not match the canonical lock")
+            os.fchmod(snapshot.fileno(), 0o400)
+        os.chmod(staging_directory, 0o500)
+        try:
+            os.rename(staging_directory, process_directory)
+        except OSError:
+            if not process_directory.exists():
+                raise
+            os.chmod(staging_directory, 0o700)
+            temporary_path.unlink(missing_ok=True)
+            staging_directory.rmdir()
+            return _private_runtime_snapshot(
+                source_fd,
+                directory=directory,
+                expected_digest=expected_digest,
+            )
+        runtime_fd = _open_nofollow(runtime_path, directory=False, label="private pinned NGS runtime")
+        directory_fd = _open_nofollow(process_directory, directory=True, label="private pinned NGS runtime directory")
+        runtime_identity = _runtime_stat_identity(os.fstat(runtime_fd))
+        directory_identity = _runtime_stat_identity(os.fstat(directory_fd))
+        private_metadata = os.fstat(runtime_fd)
+        if (
+            not stat.S_ISREG(private_metadata.st_mode)
+            or private_metadata.st_size != size
+            or stat.S_IMODE(private_metadata.st_mode) & 0o222
+        ):
+            raise AlignmentSessionError("private pinned NGS runtime snapshot is unsafe")
+        return runtime_fd, size, runtime_path, runtime_identity, directory_fd, directory_identity
+    except Exception:
+        if runtime_fd is not None:
+            os.close(runtime_fd)
+        if directory_fd is not None:
+            os.close(directory_fd)
+        try:
+            os.chmod(staging_directory, 0o700)
+            temporary_path.unlink(missing_ok=True)
+            staging_directory.rmdir()
+        except OSError:
+            pass
+        raise
+
+
 def _ngs_runtime_identity() -> tuple[str, str]:
     try:
         lock = json.loads(DORADO_LOCK_PATH.read_text(encoding="utf-8"))
@@ -678,34 +826,34 @@ def _samtools_command() -> _PinnedSamtoolsCommand:
     with _samtools_runtime_lock:
         cached = _samtools_runtime_cache.get(key)
         if cached is not None:
+            cached.verify_runtime()
             return cached
         apptainer = shutil.which("apptainer")
         if not apptainer:
             raise AlignmentSessionError("Apptainer is unavailable for the pinned NGS runtime")
         expected_digest, expected_version = _ngs_runtime_identity()
-        runtime_fd = _open_nofollow(runtime_sif, directory=False, label="pinned NGS runtime")
+        source_fd = _open_nofollow(runtime_sif, directory=False, label="pinned NGS runtime")
+        runtime_fd: int | None = None
+        directory_fd: int | None = None
+        runtime_path: Path | None = None
         try:
-            metadata_before = os.fstat(runtime_fd)
-            observed_digest = _sha256_descriptor(runtime_fd)
-            metadata_after = os.fstat(runtime_fd)
-            identity_before = (
-                metadata_before.st_dev,
-                metadata_before.st_ino,
-                metadata_before.st_size,
-                metadata_before.st_mtime_ns,
-                metadata_before.st_ctime_ns,
+            (
+                runtime_fd,
+                runtime_size,
+                runtime_path,
+                runtime_identity,
+                directory_fd,
+                directory_identity,
+            ) = _private_runtime_snapshot(
+                source_fd,
+                directory=runtime_sif.parent,
+                expected_digest=expected_digest,
             )
-            identity_after = (
-                metadata_after.st_dev,
-                metadata_after.st_ino,
-                metadata_after.st_size,
-                metadata_after.st_mtime_ns,
-                metadata_after.st_ctime_ns,
-            )
-            if identity_before != identity_after:
-                raise AlignmentSessionError("pinned NGS runtime changed during validation")
-            if observed_digest != expected_digest:
-                raise AlignmentSessionError("pinned NGS runtime digest does not match the canonical lock")
+        finally:
+            os.close(source_fd)
+        if runtime_fd is None or directory_fd is None or runtime_path is None:
+            raise AlignmentSessionError("private pinned NGS runtime snapshot is unavailable")
+        try:
             command = _PinnedSamtoolsCommand(
                 argv=(
                     apptainer,
@@ -720,7 +868,11 @@ def _samtools_command() -> _PinnedSamtoolsCommand:
                 ),
                 pass_fds=(runtime_fd,),
                 runtime_sha256=expected_digest,
-                runtime_identity=identity_after,
+                runtime_size=runtime_size,
+                runtime_path=runtime_path,
+                runtime_identity=runtime_identity,
+                runtime_directory_fd=directory_fd,
+                runtime_directory_identity=directory_identity,
             )
             try:
                 command.verify_runtime()
@@ -732,6 +884,7 @@ def _samtools_command() -> _PinnedSamtoolsCommand:
                     timeout=30,
                     pass_fds=command.pass_fds,
                 )
+                command.verify_runtime()
             except (OSError, subprocess.SubprocessError) as exc:
                 raise AlignmentSessionError("pinned NGS runtime samtools probe failed") from exc
             if not probe.stdout.startswith(f"samtools {expected_version}\n"):
@@ -740,7 +893,19 @@ def _samtools_command() -> _PinnedSamtoolsCommand:
             return command
         except Exception:
             os.close(runtime_fd)
+            os.close(directory_fd)
             raise
+
+
+def _run_pinned_samtools(
+    command: _PinnedSamtoolsCommand,
+    args: list[str],
+    **kwargs: Any,
+) -> subprocess.CompletedProcess[Any]:
+    command.verify_runtime()
+    completed = subprocess.run([*command, *args], **kwargs)
+    command.verify_runtime()
+    return completed
 
 
 def _descriptor_path(descriptor: int) -> str:
@@ -833,22 +998,25 @@ def _validate_alignment_bundle(
         bam_path = _descriptor_path(bam_snapshot.fileno())
         index_path = _descriptor_path(index_snapshot.fileno())
         pass_fds = (*samtools.pass_fds, *(snapshot.fileno() for snapshot in snapshots))
-        subprocess.run(
-            [*samtools, "quickcheck", "-v", bam_path],
+        _run_pinned_samtools(
+            samtools,
+            ["quickcheck", "-v", bam_path],
             check=True,
             capture_output=True,
             timeout=30,
             pass_fds=pass_fds,
         )
-        subprocess.run(
-            [*samtools, "idxstats", "-X", bam_path, index_path],
+        _run_pinned_samtools(
+            samtools,
+            ["idxstats", "-X", bam_path, index_path],
             check=True,
             capture_output=True,
             timeout=30,
             pass_fds=pass_fds,
         )
-        header = subprocess.run(
-            [*samtools, "view", "-H", bam_path],
+        header = _run_pinned_samtools(
+            samtools,
+            ["view", "-H", bam_path],
             check=True,
             capture_output=True,
             text=True,
@@ -1525,29 +1693,34 @@ def _iter_sam_lines(
             snapshot.close()
         raise
     assert process.stdout is not None
-    completed = False
+    lines: list[str] = []
+    bounded_stop = False
+    return_code: int | None = None
+    stderr = ""
     try:
         for line in process.stdout:
-            yield line.rstrip("\n")
-        completed = True
+            lines.append(line.rstrip("\n"))
+            if len(lines) > MAX_READ_SCAN:
+                bounded_stop = True
+                break
     finally:
         process.stdout.close()
-        if completed:
-            stderr = process.stderr.read() if process.stderr is not None else ""
-            return_code = process.wait(timeout=5)
-            if return_code != 0:
-                raise AlignmentSessionError(f"samtools read inspection failed: {stderr.strip() or 'unknown error'}")
-        elif process.poll() is None:
+        if bounded_stop and process.poll() is None:
             process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5)
+        try:
+            return_code = process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            return_code = process.wait(timeout=5)
         if process.stderr is not None:
+            stderr = process.stderr.read()
             process.stderr.close()
+        samtools.verify_runtime()
         for snapshot in reversed(snapshots):
             snapshot.close()
+    if not bounded_stop and return_code != 0:
+        raise AlignmentSessionError(f"samtools read inspection failed: {stderr.strip() or 'unknown error'}")
+    yield from lines
 
 
 def _mean_quality(quality: str) -> float | None:

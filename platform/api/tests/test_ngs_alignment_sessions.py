@@ -67,6 +67,10 @@ def test_samtools_command_uses_pinned_no_network_ont_runtime(
             f"/proc/self/fd/{command.pass_fds[0]}",
             "samtools",
         )
+        assert command.runtime_path is not None
+        assert command.runtime_path.parent.parent == container_dir
+        assert os.stat(command.runtime_path, follow_symlinks=False).st_ino == os.fstat(command.pass_fds[0]).st_ino
+        assert os.fstat(command.pass_fds[0]).st_mode & 0o222 == 0
         assert "--bind" not in command.argv
         assert observed["command"] == [*command, "--version"]
         assert observed["kwargs"]["pass_fds"] == command.pass_fds
@@ -168,7 +172,7 @@ def test_samtools_read_inspection_uses_inherited_snapshot_descriptors_without_re
         service._clear_samtools_runtime_cache()
 
 
-def test_samtools_runtime_rejects_same_inode_mutation_after_cache(
+def test_samtools_runtime_private_snapshot_survives_source_mutation_after_cache(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -191,12 +195,15 @@ def test_samtools_runtime_rejects_same_inode_mutation_after_cache(
     service._clear_samtools_runtime_cache()
     try:
         command = service._samtools_command()
+        runtime_fd = command.pass_fds[0]
+        assert os.pread(runtime_fd, command.runtime_size or 0, 0) == b"approved"
+        assert os.fstat(runtime_fd).st_mode & 0o222 == 0
         with image.open("r+b") as handle:
             handle.seek(0)
             handle.write(b"tampered")
             handle.truncate()
-        with pytest.raises(service.AlignmentSessionError, match="changed after validation"):
-            command.verify_runtime()
+        command.verify_runtime()
+        assert os.pread(runtime_fd, command.runtime_size or 0, 0) == b"approved"
     finally:
         service._clear_samtools_runtime_cache()
 
@@ -521,35 +528,37 @@ def test_generic_file_routes_hide_governed_ngs_tree(
 
     app = FastAPI()
     app.include_router(files_router.router, prefix="/api/files")
+    app.dependency_overrides[files_router.get_governed_ngs_result_roots] = lambda: (result_root,)
     client = TestClient(app)
-    parent = client.get("/api/files/browse", params={"path": "bms_results/result"})
+    parent = client.get("/api/files/browse", params={"path": "bms_results"})
     assert parent.status_code == 200
     assert parent.json()["entries"] == []
     assert client.get("/api/files/browse", params={"path": "bms_results/result/fastq_qc"}).status_code == 403
-    assert client.get("/api/files/download/bms_results/result/fastq_qc/igv_report.html").status_code == 403
-    assert client.get("/api/files/stream/bms_results/result/fastq_qc/igv_report.html").status_code == 403
-    assert client.get("/api/files/download/bms_results/result/verification/construct_verification_report.html").status_code == 403
-    assert client.get("/api/files/stream/bms_results/result/verification/construct_verification_report.html").status_code == 403
-    assert client.get("/api/files/pdb/bms_results/result/fastq_qc/governed.pdb").status_code == 403
+    governed_routes = (
+        "/api/files/download/bms_results/result/fastq_qc/igv_report.html",
+        "/api/files/stream/bms_results/result/fastq_qc/igv_report.html",
+        "/api/files/download/bms_results/result/verification/construct_verification_report.html",
+        "/api/files/stream/bms_results/result/verification/construct_verification_report.html",
+        "/api/files/pdb/bms_results/result/fastq_qc/governed.pdb",
+    )
+    for route in governed_routes:
+        assert client.get(route).status_code == 403
     assert client.post(
         "/api/files/extract-chain",
         data={"input_path": "bms_results/result/fastq_qc/governed.pdb", "chain_id": "A"},
     ).status_code == 403
     assert not (fastq_qc / "governed_chainA.pdb").exists()
-    traversal = client.post(
+
+    (fastq_qc / "qc_manifest.json").unlink()
+    (verification / "qc_manifest.json").unlink()
+    for route in governed_routes:
+        assert client.get(route).status_code == 403
+    assert client.post(
         "/api/files/upload",
         data={"path": "bms_results/result"},
-        files={"file": ("fastq_qc/qc_manifest.json", b"tampered", "application/json")},
-    )
-    assert traversal.status_code == 400
-    assert json.loads((fastq_qc / "qc_manifest.json").read_text(encoding="utf-8"))["schema"] == "sequence_qc.manifest.v1"
-    direct_manifest = client.post(
-        "/api/files/upload",
-        data={"path": "bms_results/result"},
-        files={"file": ("qc_manifest.json", b"{}", "application/json")},
-    )
-    assert direct_manifest.status_code == 403
-    assert not (result_root / "qc_manifest.json").exists()
+        files={"file": ("replacement.html", b"tampered", "text/html")},
+    ).status_code == 403
+    assert not (result_root / "replacement.html").exists()
 
 
 def _write_manifest(
