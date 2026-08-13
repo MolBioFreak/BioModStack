@@ -2128,6 +2128,12 @@ export function NGSToolkit() {
         () => new URLSearchParams(location.search).get('job_id')?.trim() || null,
         [location.search],
     );
+    const selectedJobIdRef = useRef<string | null>(selectedJobId);
+    const alignmentAccessRecoveryGenerationRef = useRef(0);
+    useEffect(() => {
+        selectedJobIdRef.current = selectedJobId;
+        alignmentAccessRecoveryGenerationRef.current += 1;
+    }, [selectedJobId]);
     useEffect(() => {
         setView(ngsToolkitViewFromSearch(location.search));
     }, [location.search]);
@@ -2328,22 +2334,36 @@ export function NGSToolkit() {
     });
     const [alignmentAccessRecoveryPending, setAlignmentAccessRecoveryPending] = useState(false);
     const [alignmentAccessRecoveryError, setAlignmentAccessRecoveryError] = useState<string | null>(null);
+    useEffect(() => {
+        setAlignmentAccessRecoveryPending(false);
+        setAlignmentAccessRecoveryError(null);
+    }, [selectedJobId]);
     const alignmentAccessDenied = isAlignmentAccessDenied(alignmentSessionsError);
     const restoreAlignmentAccess = useCallback(async () => {
         if (!selectedJobId || alignmentAccessRecoveryPending) return;
+        const recoveryJobId = selectedJobId;
+        const recoveryGeneration = alignmentAccessRecoveryGenerationRef.current + 1;
+        alignmentAccessRecoveryGenerationRef.current = recoveryGeneration;
+        const recoveryIsCurrent = () => (
+            selectedJobIdRef.current === recoveryJobId
+            && alignmentAccessRecoveryGenerationRef.current === recoveryGeneration
+        );
         setAlignmentAccessRecoveryPending(true);
         setAlignmentAccessRecoveryError(null);
         try {
-            await rotateAlignmentAccess(selectedJobId);
+            await rotateAlignmentAccess(recoveryJobId);
+            if (!recoveryIsCurrent()) return;
             const refreshed = await refetchAlignmentSessions({ throwOnError: true });
+            if (!recoveryIsCurrent()) return;
             if (refreshed.error) throw refreshed.error;
-            await queryClient.invalidateQueries({ queryKey: ['sequence-qc-manifest', selectedJobId] });
+            await queryClient.invalidateQueries({ queryKey: ['sequence-qc-manifest', recoveryJobId] });
         } catch (reason: unknown) {
+            if (!recoveryIsCurrent()) return;
             setAlignmentAccessRecoveryError(
                 reason instanceof Error ? reason.message : String(reason),
             );
         } finally {
-            setAlignmentAccessRecoveryPending(false);
+            if (recoveryIsCurrent()) setAlignmentAccessRecoveryPending(false);
         }
     }, [alignmentAccessRecoveryPending, queryClient, refetchAlignmentSessions, selectedJobId]);
 

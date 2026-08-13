@@ -1,7 +1,7 @@
 import React, { act } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const ngsApiMocks = vi.hoisted(() => ({
@@ -58,6 +58,11 @@ let client: QueryClient;
 function NgsDestination() {
     const location = useLocation();
     return <div data-testid="ngs-destination">{location.pathname}{location.search}</div>;
+}
+
+function SwitchJobButton() {
+    const navigate = useNavigate();
+    return <button type="button" onClick={() => navigate('/ngs?section=analyses&job_id=job-456')}>Switch job</button>;
 }
 
 async function flush() {
@@ -298,6 +303,65 @@ describe('completed NGS result routing', () => {
             expect(alignmentMocks.fetchAlignmentSessions).toHaveBeenCalledTimes(2);
         });
         expect(client.getQueryState(['sequence-qc-manifest', 'job-123'])?.isInvalidated).toBe(true);
+    });
+
+    it('drops an old recovery completion after switching the selected job', async () => {
+        Object.defineProperty(Element.prototype, 'scrollIntoView', {
+            configurable: true,
+            value: vi.fn(),
+        });
+        const job123 = {
+            id: 'job-123', name: 'Old FASTQ QC', model_id: 'nanopore', mode: 'ont_fastq_qc',
+            status: 'completed', created_at: '2026-08-10T00:00:00Z', output_dir: '/results/job-123', params: {},
+        };
+        const job456 = {
+            ...job123, id: 'job-456', name: 'New FASTQ QC', output_dir: '/results/job-456',
+        };
+        const denial = { response: { status: 403 } };
+        let releaseRotation!: () => void;
+        alignmentMocks.rotateAlignmentAccess.mockImplementation(() => new Promise((resolve) => {
+            releaseRotation = () => resolve({
+                job_id: 'job-123', rotated: true, scheme: 'opaque_job_capability_v1', rotation_count: 1,
+            });
+        }));
+        ngsApiMocks.fetchJobs.mockResolvedValue({ data: { jobs: [job123, job456], total: 2 } });
+        ngsApiMocks.fetchFullJob.mockImplementation((jobId: string) => Promise.resolve(jobId === 'job-123' ? job123 : job456));
+        ngsApiMocks.fetchJobStages.mockResolvedValue({ data: { stages: [] } });
+        alignmentMocks.fetchAlignmentSessions.mockImplementation((jobId: string) => (
+            jobId === 'job-123' ? Promise.reject(denial) : Promise.resolve([])
+        ));
+        alignmentMocks.isAlignmentAccessDenied.mockImplementation((reason) => reason === denial);
+        client.setQueryData(['sequence-qc-manifest', 'job-123'], { schema: 'sequence_qc.manifest.v1' });
+
+        await act(async () => {
+            root.render(
+                <QueryClientProvider client={client}>
+                    <MemoryRouter initialEntries={['/ngs?section=analyses&job_id=job-123']}>
+                        <SwitchJobButton />
+                        <Routes><Route path="/ngs" element={<NGSToolkit />} /></Routes>
+                    </MemoryRouter>
+                </QueryClientProvider>,
+            );
+        });
+        await waitUntil(() => expect(container.textContent).toContain('Restore this browser’s access'));
+        const restore = [...container.querySelectorAll('button')].find(
+            (button) => button.textContent === 'Restore this browser’s access',
+        );
+        await act(async () => restore?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+        await waitUntil(() => expect(alignmentMocks.rotateAlignmentAccess).toHaveBeenCalledWith('job-123'));
+        const switchJob = [...container.querySelectorAll('button')].find((button) => button.textContent === 'Switch job');
+        await act(async () => switchJob?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+        await waitUntil(() => expect(container.textContent).toContain('New FASTQ QC'));
+        await act(async () => {
+            releaseRotation();
+            await Promise.resolve();
+        });
+        await flush();
+
+        expect(alignmentMocks.fetchAlignmentSessions.mock.calls.filter(([jobId]) => jobId === 'job-123')).toHaveLength(1);
+        expect(client.getQueryState(['sequence-qc-manifest', 'job-123'])?.isInvalidated).toBe(false);
+        expect(container.textContent).not.toContain('Restoring access…');
+        expect(container.querySelector('[role="alert"]')?.textContent || '').not.toContain('job-123');
     });
 
     it('does not offer recovery for non-403 session failures', async () => {
