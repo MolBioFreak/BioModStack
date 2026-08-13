@@ -2130,10 +2130,10 @@ export function NGSToolkit() {
     );
     const selectedJobIdRef = useRef<string | null>(selectedJobId);
     const alignmentAccessRecoveryGenerationRef = useRef(0);
-    useEffect(() => {
+    if (selectedJobIdRef.current !== selectedJobId) {
         selectedJobIdRef.current = selectedJobId;
         alignmentAccessRecoveryGenerationRef.current += 1;
-    }, [selectedJobId]);
+    }
     useEffect(() => {
         setView(ngsToolkitViewFromSearch(location.search));
     }, [location.search]);
@@ -2332,12 +2332,18 @@ export function NGSToolkit() {
         retry: false,
         staleTime: 30_000,
     });
-    const [alignmentAccessRecoveryPending, setAlignmentAccessRecoveryPending] = useState(false);
-    const [alignmentAccessRecoveryError, setAlignmentAccessRecoveryError] = useState<string | null>(null);
-    useEffect(() => {
-        setAlignmentAccessRecoveryPending(false);
-        setAlignmentAccessRecoveryError(null);
-    }, [selectedJobId]);
+    const [alignmentAccessRecoveryState, setAlignmentAccessRecoveryState] = useState<{
+        jobId: string | null;
+        pending: boolean;
+        error: string | null;
+    }>({ jobId: null, pending: false, error: null });
+    const alignmentAccessRecoveryPending = (
+        alignmentAccessRecoveryState.jobId === selectedJobId
+        && alignmentAccessRecoveryState.pending
+    );
+    const alignmentAccessRecoveryError = alignmentAccessRecoveryState.jobId === selectedJobId
+        ? alignmentAccessRecoveryState.error
+        : null;
     const alignmentAccessDenied = isAlignmentAccessDenied(alignmentSessionsError);
     const restoreAlignmentAccess = useCallback(async () => {
         if (!selectedJobId || alignmentAccessRecoveryPending) return;
@@ -2348,8 +2354,7 @@ export function NGSToolkit() {
             selectedJobIdRef.current === recoveryJobId
             && alignmentAccessRecoveryGenerationRef.current === recoveryGeneration
         );
-        setAlignmentAccessRecoveryPending(true);
-        setAlignmentAccessRecoveryError(null);
+        setAlignmentAccessRecoveryState({ jobId: recoveryJobId, pending: true, error: null });
         try {
             await rotateAlignmentAccess(recoveryJobId);
             if (!recoveryIsCurrent()) return;
@@ -2359,11 +2364,17 @@ export function NGSToolkit() {
             await queryClient.invalidateQueries({ queryKey: ['sequence-qc-manifest', recoveryJobId] });
         } catch (reason: unknown) {
             if (!recoveryIsCurrent()) return;
-            setAlignmentAccessRecoveryError(
-                reason instanceof Error ? reason.message : String(reason),
-            );
+            setAlignmentAccessRecoveryState({
+                jobId: recoveryJobId,
+                pending: false,
+                error: reason instanceof Error ? reason.message : String(reason),
+            });
         } finally {
-            if (recoveryIsCurrent()) setAlignmentAccessRecoveryPending(false);
+            if (recoveryIsCurrent()) {
+                setAlignmentAccessRecoveryState((current) => (
+                    current.jobId === recoveryJobId ? { ...current, pending: false } : current
+                ));
+            }
         }
     }, [alignmentAccessRecoveryPending, queryClient, refetchAlignmentSessions, selectedJobId]);
 

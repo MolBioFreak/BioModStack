@@ -1,4 +1,4 @@
-import React, { act } from 'react';
+import React, { act, useLayoutEffect } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
@@ -60,8 +60,13 @@ function NgsDestination() {
     return <div data-testid="ngs-destination">{location.pathname}{location.search}</div>;
 }
 
-function SwitchJobButton() {
+function SwitchJobButton({ onJob456Layout }: { onJob456Layout?: () => void }) {
     const navigate = useNavigate();
+    const location = useLocation();
+    const selectedJob = new URLSearchParams(location.search).get('job_id');
+    useLayoutEffect(() => {
+        if (selectedJob === 'job-456') onJob456Layout?.();
+    }, [onJob456Layout, selectedJob]);
     return <button type="button" onClick={() => navigate('/ngs?section=analyses&job_id=job-456')}>Switch job</button>;
 }
 
@@ -337,7 +342,7 @@ describe('completed NGS result routing', () => {
             root.render(
                 <QueryClientProvider client={client}>
                     <MemoryRouter initialEntries={['/ngs?section=analyses&job_id=job-123']}>
-                        <SwitchJobButton />
+                        <SwitchJobButton onJob456Layout={() => releaseRotation()} />
                         <Routes><Route path="/ngs" element={<NGSToolkit />} /></Routes>
                     </MemoryRouter>
                 </QueryClientProvider>,
@@ -350,12 +355,11 @@ describe('completed NGS result routing', () => {
         await act(async () => restore?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
         await waitUntil(() => expect(alignmentMocks.rotateAlignmentAccess).toHaveBeenCalledWith('job-123'));
         const switchJob = [...container.querySelectorAll('button')].find((button) => button.textContent === 'Switch job');
-        await act(async () => switchJob?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
-        await waitUntil(() => expect(container.textContent).toContain('New FASTQ QC'));
         await act(async () => {
-            releaseRotation();
+            switchJob?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
             await Promise.resolve();
         });
+        await waitUntil(() => expect(container.textContent).toContain('New FASTQ QC'));
         await flush();
 
         expect(alignmentMocks.fetchAlignmentSessions.mock.calls.filter(([jobId]) => jobId === 'job-123')).toHaveLength(1);
