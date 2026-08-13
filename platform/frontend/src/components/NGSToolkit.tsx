@@ -4357,10 +4357,10 @@ export function NGSToolkit() {
                                                 <a
                                                     href={igvReportDownloadHref}
                                                     target="_blank"
-                                                    rel="noreferrer"
+                                                    rel="noopener"
                                                     className="px-2 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
                                                 >
-                                                    Open IGV report
+                                                    Open compact IGV report
                                                 </a>
                                             )}
                                             {igvTrackConfigDownloadHref && (
