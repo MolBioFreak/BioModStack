@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -17,7 +19,8 @@ from telemetry_store import (
 def sample(timestamp_ms: int, cpu: float, gpu_util: float = 40.0) -> dict[str, object]:
     return {
         "timestamp_ms": timestamp_ms,
-        "cpu": {"utilization": cpu, "frequency_current_mhz": 2000.0, "power_watts": 80.0, "temperature": 55.0},
+        "timestamp": datetime.fromtimestamp(timestamp_ms / 1000, timezone.utc).isoformat().replace("+00:00", "Z"),
+        "cpu": {"utilization": cpu, "per_core_utilization": [cpu, cpu + 10.0], "frequency_current_mhz": 2000.0, "power_watts": 80.0, "temperature": 55.0},
         "ram": {"used_gb": 16.0, "available_gb": 48.0, "utilization": 25.0, "swap_used_gb": 0.0},
         "gpus": [{"index": 0, "utilization": gpu_util, "memory_used_mb": 1024.0, "memory_free_mb": 23000.0, "temperature": 60.0, "power_draw_watts": 120.0, "fan_speed_percent": 30.0}],
         "gpu_error": None,
@@ -59,6 +62,19 @@ def test_completed_minute_aggregate_is_finalized_once(tmp_path: Path) -> None:
     assert points[0]["sample_count"] == 2
     assert points[0]["payload"]["cpu"]["utilization"] == 20.0
     assert points[0]["payload"]["gpus"][0]["utilization"] == 40.0
+    assert points[0]["payload"]["cpu"]["per_core_utilization"] == [20.0, 30.0]
+    assert points[0]["payload"]["timestamp_ms"] == minute
+    assert points[0]["payload"]["timestamp"] == datetime.fromtimestamp(minute / 1000, timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def test_telemetry_path_rejects_jobs_database(monkeypatch, tmp_path: Path) -> None:
+    jobs_path = tmp_path / "biomodstack.db"
+    monkeypatch.setenv("BMS_DB_PATH", str(jobs_path))
+    monkeypatch.setenv("BMS_TELEMETRY_DB_PATH", str(jobs_path))
+    from telemetry_store import telemetry_db_path
+
+    with pytest.raises(ValueError, match="separate"):
+        telemetry_db_path()
 
 
 def test_retention_deletes_only_expired_rows_and_preserves_boundary(tmp_path: Path) -> None:
@@ -110,3 +126,36 @@ def test_history_is_range_bounded_ordered_and_resolution_limited(tmp_path: Path)
         store.read_history(start_ms=base, end_ms=base + 5000, resolution="raw", limit=0)
     with pytest.raises(ValueError, match="resolution"):
         store.read_history(start_ms=base, end_ms=base + 5000, resolution="hour", limit=10)
+
+
+def test_wal_reader_writer_and_retention_can_run_concurrently(tmp_path: Path) -> None:
+    path = tmp_path / "telemetry.sqlite3"
+    writer = TelemetryStore(path)
+    reader = TelemetryStore(path)
+    writer.initialize()
+    base = 2_000_000_000_000
+    errors: list[BaseException] = []
+
+    def write_samples() -> None:
+        try:
+            for offset in range(40):
+                writer.append_sample(sample(base + offset * 1000, float(offset)))
+                if offset % 10 == 0:
+                    writer.apply_retention(base + offset * 1000)
+        except BaseException as error:  # pragma: no cover - asserted below
+            errors.append(error)
+
+    thread = threading.Thread(target=write_samples)
+    thread.start()
+    while thread.is_alive():
+        reader.read_history(
+            start_ms=base,
+            end_ms=base + 60_000,
+            resolution="raw",
+            limit=100,
+        )
+    thread.join()
+
+    assert errors == []
+    points = reader.read_history(start_ms=base, end_ms=base + 60_000, resolution="raw", limit=100)
+    assert len(points) == 40

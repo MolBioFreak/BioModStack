@@ -126,6 +126,7 @@ _STATE_HOME = Path(os.getenv("XDG_STATE_HOME", str(Path.home() / ".local" / "sta
 LOG_DIR = _STATE_HOME / "biomodstack" / "logs"
 API_LOG = LOG_DIR / "api.log"
 FRONTEND_LOG = LOG_DIR / "frontend.log"
+TELEMETRY_LOG = LOG_DIR / "telemetry.log"
 DEVELOPMENT_WORKFLOW_ADAPTER_LOG = LOG_DIR / "development-workflow-adapter.log"
 PRODUCTION_WORKFLOW_ADAPTER_LOG = LOG_DIR / "production-workflow-adapter.log"
 # Compatibility consumers use the production/core adapter identity by default.
@@ -261,6 +262,7 @@ def rotate_runtime_logs() -> None:
         DEVELOPMENT_WORKFLOW_ADAPTER_LOG,
         PRODUCTION_WORKFLOW_ADAPTER_LOG,
         CORE_RUNTIME_LOG,
+        TELEMETRY_LOG,
     ):
         rotate_log_file(path)
 
@@ -838,6 +840,7 @@ def runtime_descriptor(project_root: Path | None = None, runtime_mode: str | Non
     mode = resolve_runtime_mode(runtime_mode)
     frontend_url = runtime_frontend_url(mode, project_root=root)
     services = runtime_service_descriptors(root, mode)
+    telemetry_active = service_is_active(TELEMETRY_SERVICE, project_root=root)
     install_profile = install_profile_snapshot(project_root=root)
     if not isinstance(install_profile, Mapping):
         install_profile = {}
@@ -966,14 +969,15 @@ def runtime_descriptor(project_root: Path | None = None, runtime_mode: str | Non
             "adapter_ready": readiness["workflow-adapter"]["ready"],
             **health,
         }
-    runtime_ready = all(
+    runtime_ready = telemetry_active and all(
         bool(component["ready"])
         for component in readiness.values()
         if component["required"]
     )
     return {
         "runtime_mode": mode,
-        "runtime_active": all(bool(service["active"]) for service in services),
+        "runtime_active": telemetry_active and all(bool(service["active"]) for service in services),
+        "telemetry_active": telemetry_active,
         "runtime_ready": runtime_ready,
         "runtime_manager": "systemd-user",
         "api_url": runtime_api_url(mode, project_root=root),
@@ -1135,8 +1139,16 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     build_id = build_identity["build_id"]
     build_time = build_identity["build_time"]
     log_rotator = root / "scripts" / "rotate_biomodstack_logs.py"
-    telemetry_db = str(Path(os.getenv("BMS_TELEMETRY_DB_PATH", "/mnt/BioModStack/telemetry/telemetry.sqlite3")).expanduser())
-    telemetry_log = LOG_DIR / "telemetry.log"
+    shared_data_root = Path(str(resolved.get("data_root", Path("/mnt/BioModStack")))).expanduser().resolve()
+    expected_telemetry_db = (shared_data_root / "telemetry" / "telemetry.sqlite3").resolve()
+    resolved_jobs_db = Path(str(resolved.get("db_path", shared_data_root / "biomodstack.db"))).expanduser().resolve()
+    configured_telemetry_db = os.getenv("BMS_TELEMETRY_DB_PATH")
+    telemetry_db_path = Path(configured_telemetry_db).expanduser().resolve() if configured_telemetry_db else expected_telemetry_db
+    if telemetry_db_path == resolved_jobs_db:
+        raise ServiceManagerError("Telemetry database must be separate from the resolved jobs database")
+    if mode == CONTAINER_RUNTIME_MODE and telemetry_db_path != expected_telemetry_db:
+        raise ServiceManagerError("Production telemetry database must remain under the resolved data root")
+    telemetry_db = str(telemetry_db_path)
     telemetry_limits = render_systemd_resource_boundaries(TELEMETRY_SERVICE).replace("\n", "\n        ")
     telemetry_unit = dedent(
         f"""\
@@ -1150,6 +1162,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment=BMS_TELEMETRY_DB_PATH={telemetry_db}
         Environment=PYTHONUNBUFFERED=1
         WorkingDirectory={root / 'platform' / 'api'}
+        ExecStartPre=/usr/bin/env python3 {log_rotator}
         ExecStartPre=/usr/bin/mkdir -p {Path(telemetry_db).parent}
         ExecStart={root / 'platform' / 'api' / '.venv' / 'bin' / 'python'} -m tools.telemetry_collector
         Restart=on-failure
@@ -1157,14 +1170,13 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         TimeoutStopSec=15
         KillMode=control-group
         {telemetry_limits}
-        StandardOutput=append:{telemetry_log}
-        StandardError=append:{telemetry_log}
+        StandardOutput=append:{TELEMETRY_LOG}
+        StandardError=append:{TELEMETRY_LOG}
 
         [Install]
         WantedBy=default.target
         """
     )
-    shared_data_root = Path(str(resolved.get("data_root", Path("/mnt/BioModStack"))))
     if mode == CONTAINER_RUNTIME_MODE:
         adapter_runner = root / "scripts" / "run_biomodstack_workflow_adapter.sh"
         core_runner = root / "scripts" / "run_biomodstack_core_runtime.sh"
@@ -2034,6 +2046,8 @@ def start_all(
 
     if mode == DEV_RUNTIME_MODE:
         services_to_start: list[str] = []
+        if not service_is_active(TELEMETRY_SERVICE, project_root=root):
+            services_to_start.append(TELEMETRY_SERVICE)
         if not service_is_active(API_SERVICE, project_root=root) and not url_is_ready(runtime_api_health_url(mode, project_root=root)):
             services_to_start.append(API_SERVICE)
         if not service_is_active(FRONTEND_SERVICE, project_root=root):
@@ -2046,7 +2060,9 @@ def start_all(
         return
 
     ensure_target_enabled(root, runtime_mode=mode)
-    runtime_services_active = all(service_is_active(name, project_root=root) for name in runtime_service_names(mode))
+    runtime_services_active = service_is_active(TELEMETRY_SERVICE, project_root=root) and all(
+        service_is_active(name, project_root=root) for name in runtime_service_names(mode)
+    )
     if runtime_services_active and not (
         url_is_ready(runtime_api_health_url(mode, project_root=root)) and url_is_ready(frontend_url)
     ):
@@ -2054,7 +2070,7 @@ def start_all(
             "Stable runtime units are active but HTTP readiness is down. Automatic lifecycle restart is disabled; "
             "inspect the runtime supervisor blocked-state/incident diagnostics or issue an explicit restart."
         )
-    run_systemctl("start", *runtime_service_names(mode), TARGET_UNIT, project_root=root)
+    run_systemctl("start", TELEMETRY_SERVICE, *runtime_service_names(mode), TARGET_UNIT, project_root=root)
     if not skip_workflow_adapter_wait:
         wait_for_http(
             workflow_adapter_health_url_for_lane(
@@ -2154,7 +2170,7 @@ def restart_all(project_root: Path | None = None, runtime_mode: str | None = Non
         check=False,
         project_root=root,
     )
-    run_systemctl("start", *runtime_service_names(mode), TARGET_UNIT, project_root=root)
+    run_systemctl("start", TELEMETRY_SERVICE, *runtime_service_names(mode), TARGET_UNIT, project_root=root)
     wait_for_http(
         workflow_adapter_health_url_for_lane(PRODUCTION_LANE),
         timeout_seconds=wait_timeout_seconds,

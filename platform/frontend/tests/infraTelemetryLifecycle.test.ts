@@ -15,7 +15,10 @@ test('viewer reads bounded server-owned telemetry history without browser histor
     const historySource = readFileSync('src/components/infraTelemetryHistory.ts', 'utf8');
     assert.doesNotMatch(telemetrySource, /react-plotly\.js|plotly\.js/);
     assert.match(telemetrySource, /function TimeSeriesPlot[\s\S]*?<svg/);
-    assert.match(telemetrySource, /fetchTelemetryHistory\(startMs, endMs, 'raw', 4000\)/);
+    assert.match(telemetrySource, /const resolution = windowMinutes >= 10 \? 'minute' : 'raw'/);
+    assert.match(telemetrySource, /fetchTelemetryHistory\(startMs, endMs, resolution, 4000\)/);
+    assert.match(telemetrySource, /buildSample\(point\.payload, 1000, point\.timestamp_ms\)/);
+    assert.match(telemetrySource, /Telemetry collection is stale/);
     assert.match(telemetrySource, /const xMin = xDomain\?\.\[0\]/);
     assert.match(telemetrySource, /const xMax = xDomain\?\.\[1\]/);
     assert.match(telemetrySource, /persistTelemetryPreferences/);

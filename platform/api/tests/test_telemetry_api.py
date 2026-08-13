@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from routers import telemetry
 from telemetry_store import RAW_RETENTION_SECONDS, TelemetryStore
@@ -51,3 +53,32 @@ def test_history_endpoint_reports_unavailable_store(monkeypatch: pytest.MonkeyPa
     with pytest.raises(HTTPException) as error:
         telemetry.telemetry_history(start_ms=1, end_ms=2, resolution="raw", limit=10)
     assert error.value.status_code == 503
+
+
+def test_history_router_registration_and_query_validation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    path = tmp_path / "telemetry.sqlite3"
+    store = TelemetryStore(path)
+    store.initialize()
+    store.append_sample(_sample(1_700_000_000_000))
+    monkeypatch.setenv("BMS_TELEMETRY_DB_PATH", str(path))
+    app = FastAPI()
+    app.include_router(telemetry.router, prefix="/api")
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/telemetry/history",
+            params={
+                "start_ms": 1_699_999_999_000,
+                "end_ms": 1_700_000_001_000,
+                "resolution": "raw",
+                "limit": 10,
+            },
+        )
+        invalid = client.get(
+            "/api/telemetry/history",
+            params={"start_ms": 1, "end_ms": 2, "resolution": "hour", "limit": 10},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["points"][0]["timestamp_ms"] == 1_700_000_000_000
+    assert invalid.status_code == 422

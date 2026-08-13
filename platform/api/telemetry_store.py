@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -38,9 +39,25 @@ BEGIN SELECT RAISE(ABORT, 'minute telemetry is immutable'); END;
 def telemetry_db_path() -> Path:
     configured = os.getenv("BMS_TELEMETRY_DB_PATH")
     if configured:
-        return Path(configured).expanduser().resolve()
+        path = Path(configured).expanduser().resolve()
+        _assert_dedicated_telemetry_path(path)
+        return path
     state_home = Path(os.getenv("XDG_STATE_HOME", str(Path.home() / ".local" / "state")))
-    return (state_home / "biomodstack" / "telemetry.sqlite3").resolve()
+    path = (state_home / "biomodstack" / "telemetry.sqlite3").resolve()
+    _assert_dedicated_telemetry_path(path)
+    return path
+
+
+def _assert_dedicated_telemetry_path(path: Path) -> None:
+    jobs_paths = {
+        Path("/mnt/BioModStack/biomodstack.db").resolve(),
+        (Path.home() / ".biomodstack-dev" / "biomodstack.db").resolve(),
+    }
+    configured_jobs = os.getenv("BMS_DB_PATH")
+    if configured_jobs:
+        jobs_paths.add(Path(configured_jobs).expanduser().resolve())
+    if path in jobs_paths:
+        raise ValueError("telemetry database must be separate from the jobs database")
 
 
 def _connect(path: Path, *, maintenance: bool = False) -> sqlite3.Connection:
@@ -67,6 +84,9 @@ def _average_values(values: list[Any]) -> Any:
         keys = sorted({key for value in present for key in value})
         return {key: _average_values([value.get(key) for value in present]) for key in keys}
     if all(isinstance(value, list) for value in present):
+        if all(all(isinstance(item, (int, float)) and not isinstance(item, bool) for item in value) for value in present):
+            width = max(len(value) for value in present)
+            return [_average_values([value[index] for value in present if index < len(value)]) for index in range(width)]
         by_index: dict[int, list[dict[str, Any]]] = {}
         for value in present:
             for item in value:
@@ -116,6 +136,9 @@ class TelemetryStore:
                     continue
                 aggregate = _average_values(samples)
                 aggregate["timestamp_ms"] = bucket
+                aggregate["timestamp"] = datetime.fromtimestamp(
+                    bucket / 1000, timezone.utc
+                ).isoformat().replace("+00:00", "Z")
                 connection.execute(
                     "INSERT INTO minute_aggregates(bucket_ms, sample_count, payload_json) VALUES (?, ?, ?)",
                     (bucket, len(samples), json.dumps(aggregate, separators=(",", ":"), sort_keys=True, allow_nan=False)),

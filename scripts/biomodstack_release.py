@@ -65,6 +65,7 @@ CONTAINER_NAMES = {
 IMMUTABLE_IMAGE_ID = re.compile(r"^sha256:[0-9a-f]{64}$")
 COMPOSE_PROJECT_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 MANAGED_UNIT_NAMES = (
+    services.TELEMETRY_SERVICE,
     services.CORE_RUNTIME_SERVICE,
 )
 
@@ -663,8 +664,8 @@ class ProductionReleaseBackend:
         services.assert_production_core_listener_preflight(
             project_root=self.repo_root,
         )
-        self._run(["systemctl", "--user", "enable", services.CORE_RUNTIME_SERVICE])
-        self._run(["systemctl", "--user", "start", services.CORE_RUNTIME_SERVICE])
+        self._run(["systemctl", "--user", "enable", *MANAGED_UNIT_NAMES])
+        self._run(["systemctl", "--user", "start", *MANAGED_UNIT_NAMES])
 
     def stop_candidate(self) -> None:
         self.stop_installed_owner()
@@ -879,6 +880,7 @@ class ProductionReleaseBackend:
                 "FragmentPath": self._systemd_property(unit_name, "FragmentPath")
             }
             if unit_name in {
+                services.TELEMETRY_SERVICE,
                 services.FRONTEND_SERVICE,
                 services.WORKFLOW_ADAPTER_SERVICE,
                 services.CORE_RUNTIME_SERVICE,

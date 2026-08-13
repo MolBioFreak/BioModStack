@@ -55,7 +55,10 @@ def run() -> None:
         except Exception:
             logger.exception("telemetry sample failed")
         next_tick += 1.0
-        time.sleep(max(0.0, next_tick - time.monotonic()))
+        now = time.monotonic()
+        if next_tick <= now:
+            next_tick = now + 1.0
+        time.sleep(next_tick - now)
 
 
 if __name__ == "__main__":

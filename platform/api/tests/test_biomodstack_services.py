@@ -97,6 +97,7 @@ def test_runtime_descriptor_for_dev_mode(tmp_path: Path, monkeypatch) -> None:
         services,
         "service_is_active",
         lambda name, project_root=None: name in {
+            services.TELEMETRY_SERVICE,
             services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE,
             services.API_SERVICE,
             services.FRONTEND_SERVICE,
@@ -151,7 +152,7 @@ def test_runtime_descriptor_for_container_mode(tmp_path: Path, monkeypatch) -> N
     monkeypatch.setattr(
         services,
         "service_is_active",
-        lambda name, project_root=None: name in {services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE},
+        lambda name, project_root=None: name in {services.TELEMETRY_SERVICE, services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE},
     )
     monkeypatch.setattr(services, "url_is_ready", lambda url, timeout_seconds=2.0: True)
     monkeypatch.setattr(
@@ -243,7 +244,7 @@ def test_runtime_descriptor_container_rejects_legacy_api_listener(tmp_path: Path
     monkeypatch.setattr(
         services,
         "service_is_active",
-        lambda name, project_root=None: name in {services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE},
+        lambda name, project_root=None: name in {services.TELEMETRY_SERVICE, services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE},
     )
     monkeypatch.setattr(services, "url_is_ready", lambda url, timeout_seconds=2.0: True)
     monkeypatch.setattr(
@@ -275,7 +276,7 @@ def test_runtime_descriptor_does_not_report_ready_without_verified_listener_owne
     monkeypatch.setattr(
         services,
         "service_is_active",
-        lambda name, project_root=None: name in {services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE},
+        lambda name, project_root=None: name in {services.TELEMETRY_SERVICE, services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE},
     )
     monkeypatch.setattr(services, "url_is_ready", lambda url, timeout_seconds=2.0: True)
     monkeypatch.setattr(
@@ -500,7 +501,7 @@ def test_runtime_descriptor_requires_http_readiness_for_runtime_active(tmp_path:
     monkeypatch.setattr(
         services,
         "service_is_active",
-        lambda name, project_root=None: name in {services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE},
+        lambda name, project_root=None: name in {services.TELEMETRY_SERVICE, services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE},
     )
     monkeypatch.setattr(
         services,
@@ -558,6 +559,7 @@ def test_operator_runtime_mode_prefers_fully_active_dev_runtime(tmp_path: Path, 
         services,
         "service_is_active",
         lambda name, project_root=None: name in {
+            services.TELEMETRY_SERVICE,
             services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE,
             services.API_SERVICE,
             services.FRONTEND_SERVICE,
@@ -647,8 +649,10 @@ def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path, mo
 
     telemetry_unit = units[services.TELEMETRY_SERVICE]
     assert f"ExecStart={project_root / 'platform' / 'api' / '.venv' / 'bin' / 'python'} -m tools.telemetry_collector" in telemetry_unit
-    assert "Environment=BMS_TELEMETRY_DB_PATH=" in telemetry_unit
+    assert "Environment=BMS_TELEMETRY_DB_PATH=/mnt/BioModStack/telemetry/telemetry.sqlite3" in telemetry_unit
     assert f"WorkingDirectory={project_root / 'platform' / 'api'}" in telemetry_unit
+    assert f"ExecStartPre=/usr/bin/env python3 {project_root / 'scripts' / 'rotate_biomodstack_logs.py'}" in telemetry_unit
+    assert f"StandardOutput=append:{services.TELEMETRY_LOG}" in telemetry_unit
     assert "Restart=on-failure" in telemetry_unit
     assert "MemoryMax=512M" in telemetry_unit
 
@@ -686,6 +690,52 @@ def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path, mo
     )
     assert services.TAILNET_GLOBAL_SERVICE not in target_unit
     assert "WantedBy=default.target" in target_unit
+
+
+def test_container_telemetry_path_tracks_resolved_data_root(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / "biomodstack"
+    data_root = tmp_path / "production-data"
+    monkeypatch.setattr(
+        services,
+        "install_profile_snapshot",
+        lambda project_root=None: {"resolved": {"data_root": str(data_root)}},
+    )
+
+    units = services.render_user_units(project_root, runtime_mode="container")
+    telemetry_unit = units[services.TELEMETRY_SERVICE]
+    expected = data_root / "telemetry" / "telemetry.sqlite3"
+    assert f"Environment=BMS_TELEMETRY_DB_PATH={expected}" in telemetry_unit
+    assert "Environment=BMS_TELEMETRY_DB_PATH=/var/lib/biomodstack/telemetry/telemetry.sqlite3" in units[services.CORE_RUNTIME_SERVICE]
+
+
+def test_container_telemetry_path_rejects_divergent_override(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / "biomodstack"
+    data_root = tmp_path / "production-data"
+    monkeypatch.setattr(
+        services,
+        "install_profile_snapshot",
+        lambda project_root=None: {"resolved": {"data_root": str(data_root)}},
+    )
+    monkeypatch.setenv("BMS_TELEMETRY_DB_PATH", str(tmp_path / "wrong.sqlite3"))
+
+    with pytest.raises(services.ServiceManagerError, match="resolved data root"):
+        services.render_user_units(project_root, runtime_mode="container")
+
+
+def test_telemetry_path_rejects_resolved_jobs_database(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / "biomodstack"
+    jobs_db = tmp_path / "custom" / "jobs.sqlite3"
+    monkeypatch.setattr(
+        services,
+        "install_profile_snapshot",
+        lambda project_root=None: {
+            "resolved": {"data_root": str(jobs_db.parent), "db_path": str(jobs_db)}
+        },
+    )
+    monkeypatch.setenv("BMS_TELEMETRY_DB_PATH", str(jobs_db))
+
+    with pytest.raises(services.ServiceManagerError, match="resolved jobs database"):
+        services.render_user_units(project_root, runtime_mode="dev")
 
 
 def test_render_user_units_support_container_runtime_mode(tmp_path: Path) -> None:
@@ -1102,7 +1152,7 @@ def test_start_all_container_mode_skips_legacy_cleanup_when_runtime_container_li
     assert calls == [
         ("ensure", "container"),
         ("systemctl", ("enable", services.TARGET_UNIT)),
-        ("systemctl", ("start", services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE, services.TARGET_UNIT)),
+        ("systemctl", ("start", services.TELEMETRY_SERVICE, services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE, services.TARGET_UNIT)),
         ("wait", (services.WORKFLOW_ADAPTER_HEALTH_URL, services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
         ("wait", (services.runtime_api_health_url("container", project_root=project_root), services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
         ("wait", (services.FRONTEND_URL, services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
@@ -1133,13 +1183,13 @@ def test_start_all_dev_mode_keeps_container_runtime_and_starts_only_dev_frontend
 
     assert calls == [
         ("ensure", "dev"),
-        ("systemctl", ("start", services.FRONTEND_SERVICE, services.DEV_TARGET_UNIT)),
+        ("systemctl", ("start", services.TELEMETRY_SERVICE, services.FRONTEND_SERVICE, services.DEV_TARGET_UNIT)),
         ("wait", services.runtime_api_health_url("dev", project_root=project_root)),
         ("wait", "http://127.0.0.1:18082/"),
     ]
 
 
-def test_start_all_dev_mode_skips_legacy_cleanup_when_runtime_already_active(monkeypatch, tmp_path: Path) -> None:
+def test_start_all_dev_mode_starts_missing_telemetry_when_api_and_frontend_are_active(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / "repo"
     calls: list[tuple[str, object]] = []
     monkeypatch.setattr(services, "assert_runtime_listener_preflight", lambda *args, **kwargs: {})
@@ -1166,6 +1216,7 @@ def test_start_all_dev_mode_skips_legacy_cleanup_when_runtime_already_active(mon
 
     assert calls == [
         ("ensure", "dev"),
+        ("systemctl", ("start", services.TELEMETRY_SERVICE, services.DEV_TARGET_UNIT)),
         ("wait", services.runtime_api_health_url("dev", project_root=project_root)),
         ("wait", services.runtime_frontend_url("dev")),
     ]
@@ -1251,7 +1302,7 @@ def test_start_all_container_mode_skips_legacy_cleanup_when_runtime_already_acti
     monkeypatch.setattr(
         services,
         "service_is_active",
-        lambda service_name, project_root=None: service_name in {services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE},
+        lambda service_name, project_root=None: service_name in {services.TELEMETRY_SERVICE, services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE},
     )
     monkeypatch.setattr(services, "url_is_ready", lambda url, timeout_seconds=2.0: True)
     monkeypatch.setattr(
@@ -1275,7 +1326,7 @@ def test_start_all_container_mode_skips_legacy_cleanup_when_runtime_already_acti
     assert calls == [
         ("ensure", "container"),
         ("systemctl", ("enable", services.TARGET_UNIT)),
-        ("systemctl", ("start", services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE, services.TARGET_UNIT)),
+        ("systemctl", ("start", services.TELEMETRY_SERVICE, services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE, services.TARGET_UNIT)),
         ("wait", (services.WORKFLOW_ADAPTER_HEALTH_URL, services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
         ("wait", (services.runtime_api_health_url("container", project_root=project_root), services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
         ("wait", (services.FRONTEND_URL, services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
@@ -1292,7 +1343,7 @@ def test_start_all_container_mode_blocks_when_supervisor_active_but_http_down(mo
     monkeypatch.setattr(
         services,
         "service_is_active",
-        lambda service_name, project_root=None: service_name in {services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE},
+        lambda service_name, project_root=None: service_name in {services.TELEMETRY_SERVICE, services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE},
     )
     monkeypatch.setattr(services, "url_is_ready", lambda url, timeout_seconds=2.0: False)
     monkeypatch.setattr(
@@ -1339,7 +1390,7 @@ def test_start_all_container_mode_never_kills_existing_listeners_before_first_st
     assert calls == [
         ("ensure", "container"),
         ("systemctl", ("enable", services.TARGET_UNIT)),
-        ("systemctl", ("start", services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE, services.TARGET_UNIT)),
+        ("systemctl", ("start", services.TELEMETRY_SERVICE, services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE, services.TARGET_UNIT)),
         ("wait", (services.WORKFLOW_ADAPTER_HEALTH_URL, services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
         ("wait", (services.runtime_api_health_url("container", project_root=project_root), services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
         ("wait", (services.FRONTEND_URL, services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
@@ -1386,7 +1437,7 @@ def test_restart_all_container_mode_enables_target_before_restart(monkeypatch, t
                 services.CORE_RUNTIME_SERVICE,
             ),
         ),
-        ("systemctl", ("start", services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE, services.TARGET_UNIT)),
+        ("systemctl", ("start", services.TELEMETRY_SERVICE, services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE, services.TARGET_UNIT)),
         ("wait", (services.WORKFLOW_ADAPTER_HEALTH_URL, services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
         ("wait", (services.runtime_api_health_url("container", project_root=project_root), services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
         ("wait", (services.FRONTEND_URL, services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),

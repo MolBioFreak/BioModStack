@@ -26,7 +26,6 @@ import type {
 } from './infraTelemetryHistory';
 import { jobPollingInterval } from '../lib/queryPolling';
 
-const INFRA_STORAGE_WRITE_DEBOUNCE_MS = 1500;
 const SHARED_CONTROL_POLL_INTERVAL_MS = 10000;
 const MIN_GAP_BREAK_MS = 12000;
 const SHARED_SYSTEM_QUERY_KEY = ['system'];
@@ -1300,9 +1299,9 @@ function GpuPanel({
     );
 }
 
-function buildSample(payload: SystemStatus, pollIntervalMs: PollPreset): LiveSample {
+function buildSample(payload: SystemStatus, pollIntervalMs: PollPreset, authoritativeTimestampMs?: number): LiveSample {
     const gpu: LiveSample['gpu'] = {};
-    const timestampMs = parseTelemetryTimestampMs(payload.timestamp);
+    const timestampMs = authoritativeTimestampMs ?? parseTelemetryTimestampMs(payload.timestamp);
     payload.gpus.forEach((item) => {
         gpu[item.index] = {
             util: item.utilization,
@@ -1380,15 +1379,21 @@ export function InfraLiveTelemetry({
         queryFn: () => {
             const endMs = Date.now() + 1_000;
             const startMs = endMs - windowMinutes * 60_000;
-            return fetchTelemetryHistory(startMs, endMs, 'raw', 4000);
+            const resolution = windowMinutes >= 10 ? 'minute' : 'raw';
+            return fetchTelemetryHistory(startMs, endMs, resolution, 4000);
         },
         refetchInterval: pollIntervalMs,
         refetchIntervalInBackground: false,
         refetchOnWindowFocus: true,
     });
     const historyPoints = historyQuery.data?.data.points ?? [];
-    const samples = historyPoints.map((point) => buildSample(point.payload, 1000));
-    const payload = historyPoints.at(-1)?.payload;
+    const samples = historyPoints.map((point) => buildSample(point.payload, 1000, point.timestamp_ms));
+    const latestPoint = historyPoints.at(-1);
+    const payload = latestPoint?.payload;
+    const staleAfterMs = windowMinutes >= 10 ? 120_000 : Math.max(10_000, pollIntervalMs * 5);
+    const historyIsStale = Boolean(
+        latestPoint && (historyQuery.data?.data.generated_at_ms ?? Date.now()) - latestPoint.timestamp_ms > staleAfterMs,
+    );
     const xDomain: [number, number] = [
         historyQuery.data?.data.start_ms ?? Date.now() - windowMinutes * 60_000,
         historyQuery.data?.data.end_ms ?? Date.now(),
@@ -1466,10 +1471,8 @@ export function InfraLiveTelemetry({
 
     useEffect(() => {
         if (typeof window === 'undefined') return undefined;
-        const timeoutId = window.setTimeout(() => {
-            persistTelemetryPreferences(pollIntervalMs, windowMinutes);
-        }, INFRA_STORAGE_WRITE_DEBOUNCE_MS);
-        return () => window.clearTimeout(timeoutId);
+        persistTelemetryPreferences(pollIntervalMs, windowMinutes);
+        return undefined;
     }, [pollIntervalMs, windowMinutes]);
 
     const latestTimestampMs = samples.length > 0 ? samples[samples.length - 1].timestampMs : NaN;
@@ -1542,15 +1545,27 @@ export function InfraLiveTelemetry({
                 </div>
             )}
 
-            {!payload && !historyQuery.isError && (
+            {!payload && historyQuery.isPending && (
                 <div className="rounded-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)]/70 p-5 text-sm text-[var(--text-secondary)]">
                     Loading live telemetry...
                 </div>
             )}
 
-            {historyQuery.isError && !payload && (
+            {historyQuery.isError && (
                 <div className="rounded-2xl border border-red-500/20 bg-red-500/10 p-5 text-sm text-red-200">
-                    Failed to fetch live telemetry from the BMS API.
+                    Failed to fetch live telemetry from the BMS API. Persisted chart data may be stale.
+                </div>
+            )}
+
+            {!historyQuery.isPending && !historyQuery.isError && !payload && (
+                <div className="rounded-2xl border border-amber-500/20 bg-amber-500/10 p-5 text-sm text-amber-100">
+                    No telemetry samples are available for this window.
+                </div>
+            )}
+
+            {historyIsStale && (
+                <div className="mb-3 rounded-2xl border border-amber-500/20 bg-amber-500/10 p-3 text-sm text-amber-100">
+                    Telemetry collection is stale. The charts show the last persisted samples and preserve the collection gap.
                 </div>
             )}
 
