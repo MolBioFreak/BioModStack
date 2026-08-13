@@ -168,6 +168,39 @@ def test_samtools_read_inspection_uses_inherited_snapshot_descriptors_without_re
         service._clear_samtools_runtime_cache()
 
 
+def test_samtools_runtime_rejects_same_inode_mutation_after_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services import ngs_alignment_sessions as service
+
+    image = tmp_path / "dorado.sif"
+    image.write_bytes(b"approved")
+    monkeypatch.setenv("BMS_NGS_RUNTIME_SIF", str(image))
+    monkeypatch.setattr(service.shutil, "which", lambda _command: "/usr/bin/apptainer")
+    monkeypatch.setattr(
+        service,
+        "_ngs_runtime_identity",
+        lambda: (hashlib.sha256(b"approved").hexdigest(), "1.24"),
+    )
+    monkeypatch.setattr(
+        service.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(stdout="samtools 1.24\nUsing htslib 1.24\n"),
+    )
+    service._clear_samtools_runtime_cache()
+    try:
+        command = service._samtools_command()
+        with image.open("r+b") as handle:
+            handle.seek(0)
+            handle.write(b"tampered")
+            handle.truncate()
+        with pytest.raises(service.AlignmentSessionError, match="changed after validation"):
+            command.verify_runtime()
+    finally:
+        service._clear_samtools_runtime_cache()
+
+
 def test_samtools_runtime_rejects_wrong_observed_version(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1864,7 +1897,7 @@ def test_equal_length_wrong_reference_fails_exact_identity_validation(
     monkeypatch.setattr(
         service,
         "_samtools_command",
-        lambda: service._PinnedSamtoolsCommand(("samtools",), ()),
+        lambda: service._PinnedSamtoolsCommand(("samtools",), (), None, None),
     )
     valid, reason = service._validate_alignment_bundle(bam, index, reference, None)
 
@@ -1893,7 +1926,7 @@ def test_missing_m5_accepts_only_matching_server_manifest_reference_binding(
     monkeypatch.setattr(
         service,
         "_samtools_command",
-        lambda: service._PinnedSamtoolsCommand(("samtools",), ()),
+        lambda: service._PinnedSamtoolsCommand(("samtools",), (), None, None),
     )
     expected = hashlib.sha256(b"ACGTACGT").hexdigest()
 

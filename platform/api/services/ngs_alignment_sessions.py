@@ -571,9 +571,28 @@ def _pick_bundle(records: list[dict[str, Any]], mode: str) -> tuple[dict[str, di
 class _PinnedSamtoolsCommand:
     argv: tuple[str, ...]
     pass_fds: tuple[int, ...]
+    runtime_sha256: str | None
+    runtime_identity: tuple[int, int, int, int, int] | None
 
     def __iter__(self):
         return iter(self.argv)
+
+    def verify_runtime(self) -> None:
+        if self.runtime_sha256 is None and self.runtime_identity is None and not self.pass_fds:
+            return
+        if self.runtime_sha256 is None or self.runtime_identity is None or not self.pass_fds:
+            raise AlignmentSessionError("pinned NGS runtime authority is incomplete")
+        runtime_fd = self.pass_fds[0]
+        metadata = os.fstat(runtime_fd)
+        identity = (
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_size,
+            metadata.st_mtime_ns,
+            metadata.st_ctime_ns,
+        )
+        if not stat.S_ISREG(metadata.st_mode) or identity != self.runtime_identity:
+            raise AlignmentSessionError("pinned NGS runtime changed after validation")
 
 
 _samtools_runtime_lock = threading.RLock()
@@ -666,7 +685,26 @@ def _samtools_command() -> _PinnedSamtoolsCommand:
         expected_digest, expected_version = _ngs_runtime_identity()
         runtime_fd = _open_nofollow(runtime_sif, directory=False, label="pinned NGS runtime")
         try:
-            if _sha256_descriptor(runtime_fd) != expected_digest:
+            metadata_before = os.fstat(runtime_fd)
+            observed_digest = _sha256_descriptor(runtime_fd)
+            metadata_after = os.fstat(runtime_fd)
+            identity_before = (
+                metadata_before.st_dev,
+                metadata_before.st_ino,
+                metadata_before.st_size,
+                metadata_before.st_mtime_ns,
+                metadata_before.st_ctime_ns,
+            )
+            identity_after = (
+                metadata_after.st_dev,
+                metadata_after.st_ino,
+                metadata_after.st_size,
+                metadata_after.st_mtime_ns,
+                metadata_after.st_ctime_ns,
+            )
+            if identity_before != identity_after:
+                raise AlignmentSessionError("pinned NGS runtime changed during validation")
+            if observed_digest != expected_digest:
                 raise AlignmentSessionError("pinned NGS runtime digest does not match the canonical lock")
             command = _PinnedSamtoolsCommand(
                 argv=(
@@ -681,8 +719,11 @@ def _samtools_command() -> _PinnedSamtoolsCommand:
                     "samtools",
                 ),
                 pass_fds=(runtime_fd,),
+                runtime_sha256=expected_digest,
+                runtime_identity=identity_after,
             )
             try:
+                command.verify_runtime()
                 probe = subprocess.run(
                     [*command, "--version"],
                     check=True,
@@ -770,6 +811,7 @@ def _validate_alignment_bundle(
     reference_size: int | None = None,
 ) -> tuple[bool, str | None]:
     samtools = _samtools_command()
+    samtools.verify_runtime()
     snapshots: list[BinaryIO] = []
     try:
         if bam_sha256 is None or bam_size is None:
@@ -1442,6 +1484,7 @@ def _iter_sam_lines(
     end: int | None = None,
 ) -> Iterator[str]:
     samtools = _samtools_command()
+    samtools.verify_runtime()
     snapshots: list[BinaryIO] = []
     try:
         if bam_sha256 is None or bam_size_bytes is None:
