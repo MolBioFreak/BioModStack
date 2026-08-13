@@ -258,6 +258,40 @@ async def terminalize_failed_request_for_job(
     return True
 
 
+async def terminalize_cancelled_request_for_job(
+    session: AsyncSession,
+    *,
+    job_id: str,
+) -> bool:
+    """Bind a cancelled CM job to its still-active request."""
+
+    job = await session.get(Job, job_id)
+    if (
+        job is None
+        or job.stage_family != "conformational_mapping"
+        or job.status != "cancelled"
+    ):
+        return False
+    record = (
+        await session.execute(
+            select(ConformationalMappingRequest).where(
+                ConformationalMappingRequest.job_id == job_id,
+                ConformationalMappingRequest.status.in_(("prepared", "queued", "running")),
+            )
+        )
+    ).scalar_one_or_none()
+    if record is None:
+        return False
+    await transition_request(
+        session,
+        record,
+        status="cancelled",
+        progress={"phase": "cancelled"},
+        flush=False,
+    )
+    return True
+
+
 def _contained_file(root: Path, relative_path: str) -> Path:
     pure = PurePosixPath(relative_path)
     if pure.is_absolute() or str(pure) != relative_path or any(part in {"", ".", ".."} for part in pure.parts) or "\\" in relative_path:

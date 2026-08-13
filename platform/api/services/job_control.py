@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import async_session, Job, MdRun
 from schemas import JobStatus
+from services.execution_ownership import release_scheduler_gpu_assignment
 from services.nextflow import cancel_nextflow_job
 
 logger = logging.getLogger(__name__)
@@ -210,7 +211,7 @@ async def cancel_job_lineage(
             job.stage_progress = None
             job.completed_at = job.completed_at or completed_at
             job.error_message = job.error_message or error_message
-            params = json.loads(job.params) if isinstance(job.params, str) else dict(job.params or {})
+            params = release_scheduler_gpu_assignment(job.params)
             receipt = dict(params.get("cancellation_receipt") or {})
             receipt.update(
                 {
@@ -230,6 +231,13 @@ async def cancel_job_lineage(
 
     if before_terminal_commit is not None:
         await before_terminal_commit()
+
+    from services.conformational_mapping.persistence import (
+        terminalize_cancelled_request_for_job as terminalize_cancelled_cm_request_for_job,
+    )
+
+    for job in [*cancellable, *already_cancelled]:
+        await terminalize_cancelled_cm_request_for_job(session, job_id=str(job.id))
 
     if commit:
         await session.commit()
