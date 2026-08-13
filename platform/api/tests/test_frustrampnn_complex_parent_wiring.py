@@ -151,7 +151,7 @@ def test_complex_producer_coordinates_are_explicit_typed_and_preserved(tmp_path:
         module._decode_metadata(encoded_fabricated, source=source)
 
 
-def _minimal_mmcif() -> bytes:
+def _minimal_mmcif(*, include_dna: bool = False) -> bytes:
     columns = [
         "group_PDB", "id", "type_symbol", "label_atom_id", "label_alt_id",
         "label_comp_id", "label_asym_id", "label_entity_id", "label_seq_id",
@@ -167,8 +167,58 @@ def _minimal_mmcif() -> bytes:
             "1", "GLY", "A", atom, "1",
         ]
         lines.append(" ".join(row) + "\n")
+    if include_dna:
+        for atom_id, (atom, element) in enumerate(
+            (("P", "P"), ("OP1", "O"), ("OP2", "O"), ("O5P", "O")),
+            5,
+        ):
+            row = [
+                "ATOM", str(atom_id), element, atom, ".", "DA", "B", "2", "1", "?",
+                str(atom_id), str(atom_id + 1), str(atom_id + 2), "1.0", "20.0",
+                "1", "DA", "B", atom, "1",
+            ]
+            lines.append(" ".join(row) + "\n")
     lines.append("#\n")
     return "".join(lines).encode("utf-8")
+
+
+@pytest.mark.parametrize("suffix", [".cif", ".mmcif"])
+def test_complex_metadata_accepts_mixed_protein_dna_mmcif_aliases_and_rejects_pdb_claim(
+    tmp_path: Path,
+    suffix: str,
+) -> None:
+    module = _prepare_module()
+    source = tmp_path / f"candidate_sample_0{suffix}"
+    source.write_bytes(_minimal_mmcif(include_dna=True))
+    source_sha = __import__("hashlib").sha256(source.read_bytes()).hexdigest()
+    identity = {
+        "producer_method": "protenix",
+        "producer_sample": "batch-a",
+        "producer_rank": 0,
+        "producer_output_key": f"batch-a/candidate_sample_0{suffix}",
+    }
+    metadata = {
+        "parent_job_id": "job-complex-1",
+        "parent_workflow_id": "complex_prediction",
+        "producer_stage": "complex_prediction:protenix:protein_only",
+        "producer_candidate_key": "frustrampnn/sources/protenix/candidate.pdb",
+        **identity,
+        "producer_identity_sha256": module.producer_identity_sha256(identity),
+        "producer_artifact_sha256": source_sha,
+        "source_format": "mmcif",
+        "requiredness": "required",
+        "checkpoint_id": "megascale.ckpt",
+    }
+
+    def decode(candidate: dict[str, object]) -> dict[str, object]:
+        encoded = base64.b64encode(
+            json.dumps(candidate, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).decode("ascii")
+        return module._decode_metadata(encoded, source=source)
+
+    assert decode(metadata)["source_format"] == "mmcif"
+    with pytest.raises(ValueError, match="source_format"):
+        decode(dict(metadata, source_format="pdb"))
 
 
 def test_complex_request_preserves_original_producer_provenance_and_binding(tmp_path: Path) -> None:

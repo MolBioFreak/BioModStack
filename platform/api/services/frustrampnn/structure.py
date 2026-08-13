@@ -177,6 +177,8 @@ def derive_mmcif_atom_site_authority(source_bytes: bytes) -> dict[str, Any]:
         residue = _required(
             row[positions["label_comp_id"]], "label_comp_id"
         ).upper()
+        if residue in _CLEAR_NONPROTEIN_RESIDUES:
+            continue
         letter = _authority_residue_letter(residue)
         if letter is None:
             raise StructureNormalizationError(
