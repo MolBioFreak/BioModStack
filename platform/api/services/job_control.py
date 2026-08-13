@@ -217,7 +217,7 @@ async def cancel_job_lineage(
                 {
                     "schema": "bms.workflow-cancellation.v1",
                     "state": "completed",
-                    "completed_at": completed_at.isoformat() + "Z",
+                    "completed_at": job.completed_at.isoformat() + "Z",
                     "run_identity": str(job.nextflow_run_id or receipt.get("run_identity") or ""),
                 }
             )
