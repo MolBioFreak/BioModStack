@@ -2144,6 +2144,7 @@ def restart_all(project_root: Path | None = None, runtime_mode: str | None = Non
 
     if mode == DEV_RUNTIME_MODE:
         local_api_active = service_is_active(API_SERVICE, project_root=root)
+        run_systemctl("restart", TELEMETRY_SERVICE, project_root=root)
         run_systemctl("stop", DEV_TARGET_UNIT, FRONTEND_SERVICE, check=False, project_root=root)
         cleanup_legacy_listener("frontend", root)
         services_to_start: list[str] = []

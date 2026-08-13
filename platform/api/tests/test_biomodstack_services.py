@@ -1479,6 +1479,10 @@ def test_restart_all_dev_waits_for_adapter_before_api_and_frontend(
 
     services.restart_all(project_root=project_root, runtime_mode="dev")
 
+    assert ("systemctl", ("restart", services.TELEMETRY_SERVICE)) in calls
+    assert calls.index(("systemctl", ("restart", services.TELEMETRY_SERVICE))) < calls.index(
+        ("systemctl", ("stop", services.DEV_TARGET_UNIT, services.FRONTEND_SERVICE))
+    )
     wait_calls = [call for call in calls if call[0] == "wait"]
     assert wait_calls == [
         (
