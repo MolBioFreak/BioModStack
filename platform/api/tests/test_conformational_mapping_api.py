@@ -78,7 +78,15 @@ def test_registered_source_format_is_server_normalized() -> None:
     assert _registered_source_format("legacy/content.pdb") == "pdb"
 
 
-def test_cm_principal_requires_authentication_or_trusted_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cm_authorization_is_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("BMS_CM_AUTHORIZATION_ENABLED", raising=False)
+    monkeypatch.delenv("BMS_CM_TRUSTED_PROXY_SECRET", raising=False)
+    assert _principal(_http_request(client_host="127.0.0.1")) == cm_router._PERSONAL_WORKFLOW_PRINCIPAL
+    assert _mutation_principal(_http_request(client_host="127.0.0.1")) == cm_router._PERSONAL_WORKFLOW_PRINCIPAL
+
+
+def test_cm_authorization_flag_restores_principal_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BMS_CM_AUTHORIZATION_ENABLED", "1")
     monkeypatch.delenv("BMS_CM_TRUSTED_PROXY_SECRET", raising=False)
     with pytest.raises(HTTPException, match="authenticated conformational-mapping principal"):
         _principal(_http_request(client_host="127.0.0.1"))
@@ -92,7 +100,8 @@ def test_cm_principal_requires_authentication_or_trusted_proxy(monkeypatch: pyte
     assert _principal(_http_request(client_host="127.0.0.1", principal="alice")) == "alice"
 
 
-def test_cm_mutations_require_an_authenticated_principal() -> None:
+def test_cm_authorization_flag_restores_mutation_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BMS_CM_AUTHORIZATION_ENABLED", "true")
     with pytest.raises(HTTPException, match="authenticated conformational-mapping principal"):
         _mutation_principal(_http_request(client_host="127.0.0.1"))
     assert _mutation_principal(_http_request(client_host="127.0.0.1", principal="alice")) == "alice"

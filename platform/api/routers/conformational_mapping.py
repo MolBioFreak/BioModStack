@@ -102,6 +102,16 @@ _CONFORNETS_TEST_CASE_ID = "bms-canonical-monomer"
 _CONFORNETS_BENCHMARK_NAME = "biomodstack"
 
 
+def _authorization_enabled() -> bool:
+    """Return whether the retained CM principal boundary is active."""
+    return os.getenv("BMS_CM_AUTHORIZATION_ENABLED", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _confornets_submission_policy() -> dict[str, str]:
     return {
         "chain_id": _CONFORNETS_CHAIN_ID,
@@ -1462,6 +1472,8 @@ async def search_rcsb_sources(
 
 def _principal(request: Request) -> str:
     """Resolve an authenticated caller or the configured trusted application proxy."""
+    if not _authorization_enabled():
+        return _PERSONAL_WORKFLOW_PRINCIPAL
     principal = getattr(request.state, "authenticated_principal", None)
     if principal is None:
         configured = os.getenv("BMS_CM_TRUSTED_PROXY_SECRET", "")
