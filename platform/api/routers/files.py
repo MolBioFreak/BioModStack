@@ -21,6 +21,9 @@ from paths import (
 )
 
 router = APIRouter()
+GOVERNED_NGS_MANIFEST_SCHEMAS = frozenset(
+    {"sequence_qc.manifest.v1", "biomodstack.construct_verification.v2"}
+)
 
 
 def _read_json_nofollow(path: Path, *, max_bytes: int = 10 * 1024 * 1024) -> dict:
@@ -178,7 +181,7 @@ def _is_governed_ngs_artifact(path: Path) -> bool:
             continue
         try:
             payload = _read_json_nofollow(manifest)
-            if payload.get("schema") == "sequence_qc.manifest.v1":
+            if payload.get("schema") in GOVERNED_NGS_MANIFEST_SCHEMAS:
                 return True
         except (OSError, ValueError, json.JSONDecodeError):
             return True

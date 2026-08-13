@@ -471,6 +471,14 @@ def test_generic_file_routes_hide_governed_ngs_tree(
     report.write_text("<html></html>", encoding="utf-8")
     structure = fastq_qc / "governed.pdb"
     structure.write_text("ATOM\n", encoding="utf-8")
+    verification = result_root / "verification"
+    verification.mkdir()
+    verification_report = verification / "construct_verification_report.html"
+    verification_report.write_text("<html>verification</html>", encoding="utf-8")
+    (verification / "qc_manifest.json").write_text(
+        json.dumps({"schema": "biomodstack.construct_verification.v2", "artifacts": []}),
+        encoding="utf-8",
+    )
     (fastq_qc / "qc_manifest.json").write_text(
         json.dumps({"schema": "sequence_qc.manifest.v1", "artifacts": []}),
         encoding="utf-8",
@@ -487,6 +495,8 @@ def test_generic_file_routes_hide_governed_ngs_tree(
     assert client.get("/api/files/browse", params={"path": "bms_results/result/fastq_qc"}).status_code == 403
     assert client.get("/api/files/download/bms_results/result/fastq_qc/igv_report.html").status_code == 403
     assert client.get("/api/files/stream/bms_results/result/fastq_qc/igv_report.html").status_code == 403
+    assert client.get("/api/files/download/bms_results/result/verification/construct_verification_report.html").status_code == 403
+    assert client.get("/api/files/stream/bms_results/result/verification/construct_verification_report.html").status_code == 403
     assert client.get("/api/files/pdb/bms_results/result/fastq_qc/governed.pdb").status_code == 403
     assert client.post(
         "/api/files/extract-chain",
