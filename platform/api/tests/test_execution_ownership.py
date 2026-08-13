@@ -135,6 +135,53 @@ def test_duplicate_deterministic_unit_claim_fails_closed(monkeypatch: pytest.Mon
         ownership.create_systemd_workflow_unit(command)
 
 
+def test_cancellation_accepts_explicitly_absent_transient_unit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    unit = ownership.deterministic_unit_name(ownership.DEVELOPMENT_LANE, "gone-job", 1)
+    command_calls: list[list[str]] = []
+    stop_calls: list[str] = []
+    kill_calls: list[str] = []
+
+    def absent_unit(command: list[str]) -> subprocess.CompletedProcess[str]:
+        command_calls.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="LoadState=not-found\nActiveState=inactive\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(ownership, "_run_command", absent_unit)
+    monkeypatch.setattr(ownership, "_stop_unit", stop_calls.append)
+    monkeypatch.setattr(ownership, "_kill_unit", kill_calls.append)
+
+    assert ownership.cancel_systemd_workflow_unit(unit, ownership.DEVELOPMENT_LANE) is True
+    assert len(command_calls) == 1
+    assert stop_calls == []
+    assert kill_calls == []
+
+
+def test_systemd_inspection_failure_is_not_classified_as_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    unit = ownership.deterministic_unit_name(ownership.DEVELOPMENT_LANE, "unknown-job", 1)
+
+    monkeypatch.setattr(
+        ownership,
+        "_run_command",
+        lambda command: subprocess.CompletedProcess(
+            command,
+            1,
+            stdout="",
+            stderr="Failed to connect to bus: No medium found",
+        ),
+    )
+
+    with pytest.raises(ownership.SystemdCommandError, match="Failed to connect to bus"):
+        ownership.cancel_systemd_workflow_unit(unit, ownership.DEVELOPMENT_LANE)
+
+
 def test_cancellation_requires_empty_cgroup_after_sigterm(monkeypatch: pytest.MonkeyPatch) -> None:
     unit = ownership.deterministic_unit_name(ownership.PRODUCTION_LANE, "job-1", 1)
     slice_name = ownership.workflow_slice_for_lane(ownership.PRODUCTION_LANE)

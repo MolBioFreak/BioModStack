@@ -1383,6 +1383,67 @@ def test_restart_all_container_mode_enables_target_before_restart(monkeypatch, t
     ]
 
 
+def test_restart_all_dev_waits_for_adapter_before_api_and_frontend(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "repo"
+    calls: list[tuple[str, object]] = []
+    monkeypatch.setattr(services, "assert_runtime_listener_preflight", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        services,
+        "ensure_user_units",
+        lambda root, runtime_mode=None: calls.append(("ensure", runtime_mode)),
+    )
+    monkeypatch.setattr(
+        services,
+        "service_is_active",
+        lambda service_name, project_root=None: service_name == services.API_SERVICE,
+    )
+    monkeypatch.setattr(
+        services,
+        "run_systemctl",
+        lambda *args, **kwargs: calls.append(("systemctl", args)) or SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    monkeypatch.setattr(
+        services,
+        "cleanup_legacy_listener",
+        lambda kind, project_root=None, runtime_mode=None: calls.append(("cleanup", kind)),
+    )
+    monkeypatch.setattr(
+        services,
+        "wait_for_http",
+        lambda url, timeout_seconds=30.0: calls.append(("wait", (url, timeout_seconds))),
+    )
+
+    services.restart_all(project_root=project_root, runtime_mode="dev")
+
+    wait_calls = [call for call in calls if call[0] == "wait"]
+    assert wait_calls == [
+        (
+            "wait",
+            (
+                services.workflow_adapter_health_url_for_lane(services.DEVELOPMENT_LANE),
+                services.DEFAULT_HTTP_WAIT_TIMEOUT_SECONDS,
+            ),
+        ),
+        (
+            "wait",
+            (
+                services.runtime_api_health_url("dev", project_root=project_root),
+                services.DEFAULT_HTTP_WAIT_TIMEOUT_SECONDS,
+            ),
+        ),
+        (
+            "wait",
+            (
+                services.runtime_frontend_url("dev", project_root=project_root),
+                services.DEFAULT_HTTP_WAIT_TIMEOUT_SECONDS,
+            ),
+        ),
+    ]
+
+
 def test_core_runtime_script_delegates_to_bounded_supervisor() -> None:
     script = (services.get_project_root() / "scripts" / "run_biomodstack_core_runtime.sh").read_text(encoding="utf-8")
 

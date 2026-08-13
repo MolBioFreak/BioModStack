@@ -250,6 +250,53 @@ async def test_core_scheduler_explicitly_allows_durably_prestarted_job_handoff(
 
 
 @pytest.mark.asyncio
+async def test_scheduler_admission_waits_for_configured_adapter_readiness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import main
+
+    outcomes = iter([(False, "unavailable"), (True, "http_200")])
+    probes: list[str] = []
+    sleeps: list[float] = []
+    monkeypatch.setattr(main, "workflow_adapter_base_url", lambda: "http://127.0.0.1:18001")
+
+    async def probe(url: str) -> tuple[bool, str]:
+        probes.append(url)
+        return next(outcomes)
+
+    async def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(main, "http_readiness", probe)
+    monkeypatch.setattr(main.asyncio, "sleep", sleep)
+
+    await main.wait_for_workflow_adapter_admission(timeout_seconds=1.0, poll_interval_seconds=0.01)
+
+    assert probes == [
+        "http://127.0.0.1:18001/api/workflow-adapter/health",
+        "http://127.0.0.1:18001/api/workflow-adapter/health",
+    ]
+    assert sleeps == [0.01]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_admission_fails_before_launch_when_adapter_stays_unready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import main
+
+    monkeypatch.setattr(main, "workflow_adapter_base_url", lambda: "http://127.0.0.1:18001")
+    monkeypatch.setattr(main, "http_readiness", lambda _url: _async_readiness(False, "unavailable"))
+
+    with pytest.raises(RuntimeError, match="workflow adapter is not ready"):
+        await main.wait_for_workflow_adapter_admission(timeout_seconds=0.0, poll_interval_seconds=0.0)
+
+
+async def _async_readiness(ready: bool, status: str) -> tuple[bool, str]:
+    return ready, status
+
+
+@pytest.mark.asyncio
 async def test_detached_launcher_retains_task_until_completion(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("BMS_CORE_RUNTIME_MODE", raising=False)
     nextflow._detached_launch_tasks.clear()

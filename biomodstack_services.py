@@ -2098,6 +2098,10 @@ def restart_all(project_root: Path | None = None, runtime_mode: str | None = Non
             services_to_start.append(API_SERVICE)
         services_to_start.append(FRONTEND_SERVICE)
         run_systemctl("start", *services_to_start, DEV_TARGET_UNIT, project_root=root)
+        wait_for_http(
+            workflow_adapter_health_url_for_lane(DEVELOPMENT_LANE),
+            timeout_seconds=wait_timeout_seconds,
+        )
         wait_for_http(runtime_api_health_url(mode, project_root=root), timeout_seconds=wait_timeout_seconds)
         wait_for_http(frontend_url, timeout_seconds=wait_timeout_seconds)
         return

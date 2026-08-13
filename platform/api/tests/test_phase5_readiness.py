@@ -53,7 +53,7 @@ async def test_container_readiness_requires_reachable_adapter(monkeypatch) -> No
 
     assert result["checks"]["workflow_adapter"]["required"] is True
     assert result["checks"]["workflow_adapter"]["ready"] is False
-    assert result["checks"]["workflow_launch"]["allowed"] is True
+    assert result["checks"]["workflow_launch"]["allowed"] is False
     assert result["ready"] is False
 
 

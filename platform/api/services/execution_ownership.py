@@ -118,6 +118,7 @@ class UnitProperties:
     result: str
     slice_name: str
     invocation_id: str = ""
+    load_state: str = ""
 
     @classmethod
     def from_mapping(cls, values: Mapping[str, object]) -> "UnitProperties":
@@ -130,6 +131,7 @@ class UnitProperties:
             result=str(values.get("Result", "")),
             slice_name=str(values.get("Slice", "")),
             invocation_id=str(values.get("InvocationID", "")),
+            load_state=str(values.get("LoadState", "")),
         )
 
 
@@ -691,6 +693,7 @@ def create_systemd_workflow_unit(command: Sequence[str]) -> str:
 
 
 _SHOW_PROPERTIES = (
+    "LoadState",
     "ActiveState",
     "SubState",
     "ControlGroup",
@@ -723,11 +726,13 @@ def show_unit_properties(unit_name: str, lane: str) -> UnitProperties:
     ]
     completed = _run_command(command)
     if completed.returncode != 0:
-        raise UnitNotFoundError(
+        raise SystemdCommandError(
             f"Could not inspect workflow unit {identity.unit_name}: "
             f"{(completed.stderr or completed.stdout).strip()}"
         )
     properties = UnitProperties.from_mapping(_parse_systemd_properties(completed.stdout))
+    if properties.load_state == "not-found":
+        raise UnitNotFoundError(f"Workflow unit {identity.unit_name} is explicitly absent")
     if properties.slice_name != identity.slice_name:
         raise LaneMismatchError(
             f"Workflow unit {identity.unit_name} has slice {properties.slice_name!r}; "
@@ -802,7 +807,7 @@ def cancel_systemd_workflow_unit(
     try:
         initial = show_unit_properties(unit_name, lane)
     except UnitNotFoundError:
-        return False
+        return True
     if unit_is_inactive_with_empty_cgroup(initial):
         return True
 
@@ -818,7 +823,7 @@ def cancel_systemd_workflow_unit(
             try:
                 properties = show_unit_properties(unit_name, lane)
             except UnitNotFoundError:
-                return False
+                return True
             if unit_is_inactive_with_empty_cgroup(properties):
                 return True
             time.sleep(max(0.0, poll_interval_seconds))

@@ -158,7 +158,7 @@ async def collect_runtime_readiness(
     )
 
     adapter_url = workflow_adapter_base_url()
-    adapter_required = container_mode
+    adapter_required = container_mode or bool(adapter_url)
     if adapter_url:
         adapter_ready, adapter_status = await http_readiness(f"{adapter_url}/api/workflow-adapter/health")
     elif adapter_required:
@@ -174,7 +174,7 @@ async def collect_runtime_readiness(
         frontend_ready, frontend_status = True, "not_configured"
         frontend_required = False
 
-    launch_allowed = workflow_launches_allowed()
+    launch_allowed = workflow_launches_allowed() and adapter_ready
     checks = {
         "process_liveness": _check(required=True, ready=True, status="alive"),
         "core_database": _check(required=True, ready=core_ready, status=core_status),

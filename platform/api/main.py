@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+import asyncio
 import os
 import logging
 
@@ -16,7 +17,7 @@ from experiment_database import experiment_session_factory, get_experiment_db_pa
 from molbio_database import init_molbio_db, molbio_health
 from molbio_ngs_database import init_molbio_ngs_db, molbio_ngs_health
 from build_identity import current_build_identity
-from readiness import collect_runtime_readiness
+from readiness import collect_runtime_readiness, http_readiness
 from frustrampnn_upload_limit import FrustraMPNNUploadLimitMiddleware
 from routers import analyses, analytics, boltz_api_jobs, boltzgen, conformational_mapping, designs, external_imports, experiment_workspaces, files, frameworks, frustrampnn, gpu, inputs, jobs, md_results, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_ngs_experiments, molbio_ops, msa, ngs_alignment_sessions, nucleotide_sequences, ont_devices, ont_runs, project_manager, projects, queue, rcsb, ribocentre, rna_structure, sequence_qc, shape_blueprint, smiles_converter, system, templates, user_sequences, user_templates, viewer_resources
 from runtime_policy import workflow_launch_block_detail, workflow_launches_allowed
@@ -31,6 +32,7 @@ from services.global_experiments.worker import (
     install_global_experiment_worker,
 )
 from routers.gpu import get_gpu_stats
+from services.workflow_adapter import workflow_adapter_base_url
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -60,6 +62,30 @@ async def _orchestrator_launch_job(job_id, model_id, mode, params, output_dir):
     )
 
 
+async def wait_for_workflow_adapter_admission(
+    *,
+    timeout_seconds: float = 30.0,
+    poll_interval_seconds: float = 0.25,
+) -> None:
+    """Block scheduler admission until the configured adapter answers health probes."""
+    base_url = workflow_adapter_base_url()
+    if not base_url:
+        return
+    health_url = f"{base_url}/api/workflow-adapter/health"
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max(0.0, float(timeout_seconds))
+    last_status = "unavailable"
+    while True:
+        ready, last_status = await http_readiness(health_url)
+        if ready:
+            return
+        if loop.time() >= deadline:
+            raise RuntimeError(
+                f"Configured workflow adapter is not ready for scheduler admission: {last_status}"
+            )
+        await asyncio.sleep(max(0.0, float(poll_interval_seconds)))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize database and GPU orchestrator on startup."""
@@ -79,6 +105,7 @@ async def lifespan(app: FastAPI):
     
     # Initialize GPU orchestrator only when this runtime is allowed to own workflow launches.
     if workflow_launches_allowed():
+        await wait_for_workflow_adapter_admission()
         _orchestrator = GPUOrchestrator(
             db_session_factory=async_session,
             get_gpu_stats_fn=get_gpu_stats,
