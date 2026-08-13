@@ -1860,21 +1860,34 @@ async def test_artifact_snapshot_open_runs_outside_the_event_loop(
 
 
 @pytest.mark.asyncio
-async def test_governed_report_is_forced_to_attachment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_governed_package_html_descriptor_is_forced_to_sandboxed_attachment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from routers import ngs_alignment_sessions as routes
 
-    report = tmp_path / "igv_report.html"
+    report = tmp_path / "evidence.html"
     report.write_bytes(b"<html></html>")
     digest = hashlib.sha256(report.read_bytes()).hexdigest()
     monkeypatch.setattr(routes.service, "open_verified_artifact_snapshot", lambda *_args, **_kwargs: io.BytesIO(report.read_bytes()))
-    request = Request({"type": "http", "method": "GET", "path": "/artifact", "headers": []})
-    response = await routes._serve_artifact(
-        report,
-        {"role": "report", "size_bytes": report.stat().st_size, "sha256": digest, "mime_type": "text/html"},
-        request,
-    )
-    assert response.headers["content-disposition"] == 'attachment; filename="igv_report.html"'
-    assert isinstance(response, StreamingResponse)
+    metadata = {
+        "kind": "human_evidence_report",
+        "source": "construct_verification",
+        "size_bytes": report.stat().st_size,
+        "sha256": digest,
+        "mime_type": "text/html",
+    }
+    for headers, expected_status in (([], 200), ([(b"range", b"bytes=0-4")], 206)):
+        request = Request({"type": "http", "method": "GET", "path": "/artifact", "headers": headers})
+        response = await routes._serve_artifact(report, metadata, request)
+        assert response.status_code == expected_status
+        assert response.headers["content-disposition"] == 'attachment; filename="evidence.html"'
+        assert response.headers["content-security-policy"] == "default-src 'none'; sandbox"
+        assert response.headers["x-content-type-options"] == "nosniff"
+        assert isinstance(response, StreamingResponse)
+        chunks = [chunk async for chunk in response.body_iterator]
+        body = b"".join(chunk.encode() if isinstance(chunk, str) else bytes(chunk) for chunk in chunks)
+        assert body == report.read_bytes()[: len(body)]
 
 
 def test_alignment_routes_enforce_the_job_authorization_dependency(monkeypatch: pytest.MonkeyPatch) -> None:
