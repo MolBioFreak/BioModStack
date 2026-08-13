@@ -1151,7 +1151,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment=PYTHONUNBUFFERED=1
         WorkingDirectory={root / 'platform' / 'api'}
         ExecStartPre=/usr/bin/mkdir -p {Path(telemetry_db).parent}
-        ExecStart={root / 'platform' / 'api' / '.venv' / 'bin' / 'python'} {root / 'platform' / 'api' / 'tools' / 'telemetry_collector.py'}
+        ExecStart={root / 'platform' / 'api' / '.venv' / 'bin' / 'python'} -m tools.telemetry_collector
         Restart=on-failure
         RestartSec=5
         TimeoutStopSec=15
