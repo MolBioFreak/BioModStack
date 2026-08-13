@@ -211,7 +211,7 @@ async def _serve_artifact(path: Path, metadata: dict, request: Request) -> Respo
         "X-Content-Type-Options": "nosniff",
     }
     if metadata.get("mime_type") == "text/html":
-        if metadata.get("role") == "report":
+        if metadata.get("role") == "report" and metadata.get("_kind") == "igv_report":
             base_headers["Content-Disposition"] = f'inline; filename="{path.name}"'
         else:
             base_headers["Content-Disposition"] = f'attachment; filename="{path.name}"'

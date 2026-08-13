@@ -1086,6 +1086,7 @@ def _artifact_descriptor(job_id: str, record: dict[str, Any], role: str) -> dict
     )
     return {
         "artifact_id": identity,
+        "_kind": str(record["kind"]),
         "role": role,
         "url": f"/api/jobs/{job_id}/alignment-artifacts/{identity}",
         "sha256": observed_digest,
@@ -1206,7 +1207,7 @@ def _session_records(
 def _public_session(session: dict[str, Any]) -> dict[str, Any]:
     public = {key: value for key, value in session.items() if key != "artifacts"}
     public["artifacts"] = {
-        role: {key: value for key, value in artifact.items() if key != "_path"}
+        role: {key: value for key, value in artifact.items() if key not in {"_kind", "_path"}}
         for role, artifact in session["artifacts"].items()
     }
     return public
