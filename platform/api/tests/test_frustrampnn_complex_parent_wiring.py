@@ -68,6 +68,31 @@ def test_complex_producer_boundary_emits_typed_manifest_without_adapter_inferenc
     assert "predicted.getName()" not in complex_helper
 
 
+def test_complex_producer_binding_preserves_nested_keys_across_nextflow_staging() -> None:
+    module = (REPO_ROOT / "modules" / "structure_prediction.nf").read_text(encoding="utf-8")
+    protenix = (REPO_ROOT / "modules" / "protenix.nf").read_text(encoding="utf-8")
+    complex_helper = module.split("def complexCanonicalProducerOutputs", 1)[1].split(
+        "// Generate MSA", 1
+    )[0]
+    protenix_process = protenix.split("process ProtenixFromComplex", 1)[1].split(
+        "process ", 1
+    )[0]
+
+    assert (
+        'tuple val(input_sample), path("producer_candidates.json"), '
+        'path("predictions/**/*.cif"), emit: canonical_structures, optional: true'
+    ) in protenix_process
+    assert "manifest.candidates.size() != predictedFiles.size()" in complex_helper
+    assert "(manifestNames as Set).size() != manifestNames.size()" in complex_helper
+    assert "ambiguous output filenames" in complex_helper
+    assert "binds one output more than once" in complex_helper
+    assert "boundKeys" in complex_helper
+    assert "record.producer_output_key.toString().tokenize('/')[-1] == stagedOutputName" in complex_helper
+    assert "record.producer_artifact_sha256 == artifactDigest" in complex_helper
+    assert "boundKeys != manifestKeys" in complex_helper
+    assert "predicted.baseName" not in complex_helper
+
+
 def test_complex_producer_coordinates_are_explicit_typed_and_preserved(tmp_path: Path) -> None:
     module = _prepare_module()
     source = tmp_path / "candidate_sample_0.cif"

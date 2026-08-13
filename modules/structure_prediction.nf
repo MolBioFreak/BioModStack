@@ -246,15 +246,23 @@ def complexCanonicalProducerOutputs(outputs) {
             manifest.schema_version != 1 || !(manifest.candidates instanceof Collection)) {
             throw new IllegalArgumentException('complex producer candidate manifest is invalid')
         }
-        def predictedFiles = produced instanceof Collection ? produced : [produced]
-        predictedFiles.collect { predicted ->
-            def rawPath = predicted.toString().replace('\\', '/')
-            def marker = '/predictions/'
-            def markerIndex = rawPath.lastIndexOf(marker)
-            if (markerIndex < 0) {
-                throw new IllegalArgumentException('complex producer output escaped predictions root')
-            }
-            def stagedOutputKey = rawPath.substring(markerIndex + marker.length())
+        def predictedFiles = produced instanceof Collection ? produced as List : [produced]
+        if (manifest.candidates.size() != predictedFiles.size()) {
+            throw new IllegalArgumentException('complex producer manifest/file set is incomplete')
+        }
+        def manifestKeys = manifest.candidates.collect { it.producer_output_key } as Set
+        if (manifestKeys.size() != manifest.candidates.size()) {
+            throw new IllegalArgumentException('complex producer manifest contains duplicate output keys')
+        }
+        def manifestNames = manifest.candidates.collect { record ->
+            record.producer_output_key.toString().tokenize('/')[-1]
+        }
+        if ((manifestNames as Set).size() != manifestNames.size()) {
+            throw new IllegalArgumentException('complex producer manifest contains ambiguous output filenames')
+        }
+        def boundKeys = [] as Set
+        def bound = predictedFiles.collect { predicted ->
+            def stagedOutputName = predicted.toFile().name
             def digest = java.security.MessageDigest.getInstance('SHA-256')
             predicted.toFile().withInputStream { stream ->
                 byte[] buffer = new byte[1024 * 1024]
@@ -263,18 +271,25 @@ def complexCanonicalProducerOutputs(outputs) {
             }
             def artifactDigest = digest.digest().encodeHex().toString()
             def matches = manifest.candidates.findAll { record ->
-                record.producer_output_key == stagedOutputKey &&
+                record.producer_output_key.toString().tokenize('/')[-1] == stagedOutputName &&
                     record.producer_artifact_sha256 == artifactDigest
             }
             if (matches.size() != 1) {
                 throw new IllegalArgumentException('complex producer metadata does not bind one emitted file')
             }
             def record = matches[0] as Map
+            if (!boundKeys.add(record.producer_output_key)) {
+                throw new IllegalArgumentException('complex producer metadata binds one output more than once')
+            }
             if (record.producer_sample != (producerSample == null ? null : producerSample.toString())) {
                 throw new IllegalArgumentException('complex producer sample disagrees with scheduler input')
             }
             tuple(record, predicted)
         }
+        if (boundKeys != manifestKeys) {
+            throw new IllegalArgumentException('complex producer manifest/file set is incomplete')
+        }
+        bound
     }
 }
 
