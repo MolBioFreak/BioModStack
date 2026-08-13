@@ -4560,12 +4560,96 @@ export interface OntRunGeneration extends OntRunSummary {
     event_type: string;
 }
 
+export type OntRawSignalPreference = 'auto' | 'pod5' | 'blow5';
+export type OntRawSignalReadiness = 'ready' | 'preparable' | 'unavailable';
+export interface OntRawSignalMode {
+    state: OntRawSignalReadiness;
+    reason_code: string;
+    representation_id: string | null;
+}
+export interface OntRawSignalRepresentation {
+    representation_id: string;
+    run_id: string;
+    observed_generation: number;
+    role: 'source' | 'derived';
+    source_kind: string;
+    format: 'pod5' | 'slow5' | 'blow5';
+    source_fidelity: string;
+    state: OntRawSignalReadiness;
+    reason_code: string;
+    manifest_sha256: string;
+    artifact_count: number;
+    read_count: number | null;
+    profile_id: string | null;
+    validation: {
+        source_identity_closed: boolean;
+        adjacent_index_validated: boolean;
+        semantic_contract_validated: boolean;
+    };
+}
+export interface OntRawSignalCapabilities {
+    run_id: string;
+    observed_generation: number;
+    representation_preference: OntRawSignalPreference;
+    selected_representation_id: string | null;
+    selected_format: 'pod5' | 'blow5' | null;
+    selection_reason_code: string;
+    representations: OntRawSignalRepresentation[];
+    modes: Record<'pod5_direct' | 'blow5_indexed' | 'raw_waveform' | 'signal_to_read' | 'signal_to_reference' | 'signal_pileup' | 'igv', OntRawSignalMode>;
+}
+
+export interface OntRawSignalWaveform {
+    lookup_id: string;
+    run_id: string;
+    observed_generation: number;
+    representation_id: string;
+    read_id: string;
+    state: 'requested' | 'running' | 'ready' | 'failed';
+    reason_code: string;
+    sample_count: number | null;
+    samples: number[] | null;
+}
+
 export const fetchOntInstrumentRuns = (limit = 100) =>
     apiData(api.get<OntRunSummary[]>('/api/ont/runs', { params: { limit } }));
 export const fetchOntInstrumentRunGeneration = (runId: string, observedGeneration: number) =>
     apiData(api.get<OntRunGeneration>(
         `/api/ont/runs/${encodeURIComponent(runId)}/generations/${encodeURIComponent(String(observedGeneration))}`,
     ));
+export const fetchOntRawSignalCapabilities = (
+    runId: string,
+    observedGeneration: number,
+    representationPreference: OntRawSignalPreference,
+) => apiData(api.get<OntRawSignalCapabilities>(
+    `/api/ont/runs/${encodeURIComponent(runId)}/generations/${encodeURIComponent(String(observedGeneration))}/raw-signal`,
+    { params: { representation_preference: representationPreference } },
+));
+export const requestOntRawSignalWaveform = (
+    runId: string,
+    observedGeneration: number,
+    representationId: string,
+    readId: string,
+) => apiData(api.post<OntRawSignalWaveform>(
+    `/api/ont/runs/${encodeURIComponent(runId)}/generations/${encodeURIComponent(String(observedGeneration))}/raw-signal/waveforms`,
+    { representation_id: representationId, read_id: readId },
+));
+export const fetchOntRawSignalWaveform = (lookupId: string) =>
+    apiData(api.get<OntRawSignalWaveform>(`/api/ont/raw-signal/waveforms/${encodeURIComponent(lookupId)}`));
+export const requestOntBlow5Preparation = (
+    runId: string,
+    observedGeneration: number,
+    sourceRepresentationId: string,
+    representationPreference: 'auto' | 'blow5' = 'auto',
+) => apiData(api.post<{
+    job_id: string;
+    state: string;
+    reason_code: string;
+    profile_id: string;
+}>(`/api/ont/runs/${encodeURIComponent(runId)}/generations/${encodeURIComponent(String(observedGeneration))}/raw-signal/derive-blow5`, {
+    source_representation_id: sourceRepresentationId,
+    consumer_id: 'ont-instrument-panel',
+    representation_preference: representationPreference,
+}));
 
 export const fetchFullJob = (jobId: string) =>
     apiData(api.get<Job>(`/api/jobs/${encodeURIComponent(jobId)}`));

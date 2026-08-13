@@ -45,7 +45,7 @@ from paths import (
     resolve_allowed_path,
 )
 from schemas import JobCreate, JobResponse
-from services import alignment_access, ont_run_control, ont_submission_trust
+from services import alignment_access, ont_raw_signal, ont_run_control, ont_submission_trust
 from services.ont_barcode_batches import (
     BarcodeBatchError,
     BarcodeBatchRequest,
@@ -318,6 +318,35 @@ class OntRunSummaryResponse(BaseModel):
 class OntRunGenerationResponse(OntRunSummaryResponse):
     event_id: str
     event_type: str
+
+
+class OntRawSignalExternalRegisterRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    format: Literal["pod5", "slow5", "blow5"]
+    input_file_id: str = Field(min_length=1, max_length=36)
+    index_input_file_id: str | None = Field(default=None, min_length=1, max_length=36)
+    source_fidelity: Literal["unknown", "native", "known_degraded", "verified_exact_samples"] = "unknown"
+
+
+class OntRawSignalExternalRunRequest(OntRawSignalExternalRegisterRequest):
+    sample_id: str | None = Field(default=None, max_length=255)
+    experiment_group: str | None = Field(default=None, max_length=255)
+
+
+class OntRawSignalDerivationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_representation_id: str = Field(min_length=1, max_length=96)
+    consumer_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
+    representation_preference: Literal["auto", "blow5"] = "auto"
+
+
+class OntRawSignalWaveformRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    representation_id: str = Field(min_length=1, max_length=96)
+    read_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.-]+$")
 
 
 class OntBarcodeUnitSubmitRequest(BaseModel):
@@ -720,6 +749,142 @@ async def ont_get_instrument_run(run_id: str) -> dict[str, Any]:
     if record is None:
         raise HTTPException(status_code=404, detail=f"unknown ONT instrument run: {run_id}")
     return record
+
+
+@router.post("/raw-signal/external-runs", status_code=201)
+async def ont_create_external_raw_signal_run(
+    request: OntRawSignalExternalRunRequest,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Create one sealed external SLOW5/BLOW5/POD5 generation without invented ancestry."""
+    try:
+        result = await ont_raw_signal.create_external_run_registration(
+            session,
+            format=request.format,
+            input_file_id=request.input_file_id,
+            index_input_file_id=request.index_input_file_id,
+            source_fidelity=request.source_fidelity,
+            sample_id=request.sample_id,
+            experiment_group=request.experiment_group,
+        )
+        await session.commit()
+        return result
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="tracked input not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/runs/{run_id}/generations/{observed_generation}/raw-signal")
+async def ont_get_raw_signal_capabilities(
+    run_id: str,
+    observed_generation: int,
+    representation_preference: Literal["auto", "pod5", "blow5"] = Query("auto"),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Return independent, typed raw-signal readiness for one exact generation."""
+    try:
+        response = await ont_raw_signal.capabilities(
+            session,
+            run_id=run_id,
+            observed_generation=observed_generation,
+            preference=representation_preference,
+        )
+        return response
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="unknown ONT run generation") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/runs/{run_id}/generations/{observed_generation}/raw-signal/external", status_code=201)
+async def ont_register_external_raw_signal(
+    run_id: str,
+    observed_generation: int,
+    request: OntRawSignalExternalRegisterRequest,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Register external native evidence through opaque tracked input IDs."""
+    try:
+        result = await ont_raw_signal.register_external_source(
+            session,
+            run_id=run_id,
+            observed_generation=observed_generation,
+            format=request.format,
+            input_file_id=request.input_file_id,
+            index_input_file_id=request.index_input_file_id,
+            source_fidelity=request.source_fidelity,
+        )
+        await session.commit()
+        return result
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="run generation or tracked input not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/runs/{run_id}/generations/{observed_generation}/raw-signal/derive-blow5", status_code=202)
+async def ont_request_blow5_derivation(
+    run_id: str,
+    observed_generation: int,
+    request: OntRawSignalDerivationRequest,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Create a durable fail-closed derivation request outside the HTTP worker."""
+    try:
+        result = await ont_raw_signal.request_blow5_derivation(
+            session,
+            run_id=run_id,
+            observed_generation=observed_generation,
+            source_representation_id=request.source_representation_id,
+            consumer_id=request.consumer_id,
+            preference=request.representation_preference,
+        )
+        await session.commit()
+        return result
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="unknown ONT run generation") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/runs/{run_id}/generations/{observed_generation}/raw-signal/waveforms", status_code=202)
+async def ont_request_raw_signal_waveform(
+    run_id: str,
+    observed_generation: int,
+    request: OntRawSignalWaveformRequest,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    try:
+        return await ont_raw_signal.request_waveform_lookup(
+            session, run_id=run_id, observed_generation=observed_generation,
+            representation_id=request.representation_id, read_id=request.read_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/raw-signal/waveforms/{lookup_id}")
+async def ont_get_raw_signal_waveform(
+    lookup_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    try:
+        return await ont_raw_signal.get_waveform_lookup(session, lookup_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="unknown raw-signal waveform lookup") from exc
+
+
+@router.post("/raw-signal/derivations/{job_id}/cancel", status_code=202)
+async def ont_cancel_raw_signal_derivation(
+    job_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Request durable cancellation without accepting process or path controls."""
+    try:
+        return await ont_raw_signal.cancel_derivation(session, job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="unknown raw-signal derivation") from exc
 
 
 @router.post("/runs/{run_id}/reconcile")

@@ -27,6 +27,7 @@ from database import OntInstrumentRun, OntInstrumentRunEvent, OntInstrumentRunPr
 from paths import get_inputs_dir
 from services.host_agent_client import get_ont_position, get_ont_status, request_host_agent
 from services.ont_device_control import _public_mk1d_device
+from services.ont_raw_signal import register_native_pod5_generation
 
 
 RUN_STATES = frozenset({"armed", "starting", "running", "stopping", "stopped", "completed", "failed", "unknown"})
@@ -1008,6 +1009,7 @@ def _bounded_host_snapshot(record: OntInstrumentRun, payload: dict[str, Any]) ->
     if host_run_id and host_run_id != record.minknow_run_id:
         raise ValueError("host-agent run snapshot does not match the durable MinKNOW run binding")
     state = _normalized_state(payload.get("status") or payload.get("state"), fallback="unknown")
+    acquisition_id = str(payload.get("acquisition_id") or "").strip() or None
     output_files = _existing_output_files(
         payload.get("output_files"),
         approved_roots=_approved_output_roots(record),
@@ -1015,6 +1017,7 @@ def _bounded_host_snapshot(record: OntInstrumentRun, payload: dict[str, Any]) ->
     snapshot = {
         "schema": "bms.ont.host-run-snapshot.v1",
         "state": state,
+        "acquisition_id": acquisition_id,
         "output_files": output_files,
     }
     return state, output_files, {**snapshot, "observation_digest": _canonical_digest(snapshot)}
@@ -1086,6 +1089,12 @@ async def reconcile_instrument_run(run_id: str) -> dict[str, Any]:
             minknow_payload=bounded_snapshot,
             output_files=output_files,
         )
+        if state in TERMINAL_RUN_STATES and record.terminal_artifact_manifest_sha256:
+            await register_native_pod5_generation(
+                session,
+                run_id=record.id,
+                observed_generation=record.observed_generation,
+            )
         await session.commit()
         return await _run_response(session, record)
 

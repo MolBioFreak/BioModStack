@@ -219,6 +219,110 @@ class OntInstrumentRunEvent(Base):
     output_files = Column(JSON, nullable=False, default=dict)
 
 
+class OntRawSignalRepresentation(Base):
+    """Immutable-format representation bound to one exact ONT run generation."""
+
+    __tablename__ = "ont_raw_signal_representations"
+    __table_args__ = (
+        UniqueConstraint("run_id", "observed_generation", "manifest_sha256", name="uq_ont_raw_signal_rep_manifest"),
+        CheckConstraint("format IN ('pod5','slow5','blow5')", name="ck_ont_raw_signal_rep_format"),
+        CheckConstraint("role IN ('source','derived')", name="ck_ont_raw_signal_rep_role"),
+    )
+
+    id = Column(String(96), primary_key=True)
+    run_id = Column(String(80), ForeignKey("ont_instrument_runs.id", ondelete="RESTRICT"), nullable=False, index=True)
+    observed_generation = Column(Integer, nullable=False, index=True)
+    role = Column(String(16), nullable=False)
+    source_kind = Column(String(32), nullable=False)
+    format = Column(String(16), nullable=False, index=True)
+    source_fidelity = Column(String(64), nullable=False, default="unknown")
+    state = Column(String(32), nullable=False, index=True)
+    reason_code = Column(String(96), nullable=False)
+    artifact_manifest = Column(JSON, nullable=False)
+    manifest_sha256 = Column(String(64), nullable=False, index=True)
+    parent_representation_ids = Column(JSON, nullable=False, default=list)
+    parent_manifest_sha256s = Column(JSON, nullable=False, default=list)
+    compression = Column(JSON, nullable=False, default=dict)
+    runtime_identity = Column(JSON, nullable=False, default=dict)
+    validation_receipts = Column(JSON, nullable=False, default=dict)
+    profile_id = Column(String(128), nullable=True)
+    acquisition_id = Column(String(255), nullable=True)
+    read_count = Column(Integer, nullable=True)
+    published_at = Column(LenientSQLiteDateTime, nullable=True)
+    retention_pinned_at = Column(LenientSQLiteDateTime, nullable=True)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
+class OntRawSignalDerivationJob(Base):
+    """Durable leased request for one governed raw-signal derivation."""
+
+    __tablename__ = "ont_raw_signal_derivation_jobs"
+    __table_args__ = (
+        UniqueConstraint("run_id", "observed_generation", "source_representation_id", "profile_id", name="uq_ont_raw_signal_derivation"),
+    )
+
+    id = Column(String(96), primary_key=True)
+    run_id = Column(String(80), ForeignKey("ont_instrument_runs.id", ondelete="RESTRICT"), nullable=False, index=True)
+    observed_generation = Column(Integer, nullable=False, index=True)
+    source_representation_id = Column(String(96), ForeignKey("ont_raw_signal_representations.id", ondelete="RESTRICT"), nullable=False)
+    output_representation_id = Column(String(96), ForeignKey("ont_raw_signal_representations.id", ondelete="RESTRICT"), nullable=True)
+    requested_preference = Column(String(16), nullable=False)
+    consumer_id = Column(String(128), nullable=False)
+    profile_id = Column(String(128), nullable=False)
+    state = Column(String(32), nullable=False, default="requested", index=True)
+    reason_code = Column(String(96), nullable=False, default="conversion_requested")
+    resource_snapshot = Column(JSON, nullable=False, default=dict)
+    attempt = Column(Integer, nullable=False, default=0)
+    claim_token = Column(String(96), nullable=True, unique=True)
+    lease_expires_at = Column(LenientSQLiteDateTime, nullable=True, index=True)
+    cancel_requested_at = Column(LenientSQLiteDateTime, nullable=True)
+    stage_receipts = Column(JSON, nullable=False, default=dict)
+    failure_code = Column(String(96), nullable=True)
+    failure_message = Column(Text, nullable=True)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    completed_at = Column(LenientSQLiteDateTime, nullable=True)
+
+
+class OntRawSignalDerivationEvent(Base):
+    """Append-only transition receipt for one raw-signal derivation request."""
+
+    __tablename__ = "ont_raw_signal_derivation_events"
+
+    id = Column(String(96), primary_key=True)
+    job_id = Column(String(96), ForeignKey("ont_raw_signal_derivation_jobs.id", ondelete="RESTRICT"), nullable=False, index=True)
+    state = Column(String(32), nullable=False)
+    reason_code = Column(String(96), nullable=False)
+    receipt = Column(JSON, nullable=False, default=dict)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
+class OntRawSignalLookup(Base):
+    """Bounded selected-read waveform lookup outside HTTP execution."""
+
+    __tablename__ = "ont_raw_signal_lookups"
+    __table_args__ = (
+        UniqueConstraint("representation_id", "read_id", name="uq_ont_raw_signal_lookup_read"),
+        Index("ix_ont_raw_signal_lookups_state", "state"),
+    )
+
+    id = Column(String(96), primary_key=True)
+    run_id = Column(String(80), ForeignKey("ont_instrument_runs.id", ondelete="RESTRICT"), nullable=False, index=True)
+    observed_generation = Column(Integer, nullable=False, index=True)
+    representation_id = Column(String(96), ForeignKey("ont_raw_signal_representations.id", ondelete="RESTRICT"), nullable=False)
+    read_id = Column(String(128), nullable=False)
+    state = Column(String(32), nullable=False, default="requested")
+    reason_code = Column(String(96), nullable=False, default="requested")
+    claim_token = Column(String(96), unique=True, nullable=True)
+    lease_expires_at = Column(LenientSQLiteDateTime, nullable=True)
+    sample_count = Column(Integer, nullable=True)
+    samples = Column(JSON, nullable=True)
+    receipt = Column(JSON, nullable=False, default=dict)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+    completed_at = Column(LenientSQLiteDateTime, nullable=True)
+
+
 class OntProtocolOptionReceipt(Base):
     """Expiring server-owned receipt for one normalized MinKNOW protocol option."""
 

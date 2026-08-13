@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
 import type { Data, Layout, PlotMouseEvent } from 'plotly.js';
 import type { IGV as IgvLibrary } from 'igv';
-import { api, fetchFullJob, fetchJobLogs, fetchJobStages, fetchJobs, fetchPooledAssignmentManifest, type Job, type JobLogs } from '../lib/api';
+import { api, fetchFullJob, fetchJobLogs, fetchJobStages, fetchJobs, fetchOntRawSignalCapabilities, fetchPooledAssignmentManifest, type Job, type JobLogs } from '../lib/api';
 import {
     awaitCurrentGeneration,
     createGenerationBoundResourceWithTimeout,
@@ -2403,6 +2403,23 @@ export function NGSToolkit() {
         [selectedJob?.stage_outputs, stagePayload?.stage_outputs],
     );
     const selectedJobParams = (selectedJob?.params || {}) as Record<string, unknown>;
+    const rawSignalRunId = typeof selectedJobParams.source_instrument_run_id === 'string'
+        ? selectedJobParams.source_instrument_run_id.trim()
+        : '';
+    const rawSignalObservedGeneration = typeof selectedJobParams.source_instrument_observed_generation === 'number'
+        && Number.isInteger(selectedJobParams.source_instrument_observed_generation)
+        && selectedJobParams.source_instrument_observed_generation > 0
+        ? selectedJobParams.source_instrument_observed_generation
+        : null;
+    const rawSignalCapabilitiesQuery = useQuery({
+        queryKey: ['ont-raw-signal-for-job', rawSignalRunId, rawSignalObservedGeneration],
+        queryFn: () => fetchOntRawSignalCapabilities(rawSignalRunId, rawSignalObservedGeneration as number, 'blow5'),
+        enabled: Boolean(rawSignalRunId && rawSignalObservedGeneration),
+        staleTime: 30_000,
+    });
+    const rawSignalRepresentationId = rawSignalCapabilitiesQuery.data?.modes.raw_waveform.state === 'ready'
+        ? rawSignalCapabilitiesQuery.data.modes.raw_waveform.representation_id
+        : null;
     const selectedReferenceFastaPath = typeof selectedJobParams.reference_fasta === 'string'
         ? selectedJobParams.reference_fasta
         : null;
@@ -5137,6 +5154,11 @@ export function NGSToolkit() {
                                         jobId={selectedJob.id}
                                         sessionId={selectedAlignmentSession.session_id}
                                         currentLocus={igvCurrentLocus}
+                                        rawSignalBinding={rawSignalRunId && rawSignalObservedGeneration && rawSignalRepresentationId ? {
+                                            runId: rawSignalRunId,
+                                            observedGeneration: rawSignalObservedGeneration,
+                                            representationId: rawSignalRepresentationId,
+                                        } : null}
                                     />
                                 )}
                             </div>

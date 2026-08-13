@@ -27,6 +27,7 @@ from services.boltz_api_jobs import BoltzApiJobWorker
 from services.external_imports.worker import ExternalImportWorker
 from services.gpu_orchestrator import GPUOrchestrator
 from services.md.reconcile import MdReconcilerWorker
+from services.ont_raw_signal_worker import OntRawSignalWorker
 from services.global_experiments.worker import (
     GlobalExperimentWorker,
     install_global_experiment_worker,
@@ -45,6 +46,7 @@ _external_import_worker: ExternalImportWorker | None = None
 _boltz_api_job_worker: BoltzApiJobWorker | None = None
 _md_reconciler: MdReconcilerWorker | None = None
 _global_experiment_worker: GlobalExperimentWorker | None = None
+_ont_raw_signal_worker: OntRawSignalWorker | None = None
 
 
 async def _orchestrator_launch_job(job_id, model_id, mode, params, output_dir):
@@ -95,6 +97,7 @@ async def lifespan(app: FastAPI):
     global _boltz_api_job_worker
     global _md_reconciler
     global _global_experiment_worker
+    global _ont_raw_signal_worker
     bioxp_runtime = None
     
     # Initialize independently owned core, global experiment, MolBio, and MolBio/NGS state stores.
@@ -134,8 +137,19 @@ async def lifespan(app: FastAPI):
         _orchestrator = None
         _md_reconciler = None
         _global_experiment_worker = None
+        _ont_raw_signal_worker = None
         install_global_experiment_worker(None)
         logger.warning("[STARTUP] %s", workflow_launch_block_detail("start the GPU workflow scheduler"))
+
+    ont_runtime_image = os.getenv("BMS_ONT_SLOW5TOOLS_IMAGE", "").strip()
+    ont_runtime_digest = os.getenv("BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST", "").strip()
+    if ont_runtime_image and len(ont_runtime_digest) == 64:
+        _ont_raw_signal_worker = OntRawSignalWorker(async_session, poll_interval=5.0)
+        await _ont_raw_signal_worker.start()
+        logger.info("[STARTUP] ONT raw-signal derivation worker started")
+    else:
+        _ont_raw_signal_worker = None
+        logger.info("[STARTUP] ONT raw-signal worker disabled: pinned runtime identity absent")
 
     _analysis_worker = AnalysisWorker(
         db_session_factory=async_session,
@@ -148,6 +162,7 @@ async def lifespan(app: FastAPI):
     _external_import_worker = ExternalImportWorker(async_session, poll_interval=2.0)
     await _external_import_worker.start()
     logger.info("[STARTUP] External result import worker started")
+
 
     _boltz_api_job_worker = BoltzApiJobWorker(async_session)
     await _boltz_api_job_worker.start()
@@ -193,6 +208,9 @@ async def lifespan(app: FastAPI):
     if _external_import_worker:
         await _external_import_worker.stop()
         logger.info("[SHUTDOWN] External result import worker stopped")
+    if _ont_raw_signal_worker:
+        await _ont_raw_signal_worker.stop()
+        logger.info("[SHUTDOWN] ONT raw-signal lease-recovery worker stopped")
 
 
 app = FastAPI(

@@ -43,6 +43,7 @@ from migrations.add_ngs_reference_sets import migrate as migrate_ngs_reference_s
 from migrations.add_pooled_ont_reference_assignment import migrate as migrate_pooled_ont_reference_assignment
 from migrations.add_frustrampnn_statistics import migrate as migrate_frustrampnn_statistics
 from migrations.add_frustrampnn_reviews import migrate as migrate_frustrampnn_reviews
+from migrations.add_ont_raw_signal_ledger import migrate as migrate_ont_raw_signal_ledger
 from run_migration import migrate as migrate_stage_tracking
 
 
@@ -89,6 +90,7 @@ MIGRATIONS: List[Migration] = [
     Migration(25, "add_pooled_ont_reference_assignment", migrate_pooled_ont_reference_assignment),
     Migration(26, "add_frustrampnn_statistics", migrate_frustrampnn_statistics),
     Migration(27, "add_frustrampnn_reviews", migrate_frustrampnn_reviews),
+    Migration(28, "add_ont_raw_signal_ledger", migrate_ont_raw_signal_ledger),
 ]
 
 

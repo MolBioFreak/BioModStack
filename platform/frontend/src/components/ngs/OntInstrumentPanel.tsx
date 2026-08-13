@@ -9,12 +9,15 @@ import {
     fetchOntDeviceStatus,
     fetchOntInstrumentRunGeneration,
     fetchOntInstrumentRuns,
+    fetchOntRawSignalCapabilities,
+    requestOntBlow5Preparation,
     fetchOntProtocolOptions,
     requestMk1dReconnect,
     startOntRunIntent,
     type OntInstrumentRun,
     type OntLiveDevice,
     type OntProtocolOption,
+    type OntRawSignalPreference,
     type OntRunSummary,
 } from '../../lib/api';
 import { jobPollingInterval } from '../../lib/queryPolling';
@@ -148,6 +151,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
     const [selectedPosition, setSelectedPosition] = useState('');
     const [sampleSelection, setSampleSelection] = useState<{ domainId: string; sampleId: string } | null>(null);
     const [selectedRunGeneration, setSelectedRunGeneration] = useState<SelectedRunGeneration | null>(null);
+    const [rawSignalPreference, setRawSignalPreference] = useState<OntRawSignalPreference>('auto');
     const [message, setMessage] = useState('');
 
     useEffect(() => {
@@ -276,6 +280,21 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
         enabled: exactDomainExperimentId !== null && effectiveSelectedRunGeneration !== null,
         retry: false,
     });
+    const rawSignalQuery = useQuery({
+        queryKey: [
+            'ont-raw-signal-capabilities',
+            effectiveSelectedRunGeneration?.runId,
+            effectiveSelectedRunGeneration?.observedGeneration,
+            rawSignalPreference,
+        ],
+        queryFn: () => fetchOntRawSignalCapabilities(
+            effectiveSelectedRunGeneration?.runId as string,
+            effectiveSelectedRunGeneration?.observedGeneration as number,
+            rawSignalPreference,
+        ),
+        enabled: effectiveSelectedRunGeneration !== null,
+        retry: false,
+    });
 
     const refreshDurableRuns = (run?: OntInstrumentRun) => {
         if (run) {
@@ -284,6 +303,22 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
         void queryClient.invalidateQueries({ queryKey: ['ont-instrument-runs', exactDomainExperimentId] });
         void durableRunsQuery.refetch();
     };
+
+    const prepareBlow5 = useMutation({
+        mutationFn: async (sourceRepresentationId: string) => {
+            if (!effectiveSelectedRunGeneration) throw new Error('Select an exact ONT generation.');
+            return requestOntBlow5Preparation(
+                effectiveSelectedRunGeneration.runId,
+                effectiveSelectedRunGeneration.observedGeneration,
+                sourceRepresentationId,
+                rawSignalPreference === 'blow5' ? 'blow5' : 'auto',
+            );
+        },
+        onSuccess: (result) => {
+            setMessage(`Raw-signal request ${result.job_id}: ${result.state} (${result.reason_code})`);
+            void rawSignalQuery.refetch();
+        },
+    });
 
     const reconnectMk1d = useMutation({
         mutationFn: async () => (await requestMk1dReconnect()).data,
@@ -541,6 +576,59 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                             <div><div className="uppercase tracking-wide">Experiment group / Domain ID</div><div className="mt-1 break-all font-mono text-[var(--text-primary)]">{selectedGeneration.experiment_group ?? 'not bound'}</div></div>
                         </div>
                         <div>Terminal manifest SHA-256: <span className="break-all font-mono text-[var(--text-primary)]">{selectedGeneration.terminal_manifest_sha256 ?? 'not published'}</span></div>
+
+                        <div className="space-y-3 rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-3">
+                            <div className="flex flex-wrap items-end justify-between gap-3">
+                                <div>
+                                    <div className="font-semibold text-[var(--text-primary)]">Raw-signal representations</div>
+                                    <div>Readiness is exact-generation scoped. IGV stays independent.</div>
+                                </div>
+                                <label className="text-xs font-semibold text-[var(--text-secondary)]">Representation preference
+                                    <select
+                                        value={rawSignalPreference}
+                                        onChange={(event) => setRawSignalPreference(event.target.value as OntRawSignalPreference)}
+                                        className="ml-2 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 text-[var(--text-primary)]"
+                                    >
+                                        <option value="auto">Auto</option>
+                                        <option value="pod5">POD5</option>
+                                        <option value="blow5">Indexed BLOW5</option>
+                                    </select>
+                                </label>
+                            </div>
+                            {rawSignalQuery.isLoading ? <div>Loading raw-signal capability state…</div> : null}
+                            {rawSignalQuery.isError ? <div role="alert" className="text-amber-100">Raw-signal state unavailable: {errorMessage(rawSignalQuery.error, 'unknown capability failure')}</div> : null}
+                            {rawSignalQuery.data ? (
+                                <>
+                                    <div>Selected: <span className="font-mono text-[var(--text-primary)]">{rawSignalQuery.data.selected_format ?? 'none'}</span> · {rawSignalQuery.data.selection_reason_code}</div>
+                                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                                        {Object.entries(rawSignalQuery.data.modes).map(([mode, capability]) => (
+                                            <div key={mode} className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] p-2">
+                                                <div className="font-mono text-[var(--text-primary)]">{mode}</div>
+                                                <div className={capability.state === 'ready' ? 'text-emerald-300' : capability.state === 'preparable' ? 'text-amber-200' : 'text-[var(--text-secondary)]'}>{capability.state}</div>
+                                                <div className="break-words">{capability.reason_code}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    {rawSignalQuery.data.representations.map((representation) => (
+                                        <div key={representation.representation_id} className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] p-2">
+                                            <span className="font-semibold text-[var(--text-primary)]">{representation.format.toUpperCase()}</span>
+                                            {' '}· {representation.role} · {representation.state} · {representation.reason_code}
+                                            <div className="break-all font-mono">{representation.representation_id} · manifest {representation.manifest_sha256}</div>
+                                            {representation.state !== 'ready' && (representation.format === 'pod5' || representation.format === 'blow5') ? (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => prepareBlow5.mutate(representation.representation_id)}
+                                                    disabled={prepareBlow5.isPending}
+                                                    className="mt-2 rounded border border-cyan-500/50 px-2 py-1 font-semibold text-cyan-200 disabled:opacity-40"
+                                                >
+                                                    {representation.format === 'blow5' ? 'Validate indexed BLOW5' : 'Prepare indexed BLOW5'}
+                                                </button>
+                                            ) : null}
+                                        </div>
+                                    ))}
+                                </>
+                            ) : null}
+                        </div>
 
                         <Link
                             to={contextHref('/ngs', {
