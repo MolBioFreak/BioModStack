@@ -10,6 +10,7 @@ import sys
 import threading
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 
 import pytest
@@ -1237,6 +1238,44 @@ def test_semantic_role_route_rejects_resolver_to_descriptor_open_replacement(
     assert response.json() == {"detail": "artifact integrity digest mismatch"}
 
 
+def test_package_authority_binds_persisted_source_input_path() -> None:
+    from routers import ngs_alignment_sessions as routes
+
+    job = SimpleNamespace(
+        params={
+            "reference_sequence_sha256": hashlib.sha256(b"ACGT").hexdigest(),
+            "ont_workflow_id": "ont_fastq_qc",
+            "ont_input_mode": "fastq",
+            "fastq_path": "/inputs/reads.fastq.gz",
+        }
+    )
+
+    authority = routes._job_package_authority(cast(routes.Job, job))
+
+    assert authority["source_input_path"] == "/inputs/reads.fastq.gz"
+    del job.params["fastq_path"]
+    with pytest.raises(routes.service.AlignmentSessionError, match="source input path"):
+        routes._job_package_authority(cast(routes.Job, job))
+
+
+def test_verification_input_identity_rejects_relabelled_digest() -> None:
+    from services import ngs_alignment_sessions as service
+
+    manifest = {
+        "inputs": {
+            "source_reads": {
+                "sha256": hashlib.sha256(b"replacement").hexdigest(),
+                "size_bytes": 11,
+            }
+        }
+    }
+
+    assert service._verification_input_identity(manifest, "source_reads") != (
+        hashlib.sha256(b"canonical").hexdigest(),
+        9,
+    )
+
+
 def test_ngs_package_inventory_covers_persisted_fastq_qc_and_verification_artifacts() -> None:
     from services import ngs_alignment_sessions as service
 
@@ -1252,6 +1291,9 @@ def test_ngs_package_inventory_covers_persisted_fastq_qc_and_verification_artifa
         source_reference_sha256="b4c4f948cca0e583d9a7183fef975f54557c4c0dc925bfc940148ea3a9f2cf69",
         workflow_id="ont_fastq_qc",
         input_mode="fastq",
+        source_input_path=Path(
+            "/home/dalab/.biomodstack-dev/inputs/public/onramp-zenodo-7595170/AAZ605.basecalls.fastq.gz"
+        ),
         results_dir=Path("/home/dalab/.biomodstack-dev/bms_results"),
         job_output_dir=output_dir,
     )
@@ -1323,6 +1365,7 @@ def test_ngs_package_routes_support_authenticated_inventory_and_http_range(
             "reference_sequence_sha256": hashlib.sha256(b"ACGTACGT").hexdigest(),
             "ont_workflow_id": "ont_fastq_qc",
             "ont_input_mode": "fastq",
+            "fastq_path": str(artifact),
         },
         output_dir=str(tmp_path),
     )

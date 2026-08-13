@@ -56,7 +56,8 @@ export interface AlignmentAccessRotationResponse {
 }
 
 export function isAlignmentAccessDenied(reason: unknown): boolean {
-    return (reason as { response?: { status?: unknown } } | null)?.response?.status === 403;
+    const response = (reason as { response?: { status?: unknown; data?: { detail?: unknown } } } | null)?.response;
+    return response?.status === 403 && response.data?.detail === 'alignment access denied';
 }
 
 export interface AlignmentRead {

@@ -10,9 +10,11 @@ import {
     type AlignmentSessionResponse,
 } from '../src/lib/ngsAlignmentSession.js';
 
-test('alignment access recovery is offered only for an HTTP 403 denial', () => {
-    assert.equal(isAlignmentAccessDenied({ response: { status: 403 } }), true);
-    assert.equal(isAlignmentAccessDenied({ response: { status: 404 } }), false);
+test('alignment access recovery is offered only for the exact capability-denial response', () => {
+    assert.equal(isAlignmentAccessDenied({ response: { status: 403, data: { detail: 'alignment access denied' } } }), true);
+    assert.equal(isAlignmentAccessDenied({ response: { status: 403, data: { detail: 'alignment resource unavailable' } } }), false);
+    assert.equal(isAlignmentAccessDenied({ response: { status: 403 } }), false);
+    assert.equal(isAlignmentAccessDenied({ response: { status: 404, data: { detail: 'alignment access denied' } } }), false);
     assert.equal(isAlignmentAccessDenied(new Error('alignment access denied')), false);
 });
 

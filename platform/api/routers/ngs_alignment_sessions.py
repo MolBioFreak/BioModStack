@@ -75,6 +75,17 @@ def _job_authority(job: Job) -> dict[str, str]:
     }
 
 
+def _job_package_authority(job: Job) -> dict[str, str]:
+    authority = _job_authority(job)
+    params = getattr(job, "params", None)
+    params = params if isinstance(params, dict) else {}
+    source_key = {"fastq": "fastq_path", "bam": "bam_path", "pod5": "pod5_dir"}.get(authority["input_mode"])
+    source_path = params.get(source_key) if source_key is not None else None
+    if not isinstance(source_path, str) or not source_path.strip():
+        raise service.AlignmentSessionError("authorized source input path is required")
+    return {**authority, "source_input_path": source_path}
+
+
 def _require_local_development_browser(request: Request) -> None:
     client_host = request.client.host if request.client is not None else None
     if client_host not in LOCAL_DEVELOPMENT_ADMIN_HOSTS or os.environ.get("BMS_RUNTIME_MODE") != "dev":
@@ -307,7 +318,7 @@ async def list_ngs_package_artifacts(
         artifacts = await run_in_threadpool(
             service.build_ngs_package_artifacts,
             job_id,
-            **_job_authority(authorized_job),
+            **_job_package_authority(authorized_job),
             job_output_dir=_job_output_dir(authorized_job),
         )
         return {"job_id": job_id, "artifacts": artifacts}
@@ -327,7 +338,7 @@ async def get_ngs_package_artifact(
             service.resolve_ngs_package_artifact,
             job_id,
             sha256,
-            **_job_authority(authorized_job),
+            **_job_package_authority(authorized_job),
             job_output_dir=_job_output_dir(authorized_job),
         )
         return await _serve_artifact(path, metadata, request)

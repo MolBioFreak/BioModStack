@@ -1414,12 +1414,51 @@ def _manifest_package_artifacts(
     return descriptors
 
 
+def _stable_file_identity(path: str | Path, *, label: str) -> tuple[str, int]:
+    candidate = Path(path).expanduser()
+    if not candidate.is_absolute():
+        raise AlignmentSessionError(f"{label} path is invalid")
+    descriptor = _open_nofollow(candidate, directory=False, label=label)
+    try:
+        before = _runtime_stat_identity(os.fstat(descriptor))
+        digest = _sha256_descriptor(descriptor)
+        after_metadata = os.fstat(descriptor)
+        after = _runtime_stat_identity(after_metadata)
+        if before != after:
+            raise AlignmentSessionError(f"{label} changed during identity verification")
+        return digest, after_metadata.st_size
+    finally:
+        os.close(descriptor)
+
+
+def _manifest_artifact_identity(manifest: dict[str, Any], kind: str) -> tuple[str, int] | None:
+    for artifact in manifest.get("artifacts", []):
+        if not isinstance(artifact, dict) or artifact.get("kind") != kind:
+            continue
+        digest = artifact.get("actual_sha256") or artifact.get("sha256")
+        size = artifact.get("size_bytes")
+        if isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest) and isinstance(size, int):
+            return digest, size
+    return None
+
+
+def _verification_input_identity(manifest: dict[str, Any], role: str) -> tuple[str, int] | None:
+    inputs = manifest.get("inputs")
+    evidence = inputs.get(role) if isinstance(inputs, dict) else None
+    digest = evidence.get("sha256") if isinstance(evidence, dict) else None
+    size = evidence.get("size_bytes") if isinstance(evidence, dict) else None
+    if isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest) and isinstance(size, int):
+        return digest, size
+    return None
+
+
 def build_ngs_package_artifacts(
     job_id: str,
     *,
     source_reference_sha256: str,
     workflow_id: str,
     input_mode: str,
+    source_input_path: str | Path,
     results_dir: str | Path | None = None,
     job_output_dir: str | Path | None = None,
 ) -> list[dict[str, Any]]:
@@ -1429,6 +1468,11 @@ def build_ngs_package_artifacts(
     safe_job_id, job_root = _safe_job_root(job_id, results_dir, job_output_dir)
     if re.fullmatch(r"[0-9a-f]{64}", source_reference_sha256) is None:
         raise AlignmentSessionError("authorized source reference identity is required")
+    source_input_identity = (
+        _stable_file_identity(source_input_path, label="persisted canonical source input")
+        if input_mode in {"fastq", "bam"}
+        else None
+    )
     sequence_candidates = (job_root / "fastq_qc" / "qc_manifest.json", job_root / "qc_manifest.json")
     sequence_path = next((path for path in sequence_candidates if path.is_file() and not path.is_symlink()), None)
     if sequence_path is None:
@@ -1485,6 +1529,28 @@ def build_ngs_package_artifacts(
             or "MALFORMED_VERIFICATION_MANIFEST" in verification_manifest.get("reason_codes", [])
         ):
             raise AlignmentSessionError("construct-verification manifest schema is invalid")
+        sequence_identities = {
+            "alignment": _manifest_artifact_identity(sequence_manifest, "alignment_bam"),
+            "alignment_index": _manifest_artifact_identity(sequence_manifest, "alignment_bai"),
+            "alignment_stats": _manifest_artifact_identity(sequence_manifest, "alignment_stats"),
+            "reference": _manifest_artifact_identity(sequence_manifest, "reference"),
+        }
+        for role, expected in sequence_identities.items():
+            if expected is None or _verification_input_identity(verification_manifest, role) != expected:
+                raise AlignmentSessionError(
+                    f"construct-verification {role} identity does not match job-bound sequence-QC evidence"
+                )
+        verification_reference = verification_manifest.get("inputs", {}).get("reference", {})
+        if (
+            not isinstance(verification_reference, dict)
+            or verification_reference.get("normalized_sequence_sha256") != source_reference_sha256
+        ):
+            raise AlignmentSessionError("construct-verification reference identity does not match persisted Job")
+        if input_mode == "fastq" and (
+            source_input_identity is None
+            or _verification_input_identity(verification_manifest, "source_reads") != source_input_identity
+        ):
+            raise AlignmentSessionError("construct-verification source input does not match persisted Job")
         descriptors.extend(
             _manifest_package_artifacts(
                 safe_job_id,
@@ -1518,6 +1584,8 @@ def build_ngs_package_artifacts(
         reads_path = observed_state.get("source_reads_path") if isinstance(observed_state, dict) else None
         reads_digest = observed_state.get("source_reads_sha256") if isinstance(observed_state, dict) else None
         if input_mode == "fastq":
+            if source_input_identity is None:
+                raise AlignmentSessionError("persisted FASTQ source identity is unavailable")
             reads_relative = Path(reads_path) if isinstance(reads_path, str) else None
             if (
                 reads_relative is None
@@ -1525,18 +1593,20 @@ def build_ngs_package_artifacts(
                 or any(part in {"", ".", ".."} for part in reads_relative.parts)
                 or not isinstance(reads_digest, str)
                 or re.fullmatch(r"[0-9a-f]{64}", reads_digest) is None
+                or reads_digest != source_input_identity[0]
             ):
-                raise AlignmentSessionError("retained FASTQ provenance is incomplete")
-            descriptors.append(
-                _package_artifact_descriptor(
-                    safe_job_id,
-                    job_root,
-                    observed_state_path.parent / reads_relative,
-                    kind="source_reads_fastq",
-                    source="construct_verification_input",
-                    declared_sha256=reads_digest,
-                )
+                raise AlignmentSessionError("retained FASTQ provenance does not match persisted source input")
+            descriptor = _package_artifact_descriptor(
+                safe_job_id,
+                job_root,
+                observed_state_path.parent / reads_relative,
+                kind="source_reads_fastq",
+                source="construct_verification_input",
+                declared_sha256=reads_digest,
             )
+            if descriptor.get("size_bytes") != source_input_identity[1]:
+                raise AlignmentSessionError("retained FASTQ size does not match persisted source input")
+            descriptors.append(descriptor)
 
     if input_mode == "fastq":
         descriptors.append(
