@@ -4972,6 +4972,7 @@ async def list_jobs(
         Job.selection_source_type,
         Job.selection_source_job_id,
         Job.selection_dataset_name,
+        Job.pinned_gpu,
         Job.current_stage,
         Job.completed_stages,
         Job.awaiting_input,
