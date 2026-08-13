@@ -1331,6 +1331,15 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
             shared_data_root / "dev" / "apptainer" / "dorado-v1.3.1-samtools-v1.24.sif",
         )
     )
+    ont_container_runtime = os.environ.get("BMS_ONT_CONTAINER_RUNTIME", "docker").strip() or "docker"
+    ont_runtime_image = os.environ.get("BMS_ONT_SLOW5TOOLS_IMAGE", "").strip()
+    ont_runtime_digest = os.environ.get("BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST", "").strip()
+    ont_staging_root = os.environ.get(
+        "BMS_ONT_RAW_SIGNAL_STAGING_ROOT",
+        str(shared_data_root / "ont-raw-signal-staging"),
+    ).strip()
+    ont_acquisition_pressure = os.environ.get("BMS_ONT_RAW_SIGNAL_ACQUISITION_PRESSURE", "unknown").strip() or "unknown"
+    ont_conversion_qualified = os.environ.get("BMS_ONT_BLOW5_CONVERSION_QUALIFIED", "0").strip() or "0"
     dev_adapter_limits = render_systemd_resource_boundaries(DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE).replace(
         "\n", "\n            "
     )
@@ -1442,11 +1451,17 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment=BMS_MSA_CACHE={dev_msa_cache_dir}
         Environment=BMS_SABDAB_CACHE={dev_sabdab_cache_dir}
         Environment=BMS_CPU_POWER_STRICT=0
+        Environment=BMS_ONT_CONTAINER_RUNTIME={ont_container_runtime}
+        Environment=BMS_ONT_SLOW5TOOLS_IMAGE={ont_runtime_image}
+        Environment=BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST={ont_runtime_digest}
+        Environment=BMS_ONT_RAW_SIGNAL_STAGING_ROOT={ont_staging_root}
+        Environment=BMS_ONT_RAW_SIGNAL_ACQUISITION_PRESSURE={ont_acquisition_pressure}
+        Environment=BMS_ONT_BLOW5_CONVERSION_QUALIFIED={ont_conversion_qualified}
         Environment=BMS_BUILD_SHA={build_revision}
         Environment=BMS_BUILD_ID={build_id}
         Environment=BMS_BUILD_TIME={build_time}
         Environment=PYTHONUNBUFFERED=1
-        ExecStartPre=/usr/bin/mkdir -p {dev_data_root} {dev_inputs_dir} {dev_work_dir} {dev_results_root} {dev_weights_root} {dev_msa_cache_dir} {dev_sabdab_cache_dir} {dev_container_dir}
+        ExecStartPre=/usr/bin/mkdir -p {dev_data_root} {dev_inputs_dir} {dev_work_dir} {dev_results_root} {dev_weights_root} {dev_msa_cache_dir} {dev_sabdab_cache_dir} {dev_container_dir} {ont_staging_root}
         ExecStartPre=/usr/bin/env python3 {log_rotator}
         ExecStart={api_runner}
         Restart=on-failure
