@@ -245,17 +245,10 @@ process ReportComplexPredictionFrustraMPNNComplete {
     script:
     """
     set -euo pipefail
-    mapfile -t outputs < <('${params.api_python}' - <<'PY'
-import json, pathlib
-for marker in sorted(pathlib.Path('.').glob('published_*.json')):
-    payload = json.loads(marker.read_text(encoding='utf-8'))
-    if set(payload) != {'manifest', 'result', 'source'}:
-        raise SystemExit('invalid FrustraMPNN publication marker')
-    print(payload['result'])
-    print(payload['manifest'])
-    print(payload['source'])
-PY
-    )
+    mapfile -t outputs < <('${params.api_python}' \
+      '${params.code_root}/scripts/validate_frustrampnn_publication_markers.py' \
+      --job-root '${params.out_dir}' \
+      published_*.json)
     test \"\${#outputs[@]}\" -gt 0
     '${params.api_python}' '${params.code_root}/scripts/stage_reporter.py' --job-root-relative \
       '${params.job_id}' frustrampnn complete \"\${outputs[@]}\"

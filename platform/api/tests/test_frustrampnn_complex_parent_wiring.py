@@ -445,6 +445,20 @@ def test_complex_prediction_transports_complete_bounded_typed_v2_settings() -> N
     assert "--settings-value-origin" in prepare_block
 
 
+def test_complex_prediction_reports_closed_v2_publication_marker_before_completion() -> None:
+    workflow = _workflow()
+    reporter = workflow.split("process ReportComplexPredictionFrustraMPNNComplete", 1)[1]
+    reporter = reporter.split("workflow COMPLEX_PREDICTION", 1)[0]
+
+    validator_index = reporter.index("validate_frustrampnn_publication_markers.py")
+    stage_reporter_index = reporter.index("stage_reporter.py")
+    assert validator_index < stage_reporter_index
+    assert "--job-root '${params.out_dir}'" in reporter
+    assert "published_*.json" in reporter
+    assert "json.loads" not in reporter
+    assert "set(payload)" not in reporter
+
+
 def test_complex_prediction_reports_terminal_states_and_protein_only_scope() -> None:
     workflow = _workflow()
 
