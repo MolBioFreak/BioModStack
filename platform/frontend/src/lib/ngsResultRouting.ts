@@ -2,13 +2,63 @@ export interface NgsJobRouteIdentity {
     id: string;
     model_id?: string | null;
     mode?: string | null;
+    params?: Record<string, unknown> | null;
 }
 
 export type NgsToolkitView = 'launch' | 'instrument' | 'runs';
 
-export function isNgsJob(job: Pick<NgsJobRouteIdentity, 'model_id' | 'mode'>): boolean {
-    const modelId = (job.model_id || '').toLowerCase();
-    return ['nanopore', 'ont_fastq_qc', 'ont_plasmid_qc', 'ont_construct_screening', 'wf_clone_validation'].includes(modelId);
+const NGS_MODEL_IDS = new Set([
+    'nanopore',
+    'ont_basecall_dna',
+    'ont_basecall_rna',
+    'ont_plasmid_qc',
+    'ont_construct_screening',
+    'ont_methylation_analysis',
+    'ont_fastq_qc',
+    'ont_pooled_reference_assignment',
+    'wf_clone_validation',
+]);
+
+const NGS_WORKFLOW_IDS = new Set([
+    'ont_basecall_dna',
+    'ont_basecall_rna',
+    'ont_plasmid_qc',
+    'ont_construct_screening',
+    'ont_methylation_analysis',
+    'ont_fastq_qc',
+    'ont_pooled_reference_assignment',
+    'wf_clone_validation',
+    'basecall_dna',
+    'basecall_rna',
+    'plasmid_qc',
+    'construct_screening',
+    'methylation_analysis',
+    'fastq_qc',
+    'pooled_reference_assignment',
+    'pooled-reference-assignment',
+    'wf_clone',
+    'clone_validation',
+]);
+
+const LEGACY_NGS_MODES = new Set([
+    ...NGS_WORKFLOW_IDS,
+    'nanopore_methylation',
+]);
+
+function routeIdentity(value: unknown): string {
+    return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
+export function isNgsJob(job: Pick<NgsJobRouteIdentity, 'model_id' | 'mode' | 'params'>): boolean {
+    const modelId = routeIdentity(job.model_id);
+    if (NGS_MODEL_IDS.has(modelId)) return true;
+    if (modelId) return false;
+
+    const params = job.params && typeof job.params === 'object' ? job.params : {};
+    const workflowId = routeIdentity(params.ont_workflow_id || params.workflow_id);
+    if (NGS_WORKFLOW_IDS.has(workflowId)) return true;
+
+    return LEGACY_NGS_MODES.has(routeIdentity(job.mode));
 }
 
 export function ngsResultHref(jobId: string, currentSearch = ''): string {

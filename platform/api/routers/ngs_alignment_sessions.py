@@ -24,6 +24,24 @@ from services.sequence_qc_manifest import (
 )
 
 router = APIRouter()
+
+IGV_REPORT_CONTENT_SECURITY_POLICY = "; ".join(
+    (
+        "default-src 'none'",
+        "script-src 'unsafe-inline' https://cdn.jsdelivr.net/npm/igv@3.5.2/dist/igv.min.js",
+        "style-src 'unsafe-inline'",
+        "connect-src 'self' blob:",
+        "img-src 'self' data: blob:",
+        "font-src 'self' data:",
+        "worker-src 'self' blob:",
+        "child-src 'self' blob:",
+        "object-src 'none'",
+        "base-uri 'none'",
+        "form-action 'none'",
+        "frame-ancestors 'self'",
+        "sandbox allow-scripts allow-same-origin allow-downloads",
+    )
+)
 LOCAL_DEVELOPMENT_ADMIN_HOSTS = frozenset({None, "127.0.0.1", "::1", "localhost", "testclient"})
 
 
@@ -213,6 +231,7 @@ async def _serve_artifact(path: Path, metadata: dict, request: Request) -> Respo
     if metadata.get("mime_type") == "text/html":
         if metadata.get("role") == "report" and metadata.get("_kind") == "igv_report":
             base_headers["Content-Disposition"] = f'inline; filename="{path.name}"'
+            base_headers["Content-Security-Policy"] = IGV_REPORT_CONTENT_SECURITY_POLICY
         else:
             base_headers["Content-Disposition"] = f'attachment; filename="{path.name}"'
             base_headers["Content-Security-Policy"] = "default-src 'none'; sandbox"
