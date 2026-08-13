@@ -35,6 +35,7 @@ from biomodstack_runtime_profile import (
 
 API_SERVICE = "biomodstack-api.service"
 FRONTEND_SERVICE = "biomodstack-frontend.service"
+TELEMETRY_SERVICE = "biomodstack-telemetry.service"
 DEVELOPMENT_LANE = "development"
 PRODUCTION_LANE = "production"
 DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE = "biomodstack-development-workflow-adapter.service"
@@ -64,6 +65,10 @@ SYSTEMD_RESOURCE_LIMITS: dict[str, tuple[str, dict[str, str]]] = {
     FRONTEND_SERVICE: (
         "FRONTEND",
         {"MemoryHigh": "2G", "MemoryMax": "4G", "TasksMax": "1024", "LimitNOFILE": "65536"},
+    ),
+    TELEMETRY_SERVICE: (
+        "TELEMETRY",
+        {"MemoryHigh": "256M", "MemoryMax": "512M", "TasksMax": "64", "LimitNOFILE": "4096"},
     ),
     DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE: (
         "WORKFLOW_ADAPTER",
@@ -393,6 +398,7 @@ def all_runtime_service_names() -> tuple[str, ...]:
     return (
         API_SERVICE,
         FRONTEND_SERVICE,
+        TELEMETRY_SERVICE,
         DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE,
         PRODUCTION_WORKFLOW_ADAPTER_SERVICE,
         CORE_RUNTIME_SERVICE,
@@ -1129,6 +1135,34 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     build_id = build_identity["build_id"]
     build_time = build_identity["build_time"]
     log_rotator = root / "scripts" / "rotate_biomodstack_logs.py"
+    telemetry_db = str(Path(os.getenv("BMS_TELEMETRY_DB_PATH", "/mnt/BioModStack/telemetry/telemetry.sqlite3")).expanduser())
+    telemetry_log = LOG_DIR / "telemetry.log"
+    telemetry_limits = render_systemd_resource_boundaries(TELEMETRY_SERVICE).replace("\n", "\n        ")
+    telemetry_unit = dedent(
+        f"""\
+        [Unit]
+        Description=BioModStack host telemetry collector
+        After=local-fs.target
+
+        [Service]
+        Type=simple
+        Environment=BMS_HOME={root}
+        Environment=BMS_TELEMETRY_DB_PATH={telemetry_db}
+        Environment=PYTHONUNBUFFERED=1
+        ExecStartPre=/usr/bin/mkdir -p {Path(telemetry_db).parent}
+        ExecStart={root / 'platform' / 'api' / '.venv' / 'bin' / 'python'} {root / 'platform' / 'api' / 'tools' / 'telemetry_collector.py'}
+        Restart=on-failure
+        RestartSec=5
+        TimeoutStopSec=15
+        KillMode=control-group
+        {telemetry_limits}
+        StandardOutput=append:{telemetry_log}
+        StandardError=append:{telemetry_log}
+
+        [Install]
+        WantedBy=default.target
+        """
+    )
     shared_data_root = Path(str(resolved.get("data_root", Path("/mnt/BioModStack"))))
     if mode == CONTAINER_RUNTIME_MODE:
         adapter_runner = root / "scripts" / "run_biomodstack_workflow_adapter.sh"
@@ -1213,6 +1247,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
             Environment=BMS_WORKFLOW_ADAPTER_URL={workflow_adapter_url_for_lane(PRODUCTION_LANE)}
             Environment=BMS_STATE_DIR={production_state_root}
             Environment=BMS_DB_PATH={production_db_path}
+            Environment=BMS_TELEMETRY_DB_PATH=/var/lib/biomodstack/telemetry/telemetry.sqlite3
             Environment=BMS_WORK={production_work_dir}
             Environment=BMS_RESULTS_DIR={production_results_root}
             Environment=BMS_RESULTS_ROOT={production_results_root}
@@ -1237,7 +1272,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
             f"""\
             [Unit]
             Description=BioModStack workstation runtime target
-            Wants={PRODUCTION_WORKFLOW_ADAPTER_SERVICE} {WORKFLOW_ROOT_SLICE} {PRODUCTION_WORKFLOW_SLICE} {CORE_RUNTIME_SERVICE}
+            Wants={TELEMETRY_SERVICE} {PRODUCTION_WORKFLOW_ADAPTER_SERVICE} {WORKFLOW_ROOT_SLICE} {PRODUCTION_WORKFLOW_SLICE} {CORE_RUNTIME_SERVICE}
 
             [Install]
             WantedBy=default.target
@@ -1246,6 +1281,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
 
         return {
             PRODUCTION_WORKFLOW_ADAPTER_SERVICE: workflow_adapter_unit,
+            TELEMETRY_SERVICE: telemetry_unit,
             WORKFLOW_PARENT_SLICE: render_workflow_parent_slice(),
             WORKFLOW_ROOT_SLICE: workflow_root_slice,
             PRODUCTION_WORKFLOW_SLICE: production_workflow_slice,
@@ -1382,6 +1418,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment=BMS_STATE_DIR={dev_data_root}
         Environment=BMS_INPUTS={dev_inputs_dir}
         Environment=BMS_DB_PATH={dev_db_path}
+        Environment=BMS_TELEMETRY_DB_PATH={telemetry_db}
         Environment=BMS_WORK={dev_work_dir}
         Environment=BMS_RESULTS_DIR={dev_results_root}
         Environment=BMS_RESULTS_ROOT={dev_results_root}
@@ -1451,7 +1488,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         f"""\
         [Unit]
         Description=BioModStack development UI target
-        Wants={DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE} {WORKFLOW_ROOT_SLICE} {DEVELOPMENT_WORKFLOW_SLICE} {API_SERVICE} {FRONTEND_SERVICE}
+        Wants={TELEMETRY_SERVICE} {DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE} {WORKFLOW_ROOT_SLICE} {DEVELOPMENT_WORKFLOW_SLICE} {API_SERVICE} {FRONTEND_SERVICE}
 
         [Install]
         WantedBy=default.target
@@ -1460,6 +1497,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
 
     return {
         DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE: development_workflow_adapter_unit,
+        TELEMETRY_SERVICE: telemetry_unit,
         WORKFLOW_PARENT_SLICE: render_workflow_parent_slice(),
         WORKFLOW_ROOT_SLICE: workflow_root_slice,
         DEVELOPMENT_WORKFLOW_SLICE: development_workflow_slice,

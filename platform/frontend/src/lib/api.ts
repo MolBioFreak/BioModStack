@@ -443,7 +443,28 @@ export const fetchJobs = (params?: {
 export const fetchBoltzCpShardPlans = () => api.get<BoltzCpShardPlanCatalog>('/api/jobs/boltz-cp/shard-plans');
 // Bound live telemetry requests so a half-open connection cannot permanently
 // occupy the shared collector and suppress its recovery/backoff loop.
+export interface TelemetryHistoryPoint {
+    timestamp_ms: number;
+    sample_count: number;
+    payload: SystemStatus & { timestamp_ms?: number };
+}
+
+export interface TelemetryHistoryResponse {
+    source: 'immutable_server_telemetry';
+    database: 'dedicated_telemetry_store';
+    resolution: 'raw' | 'minute';
+    start_ms: number;
+    end_ms: number;
+    generated_at_ms: number;
+    points: TelemetryHistoryPoint[];
+}
+
 export const fetchSystemStatus = () => api.get<SystemStatus>('/api/gpu/status', { timeout: 10_000 });
+export const fetchTelemetryHistory = (startMs: number, endMs: number, resolution: 'raw' | 'minute', limit = 4000) =>
+    api.get<TelemetryHistoryResponse>('/api/telemetry/history', {
+        params: { start_ms: startMs, end_ms: endMs, resolution, limit },
+        timeout: 10_000,
+    });
 export const fetchJobById = (id: string) => api.get<Job>(`/api/jobs/${id}`);
 export const fetchRFD3LocalRedesign = (id: string) => api.get<RFD3LocalRedesignReadModel>(`/api/jobs/${id}/rfd3-local-redesign`);
 export const fetchDesignById = (id: string) => api.get<Design>(`/api/designs/${id}`);

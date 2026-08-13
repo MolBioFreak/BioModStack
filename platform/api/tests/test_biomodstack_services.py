@@ -621,6 +621,7 @@ def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path, mo
         services.DEVELOPMENT_WORKFLOW_SLICE,
         services.API_SERVICE,
         services.FRONTEND_SERVICE,
+        services.TELEMETRY_SERVICE,
         services.TAILNET_GLOBAL_SERVICE,
         services.DEV_TARGET_UNIT,
     }
@@ -643,6 +644,12 @@ def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path, mo
     assert "StartLimitIntervalSec=300" in api_unit
     assert "StartLimitBurst=3" in api_unit
     assert f"PartOf={services.DEV_TARGET_UNIT}" in api_unit
+
+    telemetry_unit = units[services.TELEMETRY_SERVICE]
+    assert f"ExecStart={project_root / 'platform' / 'api' / '.venv' / 'bin' / 'python'} {project_root / 'platform' / 'api' / 'tools' / 'telemetry_collector.py'}" in telemetry_unit
+    assert "Environment=BMS_TELEMETRY_DB_PATH=" in telemetry_unit
+    assert "Restart=on-failure" in telemetry_unit
+    assert "MemoryMax=512M" in telemetry_unit
 
     frontend_unit = units[services.FRONTEND_SERVICE]
     assert "Environment=BMS_RUNTIME_MODE=dev" in frontend_unit
@@ -672,7 +679,7 @@ def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path, mo
 
     target_unit = units[services.DEV_TARGET_UNIT]
     assert (
-        f"Wants={services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE} {services.WORKFLOW_ROOT_SLICE} "
+        f"Wants={services.TELEMETRY_SERVICE} {services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE} {services.WORKFLOW_ROOT_SLICE} "
         f"{services.DEVELOPMENT_WORKFLOW_SLICE} {services.API_SERVICE} {services.FRONTEND_SERVICE}"
         in target_unit
     )
@@ -689,6 +696,7 @@ def test_render_user_units_support_container_runtime_mode(tmp_path: Path) -> Non
         services.WORKFLOW_PARENT_SLICE,
         services.WORKFLOW_ROOT_SLICE,
         services.PRODUCTION_WORKFLOW_SLICE,
+        services.TELEMETRY_SERVICE,
         services.CORE_RUNTIME_SERVICE,
         services.TARGET_UNIT,
     }
@@ -725,7 +733,7 @@ def test_render_user_units_support_container_runtime_mode(tmp_path: Path) -> Non
 
     target_unit = units[services.TARGET_UNIT]
     assert (
-        f"Wants={services.WORKFLOW_ADAPTER_SERVICE} {services.WORKFLOW_ROOT_SLICE} "
+        f"Wants={services.TELEMETRY_SERVICE} {services.WORKFLOW_ADAPTER_SERVICE} {services.WORKFLOW_ROOT_SLICE} "
         f"{services.PRODUCTION_WORKFLOW_SLICE} {services.CORE_RUNTIME_SERVICE}"
         in target_unit
     )
@@ -744,6 +752,7 @@ def test_install_user_units_writes_expected_files(tmp_path: Path) -> None:
         services.WORKFLOW_PARENT_SLICE,
         services.WORKFLOW_ROOT_SLICE,
         services.PRODUCTION_WORKFLOW_SLICE,
+        services.TELEMETRY_SERVICE,
         services.CORE_RUNTIME_SERVICE,
         services.TARGET_UNIT,
     }
