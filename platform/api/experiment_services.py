@@ -1507,7 +1507,15 @@ async def _save_revision(
     hierarchy_bindings: list[dict[str, str | int]] = []
     previous_status: str | None = None
     if aggregate_kind == "workflow":
-        _validate_workflow_payload(payload)
+        plan_authority = await load_workflow_plan_authority(
+            session,
+            aggregate_id,
+            required=False,
+        )
+        if plan_authority is None:
+            _validate_workflow_payload(payload)
+        else:
+            validate_workflow_payload_for_plan(payload, plan_authority[1])
     elif aggregate_kind in {"workspace", "experiment", "domain_experiment"}:
         _validate_hierarchy_payload(aggregate_kind, payload)
         current_payload: dict[str, Any] | None = None
