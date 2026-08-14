@@ -187,7 +187,21 @@ def build_external_member_receipt(
     ) or not isinstance(reopen_destination.get("params"), dict):
         raise ValueError("member receipt reopen destination must be typed and relative")
 
-    issued_id = receipt_id or str(uuid.uuid4())
+    identity_seed = _canonical(
+        {
+            "source_store_id": source_store_id,
+            "entity_kind": entity_kind,
+            "entity_id": identity,
+            "source_generation_or_revision": generation,
+            "content_digest": content_digest,
+            "source_schema": source_schema.strip(),
+            "availability": availability,
+            "reopen_destination": reopen_destination,
+        }
+    )
+    issued_id = receipt_id or str(
+        uuid.uuid5(uuid.NAMESPACE_URL, f"bms.external-member-receipt.v1:{identity_seed}")
+    )
     issued_at = created_at or datetime.now(timezone.utc).isoformat()
     payload = {
         "schema": RECEIPT_SCHEMA,
