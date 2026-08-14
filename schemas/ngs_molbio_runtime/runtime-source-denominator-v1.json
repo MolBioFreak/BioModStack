@@ -1,6 +1,7 @@
 {
   "schema": "bms.ngs-molbio.runtime-source-denominator.v1",
   "paths": [
+    "biomodstack_services.py",
     "docs/reports/ngs-molbio-phase-n0-verification-v1.json",
     "platform/api/config/ngs_molbio/adapter_registry_v1.json",
     "platform/api/config/ngs_molbio/schema_registry_v1.json",
@@ -10,7 +11,6 @@
     "platform/api/experiment_models.py",
     "platform/api/experiment_operations.py",
     "platform/api/experiment_services.py",
-    "platform/api/gpu_manager.py",
     "platform/api/main.py",
     "platform/api/migrations/sqlite_sha256.py",
     "platform/api/model_registry.py",
@@ -70,6 +70,7 @@
     "platform/frontend/src/lib/api.ts",
     "platform/frontend/src/lib/projectManager.ts",
     "platform/frontend/src/pages/ProjectManager.tsx",
+    "platform/frontend/vite.config.ts",
     "schemas/ngs_molbio/binding-status-v1.schema.json",
     "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json",
     "schemas/ngs_molbio_runtime/runtime-implementation-v1.schema.json",
@@ -78,5 +79,5 @@
     "scripts/build_ngs_molbio_runtime_implementation_record.py",
     "scripts/run_ngs_molbio_payload_ownership_audit.py"
   ],
-  "content_sha256": "090679d178bf88d37ee0c30e6d339304991b1054d086bb9b0ddb9dedf18c5d91"
+  "content_sha256": "c0abcc8d4278ecbf8cdf4ee69c5ee8fff617945d3799436fb6800a4256a92914"
 }

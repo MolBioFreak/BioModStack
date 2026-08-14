@@ -812,6 +812,48 @@ def test_install_user_units_writes_expected_files(tmp_path: Path) -> None:
         assert path.read_text(encoding="utf-8") == services.render_user_units(project_root)[path.name]
 
 
+def test_render_dev_units_load_shared_project_proxy_identity(tmp_path: Path, monkeypatch) -> None:
+    config_dir = tmp_path / "config"
+    monkeypatch.setattr(services, "runtime_profile_config_dir", lambda: config_dir)
+
+    units = services.render_user_units(tmp_path / "repo", runtime_mode="dev")
+    expected = f"EnvironmentFile={config_dir / services.DEV_PROXY_IDENTITY_ENV_NAME}"
+
+    assert expected in units[services.API_SERVICE]
+    assert expected in units[services.FRONTEND_SERVICE]
+    assert expected not in units[services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE]
+
+
+def test_install_dev_units_creates_and_preserves_project_proxy_identity(tmp_path: Path, monkeypatch) -> None:
+    config_dir = tmp_path / "config"
+    systemd_dir = tmp_path / "systemd"
+    monkeypatch.setattr(services, "runtime_profile_config_dir", lambda: config_dir)
+
+    services.install_user_units(
+        project_root=tmp_path / "repo",
+        systemd_dir=systemd_dir,
+        runtime_mode="dev",
+    )
+    identity_path = config_dir / services.DEV_PROXY_IDENTITY_ENV_NAME
+    first = identity_path.read_bytes()
+    values = dict(
+        line.split("=", 1)
+        for line in first.decode("utf-8").splitlines()
+        if line
+    )
+
+    assert identity_path.stat().st_mode & 0o777 == 0o600
+    assert len(values["BMS_CM_TRUSTED_PROXY_SECRET"]) >= 43
+    assert values["BMS_DEV_API_PROXY_SECRET"] == values["BMS_CM_TRUSTED_PROXY_SECRET"]
+
+    services.install_user_units(
+        project_root=tmp_path / "repo",
+        systemd_dir=systemd_dir,
+        runtime_mode="dev",
+    )
+    assert identity_path.read_bytes() == first
+
+
 def test_rotate_log_file_bounds_append_only_service_logs(tmp_path: Path) -> None:
     log_path = tmp_path / "service.log"
     log_path.write_text("a" * 32, encoding="utf-8")

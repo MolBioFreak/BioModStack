@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import signal
 import subprocess
 import sys
@@ -53,6 +54,7 @@ TAILNET_GLOBAL_SERVICE = "biomodstack-tailnet-global.service"
 CORE_RUNTIME_SERVICE = "biomodstack-core-runtime.service"
 TARGET_UNIT = "biomodstack.target"
 DEV_TARGET_UNIT = "biomodstack-dev.target"
+DEV_PROXY_IDENTITY_ENV_NAME = "development-project-proxy.env"
 
 # Bounds are intentionally conservative for a large workstation.  Operators
 # can override each value with the documented BMS_<COMPONENT>_<FIELD>
@@ -339,6 +341,43 @@ def build_launch_ui_command(
 
 class ServiceManagerError(RuntimeError):
     """Raised when BioModStack service management fails."""
+
+
+def development_proxy_identity_env_path() -> Path:
+    return runtime_profile_config_dir() / DEV_PROXY_IDENTITY_ENV_NAME
+
+
+def ensure_development_proxy_identity() -> Path:
+    path = development_proxy_identity_env_path()
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+    if path.exists():
+        values = {}
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line and not line.startswith("#") and "=" in line:
+                key, value = line.split("=", 1)
+                values[key] = value
+        trusted = values.get("BMS_CM_TRUSTED_PROXY_SECRET", "")
+        injected = values.get("BMS_DEV_API_PROXY_SECRET", "")
+        if len(trusted) < 43 or injected != trusted:
+            raise ServiceManagerError(
+                f"Development Project proxy identity is invalid: {path}"
+            )
+        path.chmod(0o600)
+        return path
+
+    token = secrets.token_urlsafe(48)
+    content = (
+        f"BMS_CM_TRUSTED_PROXY_SECRET={token}\n"
+        f"BMS_DEV_API_PROXY_SECRET={token}\n"
+    ).encode("utf-8")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
+    descriptor = os.open(path, flags, 0o600)
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(content)
+        handle.flush()
+        os.fsync(handle.fileno())
+    return path
 
 
 def render_systemd_resource_boundaries(service_name: str) -> str:
@@ -1352,6 +1391,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     )
     api_limits = render_systemd_resource_boundaries(API_SERVICE).replace("\n", "\n        ")
     frontend_limits = render_systemd_resource_boundaries(FRONTEND_SERVICE).replace("\n", "\n        ")
+    proxy_identity_env = development_proxy_identity_env_path()
 
     tailnet_global_unit = dedent(
         f"""\
@@ -1435,6 +1475,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
 
         [Service]
         Type=simple
+        EnvironmentFile={proxy_identity_env}
         Environment=BMS_HOME={root}
         Environment=BMS_RUNTIME_MODE={DEV_RUNTIME_MODE}
         Environment=BMS_WORKFLOW_ADAPTER_LANE={DEVELOPMENT_LANE}
@@ -1498,6 +1539,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
 
         [Service]
         Type=simple
+        EnvironmentFile={proxy_identity_env}
         Environment=BMS_HOME={root}
         Environment=BMS_RUNTIME_MODE={DEV_RUNTIME_MODE}
         Environment=BMS_FRONTEND_MODE=dev
@@ -1553,6 +1595,8 @@ def install_user_units(
     root = (project_root or get_project_root()).resolve()
     target_dir = (systemd_dir or get_user_systemd_dir()).resolve()
     target_dir.mkdir(parents=True, exist_ok=True)
+    if resolve_runtime_mode(runtime_mode) == DEV_RUNTIME_MODE:
+        ensure_development_proxy_identity()
 
     written_paths: list[Path] = []
     for unit_name, content in render_user_units(root, runtime_mode=runtime_mode).items():
