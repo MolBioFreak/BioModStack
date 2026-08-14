@@ -78,6 +78,20 @@ def test_plan_sync_redeploys_current_remote_when_live_identity_is_stale() -> Non
     assert decision == "deploy-current"
 
 
+def test_plan_sync_does_not_restart_current_services_when_health_is_temporarily_unavailable() -> None:
+    sync = load_module()
+
+    decision = sync.plan_sync(
+        dirty=False,
+        local_revision="b" * 40,
+        remote_revision="b" * 40,
+        deployed_revision=None,
+        remote_descends_from_local=True,
+    )
+
+    assert decision == "blocked-health-unavailable"
+
+
 def test_plan_sync_blocks_dirty_or_diverged_canonical_tree() -> None:
     sync = load_module()
 

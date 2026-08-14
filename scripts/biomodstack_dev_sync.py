@@ -29,6 +29,7 @@ DEFAULT_STATE_DIR = Path.home() / ".local" / "state" / "biomodstack"
 SyncDecision = Literal[
     "blocked-dirty",
     "blocked-diverged",
+    "blocked-health-unavailable",
     "fast-forward-deploy",
     "deploy-current",
     "idle",
@@ -49,6 +50,8 @@ def plan_sync(
         return "blocked-diverged"
     if local_revision != remote_revision:
         return "fast-forward-deploy"
+    if deployed_revision is None:
+        return "blocked-health-unavailable"
     if deployed_revision != remote_revision:
         return "deploy-current"
     return "idle"
