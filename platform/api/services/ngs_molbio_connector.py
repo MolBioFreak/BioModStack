@@ -1180,28 +1180,28 @@ def _event_authority_spec(
         return {
             "entity_kind": "ngs_molbio_state_revision", "entity_id": str(payload["state_revision_id"]),
             "entity_revision_id": str(payload["state_revision_number"]), "content_digest": str(payload["payload_sha256"]),
-            "availability": "available", "edge_mode": "publishes",
+            "availability": "available", "edge_mode": "produces",
             "reopen_uri": f"/molbio-ngs/domain-experiments/{domain_id}?state_revision_id={payload['state_revision_id']}",
         }
     if event_type in {"molbio_ngs.sample.created", "molbio_ngs.sample.revision_saved"}:
         return {
             "entity_kind": "ngs_molbio_sample_revision", "entity_id": str(payload["sample_revision_id"]),
             "entity_revision_id": str(payload["sample_revision_number"]), "content_digest": str(payload["payload_sha256"]),
-            "availability": "available", "edge_mode": "publishes",
+            "availability": "available", "edge_mode": "produces",
             "reopen_uri": f"/api/molbio-ngs/experiments/{domain_id}/samples/{payload['sample_id']}/revisions/{payload['sample_revision_id']}",
         }
     if event_type in {"molbio_ngs.reference.created", "molbio_ngs.reference.revision_saved"}:
         return {
             "entity_kind": "ngs_molbio_reference_revision", "entity_id": str(payload["reference_revision_id"]),
             "entity_revision_id": str(payload["reference_revision_number"]), "content_digest": str(payload["canonical_fasta_sha256"]),
-            "availability": "available", "edge_mode": "publishes",
+            "availability": "available", "edge_mode": "produces",
             "reopen_uri": f"/api/molbio-ngs/references/{payload['reference_id']}/revisions/{payload['reference_revision_id']}",
         }
     if event_type == "molbio_ngs.reference.archived":
         return {
             "entity_kind": "ngs_molbio_reference_lifecycle", "entity_id": str(payload["reference_id"]),
             "entity_revision_id": str(payload["head_generation"]), "content_digest": payload_sha256,
-            "availability": "unavailable", "edge_mode": "publishes",
+            "availability": "unavailable", "edge_mode": "produces",
             "reopen_uri": f"/api/molbio-ngs/references/{payload['reference_id']}",
         }
     if event_type == "molbio_ngs.instrument_run_evidence.attached":
@@ -1222,7 +1222,7 @@ def _event_authority_spec(
         return {
             "entity_kind": "ngs_molbio_member_receipt", "entity_id": str(payload["receipt_id"]),
             "entity_revision_id": str(payload["native_generation"]), "content_digest": str(payload["receipt_sha256"]),
-            "availability": "available", "edge_mode": "publishes",
+            "availability": "available", "edge_mode": "produces",
             "reopen_uri": f"/molbio-ngs/domain-experiments/{domain_id}?member_receipt_id={payload['receipt_id']}",
         }
     raise ConnectorConflict(f"event type {event_type!r} has no global authority materializer")
