@@ -235,6 +235,7 @@ process PublishComplexPredictionFrustraMPNNCandidate {
 
 process ReportComplexPredictionFrustraMPNNComplete {
     label 'CPU'
+    stageInMode 'copy'
 
     input:
     path published_markers

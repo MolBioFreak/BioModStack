@@ -453,6 +453,7 @@ def test_complex_prediction_reports_closed_v2_publication_marker_before_completi
     validator_index = reporter.index("validate_frustrampnn_publication_markers.py")
     stage_reporter_index = reporter.index("stage_reporter.py")
     assert validator_index < stage_reporter_index
+    assert "stageInMode 'copy'" in reporter
     assert "--job-root '${params.out_dir}'" in reporter
     assert "published_*.json" in reporter
     assert "json.loads" not in reporter
