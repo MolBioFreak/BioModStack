@@ -84,6 +84,16 @@ _PROJECT_SCHEDULED_CAPABILITIES: dict[str, tuple[str, str, str]] = {
     "ngs.ont.raw_signal_qc": ("nanopore", "raw_signal_qc", "/api/ont/ngs/raw-signal-qc/submit"),
     "molbio.oligo_design.rfdpoly": ("oligo_design", "oligo_design", "/api/jobs/submit"),
 }
+_PROJECT_GOVERNED_DATASET_KINDS = frozenset(
+    {
+        "ngs_molbio.acquisition_run_input_cohort.v1",
+        "ngs_molbio.molecular_construct_cohort.v1",
+        "ngs_molbio.qc_analysis_result_cohort.v1",
+        "ngs_molbio.reference_comparison_panel_cohort.v1",
+        "ngs_molbio.sample_cohort.v1",
+        "ngs_molbio.saved_review_comparison_cohort.v1",
+    }
+)
 _PROJECT_SOURCE_RECEIPT_CONTRACTS = [
     "bms.ngs-molbio.sample-revision.adapter.v1",
     "bms.ngs.reference-revision.adapter.v1",
@@ -741,7 +751,15 @@ def contract_registry(name: str) -> dict[str, Any]:
         "payload_ownership",
     }:
         raise NgsMolBioCapabilityError(f"unknown contract registry: {name}")
-    return copy.deepcopy(_loaded()[3][name])
+    document = copy.deepcopy(_loaded()[3][name])
+    if name == "dataset" and _runtime_overlay_authorities():
+        for record in document.get("entries", []):
+            if (
+                isinstance(record, dict)
+                and record.get("dataset_kind") in _PROJECT_GOVERNED_DATASET_KINDS
+            ):
+                record["enabled"] = True
+    return document
 
 
 def _payload_value(payload: dict[str, Any], expression: str) -> Any:
