@@ -4,6 +4,7 @@
     "biomodstack_services.py",
     "docs/reports/ngs-molbio-phase-n0-verification-v1.json",
     "platform/api/config/ngs_molbio/adapter_registry_v1.json",
+    "platform/api/config/ngs_molbio/capability_inventory_v1.json",
     "platform/api/config/ngs_molbio/schema_registry_v1.json",
     "platform/api/database.py",
     "platform/api/experiment_database.py",
@@ -79,5 +80,5 @@
     "scripts/build_ngs_molbio_runtime_implementation_record.py",
     "scripts/run_ngs_molbio_payload_ownership_audit.py"
   ],
-  "content_sha256": "c0abcc8d4278ecbf8cdf4ee69c5ee8fff617945d3799436fb6800a4256a92914"
+  "content_sha256": "7fb1b53f351396a098cbe91e9cbc14079d037b4697a1651bb1395b9920e859a4"
 }

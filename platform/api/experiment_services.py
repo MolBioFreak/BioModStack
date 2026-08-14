@@ -19,11 +19,6 @@ from services.ngs_molbio_capabilities import (
     capability_record,
     validate_domain_experiment,
 )
-from services.ngs_molbio_preparation_authority import (
-    PreparationInputAuthorityError,
-    build_preparation_input_authority,
-)
-
 from model_registry import get_registry
 from scripts.rfd3_local_redesign.contract import ContractError
 from services.rfd3_local_redesign import (
@@ -2087,6 +2082,11 @@ async def prepare_workflow(
         raise ValidationFailure(
             "source-bearing workflow has no immutable pinned source receipt contract authority"
         )
+    from services.ngs_molbio_preparation_authority import (
+        PreparationInputAuthorityError,
+        build_preparation_input_authority,
+    )
+
     try:
         input_authority = await build_preparation_input_authority(
             session,
@@ -2306,6 +2306,11 @@ async def validate_preparation_authority(
         raise ValidationFailure(
             "source-bearing workflow has no immutable pinned source receipt contract authority"
         )
+    from services.ngs_molbio_preparation_authority import (
+        PreparationInputAuthorityError,
+        build_preparation_input_authority,
+    )
+
     try:
         fresh_input_authority = await build_preparation_input_authority(
             session,
