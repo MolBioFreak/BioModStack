@@ -15,6 +15,7 @@ import {
     type DomainExperimentView,
     type GlobalAggregateHead,
 } from '../../lib/api';
+import { getNgsMolBioBinding } from '../../lib/projectManager';
 
 export const EXPERIMENT_CONTEXT_KEYS = [
     'workspace_id',
@@ -99,6 +100,19 @@ export function GlobalExperimentProvider({ children }: { children: ReactNode }) 
         retry: false,
         staleTime: 15_000,
     });
+    const bindingQuery = useQuery({
+        queryKey: ['ngs-molbio-binding', workspaceId, globalExperimentId, domainExperimentId],
+        queryFn: ({ signal }) => getNgsMolBioBinding(
+            workspaceId as string,
+            globalExperimentId as string,
+            domainExperimentId as string,
+            signal,
+        ),
+        enabled: workspaceId !== null && globalExperimentId !== null && domainExperimentId !== null,
+        retry: false,
+        staleTime: 5_000,
+        refetchInterval: (query) => query.state.data?.provisioning_state === 'provisioning' ? 2_000 : false,
+    });
 
     const workspaces = workspaceQuery.data ?? [];
     const globalExperiments = globalExperimentQuery.data ?? [];
@@ -127,9 +141,11 @@ export function GlobalExperimentProvider({ children }: { children: ReactNode }) 
     const workspaceError = visibleError(workspaceQuery.error);
     const experimentError = visibleError(globalExperimentQuery.error);
     const domainError = visibleError(domainExperimentQuery.error);
+    const bindingError = visibleError(bindingQuery.error);
     const isLoading = workspaceQuery.isLoading
         || (workspaceId !== null && globalExperimentQuery.isLoading)
-        || (workspaceId !== null && domainExperimentQuery.isLoading);
+        || (workspaceId !== null && domainExperimentQuery.isLoading)
+        || (workspaceId !== null && globalExperimentId !== null && domainExperimentId !== null && bindingQuery.isLoading);
 
     const availability = useMemo<DomainContextAvailability>(() => {
         const error = workspaceError ?? experimentError ?? domainError;
@@ -194,15 +210,45 @@ export function GlobalExperimentProvider({ children }: { children: ReactNode }) 
                 error: null,
             };
         }
+        if (bindingError) {
+            return {
+                status: 'read-only',
+                canMutateDomain: false,
+                localBinding: 'unavailable',
+                globalAdapter: 'unavailable',
+                reason: `The exact shared binding authority is unavailable: ${bindingError.message}`,
+                error: bindingError,
+            };
+        }
+        const binding = bindingQuery.data;
+        const exactBindingReady = binding?.provisioning_state === 'ready'
+            && (binding.command_state === 'applied' || binding.command_state === 'duplicate')
+            && binding.domain_revision_id === selectedDomainExperiment.global_domain_experiment_revision_id
+            && Boolean(binding.global_receipt_id)
+            && Boolean(binding.acknowledgement_id);
+        if (!exactBindingReady) {
+            return {
+                status: 'read-only',
+                canMutateDomain: false,
+                localBinding: binding?.acknowledgement_id ? 'acknowledged' : 'unavailable',
+                globalAdapter: binding ? 'available' : 'unknown',
+                reason: binding?.provisioning_state === 'provisioning'
+                    ? 'Read/reopen is available while the sole managed connector establishes exact binding authority.'
+                    : 'Read/reopen is available, but mutations require a ready acknowledged binding for the exact current Domain revision.',
+                error: null,
+            };
+        }
         return {
-            status: 'read-only',
-            canMutateDomain: false,
+            status: 'available',
+            canMutateDomain: true,
             localBinding: 'acknowledged',
-            globalAdapter: 'unavailable',
-            reason: 'Read/reopen is available, but domain mutations are disabled because the finalized global adapter is unavailable.',
+            globalAdapter: 'available',
+            reason: 'The exact current Domain revision has a ready acknowledged global/local binding.',
             error: null,
         };
     }, [
+        bindingError,
+        bindingQuery.data,
         domainError,
         domainExperimentId,
         experimentError,
@@ -232,14 +278,19 @@ export function GlobalExperimentProvider({ children }: { children: ReactNode }) 
     }, [location.pathname, location.search, navigate]);
 
     const contextHref = useCallback((pathname: string, updates: ContextQueryUpdate = {}) => {
+        const queryIndex = pathname.indexOf('?');
+        const targetPathname = queryIndex >= 0 ? pathname.slice(0, queryIndex) : pathname;
         const next = new URLSearchParams(location.search);
+        if (queryIndex >= 0) {
+            new URLSearchParams(pathname.slice(queryIndex + 1)).forEach((value, key) => next.set(key, value));
+        }
         Object.entries(updates).forEach(([key, rawValue]) => {
             const value = typeof rawValue === 'string' ? rawValue.trim() : rawValue;
             if (value === null || value === undefined || value === '') next.delete(key);
             else next.set(key, value);
         });
         const search = next.toString();
-        return `${pathname}${search ? `?${search}` : ''}`;
+        return `${targetPathname}${search ? `?${search}` : ''}`;
     }, [location.search]);
 
     const setWorkspaceId = useCallback((nextWorkspaceId: string | null) => {

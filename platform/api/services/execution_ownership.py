@@ -16,6 +16,7 @@ import json
 from pathlib import Path
 import os
 import re
+import stat
 import subprocess
 import time
 from typing import Any
@@ -119,6 +120,13 @@ class UnitProperties:
     slice_name: str
     invocation_id: str = ""
     load_state: str = ""
+    cpu_quota_per_sec_usec: str = ""
+    memory_max: str = ""
+    cpu_accounting: str = ""
+    memory_accounting: str = ""
+    tasks_accounting: str = ""
+    device_policy: str = ""
+    device_allow: str = ""
 
     @classmethod
     def from_mapping(cls, values: Mapping[str, object]) -> "UnitProperties":
@@ -132,6 +140,13 @@ class UnitProperties:
             slice_name=str(values.get("Slice", "")),
             invocation_id=str(values.get("InvocationID", "")),
             load_state=str(values.get("LoadState", "")),
+            cpu_quota_per_sec_usec=str(values.get("CPUQuotaPerSecUSec", "")),
+            memory_max=str(values.get("MemoryMax", "")),
+            cpu_accounting=str(values.get("CPUAccounting", "")),
+            memory_accounting=str(values.get("MemoryAccounting", "")),
+            tasks_accounting=str(values.get("TasksAccounting", "")),
+            device_policy=str(values.get("DevicePolicy", "")),
+            device_allow=str(values.get("DeviceAllow", "")),
         )
 
 
@@ -625,6 +640,27 @@ def assert_unit_lane(unit_name: str, lane: str) -> UnitIdentity:
     return identity
 
 
+def workflow_nvidia_device_allow_paths(gpu_index: int) -> tuple[str, ...]:
+    """Resolve the bounded NVIDIA character-device allowlist for one GPU."""
+    if type(gpu_index) is not int or gpu_index < 0:
+        raise ExecutionOwnershipError("workflow GPU device index is invalid")
+    required = [
+        Path(f"/dev/nvidia{gpu_index}"),
+        Path("/dev/nvidiactl"),
+        Path("/dev/nvidia-uvm"),
+    ]
+    optional = [Path("/dev/nvidia-uvm-tools")]
+    paths = required + [path for path in optional if path.exists()]
+    for path in paths:
+        try:
+            mode = path.stat().st_mode
+        except OSError as exc:
+            raise ExecutionOwnershipError(f"required NVIDIA device is unavailable: {path}") from exc
+        if not stat.S_ISCHR(mode):
+            raise ExecutionOwnershipError(f"NVIDIA device authority is not a character device: {path}")
+    return tuple(str(path) for path in paths)
+
+
 def build_systemd_run_command(
     *,
     lane: str,
@@ -634,11 +670,39 @@ def build_systemd_run_command(
     environment: Mapping[str, object] | None = None,
     working_directory: Path | str | None = None,
     log_path: Path | str | None = None,
+    cpu_threads: int | None = None,
+    memory_max_bytes: int | None = None,
+    deny_physical_devices: bool = False,
+    allowed_physical_devices: Sequence[str] | None = None,
 ) -> list[str]:
     """Build the only supported command shape for a new workflow job."""
     identity = unit_identity(lane, job_id, attempt)
     if not command:
         raise ExecutionOwnershipError("A workflow command is required")
+    if cpu_threads is not None and (
+        type(cpu_threads) is not int or not 1 <= cpu_threads <= 24
+    ):
+        raise ExecutionOwnershipError("workflow CPU admission must be between 1 and 24 threads")
+    if memory_max_bytes is not None and (
+        type(memory_max_bytes) is not int or not 1 <= memory_max_bytes <= 96 * 1024**3
+    ):
+        raise ExecutionOwnershipError("workflow memory admission must be between 1 byte and 96 GiB")
+    if type(deny_physical_devices) is not bool:
+        raise ExecutionOwnershipError("workflow device-denial policy must be boolean")
+    allowed_devices: tuple[str, ...] | None = None
+    if allowed_physical_devices is not None:
+        if deny_physical_devices:
+            raise ExecutionOwnershipError("workflow device authority cannot deny and allow physical devices")
+        allowed_devices = tuple(str(item) for item in allowed_physical_devices)
+        if (
+            not allowed_devices
+            or len(allowed_devices) > 132
+            or len(set(allowed_devices)) != len(allowed_devices)
+            or any(not item.startswith("/dev/") or any(character.isspace() for character in item) for item in allowed_devices)
+        ):
+            raise ExecutionOwnershipError("workflow physical-device allowlist is malformed")
+    cpu_quota = f"{cpu_threads * 100}%" if cpu_threads is not None else JOB_CPU_QUOTA
+    memory_max = str(memory_max_bytes) if memory_max_bytes is not None else WORKFLOW_MEMORY_MAX
 
     rendered = [
         "systemd-run",
@@ -648,8 +712,20 @@ def build_systemd_run_command(
         f"--slice={identity.slice_name}",
         "--property=Type=exec",
         "--property=KillMode=control-group",
-        f"--property=CPUQuota={JOB_CPU_QUOTA}",
+        "--property=CPUAccounting=yes",
+        "--property=MemoryAccounting=yes",
+        "--property=TasksAccounting=yes",
+        f"--property=CPUQuota={cpu_quota}",
+        f"--property=MemoryMax={memory_max}",
     ]
+    if deny_physical_devices or allowed_devices is not None:
+        rendered.append("--property=DevicePolicy=closed")
+        if deny_physical_devices:
+            rendered.append("--property=DeviceAllow=")
+        else:
+            rendered.extend(
+                f"--property=DeviceAllow={device} rw" for device in allowed_devices or ()
+            )
     if working_directory is not None:
         rendered.append(f"--working-directory={Path(working_directory).resolve()}")
     if log_path is not None:
@@ -702,6 +778,13 @@ _SHOW_PROPERTIES = (
     "Result",
     "Slice",
     "InvocationID",
+    "CPUQuotaPerSecUSec",
+    "MemoryMax",
+    "CPUAccounting",
+    "MemoryAccounting",
+    "TasksAccounting",
+    "DevicePolicy",
+    "DeviceAllow",
 )
 
 

@@ -1,0 +1,170 @@
+{
+  "$id": "bms.operation-parameters.molbio.sequence.edit_revision.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "change_summary": {
+      "maxLength": 1024,
+      "minLength": 1,
+      "type": "string",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "change_summary",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "change summary",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "description": {
+      "anyOf": [
+        {
+          "maxLength": 8192,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "description",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "union_exact",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "description",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "expected_head_generation": {
+      "minimum": 0,
+      "type": "integer",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "expected_head_generation",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "integer",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "expected head generation",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "is_circular": {
+      "type": "boolean",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "is_circular",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "boolean",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "is circular",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "name": {
+      "maxLength": 255,
+      "minLength": 1,
+      "type": "string",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "name",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "name",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "sequence": {
+      "maxLength": 2000000,
+      "minLength": 1,
+      "type": "string",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "sequence",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "sequence",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "sequence_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "sequence_id",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "sequence id",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "sequence_type": {
+      "enum": [
+        "dna",
+        "rna"
+      ],
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "sequence_type",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "sequence type",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "source_revision_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "source_revision_id",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "source revision id",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    }
+  },
+  "required": [
+    "sequence_id",
+    "source_revision_id",
+    "expected_head_generation",
+    "name",
+    "description",
+    "sequence",
+    "sequence_type",
+    "is_circular",
+    "change_summary"
+  ],
+  "title": "molbio.sequence.edit_revision operation v1",
+  "type": "object",
+  "x-bms-source-pin": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+  "x-bms-unknown-fields": "reject_before_preparation"
+}

@@ -17,6 +17,7 @@ from sqlalchemy.orm import sessionmaker
 
 from molbio_models import IMMUTABLE_TABLES, MolBioBase, MolecularImportBatch
 from paths import get_data_root
+from services.ngs_molbio_quiescence import NgsMolBioQuiescedSession
 
 
 MOLBIO_BUSY_TIMEOUT_MS = 30_000
@@ -383,7 +384,12 @@ def create_molbio_engine(database_url: str | None = None) -> AsyncEngine:
 
 
 def make_molbio_session_factory(target_engine: AsyncEngine):
-    return sessionmaker(target_engine, class_=AsyncSession, expire_on_commit=False)
+    return sessionmaker(
+        target_engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+        sync_session_class=NgsMolBioQuiescedSession,
+    )
 
 
 async def _migration_initial(connection: AsyncConnection) -> None:

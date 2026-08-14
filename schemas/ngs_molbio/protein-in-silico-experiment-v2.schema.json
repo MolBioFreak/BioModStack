@@ -1,0 +1,118 @@
+{
+  "$id": "bms.protein-in-silico-experiment.v2",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "acceptance_criteria": {
+      "items": {
+        "$ref": "bms.scientific-criterion.v1"
+      },
+      "maxItems": 128,
+      "type": "array",
+      "x-bms-unique-by": [
+        "criterion_id"
+      ]
+    },
+    "comparison_groups": {
+      "items": {
+        "$ref": "bms.protein-comparison-group.v1"
+      },
+      "maxItems": 128,
+      "type": "array",
+      "x-bms-unique-by": [
+        "group_id"
+      ]
+    },
+    "design_constraints": {
+      "items": {
+        "$ref": "bms.protein-constraint.v1"
+      },
+      "maxItems": 0,
+      "type": "array"
+    },
+    "evidence_plan": {
+      "items": {
+        "$ref": "bms.evidence-requirement.v1"
+      },
+      "maxItems": 128,
+      "type": "array",
+      "x-bms-unique-by": [
+        "requirement_id"
+      ]
+    },
+    "experiment_mode": {
+      "enum": [
+        "exploration",
+        "design",
+        "redesign",
+        "prediction",
+        "validation",
+        "comparison",
+        "simulation",
+        "analysis"
+      ]
+    },
+    "planned_capability_ids": {
+      "items": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 64,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "schema": {
+      "const": "bms.protein-in-silico-experiment.v2"
+    },
+    "scientific_objective": {
+      "maxLength": 8192,
+      "type": "string"
+    },
+    "source_dataset_revision_ids": {
+      "items": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 128,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "targets": {
+      "items": {
+        "$ref": "bms.protein-target.v2"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "type": "array",
+      "x-bms-unique-by": [
+        "target_id"
+      ]
+    },
+    "validation_capability_ids": {
+      "items": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 32,
+      "type": "array",
+      "uniqueItems": true
+    }
+  },
+  "required": [
+    "schema",
+    "experiment_mode",
+    "scientific_objective",
+    "targets",
+    "design_constraints",
+    "planned_capability_ids",
+    "comparison_groups",
+    "validation_capability_ids",
+    "acceptance_criteria",
+    "evidence_plan",
+    "source_dataset_revision_ids"
+  ],
+  "type": "object"
+}

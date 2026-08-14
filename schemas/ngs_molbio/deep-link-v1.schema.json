@@ -1,0 +1,877 @@
+{
+  "$id": "bms.ngs-molbio.deep-link.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "properties": {
+        "binding_revision_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "deployment_profile": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "domain_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "global_experiment_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "local_state_revision_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "project_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "schema": {
+          "const": "bms.ngs-molbio.deep-link.v1"
+        },
+        "selector": {
+          "additionalProperties": false,
+          "properties": {
+            "revision_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "sequence_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "sequence_id",
+            "revision_id"
+          ],
+          "type": "object"
+        },
+        "surface": {
+          "const": "molecular_revision"
+        }
+      },
+      "required": [
+        "schema",
+        "deployment_profile",
+        "project_id",
+        "global_experiment_id",
+        "domain_id",
+        "binding_revision_id",
+        "local_state_revision_id",
+        "surface",
+        "selector"
+      ],
+      "type": "object",
+      "x-bms-deep-link-contract": {
+        "consumer_owner": "platform/frontend/src/components/MolBioToolkit/MolBioToolkitV2.tsx",
+        "destination_path": "/designer",
+        "hierarchy_query_keys": [
+          "project_id",
+          "global_experiment_id",
+          "domain_id",
+          "binding_revision_id",
+          "local_state_revision_id"
+        ],
+        "implementation_state": "partial",
+        "producer_owner": "bms.molbio.member-molecular-revision.adapter.v1",
+        "selector_query_keys": [
+          "sequence_id",
+          "revision_id"
+        ]
+      }
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "binding_revision_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "deployment_profile": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "domain_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "global_experiment_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "local_state_revision_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "project_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "schema": {
+          "const": "bms.ngs-molbio.deep-link.v1"
+        },
+        "selector": {
+          "additionalProperties": false,
+          "properties": {
+            "primer_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "primer_revision_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "primer_id",
+            "primer_revision_id"
+          ],
+          "type": "object"
+        },
+        "surface": {
+          "const": "primer_revision"
+        }
+      },
+      "required": [
+        "schema",
+        "deployment_profile",
+        "project_id",
+        "global_experiment_id",
+        "domain_id",
+        "binding_revision_id",
+        "local_state_revision_id",
+        "surface",
+        "selector"
+      ],
+      "type": "object",
+      "x-bms-deep-link-contract": {
+        "consumer_owner": null,
+        "destination_path": "/designer",
+        "hierarchy_query_keys": [
+          "project_id",
+          "global_experiment_id",
+          "domain_id",
+          "binding_revision_id",
+          "local_state_revision_id"
+        ],
+        "implementation_state": "missing",
+        "producer_owner": "bms.molbio.primer-revision.adapter.v1",
+        "selector_query_keys": [
+          "primer_id",
+          "primer_revision_id"
+        ]
+      }
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "binding_revision_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "deployment_profile": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "domain_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "global_experiment_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "local_state_revision_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "project_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "schema": {
+          "const": "bms.ngs-molbio.deep-link.v1"
+        },
+        "selector": {
+          "additionalProperties": false,
+          "properties": {
+            "pcr_experiment_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "pcr_revision_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "pcr_experiment_id",
+            "pcr_revision_id"
+          ],
+          "type": "object"
+        },
+        "surface": {
+          "const": "pcr_experiment_revision"
+        }
+      },
+      "required": [
+        "schema",
+        "deployment_profile",
+        "project_id",
+        "global_experiment_id",
+        "domain_id",
+        "binding_revision_id",
+        "local_state_revision_id",
+        "surface",
+        "selector"
+      ],
+      "type": "object",
+      "x-bms-deep-link-contract": {
+        "consumer_owner": "platform/frontend/src/components/MolBioToolkit/PCRPanel.tsx",
+        "destination_path": "/designer",
+        "hierarchy_query_keys": [
+          "project_id",
+          "global_experiment_id",
+          "domain_id",
+          "binding_revision_id",
+          "local_state_revision_id"
+        ],
+        "implementation_state": "missing",
+        "producer_owner": "bms.molbio.pcr-experiment-revision.adapter.v1",
+        "selector_query_keys": [
+          "pcr_experiment_id",
+          "pcr_revision_id"
+        ]
+      }
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "binding_revision_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "deployment_profile": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "domain_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "global_experiment_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "local_state_revision_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "project_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "schema": {
+          "const": "bms.ngs-molbio.deep-link.v1"
+        },
+        "selector": {
+          "additionalProperties": false,
+          "properties": {
+            "sample_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "sample_revision_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "sample_id",
+            "sample_revision_id"
+          ],
+          "type": "object"
+        },
+        "surface": {
+          "const": "sample_revision"
+        }
+      },
+      "required": [
+        "schema",
+        "deployment_profile",
+        "project_id",
+        "global_experiment_id",
+        "domain_id",
+        "binding_revision_id",
+        "local_state_revision_id",
+        "surface",
+        "selector"
+      ],
+      "type": "object",
+      "x-bms-deep-link-contract": {
+        "consumer_owner": "platform/frontend/src/components/molbio-ngs/DomainExperimentWorkspace.tsx",
+        "destination_path": "/molbio-ngs",
+        "hierarchy_query_keys": [
+          "project_id",
+          "global_experiment_id",
+          "domain_id",
+          "binding_revision_id",
+          "local_state_revision_id"
+        ],
+        "implementation_state": "missing",
+        "producer_owner": "bms.ngs-molbio.sample-revision.adapter.v1",
+        "selector_query_keys": [
+          "sample_id",
+          "sample_revision_id"
+        ]
+      }
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "binding_revision_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "deployment_profile": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "domain_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "global_experiment_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "local_state_revision_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "project_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "schema": {
+          "const": "bms.ngs-molbio.deep-link.v1"
+        },
+        "selector": {
+          "additionalProperties": false,
+          "properties": {
+            "reference_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "reference_revision_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "reference_id",
+            "reference_revision_id"
+          ],
+          "type": "object"
+        },
+        "surface": {
+          "const": "managed_reference_revision"
+        }
+      },
+      "required": [
+        "schema",
+        "deployment_profile",
+        "project_id",
+        "global_experiment_id",
+        "domain_id",
+        "binding_revision_id",
+        "local_state_revision_id",
+        "surface",
+        "selector"
+      ],
+      "type": "object",
+      "x-bms-deep-link-contract": {
+        "consumer_owner": "platform/frontend/src/components/molbio-ngs/DomainExperimentWorkspace.tsx",
+        "destination_path": "/molbio-ngs",
+        "hierarchy_query_keys": [
+          "project_id",
+          "global_experiment_id",
+          "domain_id",
+          "binding_revision_id",
+          "local_state_revision_id"
+        ],
+        "implementation_state": "missing",
+        "producer_owner": "bms.ngs.reference-revision.adapter.v1",
+        "selector_query_keys": [
+          "reference_id",
+          "reference_revision_id"
+        ]
+      }
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "binding_revision_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "deployment_profile": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "domain_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "global_experiment_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "local_state_revision_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "project_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "schema": {
+          "const": "bms.ngs-molbio.deep-link.v1"
+        },
+        "selector": {
+          "additionalProperties": false,
+          "properties": {
+            "observed_generation": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "run_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "run_id",
+            "observed_generation"
+          ],
+          "type": "object"
+        },
+        "surface": {
+          "const": "ont_observation"
+        }
+      },
+      "required": [
+        "schema",
+        "deployment_profile",
+        "project_id",
+        "global_experiment_id",
+        "domain_id",
+        "binding_revision_id",
+        "local_state_revision_id",
+        "surface",
+        "selector"
+      ],
+      "type": "object",
+      "x-bms-deep-link-contract": {
+        "consumer_owner": "platform/frontend/src/components/ngs/OntInstrumentPanel.tsx",
+        "destination_path": "/ngs",
+        "hierarchy_query_keys": [
+          "project_id",
+          "global_experiment_id",
+          "domain_id",
+          "binding_revision_id",
+          "local_state_revision_id"
+        ],
+        "implementation_state": "partial",
+        "producer_owner": "bms.ngs.ont-observation.adapter.v1",
+        "selector_query_keys": [
+          "run_id",
+          "observed_generation"
+        ]
+      }
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "binding_revision_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "deployment_profile": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "domain_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "global_experiment_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "local_state_revision_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "project_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "schema": {
+          "const": "bms.ngs-molbio.deep-link.v1"
+        },
+        "selector": {
+          "additionalProperties": false,
+          "properties": {
+            "job_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "manifest_identity": {
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "job_id",
+            "manifest_identity"
+          ],
+          "type": "object"
+        },
+        "surface": {
+          "const": "ngs_result_manifest"
+        }
+      },
+      "required": [
+        "schema",
+        "deployment_profile",
+        "project_id",
+        "global_experiment_id",
+        "domain_id",
+        "binding_revision_id",
+        "local_state_revision_id",
+        "surface",
+        "selector"
+      ],
+      "type": "object",
+      "x-bms-deep-link-contract": {
+        "consumer_owner": "platform/frontend/src/components/NGSToolkit.tsx",
+        "destination_path": "/ngs",
+        "hierarchy_query_keys": [
+          "project_id",
+          "global_experiment_id",
+          "domain_id",
+          "binding_revision_id",
+          "local_state_revision_id"
+        ],
+        "implementation_state": "missing",
+        "producer_owner": "bms.ngs.result-manifest.adapter.v1",
+        "selector_query_keys": [
+          "job_id",
+          "manifest_identity"
+        ]
+      }
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "binding_revision_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "deployment_profile": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "domain_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "global_experiment_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "local_state_revision_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "project_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "schema": {
+          "const": "bms.ngs-molbio.deep-link.v1"
+        },
+        "selector": {
+          "additionalProperties": false,
+          "properties": {
+            "panel_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "panel_version": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "panel_id",
+            "panel_version"
+          ],
+          "type": "object"
+        },
+        "surface": {
+          "const": "comparison_panel"
+        }
+      },
+      "required": [
+        "schema",
+        "deployment_profile",
+        "project_id",
+        "global_experiment_id",
+        "domain_id",
+        "binding_revision_id",
+        "local_state_revision_id",
+        "surface",
+        "selector"
+      ],
+      "type": "object",
+      "x-bms-deep-link-contract": {
+        "consumer_owner": null,
+        "destination_path": "/ngs",
+        "hierarchy_query_keys": [
+          "project_id",
+          "global_experiment_id",
+          "domain_id",
+          "binding_revision_id",
+          "local_state_revision_id"
+        ],
+        "implementation_state": "missing",
+        "producer_owner": "bms.ngs.comparison-panel.adapter.v1",
+        "selector_query_keys": [
+          "panel_id",
+          "panel_version"
+        ]
+      }
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "binding_revision_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "deployment_profile": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "domain_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "global_experiment_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "local_state_revision_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "project_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "schema": {
+          "const": "bms.ngs-molbio.deep-link.v1"
+        },
+        "selector": {
+          "additionalProperties": false,
+          "properties": {
+            "evidence_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "wrapper_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "evidence_id",
+            "wrapper_sha256"
+          ],
+          "type": "object"
+        },
+        "surface": {
+          "const": "evidence_assessment"
+        }
+      },
+      "required": [
+        "schema",
+        "deployment_profile",
+        "project_id",
+        "global_experiment_id",
+        "domain_id",
+        "binding_revision_id",
+        "local_state_revision_id",
+        "surface",
+        "selector"
+      ],
+      "type": "object",
+      "x-bms-deep-link-contract": {
+        "consumer_owner": null,
+        "destination_path": null,
+        "hierarchy_query_keys": [
+          "project_id",
+          "global_experiment_id",
+          "domain_id",
+          "binding_revision_id",
+          "local_state_revision_id"
+        ],
+        "implementation_state": "missing",
+        "producer_owner": "bms.ngs-molbio.evidence-assessment.adapter.v1",
+        "selector_query_keys": [
+          "evidence_id",
+          "wrapper_sha256"
+        ]
+      }
+    }
+  ],
+  "title": "Exact NGS/MolBio deep link v1"
+}

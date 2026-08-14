@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import {
@@ -17,6 +17,8 @@ import {
     type DomainStateMember,
 } from '../../lib/api';
 import { useGlobalExperimentContext } from '../experiments/GlobalExperimentContext';
+import DomainDatasetOperator from './DomainDatasetOperator';
+import DomainWorkflowOperator from './DomainWorkflowOperator';
 
 const SECTIONS = [
     ['overview', 'Overview'],
@@ -25,6 +27,8 @@ const SECTIONS = [
     ['references', 'References'],
     ['pcr', 'PCR'],
     ['instrument-runs', 'Instrument Runs'],
+    ['datasets', 'Datasets'],
+    ['workflow-plans', 'Plans & Runs'],
     ['analyses', 'Analyses'],
     ['evidence', 'Evidence'],
     ['history', 'History'],
@@ -165,6 +169,11 @@ export default function DomainExperimentWorkspace() {
         updateQueryParams,
         contextHref,
     } = context;
+    const [selectedDatasetRevisionIds, setSelectedDatasetRevisionIds] = useState<string[]>([]);
+
+    useEffect(() => {
+        setSelectedDatasetRevisionIds([]);
+    }, [workspaceId, globalExperimentId, domainExperimentId]);
 
     const requestedSection = new URLSearchParams(window.location.search).get('section');
     const activeSection: SectionKey = SECTIONS.some(([key]) => key === requestedSection)
@@ -684,6 +693,58 @@ export default function DomainExperimentWorkspace() {
         </Panel>
     );
 
+    const projectReturnUri = workspaceId && globalExperimentId && domainExperimentId
+        ? `/projects/${encodeURIComponent(workspaceId)}?${new URLSearchParams({
+            focus: globalExperimentId,
+            selected: `domain_experiment:${domainExperimentId}`,
+        }).toString()}`
+        : '/projects';
+
+    const renderDatasets = () => {
+        if (!workspaceId || !globalExperimentId || !domainExperimentId) {
+            return <Empty>Select an exact Project, Global Experiment, and NGS/MolBio Domain Experiment.</Empty>;
+        }
+        const currentStateRevisionId = stateQuery.data?.current_state_revision_id ?? null;
+        const datasetMutationBlocker = !availability.canMutateDomain
+            ? availability.reason
+            : !selectedStateRevisionId
+                ? 'Select an immutable local state revision.'
+                : selectedStateRevisionId !== currentStateRevisionId
+                    ? 'Historical local state revisions are read-only. Select the current immutable state revision to mutate Datasets.'
+                    : null;
+        return (
+            <DomainDatasetOperator
+                projectId={workspaceId}
+                globalExperimentId={globalExperimentId}
+                domainExperimentId={domainExperimentId}
+                canMutate={datasetMutationBlocker === null}
+                mutationBlocker={datasetMutationBlocker}
+                selectedRevisionIds={selectedDatasetRevisionIds}
+                onSelectedRevisionIdsChange={setSelectedDatasetRevisionIds}
+            />
+        );
+    };
+
+    const renderWorkflowPlans = () => {
+        if (!workspaceId || !globalExperimentId || !domainExperimentId) {
+            return <Empty>Select an exact Project, Global Experiment, and NGS/MolBio Domain Experiment.</Empty>;
+        }
+        return (
+            <DomainWorkflowOperator
+                projectId={workspaceId}
+                globalExperimentId={globalExperimentId}
+                domainExperimentId={domainExperimentId}
+                initialRunGroupId={new URLSearchParams(window.location.search).get('run_group_id')}
+                domainRevisionId={selectedDomainExperiment?.global_domain_experiment_revision_id ?? null}
+                selectedStateRevisionId={selectedStateRevisionId}
+                currentStateRevisionId={stateQuery.data?.current_state_revision_id ?? null}
+                projectReturnUri={projectReturnUri}
+                contextHref={contextHref}
+                inputDatasetRevisionIds={selectedDatasetRevisionIds}
+            />
+        );
+    };
+
     const sectionContent: Record<SectionKey, () => ReactNode> = {
         overview: renderOverview,
         samples: renderSamples,
@@ -691,6 +752,8 @@ export default function DomainExperimentWorkspace() {
         references: renderReferences,
         pcr: renderPcr,
         'instrument-runs': renderRuns,
+        datasets: renderDatasets,
+        'workflow-plans': renderWorkflowPlans,
         analyses: renderAnalyses,
         evidence: renderEvidence,
         history: renderHistory,
@@ -704,22 +767,46 @@ export default function DomainExperimentWorkspace() {
                         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent">Shared MolBio / NGS context</p>
                         <h2 className="text-xl font-bold text-content">Domain Experiment workspace</h2>
                         <p className="mt-1 max-w-4xl text-sm text-content-secondary">
-                            Read and reopen exact immutable scientific state. Project, Global Experiment, Domain Experiment,
-                            global domain revision, and local state revision identities remain separate.
+                            Inspect immutable scientific state, prepare and launch governed Workflow Plans, and reopen exact results.
+                            Project, Global Experiment, Domain Experiment, global domain revision, and local state revision identities remain separate.
                         </p>
                     </div>
-                    <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                        availability.status === 'available'
-                            ? 'bg-success/15 text-success'
-                            : availability.status === 'read-only'
-                                ? 'bg-warning/15 text-warning'
-                                : 'bg-error/10 text-error'
-                    }`}>
-                        {availability.status}
-                    </span>
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                        {selectedDomainExperiment && (
+                            <>
+                                <Link
+                                    className="rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-xs font-semibold text-content-secondary hover:text-content"
+                                    to={contextHref('/molbio', { state_revision_id: selectedStateRevisionId })}
+                                >
+                                    MolBio Toolkit
+                                </Link>
+                                <Link
+                                    className="rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-xs font-semibold text-content-secondary hover:text-content"
+                                    to={contextHref('/ngs', { state_revision_id: selectedStateRevisionId })}
+                                >
+                                    NGS Toolkit
+                                </Link>
+                                <Link
+                                    className="rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-xs font-semibold text-content-secondary hover:text-content"
+                                    to={projectReturnUri}
+                                >
+                                    Return to Project
+                                </Link>
+                            </>
+                        )}
+                        <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                            availability.status === 'available'
+                                ? 'bg-success/15 text-success'
+                                : availability.status === 'read-only'
+                                    ? 'bg-warning/15 text-warning'
+                                    : 'bg-error/10 text-error'
+                        }`}>
+                            {availability.status}
+                        </span>
+                    </div>
                 </div>
 
-                <div className="grid gap-3 lg:grid-cols-3">
+                <div className="grid gap-3 lg:grid-cols-4">
                     <label className="text-xs font-semibold text-content-secondary">
                         Project (workspace)
                         <select
@@ -759,6 +846,22 @@ export default function DomainExperimentWorkspace() {
                             {domainExperiments.map((domainExperiment) => (
                                 <option key={domainExperiment.domain_experiment_id} value={domainExperiment.domain_experiment_id}>
                                     {domainExperiment.domain_experiment_id}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+                    <label className="text-xs font-semibold text-content-secondary">
+                        Immutable local state revision
+                        <select
+                            value={selectedStateRevisionId ?? ''}
+                            disabled={!domainExperimentId || historyQuery.isLoading}
+                            onChange={(event) => setStateRevisionId(event.target.value || null)}
+                            className="mt-1 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-sm text-content disabled:opacity-50"
+                        >
+                            <option value="">Select immutable state revision</option>
+                            {(historyQuery.data ?? []).map((revision) => (
+                                <option key={revision.id} value={revision.id}>
+                                    Revision {revision.revision_number} — {revision.id}
                                 </option>
                             ))}
                         </select>

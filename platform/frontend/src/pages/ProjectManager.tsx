@@ -9,8 +9,6 @@ import {
     isPermissionError,
     searchProjects,
     projectManagerErrorMessage,
-    resubmitRunGroup,
-    retryRunGroup,
     type JsonObject,
     type ProjectListItem,
     type ProjectManagerReadModel,
@@ -445,17 +443,45 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
         onSuccess: (route) => navigate(route),
     });
 
+    const openNgsMolBioWorkspace = () => {
+        if (!summary) return;
+        const selectedGlobalExperimentId = globalExperimentForNode(summary, summary.selection.node_key)
+            ?? focusId
+            ?? focusIdFromReadModel(summary);
+        const selectedDomainExperimentId = domainExperimentForNode(summary, summary.selection.node_key);
+        if (!selectedGlobalExperimentId || !selectedDomainExperimentId) return;
+        const query = new URLSearchParams({
+            workspace_id: projectId,
+            global_experiment_id: selectedGlobalExperimentId,
+            domain_experiment_id: selectedDomainExperimentId,
+            section: 'workflow-plans',
+        });
+        navigate(`/ngs?${query.toString()}`);
+    };
+
     const runActionMutation = useMutation({
         mutationFn: async ({ action, run }: { action: string; run: ProjectManagerReadModel['runs']['items'][number] }) => {
             if (!summary) throw new Error('No validated Project context is available.');
-            if (action === 'retry' || action === 'resubmit') {
-                if (!run.batch_or_run_group_id) throw new Error('The server did not issue a run-group identity.');
-                if (action === 'retry') await retryRunGroup(projectId, run.batch_or_run_group_id);
-                else await resubmitRunGroup(projectId, run.batch_or_run_group_id);
-                return { kind: 'refresh' as const };
-            }
             const workflowNodeKey = `workflow:${run.workflow_id}`;
             const domainExperimentId = domainExperimentForNode(summary, workflowNodeKey);
+            if (action === 'retry' || action === 'resubmit') {
+                if (!run.batch_or_run_group_id) throw new Error('The server did not issue a run-group identity.');
+                const globalExperimentId = globalExperimentForNode(summary, workflowNodeKey)
+                    ?? focusId
+                    ?? focusIdFromReadModel(summary);
+                if (!globalExperimentId || !domainExperimentId) {
+                    throw new Error('The run has no validated Domain Experiment context.');
+                }
+                const query = new URLSearchParams({
+                    workspace_id: projectId,
+                    global_experiment_id: globalExperimentId,
+                    domain_experiment_id: domainExperimentId,
+                    section: 'workflow-plans',
+                    run_group_id: run.batch_or_run_group_id,
+                    run_group_action: action,
+                });
+                return { kind: 'route' as const, route: `/ngs?${query.toString()}` };
+            }
             if (action === 'view_lineage') {
                 if (!domainExperimentId) throw new Error('The run has no validated Domain Experiment context.');
                 return { kind: 'selection' as const, nodeKey: `virtual_folder:${domainExperimentId}:lineage` };
@@ -636,6 +662,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                             selectionUnavailable={selectionUnavailable}
                             onClose={() => setInspectorOpen(false)}
                             onOpenCanonical={() => surfaceMutation.mutate()}
+                            onOpenNgsMolBio={openNgsMolBioWorkspace}
                             onAddExisting={() => setAttachOpen(true)}
                             onCreateDomain={() => setDialogMode('create_domain')}
                             onEdit={() => setDialogMode('edit')}

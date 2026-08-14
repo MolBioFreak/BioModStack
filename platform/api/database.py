@@ -4,7 +4,7 @@ Database models and initialization for BioModStack Control Platform.
 Uses SQLAlchemy with async SQLite.
 """
 
-from sqlalchemy import CheckConstraint, Column, String, Text, Integer, Float, Boolean, DateTime, Index, JSON, LargeBinary, ForeignKey, ForeignKeyConstraint, UniqueConstraint, text, event, func, select
+from sqlalchemy import CheckConstraint, Column, String, Text, Integer, Float, Boolean, DateTime, Index, JSON, LargeBinary, ForeignKey, ForeignKeyConstraint, UniqueConstraint, text, event, func, inspect, select
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import Session, sessionmaker, declarative_base, relationship
 from sqlalchemy.types import TypeDecorator
@@ -14,13 +14,41 @@ import json
 from types import SimpleNamespace
 from paths import get_db_path, get_db_url
 from migrations.sqlite_sha256 import register_sqlite_sha256
+from services.ngs_molbio_quiescence import NgsMolBioQuiescedSession
 
 
 # Database path - resolved via paths helper (supports env overrides)
 DEFAULT_DB_PATH = get_db_path()
 DATABASE_URL = get_db_url()
 current_launch_context_id: ContextVar[str | None] = ContextVar("bms_launch_context_id", default=None)
+LAUNCH_CONTEXT_BINDING_PROVENANCE_KEY = "launch_context_binding"
+LAUNCH_CONTEXT_BINDING_PROVENANCE_SCHEMA = "bms.launch-context-core-binding.v1"
 
+
+def launch_context_binding_ready(job: object) -> bool:
+    provenance_value = getattr(job, "provenance", None)
+    provenance = provenance_value if isinstance(provenance_value, dict) else {}
+    launch_context_id = provenance.get("launch_context_id")
+    if not isinstance(launch_context_id, str) or not launch_context_id:
+        return True
+    marker = provenance.get(LAUNCH_CONTEXT_BINDING_PROVENANCE_KEY)
+    if not isinstance(marker, dict) or set(marker) != {
+        "schema", "launch_context_id", "run_attempt_id", "canonical_job_id",
+        "binding_receipt_sha256",
+    }:
+        return False
+    digest = marker.get("binding_receipt_sha256")
+    return bool(
+        marker.get("schema") == LAUNCH_CONTEXT_BINDING_PROVENANCE_SCHEMA
+        and marker.get("launch_context_id") == launch_context_id
+        and isinstance(marker.get("run_attempt_id"), str)
+        and marker.get("run_attempt_id")
+        and marker.get("canonical_job_id") == str(getattr(job, "id", ""))
+        and isinstance(digest, str)
+        and len(digest) == 64
+        and digest == digest.lower()
+        and all(character in "0123456789abcdef" for character in digest)
+    )
 
 def _canonical_sqlite_json(value: object) -> str:
     """Serialize JSON evidence exactly as the SHA-256 persistence contract requires."""
@@ -45,7 +73,12 @@ if engine.dialect.name == "sqlite":
             cursor.close()
 
 
-async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+async_session = sessionmaker(
+    engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+    sync_session_class=NgsMolBioQuiescedSession,
+)
 
 Base = declarative_base()
 
@@ -686,6 +719,24 @@ class ExternalResultImport(Base):
 
 @event.listens_for(Session, "before_flush")
 def _bind_new_jobs_to_launch_context(session: Session, _flush_context, _instances) -> None:
+    for record in session.dirty:
+        if not isinstance(record, Job):
+            continue
+        history = inspect(record).attrs.provenance.history
+        if not history.has_changes() or not history.deleted:
+            continue
+        previous = dict(history.deleted[0] or {})
+        current = dict(record.provenance or {})
+        previous_context = previous.get("launch_context_id")
+        if previous_context is not None and current.get("launch_context_id") != previous_context:
+            raise ValueError("Job launch-context provenance cannot change")
+        previous_binding = previous.get(LAUNCH_CONTEXT_BINDING_PROVENANCE_KEY)
+        if (
+            previous_binding is not None
+            and current.get(LAUNCH_CONTEXT_BINDING_PROVENANCE_KEY) != previous_binding
+        ):
+            raise ValueError("Job launch-context binding cannot change")
+
     launch_context_id = current_launch_context_id.get()
     if launch_context_id is None:
         return

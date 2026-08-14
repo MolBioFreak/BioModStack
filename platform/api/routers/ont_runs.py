@@ -20,7 +20,8 @@ from pydantic import (
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import Job, get_session
+from database import Job, current_launch_context_id, get_session
+from experiment_database import get_experiment_session
 from molbio_ngs_database import get_molbio_ngs_session
 from molbio_ngs_services import (
     DomainStateNotFound,
@@ -609,6 +610,7 @@ async def _create_pipeline_job(
     job: JobCreate,
     background_tasks: BackgroundTasks,
     session: AsyncSession,
+    experiment_session: AsyncSession,
     response: Response,
     request: Request,
     *,
@@ -618,10 +620,20 @@ async def _create_pipeline_job(
     # router stack unless a launch request actually reaches this endpoint.
     from routers.jobs import create_job  # noqa: PLC0415
 
+    launch_context_id = current_launch_context_id.get()
+    if launch_context_id:
+        job = job.model_copy(update={"launch_context_id": launch_context_id})
+        commit = True
     token, token_digest = alignment_access.issue_alignment_access_token()
     trust_token = ont_submission_trust.begin_trusted_ont_job_creation(token_digest)
     try:
-        created = await create_job(job, background_tasks, session, _commit=commit)
+        created = await create_job(
+            job,
+            background_tasks,
+            session,
+            _commit=commit,
+            experiment_session=experiment_session,
+        )
     finally:
         ont_submission_trust.end_trusted_ont_job_creation(trust_token)
     alignment_access.set_alignment_access_cookie(created.id, token, response, request)
@@ -947,6 +959,7 @@ async def ont_submit_ngs_workflow(
     http_request: Request,
     response: Response,
     session: AsyncSession = Depends(get_session),
+    experiment_session: AsyncSession = Depends(get_experiment_session),
     molbio_ngs_session: AsyncSession = Depends(get_molbio_ngs_session),
 ) -> JobResponse:
     """Submit a canonical ONT/NGS Nextflow analysis job.
@@ -1083,6 +1096,7 @@ async def ont_submit_ngs_workflow(
             job,
             background_tasks,
             session,
+            experiment_session,
             response,
             http_request,
             commit=not receipt_id and not panel_receipt_id,
@@ -1305,6 +1319,7 @@ async def ont_submit_plasmid_qc_from_run(
     http_request: Request,
     response: Response,
     session: AsyncSession = Depends(get_session),
+    experiment_session: AsyncSession = Depends(get_experiment_session),
     molbio_ngs_session: AsyncSession = Depends(get_molbio_ngs_session),
 ) -> JobResponse:
     """Submit generic plasmid QC from a durable artifact and a one-time MolBio receipt."""
@@ -1419,6 +1434,7 @@ async def ont_submit_plasmid_qc_from_run(
             job,
             background_tasks,
             session,
+            experiment_session,
             response,
             http_request,
             commit=False,

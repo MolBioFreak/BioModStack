@@ -1,0 +1,32 @@
+{
+  "$id": "bms.protein.constraint-payload-registry.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "baseline_source_commit": {
+      "const": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517"
+    },
+    "baseline_source_tree": {
+      "const": "f89094ba373e3dd8fa181fd17d942e54a6f0f63e"
+    },
+    "content_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "entries": {
+      "const": [],
+      "type": "array"
+    },
+    "schema": {
+      "const": "bms.protein.constraint-payload-registry.v1"
+    }
+  },
+  "required": [
+    "schema",
+    "baseline_source_commit",
+    "baseline_source_tree",
+    "entries",
+    "content_sha256"
+  ],
+  "type": "object"
+}

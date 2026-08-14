@@ -1,0 +1,470 @@
+{
+  "$id": "bms.ngs-molbio.capability-inventory.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "adapter_registry_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "baseline_source_commit": {
+      "const": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517"
+    },
+    "baseline_source_tree": {
+      "const": "f89094ba373e3dd8fa181fd17d942e54a6f0f63e"
+    },
+    "branch_closure_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "capabilities": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "accepted_source_roles": {
+            "items": {
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 64,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "allowed_domain_modes": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 16,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "canonical_source_destination": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          },
+          "capability_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "capability_kind": {
+            "enum": [
+              "scheduled_workflow",
+              "domain_operation"
+            ]
+          },
+          "capability_version": {
+            "const": "1"
+          },
+          "classified_parameter_keys": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 256,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "entrypoint_owner": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "exposure_state": {
+            "enum": [
+              "accepted",
+              "experimental",
+              "internal",
+              "historical",
+              "disabled"
+            ]
+          },
+          "inventory_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "launch_mode": {
+            "enum": [
+              "typed_launcher_handoff",
+              "domain_operation"
+            ]
+          },
+          "materializer_owner": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "native_mapping": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "canonical_workflow",
+                  "domain_operation"
+                ]
+              },
+              "native_request_compatibility": {
+                "enum": [
+                  "exact",
+                  "requires_unimplemented_revision_materializer",
+                  "partial_native_mapping"
+                ]
+              },
+              "source": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id",
+              "source",
+              "native_request_compatibility"
+            ],
+            "type": "object"
+          },
+          "observed_parameter_keys": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 256,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "parameter_schema_id": {
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "parameter_schema_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "parity_ledger": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "evidence": {
+                  "maxLength": 2048,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "gate": {
+                  "enum": [
+                    "installed_inventory",
+                    "global_schema",
+                    "browser_controls",
+                    "agent_parity",
+                    "persistence",
+                    "execution",
+                    "receipt",
+                    "global_result_experience",
+                    "workflow_reuse",
+                    "live_agreement"
+                  ]
+                },
+                "state": {
+                  "enum": [
+                    "pass",
+                    "partial",
+                    "missing",
+                    "not_applicable"
+                  ]
+                }
+              },
+              "required": [
+                "gate",
+                "state",
+                "evidence"
+              ],
+              "type": "object"
+            },
+            "maxItems": 10,
+            "minItems": 10,
+            "type": "array"
+          },
+          "plannable": {
+            "type": "boolean"
+          },
+          "preparation_owner": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "readiness_authority": {
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "receipt_contracts": {
+            "items": {
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 32,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "result_contracts": {
+            "items": {
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 32,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "scientific_role": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "server_owned_parameter_keys": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 256,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "submission_owner": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unclassified_parameter_keys": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 256,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "unsupported_parameter_keys": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 256,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "viewer_destination": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "capability_id",
+          "capability_version",
+          "label",
+          "scientific_role",
+          "allowed_domain_modes",
+          "capability_kind",
+          "launch_mode",
+          "native_mapping",
+          "parameter_schema_id",
+          "parameter_schema_sha256",
+          "preparation_owner",
+          "submission_owner",
+          "entrypoint_owner",
+          "materializer_owner",
+          "result_contracts",
+          "receipt_contracts",
+          "canonical_source_destination",
+          "viewer_destination",
+          "accepted_source_roles",
+          "exposure_state",
+          "readiness_authority",
+          "plannable",
+          "observed_parameter_keys",
+          "classified_parameter_keys",
+          "server_owned_parameter_keys",
+          "unsupported_parameter_keys",
+          "unclassified_parameter_keys",
+          "parity_ledger",
+          "inventory_sha256"
+        ],
+        "type": "object"
+      },
+      "maxItems": 21,
+      "minItems": 21,
+      "type": "array"
+    },
+    "constraint_payload_registry_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "content_hash_semantics": {
+      "const": "sha256(rfc8785(document_without_top_level_content_sha256))"
+    },
+    "content_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "contract_ids": {
+      "additionalProperties": false,
+      "properties": {
+        "binding_adapter": {
+          "const": "bms.ngs-molbio.domain-binding.adapter.v1"
+        },
+        "binding_receipt": {
+          "const": "bms.ngs-molbio.global-binding-receipt.v1"
+        },
+        "connector_acknowledgement": {
+          "const": "bms.ngs-molbio.connector-acknowledgement.v1"
+        },
+        "connector_command": {
+          "const": "bms.ngs-molbio.connector-command.v1"
+        },
+        "connector_event": {
+          "const": "bms.ngs-molbio.connector-event.v1"
+        },
+        "deep_link": {
+          "const": "bms.ngs-molbio.deep-link.v1"
+        },
+        "pagination": {
+          "const": "bms.opaque-keyset-page.v1"
+        },
+        "payload_ownership_audit": {
+          "const": "bms.payload-ownership-audit.v1"
+        },
+        "payload_ownership_manifest": {
+          "const": "bms.payload-ownership-manifest.v1"
+        }
+      },
+      "required": [
+        "binding_adapter",
+        "binding_receipt",
+        "connector_command",
+        "connector_event",
+        "connector_acknowledgement",
+        "deep_link",
+        "pagination",
+        "payload_ownership_manifest",
+        "payload_ownership_audit"
+      ],
+      "type": "object"
+    },
+    "criterion_schema_ids": {
+      "const": [
+        "bms.scientific-criterion.artifact-presence.v1",
+        "bms.scientific-criterion.manual-review.v1",
+        "bms.scientific-criterion.metric-threshold.v1"
+      ],
+      "type": "array"
+    },
+    "dataset_registry_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "event_registry_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "evidence_schema_ids": {
+      "const": [
+        "bms.evidence-requirement.native-receipt.v1",
+        "bms.evidence-requirement.operator-observation.v1",
+        "bms.evidence-requirement.result-artifact.v1"
+      ],
+      "type": "array"
+    },
+    "payload_ownership_manifest_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "schema": {
+      "const": "bms.ngs-molbio.capability-inventory.v1"
+    },
+    "schema_registry_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "source_pin_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "schema_version",
+    "baseline_source_commit",
+    "baseline_source_tree",
+    "source_pin_sha256",
+    "schema_registry_sha256",
+    "adapter_registry_sha256",
+    "event_registry_sha256",
+    "dataset_registry_sha256",
+    "constraint_payload_registry_sha256",
+    "branch_closure_sha256",
+    "content_hash_semantics",
+    "contract_ids",
+    "criterion_schema_ids",
+    "evidence_schema_ids",
+    "capabilities",
+    "content_sha256",
+    "payload_ownership_manifest_sha256"
+  ],
+  "type": "object"
+}

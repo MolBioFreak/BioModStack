@@ -1,0 +1,82 @@
+{
+  "$id": "bms.opaque-keyset-page.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "authority_context_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "has_more": {
+      "type": "boolean"
+    },
+    "items": {
+      "items": {},
+      "type": "array"
+    },
+    "limit": {
+      "default": 50,
+      "maximum": 100,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "next_cursor": {
+      "anyOf": [
+        {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "schema": {
+      "const": "bms.opaque-keyset-page.v1"
+    },
+    "total": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "items",
+    "next_cursor",
+    "has_more",
+    "limit",
+    "authority_context_sha256"
+  ],
+  "title": "Bounded opaque-keyset page v1",
+  "type": "object",
+  "x-bms-pagination-policy": {
+    "cursor_encoding": "opaque_server_signed_or_mac_bound",
+    "cursor_preimage_fields": [
+      "authority_context_sha256",
+      "revision_id",
+      "last_stable_id_or_ordinal",
+      "limit"
+    ],
+    "dataset_member_ordering": [
+      "ordinal ASC"
+    ],
+    "default_limit": 50,
+    "maximum_limit": 100,
+    "oversize_error": "response_too_large",
+    "response_limit_bytes": 1048576,
+    "standard_ordering": [
+      "created_at DESC",
+      "stable_id DESC"
+    ],
+    "summary_limit_bytes": 262144,
+    "total_policy": "present_only_when_bounded_without_unbounded_scan"
+  }
+}

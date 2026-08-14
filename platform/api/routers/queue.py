@@ -678,6 +678,19 @@ async def retry_job(job_id: str, session: AsyncSession = Depends(get_session)):
     
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    launch_context_id = (job.provenance or {}).get("launch_context_id")
+    if launch_context_id:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "PROJECT_BOUND_REORCHESTRATION_REQUIRED",
+                "message": (
+                    "Project-bound Jobs must be retried through the owning Domain Run Group "
+                    "with a replacement preparation, attempt, and launch context."
+                ),
+                "launch_context_id": launch_context_id,
+            },
+        )
     
     if job.queue_status != 'failed':
         raise HTTPException(status_code=400, detail="Can only retry failed jobs")

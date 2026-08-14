@@ -6,15 +6,25 @@ import fcntl
 import os
 import socket
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from experiment_models import ExperimentDispatchOutbox, ExperimentRunGroup
+from experiment_models import (
+    ExperimentDispatchOutbox,
+    ExperimentRunControlCommand,
+    ExperimentRunGroup,
+)
 from experiment_services import ExistingJobMaterializer, dispatch_pending_outbox, reconcile_run_group
+from services.global_experiments.launch_contexts import (
+    publish_consumed_launch_context_bindings,
+    recover_stale_typed_launch_context_claims,
+)
+from services.ngs_molbio_connector import connector_health, process_command_once, process_outbox_once
+from services.ngs_molbio_run_control import process_run_control_command_once
 
 
 _ACTIVE_GROUP_STATES = {
@@ -24,6 +34,8 @@ _ACTIVE_GROUP_STATES = {
     "queued",
     "running",
 }
+_RUN_CONTROL_STATUSES = ("pending", "leased", "retryable", "applied", "conflicted")
+_TYPED_CLAIM_STALE_AFTER = timedelta(minutes=5)
 
 _global_worker: "GlobalExperimentWorker | None" = None
 
@@ -44,6 +56,7 @@ class GlobalExperimentWorker:
         self,
         experiment_session_factory: async_sessionmaker[AsyncSession],
         core_session_factory: async_sessionmaker[AsyncSession],
+        molbio_ngs_session_factory: async_sessionmaker[AsyncSession],
         *,
         database_path: Path,
         poll_interval: float = 2.0,
@@ -52,6 +65,7 @@ class GlobalExperimentWorker:
     ) -> None:
         self._experiment_sessions = experiment_session_factory
         self._core_sessions = core_session_factory
+        self._molbio_ngs_sessions = molbio_ngs_session_factory
         self._poll_interval = poll_interval
         self._dispatch_batch_size = dispatch_batch_size
         self._reconcile_batch_size = reconcile_batch_size
@@ -64,6 +78,17 @@ class GlobalExperimentWorker:
         self.last_successful_sweep: str | None = None
         self.failure_count = 0
         self.last_error: str | None = None
+        self.last_sweep_counts = {
+            "run_control_before_dispatch": 0,
+            "run_control_before_reconcile": 0,
+            "typed_claim_recovery": 0,
+            "typed_binding_publications": 0,
+            "typed_binding_publication_conflicts": 0,
+            "dispatched": 0,
+            "reconciled": 0,
+            "connector_commands": 0,
+            "connector_events": 0,
+        }
 
     def _acquire_owner_lease(self) -> bool:
         self._lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -133,9 +158,80 @@ class GlobalExperimentWorker:
             except asyncio.TimeoutError:
                 pass
 
+    async def _process_run_control_batch(self) -> int:
+        processed_count = 0
+        for _ in range(self._dispatch_batch_size):
+            async with self._experiment_sessions() as experiment_session:
+                async with self._core_sessions() as core_session:
+                    processed = await process_run_control_command_once(
+                        experiment_session,
+                        core_session,
+                        worker_id=self.worker_id,
+                    )
+            if processed == 0:
+                break
+            processed_count += processed
+        return processed_count
+
+    async def _recover_stale_typed_claim_batch(self) -> tuple[int, int, int]:
+        async with self._experiment_sessions() as experiment_session:
+            async with self._core_sessions() as core_session:
+                report = await recover_stale_typed_launch_context_claims(
+                    experiment_session,
+                    core_session,
+                    claimed_before=datetime.now(timezone.utc) - _TYPED_CLAIM_STALE_AFTER,
+                    limit=max(1, min(self._dispatch_batch_size, 100)),
+                )
+                await experiment_session.commit()
+                binding_report = await publish_consumed_launch_context_bindings(
+                    experiment_session,
+                    core_session,
+                    priority_context_ids=tuple(report["consumed_launch_context_ids"]),
+                    limit=max(1, min(self._dispatch_batch_size, 100)),
+                )
+        return (
+            int(report["scanned_count"]),
+            int(binding_report["published_count"]),
+            int(binding_report["conflict_count"]),
+        )
+
     async def run_once(self) -> dict[str, int]:
         if self.lease_state != "owner":
-            return {"dispatched": 0, "reconciled": 0}
+            return {
+                "run_control_before_dispatch": 0,
+                "run_control_before_reconcile": 0,
+                "typed_claim_recovery": 0,
+                "typed_binding_publications": 0,
+                "typed_binding_publication_conflicts": 0,
+                "dispatched": 0,
+                "reconciled": 0,
+                "connector_commands": 0,
+                "connector_events": 0,
+            }
+        run_control_before_dispatch = await self._process_run_control_batch()
+        typed_claim_recovery, typed_binding_publications, typed_binding_publication_conflicts = (
+            await self._recover_stale_typed_claim_batch()
+        )
+        connector_commands = 0
+        connector_events = 0
+        for _ in range(self._dispatch_batch_size):
+            async with self._experiment_sessions() as experiment_session:
+                async with self._molbio_ngs_sessions() as domain_session:
+                    processed = await process_command_once(
+                        experiment_session, domain_session, worker_id=self.worker_id
+                    )
+            if processed == 0:
+                break
+            connector_commands += processed
+        for _ in range(self._dispatch_batch_size):
+            async with self._experiment_sessions() as experiment_session:
+                async with self._molbio_ngs_sessions() as domain_session:
+                    processed = await process_outbox_once(
+                        experiment_session, domain_session, worker_id=self.worker_id
+                    )
+            if processed == 0:
+                break
+            connector_events += processed
         dispatched = 0
         for _ in range(self._dispatch_batch_size):
             async with self._experiment_sessions() as experiment_session:
@@ -144,6 +240,7 @@ class GlobalExperimentWorker:
                         claimed = await dispatch_pending_outbox(
                             experiment_session,
                             ExistingJobMaterializer(core_session),
+                            core_session=core_session,
                             lease_owner=self.worker_id,
                         )
                     except Exception as exc:
@@ -154,6 +251,7 @@ class GlobalExperimentWorker:
                 break
             dispatched += claimed
 
+        run_control_before_reconcile = await self._process_run_control_batch()
         async with self._experiment_sessions() as discovery_session:
             group_ids = list(
                 (
@@ -191,7 +289,19 @@ class GlobalExperimentWorker:
         self.last_successful_sweep = datetime.now(timezone.utc).isoformat()
         if self.last_error is not None and self.failure_count == 0:
             self.last_error = None
-        return {"dispatched": dispatched, "reconciled": reconciled}
+        sweep_counts = {
+            "run_control_before_dispatch": run_control_before_dispatch,
+            "run_control_before_reconcile": run_control_before_reconcile,
+            "typed_claim_recovery": typed_claim_recovery,
+            "typed_binding_publications": typed_binding_publications,
+            "typed_binding_publication_conflicts": typed_binding_publication_conflicts,
+            "dispatched": dispatched,
+            "reconciled": reconciled,
+            "connector_commands": connector_commands,
+            "connector_events": connector_events,
+        }
+        self.last_sweep_counts = sweep_counts
+        return sweep_counts
 
     async def health_snapshot(self, session: AsyncSession | None = None) -> dict[str, Any]:
         if session is None:
@@ -223,6 +333,28 @@ class GlobalExperimentWorker:
                 )
             ).scalar_one()
         )
+        run_control_status_counts: dict[str, int] = {}
+        for command_status in _RUN_CONTROL_STATUSES:
+            run_control_status_counts[command_status] = int(
+                (
+                    await active_session.execute(
+                        select(func.count(ExperimentRunControlCommand.command_id)).where(
+                            ExperimentRunControlCommand.status == command_status
+                        )
+                    )
+                ).scalar_one()
+            )
+        run_control_total_count = int(
+            (
+                await active_session.execute(
+                    select(func.count(ExperimentRunControlCommand.command_id))
+                )
+            ).scalar_one()
+        )
+        run_control_unknown_count = max(
+            0,
+            run_control_total_count - sum(run_control_status_counts.values()),
+        )
         oldest_age = None
         if isinstance(oldest, str):
             try:
@@ -230,6 +362,8 @@ class GlobalExperimentWorker:
                 oldest_age = max(0, int((datetime.now(timezone.utc) - created).total_seconds()))
             except ValueError:
                 oldest_age = None
+        async with self._molbio_ngs_sessions() as domain_session:
+            connector = await connector_health(active_session, domain_session)
         return {
             "schema": "bms.experiment.worker-health.v1",
             "worker_id": self.worker_id,
@@ -240,6 +374,17 @@ class GlobalExperimentWorker:
             "oldest_pending_age_seconds": oldest_age,
             "failure_count": durable_failures + self.failure_count,
             "last_error": self.last_error,
+            "last_sweep_counts": dict(self.last_sweep_counts),
+            "run_control": {
+                "total_count": run_control_total_count,
+                "actionable_count": sum(
+                    run_control_status_counts[state]
+                    for state in ("pending", "leased", "retryable")
+                ),
+                "status_counts": run_control_status_counts,
+                "unknown_status_count": run_control_unknown_count,
+            },
+            "ngs_molbio_connector": connector,
         }
 
 

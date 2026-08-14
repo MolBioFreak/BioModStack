@@ -1,16 +1,19 @@
 """Global workspace/workflow/dataset/run-group HTTP contract."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import secrets
-from typing import Any, Mapping
+import uuid
+from typing import Annotated, Any, Mapping
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from database import get_session
 from experiment_database import get_experiment_session
 from experiment_models import (
     ExperimentAggregateHead,
@@ -19,6 +22,7 @@ from experiment_models import (
     ExperimentRevision,
     ExperimentRunGroup,
     ExperimentRunAttempt,
+    ExperimentOperationalReceipt,
     ExperimentValidation,
     ExperimentWorkflowPreparation,
     ExperimentWorkflowRun,
@@ -31,6 +35,7 @@ from experiment_operations import (
     build_workspace_export,
     create_online_backup,
     register_external_entity_receipt,
+    restore_backup_to_staging,
     verify_backup,
     verify_workspace_export,
     workspace_analytics,
@@ -57,6 +62,16 @@ from experiment_services import (
     save_dataset_revision,
     save_workflow_draft,
     save_workflow_revision,
+)
+from services.ngs_molbio_release_acceptance import (
+    SharedPackageAcceptanceError,
+    acceptance_operational_receipt,
+)
+from services.ngs_molbio_n5 import operational_receipt
+from services.ngs_molbio_run_control import (
+    command_document,
+    process_run_control_command,
+    request_run_group_cancellation,
 )
 from services.global_experiments.worker import global_experiment_worker
 
@@ -145,6 +160,10 @@ class StrictRequestModel(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class SharedPackageAcceptanceRequest(StrictRequestModel):
+    evidence: dict[str, Any]
+
+
 class WorkspaceCreateRequest(StrictRequestModel):
     name: str = Field(min_length=1, max_length=255)
     description: str = ""
@@ -204,18 +223,78 @@ class ArchiveRequest(StrictRequestModel):
     expected_head_generation: int | None = Field(default=None, ge=0)
 
 
+BoundedAuthorityId = Annotated[str, Field(min_length=1, max_length=128)]
+
+
 class RunGroupCreateRequest(StrictRequestModel):
-    preparation_ids: list[str] = Field(min_length=1)
+    preparation_ids: list[BoundedAuthorityId] = Field(min_length=1, max_length=128)
+    source_domain_id: BoundedAuthorityId
+    launch_context_ids: dict[BoundedAuthorityId, BoundedAuthorityId] = Field(
+        min_length=0, max_length=128
+    )
     idempotency_key: str = Field(min_length=1, max_length=255)
+
+    @model_validator(mode="after")
+    def validate_launch_contexts(self) -> "RunGroupCreateRequest":
+        if len(set(self.preparation_ids)) != len(self.preparation_ids):
+            raise ValueError("preparation_ids must be unique")
+        if not set(self.launch_context_ids).issubset(self.preparation_ids):
+            raise ValueError("launch_context_ids may only identify requested preparations")
+        if len(set(self.launch_context_ids.values())) != len(self.launch_context_ids):
+            raise ValueError("launch_context_ids must contain unique launch contexts")
+        return self
+
+
+class CancelRunGroupRequest(StrictRequestModel):
+    idempotency_key: str = Field(min_length=1, max_length=255)
+    expected_generation: int = Field(ge=0)
+    reason: str = Field(min_length=1, max_length=1024)
 
 
 class RetryRunGroupRequest(StrictRequestModel):
     idempotency_key: str = Field(min_length=1, max_length=255)
-    replacement_preparation_ids: dict[str, str] = Field(default_factory=dict)
+    expected_generation: int = Field(ge=0)
+    source_domain_id: BoundedAuthorityId
+    replacement_preparation_ids: dict[BoundedAuthorityId, BoundedAuthorityId] = Field(
+        min_length=1, max_length=128
+    )
+    replacement_launch_context_ids: dict[BoundedAuthorityId, BoundedAuthorityId] = Field(
+        min_length=0, max_length=128
+    )
+
+    @model_validator(mode="after")
+    def validate_replacement_launch_contexts(self) -> "RetryRunGroupRequest":
+        if not set(self.replacement_launch_context_ids).issubset(
+            self.replacement_preparation_ids
+        ):
+            raise ValueError(
+                "replacement_launch_context_ids may only identify replacement runs"
+            )
+        if len(set(self.replacement_launch_context_ids.values())) != len(
+            self.replacement_launch_context_ids
+        ):
+            raise ValueError("replacement_launch_context_ids must contain unique launch contexts")
+        return self
 
 
 class ResubmitRunGroupRequest(StrictRequestModel):
     idempotency_key: str = Field(min_length=1, max_length=255)
+    expected_generation: int = Field(ge=0)
+    source_domain_id: BoundedAuthorityId
+    preparation_ids: list[BoundedAuthorityId] = Field(min_length=1, max_length=128)
+    launch_context_ids: dict[BoundedAuthorityId, BoundedAuthorityId] = Field(
+        min_length=0, max_length=128
+    )
+
+    @model_validator(mode="after")
+    def validate_launch_contexts(self) -> "ResubmitRunGroupRequest":
+        if len(set(self.preparation_ids)) != len(self.preparation_ids):
+            raise ValueError("preparation_ids must be unique")
+        if not set(self.launch_context_ids).issubset(self.preparation_ids):
+            raise ValueError("launch_context_ids may only identify requested preparations")
+        if len(set(self.launch_context_ids.values())) != len(self.launch_context_ids):
+            raise ValueError("launch_context_ids must contain unique launch contexts")
+        return self
 
 
 class StatsHandoffRequest(StrictRequestModel):
@@ -695,6 +774,7 @@ async def prepare_workspace_workflow(
     workflow_revision_id: str,
     request: Request,
     session: AsyncSession = Depends(get_experiment_session),
+    core_session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     try:
         _mutation_principal(request)
@@ -709,6 +789,7 @@ async def prepare_workspace_workflow(
             session,
             workflow_revision_id,
             {"input_dataset_revision_ids": payload.input_dataset_revision_ids},
+            core_session=core_session,
         )
         await session.commit()
         return {
@@ -782,6 +863,7 @@ async def create_workspace_run_group(
     payload: RunGroupCreateRequest,
     request: Request,
     session: AsyncSession = Depends(get_experiment_session),
+    core_session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     try:
         await _require_mutation_owner(request, session, resource_id=workspace_id)
@@ -795,6 +877,9 @@ async def create_workspace_run_group(
             workspace_id,
             payload.preparation_ids,
             idempotency_key=payload.idempotency_key,
+            launch_context_ids=payload.launch_context_ids,
+            core_session=core_session,
+            source_domain_id=payload.source_domain_id,
         )
         await session.commit()
         return {
@@ -881,6 +966,57 @@ async def reconcile_workspace_run_group(
     )
 
 
+@router.post("/{workspace_id}/run-groups/{run_group_id}/cancel")
+async def cancel_workspace_run_group(
+    workspace_id: str,
+    run_group_id: str,
+    payload: CancelRunGroupRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_experiment_session),
+    core_session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    try:
+        await _require_mutation_owner(request, session, resource_id=run_group_id)
+        command = await request_run_group_cancellation(
+            session,
+            workspace_id=workspace_id,
+            run_group_id=run_group_id,
+            idempotency_key=payload.idempotency_key,
+            expected_generation=payload.expected_generation,
+            reason=payload.reason,
+        )
+        if command.status not in {"applied", "conflicted"}:
+            command = await process_run_control_command(
+                session,
+                core_session,
+                command_id=command.command_id,
+                worker_id=f"workspace-cancel:{uuid.uuid4()}",
+            )
+        if command.status == "conflicted":
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "run_control_conflicted",
+                    "command_id": command.command_id,
+                    "status": command.status,
+                },
+            )
+        if command.status != "applied":
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "run_control_pending",
+                    "command_id": command.command_id,
+                    "status": command.status,
+                },
+            )
+        return command_document(command)
+    except ExperimentServiceError as exc:
+        await session.rollback()
+        await core_session.rollback()
+        raise _error(exc) from exc
+
+
 @router.post("/{workspace_id}/run-groups/{run_group_id}/retry")
 async def retry_workspace_run_group(
     workspace_id: str,
@@ -888,6 +1024,7 @@ async def retry_workspace_run_group(
     payload: RetryRunGroupRequest,
     request: Request,
     session: AsyncSession = Depends(get_experiment_session),
+    core_session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     try:
         await _require_mutation_owner(request, session, resource_id=run_group_id)
@@ -897,6 +1034,10 @@ async def retry_workspace_run_group(
             run_group_id,
             idempotency_key=payload.idempotency_key,
             replacement_preparation_ids=payload.replacement_preparation_ids,
+            replacement_launch_context_ids=payload.replacement_launch_context_ids,
+            expected_generation=payload.expected_generation,
+            core_session=core_session,
+            source_domain_id=payload.source_domain_id,
         )
         await session.commit()
         return {"id": group.resource_id, "state": group.state, "generation": group.generation}
@@ -912,6 +1053,7 @@ async def resubmit_workspace_run_group(
     payload: ResubmitRunGroupRequest,
     request: Request,
     session: AsyncSession = Depends(get_experiment_session),
+    core_session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     try:
         await _require_mutation_owner(request, session, resource_id=run_group_id)
@@ -920,6 +1062,11 @@ async def resubmit_workspace_run_group(
             workspace_id,
             run_group_id,
             idempotency_key=payload.idempotency_key,
+            preparation_ids=payload.preparation_ids,
+            launch_context_ids=payload.launch_context_ids,
+            expected_generation=payload.expected_generation,
+            core_session=core_session,
+            source_domain_id=payload.source_domain_id,
         )
         await session.commit()
         return {"id": group.resource_id, "state": group.state, "generation": group.generation}
@@ -928,20 +1075,129 @@ async def resubmit_workspace_run_group(
         raise _error(exc) from exc
 
 
+@router.post("/ops/ngs-molbio/package-acceptance", status_code=status.HTTP_201_CREATED)
+async def record_ngs_molbio_package_acceptance(
+    payload: SharedPackageAcceptanceRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_experiment_session),
+    core_session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    try:
+        actor = _operator_principal(request)
+        receipt = await acceptance_operational_receipt(
+            session,
+            core_session,
+            payload.evidence,
+            accepted_by=actor,
+        )
+        return json.loads(receipt.receipt_json)
+    except SharedPackageAcceptanceError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail={"code": "package_acceptance_rejected", "message": str(exc)}) from exc
+
+
+async def _creation_receipt_authority(
+    session: AsyncSession,
+    *,
+    operation_kind: str,
+    native_identity: str,
+) -> tuple[dict[str, Any], str]:
+    rows = list((await session.scalars(
+        select(ExperimentOperationalReceipt)
+        .where(
+            ExperimentOperationalReceipt.operation_kind == operation_kind,
+            ExperimentOperationalReceipt.native_identity == native_identity,
+            ExperimentOperationalReceipt.state == "created",
+        )
+        .order_by(ExperimentOperationalReceipt.receipt_id)
+        .limit(2)
+    )).all())
+    if len(rows) != 1:
+        raise ExperimentOperationError("immutable operation creation receipt is missing or ambiguous")
+    row = rows[0]
+    raw = row.receipt_json.encode("utf-8")
+    if hashlib.sha256(raw).hexdigest() != row.receipt_sha256:
+        raise ExperimentOperationError("immutable operation creation receipt digest is invalid")
+    try:
+        body = json.loads(row.receipt_json)
+    except json.JSONDecodeError as exc:
+        raise ExperimentOperationError("immutable operation creation receipt JSON is invalid") from exc
+    if type(body) is not dict:
+        raise ExperimentOperationError("immutable operation creation receipt shape is invalid")
+    return body, row.receipt_sha256
+
+
 @router.post("/ops/backup", status_code=status.HTTP_201_CREATED)
-async def create_experiment_backup(request: Request) -> dict[str, Any]:
+async def create_experiment_backup(request: Request, session: AsyncSession = Depends(get_experiment_session)) -> dict[str, Any]:
     try:
         _operator_principal(request)
-        return create_online_backup()
+        result = create_online_backup()
+        session.add(operational_receipt(operation_kind="backup", native_identity=result["backup_id"], state="created", receipt=result))
+        await session.commit()
+        return result
     except ExperimentOperationError as exc:
         raise _error(exc) from exc
 
 
 @router.get("/ops/backups/{backup_id}/verify")
-async def verify_experiment_backup(backup_id: str) -> dict[str, Any]:
+async def verify_experiment_backup(
+    backup_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
     try:
-        return verify_backup(backup_id)
+        actor = _operator_principal(request)
+        creation_receipt, creation_sha256 = await _creation_receipt_authority(
+            session,
+            operation_kind="backup",
+            native_identity=backup_id,
+        )
+        result = verify_backup(
+            backup_id,
+            verifier_id=actor,
+            creation_receipt=creation_receipt,
+            creation_receipt_sha256=creation_sha256,
+        )
+        verified_at = result.get("verified_at") or result.get("checked_at")
+        session.add(operational_receipt(operation_kind="backup", native_identity=backup_id, state="verified", receipt=result, verified_at=verified_at))
+        await session.commit()
+        return result
     except ExperimentOperationError as exc:
+        raise _error(exc) from exc
+
+
+@router.post("/ops/backups/{backup_id}/restore-drill", status_code=status.HTTP_201_CREATED)
+async def restore_experiment_backup_drill(
+    backup_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    try:
+        actor = _operator_principal(request)
+        creation_receipt, creation_sha256 = await _creation_receipt_authority(
+            session,
+            operation_kind="backup",
+            native_identity=backup_id,
+        )
+        result = restore_backup_to_staging(
+            backup_id,
+            verifier_id=actor,
+            creation_receipt=creation_receipt,
+            creation_receipt_sha256=creation_sha256,
+        )
+        session.add(
+            operational_receipt(
+                operation_kind="restoration",
+                native_identity=result["restore_id"],
+                state="verified",
+                receipt=result,
+                verified_at=result["verified_at"],
+            )
+        )
+        await session.commit()
+        return result
+    except ExperimentOperationError as exc:
+        await session.rollback()
         raise _error(exc) from exc
 
 
@@ -979,15 +1235,37 @@ async def export_workspace(
 ) -> dict[str, Any]:
     try:
         await _require_mutation_owner(request, session, resource_id=workspace_id)
-        return await build_workspace_export(session, workspace_id)
+        result = await build_workspace_export(session, workspace_id)
+        session.add(operational_receipt(operation_kind="export", native_identity=result["export_id"], state="created", receipt=result, workspace_id=workspace_id))
+        await session.commit()
+        return result
     except ExperimentOperationError as exc:
         raise _error(exc) from exc
 
 
 @router.get("/exports/{export_id}/verify")
-async def verify_workspace_export_route(export_id: str) -> dict[str, Any]:
+async def verify_workspace_export_route(
+    export_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
     try:
-        return verify_workspace_export(export_id)
+        actor = _operator_principal(request)
+        creation_receipt, creation_sha256 = await _creation_receipt_authority(
+            session,
+            operation_kind="export",
+            native_identity=export_id,
+        )
+        result = verify_workspace_export(
+            export_id,
+            verifier_id=actor,
+            creation_receipt=creation_receipt,
+            creation_receipt_sha256=creation_sha256,
+        )
+        verified_at = result.get("verified_at") or result.get("checked_at")
+        session.add(operational_receipt(operation_kind="export", native_identity=export_id, state="verified", receipt=result, workspace_id=result.get("workspace_id"), verified_at=verified_at))
+        await session.commit()
+        return result
     except ExperimentOperationError as exc:
         raise _error(exc) from exc
 

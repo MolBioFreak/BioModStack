@@ -1,0 +1,2817 @@
+{
+  "adapter_registry_sha256": "1eeb3cfb2252bbc5378b94d8bbae9e1465a2db5ee756bc7593538dffea6742ca",
+  "baseline_source_commit": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+  "baseline_source_tree": "f89094ba373e3dd8fa181fd17d942e54a6f0f63e",
+  "branch_closure_sha256": "0d3f37b6e5b972f33450d05591ff06d404cd13b2c75490b2b3850f2deed00647",
+  "capabilities": [
+    {
+      "accepted_source_roles": [
+        "molecular_revision:preoverlapped_fragment"
+      ],
+      "allowed_domain_modes": [
+        "assembly_validation"
+      ],
+      "canonical_source_destination": "/molbio",
+      "capability_id": "molbio.assembly.gibson",
+      "capability_kind": "domain_operation",
+      "capability_version": "1",
+      "classified_parameter_keys": [
+        "change_summary",
+        "circular",
+        "fragment_revision_ids",
+        "min_anneal",
+        "orientations",
+        "overlap",
+        "planning_mode",
+        "target_tm"
+      ],
+      "entrypoint_owner": null,
+      "exposure_state": "internal",
+      "inventory_sha256": "708630a2961ae8e447dab0a2938098b962e8a238bf1218213b685c0e538addc1",
+      "label": "Gibson Assembly",
+      "launch_mode": "domain_operation",
+      "materializer_owner": null,
+      "native_mapping": {
+        "id": "molbio.assembly.gibson",
+        "kind": "domain_operation",
+        "native_request_compatibility": "requires_unimplemented_revision_materializer",
+        "source": "POST /api/molbio/assembly/gibson/save"
+      },
+      "observed_parameter_keys": [
+        "change_summary",
+        "circular",
+        "fragment_revision_ids",
+        "fragments",
+        "maximum_overlap",
+        "min_anneal",
+        "minimum_overlap",
+        "new_name",
+        "orientations",
+        "overlap",
+        "planning_mode",
+        "preferred_overlap",
+        "save_description",
+        "target_tm"
+      ],
+      "parameter_schema_id": "bms.operation-parameters.molbio.assembly.gibson.v1",
+      "parameter_schema_sha256": "58ca18495534f4bd3bbe3c98b3999fe62d52da678154868a7fe847f6da9ffdf1",
+      "parity_ledger": [
+        {
+          "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
+          "gate": "installed_inventory",
+          "state": "pass"
+        },
+        {
+          "evidence": "Closed schema bytes and digest are registered. Unknown fields reject.",
+          "gate": "global_schema",
+          "state": "pass"
+        },
+        {
+          "evidence": "Current browser surfaces do not consume this server-owned schema for every field.",
+          "gate": "browser_controls",
+          "state": "partial"
+        },
+        {
+          "evidence": "Discovery/readback/submission do not yet share this schema end to end.",
+          "gate": "agent_parity",
+          "state": "missing"
+        },
+        {
+          "evidence": "Requested and effective values do not yet round-trip through every Project lifecycle path.",
+          "gate": "persistence",
+          "state": "partial"
+        },
+        {
+          "evidence": "Native route consumes raw objects or sequences while the Project schema uses immutable revisions. No bound revision-resolution/materialization adapter exists.",
+          "gate": "execution",
+          "state": "partial"
+        },
+        {
+          "evidence": "Dedicated terminal or domain-operation receipt closure is not complete.",
+          "gate": "receipt",
+          "state": "missing"
+        },
+        {
+          "evidence": "Add to Project and exact historical reopen are incomplete.",
+          "gate": "global_result_experience",
+          "state": "partial"
+        },
+        {
+          "evidence": "Deterministic domain operation; scheduled reuse does not apply.",
+          "gate": "workflow_reuse",
+          "state": "not_applicable"
+        },
+        {
+          "evidence": "No authorized Development acceptance has been run for this frozen contract.",
+          "gate": "live_agreement",
+          "state": "missing"
+        }
+      ],
+      "plannable": false,
+      "preparation_owner": null,
+      "readiness_authority": "bms.ngs-molbio.capability-readiness.v1",
+      "receipt_contracts": [
+        "bms.molbio.molecular-operation.v1"
+      ],
+      "result_contracts": [
+        "bms.molbio.molecular-operation.v1"
+      ],
+      "scientific_role": "assembly_validation",
+      "server_owned_parameter_keys": [
+        "new_name",
+        "save_description"
+      ],
+      "submission_owner": "routers.molbio_ops.save_gibson_assembly",
+      "unclassified_parameter_keys": [
+        "fragments",
+        "maximum_overlap",
+        "minimum_overlap",
+        "preferred_overlap"
+      ],
+      "unsupported_parameter_keys": [],
+      "viewer_destination": "/molbio?operation_id={operation_id}"
+    },
+    {
+      "accepted_source_roles": [
+        "molecular_revision:fragment"
+      ],
+      "allowed_domain_modes": [
+        "assembly_validation"
+      ],
+      "canonical_source_destination": "/molbio",
+      "capability_id": "molbio.assembly.golden_gate",
+      "capability_kind": "domain_operation",
+      "capability_version": "1",
+      "classified_parameter_keys": [
+        "change_summary",
+        "circular",
+        "enzyme_name",
+        "fragment_revision_ids",
+        "orientations"
+      ],
+      "entrypoint_owner": null,
+      "exposure_state": "internal",
+      "inventory_sha256": "b062d4e858842f81bfbd46a4834bbf6ad4ce6339ff8abe70182c0ecbf4b805df",
+      "label": "Golden Gate Assembly",
+      "launch_mode": "domain_operation",
+      "materializer_owner": null,
+      "native_mapping": {
+        "id": "molbio.assembly.golden_gate",
+        "kind": "domain_operation",
+        "native_request_compatibility": "requires_unimplemented_revision_materializer",
+        "source": "POST /api/molbio/assembly/golden-gate/save"
+      },
+      "observed_parameter_keys": [
+        "change_summary",
+        "circular",
+        "enzyme_name",
+        "fragment_revision_ids",
+        "fragments",
+        "new_name",
+        "orientations",
+        "save_description"
+      ],
+      "parameter_schema_id": "bms.operation-parameters.molbio.assembly.golden_gate.v1",
+      "parameter_schema_sha256": "fdd0a72f8b7757d0c6f767f3bc5a438299426859deaa2d3482af0b7c5df5dda8",
+      "parity_ledger": [
+        {
+          "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
+          "gate": "installed_inventory",
+          "state": "pass"
+        },
+        {
+          "evidence": "Closed schema bytes and digest are registered. Unknown fields reject.",
+          "gate": "global_schema",
+          "state": "pass"
+        },
+        {
+          "evidence": "Current browser surfaces do not consume this server-owned schema for every field.",
+          "gate": "browser_controls",
+          "state": "partial"
+        },
+        {
+          "evidence": "Discovery/readback/submission do not yet share this schema end to end.",
+          "gate": "agent_parity",
+          "state": "missing"
+        },
+        {
+          "evidence": "Requested and effective values do not yet round-trip through every Project lifecycle path.",
+          "gate": "persistence",
+          "state": "partial"
+        },
+        {
+          "evidence": "Native route consumes raw objects or sequences while the Project schema uses immutable revisions. No bound revision-resolution/materialization adapter exists.",
+          "gate": "execution",
+          "state": "partial"
+        },
+        {
+          "evidence": "Dedicated terminal or domain-operation receipt closure is not complete.",
+          "gate": "receipt",
+          "state": "missing"
+        },
+        {
+          "evidence": "Add to Project and exact historical reopen are incomplete.",
+          "gate": "global_result_experience",
+          "state": "partial"
+        },
+        {
+          "evidence": "Deterministic domain operation; scheduled reuse does not apply.",
+          "gate": "workflow_reuse",
+          "state": "not_applicable"
+        },
+        {
+          "evidence": "No authorized Development acceptance has been run for this frozen contract.",
+          "gate": "live_agreement",
+          "state": "missing"
+        }
+      ],
+      "plannable": false,
+      "preparation_owner": null,
+      "readiness_authority": "bms.ngs-molbio.capability-readiness.v1",
+      "receipt_contracts": [
+        "bms.molbio.molecular-operation.v1"
+      ],
+      "result_contracts": [
+        "bms.molbio.molecular-operation.v1"
+      ],
+      "scientific_role": "assembly_validation",
+      "server_owned_parameter_keys": [
+        "new_name",
+        "save_description"
+      ],
+      "submission_owner": "routers.molbio_ops.save_golden_gate_assembly",
+      "unclassified_parameter_keys": [
+        "fragments"
+      ],
+      "unsupported_parameter_keys": [],
+      "viewer_destination": "/molbio?operation_id={operation_id}"
+    },
+    {
+      "accepted_source_roles": [
+        "molecular_revision:fragment"
+      ],
+      "allowed_domain_modes": [
+        "assembly_validation"
+      ],
+      "canonical_source_destination": "/molbio",
+      "capability_id": "molbio.assembly.ligation",
+      "capability_kind": "domain_operation",
+      "capability_version": "1",
+      "classified_parameter_keys": [
+        "change_summary",
+        "circular",
+        "fragment_revision_ids",
+        "orientations"
+      ],
+      "entrypoint_owner": null,
+      "exposure_state": "internal",
+      "inventory_sha256": "542ac9d1a59e52e2a0a28672170447afe3e815e676f239cd7f9954c412250fa1",
+      "label": "Ligation Assembly",
+      "launch_mode": "domain_operation",
+      "materializer_owner": null,
+      "native_mapping": {
+        "id": "molbio.assembly.ligation",
+        "kind": "domain_operation",
+        "native_request_compatibility": "requires_unimplemented_revision_materializer",
+        "source": "POST /api/molbio/assembly/ligation/save"
+      },
+      "observed_parameter_keys": [
+        "change_summary",
+        "circular",
+        "fragment_revision_ids",
+        "fragments",
+        "new_name",
+        "orientations",
+        "save_description"
+      ],
+      "parameter_schema_id": "bms.operation-parameters.molbio.assembly.ligation.v1",
+      "parameter_schema_sha256": "e2d043a1b4157dbef6afe40f3059689ee3c2211094826475f1ae117ab9703077",
+      "parity_ledger": [
+        {
+          "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
+          "gate": "installed_inventory",
+          "state": "pass"
+        },
+        {
+          "evidence": "Closed schema bytes and digest are registered. Unknown fields reject.",
+          "gate": "global_schema",
+          "state": "pass"
+        },
+        {
+          "evidence": "Current browser surfaces do not consume this server-owned schema for every field.",
+          "gate": "browser_controls",
+          "state": "partial"
+        },
+        {
+          "evidence": "Discovery/readback/submission do not yet share this schema end to end.",
+          "gate": "agent_parity",
+          "state": "missing"
+        },
+        {
+          "evidence": "Requested and effective values do not yet round-trip through every Project lifecycle path.",
+          "gate": "persistence",
+          "state": "partial"
+        },
+        {
+          "evidence": "Native route consumes raw objects or sequences while the Project schema uses immutable revisions. No bound revision-resolution/materialization adapter exists.",
+          "gate": "execution",
+          "state": "partial"
+        },
+        {
+          "evidence": "Dedicated terminal or domain-operation receipt closure is not complete.",
+          "gate": "receipt",
+          "state": "missing"
+        },
+        {
+          "evidence": "Add to Project and exact historical reopen are incomplete.",
+          "gate": "global_result_experience",
+          "state": "partial"
+        },
+        {
+          "evidence": "Deterministic domain operation; scheduled reuse does not apply.",
+          "gate": "workflow_reuse",
+          "state": "not_applicable"
+        },
+        {
+          "evidence": "No authorized Development acceptance has been run for this frozen contract.",
+          "gate": "live_agreement",
+          "state": "missing"
+        }
+      ],
+      "plannable": false,
+      "preparation_owner": null,
+      "readiness_authority": "bms.ngs-molbio.capability-readiness.v1",
+      "receipt_contracts": [
+        "bms.molbio.molecular-operation.v1"
+      ],
+      "result_contracts": [
+        "bms.molbio.molecular-operation.v1"
+      ],
+      "scientific_role": "assembly_validation",
+      "server_owned_parameter_keys": [
+        "new_name",
+        "save_description"
+      ],
+      "submission_owner": "routers.molbio_ops.save_ligation_assembly",
+      "unclassified_parameter_keys": [
+        "fragments"
+      ],
+      "unsupported_parameter_keys": [],
+      "viewer_destination": "/molbio?operation_id={operation_id}"
+    },
+    {
+      "accepted_source_roles": [
+        "molecular_revision"
+      ],
+      "allowed_domain_modes": [
+        "molecular_design"
+      ],
+      "canonical_source_destination": "/molbio",
+      "capability_id": "molbio.mutagenesis",
+      "capability_kind": "domain_operation",
+      "capability_version": "1",
+      "classified_parameter_keys": [
+        "change_summary",
+        "mutations",
+        "source_revision_id"
+      ],
+      "entrypoint_owner": null,
+      "exposure_state": "internal",
+      "inventory_sha256": "f706ef4fee3d6cb1e64f0a9f4628a5736c61178b64e30d5a0a684e29c37195db",
+      "label": "Mutagenesis",
+      "launch_mode": "domain_operation",
+      "materializer_owner": null,
+      "native_mapping": {
+        "id": "molbio.mutagenesis",
+        "kind": "domain_operation",
+        "native_request_compatibility": "requires_unimplemented_revision_materializer",
+        "source": "POST /api/molbio/mutagenesis"
+      },
+      "observed_parameter_keys": [
+        "change_summary",
+        "is_circular",
+        "mutations",
+        "name",
+        "new_name",
+        "save",
+        "sequence",
+        "sequence_id",
+        "sequence_type",
+        "source_revision_id"
+      ],
+      "parameter_schema_id": "bms.operation-parameters.molbio.mutagenesis.v1",
+      "parameter_schema_sha256": "09e95fed1dfa712f3f0d5a29e80dc4e571254d4fc4d9bf570c51bdb7ec5160cf",
+      "parity_ledger": [
+        {
+          "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
+          "gate": "installed_inventory",
+          "state": "pass"
+        },
+        {
+          "evidence": "Closed schema bytes and digest are registered. Unknown fields reject.",
+          "gate": "global_schema",
+          "state": "pass"
+        },
+        {
+          "evidence": "Current browser surfaces do not consume this server-owned schema for every field.",
+          "gate": "browser_controls",
+          "state": "partial"
+        },
+        {
+          "evidence": "Discovery/readback/submission do not yet share this schema end to end.",
+          "gate": "agent_parity",
+          "state": "missing"
+        },
+        {
+          "evidence": "Requested and effective values do not yet round-trip through every Project lifecycle path.",
+          "gate": "persistence",
+          "state": "partial"
+        },
+        {
+          "evidence": "Native route consumes raw objects or sequences while the Project schema uses immutable revisions. No bound revision-resolution/materialization adapter exists.",
+          "gate": "execution",
+          "state": "partial"
+        },
+        {
+          "evidence": "Dedicated terminal or domain-operation receipt closure is not complete.",
+          "gate": "receipt",
+          "state": "missing"
+        },
+        {
+          "evidence": "Add to Project and exact historical reopen are incomplete.",
+          "gate": "global_result_experience",
+          "state": "partial"
+        },
+        {
+          "evidence": "Deterministic domain operation; scheduled reuse does not apply.",
+          "gate": "workflow_reuse",
+          "state": "not_applicable"
+        },
+        {
+          "evidence": "No authorized Development acceptance has been run for this frozen contract.",
+          "gate": "live_agreement",
+          "state": "missing"
+        }
+      ],
+      "plannable": false,
+      "preparation_owner": null,
+      "readiness_authority": "bms.ngs-molbio.capability-readiness.v1",
+      "receipt_contracts": [
+        "bms.molbio.molecular-operation.v1"
+      ],
+      "result_contracts": [
+        "bms.molbio.molecular-operation.v1"
+      ],
+      "scientific_role": "molecular_design",
+      "server_owned_parameter_keys": [
+        "new_name",
+        "save"
+      ],
+      "submission_owner": "routers.molbio_ops.mutagenesis",
+      "unclassified_parameter_keys": [
+        "is_circular",
+        "name",
+        "sequence",
+        "sequence_id",
+        "sequence_type"
+      ],
+      "unsupported_parameter_keys": [],
+      "viewer_destination": "/molbio?operation_id={operation_id}"
+    },
+    {
+      "accepted_source_roles": [
+        "target_structure_receipt",
+        "scaffold_structure_receipt"
+      ],
+      "allowed_domain_modes": [
+        "molecular_design"
+      ],
+      "canonical_source_destination": "/jobs/submit?template=oligo_design",
+      "capability_id": "molbio.oligo_design.rfdpoly",
+      "capability_kind": "scheduled_workflow",
+      "capability_version": "1",
+      "classified_parameter_keys": [
+        "binding_guidance",
+        "boltz_min_plddt",
+        "boltz_num_samples",
+        "boltz_recycling_steps",
+        "boltz_sampling_steps",
+        "boltz_validation_mode",
+        "chain_sequences",
+        "designs_per_job",
+        "hotspot_residues",
+        "nampnn_chains_to_design",
+        "nampnn_design_na_only",
+        "nampnn_fixed_residues",
+        "nampnn_num_seqs",
+        "nampnn_seed",
+        "nampnn_temperature",
+        "oligo_max_pae",
+        "oligo_min_plddt",
+        "oligo_min_ptm",
+        "oligo_validate_boltz",
+        "openmm_compute_tier",
+        "openmm_enabled",
+        "rfdpoly_checkpoint",
+        "rfdpoly_contigs",
+        "rfdpoly_diffusion_steps",
+        "rfdpoly_noise_schedule",
+        "rfdpoly_num_designs",
+        "rfdpoly_polymer_chains",
+        "rfdpoly_seed",
+        "rfdpoly_temperature",
+        "target_chains",
+        "use_swa"
+      ],
+      "entrypoint_owner": "services.nextflow.resolve_nextflow_entrypoint",
+      "exposure_state": "internal",
+      "inventory_sha256": "e4be1158f29cae5bdd211bb3f5ab000f2872981926453161364279d1224d2f9f",
+      "label": "RFDpoly Oligo Design",
+      "launch_mode": "typed_launcher_handoff",
+      "materializer_owner": "services.nextflow.build_nextflow_command",
+      "native_mapping": {
+        "id": "oligo_design",
+        "kind": "canonical_workflow",
+        "native_request_compatibility": "partial_native_mapping",
+        "source": "workflows/oligo_design.nf"
+      },
+      "observed_parameter_keys": [
+        "binding_guidance",
+        "boltz_min_plddt",
+        "boltz_num_samples",
+        "boltz_recycling_steps",
+        "boltz_sampling_steps",
+        "boltz_validation_mode",
+        "chain_sequences",
+        "compress_outputs",
+        "designs_per_job",
+        "hotspot_residues",
+        "keep_intermediates",
+        "nampnn_chains_to_design",
+        "nampnn_design_na_only",
+        "nampnn_fixed_residues",
+        "nampnn_num_seqs",
+        "nampnn_seed",
+        "nampnn_temperature",
+        "oligo_max_pae",
+        "oligo_min_plddt",
+        "oligo_min_ptm",
+        "oligo_validate_boltz",
+        "openmm_compute_tier",
+        "openmm_enabled",
+        "rfdpoly_checkpoint",
+        "rfdpoly_contigs",
+        "rfdpoly_diffusion_steps",
+        "rfdpoly_enabled",
+        "rfdpoly_noise_schedule",
+        "rfdpoly_num_designs",
+        "rfdpoly_polymer_chains",
+        "rfdpoly_seed",
+        "rfdpoly_temperature",
+        "scaffold_pdb",
+        "target_chains",
+        "target_pdb",
+        "use_swa"
+      ],
+      "parameter_schema_id": "bms.workflow-parameters.molbio.oligo_design.rfdpoly.v1",
+      "parameter_schema_sha256": "7ae266b060771e4c13b35bb900d606b7e026352c4c65f1d5d54e5d46f30a8ebd",
+      "parity_ledger": [
+        {
+          "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
+          "gate": "installed_inventory",
+          "state": "pass"
+        },
+        {
+          "evidence": "Closed schema bytes and digest are registered. Unknown fields reject.",
+          "gate": "global_schema",
+          "state": "pass"
+        },
+        {
+          "evidence": "Current browser surfaces do not consume this server-owned schema for every field.",
+          "gate": "browser_controls",
+          "state": "partial"
+        },
+        {
+          "evidence": "Discovery/readback/submission do not yet share this schema end to end.",
+          "gate": "agent_parity",
+          "state": "missing"
+        },
+        {
+          "evidence": "Requested and effective values do not yet round-trip through every Project lifecycle path.",
+          "gate": "persistence",
+          "state": "partial"
+        },
+        {
+          "evidence": "Canonical Job and Nextflow entrypoint exist. The Project compiler and full UI/API/native type reconciliation are missing; NA-only boolean and target/scaffold authority drift remain.",
+          "gate": "execution",
+          "state": "partial"
+        },
+        {
+          "evidence": "Dedicated terminal or domain-operation receipt closure is not complete.",
+          "gate": "receipt",
+          "state": "missing"
+        },
+        {
+          "evidence": "Add to Project and exact historical reopen are incomplete.",
+          "gate": "global_result_experience",
+          "state": "partial"
+        },
+        {
+          "evidence": "Canonical workflow exists; immutable preparation/materialization reuse remains incomplete.",
+          "gate": "workflow_reuse",
+          "state": "missing"
+        },
+        {
+          "evidence": "No authorized Development acceptance has been run for this frozen contract.",
+          "gate": "live_agreement",
+          "state": "missing"
+        }
+      ],
+      "plannable": false,
+      "preparation_owner": "experiment_services.prepare_workflow",
+      "readiness_authority": "bms.ngs-molbio.capability-readiness.v1",
+      "receipt_contracts": [
+        "bms.global.external-entity-receipt.v1"
+      ],
+      "result_contracts": [
+        "core_job_result",
+        "immutable_molecular_revision"
+      ],
+      "scientific_role": "molecular_design",
+      "server_owned_parameter_keys": [
+        "compress_outputs",
+        "keep_intermediates",
+        "rfdpoly_enabled",
+        "scaffold_pdb",
+        "target_pdb"
+      ],
+      "submission_owner": "routers.jobs.create_job",
+      "unclassified_parameter_keys": [],
+      "unsupported_parameter_keys": [],
+      "viewer_destination": "/results/{job_id}"
+    },
+    {
+      "accepted_source_roles": [
+        "molecular_revision:template",
+        "primer_revision:forward",
+        "primer_revision:reverse"
+      ],
+      "allowed_domain_modes": [
+        "pcr_validation"
+      ],
+      "canonical_source_destination": "/molbio",
+      "capability_id": "molbio.pcr",
+      "capability_kind": "domain_operation",
+      "capability_version": "1",
+      "classified_parameter_keys": [
+        "change_summary",
+        "cycling_assumptions",
+        "forward_primer_revision_id",
+        "notes",
+        "polymerase_preset_revision_id",
+        "reaction_settings",
+        "reverse_primer_revision_id",
+        "template_revision_id",
+        "tm_settings"
+      ],
+      "entrypoint_owner": null,
+      "exposure_state": "internal",
+      "inventory_sha256": "884a29cac063f1ff3fe7eee2b8fc3145e7097fa4effdcfbbd55a3d52a6e062e8",
+      "label": "PCR",
+      "launch_mode": "domain_operation",
+      "materializer_owner": null,
+      "native_mapping": {
+        "id": "molbio.pcr",
+        "kind": "domain_operation",
+        "native_request_compatibility": "requires_unimplemented_revision_materializer",
+        "source": "POST /api/molbio/pcr"
+      },
+      "observed_parameter_keys": [
+        "change_summary",
+        "cycling_assumptions",
+        "forward_primer_revision_id",
+        "idempotency_key",
+        "is_circular",
+        "name",
+        "new_name",
+        "notes",
+        "persist_experiment",
+        "polymerase_preset_revision_id",
+        "primer_fwd",
+        "primer_rev",
+        "provenance",
+        "reaction_settings",
+        "reverse_primer_revision_id",
+        "review_state",
+        "save",
+        "sequence",
+        "sequence_id",
+        "sequence_type",
+        "template_revision_id",
+        "tm_settings"
+      ],
+      "parameter_schema_id": "bms.operation-parameters.molbio.pcr.v1",
+      "parameter_schema_sha256": "a5eddc81b76955207bc32680a668aec9e84901dbb40d1a8d546bec9f416cc89f",
+      "parity_ledger": [
+        {
+          "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
+          "gate": "installed_inventory",
+          "state": "pass"
+        },
+        {
+          "evidence": "Closed schema bytes and digest are registered. Unknown fields reject.",
+          "gate": "global_schema",
+          "state": "pass"
+        },
+        {
+          "evidence": "Current browser surfaces do not consume this server-owned schema for every field.",
+          "gate": "browser_controls",
+          "state": "partial"
+        },
+        {
+          "evidence": "Discovery/readback/submission do not yet share this schema end to end.",
+          "gate": "agent_parity",
+          "state": "missing"
+        },
+        {
+          "evidence": "Requested and effective values do not yet round-trip through every Project lifecycle path.",
+          "gate": "persistence",
+          "state": "partial"
+        },
+        {
+          "evidence": "Native route consumes raw objects or sequences while the Project schema uses immutable revisions. No bound revision-resolution/materialization adapter exists.",
+          "gate": "execution",
+          "state": "partial"
+        },
+        {
+          "evidence": "Dedicated terminal or domain-operation receipt closure is not complete.",
+          "gate": "receipt",
+          "state": "missing"
+        },
+        {
+          "evidence": "Add to Project and exact historical reopen are incomplete.",
+          "gate": "global_result_experience",
+          "state": "partial"
+        },
+        {
+          "evidence": "Deterministic domain operation; scheduled reuse does not apply.",
+          "gate": "workflow_reuse",
+          "state": "not_applicable"
+        },
+        {
+          "evidence": "No authorized Development acceptance has been run for this frozen contract.",
+          "gate": "live_agreement",
+          "state": "missing"
+        }
+      ],
+      "plannable": false,
+      "preparation_owner": null,
+      "readiness_authority": "bms.ngs-molbio.capability-readiness.v1",
+      "receipt_contracts": [
+        "bms.molbio.molecular-operation.v1"
+      ],
+      "result_contracts": [
+        "bms.molbio.pcr-experiment-revision.v1"
+      ],
+      "scientific_role": "pcr_validation",
+      "server_owned_parameter_keys": [
+        "idempotency_key",
+        "new_name",
+        "persist_experiment",
+        "save"
+      ],
+      "submission_owner": "routers.molbio_ops.pcr",
+      "unclassified_parameter_keys": [
+        "is_circular",
+        "name",
+        "primer_fwd",
+        "primer_rev",
+        "provenance",
+        "review_state",
+        "sequence",
+        "sequence_id",
+        "sequence_type"
+      ],
+      "unsupported_parameter_keys": [],
+      "viewer_destination": "/molbio?operation_id={operation_id}"
+    },
+    {
+      "accepted_source_roles": [
+        "molecular_revision:template"
+      ],
+      "allowed_domain_modes": [
+        "pcr_validation"
+      ],
+      "canonical_source_destination": "/molbio",
+      "capability_id": "molbio.primer.design_qc",
+      "capability_kind": "domain_operation",
+      "capability_version": "1",
+      "classified_parameter_keys": [
+        "flank_search_span",
+        "gc_clamp_min",
+        "gc_max_percent",
+        "gc_min_percent",
+        "max_pairs",
+        "max_poly_x",
+        "overhang_forward",
+        "overhang_reverse",
+        "primer_max_length",
+        "primer_min_length",
+        "product_max_length",
+        "product_min_length",
+        "target_end",
+        "target_start",
+        "template_revision_id",
+        "tm_max_delta_c",
+        "tm_settings",
+        "tm_target_c"
+      ],
+      "entrypoint_owner": null,
+      "exposure_state": "internal",
+      "inventory_sha256": "a3149d73e8a8f25e5f9d144af0239bdedbb740f5bcba5236bc2bbeba83c6a93d",
+      "label": "Primer Design and QC",
+      "launch_mode": "domain_operation",
+      "materializer_owner": null,
+      "native_mapping": {
+        "id": "molbio.primer.design_qc",
+        "kind": "domain_operation",
+        "native_request_compatibility": "requires_unimplemented_revision_materializer",
+        "source": "POST /api/molbio/primer-design"
+      },
+      "observed_parameter_keys": [
+        "flank_search_span",
+        "gc_clamp_min",
+        "gc_max_percent",
+        "gc_min_percent",
+        "is_circular",
+        "max_pairs",
+        "max_poly_x",
+        "name",
+        "overhang_forward",
+        "overhang_reverse",
+        "primer_max_length",
+        "primer_min_length",
+        "product_max_length",
+        "product_min_length",
+        "sequence",
+        "sequence_id",
+        "sequence_type",
+        "target_end",
+        "target_start",
+        "template_revision_id",
+        "tm_max_delta_c",
+        "tm_settings",
+        "tm_target_c"
+      ],
+      "parameter_schema_id": "bms.operation-parameters.molbio.primer.design_qc.v1",
+      "parameter_schema_sha256": "63209d51387067d3417949fb2517e0f6269c979aa5185246d435c274bb16726e",
+      "parity_ledger": [
+        {
+          "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
+          "gate": "installed_inventory",
+          "state": "pass"
+        },
+        {
+          "evidence": "Closed schema bytes and digest are registered. Unknown fields reject.",
+          "gate": "global_schema",
+          "state": "pass"
+        },
+        {
+          "evidence": "Current browser surfaces do not consume this server-owned schema for every field.",
+          "gate": "browser_controls",
+          "state": "partial"
+        },
+        {
+          "evidence": "Discovery/readback/submission do not yet share this schema end to end.",
+          "gate": "agent_parity",
+          "state": "missing"
+        },
+        {
+          "evidence": "Requested and effective values do not yet round-trip through every Project lifecycle path.",
+          "gate": "persistence",
+          "state": "partial"
+        },
+        {
+          "evidence": "Native route consumes raw objects or sequences while the Project schema uses immutable revisions. No bound revision-resolution/materialization adapter exists.",
+          "gate": "execution",
+          "state": "partial"
+        },
+        {
+          "evidence": "Dedicated terminal or domain-operation receipt closure is not complete.",
+          "gate": "receipt",
+          "state": "missing"
+        },
+        {
+          "evidence": "Add to Project and exact historical reopen are incomplete.",
+          "gate": "global_result_experience",
+          "state": "partial"
+        },
+        {
+          "evidence": "Deterministic domain operation; scheduled reuse does not apply.",
+          "gate": "workflow_reuse",
+          "state": "not_applicable"
+        },
+        {
+          "evidence": "No authorized Development acceptance has been run for this frozen contract.",
+          "gate": "live_agreement",
+          "state": "missing"
+        }
+      ],
+      "plannable": false,
+      "preparation_owner": null,
+      "readiness_authority": "bms.ngs-molbio.capability-readiness.v1",
+      "receipt_contracts": [
+        "bms.molbio.molecular-operation.v1"
+      ],
+      "result_contracts": [
+        "bms.molbio.primer-revision.v1"
+      ],
+      "scientific_role": "pcr_validation",
+      "server_owned_parameter_keys": [],
+      "submission_owner": "routers.molbio_ops.design_primers",
+      "unclassified_parameter_keys": [
+        "is_circular",
+        "name",
+        "sequence",
+        "sequence_id",
+        "sequence_type"
+      ],
+      "unsupported_parameter_keys": [],
+      "viewer_destination": "/molbio?operation_id={operation_id}"
+    },
+    {
+      "accepted_source_roles": [
+        "molecular_revision"
+      ],
+      "allowed_domain_modes": [
+        "analysis"
+      ],
+      "canonical_source_destination": "/molbio",
+      "capability_id": "molbio.restriction_digest",
+      "capability_kind": "domain_operation",
+      "capability_version": "1",
+      "classified_parameter_keys": [
+        "enzymes",
+        "source_revision_id"
+      ],
+      "entrypoint_owner": null,
+      "exposure_state": "internal",
+      "inventory_sha256": "26d508181cc138a0da6cf013d1af863ac074c54239636ec7b2f68abe2bd47aa3",
+      "label": "Restriction Digest",
+      "launch_mode": "domain_operation",
+      "materializer_owner": null,
+      "native_mapping": {
+        "id": "molbio.restriction_digest",
+        "kind": "domain_operation",
+        "native_request_compatibility": "requires_unimplemented_revision_materializer",
+        "source": "POST /api/molbio/digest"
+      },
+      "observed_parameter_keys": [
+        "enzymes",
+        "is_circular",
+        "name",
+        "new_name",
+        "save",
+        "sequence",
+        "sequence_id",
+        "sequence_type",
+        "source_revision_id"
+      ],
+      "parameter_schema_id": "bms.operation-parameters.molbio.restriction_digest.v1",
+      "parameter_schema_sha256": "e797b571d5008e72f0f0833a8ba617a0876b48ef571e7ff636c3496e8217ba29",
+      "parity_ledger": [
+        {
+          "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
+          "gate": "installed_inventory",
+          "state": "pass"
+        },
+        {
+          "evidence": "Closed schema bytes and digest are registered. Unknown fields reject.",
+          "gate": "global_schema",
+          "state": "pass"
+        },
+        {
+          "evidence": "Current browser surfaces do not consume this server-owned schema for every field.",
+          "gate": "browser_controls",
+          "state": "partial"
+        },
+        {
+          "evidence": "Discovery/readback/submission do not yet share this schema end to end.",
+          "gate": "agent_parity",
+          "state": "missing"
+        },
+        {
+          "evidence": "Requested and effective values do not yet round-trip through every Project lifecycle path.",
+          "gate": "persistence",
+          "state": "partial"
+        },
+        {
+          "evidence": "Native route consumes raw objects or sequences while the Project schema uses immutable revisions. No bound revision-resolution/materialization adapter exists.",
+          "gate": "execution",
+          "state": "partial"
+        },
+        {
+          "evidence": "Dedicated terminal or domain-operation receipt closure is not complete.",
+          "gate": "receipt",
+          "state": "missing"
+        },
+        {
+          "evidence": "Add to Project and exact historical reopen are incomplete.",
+          "gate": "global_result_experience",
+          "state": "partial"
+        },
+        {
+          "evidence": "Deterministic domain operation; scheduled reuse does not apply.",
+          "gate": "workflow_reuse",
+          "state": "not_applicable"
+        },
+        {
+          "evidence": "No authorized Development acceptance has been run for this frozen contract.",
+          "gate": "live_agreement",
+          "state": "missing"
+        }
+      ],
+      "plannable": false,
+      "preparation_owner": null,
+      "readiness_authority": "bms.ngs-molbio.capability-readiness.v1",
+      "receipt_contracts": [
+        "bms.molbio.molecular-operation.v1"
+      ],
+      "result_contracts": [
+        "bms.molbio.molecular-operation.v1"
+      ],
+      "scientific_role": "analysis",
+      "server_owned_parameter_keys": [
+        "new_name",
+        "save"
+      ],
+      "submission_owner": "routers.molbio_ops.digest",
+      "unclassified_parameter_keys": [
+        "is_circular",
+        "name",
+        "sequence",
+        "sequence_id",
+        "sequence_type"
+      ],
+      "unsupported_parameter_keys": [],
+      "viewer_destination": "/molbio?operation_id={operation_id}"
+    },
+    {
+      "accepted_source_roles": [
+        "molecular_revision:reference",
+        "molecular_revision:query"
+      ],
+      "allowed_domain_modes": [
+        "alignment"
+      ],
+      "canonical_source_destination": "/molbio",
+      "capability_id": "molbio.sequence.alignment",
+      "capability_kind": "domain_operation",
+      "capability_version": "1",
+      "classified_parameter_keys": [
+        "query_revision_id",
+        "reference_revision_id",
+        "settings"
+      ],
+      "entrypoint_owner": null,
+      "exposure_state": "internal",
+      "inventory_sha256": "985f37024f97f78bddbe314c3cf4394277a322516a3de67ae4cef9088ac2802b",
+      "label": "Sequence Alignment",
+      "launch_mode": "domain_operation",
+      "materializer_owner": null,
+      "native_mapping": {
+        "id": "molbio.sequence.alignment",
+        "kind": "domain_operation",
+        "native_request_compatibility": "requires_unimplemented_revision_materializer",
+        "source": "POST /api/molbio/alignment"
+      },
+      "observed_parameter_keys": [
+        "query_name",
+        "query_revision_id",
+        "query_sequence",
+        "reference_name",
+        "reference_revision_id",
+        "reference_sequence",
+        "settings"
+      ],
+      "parameter_schema_id": "bms.operation-parameters.molbio.sequence.alignment.v1",
+      "parameter_schema_sha256": "e6788fc379087bb8f8540df5b0f11f859d85b9af3307deb1f6d4533e335e83a3",
+      "parity_ledger": [
+        {
+          "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
+          "gate": "installed_inventory",
+          "state": "pass"
+        },
+        {
+          "evidence": "Closed schema bytes and digest are registered. Unknown fields reject.",
+          "gate": "global_schema",
+          "state": "pass"
+        },
+        {
+          "evidence": "Current browser surfaces do not consume this server-owned schema for every field.",
+          "gate": "browser_controls",
+          "state": "partial"
+        },
+        {
+          "evidence": "Discovery/readback/submission do not yet share this schema end to end.",
+          "gate": "agent_parity",
+          "state": "missing"
+        },
+        {
+          "evidence": "Requested and effective values do not yet round-trip through every Project lifecycle path.",
+          "gate": "persistence",
+          "state": "partial"
+        },
+        {
+          "evidence": "Native route consumes raw objects or sequences while the Project schema uses immutable revisions. No bound revision-resolution/materialization adapter exists.",
+          "gate": "execution",
+          "state": "partial"
+        },
+        {
+          "evidence": "Dedicated terminal or domain-operation receipt closure is not complete.",
+          "gate": "receipt",
+          "state": "missing"
+        },
+        {
+          "evidence": "Add to Project and exact historical reopen are incomplete.",
+          "gate": "global_result_experience",
+          "state": "partial"
+        },
+        {
+          "evidence": "Deterministic domain operation; scheduled reuse does not apply.",
+          "gate": "workflow_reuse",
+          "state": "not_applicable"
+        },
+        {
+          "evidence": "No authorized Development acceptance has been run for this frozen contract.",
+          "gate": "live_agreement",
+          "state": "missing"
+        }
+      ],
+      "plannable": false,
+      "preparation_owner": null,
+      "readiness_authority": "bms.ngs-molbio.capability-readiness.v1",
+      "receipt_contracts": [
+        "bms.molbio.molecular-operation.v1"
+      ],
+      "result_contracts": [
+        "bounded_alignment_result"
+      ],
+      "scientific_role": "alignment",
+      "server_owned_parameter_keys": [],
+      "submission_owner": "routers.molbio_ops.align_molecular_sequences",
+      "unclassified_parameter_keys": [
+        "query_name",
+        "query_sequence",
+        "reference_name",
+        "reference_sequence"
+      ],
+      "unsupported_parameter_keys": [],
+      "viewer_destination": "/molbio?operation_id={operation_id}"
+    },
+    {
+      "accepted_source_roles": [
+        "molecular_revision"
+      ],
+      "allowed_domain_modes": [
+        "analysis"
+      ],
+      "canonical_source_destination": "/molbio",
+      "capability_id": "molbio.sequence.annotation",
+      "capability_kind": "domain_operation",
+      "capability_version": "1",
+      "classified_parameter_keys": [
+        "change_summary",
+        "expected_head_generation",
+        "features",
+        "sequence_id",
+        "source_revision_id"
+      ],
+      "entrypoint_owner": null,
+      "exposure_state": "internal",
+      "inventory_sha256": "f2c69b0c5599b87d5359f5b15c361711072f0406d7f5bebac5f1860fa471bac6",
+      "label": "Sequence Annotation",
+      "launch_mode": "domain_operation",
+      "materializer_owner": null,
+      "native_mapping": {
+        "id": "molbio.sequence.annotation",
+        "kind": "domain_operation",
+        "native_request_compatibility": "requires_unimplemented_revision_materializer",
+        "source": "POST /api/nucleotide-sequences/{sequence_id}/features"
+      },
+      "observed_parameter_keys": [
+        "change_summary",
+        "color",
+        "description",
+        "end",
+        "expected_head_generation",
+        "features",
+        "id",
+        "name",
+        "notes",
+        "provenance",
+        "qualifiers",
+        "segments",
+        "sequence_id",
+        "source_revision_id",
+        "start",
+        "strand",
+        "type"
+      ],
+      "parameter_schema_id": "bms.operation-parameters.molbio.sequence.annotation.v1",
+      "parameter_schema_sha256": "b6552a306fc955dd8416450d9f713259a65589e2040ad3f4a07dc2ae06bdb2eb",
+      "parity_ledger": [
+        {
+          "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
+          "gate": "installed_inventory",
+          "state": "pass"
+        },
+        {
+          "evidence": "Closed schema bytes and digest are registered. Unknown fields reject.",
+          "gate": "global_schema",
+          "state": "pass"
+        },
+        {
+          "evidence": "Current browser surfaces do not consume this server-owned schema for every field.",
+          "gate": "browser_controls",
+          "state": "partial"
+        },
+        {
+          "evidence": "Discovery/readback/submission do not yet share this schema end to end.",
+          "gate": "agent_parity",
+          "state": "missing"
+        },
+        {
+          "evidence": "Requested and effective values do not yet round-trip through every Project lifecycle path.",
+          "gate": "persistence",
+          "state": "partial"
+        },
+        {
+          "evidence": "Native route consumes raw objects or sequences while the Project schema uses immutable revisions. No bound revision-resolution/materialization adapter exists.",
+          "gate": "execution",
+          "state": "partial"
+        },
+        {
+          "evidence": "Dedicated terminal or domain-operation receipt closure is not complete.",
+          "gate": "receipt",
+          "state": "missing"
+        },
+        {
+          "evidence": "Add to Project and exact historical reopen are incomplete.",
+          "gate": "global_result_experience",
+          "state": "partial"
+        },
+        {
+          "evidence": "Deterministic domain operation; scheduled reuse does not apply.",
+          "gate": "workflow_reuse",
+          "state": "not_applicable"
+        },
+        {
+          "evidence": "No authorized Development acceptance has been run for this frozen contract.",
+          "gate": "live_agreement",
+          "state": "missing"
+        }
+      ],
+      "plannable": false,
+      "preparation_owner": null,
+      "readiness_authority": "bms.ngs-molbio.capability-readiness.v1",
+      "receipt_contracts": [
+        "bms.molbio.molecular-operation.v1"
+      ],
+      "result_contracts": [
+        "bms.molbio.molecular-revision.v1"
+      ],
+      "scientific_role": "analysis",
+      "server_owned_parameter_keys": [],
+      "submission_owner": "routers.nucleotide_sequences.update_sequence",
+      "unclassified_parameter_keys": [
+        "color",
+        "description",
+        "end",
+        "id",
+        "name",
+        "notes",
+        "provenance",
+        "qualifiers",
+        "segments",
+        "start",
+        "strand",
+        "type"
+      ],
+      "unsupported_parameter_keys": [],
+      "viewer_destination": "/molbio?operation_id={operation_id}"
+    },
+    {
+      "accepted_source_roles": [
+        "molecular_revision"
+      ],
+      "allowed_domain_modes": [
+        "molecular_design"
+      ],
+      "canonical_source_destination": "/molbio",
+      "capability_id": "molbio.sequence.edit_revision",
+      "capability_kind": "domain_operation",
+      "capability_version": "1",
+      "classified_parameter_keys": [
+        "change_summary",
+        "description",
+        "expected_head_generation",
+        "is_circular",
+        "name",
+        "sequence",
+        "sequence_id",
+        "sequence_type",
+        "source_revision_id"
+      ],
+      "entrypoint_owner": null,
+      "exposure_state": "internal",
+      "inventory_sha256": "f942e54fb26152d47e7e7b2f65cbaf2db2f385201e92f427cc0dbfd431265ca1",
+      "label": "Sequence Edit Revision",
+      "launch_mode": "domain_operation",
+      "materializer_owner": null,
+      "native_mapping": {
+        "id": "molbio.sequence.edit_revision",
+        "kind": "domain_operation",
+        "native_request_compatibility": "requires_unimplemented_revision_materializer",
+        "source": "PUT /api/nucleotide-sequences/{sequence_id}"
+      },
+      "observed_parameter_keys": [
+        "accession",
+        "analysis_tracks",
+        "change_summary",
+        "description",
+        "expected_head_generation",
+        "features",
+        "is_circular",
+        "molecule_orientation",
+        "molecule_strandedness",
+        "name",
+        "organism",
+        "primers",
+        "sequence",
+        "sequence_id",
+        "sequence_type",
+        "source_file",
+        "source_revision_id"
+      ],
+      "parameter_schema_id": "bms.operation-parameters.molbio.sequence.edit_revision.v1",
+      "parameter_schema_sha256": "a1129a57139b649bf936451e70e4e0da674f63148fef9de9ce5d81e24e933548",
+      "parity_ledger": [
+        {
+          "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
+          "gate": "installed_inventory",
+          "state": "pass"
+        },
+        {
+          "evidence": "Closed schema bytes and digest are registered. Unknown fields reject.",
+          "gate": "global_schema",
+          "state": "pass"
+        },
+        {
+          "evidence": "Current browser surfaces do not consume this server-owned schema for every field.",
+          "gate": "browser_controls",
+          "state": "partial"
+        },
+        {
+          "evidence": "Discovery/readback/submission do not yet share this schema end to end.",
+          "gate": "agent_parity",
+          "state": "missing"
+        },
+        {
+          "evidence": "Requested and effective values do not yet round-trip through every Project lifecycle path.",
+          "gate": "persistence",
+          "state": "partial"
+        },
+        {
+          "evidence": "Native route consumes raw objects or sequences while the Project schema uses immutable revisions. No bound revision-resolution/materialization adapter exists.",
+          "gate": "execution",
+          "state": "partial"
+        },
+        {
+          "evidence": "Dedicated terminal or domain-operation receipt closure is not complete.",
+          "gate": "receipt",
+          "state": "missing"
+        },
+        {
+          "evidence": "Add to Project and exact historical reopen are incomplete.",
+          "gate": "global_result_experience",
+          "state": "partial"
+        },
+        {
+          "evidence": "Deterministic domain operation; scheduled reuse does not apply.",
+          "gate": "workflow_reuse",
+          "state": "not_applicable"
+        },
+        {
+          "evidence": "No authorized Development acceptance has been run for this frozen contract.",
+          "gate": "live_agreement",
+          "state": "missing"
+        }
+      ],
+      "plannable": false,
+      "preparation_owner": null,
+      "readiness_authority": "bms.ngs-molbio.capability-readiness.v1",
+      "receipt_contracts": [
+        "bms.molbio.molecular-operation.v1"
+      ],
+      "result_contracts": [
+        "bms.molbio.molecular-revision.v1"
+      ],
+      "scientific_role": "molecular_design",
+      "server_owned_parameter_keys": [
+        "source_file"
+      ],
+      "submission_owner": "routers.nucleotide_sequences.update_sequence",
+      "unclassified_parameter_keys": [
+        "accession",
+        "analysis_tracks",
+        "features",
+        "molecule_orientation",
+        "molecule_strandedness",
+        "organism",
+        "primers"
+      ],
+      "unsupported_parameter_keys": [],
+      "viewer_destination": "/molbio?operation_id={operation_id}"
+    },
+    {
+      "accepted_source_roles": [
+        "import_source"
+      ],
+      "allowed_domain_modes": [
+        "molecular_design"
+      ],
+      "canonical_source_destination": "/molbio",
+      "capability_id": "molbio.sequence.import_revision",
+      "capability_kind": "domain_operation",
+      "capability_version": "1",
+      "classified_parameter_keys": [
+        "change_summary",
+        "raw_rows",
+        "source_format",
+        "source_text",
+        "topology_default",
+        "topology_overrides"
+      ],
+      "entrypoint_owner": null,
+      "exposure_state": "internal",
+      "inventory_sha256": "1a08c1a56cd1c3323798ef6ea48ad742988cba0c63927132070c45bb026684c4",
+      "label": "Sequence Import Revision",
+      "launch_mode": "domain_operation",
+      "materializer_owner": null,
+      "native_mapping": {
+        "id": "molbio.sequence.import_revision",
+        "kind": "domain_operation",
+        "native_request_compatibility": "requires_unimplemented_revision_materializer",
+        "source": "POST /api/molbio/sequences/import/commit"
+      },
+      "observed_parameter_keys": [
+        "change_summary",
+        "idempotency_key",
+        "raw_rows",
+        "source_format",
+        "source_text",
+        "topology_default",
+        "topology_overrides"
+      ],
+      "parameter_schema_id": "bms.operation-parameters.molbio.sequence.import_revision.v1",
+      "parameter_schema_sha256": "0fe1b045416666e2355dd098049618e24b20c9c6bc9f31a27e36fe8010ce0e64",
+      "parity_ledger": [
+        {
+          "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
+          "gate": "installed_inventory",
+          "state": "pass"
+        },
+        {
+          "evidence": "Closed schema bytes and digest are registered. Unknown fields reject.",
+          "gate": "global_schema",
+          "state": "pass"
+        },
+        {
+          "evidence": "Current browser surfaces do not consume this server-owned schema for every field.",
+          "gate": "browser_controls",
+          "state": "partial"
+        },
+        {
+          "evidence": "Discovery/readback/submission do not yet share this schema end to end.",
+          "gate": "agent_parity",
+          "state": "missing"
+        },
+        {
+          "evidence": "Requested and effective values do not yet round-trip through every Project lifecycle path.",
+          "gate": "persistence",
+          "state": "partial"
+        },
+        {
+          "evidence": "Native route consumes raw objects or sequences while the Project schema uses immutable revisions. No bound revision-resolution/materialization adapter exists.",
+          "gate": "execution",
+          "state": "partial"
+        },
+        {
+          "evidence": "Dedicated terminal or domain-operation receipt closure is not complete.",
+          "gate": "receipt",
+          "state": "missing"
+        },
+        {
+          "evidence": "Add to Project and exact historical reopen are incomplete.",
+          "gate": "global_result_experience",
+          "state": "partial"
+        },
+        {
+          "evidence": "Deterministic domain operation; scheduled reuse does not apply.",
+          "gate": "workflow_reuse",
+          "state": "not_applicable"
+        },
+        {
+          "evidence": "No authorized Development acceptance has been run for this frozen contract.",
+          "gate": "live_agreement",
+          "state": "missing"
+        }
+      ],
+      "plannable": false,
+      "preparation_owner": null,
+      "readiness_authority": "bms.ngs-molbio.capability-readiness.v1",
+      "receipt_contracts": [
+        "bms.molbio.molecular-operation.v1"
+      ],
+      "result_contracts": [
+        "bms.molbio.sequence-import-commit.v1"
+      ],
+      "scientific_role": "molecular_design",
+      "server_owned_parameter_keys": [
+        "idempotency_key"
+      ],
+      "submission_owner": "services.molbio_sequence_import.commit_sequence_import",
+      "unclassified_parameter_keys": [],
+      "unsupported_parameter_keys": [],
+      "viewer_destination": "/molbio?operation_id={operation_id}"
+    },
+    {
+      "accepted_source_roles": [
+        "molecular_revision:rna"
+      ],
+      "allowed_domain_modes": [
+        "analysis"
+      ],
+      "canonical_source_destination": "/molbio",
+      "capability_id": "molbio.sequence.rna_structure_analysis",
+      "capability_kind": "domain_operation",
+      "capability_version": "1",
+      "classified_parameter_keys": [
+        "include_partition",
+        "settings",
+        "source_revision_id"
+      ],
+      "entrypoint_owner": null,
+      "exposure_state": "internal",
+      "inventory_sha256": "80002cd44d2849039d6c0c97c4e8b1383ad270e8edcd8c99f4f967eb48bce567",
+      "label": "RNA Structure Analysis",
+      "launch_mode": "domain_operation",
+      "materializer_owner": null,
+      "native_mapping": {
+        "id": "molbio.sequence.rna_structure_analysis",
+        "kind": "domain_operation",
+        "native_request_compatibility": "requires_unimplemented_revision_materializer",
+        "source": "POST /api/molbio/rna-structure/fold"
+      },
+      "observed_parameter_keys": [
+        "include_partition",
+        "is_circular",
+        "name",
+        "sequence",
+        "sequence_id",
+        "settings",
+        "source_revision_id"
+      ],
+      "parameter_schema_id": "bms.operation-parameters.molbio.sequence.rna_structure_analysis.v1",
+      "parameter_schema_sha256": "7dff9d94b0266d0d0532377aee52b4c78c4e0464616e44a71c8b393f2d7c7dd4",
+      "parity_ledger": [
+        {
+          "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
+          "gate": "installed_inventory",
+          "state": "pass"
+        },
+        {
+          "evidence": "Closed schema bytes and digest are registered. Unknown fields reject.",
+          "gate": "global_schema",
+          "state": "pass"
+        },
+        {
+          "evidence": "Current browser surfaces do not consume this server-owned schema for every field.",
+          "gate": "browser_controls",
+          "state": "partial"
+        },
+        {
+          "evidence": "Discovery/readback/submission do not yet share this schema end to end.",
+          "gate": "agent_parity",
+          "state": "missing"
+        },
+        {
+          "evidence": "Requested and effective values do not yet round-trip through every Project lifecycle path.",
+          "gate": "persistence",
+          "state": "partial"
+        },
+        {
+          "evidence": "Native route consumes raw objects or sequences while the Project schema uses immutable revisions. No bound revision-resolution/materialization adapter exists.",
+          "gate": "execution",
+          "state": "partial"
+        },
+        {
+          "evidence": "Dedicated terminal or domain-operation receipt closure is not complete.",
+          "gate": "receipt",
+          "state": "missing"
+        },
+        {
+          "evidence": "Add to Project and exact historical reopen are incomplete.",
+          "gate": "global_result_experience",
+          "state": "partial"
+        },
+        {
+          "evidence": "Deterministic domain operation; scheduled reuse does not apply.",
+          "gate": "workflow_reuse",
+          "state": "not_applicable"
+        },
+        {
+          "evidence": "No authorized Development acceptance has been run for this frozen contract.",
+          "gate": "live_agreement",
+          "state": "missing"
+        }
+      ],
+      "plannable": false,
+      "preparation_owner": null,
+      "readiness_authority": "bms.ngs-molbio.capability-readiness.v1",
+      "receipt_contracts": [
+        "bms.molbio.molecular-operation.v1"
+      ],
+      "result_contracts": [
+        "rna_structure_result"
+      ],
+      "scientific_role": "analysis",
+      "server_owned_parameter_keys": [],
+      "submission_owner": "routers.rna_structure.fold_rna",
+      "unclassified_parameter_keys": [
+        "is_circular",
+        "name",
+        "sequence",
+        "sequence_id"
+      ],
+      "unsupported_parameter_keys": [],
+      "viewer_destination": "/molbio?operation_id={operation_id}"
+    },
+    {
+      "accepted_source_roles": [
+        "ngs_pod5",
+        "ngs_reference",
+        "ngs_duplex_pairs",
+        "ngs_sample_sheet"
+      ],
+      "allowed_domain_modes": [
+        "sequencing"
+      ],
+      "canonical_source_destination": "/ngs",
+      "capability_id": "ngs.ont.basecall_dna",
+      "capability_kind": "scheduled_workflow",
+      "capability_version": "1",
+      "classified_parameter_keys": [
+        "barcode_kit",
+        "dorado_basecall_mode",
+        "dorado_batch_size",
+        "dorado_quality_mode",
+        "min_qscore",
+        "modified_bases",
+        "trim_adapters"
+      ],
+      "entrypoint_owner": "services.nextflow.resolve_nextflow_entrypoint",
+      "exposure_state": "internal",
+      "inventory_sha256": "182630212375ca9640afe7c0666d060e209b4302ec004943dfd59f43d21e005f",
+      "label": "ONT DNA Basecalling",
+      "launch_mode": "typed_launcher_handoff",
+      "materializer_owner": "services.nextflow.build_nextflow_command",
+      "native_mapping": {
+        "id": "ont_basecall_dna",
+        "kind": "canonical_workflow",
+        "native_request_compatibility": "partial_native_mapping",
+        "source": "workflows/ngs/ont_basecall_dna.nf"
+      },
+      "observed_parameter_keys": [
+        "barcode_kit",
+        "dorado_basecall_mode",
+        "dorado_batch_size",
+        "dorado_device",
+        "dorado_model",
+        "dorado_quality_mode",
+        "emit_summary",
+        "min_qscore",
+        "modified_bases",
+        "pod5_dir",
+        "reference_fasta",
+        "trim_adapters"
+      ],
+      "parameter_schema_id": "bms.workflow-parameters.ngs.ont.basecall_dna.v1",
+      "parameter_schema_sha256": "f54d88241fff3eac22312d7d8086702a78f0cc7173b3caa5212bc1bde5816fc5",
+      "parity_ledger": [
+        {
+          "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
+          "gate": "installed_inventory",
+          "state": "pass"
+        },
+        {
+          "evidence": "Closed schema bytes and digest are registered. Unknown fields reject.",
+          "gate": "global_schema",
+          "state": "pass"
+        },
+        {
+          "evidence": "Current browser surfaces do not consume this server-owned schema for every field.",
+          "gate": "browser_controls",
+          "state": "partial"
+        },
+        {
+          "evidence": "Discovery/readback/submission do not yet share this schema end to end.",
+          "gate": "agent_parity",
+          "state": "missing"
+        },
+        {
+          "evidence": "Requested and effective values do not yet round-trip through every Project lifecycle path.",
+          "gate": "persistence",
+          "state": "partial"
+        },
+        {
+          "evidence": "Canonical ONT submission and Nextflow entrypoint exist. Catalog/compiler/UI keys still differ, and Project preparation does not yet materialize this exact schema without fallback.",
+          "gate": "execution",
+          "state": "partial"
+        },
+        {
+          "evidence": "Dedicated terminal or domain-operation receipt closure is not complete.",
+          "gate": "receipt",
+          "state": "missing"
+        },
+        {
+          "evidence": "Add to Project and exact historical reopen are incomplete.",
+          "gate": "global_result_experience",
+          "state": "partial"
+        },
+        {
+          "evidence": "Canonical workflow exists; immutable preparation/materialization reuse remains incomplete.",
+          "gate": "workflow_reuse",
+          "state": "missing"
+        },
+        {
+          "evidence": "No authorized Development acceptance has been run for this frozen contract.",
+          "gate": "live_agreement",
+          "state": "missing"
+        }
+      ],
+      "plannable": false,
+      "preparation_owner": "experiment_services.prepare_workflow",
+      "readiness_authority": "bms.ngs-molbio.capability-readiness.v1",
+      "receipt_contracts": [
+        "bms.core.ngs-job-launch.v1"
+      ],
+      "result_contracts": [
+        "sequence_qc.manifest.v1"
+      ],
+      "scientific_role": "sequencing",
+      "server_owned_parameter_keys": [
+        "dorado_device",
+        "dorado_model",
+        "pod5_dir",
+        "reference_fasta"
+      ],
+      "submission_owner": "routers.ont_runs.ont_submit_ngs_workflow",
+      "unclassified_parameter_keys": [],
+      "unsupported_parameter_keys": [
+        "emit_summary"
+      ],
+      "viewer_destination": "/ngs?job_id={job_id}"
+    },
+    {
+      "accepted_source_roles": [
+        "ngs_pod5",
+        "ngs_reference"
+      ],
+      "allowed_domain_modes": [
+        "sequencing"
+      ],
+      "canonical_source_destination": "/ngs",
+      "capability_id": "ngs.ont.basecall_rna",
+      "capability_kind": "scheduled_workflow",
+      "capability_version": "1",
+      "classified_parameter_keys": [
+        "dorado_batch_size",
+        "dorado_quality_mode",
+        "min_qscore"
+      ],
+      "entrypoint_owner": "services.nextflow.resolve_nextflow_entrypoint",
+      "exposure_state": "internal",
+      "inventory_sha256": "2a18794207df8b4238d3d7053142d382c77d8dd39cf2ddcb5aaddcf3e8552e36",
+      "label": "ONT RNA Basecalling",
+      "launch_mode": "typed_launcher_handoff",
+      "materializer_owner": "services.nextflow.build_nextflow_command",
+      "native_mapping": {
+        "id": "ont_basecall_rna",
+        "kind": "canonical_workflow",
+        "native_request_compatibility": "partial_native_mapping",
+        "source": "workflows/ngs/ont_basecall_rna.nf"
+      },
+      "observed_parameter_keys": [
+        "dorado_batch_size",
+        "dorado_device",
+        "dorado_model",
+        "dorado_quality_mode",
+        "emit_summary",
+        "min_qscore",
+        "pod5_dir",
+        "reference_fasta",
+        "trim_adapters"
+      ],
+      "parameter_schema_id": "bms.workflow-parameters.ngs.ont.basecall_rna.v1",
+      "parameter_schema_sha256": "df51eab5c88cdebdbac7e3d6255f70764cbc5fd8bb5e2a9210711350ebb1016f",
+      "parity_ledger": [
+        {
+          "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
+          "gate": "installed_inventory",
+          "state": "pass"
+        },
+        {
+          "evidence": "Closed schema bytes and digest are registered. Unknown fields reject.",
+          "gate": "global_schema",
+          "state": "pass"
+        },
+        {
+          "evidence": "Current browser surfaces do not consume this server-owned schema for every field.",
+          "gate": "browser_controls",
+          "state": "partial"
+        },
+        {
+          "evidence": "Discovery/readback/submission do not yet share this schema end to end.",
+          "gate": "agent_parity",
+          "state": "missing"
+        },
+        {
+          "evidence": "Requested and effective values do not yet round-trip through every Project lifecycle path.",
+          "gate": "persistence",
+          "state": "partial"
+        },
+        {
+          "evidence": "Canonical ONT submission and Nextflow entrypoint exist. Catalog/compiler/UI keys still differ, and Project preparation does not yet materialize this exact schema without fallback.",
+          "gate": "execution",
+          "state": "partial"
+        },
+        {
+          "evidence": "Dedicated terminal or domain-operation receipt closure is not complete.",
+          "gate": "receipt",
+          "state": "missing"
+        },
+        {
+          "evidence": "Add to Project and exact historical reopen are incomplete.",
+          "gate": "global_result_experience",
+          "state": "partial"
+        },
+        {
+          "evidence": "Canonical workflow exists; immutable preparation/materialization reuse remains incomplete.",
+          "gate": "workflow_reuse",
+          "state": "missing"
+        },
+        {
+          "evidence": "No authorized Development acceptance has been run for this frozen contract.",
+          "gate": "live_agreement",
+          "state": "missing"
+        }
+      ],
+      "plannable": false,
+      "preparation_owner": "experiment_services.prepare_workflow",
+      "readiness_authority": "bms.ngs-molbio.capability-readiness.v1",
+      "receipt_contracts": [
+        "bms.core.ngs-job-launch.v1"
+      ],
+      "result_contracts": [
+        "sequence_qc.manifest.v1"
+      ],
+      "scientific_role": "sequencing",
+      "server_owned_parameter_keys": [
+        "dorado_device",
+        "dorado_model",
+        "pod5_dir",
+        "reference_fasta"
+      ],
+      "submission_owner": "routers.ont_runs.ont_submit_ngs_workflow",
+      "unclassified_parameter_keys": [
+        "trim_adapters"
+      ],
+      "unsupported_parameter_keys": [
+        "emit_summary"
+      ],
+      "viewer_destination": "/ngs?job_id={job_id}"
+    },
+    {
+      "accepted_source_roles": [
+        "ngs_reads",
+        "molecular_expected_construct"
+      ],
+      "allowed_domain_modes": [
+        "assembly_validation"
+      ],
+      "canonical_source_destination": "/ngs",
+      "capability_id": "ngs.ont.clone_validation",
+      "capability_kind": "scheduled_workflow",
+      "capability_version": "1",
+      "classified_parameter_keys": [
+        "dorado_basecall_mode",
+        "dorado_batch_size",
+        "dorado_quality_mode",
+        "enable_rotating_reference_frames",
+        "min_qscore",
+        "rotation_scan_step_bp",
+        "single_ref_split_max_query_gap_bp",
+        "single_ref_split_min_mapq",
+        "single_ref_split_min_segment_bp",
+        "trim_adapters",
+        "wf_clone_approx_size",
+        "wf_clone_assembly_tool",
+        "wf_clone_assm_coverage",
+        "wf_clone_canu_fast",
+        "wf_clone_cutsite_mismatch",
+        "wf_clone_expected_coverage",
+        "wf_clone_expected_identity",
+        "wf_clone_flye_quality",
+        "wf_clone_large_construct",
+        "wf_clone_min_quality",
+        "wf_clone_non_uniform_coverage",
+        "wf_clone_primer_mismatch",
+        "wf_clone_trim_length"
+      ],
+      "entrypoint_owner": "services.nextflow.resolve_nextflow_entrypoint",
+      "exposure_state": "internal",
+      "inventory_sha256": "acf3157ee7a130c6edf7a0a84e80c89442c793e736060b794e961b5635f77953",
+      "label": "ONT Clone Validation",
+      "launch_mode": "typed_launcher_handoff",
+      "materializer_owner": "services.nextflow.build_nextflow_command",
+      "native_mapping": {
+        "id": "wf_clone_validation",
+        "kind": "canonical_workflow",
+        "native_request_compatibility": "partial_native_mapping",
+        "source": "workflows/ngs/wf_clone_validation.nf"
+      },
+      "observed_parameter_keys": [
+        "bam_path",
+        "dorado_basecall_mode",
+        "dorado_batch_size",
+        "dorado_device",
+        "dorado_model",
+        "dorado_quality_mode",
+        "emit_summary",
+        "enable_rotating_reference_frames",
+        "fastq_path",
+        "min_qscore",
+        "pod5_dir",
+        "reference_fasta",
+        "rotation_scan_step_bp",
+        "server_bound_input_mode",
+        "single_ref_split_max_query_gap_bp",
+        "single_ref_split_min_mapq",
+        "single_ref_split_min_segment_bp",
+        "trim_adapters",
+        "wf_clone_approx_size",
+        "wf_clone_assembly_tool",
+        "wf_clone_assm_coverage",
+        "wf_clone_canu_fast",
+        "wf_clone_cutsite_mismatch",
+        "wf_clone_expected_coverage",
+        "wf_clone_expected_identity",
+        "wf_clone_flye_quality",
+        "wf_clone_large_construct",
+        "wf_clone_min_quality",
+        "wf_clone_non_uniform_coverage",
+        "wf_clone_primer_mismatch",
+        "wf_clone_sample",
+        "wf_clone_trim_length"
+      ],
+      "parameter_schema_id": "bms.workflow-parameters.ngs.ont.clone_validation.v1",
+      "parameter_schema_sha256": "fab469822940c0663f8d9a2191146378f43c56300159d7cf3442895da3839d9a",
+      "parity_ledger": [
+        {
+          "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
+          "gate": "installed_inventory",
+          "state": "pass"
+        },
+        {
+          "evidence": "Closed schema bytes and digest are registered. Unknown fields reject.",
+          "gate": "global_schema",
+          "state": "pass"
+        },
+        {
+          "evidence": "Current browser surfaces do not consume this server-owned schema for every field.",
+          "gate": "browser_controls",
+          "state": "partial"
+        },
+        {
+          "evidence": "Discovery/readback/submission do not yet share this schema end to end.",
+          "gate": "agent_parity",
+          "state": "missing"
+        },
+        {
+          "evidence": "Requested and effective values do not yet round-trip through every Project lifecycle path.",
+          "gate": "persistence",
+          "state": "partial"
+        },
+        {
+          "evidence": "Canonical ONT submission and Nextflow entrypoint exist. Catalog/compiler/UI keys still differ, and Project preparation does not yet materialize this exact schema without fallback.",
+          "gate": "execution",
+          "state": "partial"
+        },
+        {
+          "evidence": "Dedicated terminal or domain-operation receipt closure is not complete.",
+          "gate": "receipt",
+          "state": "missing"
+        },
+        {
+          "evidence": "Add to Project and exact historical reopen are incomplete.",
+          "gate": "global_result_experience",
+          "state": "partial"
+        },
+        {
+          "evidence": "Canonical workflow exists; immutable preparation/materialization reuse remains incomplete.",
+          "gate": "workflow_reuse",
+          "state": "missing"
+        },
+        {
+          "evidence": "No authorized Development acceptance has been run for this frozen contract.",
+          "gate": "live_agreement",
+          "state": "missing"
+        }
+      ],
+      "plannable": false,
+      "preparation_owner": "experiment_services.prepare_workflow",
+      "readiness_authority": "bms.ngs-molbio.capability-readiness.v1",
+      "receipt_contracts": [
+        "bms.core.ngs-job-launch.v1"
+      ],
+      "result_contracts": [
+        "sequence_qc.manifest.v1",
+        "biomodstack.construct_verification.v2"
+      ],
+      "scientific_role": "assembly_validation",
+      "server_owned_parameter_keys": [
+        "bam_path",
+        "dorado_device",
+        "dorado_model",
+        "fastq_path",
+        "pod5_dir",
+        "reference_fasta",
+        "server_bound_input_mode"
+      ],
+      "submission_owner": "routers.ont_runs.ont_submit_ngs_workflow",
+      "unclassified_parameter_keys": [
+        "wf_clone_sample"
+      ],
+      "unsupported_parameter_keys": [
+        "emit_summary"
+      ],
+      "viewer_destination": "/ngs?job_id={job_id}"
+    },
+    {
+      "accepted_source_roles": [
+        "ngs_reads",
+        "molecular_expected_construct"
+      ],
+      "allowed_domain_modes": [
+        "assembly_validation"
+      ],
+      "canonical_source_destination": "/ngs",
+      "capability_id": "ngs.ont.construct_screening",
+      "capability_kind": "scheduled_workflow",
+      "capability_version": "1",
+      "classified_parameter_keys": [
+        "bam_force_realign",
+        "bam_min_mapq",
+        "dorado_basecall_mode",
+        "dorado_batch_size",
+        "dorado_quality_mode",
+        "enable_rotating_reference_frames",
+        "expected_plasmid_size",
+        "fastq_minimap2_allow_secondary",
+        "fastq_minimap2_preset",
+        "igv_report_flanking_bp",
+        "igv_report_max_sites",
+        "igv_track_window_bp",
+        "min_fastq_read_length",
+        "min_qscore",
+        "rotation_scan_step_bp",
+        "run_assembly",
+        "run_fastq_qc",
+        "single_ref_split_max_query_gap_bp",
+        "single_ref_split_min_mapq",
+        "single_ref_split_min_segment_bp",
+        "trim_adapters",
+        "wf_clone_approx_size",
+        "wf_clone_assembly_tool",
+        "wf_clone_assm_coverage",
+        "wf_clone_canu_fast",
+        "wf_clone_cutsite_mismatch",
+        "wf_clone_expected_coverage",
+        "wf_clone_expected_identity",
+        "wf_clone_flye_quality",
+        "wf_clone_large_construct",
+        "wf_clone_min_quality",
+        "wf_clone_non_uniform_coverage",
+        "wf_clone_primer_mismatch",
+        "wf_clone_trim_length"
+      ],
+      "entrypoint_owner": "services.nextflow.resolve_nextflow_entrypoint",
+      "exposure_state": "internal",
+      "inventory_sha256": "8dc60a71fe36d83bc4ab507f1f693680aaf21526394fb343946856c0067b7c61",
+      "label": "ONT Construct Screening",
+      "launch_mode": "typed_launcher_handoff",
+      "materializer_owner": "services.nextflow.build_nextflow_command",
+      "native_mapping": {
+        "id": "ont_construct_screening",
+        "kind": "canonical_workflow",
+        "native_request_compatibility": "partial_native_mapping",
+        "source": "workflows/ngs/ont_construct_screening.nf"
+      },
+      "observed_parameter_keys": [
+        "bam_force_realign",
+        "bam_min_mapq",
+        "bam_path",
+        "dorado_basecall_mode",
+        "dorado_batch_size",
+        "dorado_device",
+        "dorado_model",
+        "dorado_quality_mode",
+        "emit_summary",
+        "enable_rotating_reference_frames",
+        "expected_plasmid_size",
+        "fastq_minimap2_allow_secondary",
+        "fastq_minimap2_preset",
+        "fastq_path",
+        "igv_report_flanking_bp",
+        "igv_report_max_sites",
+        "igv_track_window_bp",
+        "min_fastq_read_length",
+        "min_qscore",
+        "pod5_dir",
+        "reference_fasta",
+        "rotation_scan_step_bp",
+        "run_assembly",
+        "run_fastq_qc",
+        "server_bound_input_mode",
+        "single_ref_split_max_query_gap_bp",
+        "single_ref_split_min_mapq",
+        "single_ref_split_min_segment_bp",
+        "trim_adapters",
+        "wf_clone_approx_size",
+        "wf_clone_assembly_tool",
+        "wf_clone_assm_coverage",
+        "wf_clone_canu_fast",
+        "wf_clone_cutsite_mismatch",
+        "wf_clone_expected_coverage",
+        "wf_clone_expected_identity",
+        "wf_clone_flye_quality",
+        "wf_clone_large_construct",
+        "wf_clone_min_quality",
+        "wf_clone_non_uniform_coverage",
+        "wf_clone_primer_mismatch",
+        "wf_clone_sample",
+        "wf_clone_trim_length"
+      ],
+      "parameter_schema_id": "bms.workflow-parameters.ngs.ont.construct_screening.v1",
+      "parameter_schema_sha256": "67fd4c9d608c2fc638e24656bb739835ed67245780643da616be88d7f0b49934",
+      "parity_ledger": [
+        {
+          "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
+          "gate": "installed_inventory",
+          "state": "pass"
+        },
+        {
+          "evidence": "Closed schema bytes and digest are registered. Unknown fields reject.",
+          "gate": "global_schema",
+          "state": "pass"
+        },
+        {
+          "evidence": "Current browser surfaces do not consume this server-owned schema for every field.",
+          "gate": "browser_controls",
+          "state": "partial"
+        },
+        {
+          "evidence": "Discovery/readback/submission do not yet share this schema end to end.",
+          "gate": "agent_parity",
+          "state": "missing"
+        },
+        {
+          "evidence": "Requested and effective values do not yet round-trip through every Project lifecycle path.",
+          "gate": "persistence",
+          "state": "partial"
+        },
+        {
+          "evidence": "Canonical ONT submission and Nextflow entrypoint exist. Catalog/compiler/UI keys still differ, and Project preparation does not yet materialize this exact schema without fallback.",
+          "gate": "execution",
+          "state": "partial"
+        },
+        {
+          "evidence": "Dedicated terminal or domain-operation receipt closure is not complete.",
+          "gate": "receipt",
+          "state": "missing"
+        },
+        {
+          "evidence": "Add to Project and exact historical reopen are incomplete.",
+          "gate": "global_result_experience",
+          "state": "partial"
+        },
+        {
+          "evidence": "Canonical workflow exists; immutable preparation/materialization reuse remains incomplete.",
+          "gate": "workflow_reuse",
+          "state": "missing"
+        },
+        {
+          "evidence": "No authorized Development acceptance has been run for this frozen contract.",
+          "gate": "live_agreement",
+          "state": "missing"
+        }
+      ],
+      "plannable": false,
+      "preparation_owner": "experiment_services.prepare_workflow",
+      "readiness_authority": "bms.ngs-molbio.capability-readiness.v1",
+      "receipt_contracts": [
+        "bms.core.ngs-job-launch.v1"
+      ],
+      "result_contracts": [
+        "sequence_qc.manifest.v1",
+        "biomodstack.construct_verification.v2"
+      ],
+      "scientific_role": "assembly_validation",
+      "server_owned_parameter_keys": [
+        "bam_path",
+        "dorado_device",
+        "dorado_model",
+        "fastq_path",
+        "pod5_dir",
+        "reference_fasta",
+        "server_bound_input_mode"
+      ],
+      "submission_owner": "routers.ont_runs.ont_submit_ngs_workflow",
+      "unclassified_parameter_keys": [
+        "wf_clone_sample"
+      ],
+      "unsupported_parameter_keys": [
+        "emit_summary"
+      ],
+      "viewer_destination": "/ngs?job_id={job_id}"
+    },
+    {
+      "accepted_source_roles": [
+        "ngs_fastq",
+        "ngs_reference"
+      ],
+      "allowed_domain_modes": [
+        "quality_control"
+      ],
+      "canonical_source_destination": "/ngs",
+      "capability_id": "ngs.ont.fastq_qc",
+      "capability_kind": "scheduled_workflow",
+      "capability_version": "1",
+      "classified_parameter_keys": [
+        "enable_rotating_reference_frames",
+        "expected_plasmid_size",
+        "fastq_minimap2_allow_secondary",
+        "fastq_minimap2_preset",
+        "igv_report_flanking_bp",
+        "igv_report_max_sites",
+        "igv_track_window_bp",
+        "min_fastq_read_length",
+        "rotation_scan_step_bp",
+        "single_ref_split_max_query_gap_bp",
+        "single_ref_split_min_mapq",
+        "single_ref_split_min_segment_bp"
+      ],
+      "entrypoint_owner": "services.nextflow.resolve_nextflow_entrypoint",
+      "exposure_state": "internal",
+      "inventory_sha256": "9a910a27957d51c3feee63a5dbb817f4d76f5c13a0993a5b7b945754611b457e",
+      "label": "ONT FASTQ QC",
+      "launch_mode": "typed_launcher_handoff",
+      "materializer_owner": "services.nextflow.build_nextflow_command",
+      "native_mapping": {
+        "id": "ont_fastq_qc",
+        "kind": "canonical_workflow",
+        "native_request_compatibility": "partial_native_mapping",
+        "source": "workflows/ngs/ont_fastq_qc.nf"
+      },
+      "observed_parameter_keys": [
+        "enable_rotating_reference_frames",
+        "expected_plasmid_size",
+        "fastq_minimap2_allow_secondary",
+        "fastq_minimap2_preset",
+        "fastq_path",
+        "igv_report_flanking_bp",
+        "igv_report_max_sites",
+        "igv_track_window_bp",
+        "min_fastq_read_length",
+        "reference_fasta",
+        "rotation_scan_step_bp",
+        "run_fastq_qc",
+        "single_ref_split_max_query_gap_bp",
+        "single_ref_split_min_mapq",
+        "single_ref_split_min_segment_bp"
+      ],
+      "parameter_schema_id": "bms.workflow-parameters.ngs.ont.fastq_qc.v1",
+      "parameter_schema_sha256": "1a5c5c7040b052df5a7693a0f7705e52b4fdd6d10aadbfef9cc543b2e669aed1",
+      "parity_ledger": [
+        {
+          "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
+          "gate": "installed_inventory",
+          "state": "pass"
+        },
+        {
+          "evidence": "Closed schema bytes and digest are registered. Unknown fields reject.",
+          "gate": "global_schema",
+          "state": "pass"
+        },
+        {
+          "evidence": "Current browser surfaces do not consume this server-owned schema for every field.",
+          "gate": "browser_controls",
+          "state": "partial"
+        },
+        {
+          "evidence": "Discovery/readback/submission do not yet share this schema end to end.",
+          "gate": "agent_parity",
+          "state": "missing"
+        },
+        {
+          "evidence": "Requested and effective values do not yet round-trip through every Project lifecycle path.",
+          "gate": "persistence",
+          "state": "partial"
+        },
+        {
+          "evidence": "Canonical ONT submission and Nextflow entrypoint exist. Catalog/compiler/UI keys still differ, and Project preparation does not yet materialize this exact schema without fallback.",
+          "gate": "execution",
+          "state": "partial"
+        },
+        {
+          "evidence": "Dedicated terminal or domain-operation receipt closure is not complete.",
+          "gate": "receipt",
+          "state": "missing"
+        },
+        {
+          "evidence": "Add to Project and exact historical reopen are incomplete.",
+          "gate": "global_result_experience",
+          "state": "partial"
+        },
+        {
+          "evidence": "Canonical workflow exists; immutable preparation/materialization reuse remains incomplete.",
+          "gate": "workflow_reuse",
+          "state": "missing"
+        },
+        {
+          "evidence": "No authorized Development acceptance has been run for this frozen contract.",
+          "gate": "live_agreement",
+          "state": "missing"
+        }
+      ],
+      "plannable": false,
+      "preparation_owner": "experiment_services.prepare_workflow",
+      "readiness_authority": "bms.ngs-molbio.capability-readiness.v1",
+      "receipt_contracts": [
+        "bms.core.ngs-job-launch.v1"
+      ],
+      "result_contracts": [
+        "sequence_qc.manifest.v1"
+      ],
+      "scientific_role": "quality_control",
+      "server_owned_parameter_keys": [
+        "fastq_path",
+        "reference_fasta"
+      ],
+      "submission_owner": "routers.ont_runs.ont_submit_ngs_workflow",
+      "unclassified_parameter_keys": [
+        "run_fastq_qc"
+      ],
+      "unsupported_parameter_keys": [],
+      "viewer_destination": "/ngs?job_id={job_id}"
+    },
+    {
+      "accepted_source_roles": [
+        "ngs_pod5_or_tagged_bam",
+        "ngs_reference"
+      ],
+      "allowed_domain_modes": [
+        "analysis"
+      ],
+      "canonical_source_destination": "/ngs",
+      "capability_id": "ngs.ont.methylation_analysis",
+      "capability_kind": "scheduled_workflow",
+      "capability_version": "1",
+      "classified_parameter_keys": [
+        "bam_force_realign",
+        "bam_min_mapq",
+        "dorado_batch_size",
+        "min_qscore",
+        "modified_bases",
+        "modkit_filter_threshold",
+        "run_modkit"
+      ],
+      "entrypoint_owner": "services.nextflow.resolve_nextflow_entrypoint",
+      "exposure_state": "internal",
+      "inventory_sha256": "85c154eeba18f9f32d52c744e5691b9a6abcebc41c26cd5927bfe3a814d6b4f3",
+      "label": "ONT Methylation Analysis",
+      "launch_mode": "typed_launcher_handoff",
+      "materializer_owner": "services.nextflow.build_nextflow_command",
+      "native_mapping": {
+        "id": "ont_methylation_analysis",
+        "kind": "canonical_workflow",
+        "native_request_compatibility": "partial_native_mapping",
+        "source": "workflows/ngs/ont_methylation_analysis.nf"
+      },
+      "observed_parameter_keys": [
+        "bam_force_realign",
+        "bam_min_mapq",
+        "bam_path",
+        "dorado_batch_size",
+        "dorado_device",
+        "dorado_model",
+        "emit_summary",
+        "min_qscore",
+        "modified_bases",
+        "modkit_filter_threshold",
+        "pod5_dir",
+        "reference_fasta",
+        "run_modkit",
+        "server_bound_input_mode",
+        "trim_adapters"
+      ],
+      "parameter_schema_id": "bms.workflow-parameters.ngs.ont.methylation_analysis.v1",
+      "parameter_schema_sha256": "aac83932c2561db616e1809a4f692af89e5894fd7b0071000ea4b9178303c22e",
+      "parity_ledger": [
+        {
+          "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
+          "gate": "installed_inventory",
+          "state": "pass"
+        },
+        {
+          "evidence": "Closed schema bytes and digest are registered. Unknown fields reject.",
+          "gate": "global_schema",
+          "state": "pass"
+        },
+        {
+          "evidence": "Current browser surfaces do not consume this server-owned schema for every field.",
+          "gate": "browser_controls",
+          "state": "partial"
+        },
+        {
+          "evidence": "Discovery/readback/submission do not yet share this schema end to end.",
+          "gate": "agent_parity",
+          "state": "missing"
+        },
+        {
+          "evidence": "Requested and effective values do not yet round-trip through every Project lifecycle path.",
+          "gate": "persistence",
+          "state": "partial"
+        },
+        {
+          "evidence": "Canonical ONT submission and Nextflow entrypoint exist. Catalog/compiler/UI keys still differ, and Project preparation does not yet materialize this exact schema without fallback.",
+          "gate": "execution",
+          "state": "partial"
+        },
+        {
+          "evidence": "Dedicated terminal or domain-operation receipt closure is not complete.",
+          "gate": "receipt",
+          "state": "missing"
+        },
+        {
+          "evidence": "Add to Project and exact historical reopen are incomplete.",
+          "gate": "global_result_experience",
+          "state": "partial"
+        },
+        {
+          "evidence": "Canonical workflow exists; immutable preparation/materialization reuse remains incomplete.",
+          "gate": "workflow_reuse",
+          "state": "missing"
+        },
+        {
+          "evidence": "No authorized Development acceptance has been run for this frozen contract.",
+          "gate": "live_agreement",
+          "state": "missing"
+        }
+      ],
+      "plannable": false,
+      "preparation_owner": "experiment_services.prepare_workflow",
+      "readiness_authority": "bms.ngs-molbio.capability-readiness.v1",
+      "receipt_contracts": [
+        "bms.core.ngs-job-launch.v1"
+      ],
+      "result_contracts": [
+        "sequence_qc.manifest.v1"
+      ],
+      "scientific_role": "analysis",
+      "server_owned_parameter_keys": [
+        "bam_path",
+        "dorado_device",
+        "dorado_model",
+        "pod5_dir",
+        "reference_fasta",
+        "server_bound_input_mode"
+      ],
+      "submission_owner": "routers.ont_runs.ont_submit_ngs_workflow",
+      "unclassified_parameter_keys": [
+        "trim_adapters"
+      ],
+      "unsupported_parameter_keys": [
+        "emit_summary"
+      ],
+      "viewer_destination": "/ngs?job_id={job_id}"
+    },
+    {
+      "accepted_source_roles": [
+        "ngs_reads",
+        "ngs_reference"
+      ],
+      "allowed_domain_modes": [
+        "quality_control"
+      ],
+      "canonical_source_destination": "/ngs",
+      "capability_id": "ngs.ont.plasmid_qc",
+      "capability_kind": "scheduled_workflow",
+      "capability_version": "1",
+      "classified_parameter_keys": [
+        "bam_force_realign",
+        "bam_min_mapq",
+        "dorado_basecall_mode",
+        "dorado_batch_size",
+        "dorado_quality_mode",
+        "enable_rotating_reference_frames",
+        "expected_plasmid_size",
+        "fastq_minimap2_allow_secondary",
+        "fastq_minimap2_preset",
+        "igv_report_flanking_bp",
+        "igv_report_max_sites",
+        "igv_track_window_bp",
+        "min_fastq_read_length",
+        "min_qscore",
+        "rotation_scan_step_bp",
+        "run_fastq_qc",
+        "single_ref_split_max_query_gap_bp",
+        "single_ref_split_min_mapq",
+        "single_ref_split_min_segment_bp",
+        "trim_adapters"
+      ],
+      "entrypoint_owner": "services.nextflow.resolve_nextflow_entrypoint",
+      "exposure_state": "internal",
+      "inventory_sha256": "028035bcf1275bd9e902017635ddd9e3aa2e98e7f89b08d2a7814cae5015683b",
+      "label": "ONT Plasmid QC",
+      "launch_mode": "typed_launcher_handoff",
+      "materializer_owner": "services.nextflow.build_nextflow_command",
+      "native_mapping": {
+        "id": "ont_plasmid_qc",
+        "kind": "canonical_workflow",
+        "native_request_compatibility": "partial_native_mapping",
+        "source": "workflows/ngs/ont_plasmid_qc.nf"
+      },
+      "observed_parameter_keys": [
+        "bam_force_realign",
+        "bam_min_mapq",
+        "bam_path",
+        "dorado_basecall_mode",
+        "dorado_batch_size",
+        "dorado_device",
+        "dorado_model",
+        "dorado_quality_mode",
+        "emit_summary",
+        "enable_rotating_reference_frames",
+        "expected_plasmid_size",
+        "fastq_minimap2_allow_secondary",
+        "fastq_minimap2_preset",
+        "fastq_path",
+        "igv_report_flanking_bp",
+        "igv_report_max_sites",
+        "igv_track_window_bp",
+        "min_fastq_read_length",
+        "min_qscore",
+        "pod5_dir",
+        "reference_fasta",
+        "rotation_scan_step_bp",
+        "run_fastq_qc",
+        "server_bound_input_mode",
+        "single_ref_split_max_query_gap_bp",
+        "single_ref_split_min_mapq",
+        "single_ref_split_min_segment_bp",
+        "trim_adapters"
+      ],
+      "parameter_schema_id": "bms.workflow-parameters.ngs.ont.plasmid_qc.v1",
+      "parameter_schema_sha256": "f06ddaebea85c76c1a871f244e58166aabe581e9d12e9d2d63e0febaabf8b3fe",
+      "parity_ledger": [
+        {
+          "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
+          "gate": "installed_inventory",
+          "state": "pass"
+        },
+        {
+          "evidence": "Closed schema bytes and digest are registered. Unknown fields reject.",
+          "gate": "global_schema",
+          "state": "pass"
+        },
+        {
+          "evidence": "Current browser surfaces do not consume this server-owned schema for every field.",
+          "gate": "browser_controls",
+          "state": "partial"
+        },
+        {
+          "evidence": "Discovery/readback/submission do not yet share this schema end to end.",
+          "gate": "agent_parity",
+          "state": "missing"
+        },
+        {
+          "evidence": "Requested and effective values do not yet round-trip through every Project lifecycle path.",
+          "gate": "persistence",
+          "state": "partial"
+        },
+        {
+          "evidence": "Canonical ONT submission and Nextflow entrypoint exist. Catalog/compiler/UI keys still differ, and Project preparation does not yet materialize this exact schema without fallback.",
+          "gate": "execution",
+          "state": "partial"
+        },
+        {
+          "evidence": "Dedicated terminal or domain-operation receipt closure is not complete.",
+          "gate": "receipt",
+          "state": "missing"
+        },
+        {
+          "evidence": "Add to Project and exact historical reopen are incomplete.",
+          "gate": "global_result_experience",
+          "state": "partial"
+        },
+        {
+          "evidence": "Canonical workflow exists; immutable preparation/materialization reuse remains incomplete.",
+          "gate": "workflow_reuse",
+          "state": "missing"
+        },
+        {
+          "evidence": "No authorized Development acceptance has been run for this frozen contract.",
+          "gate": "live_agreement",
+          "state": "missing"
+        }
+      ],
+      "plannable": false,
+      "preparation_owner": "experiment_services.prepare_workflow",
+      "readiness_authority": "bms.ngs-molbio.capability-readiness.v1",
+      "receipt_contracts": [
+        "bms.core.ngs-job-launch.v1"
+      ],
+      "result_contracts": [
+        "sequence_qc.manifest.v1"
+      ],
+      "scientific_role": "quality_control",
+      "server_owned_parameter_keys": [
+        "bam_path",
+        "dorado_device",
+        "dorado_model",
+        "fastq_path",
+        "pod5_dir",
+        "reference_fasta",
+        "server_bound_input_mode"
+      ],
+      "submission_owner": "routers.ont_runs.ont_submit_ngs_workflow",
+      "unclassified_parameter_keys": [],
+      "unsupported_parameter_keys": [
+        "emit_summary"
+      ],
+      "viewer_destination": "/ngs?job_id={job_id}"
+    },
+    {
+      "accepted_source_roles": [
+        "ngs_fastq",
+        "ngs_reference_set"
+      ],
+      "allowed_domain_modes": [
+        "comparison"
+      ],
+      "canonical_source_destination": "/ngs",
+      "capability_id": "ngs.ont.pooled_reference_assignment",
+      "capability_kind": "scheduled_workflow",
+      "capability_version": "1",
+      "classified_parameter_keys": [
+        "pooled_assignment_min_alignment_score_margin",
+        "pooled_assignment_min_mapq"
+      ],
+      "entrypoint_owner": "services.nextflow.resolve_nextflow_entrypoint",
+      "exposure_state": "internal",
+      "inventory_sha256": "5047095d27725aa9ef6ecb773951e77320c4a4ffe4c564fa29f0ec0f29f6667f",
+      "label": "ONT Pooled Reference Assignment",
+      "launch_mode": "typed_launcher_handoff",
+      "materializer_owner": "services.nextflow.build_nextflow_command",
+      "native_mapping": {
+        "id": "ont_pooled_reference_assignment",
+        "kind": "canonical_workflow",
+        "native_request_compatibility": "partial_native_mapping",
+        "source": "workflows/ngs/ont_pooled_reference_assignment.nf"
+      },
+      "observed_parameter_keys": [
+        "fastq_path",
+        "pooled_assignment_min_alignment_score_margin",
+        "pooled_assignment_min_mapq",
+        "reference_set_manifest"
+      ],
+      "parameter_schema_id": "bms.workflow-parameters.ngs.ont.pooled_reference_assignment.v1",
+      "parameter_schema_sha256": "89724f1e39dbd09c42f8686ae866d0bda058cdda9c1cc0b43185b6ee00daee78",
+      "parity_ledger": [
+        {
+          "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
+          "gate": "installed_inventory",
+          "state": "pass"
+        },
+        {
+          "evidence": "Closed schema bytes and digest are registered. Unknown fields reject.",
+          "gate": "global_schema",
+          "state": "pass"
+        },
+        {
+          "evidence": "Current browser surfaces do not consume this server-owned schema for every field.",
+          "gate": "browser_controls",
+          "state": "partial"
+        },
+        {
+          "evidence": "Discovery/readback/submission do not yet share this schema end to end.",
+          "gate": "agent_parity",
+          "state": "missing"
+        },
+        {
+          "evidence": "Requested and effective values do not yet round-trip through every Project lifecycle path.",
+          "gate": "persistence",
+          "state": "partial"
+        },
+        {
+          "evidence": "Canonical ONT submission and Nextflow entrypoint exist. Catalog/compiler/UI keys still differ, and Project preparation does not yet materialize this exact schema without fallback.",
+          "gate": "execution",
+          "state": "partial"
+        },
+        {
+          "evidence": "Dedicated terminal or domain-operation receipt closure is not complete.",
+          "gate": "receipt",
+          "state": "missing"
+        },
+        {
+          "evidence": "Add to Project and exact historical reopen are incomplete.",
+          "gate": "global_result_experience",
+          "state": "partial"
+        },
+        {
+          "evidence": "Canonical workflow exists; immutable preparation/materialization reuse remains incomplete.",
+          "gate": "workflow_reuse",
+          "state": "missing"
+        },
+        {
+          "evidence": "No authorized Development acceptance has been run for this frozen contract.",
+          "gate": "live_agreement",
+          "state": "missing"
+        }
+      ],
+      "plannable": false,
+      "preparation_owner": "experiment_services.prepare_workflow",
+      "readiness_authority": "bms.ngs-molbio.capability-readiness.v1",
+      "receipt_contracts": [
+        "bms.core.ngs-job-launch.v1"
+      ],
+      "result_contracts": [
+        "bms.ngs.pooled-reference-assignment-summary.v1",
+        "bms.ngs.pooled-assignment-release.v1"
+      ],
+      "scientific_role": "comparison",
+      "server_owned_parameter_keys": [
+        "fastq_path",
+        "reference_set_manifest"
+      ],
+      "submission_owner": "routers.ont_runs.ont_submit_pooled_reference_assignment",
+      "unclassified_parameter_keys": [],
+      "unsupported_parameter_keys": [],
+      "viewer_destination": "/ngs?job_id={job_id}"
+    }
+  ],
+  "constraint_payload_registry_sha256": "92611ecfaf2f12b9ddfef7e6031efd9503cfa9efc528b809aca33ac91e2a35f9",
+  "content_hash_semantics": "sha256(rfc8785(document_without_top_level_content_sha256))",
+  "content_sha256": "eaf59dc9825e6ad0e10c99411662021bc1c3cf4f9832068ec41566703cb1d360",
+  "contract_ids": {
+    "binding_adapter": "bms.ngs-molbio.domain-binding.adapter.v1",
+    "binding_receipt": "bms.ngs-molbio.global-binding-receipt.v1",
+    "connector_acknowledgement": "bms.ngs-molbio.connector-acknowledgement.v1",
+    "connector_command": "bms.ngs-molbio.connector-command.v1",
+    "connector_event": "bms.ngs-molbio.connector-event.v1",
+    "deep_link": "bms.ngs-molbio.deep-link.v1",
+    "pagination": "bms.opaque-keyset-page.v1",
+    "payload_ownership_audit": "bms.payload-ownership-audit.v1",
+    "payload_ownership_manifest": "bms.payload-ownership-manifest.v1"
+  },
+  "criterion_schema_ids": [
+    "bms.scientific-criterion.artifact-presence.v1",
+    "bms.scientific-criterion.manual-review.v1",
+    "bms.scientific-criterion.metric-threshold.v1"
+  ],
+  "dataset_registry_sha256": "cb11b1b780376e9d6e5093057dbd8e6fe64a33df37988679b9d0f52530114aff",
+  "event_registry_sha256": "695fa4a3fae621b19c8ecdf48de1104cce59891d7c06024ea53a947fa3426adc",
+  "evidence_schema_ids": [
+    "bms.evidence-requirement.native-receipt.v1",
+    "bms.evidence-requirement.operator-observation.v1",
+    "bms.evidence-requirement.result-artifact.v1"
+  ],
+  "payload_ownership_manifest_sha256": "a0a8e0ae952565e5f8dacbd84567e65853c8fbd1ab6b1bb7454ceefcab4aa6cb",
+  "schema": "bms.ngs-molbio.capability-inventory.v1",
+  "schema_registry_sha256": "d4b9d141a105f770cf832bee6d96a98e80c3078d109262cf5200c2f949b22e2f",
+  "schema_version": 1,
+  "source_pin_sha256": "76028030245171a8000eccc51349e72b71081ea7efe064ca2bd5b00d431588be"
+}

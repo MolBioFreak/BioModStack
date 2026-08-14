@@ -10,7 +10,7 @@ import json
 import logging
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import async_session, Job, MdRun
@@ -25,11 +25,6 @@ _ACTIVE_JOB_STATUSES = {
     JobStatus.QUEUED.value,
     JobStatus.RUNNING.value,
     JobStatus.AWAITING_INPUT.value,
-}
-_TERMINAL_JOB_STATUSES = {
-    JobStatus.COMPLETED.value,
-    JobStatus.FAILED.value,
-    JobStatus.CANCELLED.value,
 }
 
 
@@ -145,13 +140,22 @@ async def cancel_job_lineage(
 
     request_time = datetime.utcnow()
     cancellable = [job for job in lineage if _job_is_cancelable(job)]
+    cancellable_ids = {str(job.id) for job in cancellable}
     already_cancelled = [
         job for job in lineage
-        if str(job.status or "").strip().lower() == JobStatus.CANCELLED.value
+        if str(job.id) not in cancellable_ids
+        and str(job.status or "").strip().lower() == JobStatus.CANCELLED.value
     ]
+    intent_statuses = {
+        str(job.id): str(job.status or "")
+        for job in cancellable
+    }
+    intent_queue_statuses = {str(job.id): job.queue_status for job in cancellable}
+    intent_completed_at = {str(job.id): job.completed_at for job in cancellable}
 
     # Publish durable intent before asking the external owner to stop anything.
     # A process/unit result cannot grant terminal cancellation authority.
+    intent_conflicts: list[str] = []
     for job in cancellable:
         params = json.loads(job.params) if isinstance(job.params, str) else dict(job.params or {})
         params["cancellation_receipt"] = {
@@ -160,14 +164,38 @@ async def cancel_job_lineage(
             "requested_at": request_time.isoformat() + "Z",
             "run_identity": str(job.nextflow_run_id or ""),
         }
-        job.params = params
-        job.queue_status = "cancelling"
+        intent_update = await session.execute(
+            update(Job)
+            .where(
+                Job.id == job.id,
+                Job.status == intent_statuses[str(job.id)],
+                Job.queue_status == intent_queue_statuses[str(job.id)],
+                Job.completed_at == intent_completed_at[str(job.id)],
+            )
+            .values(params=params, queue_status="cancelling")
+            .execution_options(synchronize_session=False)
+        )
+        if intent_update.rowcount != 1:
+            intent_conflicts.append(str(job.id))
+    if intent_conflicts:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "CANCELLATION_INTENT_CONFLICT",
+                "message": "Producer state changed before cancellation intent publication",
+                "job_ids": intent_conflicts,
+            },
+        )
+    for job in cancellable:
+        await session.refresh(job)
     if before_intent_commit is not None:
         await before_intent_commit()
-    if commit:
-        await session.commit()
-    else:
-        await session.flush()
+    # This is an intentional saga boundary even for commit=False callers. The
+    # canonical core intent must survive a process crash during physical stop;
+    # commit=False continues to leave the later terminal publication to its
+    # caller-owned transaction.
+    await session.commit()
 
     incomplete: list[str] = []
     for job in cancellable:
@@ -196,33 +224,72 @@ async def cancel_job_lineage(
         )
 
     completed_at = datetime.utcnow()
+    terminal_conflicts: list[str] = []
     for job in [*cancellable, *already_cancelled]:
-        status = str(job.status or "").strip().lower()
-        if status not in _TERMINAL_JOB_STATUSES or status == JobStatus.CANCELLED.value:
-            job.status = JobStatus.CANCELLED.value
-            job.queue_status = "cancelled"
-            job.paused = False
-            job.assigned_gpu = None
-            job.awaiting_input = False
-            job.awaiting_stage = None
-            job.awaiting_payload = {}
-            job.retry_count = 0
-            job.current_stage = None
-            job.stage_progress = None
-            job.completed_at = job.completed_at or completed_at
-            job.error_message = job.error_message or error_message
-            params = release_scheduler_gpu_assignment(job.params)
-            receipt = dict(params.get("cancellation_receipt") or {})
-            receipt.update(
-                {
-                    "schema": "bms.workflow-cancellation.v1",
-                    "state": "completed",
-                    "completed_at": job.completed_at.isoformat() + "Z",
-                    "run_identity": str(job.nextflow_run_id or receipt.get("run_identity") or ""),
-                }
+        await session.refresh(job)
+        expected_status = (
+            JobStatus.CANCELLED.value
+            if str(job.id) not in cancellable_ids
+            else intent_statuses[str(job.id)]
+        )
+        params = release_scheduler_gpu_assignment(job.params)
+        receipt = dict(params.get("cancellation_receipt") or {})
+        terminal_time = job.completed_at or completed_at
+        receipt.update(
+            {
+                "schema": "bms.workflow-cancellation.v1",
+                "state": "completed",
+                "completed_at": terminal_time.isoformat() + "Z",
+                "run_identity": str(job.nextflow_run_id or receipt.get("run_identity") or ""),
+            }
+        )
+        params["cancellation_receipt"] = receipt
+        predicates = [
+            Job.id == job.id,
+            Job.status == expected_status,
+        ]
+        if str(job.id) in cancellable_ids:
+            predicates.extend(
+                (
+                    Job.queue_status == "cancelling",
+                    Job.completed_at == intent_completed_at[str(job.id)],
+                )
             )
-            params["cancellation_receipt"] = receipt
-            job.params = params
+        terminalized = await session.execute(
+            update(Job)
+            .where(*predicates)
+            .values(
+                status=JobStatus.CANCELLED.value,
+                queue_status="cancelled",
+                paused=False,
+                assigned_gpu=None,
+                awaiting_input=False,
+                awaiting_stage=None,
+                awaiting_payload={},
+                retry_count=0,
+                current_stage=None,
+                stage_progress=None,
+                completed_at=terminal_time,
+                error_message=job.error_message or error_message,
+                params=params,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if terminalized.rowcount != 1:
+            terminal_conflicts.append(str(job.id))
+
+    if terminal_conflicts:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "CANCELLATION_TERMINAL_CONFLICT",
+                "message": "Producer terminal state won before cancellation publication",
+                "job_ids": terminal_conflicts,
+            },
+        )
+    for job in [*cancellable, *already_cancelled]:
+        await session.refresh(job)
 
     from services.rfd3_local_redesign import terminalize_cancelled_request_for_job
 

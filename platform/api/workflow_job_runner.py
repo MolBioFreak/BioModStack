@@ -32,6 +32,12 @@ from services.execution_ownership import (
     update_execution_attempt,
     utc_timestamp,
 )
+from services.resource_usage_evidence import (
+    ResourceUsageEvidenceError,
+    WorkflowResourceMonitor,
+    attach_resource_usage_receipt,
+    strip_resource_execution_metadata,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -91,6 +97,8 @@ async def _load_authoritative_attempt(
         job = result.scalar_one_or_none()
         if job is None:
             raise ExecutionOwnershipError(f"Authoritative workflow job {job_id} was not found")
+        if not database.launch_context_binding_ready(job):
+            raise ExecutionOwnershipError("launch-context source binding is not durably published")
         params = params_mapping(getattr(job, "params", {}))
         receipt = latest_execution_attempt(params)
         if receipt is None or str(receipt.get("lane", "")) != lane:
@@ -207,6 +215,21 @@ async def _finish_attempt(
     return state
 
 
+async def _persist_resource_usage_receipt(job_id: str, receipt: dict[str, Any]) -> None:
+    """Append one producer receipt without replacing another execution identity."""
+
+    async with database.async_session() as session:
+        await session.execute(sqlalchemy.text("BEGIN IMMEDIATE"))
+        result = await session.execute(
+            sqlalchemy.select(database.Job).where(database.Job.id == job_id)
+        )
+        job = result.scalar_one_or_none()
+        if job is None:
+            raise ResourceUsageEvidenceError("resource receipt Job disappeared")
+        job.params = attach_resource_usage_receipt(job.params, receipt)
+        await session.commit()
+
+
 def _terminal_state(job: Any) -> tuple[str, str | None]:
     status = str(getattr(job, "status", "") or "").strip().lower()
     if status == "cancelled":
@@ -231,8 +254,12 @@ async def run_workflow_job(job_id: str, lane: str) -> int:
         owner_nonce=owner_nonce,
         invocation_id=invocation_id,
     )
+    monitor: WorkflowResourceMonitor | None = None
 
     try:
+        monitor = WorkflowResourceMonitor.from_job(job)
+        if monitor is not None:
+            monitor.start()
         authoritative_model_id = str(job.model_id)
         authoritative_mode = str(job.mode)
         authoritative_output_dir = str(getattr(job, "output_dir", "") or "")
@@ -244,12 +271,19 @@ async def run_workflow_job(job_id: str, lane: str) -> int:
             job_id=job_id,
             model_id=authoritative_model_id,
             mode=authoritative_mode,
-            params=strip_execution_metadata(params),
+            params=strip_resource_execution_metadata(strip_execution_metadata(params)),
             output_dir=authoritative_output_dir,
             allow_running_job=True,
         )
     except Exception as exc:
         logger.exception("Transient workflow runner failed for %s", job_id)
+        if monitor is not None:
+            try:
+                await _persist_resource_usage_receipt(
+                    job_id, monitor.finish(outcome="failed")
+                )
+            except Exception:
+                logger.exception("Could not persist failed resource-use evidence for %s", job_id)
         await _finish_attempt(
             job_id=job_id,
             lane=identity.lane,
@@ -269,6 +303,13 @@ async def run_workflow_job(job_id: str, lane: str) -> int:
             final_job = result.scalar_one_or_none()
     except Exception as exc:
         logger.exception("Could not reload the authoritative workflow result for %s", job_id)
+        if monitor is not None:
+            try:
+                await _persist_resource_usage_receipt(
+                    job_id, monitor.finish(outcome="failed")
+                )
+            except Exception:
+                logger.exception("Could not persist failed resource-use evidence for %s", job_id)
         await _finish_attempt(
             job_id=job_id,
             lane=identity.lane,
@@ -280,6 +321,13 @@ async def run_workflow_job(job_id: str, lane: str) -> int:
         )
         return 1
     if final_job is None:
+        if monitor is not None:
+            try:
+                await _persist_resource_usage_receipt(
+                    job_id, monitor.finish(outcome="failed")
+                )
+            except Exception:
+                logger.exception("Could not persist failed resource-use evidence for %s", job_id)
         await _finish_attempt(
             job_id=job_id,
             lane=identity.lane,
@@ -292,6 +340,17 @@ async def run_workflow_job(job_id: str, lane: str) -> int:
         return 1
 
     state, reason = _terminal_state(final_job)
+    if monitor is not None:
+        try:
+            resource_receipt = monitor.finish(outcome=state)
+            await _persist_resource_usage_receipt(job_id, resource_receipt)
+            if state == "completed" and resource_receipt.get("complete") is not True:
+                state = "failed"
+                reason = "producer_resource_evidence_incomplete"
+        except Exception:
+            logger.exception("Could not persist terminal resource-use evidence for %s", job_id)
+            state = "failed"
+            reason = "producer_resource_evidence_persistence_failed"
     await _finish_attempt(
         job_id=job_id,
         lane=identity.lane,

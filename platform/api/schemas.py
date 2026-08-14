@@ -167,17 +167,24 @@ class LaunchContextCreateRequest(BaseModel):
 class LaunchContextResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    schema_name: Literal["bms.launch-context.v1"] = Field(alias="schema", serialization_alias="schema")
+    schema_name: Literal["bms.launch-context.v1", "bms.launch-context.v2"] = Field(
+        alias="schema", serialization_alias="schema"
+    )
     launch_context_id: str
     project_id: str
     global_experiment_id: str
     domain_experiment_id: str
     workflow_id: Optional[str]
     workflow_revision_id: Optional[str]
+    preparation_id: Optional[str] = None
+    run_attempt_id: Optional[str] = None
+    normalized_request_sha256: Optional[str] = None
+    validation_receipt_id: Optional[str] = None
+    validation_receipt_sha256: Optional[str] = None
     pinned_gpu: Optional[int]
     return_uri: str
     source_receipt_id: str
-    state: Literal["issued", "claimed", "consumed"]
+    state: Literal["issued", "reserved", "claimed", "consumed"]
     canonical_job_id: Optional[str] = None
     recovery_job_id: Optional[str] = None
     binding_receipt: Optional[dict] = None

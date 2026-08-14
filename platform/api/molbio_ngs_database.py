@@ -12,6 +12,7 @@ from migrations.sqlite_sha256 import register_sqlite_sha256
 from molbio_ngs_migrations import health, run_all
 from molbio_ngs_models import MolBioNGSBase
 from paths import get_molbio_ngs_db_path, get_molbio_ngs_db_url
+from services.ngs_molbio_quiescence import NgsMolBioQuiescedSession
 
 
 def _sqlite_path_from_url(url: str) -> Path | None:
@@ -48,7 +49,12 @@ def create_molbio_ngs_engine(url: str | None = None):
 
 
 def create_molbio_ngs_session_factory(engine):  # noqa: ANN001
-    return async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    return async_sessionmaker(
+        engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+        sync_session_class=NgsMolBioQuiescedSession,
+    )
 
 
 molbio_ngs_engine = create_molbio_ngs_engine()

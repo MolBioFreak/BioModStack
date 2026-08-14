@@ -366,7 +366,7 @@ async def attach_instrument_run_evidence(
             resolved, receipt_id=receipt_id, created_at=_now()
         ),
     )
-    _audit_and_outbox(
+    await _audit_and_outbox(
         session,
         domain_id=global_domain_experiment_id,
         resource_id=row.receipt_id,
@@ -762,7 +762,7 @@ async def create_evidence_assessment(
     )
     domain_session.add(assessment)
     await domain_session.flush([assessment])
-    _audit_and_outbox(
+    await _audit_and_outbox(
         domain_session,
         domain_id=global_domain_experiment_id,
         resource_id=evidence_id,

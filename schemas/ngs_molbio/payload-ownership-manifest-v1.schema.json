@@ -1,0 +1,99 @@
+{
+  "$id": "bms.payload-ownership-manifest.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "classes": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "active_authority": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "forbidden_global_payloads": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 64,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "payload_class": {
+            "enum": [
+              "molecular_sequence_document_construct_primer_pcr_operation",
+              "local_scientific_state_sample_binding_evidence_assessment",
+              "raw_signal_reads_alignments_ngs_manifests_qc_instrument_observations",
+              "project_membership_receipt_digest_lineage_eln",
+              "protein_sequences_complexes_targets_structures_ensembles_trajectories_landscapes_metrics_manifests"
+            ]
+          },
+          "permitted_global_fields": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 64,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "payload_class",
+          "active_authority",
+          "permitted_global_fields",
+          "forbidden_global_payloads"
+        ],
+        "type": "object"
+      },
+      "maxItems": 5,
+      "minItems": 5,
+      "type": "array",
+      "x-bms-unique-by": [
+        "payload_class"
+      ]
+    },
+    "content_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "retained_audit_baseline_state": {
+      "const": "missing"
+    },
+    "scanner_baseline_state": {
+      "const": "missing"
+    },
+    "scanner_id": {
+      "const": "bms.payload-ownership-scanner.v1"
+    },
+    "scanner_version": {
+      "const": "1"
+    },
+    "schema": {
+      "const": "bms.payload-ownership-manifest.v1"
+    },
+    "source_commit": {
+      "const": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517"
+    },
+    "source_tree": {
+      "const": "f89094ba373e3dd8fa181fd17d942e54a6f0f63e"
+    }
+  },
+  "required": [
+    "schema",
+    "scanner_id",
+    "scanner_version",
+    "classes",
+    "content_sha256",
+    "source_commit",
+    "source_tree",
+    "scanner_baseline_state",
+    "retained_audit_baseline_state"
+  ],
+  "title": "Payload ownership manifest v1",
+  "type": "object"
+}

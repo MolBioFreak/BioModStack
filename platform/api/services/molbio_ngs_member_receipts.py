@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import stat
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -32,6 +34,8 @@ from molbio_models import (
 )
 from molbio_ngs_models import MolBioNGSMemberReceipt
 from services.job_result_roots import resolve_persisted_job_result_root
+from services.ont_ngs_contract import get_ont_workflow_spec
+from services.ont_run_control import _valid_terminal_manifest
 from services.molbio_ngs_receipts import _snapshot_sequence
 from services.ngs_comparison_panels import _validated_panel_manifest
 from services.nucleotide_validation import canonicalize_nucleotide_sequence
@@ -40,6 +44,7 @@ from services.sequence_qc_manifest import (
     find_manifest_in_result_root,
     load_sequence_qc_manifest,
 )
+from paths import get_inputs_dir, get_results_dir, resolve_runtime_data_path
 
 RECEIPT_SCHEMA = "bms.molbio-ngs.external-member-receipt.v1"
 RECEIPT_SCHEMA_NAME = "bms.molbio-ngs.external-member-receipt"
@@ -101,6 +106,32 @@ def _sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
+def _sha256_regular_file(path: Path) -> tuple[str, int]:
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        details = os.fstat(descriptor)
+        if not stat.S_ISREG(details.st_mode):
+            raise ValueError("native artifact is not a regular file")
+        digest = hashlib.sha256()
+        size = 0
+        while chunk := os.read(descriptor, 1024 * 1024):
+            digest.update(chunk)
+            size += len(chunk)
+        after = os.fstat(descriptor)
+        if (details.st_dev, details.st_ino, details.st_size) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+        ):
+            raise ValueError("native artifact changed while it was verified")
+        return digest.hexdigest(), size
+    finally:
+        os.close(descriptor)
+
+
 def _sha256_payload(payload: Mapping[str, Any]) -> str:
     return _sha256_bytes(_canonical(payload).encode("utf-8"))
 
@@ -141,6 +172,8 @@ def build_external_member_receipt(
         "ngs_comparison_panel",
         "ngs_reference_revision",
         "ngs_evidence_assessment",
+        "sample_revision",
+        "ngs_molbio_state_revision",
     }:
         raise ValueError("unsupported member receipt entity kind")
     if not identity or not generation or not isinstance(source_schema, str) or not source_schema.strip():
@@ -218,6 +251,8 @@ def parse_canonical_member_receipt(canonical_receipt: str) -> dict[str, Any]:
         "ngs_comparison_panel",
         "ngs_reference_revision",
         "ngs_evidence_assessment",
+        "sample_revision",
+        "ngs_molbio_state_revision",
     }:
         raise ValueError("member receipt canonical entity kind is unsupported")
     for field_name in (
@@ -435,6 +470,29 @@ async def resolve_ont_instrument_run_receipt(
     ).scalar_one_or_none()
     if run is None or event is None:
         raise KeyError("ONT run observation identity was not found")
+    terminal_manifest_digest = None
+    if run.observed_generation == event.observed_generation and (
+        run.terminal_artifact_manifest is not None
+        or run.terminal_artifact_manifest_sha256 is not None
+    ):
+        validated = _valid_terminal_manifest(run)
+        if validated is None:
+            raise ValueError("ONT terminal manifest authority is invalid")
+        _manifest, artifacts = validated
+        for artifact in artifacts:
+            path = resolve_runtime_data_path(str(artifact["path"])).resolve()
+            if not any(
+                path.is_relative_to(root.resolve())
+                for root in (get_inputs_dir(), get_results_dir())
+            ):
+                raise ValueError("ONT terminal artifact is outside server-owned roots")
+            observed_digest, observed_size = _sha256_regular_file(path)
+            if (
+                observed_size != artifact["bytes"]
+                or observed_digest != artifact["sha256"]
+            ):
+                raise ValueError("ONT terminal artifact bytes do not match native authority")
+        terminal_manifest_digest = run.terminal_artifact_manifest_sha256
     payload = {
         "run_id": run.id,
         "position_id": run.position_id,
@@ -444,11 +502,7 @@ async def resolve_ont_instrument_run_receipt(
         "event_type": event.event_type,
         "minknow_payload": event.minknow_payload,
         "output_files": event.output_files,
-        "terminal_artifact_manifest_sha256": (
-            run.terminal_artifact_manifest_sha256
-            if run.observed_generation == event.observed_generation
-            else None
-        ),
+        "terminal_artifact_manifest_sha256": terminal_manifest_digest,
     }
     return build_external_member_receipt(
         source_store_id="core-ngs",
@@ -474,18 +528,25 @@ async def resolve_ngs_job_receipt(
     job = await session.get(Job, job_id)
     if job is None or job.model_id != "nanopore":
         raise KeyError("core NGS job identity was not found")
+    params = job.params if isinstance(job.params, dict) else {}
+    workflow_id = params.get("ont_workflow_id")
+    if not isinstance(workflow_id, str) or not workflow_id:
+        raise ValueError("core NGS job lacks a canonical workflow identity")
+    workflow = get_ont_workflow_spec(workflow_id)
+    if workflow.workflow_id != workflow_id:
+        raise ValueError("core NGS job workflow identity is not canonical")
     launch = {
         "id": job.id,
         "name": job.name,
         "model_id": job.model_id,
         "mode": job.mode,
-        "params": job.params,
+        "params": params,
         "created_at": _json_value(job.created_at),
         "output_dir": job.output_dir,
         "child_output_dir": job.child_output_dir,
         "parent_job_id": job.parent_job_id,
         "source_stage_job_id": job.source_stage_job_id,
-        "source_instrument_run_id": (job.params or {}).get("source_instrument_run_id"),
+        "source_instrument_run_id": params.get("source_instrument_run_id"),
     }
     return build_external_member_receipt(
         source_store_id="core-ngs",
@@ -503,18 +564,39 @@ async def resolve_ngs_result_manifest_receipt(
     session: AsyncSession,
     *,
     job_id: str,
+    manifest_identity: str = "sequence-qc-manifest",
 ) -> ExternalMemberReceipt:
+    if manifest_identity != "sequence-qc-manifest":
+        raise KeyError("NGS result manifest identity was not found")
     job = await session.get(Job, job_id)
     if job is None or job.model_id != "nanopore":
         raise KeyError("core NGS job identity was not found")
     result_root = resolve_persisted_job_result_root(job)
     manifest_path = find_manifest_in_result_root(result_root)
     raw = manifest_path.read_bytes()
-    manifest = load_sequence_qc_manifest(manifest_path, raw_bytes=raw)
+    params = job.params if isinstance(job.params, dict) else {}
+    workflow_id = params.get("ont_workflow_id")
+    if not isinstance(workflow_id, str) or not workflow_id:
+        raise ValueError("core NGS job lacks a canonical workflow identity")
+    workflow = get_ont_workflow_spec(workflow_id)
+    if workflow.workflow_id != workflow_id:
+        raise ValueError("core NGS job workflow identity is not canonical")
+    manifest = load_sequence_qc_manifest(
+        manifest_path,
+        raw_bytes=raw,
+        expected_job_id=job.id,
+        expected_workflow_id=workflow_id,
+    )
+    if manifest.get("job_id") != job.id:
+        raise ValueError("NGS result manifest is not owned by the requested Job")
     source_schema = manifest.get("schema")
     if source_schema == VERIFICATION_SCHEMA:
         if "MALFORMED_VERIFICATION_MANIFEST" in manifest.get("reason_codes", []):
             raise ValueError("NGS result verification manifest is malformed")
+    elif source_schema == "sequence_qc.manifest.v1" and manifest.get(
+        "artifact_schema_version"
+    ) in {1, 2}:
+        pass
     elif source_schema is None and manifest.get("artifact_schema_version") in {1, 2}:
         required = {"job_id", "workflow_status", "verification_status", "artifacts"}
         if not required.issubset(manifest):
@@ -527,12 +609,78 @@ async def resolve_ngs_result_manifest_receipt(
     return build_external_member_receipt(
         source_store_id="core-ngs",
         entity_kind="ngs_result_manifest",
-        entity_id=f"{job.id}:sequence-qc-manifest",
+        entity_id=f"{job.id}:{manifest_identity}",
         source_generation_or_revision="result-manifest",
         content_digest=_sha256_bytes(raw),
         source_schema=source_schema,
         availability="available",
         reopen_destination=_reopen("ngs-job-evidence", job_id=job.id),
+    )
+
+
+async def resolve_sample_revision_receipt(
+    session: AsyncSession,
+    *,
+    global_domain_experiment_id: str,
+    sample_id: str,
+    sample_revision_id: str,
+) -> ExternalMemberReceipt:
+    from molbio_ngs_services import get_sample_revision
+
+    revision = await get_sample_revision(
+        session,
+        global_domain_experiment_id,
+        sample_id,
+        sample_revision_id,
+    )
+    return build_external_member_receipt(
+        source_store_id="molbio-ngs-domain",
+        entity_kind="sample_revision",
+        entity_id=revision.id,
+        source_generation_or_revision=revision.revision_number,
+        content_digest=revision.payload_sha256,
+        source_schema="bms.molbio-ngs.sample-revision.v1",
+        availability="available",
+        reopen_destination=_reopen(
+            "molbio-ngs-sample-revision",
+            global_domain_experiment_id=global_domain_experiment_id,
+            sample_id=sample_id,
+            sample_revision_id=revision.id,
+        ),
+    )
+
+
+async def resolve_state_revision_receipt(
+    session: AsyncSession,
+    *,
+    global_domain_experiment_id: str,
+    state_revision_id: str,
+) -> ExternalMemberReceipt:
+    from molbio_ngs_services import get_state_revision, verify_state_revision_integrity
+
+    revision = await get_state_revision(
+        session, global_domain_experiment_id, state_revision_id
+    )
+    payload, membership_graph = await verify_state_revision_integrity(session, revision)
+    content_digest = _sha256_payload(
+        {
+            "state_payload": payload,
+            "ordered_membership_graph": membership_graph,
+        }
+    )
+    return build_external_member_receipt(
+        source_store_id="molbio-ngs-domain",
+        entity_kind="ngs_molbio_state_revision",
+        entity_id=revision.id,
+        source_generation_or_revision=revision.revision_number,
+        content_digest=content_digest,
+        source_schema="bms.molbio-ngs.domain-state-revision.v1",
+        availability="available",
+        reopen_destination=_reopen(
+            "molbio-ngs-state-revision",
+            global_domain_experiment_id=global_domain_experiment_id,
+            state_revision_id=revision.id,
+        ),
     )
 
 
@@ -587,5 +735,7 @@ __all__ = [
     "resolve_ont_instrument_run_receipt",
     "resolve_pcr_experiment_revision_receipt",
     "resolve_primer_revision_receipt",
+    "resolve_sample_revision_receipt",
+    "resolve_state_revision_receipt",
     "serialize_external_member_receipt",
 ]

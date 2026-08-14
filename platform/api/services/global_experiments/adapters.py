@@ -21,6 +21,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import (
+    ApprovedNgsComparisonPanel,
     ConformationalMappingArtifact,
     ConformationalMappingRecord,
     ConformationalMappingRequest,
@@ -39,7 +40,25 @@ from database import (
     RFD3LocalRedesignRequest,
 )
 from molbio_database import molbio_session
-from molbio_models import MolecularDocument, MolecularOperation, MolecularOperationInput, MolecularOperationOutput, MolecularRevision
+from molbio_models import (
+    MolecularDocument,
+    MolecularOperation,
+    MolecularOperationInput,
+    MolecularOperationOutput,
+    MolecularRevision,
+    PCRExperimentRevision,
+    PrimerRevision,
+)
+from molbio_ngs_database import molbio_ngs_session_factory
+from molbio_ngs_models import (
+    MolBioNGSDomainStateMember,
+    MolBioNGSDomainStateRevision,
+    MolBioNGSEvidenceAssessment,
+    MolBioNGSMemberReceipt,
+    MolBioNGSReferenceResource,
+    MolBioNGSReferenceRevision,
+    MolBioNGSSampleRevision,
+)
 from scripts.rfd3_local_redesign.contract import request_sha256 as rfd3_request_sha256
 from services.conformational_mapping.contracts import canonical_sha256 as cm_canonical_sha256
 from services.frustrampnn.contracts import canonical_json_bytes as frustrampnn_canonical_bytes
@@ -54,6 +73,23 @@ from services.result_contracts import resolve_result_contract
 from services.sequence_qc_manifest import SequenceQcManifestError, load_sequence_qc_manifest
 from services.ont_run_control import TERMINAL_RUN_STATES, _valid_terminal_manifest
 from services.job_result_roots import resolve_persisted_job_result_root
+from services.molbio_ngs_member_receipts import (
+    ExternalMemberReceipt,
+    resolve_approved_comparison_panel_receipt,
+    resolve_molecular_operation_receipt,
+    resolve_molecular_revision_receipt,
+    resolve_ngs_job_receipt,
+    resolve_ngs_result_manifest_receipt,
+    resolve_ont_instrument_run_receipt,
+    resolve_pcr_experiment_revision_receipt,
+    resolve_primer_revision_receipt,
+    resolve_sample_revision_receipt,
+    resolve_state_revision_receipt,
+    serialize_external_member_receipt,
+)
+from services.molbio_ngs_references import resolve_ngs_reference_revision_receipt
+from services.molbio_ngs_evidence import resolve_evidence_assessment_receipt
+from services.ngs_comparison_panels import _validated_panel_manifest
 from paths import get_inputs_dir, get_results_dir, resolve_runtime_data_path
 
 
@@ -149,11 +185,19 @@ registry = AdapterRegistry()
 
 
 def _source_build_revision() -> str:
-    value = str(os.getenv("BMS_BUILD_SHA") or os.getenv("GIT_SHA") or "").strip()
-    if not value or len(value) > 160:
+    try:
+        from services.ngs_molbio_runtime_status import runtime_implementation_record
+
+        value = runtime_implementation_record().get("successor_source_commit")
+    except (ImportError, OSError, RuntimeError, ValueError) as exc:
         raise AdapterError(
             "source_revision_unavailable",
-            "source build revision is unavailable; fail closed rather than issue unverifiable receipt",
+            "package-local runtime source authority is unavailable",
+        ) from exc
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40}", value) is None:
+        raise AdapterError(
+            "source_revision_unavailable",
+            "package-local runtime source revision is invalid",
         )
     return value
 
@@ -338,6 +382,7 @@ def _receipt(
     contract_digest: str | None,
     reopen_uri: str,
     metadata: dict[str, Any],
+    entity_revision_id: str | None = None,
 ) -> dict[str, Any]:
     _sha256(content_digest, "content digest")
     if contract_digest is not None:
@@ -349,7 +394,7 @@ def _receipt(
         "store_id": adapter.store_id,
         "entity_kind": adapter.entity_kind,
         "entity_id": entity_id,
-        "entity_revision_id": contract_digest or content_digest,
+        "entity_revision_id": entity_revision_id or contract_digest or content_digest,
         "content_digest": content_digest,
         "contract_digest": contract_digest,
         "source_build_revision": _source_build_revision(),
@@ -2103,6 +2148,1064 @@ class NgsAnalysisReferenceAdapter(SequenceQcReferenceAdapter):
         return receipt
 
 
+def _member_global_entity_id(authority: dict[str, Any]) -> str:
+    kind = str(authority.get("entity_kind") or "")
+    entity_id = str(authority.get("entity_id") or "")
+    reopen = authority.get("reopen_destination")
+    params = reopen.get("params") if isinstance(reopen, dict) else None
+    if not isinstance(params, dict):
+        raise AdapterError("source_contract_invalid", "native member receipt has no typed reopen identity")
+    key_map = {
+        "molecular_revision": ("sequence_id", "revision_id"),
+        "primer_revision": ("primer_id", "revision_id"),
+        "pcr_experiment_revision": ("experiment_id", "revision_id"),
+        "molecular_operation": ("operation_id",),
+        "ngs_reference_revision": (
+            "global_domain_experiment_id",
+            "reference_id",
+            "revision_id",
+        ),
+        "ngs_comparison_panel": ("panel_id", "panel_version"),
+        "ont_instrument_run": ("run_id", "observed_generation"),
+        "ngs_job": ("job_id",),
+        "ngs_evidence_assessment": ("global_domain_experiment_id", "evidence_id"),
+        "sample_revision": (
+            "global_domain_experiment_id",
+            "sample_id",
+            "sample_revision_id",
+        ),
+        "ngs_molbio_state_revision": (
+            "global_domain_experiment_id",
+            "state_revision_id",
+        ),
+    }
+    if kind == "ngs_result_manifest":
+        job_id = params.get("job_id")
+        suffix = f"{job_id}:" if isinstance(job_id, str) else ""
+        if not suffix or not entity_id.startswith(suffix):
+            raise AdapterError("source_contract_invalid", "native manifest receipt identity is malformed")
+        return urlencode(
+            {
+                "job_id": job_id,
+                "manifest_identity": entity_id[len(suffix):],
+            }
+        )
+    keys = key_map.get(kind)
+    if keys is None or any(key not in params for key in keys):
+        raise AdapterError("source_contract_invalid", "native member receipt identity is incomplete")
+    if len(keys) == 1:
+        value = str(params[keys[0]])
+        if value != entity_id:
+            raise AdapterError("source_contract_invalid", "native member receipt stable identity diverges")
+        return value
+    return urlencode({key: str(params[key]) for key in keys})
+
+
+def _exact_member_receipt(
+    adapter: DomainAdapter,
+    *,
+    requested_entity_id: str,
+    member: ExternalMemberReceipt,
+    reopen_uri: str,
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
+    accepted_schemas = getattr(adapter, "source_schemas", frozenset())
+    fixed_revision_marker = getattr(adapter, "fixed_revision_marker", None)
+    if (
+        member.entity_kind != adapter.entity_kind
+        or member.source_store_id != adapter.store_id
+        or member.availability != "available"
+        or (accepted_schemas and member.source_schema not in accepted_schemas)
+        or (
+            fixed_revision_marker is not None
+            and str(member.source_generation_or_revision) != fixed_revision_marker
+        )
+        or _member_global_entity_id({
+            "entity_kind": member.entity_kind,
+            "entity_id": member.entity_id,
+            "reopen_destination": member.reopen_destination,
+        }) != requested_entity_id
+    ):
+        raise AdapterError("source_contract_invalid", "native member receipt authority diverges from requested identity")
+    return _receipt(
+        adapter,
+        entity_id=requested_entity_id,
+        entity_revision_id=str(member.source_generation_or_revision),
+        content_digest=_sha256(member.content_digest, "native member content digest"),
+        contract_digest=_sha256(member.content_digest, "native member contract digest"),
+        reopen_uri=reopen_uri,
+        metadata={
+            "canonical_state": "immutable",
+            "native_entity_id": member.entity_id,
+            "native_revision_or_generation": str(member.source_generation_or_revision),
+            "source_schema": member.source_schema,
+            **metadata,
+        },
+    )
+
+
+async def _resolve_exact_member(awaitable: Any) -> ExternalMemberReceipt:
+    try:
+        return await awaitable
+    except KeyError as exc:
+        raise AdapterError("entity_not_found", str(exc)) from exc
+    except (ValueError, OSError) as exc:
+        raise AdapterError("source_contract_invalid", str(exc)) from exc
+
+
+async def _exact_member_domain_owner(
+    session: AsyncSession,
+    *,
+    receipt_id: str,
+) -> str:
+    rows = list((await session.execute(
+        select(MolBioNGSDomainStateRevision.global_domain_experiment_id)
+        .join(
+            MolBioNGSDomainStateMember,
+            MolBioNGSDomainStateMember.state_revision_id == MolBioNGSDomainStateRevision.id,
+        )
+        .where(MolBioNGSDomainStateMember.receipt_id == receipt_id)
+        .distinct()
+        .limit(2)
+    )).scalars().all())
+    if len(rows) != 1:
+        raise AdapterError(
+            "source_contract_invalid",
+            "exact member receipt does not resolve to one Domain owner",
+        )
+    return str(rows[0])
+
+
+async def _exact_local_member_authority(
+    session: AsyncSession,
+    *,
+    member: ExternalMemberReceipt,
+) -> tuple[str, str]:
+    """Resolve one persisted native receipt and its sole Domain owner.
+
+    Native resolvers issue a fresh wrapper receipt on each call, so ownership
+    cannot be proved from that transient receipt ID.  Resolve instead by the
+    complete immutable native identity and digest, then verify the persisted
+    canonical body before following its state-membership edge.
+    """
+
+    canonical_reopen = json.dumps(
+        member.reopen_destination,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    rows = list((await session.scalars(
+        select(MolBioNGSMemberReceipt)
+        .where(
+            MolBioNGSMemberReceipt.source_store_id == member.source_store_id,
+            MolBioNGSMemberReceipt.entity_kind == member.entity_kind,
+            MolBioNGSMemberReceipt.entity_id == member.entity_id,
+            MolBioNGSMemberReceipt.source_generation_or_revision
+            == str(member.source_generation_or_revision),
+            MolBioNGSMemberReceipt.content_digest == member.content_digest,
+            MolBioNGSMemberReceipt.availability == member.availability,
+            MolBioNGSMemberReceipt.reopen_destination == canonical_reopen,
+        )
+        .order_by(MolBioNGSMemberReceipt.receipt_id)
+        .limit(2)
+    )).all())
+    if len(rows) != 1:
+        raise AdapterError(
+            "source_contract_invalid",
+            "native immutable identity and digest do not resolve to one local member receipt",
+        )
+    row = rows[0]
+    try:
+        authority = serialize_external_member_receipt(row)
+    except ValueError as exc:
+        raise AdapterError("source_digest_mismatch", str(exc)) from exc
+    expected = {
+        "source_store_id": member.source_store_id,
+        "entity_kind": member.entity_kind,
+        "entity_id": member.entity_id,
+        "source_generation_or_revision": str(member.source_generation_or_revision),
+        "content_digest": member.content_digest,
+        "source_schema": member.source_schema,
+        "availability": member.availability,
+        "reopen_destination": member.reopen_destination,
+    }
+    if any(authority.get(key) != value for key, value in expected.items()):
+        raise AdapterError(
+            "source_digest_mismatch",
+            "persisted local member receipt diverges from native immutable authority",
+        )
+    persisted_receipt_id = str(row.receipt_id)
+    canonical_receipt_id = authority.get("receipt_id")
+    if not isinstance(canonical_receipt_id, str) or canonical_receipt_id != persisted_receipt_id:
+        raise AdapterError(
+            "source_digest_mismatch",
+            "persisted local member receipt ID diverges from its canonical body",
+        )
+
+    def canonical_timestamp(value: Any) -> str:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("member receipt timestamp is invalid")
+        candidate = value.strip()
+        if candidate.endswith("Z"):
+            candidate = f"{candidate[:-1]}+00:00"
+        parsed = datetime.fromisoformat(candidate)
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError("member receipt timestamp must be timezone-aware")
+        return parsed.astimezone(timezone.utc).isoformat(timespec="microseconds")
+
+    try:
+        canonical_created_at = canonical_timestamp(authority.get("created_at"))
+        persisted_created_at = canonical_timestamp(row.created_at)
+    except (TypeError, ValueError) as exc:
+        raise AdapterError("source_digest_mismatch", str(exc)) from exc
+    if canonical_created_at != persisted_created_at:
+        raise AdapterError(
+            "source_digest_mismatch",
+            "persisted local member receipt timestamp diverges from its canonical body",
+        )
+
+    domain_id = await _exact_member_domain_owner(
+        session,
+        receipt_id=canonical_receipt_id,
+    )
+    return domain_id, canonical_receipt_id
+
+
+class ExactMolecularRevisionMemberAdapter:
+    adapter_id = "bms.molbio.member-molecular-revision.adapter.v1"
+    adapter_version = 1
+    display_name = "Exact molecular revision member"
+    entity_kind = "molecular_revision"
+    domain_kind = "ngs_molbio"
+    store_id = "molbio"
+    source_schemas = frozenset({"bms.molbio.molecular-revision.v1"})
+
+    def __init__(
+        self,
+        *,
+        session_factory: Callable[[], Any] = molbio_session,
+        domain_session_factory: Callable[[], Any] = molbio_ngs_session_factory,
+    ):
+        self._sessions = session_factory
+        self._domain_sessions = domain_session_factory
+
+    async def search(self, core_session: AsyncSession, *, query: str, limit: int) -> list[EntityProjection]:
+        del core_session
+        normalized = _search_inputs(query, limit)
+        async with self._sessions() as session:
+            statement = select(MolecularRevision)
+            if normalized:
+                pattern = f"%{normalized}%"
+                statement = statement.where(or_(MolecularRevision.id.ilike(pattern), MolecularRevision.document_id.ilike(pattern)))
+            rows = list((await session.scalars(statement.order_by(MolecularRevision.created_at.desc()).limit(limit))).all())
+        return [EntityProjection(
+            entity_id=urlencode({"sequence_id": row.document_id, "revision_id": row.id}),
+            entity_kind=self.entity_kind,
+            label=_bounded_label((row.snapshot or {}).get("name"), row.id),
+            canonical_state="immutable",
+            metadata={"sequence_id": row.document_id, "revision_id": row.id, "revision_number": row.revision_number},
+        ) for row in rows]
+
+    async def verify(self, core_session: AsyncSession, entity_id: str) -> dict[str, Any]:
+        del core_session
+        identity = _parse_composite_identity(entity_id, ("sequence_id", "revision_id"))
+        async with self._sessions() as session:
+            member = await _resolve_exact_member(resolve_molecular_revision_receipt(session, **identity))
+        async with self._domain_sessions() as domain_session:
+            domain_id, native_receipt_id = await _exact_local_member_authority(
+                domain_session, member=member
+            )
+        return _exact_member_receipt(
+            self, requested_entity_id=entity_id, member=member,
+            reopen_uri=_query_uri("/designer", **identity),
+            metadata={
+                "sequence_id": identity["sequence_id"],
+                "revision_id": identity["revision_id"],
+                "global_domain_experiment_id": domain_id,
+                "native_member_receipt_id": native_receipt_id,
+                "result_contract_id": "molbio_molecular_revision_member_v1",
+            },
+        )
+
+
+class ExactPrimerRevisionAdapter:
+    adapter_id = "bms.molbio.primer-revision.adapter.v1"
+    adapter_version = 1
+    display_name = "Exact primer revision"
+    entity_kind = "primer_revision"
+    domain_kind = "ngs_molbio"
+    store_id = "molbio"
+    source_schemas = frozenset({"bms.molbio.primer-revision.v1"})
+
+    def __init__(
+        self,
+        *,
+        session_factory: Callable[[], Any] = molbio_session,
+        domain_session_factory: Callable[[], Any] = molbio_ngs_session_factory,
+    ):
+        self._sessions = session_factory
+        self._domain_sessions = domain_session_factory
+
+    async def search(self, core_session: AsyncSession, *, query: str, limit: int) -> list[EntityProjection]:
+        del core_session
+        normalized = _search_inputs(query, limit)
+        async with self._sessions() as session:
+            statement = select(PrimerRevision)
+            if normalized:
+                pattern = f"%{normalized}%"
+                statement = statement.where(or_(PrimerRevision.id.ilike(pattern), PrimerRevision.primer_id.ilike(pattern)))
+            rows = list((await session.scalars(statement.order_by(PrimerRevision.created_at.desc()).limit(limit))).all())
+        return [EntityProjection(
+            entity_id=urlencode({"primer_id": row.primer_id, "revision_id": row.id}),
+            entity_kind=self.entity_kind, label=_bounded_label(row.id, row.primer_id),
+            canonical_state="immutable", metadata={"primer_id": row.primer_id, "revision_number": row.revision_number},
+        ) for row in rows]
+
+    async def verify(self, core_session: AsyncSession, entity_id: str) -> dict[str, Any]:
+        del core_session
+        identity = _parse_composite_identity(entity_id, ("primer_id", "revision_id"))
+        async with self._sessions() as session:
+            member = await _resolve_exact_member(resolve_primer_revision_receipt(session, **identity))
+        async with self._domain_sessions() as domain_session:
+            domain_id, native_receipt_id = await _exact_local_member_authority(
+                domain_session, member=member
+            )
+        return _exact_member_receipt(
+            self, requested_entity_id=entity_id, member=member,
+            reopen_uri=_query_uri("/molbio", **identity),
+            metadata={
+                **identity,
+                "global_domain_experiment_id": domain_id,
+                "native_member_receipt_id": native_receipt_id,
+                "result_contract_id": "molbio_primer_revision_v1",
+            },
+        )
+
+
+class ExactPcrExperimentRevisionAdapter:
+    adapter_id = "bms.molbio.pcr-experiment-revision.adapter.v1"
+    adapter_version = 1
+    display_name = "Exact PCR experiment revision"
+    entity_kind = "pcr_experiment_revision"
+    domain_kind = "ngs_molbio"
+    store_id = "molbio"
+    source_schemas = frozenset({"bms.molbio.pcr-experiment-revision.v1"})
+
+    def __init__(
+        self,
+        *,
+        session_factory: Callable[[], Any] = molbio_session,
+        domain_session_factory: Callable[[], Any] = molbio_ngs_session_factory,
+    ):
+        self._sessions = session_factory
+        self._domain_sessions = domain_session_factory
+
+    async def search(self, core_session: AsyncSession, *, query: str, limit: int) -> list[EntityProjection]:
+        del core_session
+        normalized = _search_inputs(query, limit)
+        async with self._sessions() as session:
+            statement = select(PCRExperimentRevision)
+            if normalized:
+                pattern = f"%{normalized}%"
+                statement = statement.where(or_(PCRExperimentRevision.id.ilike(pattern), PCRExperimentRevision.experiment_id.ilike(pattern)))
+            rows = list((await session.scalars(statement.order_by(PCRExperimentRevision.created_at.desc()).limit(limit))).all())
+        return [EntityProjection(
+            entity_id=urlencode({"experiment_id": row.experiment_id, "revision_id": row.id}),
+            entity_kind=self.entity_kind, label=_bounded_label(row.id, row.experiment_id),
+            canonical_state="immutable", metadata={"experiment_id": row.experiment_id, "revision_number": row.revision_number},
+        ) for row in rows]
+
+    async def verify(self, core_session: AsyncSession, entity_id: str) -> dict[str, Any]:
+        del core_session
+        identity = _parse_composite_identity(entity_id, ("experiment_id", "revision_id"))
+        async with self._sessions() as session:
+            member = await _resolve_exact_member(resolve_pcr_experiment_revision_receipt(session, **identity))
+        async with self._domain_sessions() as domain_session:
+            domain_id, native_receipt_id = await _exact_local_member_authority(
+                domain_session, member=member
+            )
+        return _exact_member_receipt(
+            self, requested_entity_id=entity_id, member=member,
+            reopen_uri=_query_uri("/molbio", **identity),
+            metadata={
+                **identity,
+                "global_domain_experiment_id": domain_id,
+                "native_member_receipt_id": native_receipt_id,
+                "result_contract_id": "molbio_pcr_experiment_revision_v1",
+            },
+        )
+
+
+class ExactMolecularOperationMemberAdapter:
+    adapter_id = "bms.molbio.member-operation.adapter.v1"
+    adapter_version = 1
+    display_name = "Exact molecular operation member"
+    entity_kind = "molecular_operation"
+    domain_kind = "ngs_molbio"
+    store_id = "molbio"
+    source_schemas = frozenset({"bms.molbio.molecular-operation.v1"})
+    fixed_revision_marker = "event"
+
+    def __init__(
+        self,
+        *,
+        session_factory: Callable[[], Any] = molbio_session,
+        domain_session_factory: Callable[[], Any] = molbio_ngs_session_factory,
+    ):
+        self._sessions = session_factory
+        self._domain_sessions = domain_session_factory
+
+    async def search(self, core_session: AsyncSession, *, query: str, limit: int) -> list[EntityProjection]:
+        del core_session
+        normalized = _search_inputs(query, limit)
+        async with self._sessions() as session:
+            statement = select(MolecularOperation)
+            if normalized:
+                pattern = f"%{normalized}%"
+                statement = statement.where(or_(MolecularOperation.id.ilike(pattern), MolecularOperation.operation_kind.ilike(pattern)))
+            rows = list((await session.scalars(statement.order_by(MolecularOperation.created_at.desc()).limit(limit))).all())
+        return [EntityProjection(row.id, self.entity_kind, _bounded_label(row.operation_kind, row.id), str(row.status), {"operation_kind": row.operation_kind}) for row in rows]
+
+    async def verify(self, core_session: AsyncSession, entity_id: str) -> dict[str, Any]:
+        del core_session
+        if not entity_id or len(entity_id) > 160:
+            raise AdapterError("invalid_entity_id", "molecular operation identity is invalid")
+        async with self._sessions() as session:
+            member = await _resolve_exact_member(resolve_molecular_operation_receipt(session, operation_id=entity_id))
+            inputs = list((await session.scalars(select(MolecularOperationInput).where(MolecularOperationInput.operation_id == entity_id).order_by(MolecularOperationInput.position, MolecularOperationInput.id))).all())
+            outputs = list((await session.scalars(select(MolecularOperationOutput).where(MolecularOperationOutput.operation_id == entity_id).order_by(MolecularOperationOutput.position, MolecularOperationOutput.id))).all())
+            revision_ids = {item.revision_id for item in [*inputs, *outputs]}
+            revisions = {row.id: row for row in (await session.scalars(select(MolecularRevision).where(MolecularRevision.id.in_(revision_ids)))).all()} if revision_ids else {}
+        if len(revisions) != len(revision_ids):
+            raise AdapterError("source_contract_invalid", "molecular operation lineage has a missing revision")
+        async with self._domain_sessions() as domain_session:
+            domain_id, native_receipt_id = await _exact_local_member_authority(
+                domain_session, member=member
+            )
+        lineage = []
+        for relation, rows in (("uses_input", inputs), ("produced", outputs)):
+            for row in rows:
+                revision = revisions[row.revision_id]
+                lineage.append({
+                    "relation": relation,
+                    "role": row.role,
+                    "ordinal": row.position,
+                    "entity_kind": "molecular_revision",
+                    "entity_id": urlencode({"sequence_id": revision.document_id, "revision_id": revision.id}),
+                    "receipt_content_digest": _sha256(revision.content_sha256, "molecular revision digest"),
+                })
+        return _exact_member_receipt(
+            self, requested_entity_id=entity_id, member=member,
+            reopen_uri=_query_uri("/designer", operation_id=entity_id),
+            metadata={
+                "operation_id": entity_id,
+                "global_domain_experiment_id": domain_id,
+                "native_member_receipt_id": native_receipt_id,
+                "native_lineage": lineage,
+                "result_contract_id": "molbio_molecular_operation_member_v1",
+            },
+        )
+
+
+class ExactSampleRevisionAdapter:
+    adapter_id = "bms.ngs-molbio.sample-revision.adapter.v1"
+    adapter_version = 1
+    display_name = "Exact NGS/MolBio sample revision"
+    entity_kind = "sample_revision"
+    domain_kind = "ngs_molbio"
+    store_id = "molbio-ngs-domain"
+    source_schemas = frozenset({"bms.molbio-ngs.sample-revision.v1"})
+
+    def __init__(self, *, session_factory: Callable[[], Any] = molbio_ngs_session_factory):
+        self._sessions = session_factory
+
+    async def search(self, core_session: AsyncSession, *, query: str, limit: int) -> list[EntityProjection]:
+        del core_session
+        normalized = _search_inputs(query, limit)
+        async with self._sessions() as session:
+            statement = select(MolBioNGSSampleRevision)
+            if normalized:
+                pattern = f"%{normalized}%"
+                statement = statement.where(or_(MolBioNGSSampleRevision.id.ilike(pattern), MolBioNGSSampleRevision.sample_id.ilike(pattern), MolBioNGSSampleRevision.global_domain_experiment_id.ilike(pattern)))
+            rows = list((await session.scalars(statement.order_by(MolBioNGSSampleRevision.created_at.desc()).limit(limit))).all())
+        return [EntityProjection(
+            urlencode({"global_domain_experiment_id": row.global_domain_experiment_id, "sample_id": row.sample_id, "sample_revision_id": row.id}),
+            self.entity_kind, _bounded_label(row.sample_id, row.id), "immutable",
+            {"global_domain_experiment_id": row.global_domain_experiment_id, "sample_id": row.sample_id, "revision_number": row.revision_number},
+        ) for row in rows]
+
+    async def verify(self, core_session: AsyncSession, entity_id: str) -> dict[str, Any]:
+        del core_session
+        identity = _parse_composite_identity(entity_id, ("global_domain_experiment_id", "sample_id", "sample_revision_id"))
+        async with self._sessions() as session:
+            member = await _resolve_exact_member(resolve_sample_revision_receipt(session, **identity))
+        return _exact_member_receipt(
+            self, requested_entity_id=entity_id, member=member,
+            reopen_uri=_query_uri(f"/molbio-ngs/domain-experiments/{identity['global_domain_experiment_id']}", sample_id=identity["sample_id"], sample_revision_id=identity["sample_revision_id"]),
+            metadata={**identity, "result_contract_id": "ngs_molbio_sample_revision_v1"},
+        )
+
+
+class ExactStateRevisionAdapter:
+    adapter_id = "bms.ngs-molbio.state-revision.adapter.v1"
+    adapter_version = 1
+    display_name = "Exact NGS/MolBio scientific-state revision"
+    entity_kind = "ngs_molbio_state_revision"
+    domain_kind = "ngs_molbio"
+    store_id = "molbio-ngs-domain"
+    source_schemas = frozenset({"bms.molbio-ngs.domain-state-revision.v1"})
+
+    def __init__(self, *, session_factory: Callable[[], Any] = molbio_ngs_session_factory):
+        self._sessions = session_factory
+
+    async def search(self, core_session: AsyncSession, *, query: str, limit: int) -> list[EntityProjection]:
+        del core_session
+        normalized = _search_inputs(query, limit)
+        async with self._sessions() as session:
+            statement = select(MolBioNGSDomainStateRevision)
+            if normalized:
+                pattern = f"%{normalized}%"
+                statement = statement.where(or_(MolBioNGSDomainStateRevision.id.ilike(pattern), MolBioNGSDomainStateRevision.global_domain_experiment_id.ilike(pattern)))
+            rows = list((await session.scalars(statement.order_by(MolBioNGSDomainStateRevision.created_at.desc()).limit(limit))).all())
+        return [EntityProjection(
+            urlencode({"global_domain_experiment_id": row.global_domain_experiment_id, "state_revision_id": row.id}), self.entity_kind,
+            _bounded_label(f"State revision {row.revision_number}", row.id), "immutable",
+            {"global_domain_experiment_id": row.global_domain_experiment_id, "revision_number": row.revision_number, "binding_revision_id": row.binding_revision_id},
+        ) for row in rows]
+
+    async def verify(self, core_session: AsyncSession, entity_id: str) -> dict[str, Any]:
+        del core_session
+        identity = _parse_composite_identity(entity_id, ("global_domain_experiment_id", "state_revision_id"))
+        async with self._sessions() as session:
+            revision = await session.get(MolBioNGSDomainStateRevision, identity["state_revision_id"])
+            member = await _resolve_exact_member(resolve_state_revision_receipt(session, **identity))
+            if revision is None or revision.global_domain_experiment_id != identity["global_domain_experiment_id"]:
+                raise AdapterError("entity_not_found", "state revision identity is unavailable")
+            from molbio_ngs_services import verify_state_revision_integrity
+            payload, graph = await verify_state_revision_integrity(session, revision)
+            sample_ids = list(payload.get("design", {}).get("sample_revision_ids", []))
+            sample_rows = {
+                row.id: row
+                for row in (
+                    await session.scalars(
+                        select(MolBioNGSSampleRevision).where(
+                            MolBioNGSSampleRevision.id.in_(sample_ids)
+                        )
+                    )
+                ).all()
+            } if sample_ids else {}
+        lineage = [{
+            "relation": "references",
+            "role": item["role"],
+            "ordinal": item["ordinal"],
+            "entity_kind": item["entity_kind"],
+            "entity_id": _member_global_entity_id(item),
+            "receipt_content_digest": item["content_digest"],
+        } for item in graph]
+        lineage.extend({
+            "relation": "references",
+            "role": "sample",
+            "ordinal": ordinal,
+            "entity_kind": "sample_revision",
+            "entity_id": urlencode({
+                "global_domain_experiment_id": identity["global_domain_experiment_id"],
+                "sample_id": sample_rows[sample_id].sample_id,
+                "sample_revision_id": sample_id,
+            }),
+            "receipt_content_digest": sample_rows[sample_id].payload_sha256,
+        } for ordinal, sample_id in enumerate(sample_ids))
+        return _exact_member_receipt(
+            self, requested_entity_id=entity_id, member=member,
+            reopen_uri=_query_uri(f"/molbio-ngs/domain-experiments/{identity['global_domain_experiment_id']}", state_revision_id=identity["state_revision_id"]),
+            metadata={
+                **identity,
+                "binding_revision_id": revision.binding_revision_id,
+                "payload_sha256": revision.payload_sha256,
+                "membership_graph_sha256": revision.membership_graph_sha256,
+                "native_lineage": lineage,
+                "result_contract_id": "ngs_molbio_state_revision_v1",
+            },
+        )
+
+
+class ExactNgsReferenceRevisionAdapter:
+    adapter_id = "bms.ngs.reference-revision.adapter.v1"
+    adapter_version = 1
+    display_name = "Exact managed NGS reference revision"
+    entity_kind = "ngs_reference_revision"
+    domain_kind = "ngs_molbio"
+    store_id = "molbio-ngs-domain"
+    source_schemas = frozenset({"bms.molbio-ngs.reference-revision.v1"})
+
+    def __init__(self, *, session_factory: Callable[[], Any] = molbio_ngs_session_factory):
+        self._sessions = session_factory
+
+    async def search(self, core_session: AsyncSession, *, query: str, limit: int) -> list[EntityProjection]:
+        del core_session
+        normalized = _search_inputs(query, limit)
+        async with self._sessions() as session:
+            statement = select(MolBioNGSReferenceRevision, MolBioNGSReferenceResource).join(MolBioNGSReferenceResource, MolBioNGSReferenceResource.id == MolBioNGSReferenceRevision.reference_id)
+            if normalized:
+                pattern = f"%{normalized}%"
+                statement = statement.where(or_(MolBioNGSReferenceRevision.id.ilike(pattern), MolBioNGSReferenceRevision.reference_id.ilike(pattern), MolBioNGSReferenceResource.name.ilike(pattern)))
+            rows = (await session.execute(statement.order_by(MolBioNGSReferenceRevision.created_at.desc()).limit(limit))).all()
+        return [EntityProjection(
+            urlencode({
+                "global_domain_experiment_id": rev.global_domain_experiment_id,
+                "reference_id": rev.reference_id,
+                "revision_id": rev.id,
+            }),
+            self.entity_kind, _bounded_label(resource.name, rev.id), "immutable",
+            {"global_domain_experiment_id": rev.global_domain_experiment_id, "reference_id": rev.reference_id, "revision_number": rev.revision_number},
+        ) for rev, resource in rows]
+
+    async def verify(self, core_session: AsyncSession, entity_id: str) -> dict[str, Any]:
+        del core_session
+        identity = _parse_composite_identity(
+            entity_id,
+            ("global_domain_experiment_id", "reference_id", "revision_id"),
+        )
+        async with self._sessions() as session:
+            member = await _resolve_exact_member(resolve_ngs_reference_revision_receipt(
+                session,
+                global_domain_experiment_id=identity["global_domain_experiment_id"],
+                reference_id=identity["reference_id"],
+                revision_id=identity["revision_id"],
+            ))
+            revision = await session.get(MolBioNGSReferenceRevision, identity["revision_id"])
+        if revision is None:
+            raise AdapterError("entity_not_found", "managed reference revision does not exist")
+        payload = json.loads(revision.canonical_payload)
+        provenance = payload.get("source_provenance") if isinstance(payload, dict) else None
+        lineage = []
+        if isinstance(provenance, dict) and provenance.get("kind") == "molbio_molecular_revision":
+            sequence_id = provenance.get("sequence_id")
+            revision_id = provenance.get("molecular_revision_id")
+            digest = provenance.get("molecular_revision_sha256")
+            if not all(isinstance(value, str) and value for value in (sequence_id, revision_id, digest)):
+                raise AdapterError("source_contract_invalid", "managed reference molecular provenance is incomplete")
+            lineage.append({
+                "relation": "derived_from", "entity_kind": "molecular_revision",
+                "entity_id": urlencode({"sequence_id": sequence_id, "revision_id": revision_id}),
+                "receipt_content_digest": _sha256(digest, "molecular source digest"),
+            })
+        return _exact_member_receipt(
+            self, requested_entity_id=entity_id, member=member,
+            reopen_uri=_query_uri(
+                f"/molbio-ngs/domain-experiments/{identity['global_domain_experiment_id']}",
+                reference_id=identity["reference_id"],
+                revision_id=identity["revision_id"],
+            ),
+            metadata={**identity, "canonical_fasta_size_bytes": revision.canonical_fasta_size_bytes, "native_lineage": lineage, "result_contract_id": "ngs_reference_revision_v1"},
+        )
+
+
+class ExactNgsComparisonPanelAdapter:
+    adapter_id = "bms.ngs.comparison-panel.adapter.v1"
+    adapter_version = 1
+    display_name = "Exact approved NGS comparison panel"
+    entity_kind = "ngs_comparison_panel"
+    domain_kind = "ngs_molbio"
+    store_id = "core-ngs"
+    source_schemas = frozenset({"bms.ngs.approved-comparison-panel.v1"})
+
+    def __init__(
+        self,
+        *,
+        domain_session_factory: Callable[[], Any] = molbio_ngs_session_factory,
+    ):
+        self._domain_sessions = domain_session_factory
+
+    async def search(self, core_session: AsyncSession, *, query: str, limit: int) -> list[EntityProjection]:
+        normalized = _search_inputs(query, limit)
+        statement = select(ApprovedNgsComparisonPanel)
+        if normalized:
+            pattern = f"%{normalized}%"
+            statement = statement.where(or_(ApprovedNgsComparisonPanel.id.ilike(pattern), ApprovedNgsComparisonPanel.label.ilike(pattern)))
+        rows = list((await core_session.scalars(statement.order_by(ApprovedNgsComparisonPanel.created_at.desc()).limit(limit))).all())
+        return [EntityProjection(urlencode({"panel_id": row.id, "panel_version": row.version}), self.entity_kind, _bounded_label(row.label, row.id), str(row.status), {"panel_version": row.version}) for row in rows]
+
+    async def verify(self, core_session: AsyncSession, entity_id: str) -> dict[str, Any]:
+        identity = _parse_composite_identity(entity_id, ("panel_id", "panel_version"))
+        try:
+            panel_version = int(identity["panel_version"])
+        except ValueError as exc:
+            raise AdapterError("invalid_entity_id", "comparison panel version is invalid") from exc
+        member = await _resolve_exact_member(resolve_approved_comparison_panel_receipt(core_session, panel_id=identity["panel_id"], panel_version=panel_version))
+        async with self._domain_sessions() as domain_session:
+            domain_id, native_receipt_id = await _exact_local_member_authority(
+                domain_session, member=member
+            )
+        panel = await core_session.get(ApprovedNgsComparisonPanel, identity["panel_id"])
+        if panel is None:
+            raise AdapterError("entity_not_found", "comparison panel does not exist")
+        manifest = _validated_panel_manifest(panel)
+        role_map = {"host": "reference", "plasmid_decoy": "control"}
+        lineage = [{
+            "relation": "compared_with",
+            "role": role_map[str(item["role"])],
+            "ordinal": ordinal,
+            "compatibility_contract_id": "bms.ngs.approved-comparison-panel.v1",
+            "source_digest": item["revision_sha256"],
+            "entity_kind": "molecular_revision",
+            "entity_id": urlencode({"sequence_id": item["sequence_id"], "revision_id": item["revision_id"]}),
+            "receipt_content_digest": item["revision_sha256"],
+        } for ordinal, item in enumerate(manifest["entries"])]
+        return _exact_member_receipt(
+            self, requested_entity_id=entity_id, member=member,
+            reopen_uri=_query_uri("/ngs", panel_id=identity["panel_id"], panel_version=str(panel_version)),
+            metadata={
+                "panel_id": identity["panel_id"],
+                "panel_version": panel_version,
+                "entry_count": len(lineage),
+                "global_domain_experiment_id": domain_id,
+                "native_member_receipt_id": native_receipt_id,
+                "native_lineage": lineage,
+                "result_contract_id": "ngs_comparison_panel_v1",
+            },
+        )
+
+
+class ExactOntObservationAdapter:
+    adapter_id = "bms.ngs.ont-observation.adapter.v1"
+    adapter_version = 1
+    display_name = "Exact ONT run observation"
+    entity_kind = "ont_instrument_run"
+    domain_kind = "ngs_molbio"
+    store_id = "core-ngs"
+    source_schemas = frozenset({"bms.ont.instrument-run-observation.v1"})
+
+    def __init__(self, *, domain_session_factory: Callable[[], Any] = molbio_ngs_session_factory):
+        self._domain_sessions = domain_session_factory
+
+    async def search(self, core_session: AsyncSession, *, query: str, limit: int) -> list[EntityProjection]:
+        normalized = _search_inputs(query, limit)
+        statement = select(OntInstrumentRunEvent, OntInstrumentRun).join(OntInstrumentRun, OntInstrumentRun.id == OntInstrumentRunEvent.run_id)
+        if normalized:
+            pattern = f"%{normalized}%"
+            statement = statement.where(or_(OntInstrumentRunEvent.run_id.ilike(pattern), OntInstrumentRun.sample_id.ilike(pattern)))
+        rows = (await core_session.execute(statement.order_by(OntInstrumentRunEvent.observed_at.desc()).limit(limit))).all()
+        return [EntityProjection(urlencode({"run_id": event.run_id, "observed_generation": event.observed_generation}), self.entity_kind, _bounded_label(run.sample_id, event.run_id), str(event.state), {"observed_generation": event.observed_generation}) for event, run in rows]
+
+    async def verify(self, core_session: AsyncSession, entity_id: str) -> dict[str, Any]:
+        identity = _parse_composite_identity(entity_id, ("run_id", "observed_generation"))
+        try:
+            generation = int(identity["observed_generation"])
+        except ValueError as exc:
+            raise AdapterError("invalid_entity_id", "ONT observation generation is invalid") from exc
+        member = await _resolve_exact_member(resolve_ont_instrument_run_receipt(core_session, run_id=identity["run_id"], observed_generation=generation))
+        run = await core_session.get(OntInstrumentRun, identity["run_id"])
+        event = await core_session.scalar(
+            select(OntInstrumentRunEvent).where(
+                OntInstrumentRunEvent.run_id == identity["run_id"],
+                OntInstrumentRunEvent.observed_generation == generation,
+            )
+        )
+        if run is None or event is None:
+            raise AdapterError("entity_not_found", "ONT observation authority is unavailable")
+        async with self._domain_sessions() as domain_session:
+            domain_id, native_receipt_id = await _exact_local_member_authority(
+                domain_session, member=member
+            )
+        terminal_manifest_sha256 = None
+        terminal_manifest_generation = None
+        terminal_manifest_state = None
+        terminal_artifacts: list[dict[str, Any]] = []
+        if int(run.observed_generation or 0) == generation:
+            terminal = _valid_terminal_manifest(run)
+            if terminal is not None:
+                manifest, artifacts = terminal
+                terminal_manifest_sha256 = _sha256(
+                    run.terminal_artifact_manifest_sha256,
+                    "ONT terminal manifest digest",
+                )
+                terminal_manifest_generation = int(manifest["observed_generation"])
+                terminal_manifest_state = str(manifest["terminal_state"])
+                terminal_artifacts = [
+                    {
+                        "kind": str(artifact["kind"]),
+                        "sha256": _sha256(artifact["sha256"], "ONT terminal artifact digest"),
+                        "size_bytes": int(artifact["bytes"]),
+                    }
+                    for artifact in artifacts
+                ]
+        observed_at = (
+            event.observed_at.isoformat()
+            if hasattr(event.observed_at, "isoformat")
+            else str(event.observed_at)
+        )
+        return _exact_member_receipt(
+            self,
+            requested_entity_id=entity_id,
+            member=member,
+            reopen_uri=_query_uri(
+                "/ngs",
+                run_id=identity["run_id"],
+                observed_generation=str(generation),
+            ),
+            metadata={
+                "run_id": identity["run_id"],
+                "observed_generation": generation,
+                "global_domain_experiment_id": domain_id,
+                "native_member_receipt_id": native_receipt_id,
+                "state": str(event.state),
+                "observation_reason": (
+                    f"event={event.event_type}; state={event.state}; "
+                    f"observed_generation={generation}"
+                ),
+                "event_type": str(event.event_type),
+                "observed_at": observed_at,
+                "position_id": run.position_id,
+                "sample_id": run.sample_id,
+                "minknow_payload_sha256": _canonical_json_sha256(event.minknow_payload),
+                "output_files_sha256": _canonical_json_sha256(event.output_files or {}),
+                "output_file_roles": sorted(str(key) for key in (event.output_files or {})),
+                "terminal_manifest_sha256": terminal_manifest_sha256,
+                "terminal_manifest_observed_generation": terminal_manifest_generation,
+                "terminal_manifest_state": terminal_manifest_state,
+                "terminal_artifacts": terminal_artifacts,
+                "handoff_ready": bool(run.handoff_ready),
+                "result_contract_id": "ont_instrument_run_observation_v1",
+            },
+        )
+
+
+class ExactNgsJobAdapter:
+    adapter_id = "bms.ngs.job-reference.adapter.v1"
+    adapter_version = 1
+    display_name = "Exact NGS Job launch"
+    entity_kind = "ngs_job"
+    domain_kind = "ngs_molbio"
+    store_id = "core-ngs"
+    source_schemas = frozenset({"bms.core.ngs-job-launch.v1"})
+    fixed_revision_marker = "launch"
+
+    def __init__(self, *, domain_session_factory: Callable[[], Any] = molbio_ngs_session_factory):
+        self._domain_sessions = domain_session_factory
+
+    async def search(self, core_session: AsyncSession, *, query: str, limit: int) -> list[EntityProjection]:
+        normalized = _search_inputs(query, limit)
+        statement = select(Job).where(Job.model_id == "nanopore")
+        if normalized:
+            pattern = f"%{normalized}%"
+            statement = statement.where(or_(Job.id.ilike(pattern), Job.name.ilike(pattern)))
+        rows = list((await core_session.scalars(statement.order_by(Job.created_at.desc()).limit(limit))).all())
+        return [EntityProjection(row.id, self.entity_kind, _bounded_label(row.name, row.id), str(row.status), {"workflow_id": (row.params or {}).get("ont_workflow_id")}) for row in rows]
+
+    async def verify(self, core_session: AsyncSession, entity_id: str) -> dict[str, Any]:
+        if not entity_id or len(entity_id) > 160:
+            raise AdapterError("invalid_entity_id", "NGS Job identity is invalid")
+        member = await _resolve_exact_member(resolve_ngs_job_receipt(core_session, job_id=entity_id))
+        job = await core_session.get(Job, entity_id)
+        if job is None:
+            raise AdapterError("entity_not_found", "NGS Job does not exist")
+        params = job.params if isinstance(job.params, dict) else {}
+        claimed_domain_id = params.get("global_domain_experiment_id")
+        state_id = params.get("molbio_ngs_state_revision_id")
+        if not isinstance(claimed_domain_id, str) or not claimed_domain_id:
+            raise AdapterError("source_contract_invalid", "NGS Job lacks exact Domain ownership")
+        if not isinstance(state_id, str) or not state_id:
+            raise AdapterError("source_contract_invalid", "NGS Job lacks exact scientific-state revision authority")
+        async with self._domain_sessions() as domain_session:
+            domain_id, native_receipt_id = await _exact_local_member_authority(
+                domain_session, member=member
+            )
+            if claimed_domain_id != domain_id:
+                raise AdapterError(
+                    "source_contract_invalid",
+                    "NGS Job claimed Domain diverges from persisted member-receipt ownership",
+                )
+            state_member = await _resolve_exact_member(resolve_state_revision_receipt(
+                domain_session,
+                global_domain_experiment_id=domain_id,
+                state_revision_id=state_id,
+            ))
+        lineage = []
+        lineage.append({
+            "relation": "uses_input", "entity_kind": "ngs_molbio_state_revision",
+            "entity_id": urlencode({"global_domain_experiment_id": domain_id, "state_revision_id": state_id}),
+            "receipt_content_digest": state_member.content_digest,
+        })
+        return _exact_member_receipt(
+            self, requested_entity_id=entity_id, member=member,
+            reopen_uri=_query_uri("/ngs", job_id=entity_id),
+            metadata={"job_id": entity_id, "job_status": str(job.status), "workflow_id": params.get("ont_workflow_id"), "global_domain_experiment_id": domain_id, "native_member_receipt_id": native_receipt_id, "native_lineage": lineage, "result_contract_id": "ngs_job_launch_v1"},
+        )
+
+
+class ExactNgsResultManifestAdapter:
+    adapter_id = "bms.ngs.result-manifest.adapter.v1"
+    adapter_version = 1
+    display_name = "Exact NGS result manifest"
+    entity_kind = "ngs_result_manifest"
+    domain_kind = "ngs_molbio"
+    store_id = "core-ngs"
+    source_schemas = frozenset({
+        "biomodstack.construct_verification.v2",
+        "sequence_qc.manifest.v1",
+        "bms.sequence-qc.manifest.v1",
+        "bms.sequence-qc.manifest.v2",
+    })
+    fixed_revision_marker = "result-manifest"
+
+    def __init__(self, *, domain_session_factory: Callable[[], Any] = molbio_ngs_session_factory):
+        self._domain_sessions = domain_session_factory
+
+    async def search(self, core_session: AsyncSession, *, query: str, limit: int) -> list[EntityProjection]:
+        normalized = _search_inputs(query, limit)
+        statement = select(Job).where(Job.model_id == "nanopore")
+        if normalized:
+            pattern = f"%{normalized}%"
+            statement = statement.where(or_(Job.id.ilike(pattern), Job.name.ilike(pattern)))
+        rows = list((await core_session.scalars(statement.order_by(Job.created_at.desc()).limit(limit))).all())
+        return [EntityProjection(urlencode({"job_id": row.id, "manifest_identity": "sequence-qc-manifest"}), self.entity_kind, _bounded_label(row.name, row.id), str(row.status), {"job_id": row.id, "manifest_identity": "sequence-qc-manifest"}) for row in rows]
+
+    async def verify(self, core_session: AsyncSession, entity_id: str) -> dict[str, Any]:
+        identity = _parse_composite_identity(entity_id, ("job_id", "manifest_identity"))
+        member = await _resolve_exact_member(resolve_ngs_result_manifest_receipt(core_session, **identity))
+        job_member = await _resolve_exact_member(resolve_ngs_job_receipt(core_session, job_id=identity["job_id"]))
+        job = await core_session.get(Job, identity["job_id"])
+        if job is None:
+            raise AdapterError("entity_not_found", "NGS result owner Job does not exist")
+        params = job.params if isinstance(job.params, dict) else {}
+        claimed_domain_id = params.get("global_domain_experiment_id")
+        if not isinstance(claimed_domain_id, str) or not claimed_domain_id:
+            raise AdapterError("source_contract_invalid", "NGS result owner Job lacks exact Domain ownership")
+        async with self._domain_sessions() as domain_session:
+            domain_id, native_receipt_id = await _exact_local_member_authority(
+                domain_session, member=member
+            )
+        if claimed_domain_id != domain_id:
+            raise AdapterError(
+                "source_contract_invalid",
+                "NGS result owner Job claimed Domain diverges from persisted manifest-receipt ownership",
+            )
+        return _exact_member_receipt(
+            self, requested_entity_id=entity_id, member=member,
+            reopen_uri=_query_uri("/ngs", **identity),
+            metadata={
+                **identity, "job_status": str(job.status),
+                "global_domain_experiment_id": domain_id,
+                "native_member_receipt_id": native_receipt_id,
+                "native_lineage": [{
+                    "relation": "derived_from",
+                    "entity_kind": "ngs_job",
+                    "entity_id": identity["job_id"],
+                    "receipt_content_digest": job_member.content_digest,
+                }],
+                "result_contract_id": "ngs_result_manifest_v1",
+            },
+        )
+
+
+class ExactEvidenceAssessmentAdapter:
+    adapter_id = "bms.ngs-molbio.evidence-assessment.adapter.v1"
+    adapter_version = 1
+    display_name = "Exact NGS/MolBio evidence assessment"
+    entity_kind = "ngs_evidence_assessment"
+    domain_kind = "ngs_molbio"
+    store_id = "molbio-ngs-domain"
+    source_schemas = frozenset({"bms.molbio-ngs.ngs-evidence-receipt.v1"})
+    fixed_revision_marker = "1"
+
+    def __init__(self, *, session_factory: Callable[[], Any] = molbio_ngs_session_factory):
+        self._sessions = session_factory
+
+    async def search(self, core_session: AsyncSession, *, query: str, limit: int) -> list[EntityProjection]:
+        del core_session
+        normalized = _search_inputs(query, limit)
+        async with self._sessions() as session:
+            statement = select(MolBioNGSEvidenceAssessment)
+            if normalized:
+                pattern = f"%{normalized}%"
+                statement = statement.where(or_(MolBioNGSEvidenceAssessment.evidence_id.ilike(pattern), MolBioNGSEvidenceAssessment.global_domain_experiment_id.ilike(pattern)))
+            rows = list((await session.scalars(statement.order_by(MolBioNGSEvidenceAssessment.created_at.desc()).limit(limit))).all())
+        return [EntityProjection(urlencode({"global_domain_experiment_id": row.global_domain_experiment_id, "evidence_id": row.evidence_id}), self.entity_kind, _bounded_label(row.evidence_id, row.evidence_id), "immutable", {"scientific_assessment": row.scientific_assessment}) for row in rows]
+
+    async def verify(self, core_session: AsyncSession, entity_id: str) -> dict[str, Any]:
+        del core_session
+        identity = _parse_composite_identity(entity_id, ("global_domain_experiment_id", "evidence_id"))
+        async with self._sessions() as session:
+            member = await _resolve_exact_member(resolve_evidence_assessment_receipt(session, **identity))
+            assessment = await session.get(MolBioNGSEvidenceAssessment, identity["evidence_id"])
+            if assessment is None or assessment.global_domain_experiment_id != identity["global_domain_experiment_id"]:
+                raise AdapterError("entity_not_found", "evidence assessment does not exist")
+            state_member = await _resolve_exact_member(resolve_state_revision_receipt(
+                session,
+                global_domain_experiment_id=identity["global_domain_experiment_id"],
+                state_revision_id=assessment.state_revision_id,
+            ))
+            receipt_ids = [
+                assessment.ngs_job_receipt_id,
+                assessment.ngs_result_manifest_receipt_id,
+                assessment.ngs_reference_revision_receipt_id,
+                assessment.ont_instrument_run_receipt_id,
+                assessment.molecular_revision_receipt_id,
+                assessment.ngs_comparison_panel_receipt_id,
+            ]
+            rows = {row.receipt_id: row for row in (await session.scalars(select(MolBioNGSMemberReceipt).where(MolBioNGSMemberReceipt.receipt_id.in_([item for item in receipt_ids if item])))).all()}
+        lineage = [{
+            "relation": "validated_by",
+            "entity_kind": "ngs_molbio_state_revision",
+            "entity_id": urlencode({"global_domain_experiment_id": identity["global_domain_experiment_id"], "state_revision_id": assessment.state_revision_id}),
+            "receipt_content_digest": state_member.content_digest,
+        }]
+        if assessment.sample_revision_id:
+            async with self._sessions() as session:
+                sample = await session.get(MolBioNGSSampleRevision, assessment.sample_revision_id)
+            if sample is None or sample.global_domain_experiment_id != identity["global_domain_experiment_id"]:
+                raise AdapterError("source_contract_invalid", "evidence sample authority is unavailable")
+            sample_identity = urlencode({"global_domain_experiment_id": identity["global_domain_experiment_id"], "sample_id": sample.sample_id, "sample_revision_id": sample.id})
+            lineage.append({"relation": "validated_by", "entity_kind": "sample_revision", "entity_id": sample_identity, "receipt_content_digest": sample.payload_sha256})
+        for receipt_id in receipt_ids:
+            if receipt_id is None:
+                continue
+            row = rows.get(receipt_id)
+            if row is None:
+                raise AdapterError("source_contract_invalid", "evidence references an unavailable native receipt")
+            try:
+                authority = serialize_external_member_receipt(row)
+            except ValueError as exc:
+                raise AdapterError("source_digest_mismatch", str(exc)) from exc
+            duplicated = {
+                "receipt_id": row.receipt_id,
+                "source_store_id": row.source_store_id,
+                "entity_kind": row.entity_kind,
+                "entity_id": row.entity_id,
+                "source_generation_or_revision": row.source_generation_or_revision,
+                "content_digest": row.content_digest,
+                "availability": row.availability,
+                "created_at": row.created_at,
+            }
+            if any(authority[key] != value for key, value in duplicated.items()):
+                raise AdapterError("source_digest_mismatch", "evidence member receipt columns diverge from canonical authority")
+            lineage.append({
+                "relation": "validated_by", "entity_kind": authority["entity_kind"],
+                "entity_id": _member_global_entity_id(authority),
+                "receipt_content_digest": authority["content_digest"],
+            })
+        return _exact_member_receipt(
+            self, requested_entity_id=entity_id, member=member,
+            reopen_uri=_query_uri(f"/molbio-ngs/domain-experiments/{identity['global_domain_experiment_id']}", evidence_id=identity["evidence_id"]),
+            metadata={
+                **identity,
+                "scientific_assessment": assessment.scientific_assessment,
+                "assessment_rule_id": assessment.assessment_rule_id,
+                "job_lifecycle_state": assessment.job_lifecycle_state,
+                "manifest_integrity": assessment.manifest_integrity,
+                "scientific_assessment_reason": (
+                    f"rule={assessment.assessment_rule_id}; "
+                    f"job_lifecycle_state={assessment.job_lifecycle_state}; "
+                    f"manifest_integrity={assessment.manifest_integrity}"
+                ),
+                "global_domain_experiment_id": identity["global_domain_experiment_id"],
+                "native_lineage": lineage,
+                "result_contract_id": "ngs_evidence_assessment_v1",
+            },
+        )
+
+
 class TypedCoreJobResultAdapter:
     domain_kind = "protein_in_silico"
     store_id = "core"
@@ -2186,6 +3289,18 @@ for _adapter in (
     SequenceQcReferenceAdapter(),
     NgsAnalysisReferenceAdapter(),
     NgsAlignmentViewerReferenceAdapter(),
+    ExactMolecularRevisionMemberAdapter(),
+    ExactPrimerRevisionAdapter(),
+    ExactPcrExperimentRevisionAdapter(),
+    ExactMolecularOperationMemberAdapter(),
+    ExactSampleRevisionAdapter(),
+    ExactStateRevisionAdapter(),
+    ExactNgsReferenceRevisionAdapter(),
+    ExactNgsComparisonPanelAdapter(),
+    ExactOntObservationAdapter(),
+    ExactNgsJobAdapter(),
+    ExactNgsResultManifestAdapter(),
+    ExactEvidenceAssessmentAdapter(),
 ):
     registry.register(_adapter)
 

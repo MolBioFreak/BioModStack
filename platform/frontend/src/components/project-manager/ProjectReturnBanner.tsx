@@ -24,17 +24,27 @@ export function ProjectReturnBanner() {
         enabled: Boolean(launchContextId),
         retry: false,
     });
-    const returnUri = verifiedReturnUri(contextQuery.data?.return_uri ?? null);
-    if (!returnUri) return null;
+    const context = contextQuery.data;
+    const returnUri = verifiedReturnUri(context?.return_uri ?? null);
+    if (!returnUri || !context) return null;
 
     return (
         <aside className="border-b border-accent/30 bg-accent/10 px-4 py-2 text-content" aria-label="Project return context">
             <div className="mx-auto flex max-w-7xl items-center justify-between gap-3">
-                <p className="text-xs text-content-secondary">This result was opened from a verified Project context.</p>
+                <div className="min-w-0 text-xs text-content-secondary">
+                    <p className="truncate">
+                        Project {context.project_id} / Experiment {context.global_experiment_id} / Domain {context.domain_experiment_id}
+                    </p>
+                    {context.schema === 'bms.launch-context.v2' && (
+                        <p className="truncate">
+                            Prepared workflow {context.workflow_id} / Preparation {context.preparation_id} / Attempt {context.run_attempt_id}
+                        </p>
+                    )}
+                </div>
                 <Link
                     to={returnUri}
                     aria-label="Return to Project context"
-                    className="rounded-lg border border-accent px-3 py-1.5 text-xs font-semibold text-accent focus:ring-2 focus:ring-accent"
+                    className="shrink-0 rounded-lg border border-accent px-3 py-1.5 text-xs font-semibold text-accent focus:ring-2 focus:ring-accent"
                 >
                     Return to Project
                 </Link>

@@ -24,7 +24,9 @@ MIGRATION_V2_VERSION = 2
 MIGRATION_V2_NAME = "molbio_ngs_samples_references_v2"
 MIGRATION_V3_VERSION = 3
 MIGRATION_V3_NAME = "molbio_ngs_immutable_evidence_assessments_v3"
-LATEST_MIGRATION_VERSION = MIGRATION_V3_VERSION
+MIGRATION_V4_VERSION = 4
+MIGRATION_V4_NAME = "molbio_ngs_versioned_bindings_ordered_outbox_v4"
+LATEST_MIGRATION_VERSION = MIGRATION_V4_VERSION
 BACKUP_MANIFEST_SCHEMA = "bms.molbio-ngs.domain-state-backup-manifest.v1"
 
 LEDGER_SQL = """
@@ -798,6 +800,404 @@ BEGIN
 END;
 '''
 
+MIGRATION_V4_SQL = r'''
+DROP TRIGGER trg_molbio_ngs_evidence_digest_insert;
+DROP TRIGGER trg_molbio_ngs_evidence_authority_insert;
+DROP TRIGGER trg_molbio_ngs_evidence_immutable_update;
+DROP TRIGGER trg_molbio_ngs_evidence_immutable_delete;
+DROP TRIGGER trg_molbio_ngs_state_member_immutable_update;
+DROP TRIGGER trg_molbio_ngs_state_member_immutable_delete;
+DROP TRIGGER trg_molbio_ngs_member_receipt_digest_insert;
+DROP TRIGGER trg_molbio_ngs_member_receipt_authority_insert;
+DROP TRIGGER trg_molbio_ngs_member_receipt_immutable_update;
+DROP TRIGGER trg_molbio_ngs_member_receipt_immutable_delete;
+DROP INDEX ix_molbio_ngs_evidence_domain_created;
+DROP INDEX ix_molbio_ngs_evidence_state_revision;
+DROP INDEX ix_molbio_ngs_evidence_sample_revision;
+DROP INDEX ix_molbio_ngs_state_members_identity;
+DROP INDEX ix_molbio_ngs_member_receipts_source_identity;
+ALTER TABLE molbio_ngs_evidence_assessments RENAME TO molbio_ngs_evidence_assessments_v3;
+ALTER TABLE molbio_ngs_domain_state_members RENAME TO molbio_ngs_domain_state_members_v3;
+ALTER TABLE molbio_ngs_member_receipts RENAME TO molbio_ngs_member_receipts_v3;
+CREATE TABLE molbio_ngs_member_receipts (
+    receipt_id TEXT PRIMARY KEY,
+    source_store_id TEXT NOT NULL CHECK(source_store_id IN ('molbio','core-ngs','molbio-ngs-domain')),
+    entity_kind TEXT NOT NULL CHECK(entity_kind IN (
+        'molecular_revision','primer_revision','pcr_experiment_revision',
+        'molecular_operation','ont_instrument_run','ngs_job','ngs_result_manifest',
+        'ngs_comparison_panel','ngs_reference_revision','ngs_evidence_assessment',
+        'sample_revision','ngs_molbio_state_revision'
+    )),
+    entity_id TEXT NOT NULL,
+    source_generation_or_revision TEXT NOT NULL,
+    content_digest TEXT NOT NULL CHECK(length(content_digest) = 64),
+    schema_name TEXT NOT NULL,
+    schema_version TEXT NOT NULL,
+    availability TEXT NOT NULL CHECK(availability IN ('available','unavailable','unknown')),
+    reopen_destination TEXT NOT NULL,
+    canonical_receipt TEXT NOT NULL,
+    receipt_sha256 TEXT NOT NULL CHECK(length(receipt_sha256) = 64),
+    created_at TEXT NOT NULL
+);
+INSERT INTO molbio_ngs_member_receipts
+SELECT * FROM molbio_ngs_member_receipts_v3;
+CREATE TABLE molbio_ngs_domain_state_members (
+    state_revision_id TEXT NOT NULL REFERENCES molbio_ngs_domain_state_revisions(id) ON DELETE RESTRICT,
+    receipt_id TEXT NOT NULL REFERENCES molbio_ngs_member_receipts(receipt_id) ON DELETE RESTRICT,
+    role TEXT NOT NULL,
+    ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+    sample_revision_id TEXT REFERENCES molbio_ngs_sample_revisions(id) ON DELETE RESTRICT,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(state_revision_id, receipt_id, role),
+    UNIQUE(state_revision_id, ordinal)
+);
+INSERT INTO molbio_ngs_domain_state_members
+SELECT * FROM molbio_ngs_domain_state_members_v3;
+CREATE TABLE molbio_ngs_evidence_assessments (
+    evidence_id TEXT PRIMARY KEY,
+    global_domain_experiment_id TEXT NOT NULL REFERENCES molbio_ngs_domain_states(global_domain_experiment_id) ON DELETE RESTRICT,
+    state_revision_id TEXT NOT NULL,
+    sample_revision_id TEXT,
+    ngs_job_receipt_id TEXT NOT NULL REFERENCES molbio_ngs_member_receipts(receipt_id) ON DELETE RESTRICT,
+    ngs_result_manifest_receipt_id TEXT NOT NULL REFERENCES molbio_ngs_member_receipts(receipt_id) ON DELETE RESTRICT,
+    ngs_reference_revision_receipt_id TEXT NOT NULL REFERENCES molbio_ngs_member_receipts(receipt_id) ON DELETE RESTRICT,
+    ont_instrument_run_receipt_id TEXT REFERENCES molbio_ngs_member_receipts(receipt_id) ON DELETE RESTRICT,
+    molecular_revision_receipt_id TEXT REFERENCES molbio_ngs_member_receipts(receipt_id) ON DELETE RESTRICT,
+    ngs_comparison_panel_receipt_id TEXT REFERENCES molbio_ngs_member_receipts(receipt_id) ON DELETE RESTRICT,
+    assessment_rule_id TEXT NOT NULL,
+    requested_assessment TEXT NOT NULL CHECK(requested_assessment IN ('PASS','FAIL','REVIEW')),
+    scientific_assessment TEXT NOT NULL CHECK(scientific_assessment IN ('PASS','FAIL','REVIEW')),
+    job_lifecycle_state TEXT NOT NULL CHECK(job_lifecycle_state IN ('queued','running','completed','failed','cancelled')),
+    manifest_integrity TEXT NOT NULL CHECK(manifest_integrity IN ('valid','invalid','unavailable')),
+    raw_manifest_sha256 TEXT NOT NULL CHECK(length(raw_manifest_sha256) = 64 AND raw_manifest_sha256 NOT GLOB '*[^0-9a-f]*'),
+    notes TEXT,
+    canonical_wrapper TEXT NOT NULL CHECK(json_valid(canonical_wrapper) = 1),
+    wrapper_sha256 TEXT NOT NULL CHECK(length(wrapper_sha256) = 64 AND wrapper_sha256 NOT GLOB '*[^0-9a-f]*'),
+    created_at TEXT NOT NULL,
+    created_by TEXT,
+    FOREIGN KEY(global_domain_experiment_id, state_revision_id)
+        REFERENCES molbio_ngs_domain_state_revisions(global_domain_experiment_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY(global_domain_experiment_id, sample_revision_id)
+        REFERENCES molbio_ngs_sample_revisions(global_domain_experiment_id, id) ON DELETE RESTRICT
+);
+INSERT INTO molbio_ngs_evidence_assessments
+SELECT * FROM molbio_ngs_evidence_assessments_v3;
+DROP TABLE molbio_ngs_evidence_assessments_v3;
+DROP TABLE molbio_ngs_domain_state_members_v3;
+DROP TABLE molbio_ngs_member_receipts_v3;
+CREATE INDEX ix_molbio_ngs_member_receipts_source_identity
+    ON molbio_ngs_member_receipts(source_store_id, entity_kind, entity_id, source_generation_or_revision);
+CREATE INDEX ix_molbio_ngs_state_members_identity ON molbio_ngs_domain_state_members(receipt_id);
+CREATE INDEX ix_molbio_ngs_evidence_domain_created
+    ON molbio_ngs_evidence_assessments(global_domain_experiment_id, created_at, evidence_id);
+CREATE INDEX ix_molbio_ngs_evidence_state_revision ON molbio_ngs_evidence_assessments(state_revision_id);
+CREATE INDEX ix_molbio_ngs_evidence_sample_revision ON molbio_ngs_evidence_assessments(sample_revision_id);
+CREATE TRIGGER trg_molbio_ngs_member_receipt_digest_insert
+BEFORE INSERT ON molbio_ngs_member_receipts
+WHEN NEW.receipt_sha256 != sha256(NEW.canonical_receipt)
+BEGIN SELECT RAISE(ABORT, 'member receipt digest mismatch'); END;
+CREATE TRIGGER trg_molbio_ngs_member_receipt_authority_insert
+BEFORE INSERT ON molbio_ngs_member_receipts
+WHEN json_valid(NEW.canonical_receipt) != 1
+  OR json_extract(NEW.canonical_receipt, '$.schema') != 'bms.molbio-ngs.external-member-receipt.v1'
+  OR json_extract(NEW.canonical_receipt, '$.receipt_id') IS NOT NEW.receipt_id
+  OR json_extract(NEW.canonical_receipt, '$.source_store_id') IS NOT NEW.source_store_id
+  OR json_extract(NEW.canonical_receipt, '$.entity_kind') IS NOT NEW.entity_kind
+  OR json_extract(NEW.canonical_receipt, '$.entity_id') IS NOT NEW.entity_id
+  OR CAST(json_extract(NEW.canonical_receipt, '$.source_generation_or_revision') AS TEXT) IS NOT NEW.source_generation_or_revision
+  OR json_extract(NEW.canonical_receipt, '$.content_digest') IS NOT NEW.content_digest
+  OR json_extract(NEW.canonical_receipt, '$.availability') IS NOT NEW.availability
+  OR json(json_extract(NEW.canonical_receipt, '$.reopen_destination')) IS NOT json(NEW.reopen_destination)
+  OR json_extract(NEW.canonical_receipt, '$.created_at') IS NOT NEW.created_at
+  OR NEW.schema_name != 'bms.molbio-ngs.external-member-receipt' OR NEW.schema_version != '1'
+BEGIN SELECT RAISE(ABORT, 'member receipt authority mismatch'); END;
+CREATE TRIGGER trg_molbio_ngs_member_receipt_immutable_update BEFORE UPDATE ON molbio_ngs_member_receipts
+BEGIN SELECT RAISE(ABORT, 'member receipt is immutable'); END;
+CREATE TRIGGER trg_molbio_ngs_member_receipt_immutable_delete BEFORE DELETE ON molbio_ngs_member_receipts
+BEGIN SELECT RAISE(ABORT, 'member receipt is immutable'); END;
+CREATE TRIGGER trg_molbio_ngs_state_member_immutable_update BEFORE UPDATE ON molbio_ngs_domain_state_members
+BEGIN SELECT RAISE(ABORT, 'state revision member is immutable'); END;
+CREATE TRIGGER trg_molbio_ngs_state_member_immutable_delete BEFORE DELETE ON molbio_ngs_domain_state_members
+BEGIN SELECT RAISE(ABORT, 'state revision member is immutable'); END;
+CREATE TRIGGER trg_molbio_ngs_evidence_digest_insert
+BEFORE INSERT ON molbio_ngs_evidence_assessments
+WHEN NEW.wrapper_sha256 != sha256(NEW.canonical_wrapper)
+BEGIN SELECT RAISE(ABORT, 'evidence assessment wrapper digest mismatch'); END;
+CREATE TRIGGER trg_molbio_ngs_evidence_authority_insert
+BEFORE INSERT ON molbio_ngs_evidence_assessments
+WHEN json_extract(NEW.canonical_wrapper, '$.schema') IS NOT 'bms.molbio-ngs.ngs-evidence-receipt.v1'
+  OR json_extract(NEW.canonical_wrapper, '$.evidence_id') IS NOT NEW.evidence_id
+  OR json_extract(NEW.canonical_wrapper, '$.global_domain_experiment_id') IS NOT NEW.global_domain_experiment_id
+  OR json_extract(NEW.canonical_wrapper, '$.state_revision_id') IS NOT NEW.state_revision_id
+  OR json_extract(NEW.canonical_wrapper, '$.sample_revision_id') IS NOT NEW.sample_revision_id
+  OR json_extract(NEW.canonical_wrapper, '$.receipt_ids.ngs_job') IS NOT NEW.ngs_job_receipt_id
+  OR json_extract(NEW.canonical_wrapper, '$.receipt_ids.ngs_result_manifest') IS NOT NEW.ngs_result_manifest_receipt_id
+  OR json_extract(NEW.canonical_wrapper, '$.receipt_ids.ngs_reference_revision') IS NOT NEW.ngs_reference_revision_receipt_id
+  OR json_extract(NEW.canonical_wrapper, '$.receipt_ids.ont_instrument_run') IS NOT NEW.ont_instrument_run_receipt_id
+  OR json_extract(NEW.canonical_wrapper, '$.receipt_ids.molecular_revision') IS NOT NEW.molecular_revision_receipt_id
+  OR json_extract(NEW.canonical_wrapper, '$.receipt_ids.ngs_comparison_panel') IS NOT NEW.ngs_comparison_panel_receipt_id
+  OR json_extract(NEW.canonical_wrapper, '$.assessment_rule_id') IS NOT NEW.assessment_rule_id
+  OR json_extract(NEW.canonical_wrapper, '$.requested_assessment') IS NOT NEW.requested_assessment
+  OR json_extract(NEW.canonical_wrapper, '$.scientific_assessment') IS NOT NEW.scientific_assessment
+  OR json_extract(NEW.canonical_wrapper, '$.job_lifecycle_state') IS NOT NEW.job_lifecycle_state
+  OR json_extract(NEW.canonical_wrapper, '$.manifest_integrity') IS NOT NEW.manifest_integrity
+  OR json_extract(NEW.canonical_wrapper, '$.raw_manifest_sha256') IS NOT NEW.raw_manifest_sha256
+  OR json_extract(NEW.canonical_wrapper, '$.notes') IS NOT NEW.notes
+  OR json_extract(NEW.canonical_wrapper, '$.created_at') IS NOT NEW.created_at
+  OR json_extract(NEW.canonical_wrapper, '$.created_by') IS NOT NEW.created_by
+BEGIN SELECT RAISE(ABORT, 'evidence assessment wrapper authority mismatch'); END;
+CREATE TRIGGER trg_molbio_ngs_evidence_immutable_update BEFORE UPDATE ON molbio_ngs_evidence_assessments
+BEGIN SELECT RAISE(ABORT, 'evidence assessment is immutable'); END;
+CREATE TRIGGER trg_molbio_ngs_evidence_immutable_delete BEFORE DELETE ON molbio_ngs_evidence_assessments
+BEGIN SELECT RAISE(ABORT, 'evidence assessment is immutable'); END;
+
+CREATE TABLE molbio_ngs_global_binding_revisions (
+    binding_revision_id TEXT PRIMARY KEY NOT NULL,
+    global_domain_experiment_id TEXT NOT NULL REFERENCES molbio_ngs_domain_states(global_domain_experiment_id) DEFERRABLE INITIALLY DEFERRED,
+    revision_number INTEGER NOT NULL CHECK(revision_number > 0),
+    supersedes_binding_revision_id TEXT REFERENCES molbio_ngs_global_binding_revisions(binding_revision_id),
+    global_domain_experiment_revision_id TEXT NOT NULL,
+    global_domain_experiment_revision_digest TEXT NOT NULL CHECK(length(global_domain_experiment_revision_digest) = 64),
+    project_id TEXT NOT NULL, project_generation TEXT NOT NULL,
+    project_digest TEXT NOT NULL CHECK(length(project_digest) = 64),
+    project_receipt_id TEXT NOT NULL, project_reopen_destination TEXT NOT NULL,
+    project_acknowledgement TEXT NOT NULL,
+    global_experiment_id TEXT NOT NULL, global_experiment_generation TEXT NOT NULL,
+    global_experiment_digest TEXT NOT NULL CHECK(length(global_experiment_digest) = 64),
+    global_experiment_receipt_id TEXT NOT NULL,
+    global_experiment_reopen_destination TEXT NOT NULL,
+    global_experiment_acknowledgement TEXT NOT NULL,
+    global_binding_receipt_id TEXT,
+    global_binding_receipt_json TEXT,
+    global_binding_receipt_sha256 TEXT,
+    connector_command_id TEXT UNIQUE,
+    binding_state TEXT NOT NULL CHECK(binding_state IN ('needs_reverification','acknowledged','stale','conflicted')),
+    last_verified_at TEXT, last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT,
+    UNIQUE(global_domain_experiment_id, revision_number),
+    CHECK((global_binding_receipt_id IS NULL AND global_binding_receipt_json IS NULL AND global_binding_receipt_sha256 IS NULL)
+       OR (global_binding_receipt_id IS NOT NULL AND global_binding_receipt_json IS NOT NULL
+           AND global_binding_receipt_sha256 IS NOT NULL
+           AND sha256(global_binding_receipt_json) = lower(global_binding_receipt_sha256)))
+);
+ALTER TABLE molbio_ngs_domain_states ADD COLUMN current_binding_revision_id TEXT REFERENCES molbio_ngs_global_binding_revisions(binding_revision_id) DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE molbio_ngs_domain_state_revisions ADD COLUMN binding_revision_id TEXT REFERENCES molbio_ngs_global_binding_revisions(binding_revision_id);
+DROP TRIGGER trg_molbio_ngs_state_revision_immutable_update;
+CREATE TRIGGER trg_molbio_ngs_state_revision_immutable_update
+BEFORE UPDATE ON molbio_ngs_domain_state_revisions
+WHEN OLD.binding_revision_id IS NOT NULL
+BEGIN SELECT RAISE(ABORT, 'state revision is immutable'); END;
+ALTER TABLE molbio_ngs_outbox_events ADD COLUMN binding_revision_id TEXT REFERENCES molbio_ngs_global_binding_revisions(binding_revision_id);
+ALTER TABLE molbio_ngs_outbox_events ADD COLUMN event_stream TEXT;
+ALTER TABLE molbio_ngs_outbox_events ADD COLUMN stream_generation INTEGER;
+ALTER TABLE molbio_ngs_outbox_events ADD COLUMN source_generation INTEGER;
+CREATE UNIQUE INDEX ux_molbio_ngs_outbox_stream_generation
+    ON molbio_ngs_outbox_events(global_domain_experiment_id, binding_revision_id, event_stream, stream_generation);
+CREATE INDEX ix_molbio_ngs_outbox_delivery
+    ON molbio_ngs_outbox_events(status, next_retry_at, created_at);
+CREATE TABLE molbio_ngs_outbox_streams (
+    global_domain_experiment_id TEXT NOT NULL REFERENCES molbio_ngs_domain_states(global_domain_experiment_id),
+    binding_revision_id TEXT NOT NULL REFERENCES molbio_ngs_global_binding_revisions(binding_revision_id),
+    event_stream TEXT NOT NULL,
+    next_stream_generation INTEGER NOT NULL CHECK(next_stream_generation > 0),
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(global_domain_experiment_id, binding_revision_id, event_stream)
+);
+CREATE TABLE molbio_ngs_connector_acknowledgements (
+    acknowledgement_id TEXT PRIMARY KEY NOT NULL,
+    command_id TEXT NOT NULL UNIQUE,
+    binding_revision_id TEXT NOT NULL REFERENCES molbio_ngs_global_binding_revisions(binding_revision_id),
+    disposition TEXT NOT NULL CHECK(disposition IN ('applied','duplicate','retryable','conflicted','deferred_gap')),
+    acknowledgement_json TEXT NOT NULL,
+    acknowledgement_sha256 TEXT NOT NULL CHECK(length(acknowledgement_sha256) = 64),
+    created_at TEXT NOT NULL,
+    CHECK(sha256(acknowledgement_json) = lower(acknowledgement_sha256))
+);
+CREATE TRIGGER trg_molbio_ngs_binding_revision_immutable_update
+BEFORE UPDATE OF binding_revision_id, global_domain_experiment_id, revision_number,
+ supersedes_binding_revision_id, global_domain_experiment_revision_id,
+ global_domain_experiment_revision_digest, project_id, project_generation, project_digest,
+ project_receipt_id, project_reopen_destination, project_acknowledgement,
+ global_experiment_id, global_experiment_generation, global_experiment_digest,
+ global_experiment_receipt_id, global_experiment_reopen_destination,
+ global_experiment_acknowledgement, global_binding_receipt_id,
+ global_binding_receipt_json, global_binding_receipt_sha256, connector_command_id, created_at
+ON molbio_ngs_global_binding_revisions
+BEGIN SELECT RAISE(ABORT, 'binding revision authority is immutable'); END;
+CREATE TRIGGER trg_molbio_ngs_binding_revision_delete_forbidden
+BEFORE DELETE ON molbio_ngs_global_binding_revisions
+BEGIN SELECT RAISE(ABORT, 'binding revisions are append-only'); END;
+CREATE TRIGGER trg_molbio_ngs_state_binding_required_insert
+BEFORE INSERT ON molbio_ngs_domain_states WHEN NEW.current_binding_revision_id IS NULL
+BEGIN SELECT RAISE(ABORT, 'Domain state requires a current binding revision'); END;
+CREATE TRIGGER trg_molbio_ngs_state_binding_required_update
+BEFORE UPDATE OF current_binding_revision_id ON molbio_ngs_domain_states
+WHEN NEW.current_binding_revision_id IS NULL
+BEGIN SELECT RAISE(ABORT, 'Domain state requires a current binding revision'); END;
+CREATE TRIGGER trg_molbio_ngs_state_revision_binding_required_insert
+BEFORE INSERT ON molbio_ngs_domain_state_revisions WHEN NEW.binding_revision_id IS NULL
+BEGIN SELECT RAISE(ABORT, 'state revision requires a binding revision'); END;
+CREATE TRIGGER trg_molbio_ngs_state_revision_binding_immutable
+BEFORE UPDATE OF binding_revision_id ON molbio_ngs_domain_state_revisions
+BEGIN SELECT RAISE(ABORT, 'state revision binding is immutable'); END;
+CREATE TRIGGER trg_molbio_ngs_outbox_ordering_required_insert
+BEFORE INSERT ON molbio_ngs_outbox_events
+WHEN NEW.binding_revision_id IS NULL OR NEW.event_stream IS NULL OR NEW.stream_generation IS NULL OR NEW.stream_generation < 1
+BEGIN SELECT RAISE(ABORT, 'ordered outbox authority is required'); END;
+CREATE TRIGGER trg_molbio_ngs_outbox_ordering_immutable
+BEFORE UPDATE OF binding_revision_id, event_stream, stream_generation, source_generation ON molbio_ngs_outbox_events
+WHEN OLD.binding_revision_id IS NOT NULL OR OLD.event_stream IS NOT NULL OR OLD.stream_generation IS NOT NULL
+BEGIN SELECT RAISE(ABORT, 'outbox ordering authority is immutable'); END;
+CREATE TRIGGER trg_molbio_ngs_outbox_lease_fence
+BEFORE UPDATE OF status, acknowledgement_json, acknowledgement_sha256, conflict_json, conflict_sha256 ON molbio_ngs_outbox_events
+WHEN (NEW.status = 'leased' AND (
+        NEW.lease_owner IS NULL OR NEW.lease_token IS NULL OR NEW.lease_expires_at IS NULL
+     ))
+  OR (NEW.status <> 'leased' AND (
+        NEW.lease_owner IS NOT NULL OR NEW.lease_token IS NOT NULL OR NEW.lease_expires_at IS NOT NULL
+     ))
+  OR (NEW.status = 'acknowledged' AND (
+        NEW.acknowledgement_json IS NULL OR NEW.acknowledgement_sha256 IS NULL
+        OR NEW.conflict_json IS NOT NULL OR NEW.conflict_sha256 IS NOT NULL
+     ))
+  OR (NEW.status = 'conflict' AND (
+        NEW.conflict_json IS NULL OR NEW.conflict_sha256 IS NULL
+        OR NEW.acknowledgement_json IS NOT NULL OR NEW.acknowledgement_sha256 IS NOT NULL
+     ))
+BEGIN SELECT RAISE(ABORT, 'invalid token-fenced outbox delivery state'); END;
+CREATE TRIGGER trg_molbio_ngs_outbox_delivery_state_insert
+BEFORE INSERT ON molbio_ngs_outbox_events
+WHEN (NEW.status = 'leased' AND (
+        NEW.lease_owner IS NULL OR NEW.lease_token IS NULL OR NEW.lease_expires_at IS NULL
+     ))
+  OR (NEW.status <> 'leased' AND (
+        NEW.lease_owner IS NOT NULL OR NEW.lease_token IS NOT NULL OR NEW.lease_expires_at IS NOT NULL
+     ))
+  OR (NEW.status = 'acknowledged' AND (
+        NEW.acknowledgement_json IS NULL OR NEW.acknowledgement_sha256 IS NULL
+        OR NEW.conflict_json IS NOT NULL OR NEW.conflict_sha256 IS NOT NULL
+     ))
+  OR (NEW.status = 'conflict' AND (
+        NEW.conflict_json IS NULL OR NEW.conflict_sha256 IS NULL
+        OR NEW.acknowledgement_json IS NOT NULL OR NEW.acknowledgement_sha256 IS NOT NULL
+     ))
+BEGIN SELECT RAISE(ABORT, 'invalid outbox delivery state'); END;
+CREATE TRIGGER trg_molbio_ngs_connector_ack_immutable_update BEFORE UPDATE ON molbio_ngs_connector_acknowledgements
+BEGIN SELECT RAISE(ABORT, 'connector acknowledgement is immutable'); END;
+CREATE TRIGGER trg_molbio_ngs_connector_ack_immutable_delete BEFORE DELETE ON molbio_ngs_connector_acknowledgements
+BEGIN SELECT RAISE(ABORT, 'connector acknowledgement is immutable'); END;
+'''
+
+MIGRATION_V4_FINALIZE_SQL = r'''
+DROP TRIGGER trg_molbio_ngs_binding_authority_immutable_update;
+DROP TABLE molbio_ngs_global_bindings;
+DROP TRIGGER trg_molbio_ngs_outbox_digest_insert;
+DROP TRIGGER trg_molbio_ngs_outbox_evidence_digest_insert;
+DROP TRIGGER trg_molbio_ngs_outbox_evidence_digest_update;
+DROP TRIGGER trg_molbio_ngs_outbox_payload_immutable_update;
+DROP TRIGGER trg_molbio_ngs_outbox_immutable_delete;
+DROP TRIGGER trg_molbio_ngs_outbox_ordering_required_insert;
+DROP TRIGGER trg_molbio_ngs_outbox_ordering_immutable;
+DROP TRIGGER trg_molbio_ngs_outbox_lease_fence;
+DROP TRIGGER trg_molbio_ngs_outbox_delivery_state_insert;
+DROP INDEX ix_molbio_ngs_outbox_status_created;
+DROP INDEX ux_molbio_ngs_outbox_stream_generation;
+DROP INDEX ix_molbio_ngs_outbox_delivery;
+ALTER TABLE molbio_ngs_outbox_events RENAME TO molbio_ngs_outbox_events_v4_stage;
+CREATE TABLE molbio_ngs_outbox_events (
+    id TEXT PRIMARY KEY,
+    global_domain_experiment_id TEXT NOT NULL REFERENCES molbio_ngs_domain_states(global_domain_experiment_id) ON DELETE RESTRICT,
+    state_revision_id TEXT REFERENCES molbio_ngs_domain_state_revisions(id) ON DELETE RESTRICT,
+    binding_revision_id TEXT NOT NULL REFERENCES molbio_ngs_global_binding_revisions(binding_revision_id),
+    event_type TEXT NOT NULL,
+    event_stream TEXT NOT NULL,
+    stream_generation INTEGER NOT NULL CHECK(stream_generation > 0),
+    source_generation INTEGER,
+    payload_json TEXT NOT NULL,
+    payload_sha256 TEXT NOT NULL CHECK(length(payload_sha256) = 64),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','leased','acknowledged','retryable_error','conflict')),
+    lease_owner TEXT,
+    lease_token TEXT,
+    lease_expires_at TEXT,
+    next_retry_at TEXT,
+    retry_count INTEGER NOT NULL DEFAULT 0 CHECK(retry_count >= 0),
+    last_error TEXT,
+    acknowledgement_json TEXT,
+    acknowledgement_sha256 TEXT CHECK(acknowledgement_sha256 IS NULL OR length(acknowledgement_sha256) = 64),
+    conflict_json TEXT,
+    conflict_sha256 TEXT CHECK(conflict_sha256 IS NULL OR length(conflict_sha256) = 64),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(global_domain_experiment_id, binding_revision_id, event_stream, stream_generation),
+    CHECK((status = 'leased') = (lease_owner IS NOT NULL AND lease_token IS NOT NULL AND lease_expires_at IS NOT NULL)),
+    CHECK((acknowledgement_json IS NULL) = (acknowledgement_sha256 IS NULL)),
+    CHECK((conflict_json IS NULL) = (conflict_sha256 IS NULL)),
+    CHECK(status <> 'acknowledged' OR (acknowledgement_json IS NOT NULL AND conflict_json IS NULL)),
+    CHECK(status <> 'conflict' OR (conflict_json IS NOT NULL AND acknowledgement_json IS NULL))
+);
+INSERT INTO molbio_ngs_outbox_events(
+    id, global_domain_experiment_id, state_revision_id, binding_revision_id,
+    event_type, event_stream, stream_generation, source_generation, payload_json,
+    payload_sha256, status, lease_owner, lease_token, lease_expires_at,
+    next_retry_at, retry_count, last_error, acknowledgement_json,
+    acknowledgement_sha256, conflict_json, conflict_sha256, created_at, updated_at
+)
+SELECT id, global_domain_experiment_id, state_revision_id, binding_revision_id,
+       event_type, event_stream, stream_generation, source_generation, payload_json,
+       payload_sha256, status, lease_owner, lease_token, lease_expires_at,
+       next_retry_at, retry_count, last_error, acknowledgement_json,
+       acknowledgement_sha256, conflict_json, conflict_sha256, created_at, updated_at
+  FROM molbio_ngs_outbox_events_v4_stage;
+DROP TABLE molbio_ngs_outbox_events_v4_stage;
+CREATE INDEX ix_molbio_ngs_outbox_status_created ON molbio_ngs_outbox_events(status, created_at);
+CREATE UNIQUE INDEX ux_molbio_ngs_outbox_stream_generation
+    ON molbio_ngs_outbox_events(global_domain_experiment_id, binding_revision_id, event_stream, stream_generation);
+CREATE INDEX ix_molbio_ngs_outbox_delivery ON molbio_ngs_outbox_events(status, next_retry_at, created_at);
+CREATE TRIGGER trg_molbio_ngs_outbox_digest_insert BEFORE INSERT ON molbio_ngs_outbox_events
+WHEN NEW.payload_sha256 != sha256(NEW.payload_json)
+BEGIN SELECT RAISE(ABORT, 'outbox event payload digest mismatch'); END;
+CREATE TRIGGER trg_molbio_ngs_outbox_evidence_digest_insert BEFORE INSERT ON molbio_ngs_outbox_events
+WHEN (NEW.acknowledgement_json IS NULL) != (NEW.acknowledgement_sha256 IS NULL)
+  OR (NEW.acknowledgement_json IS NOT NULL AND NEW.acknowledgement_sha256 != sha256(NEW.acknowledgement_json))
+  OR (NEW.conflict_json IS NULL) != (NEW.conflict_sha256 IS NULL)
+  OR (NEW.conflict_json IS NOT NULL AND NEW.conflict_sha256 != sha256(NEW.conflict_json))
+BEGIN SELECT RAISE(ABORT, 'outbox evidence digest mismatch'); END;
+CREATE TRIGGER trg_molbio_ngs_outbox_evidence_digest_update BEFORE UPDATE ON molbio_ngs_outbox_events
+WHEN (NEW.acknowledgement_json IS NULL) != (NEW.acknowledgement_sha256 IS NULL)
+  OR (NEW.acknowledgement_json IS NOT NULL AND NEW.acknowledgement_sha256 != sha256(NEW.acknowledgement_json))
+  OR (NEW.conflict_json IS NULL) != (NEW.conflict_sha256 IS NULL)
+  OR (NEW.conflict_json IS NOT NULL AND NEW.conflict_sha256 != sha256(NEW.conflict_json))
+BEGIN SELECT RAISE(ABORT, 'outbox evidence digest mismatch'); END;
+CREATE TRIGGER trg_molbio_ngs_outbox_payload_immutable_update BEFORE UPDATE ON molbio_ngs_outbox_events
+WHEN OLD.id IS NOT NEW.id OR OLD.global_domain_experiment_id IS NOT NEW.global_domain_experiment_id
+  OR OLD.state_revision_id IS NOT NEW.state_revision_id OR OLD.binding_revision_id IS NOT NEW.binding_revision_id
+  OR OLD.event_type IS NOT NEW.event_type OR OLD.event_stream IS NOT NEW.event_stream
+  OR OLD.stream_generation IS NOT NEW.stream_generation OR OLD.source_generation IS NOT NEW.source_generation
+  OR OLD.payload_json IS NOT NEW.payload_json OR OLD.payload_sha256 IS NOT NEW.payload_sha256
+  OR OLD.created_at IS NOT NEW.created_at
+BEGIN SELECT RAISE(ABORT, 'outbox event payload is immutable'); END;
+CREATE TRIGGER trg_molbio_ngs_outbox_immutable_delete BEFORE DELETE ON molbio_ngs_outbox_events
+BEGIN SELECT RAISE(ABORT, 'outbox event is immutable'); END;
+CREATE TRIGGER trg_molbio_ngs_outbox_ordering_required_insert BEFORE INSERT ON molbio_ngs_outbox_events
+WHEN NEW.binding_revision_id IS NULL OR NEW.event_stream IS NULL OR NEW.stream_generation IS NULL OR NEW.stream_generation < 1
+BEGIN SELECT RAISE(ABORT, 'ordered outbox authority is required'); END;
+CREATE TRIGGER trg_molbio_ngs_outbox_ordering_immutable
+BEFORE UPDATE OF binding_revision_id, event_stream, stream_generation, source_generation ON molbio_ngs_outbox_events
+BEGIN SELECT RAISE(ABORT, 'outbox ordering authority is immutable'); END;
+CREATE TRIGGER trg_molbio_ngs_outbox_lease_fence
+BEFORE UPDATE OF status, acknowledgement_json, acknowledgement_sha256, conflict_json, conflict_sha256 ON molbio_ngs_outbox_events
+WHEN (NEW.status = 'leased' AND (NEW.lease_owner IS NULL OR NEW.lease_token IS NULL OR NEW.lease_expires_at IS NULL))
+  OR (NEW.status <> 'leased' AND (NEW.lease_owner IS NOT NULL OR NEW.lease_token IS NOT NULL OR NEW.lease_expires_at IS NOT NULL))
+  OR (NEW.status = 'acknowledged' AND (NEW.acknowledgement_json IS NULL OR NEW.acknowledgement_sha256 IS NULL OR NEW.conflict_json IS NOT NULL))
+  OR (NEW.status = 'conflict' AND (NEW.conflict_json IS NULL OR NEW.conflict_sha256 IS NULL OR NEW.acknowledgement_json IS NOT NULL))
+BEGIN SELECT RAISE(ABORT, 'invalid token-fenced outbox delivery state'); END;
+CREATE TRIGGER trg_molbio_ngs_outbox_delivery_state_insert BEFORE INSERT ON molbio_ngs_outbox_events
+WHEN (NEW.status = 'leased' AND (NEW.lease_owner IS NULL OR NEW.lease_token IS NULL OR NEW.lease_expires_at IS NULL))
+  OR (NEW.status <> 'leased' AND (NEW.lease_owner IS NOT NULL OR NEW.lease_token IS NOT NULL OR NEW.lease_expires_at IS NOT NULL))
+  OR (NEW.status = 'acknowledged' AND (NEW.acknowledgement_json IS NULL OR NEW.acknowledgement_sha256 IS NULL OR NEW.conflict_json IS NOT NULL))
+  OR (NEW.status = 'conflict' AND (NEW.conflict_json IS NULL OR NEW.conflict_sha256 IS NULL OR NEW.acknowledgement_json IS NOT NULL))
+BEGIN SELECT RAISE(ABORT, 'invalid outbox delivery state'); END;
+'''
+
 
 def migration_checksum() -> str:
     return hashlib.sha256(MIGRATION_SQL.encode("utf-8")).hexdigest()
@@ -809,6 +1209,12 @@ def migration_v2_checksum() -> str:
 
 def migration_v3_checksum() -> str:
     return hashlib.sha256(MIGRATION_V3_SQL.encode("utf-8")).hexdigest()
+
+
+def migration_v4_checksum() -> str:
+    return hashlib.sha256(
+        (MIGRATION_V4_SQL + MIGRATION_V4_FINALIZE_SQL).encode("utf-8")
+    ).hexdigest()
 
 
 def _migration_registry() -> list[tuple[int, str, str, str, str]]:
@@ -835,11 +1241,239 @@ def _migration_registry() -> list[tuple[int, str, str, str, str]]:
             "Immutable exact NGS evidence assessments and typed receipts",
             MIGRATION_V3_SQL,
         ),
+        (
+            MIGRATION_V4_VERSION,
+            MIGRATION_V4_NAME,
+            migration_v4_checksum(),
+            "Append-only binding revisions and ordered token-fenced outbox authority",
+            MIGRATION_V4_SQL + MIGRATION_V4_FINALIZE_SQL,
+        ),
     ]
 
 
 def _expected_ledger_rows() -> list[tuple[int, str, str]]:
     return [(version, name, checksum) for version, name, checksum, _, _ in _migration_registry()]
+
+
+def _legacy_binding_revision_id(row: sqlite3.Row | tuple[object, ...]) -> str:
+    seed = (
+        "bms:molbio-ngs:legacy-binding-v1:"
+        + ":".join(str(value) for value in (row[0], row[1], row[2], row[5], row[11]))
+    )
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, seed))
+
+
+def _legacy_event_authority(
+    connection: sqlite3.Connection, domain_id: str, event_type: str, payload: dict[str, object]
+) -> tuple[str, int | None]:
+    expected_schemas = {
+        "molbio_ngs.domain_state.initialized": "bms.molbio-ngs.domain-state-initialized.v1",
+        "molbio_ngs.domain_state.revision_saved": "bms.molbio-ngs.domain-state-revision-saved.v1",
+        "molbio_ngs.sample.created": "bms.molbio-ngs.sample-created.v1",
+        "molbio_ngs.sample.revision_saved": "bms.molbio-ngs.sample-revision-saved.v1",
+        "molbio_ngs.reference.created": "bms.molbio-ngs.reference-created.v1",
+        "molbio_ngs.reference.revision_saved": "bms.molbio-ngs.reference-revision-saved.v1",
+        "molbio_ngs.reference.archived": "bms.molbio-ngs.reference-archived.v1",
+        "molbio_ngs.instrument_run_evidence.attached": "bms.molbio-ngs.instrument-run-evidence-attached.v1",
+        "molbio_ngs.evidence.assessed": "bms.molbio-ngs.evidence-assessed.v1",
+    }
+    if payload.get("schema") != expected_schemas.get(event_type):
+        raise sqlite3.IntegrityError(f"v4_event_attestation_error:event_schema:{event_type}")
+
+    def required_text(name: str) -> str:
+        value = payload.get(name)
+        if not isinstance(value, str) or not value:
+            raise sqlite3.IntegrityError(f"v4_event_attestation_error:{event_type}:{name}")
+        return value
+
+    if event_type == "molbio_ngs.domain_state.initialized":
+        binding = connection.execute(
+            "SELECT global_domain_experiment_revision_id, global_domain_experiment_revision_digest, project_id, project_generation, project_digest, global_experiment_id, global_experiment_generation, global_experiment_digest FROM molbio_ngs_global_bindings WHERE global_domain_experiment_id=?",
+            (domain_id,),
+        ).fetchone()
+        expected = (
+            payload.get("global_domain_experiment_revision_id"),
+            payload.get("global_domain_experiment_revision_digest"),
+            payload.get("project_id"), str(payload.get("project_generation")),
+            payload.get("project_digest"), payload.get("global_experiment_id"),
+            str(payload.get("global_experiment_generation")), payload.get("global_experiment_digest"),
+        )
+        if binding is None or tuple(str(value) for value in binding) != tuple(str(value) for value in expected):
+            raise sqlite3.IntegrityError("v4_event_attestation_error:initialization_binding")
+        return "binding", 0
+    if event_type == "molbio_ngs.domain_state.revision_saved":
+        revision_id = required_text("state_revision_id")
+        row = connection.execute(
+            "SELECT revision_number, payload_sha256, membership_graph_sha256 FROM molbio_ngs_domain_state_revisions WHERE id=? AND global_domain_experiment_id=?",
+            (revision_id, domain_id),
+        ).fetchone()
+        if row is None or payload.get("state_revision_number") != row[0] or payload.get("payload_sha256") != row[1] or payload.get("membership_graph_sha256") != row[2]:
+            raise sqlite3.IntegrityError("v4_event_attestation_error:state_revision")
+        return "state", int(row[0])
+    if event_type in {"molbio_ngs.sample.created", "molbio_ngs.sample.revision_saved"}:
+        sample_id = required_text("sample_id")
+        revision_id = required_text("sample_revision_id")
+        row = connection.execute(
+            "SELECT revision_number, payload_sha256 FROM molbio_ngs_sample_revisions WHERE id=? AND sample_id=? AND global_domain_experiment_id=?",
+            (revision_id, sample_id, domain_id),
+        ).fetchone()
+        if row is None or payload.get("sample_revision_number") != row[0] or payload.get("payload_sha256") != row[1]:
+            raise sqlite3.IntegrityError("v4_event_attestation_error:sample_revision")
+        return f"sample:{sample_id}", int(row[0])
+    if event_type in {"molbio_ngs.reference.created", "molbio_ngs.reference.revision_saved"}:
+        reference_id = required_text("reference_id")
+        revision_id = required_text("reference_revision_id")
+        row = connection.execute(
+            "SELECT revision_number, canonical_fasta_sha256 FROM molbio_ngs_reference_revisions WHERE id=? AND reference_id=? AND global_domain_experiment_id=?",
+            (revision_id, reference_id, domain_id),
+        ).fetchone()
+        if row is None or payload.get("reference_revision_number") != row[0] or payload.get("canonical_fasta_sha256") != row[1]:
+            raise sqlite3.IntegrityError("v4_event_attestation_error:reference_revision")
+        return f"reference:{reference_id}", int(row[0])
+    if event_type == "molbio_ngs.reference.archived":
+        reference_id = required_text("reference_id")
+        row = connection.execute(
+            "SELECT head_generation, archived_at FROM molbio_ngs_reference_resources WHERE id=? AND global_domain_experiment_id=?",
+            (reference_id, domain_id),
+        ).fetchone()
+        if row is None or payload.get("head_generation") != row[0] or payload.get("archived_at") != row[1]:
+            raise sqlite3.IntegrityError("v4_event_attestation_error:reference_archive")
+        return f"reference:{reference_id}", int(row[0])
+    if event_type == "molbio_ngs.instrument_run_evidence.attached":
+        run_id = required_text("run_id")
+        receipt_id = required_text("receipt_id")
+        row = connection.execute(
+            "SELECT entity_kind, entity_id, source_generation_or_revision, content_digest FROM molbio_ngs_member_receipts WHERE receipt_id=?",
+            (receipt_id,),
+        ).fetchone()
+        observed = payload.get("observed_generation")
+        if row is None or row[0] != "ont_instrument_run" or row[1] != run_id or str(row[2]) != str(observed) or row[3] != payload.get("observation_sha256"):
+            raise sqlite3.IntegrityError("v4_event_attestation_error:instrument_evidence")
+        return f"member:ont_instrument_run:{run_id}", int(observed)
+    if event_type == "molbio_ngs.evidence.assessed":
+        evidence_id = required_text("evidence_id")
+        row = connection.execute(
+            "SELECT wrapper_sha256, scientific_assessment FROM molbio_ngs_evidence_assessments WHERE evidence_id=? AND global_domain_experiment_id=?",
+            (evidence_id, domain_id),
+        ).fetchone()
+        if row is None or row[0] != payload.get("wrapper_sha256") or row[1] != payload.get("scientific_assessment"):
+            raise sqlite3.IntegrityError("v4_event_attestation_error:evidence")
+        return f"evidence:{evidence_id}", None
+    raise sqlite3.IntegrityError(f"v4_event_attestation_error:unknown_event_type:{event_type}")
+
+
+def _v4_upgrade_plan(connection: sqlite3.Connection) -> tuple[list[tuple[object, ...]], list[tuple[object, ...]]]:
+    bindings = connection.execute(
+        "SELECT global_domain_experiment_id, global_domain_experiment_revision_id, global_domain_experiment_revision_digest, project_id, project_generation, project_digest, project_receipt_id, project_reopen_destination, project_acknowledgement, global_experiment_id, global_experiment_generation, global_experiment_digest, global_experiment_receipt_id, global_experiment_reopen_destination, global_experiment_acknowledgement, last_verified_at, last_error, created_at, updated_at FROM molbio_ngs_global_bindings ORDER BY global_domain_experiment_id"
+    ).fetchall()
+    binding_plan = [( _legacy_binding_revision_id(row), *row) for row in bindings]
+    binding_by_domain = {str(row[1]): str(row[0]) for row in binding_plan}
+    events = connection.execute(
+        "SELECT id, global_domain_experiment_id, event_type, payload_json, payload_sha256, status, lease_owner, lease_token, lease_expires_at, next_retry_at, retry_count, last_error, acknowledgement_json, acknowledgement_sha256, conflict_json, conflict_sha256, created_at FROM molbio_ngs_outbox_events ORDER BY created_at, id"
+    ).fetchall()
+    counters: dict[tuple[str, str, str], int] = {}
+    event_plan: list[tuple[object, ...]] = []
+    for row in events:
+        if row[5] != "pending" or any(row[index] is not None for index in (6, 7, 8, 9, 11, 12, 13, 14, 15)) or row[10] != 0:
+            raise sqlite3.IntegrityError("untrusted_legacy_delivery_state")
+        try:
+            payload = json.loads(str(row[3]))
+        except json.JSONDecodeError as exc:
+            raise sqlite3.IntegrityError("v4_event_attestation_error:invalid_json") from exc
+        if not isinstance(payload, dict) or hashlib.sha256(str(row[3]).encode("utf-8")).hexdigest() != row[4]:
+            raise sqlite3.IntegrityError("v4_event_attestation_error:payload_digest")
+        domain_id = str(row[1])
+        binding_id = binding_by_domain.get(domain_id)
+        if binding_id is None:
+            raise sqlite3.IntegrityError("v4_event_attestation_error:missing_binding")
+        stream, source_generation = _legacy_event_authority(connection, domain_id, str(row[2]), payload)
+        key = (domain_id, binding_id, stream)
+        generation = counters.get(key, 0) + 1
+        counters[key] = generation
+        event_plan.append((str(row[0]), binding_id, stream, generation, source_generation))
+    return binding_plan, event_plan
+
+
+def _execute_transactional_script(connection: sqlite3.Connection, script: str) -> None:
+    statement = ""
+    for line in script.splitlines(keepends=True):
+        statement += line
+        if sqlite3.complete_statement(statement):
+            sql = statement.strip()
+            statement = ""
+            if sql:
+                connection.execute(sql)
+    if statement.strip():
+        raise sqlite3.IntegrityError("incomplete migration SQL statement")
+
+
+def _materialize_v4_upgrade(
+    connection: sqlite3.Connection,
+    bindings: list[tuple[object, ...]],
+    events: list[tuple[object, ...]],
+) -> None:
+    _execute_transactional_script(connection, MIGRATION_V4_SQL)
+    for item in bindings:
+        binding_id, domain_id, domain_revision_id, domain_digest, project_id, project_generation, project_digest, project_receipt_id, project_reopen, project_ack, global_id, global_generation, global_digest, global_receipt_id, global_reopen, global_ack, last_verified, last_error, created_at, updated_at = item
+        connection.execute(
+            "INSERT INTO molbio_ngs_global_binding_revisions(binding_revision_id, global_domain_experiment_id, revision_number, supersedes_binding_revision_id, global_domain_experiment_revision_id, global_domain_experiment_revision_digest, project_id, project_generation, project_digest, project_receipt_id, project_reopen_destination, project_acknowledgement, global_experiment_id, global_experiment_generation, global_experiment_digest, global_experiment_receipt_id, global_experiment_reopen_destination, global_experiment_acknowledgement, global_binding_receipt_id, global_binding_receipt_json, global_binding_receipt_sha256, connector_command_id, binding_state, last_verified_at, last_error, created_at, updated_at) VALUES (?,?,1,NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,NULL,NULL,NULL,'needs_reverification',?,?,?,?)",
+            (binding_id, domain_id, domain_revision_id, domain_digest, project_id, project_generation, project_digest, project_receipt_id, project_reopen, project_ack, global_id, global_generation, global_digest, global_receipt_id, global_reopen, global_ack, last_verified, last_error, created_at, updated_at),
+        )
+        connection.execute("UPDATE molbio_ngs_domain_states SET current_binding_revision_id=? WHERE global_domain_experiment_id=?", (binding_id, domain_id))
+        connection.execute("UPDATE molbio_ngs_domain_state_revisions SET binding_revision_id=? WHERE global_domain_experiment_id=?", (binding_id, domain_id))
+    for event_id, binding_id, stream, generation, source_generation in events:
+        connection.execute("UPDATE molbio_ngs_outbox_events SET binding_revision_id=?, event_stream=?, stream_generation=?, source_generation=? WHERE id=?", (binding_id, stream, generation, source_generation, event_id))
+    connection.execute(
+        "INSERT INTO molbio_ngs_outbox_streams(global_domain_experiment_id, binding_revision_id, event_stream, next_stream_generation, updated_at) SELECT global_domain_experiment_id, binding_revision_id, event_stream, max(stream_generation)+1, max(updated_at) FROM molbio_ngs_outbox_events GROUP BY global_domain_experiment_id, binding_revision_id, event_stream"
+    )
+    _execute_transactional_script(connection, MIGRATION_V4_FINALIZE_SQL)
+
+
+def _v4_materialized_mapping(connection: sqlite3.Connection) -> bytes:
+    mapping = {
+        "bindings": connection.execute(
+            "SELECT global_domain_experiment_id, binding_revision_id, revision_number, binding_state FROM molbio_ngs_global_binding_revisions ORDER BY global_domain_experiment_id, revision_number"
+        ).fetchall(),
+        "events": connection.execute(
+            "SELECT id, global_domain_experiment_id, binding_revision_id, event_stream, stream_generation, source_generation FROM molbio_ngs_outbox_events ORDER BY id"
+        ).fetchall(),
+        "streams": connection.execute(
+            "SELECT global_domain_experiment_id, binding_revision_id, event_stream, next_stream_generation FROM molbio_ngs_outbox_streams ORDER BY global_domain_experiment_id, binding_revision_id, event_stream"
+        ).fetchall(),
+    }
+    return json.dumps(mapping, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _v4_rolled_back_dry_run(connection: sqlite3.Connection) -> bytes:
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        bindings, events = _v4_upgrade_plan(connection)
+        _materialize_v4_upgrade(connection, bindings, events)
+        return _v4_materialized_mapping(connection)
+    finally:
+        connection.rollback()
+
+
+def _apply_v4_upgrade(connection: sqlite3.Connection) -> None:
+    first = _v4_rolled_back_dry_run(connection)
+    second = _v4_rolled_back_dry_run(connection)
+    if first != second:
+        raise sqlite3.IntegrityError("v4_nondeterministic_rolled_back_mapping")
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        bindings, events = _v4_upgrade_plan(connection)
+        _materialize_v4_upgrade(connection, bindings, events)
+        if _v4_materialized_mapping(connection) != first:
+            raise sqlite3.IntegrityError("v4_committing_mapping_diverged_from_dry_run")
+        checksum = migration_v4_checksum()
+        connection.execute(
+            "INSERT INTO molbio_ngs_schema_migrations(version,name,checksum,description,applied_at) VALUES (?,?,?,?,?)",
+            (MIGRATION_V4_VERSION, MIGRATION_V4_NAME, checksum, "Append-only binding revisions and ordered token-fenced outbox authority", datetime.now(timezone.utc).isoformat()),
+        )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
 
 
 def _sql_literal(value: str) -> str:
@@ -904,6 +1538,44 @@ def _expected_schema_objects() -> dict[str, dict[str, str]]:
 
 def _authority_coherence_errors(connection: sqlite3.Connection) -> list[dict[str, object]]:
     checks = (
+        (
+            "domain_state_current_binding",
+            """
+            SELECT state.global_domain_experiment_id, state.current_binding_revision_id
+              FROM molbio_ngs_domain_states AS state
+              LEFT JOIN molbio_ngs_global_binding_revisions AS binding
+                ON binding.binding_revision_id = state.current_binding_revision_id
+               AND binding.global_domain_experiment_id = state.global_domain_experiment_id
+             WHERE state.current_binding_revision_id IS NULL OR binding.binding_revision_id IS NULL
+             ORDER BY state.global_domain_experiment_id
+            """,
+        ),
+        (
+            "state_revision_binding",
+            """
+            SELECT revision.id, revision.binding_revision_id
+              FROM molbio_ngs_domain_state_revisions AS revision
+              LEFT JOIN molbio_ngs_global_binding_revisions AS binding
+                ON binding.binding_revision_id = revision.binding_revision_id
+               AND binding.global_domain_experiment_id = revision.global_domain_experiment_id
+             WHERE revision.binding_revision_id IS NULL OR binding.binding_revision_id IS NULL
+             ORDER BY revision.id
+            """,
+        ),
+        (
+            "ordered_outbox_binding",
+            """
+            SELECT event.id, event.binding_revision_id, event.event_stream, event.stream_generation
+              FROM molbio_ngs_outbox_events AS event
+              LEFT JOIN molbio_ngs_global_binding_revisions AS binding
+                ON binding.binding_revision_id = event.binding_revision_id
+               AND binding.global_domain_experiment_id = event.global_domain_experiment_id
+             WHERE binding.binding_revision_id IS NULL
+                OR event.event_stream IS NULL OR event.stream_generation IS NULL
+                OR event.stream_generation < 1
+             ORDER BY event.id
+            """,
+        ),
         (
             "domain_state_current_revision",
             """
@@ -1098,6 +1770,9 @@ def run_all(db_path: str | Path) -> None:
         if rows != expected_rows[: len(rows)]:
             raise RuntimeError(f"MolBio/NGS migration ledger mismatch: {rows!r}")
         for version, name, checksum, description, migration_sql in registry[len(rows) :]:
+            if version == MIGRATION_V4_VERSION:
+                _apply_v4_upgrade(connection)
+                continue
             applied_at = datetime.now(timezone.utc).isoformat()
             connection.executescript(
                 "BEGIN IMMEDIATE;\n"

@@ -5,6 +5,294 @@ export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 export type JsonObject = Record<string, JsonValue>;
 
+export interface NgsMolBioBindingStatus {
+    schema: 'bms.ngs-molbio.binding-status.v1';
+    project_id: string;
+    project_revision_id: string;
+    global_experiment_id: string;
+    global_experiment_revision_id: string;
+    domain_id: string;
+    domain_revision_id: string;
+    binding_revision_id: string;
+    global_receipt_id: string | null;
+    global_receipt_sha256: string | null;
+    connector_command_id: string;
+    command_state: string;
+    acknowledgement_id: string | null;
+    acknowledgement_sha256: string | null;
+    local_state_id: string | null;
+    provisioning_state: 'ready' | 'provisioning' | 'degraded';
+    head_generation: number;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface DomainWorkflowPlanHead {
+    schema: 'bms.workflow-plan-head.v1';
+    plan_id: string;
+    name: string;
+    capability_id: string;
+    current_revision_id: string | null;
+    head_generation: number;
+    draft_id: string | null;
+    draft_generation: number | null;
+    domain_revision_id: string | null;
+    capability_contract: DomainWorkflowCapabilityContract;
+    capability_contract_sha256: string;
+    workflow_family: string;
+    adapter_id: string;
+    lifecycle_state: string;
+    draft?: JsonObject | null;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface DomainWorkflowPlanRevision {
+    schema: 'bms.workflow-plan-revision.v1';
+    revision_id: string;
+    plan_id: string;
+    revision_number: number;
+    parent_revision_id: string | null;
+    payload: JsonObject;
+    payload_sha256: string;
+    dependency_graph_sha256: string;
+    change_summary?: string;
+    created_at: string;
+}
+
+export interface DomainWorkflowPreparation {
+    schema: 'bms.workflow-preparation.v1';
+    preparation_id: string;
+    workflow_revision_id: string;
+    normalized_request: JsonObject;
+    normalized_request_sha256: string;
+    requested_settings: JsonObject;
+    effective_settings: JsonObject;
+    scheduler: JsonObject;
+    validation_receipt_id: string;
+    validation: JsonObject;
+    status: string;
+    expected_cardinality: number;
+    created_at: string;
+    prepared_at: string;
+}
+
+export interface PreparedLaunchContext {
+    schema: 'bms.launch-context.v2';
+    launch_context_id: string;
+    project_id: string;
+    global_experiment_id: string;
+    domain_experiment_id: string;
+    workflow_id: string;
+    workflow_revision_id: string;
+    preparation_id: string;
+    run_attempt_id: string | null;
+    normalized_request_sha256: string;
+    validation_receipt_id: string;
+    validation_receipt_sha256: string;
+    return_uri: string;
+    source_receipt_id: string;
+    state: string;
+    canonical_job_id: string | null;
+    binding_receipt: JsonObject | null;
+    issued_at: string;
+    expires_at: string;
+}
+
+export interface DomainRunAttempt {
+    attempt_id: string;
+    attempt_number: number;
+    preparation_id: string;
+    state: string;
+    canonical_job_id: string | null;
+    launch_context: PreparedLaunchContext | null;
+    terminal_receipt: JsonObject | null;
+}
+
+export interface DomainWorkflowRun {
+    run_id: string;
+    preparation_id: string;
+    state: string;
+    generation: number;
+    attempts: DomainRunAttempt[];
+}
+
+export interface DomainRunGroup {
+    schema: 'bms.run-group.v1';
+    run_group_id: string;
+    request_sha256: string;
+    state: string;
+    generation: number;
+    runs: DomainWorkflowRun[];
+    cancellation_receipt?: JsonObject;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface RunControlCommandDocument {
+    schema: 'bms.run-control-command.v1';
+    command_id: string;
+    command_type: 'cancel';
+    workspace_id: string;
+    run_group_id: string;
+    expected_generation: number;
+    status: string;
+    attempt_count: number;
+    created_at: string;
+    updated_at: string;
+    applied_at: string | null;
+    acknowledgement?: JsonObject;
+    conflict?: JsonObject;
+}
+
+export interface DomainResultSurface {
+    schema: string;
+    receipt_id: string;
+    route: string | null;
+    readiness: string;
+    surface_kind: string;
+    native_summary: JsonObject;
+    available_actions: string[];
+}
+
+export type DomainCapabilityLaunchMode = 'managed_materialization' | 'typed_launcher_handoff';
+
+export interface DomainCapabilityModelMode {
+    model_id: string;
+    mode: string;
+}
+
+export interface DomainWorkflowCapabilityContractCapability {
+    [key: string]: JsonValue;
+    capability_id: string;
+    capability_version: string;
+    label: string;
+    scientific_role: string;
+    launch_mode: DomainCapabilityLaunchMode;
+    workflow_family: string;
+    workflow_adapter_id: string;
+    parameter_schema_id: string;
+    plannable: true;
+    exposure_state: 'accepted';
+    result_contracts: string[];
+}
+
+export interface DomainWorkflowCapabilityContract {
+    schema: 'bms.workflow-plan-capability-contract.v1';
+    capability: DomainWorkflowCapabilityContractCapability;
+    parameter_schema: JsonObject;
+    allowed_model_modes: DomainCapabilityModelMode[];
+}
+
+export interface DomainCapabilityDescriptor {
+    capability_id: string;
+    capability_version: string;
+    label: string;
+    scientific_role: string;
+    launch_mode: DomainCapabilityLaunchMode;
+    workflow_family: string | null;
+    workflow_adapter_id: string | null;
+    parameter_schema_id: string;
+    parameter_schema: JsonObject;
+    allowed_model_modes: DomainCapabilityModelMode[];
+    result_contracts: string[];
+    canonical_source_destination: string;
+    accepted_source_roles: string[];
+    capability_contract: DomainWorkflowCapabilityContract;
+    capability_contract_sha256: string;
+}
+
+export interface DomainCapabilityList {
+    schema: 'bms.ngs-molbio.domain-capability-list.v1';
+    domain_id: string;
+    domain_revision_id: string | null;
+    experiment_mode: string | null;
+    inventory_sha256: string;
+    items: DomainCapabilityDescriptor[];
+}
+
+export interface DomainDatasetKindMemberContract {
+    adapter_id: string;
+    receipt_kind: string;
+    allowed_roles: string[];
+    compatibility_rule: string;
+}
+
+export interface DomainDatasetKindDescriptor {
+    dataset_kind: string;
+    label: string;
+    minimum_members: number;
+    maximum_members: number;
+    allowed_members: DomainDatasetKindMemberContract[];
+    compatibility_rules: string[];
+}
+
+export interface DomainDatasetHead {
+    schema: 'bms.dataset-head.v1';
+    project_id?: string;
+    global_experiment_id?: string;
+    domain_id?: string;
+    dataset_id: string;
+    name: string;
+    dataset_kind: string;
+    current_revision_id: string | null;
+    head_generation: number;
+    lifecycle_state: string;
+    normalized_request_sha256?: string | null;
+    created_at: string;
+    updated_at?: string;
+}
+
+export interface DomainDatasetMemberMetadata {
+    display_label?: string | null;
+    group_label?: string | null;
+    condition_label?: string | null;
+    tags: string[];
+}
+
+export interface DomainDatasetMember {
+    schema?: string;
+    receipt_id: string;
+    adapter_id?: string;
+    store_id?: string;
+    entity_kind?: string;
+    entity_id?: string;
+    native_revision_or_generation?: string;
+    native_content_sha256?: string;
+    role: string;
+    ordinal: number;
+    media_type: string | null;
+    metadata: DomainDatasetMemberMetadata;
+    reopen_uri?: string;
+    canonical_member_sha256?: string;
+    size_bytes?: number | null;
+}
+
+export interface DomainDatasetRevisionSummary {
+    revision_id: string;
+    revision_number: number;
+    parent_revision_id: string | null;
+    revision_sha256: string;
+    created_at: string;
+}
+
+export interface DomainDatasetRevision extends DomainDatasetRevisionSummary {
+    schema: 'bms.dataset-revision.v1';
+    dataset_id: string;
+    member_count: number;
+    members?: DomainDatasetMember[];
+    members_uri?: string;
+    head_generation?: number;
+    normalized_request_sha256?: string;
+}
+
+export interface DomainDatasetMemberDraft {
+    receipt_id: string;
+    role: string;
+    media_type: string | null;
+    metadata: DomainDatasetMemberMetadata;
+}
+
 export type HierarchyNodeType = 'project' | 'global_experiment' | 'domain_experiment' | 'virtual_folder';
 export type MapNodeType = HierarchyNodeType | 'workflow' | 'run' | 'workflow_run' | 'result' | 'dataset' | 'external_entity_receipt' | 'research_record';
 export type ResultSurfaceKind = 'protein_design' | 'molecular_dynamics' | 'conformational_mapping' | 'frustrampnn' | 'ngs' | 'molbio' | 'artifact' | 'unsupported';
@@ -306,17 +594,22 @@ export interface AttachmentReceipt {
 }
 
 export interface LaunchContext {
-    schema: 'bms.launch-context.v1';
+    schema: 'bms.launch-context.v1' | 'bms.launch-context.v2';
     launch_context_id: string;
     project_id: string;
     global_experiment_id: string;
     domain_experiment_id: string;
     workflow_id: string | null;
     workflow_revision_id: string | null;
+    preparation_id?: string | null;
+    run_attempt_id?: string | null;
+    normalized_request_sha256?: string | null;
+    validation_receipt_id?: string | null;
+    validation_receipt_sha256?: string | null;
     pinned_gpu: number | null;
     return_uri: string;
     source_receipt_id: string;
-    state: 'issued' | 'claimed' | 'consumed';
+    state: 'issued' | 'reserved' | 'claimed' | 'consumed';
     canonical_job_id?: string | null;
     recovery_job_id?: string | null;
     binding_receipt?: JsonObject | null;
@@ -382,14 +675,16 @@ export interface GlobalExperimentCreateRequest {
 }
 
 export interface DomainExperimentCreateRequest {
-    schema: 'bms.domain-experiment.v1';
+    schema: 'bms.domain-experiment.v2';
     domain_kind: 'protein_in_silico' | 'ngs_molbio';
-    domain_contract_version?: string;
+    domain_contract_version: '2';
     name: string;
-    objective?: string;
-    status?: 'draft' | 'planned' | 'active' | 'analysis' | 'review' | 'completed' | 'blocked';
-    tags?: string[];
-    change_summary?: string;
+    objective: string;
+    status: 'draft' | 'planned' | 'active' | 'analysis' | 'review' | 'completed' | 'blocked' | 'archived';
+    tags: string[];
+    source_receipt_ids: string[];
+    dataset_revision_ids: string[];
+    change_summary: string;
     domain_payload: JsonObject;
 }
 
@@ -783,21 +1078,31 @@ export function normalizeProjectManagerReadModel(value: unknown): ProjectManager
 
 export function parseLaunchContext(value: unknown): LaunchContext {
     const label = 'launch context';
-    const record = exactRecord(value, label, ['schema', 'launch_context_id', 'project_id', 'global_experiment_id', 'domain_experiment_id', 'workflow_id', 'workflow_revision_id', 'pinned_gpu', 'return_uri', 'source_receipt_id', 'state', 'issued_at', 'expires_at'], ['canonical_job_id', 'recovery_job_id', 'binding_receipt']);
+    const record = exactRecord(
+        value,
+        label,
+        ['schema', 'launch_context_id', 'project_id', 'global_experiment_id', 'domain_experiment_id', 'workflow_id', 'workflow_revision_id', 'pinned_gpu', 'return_uri', 'source_receipt_id', 'state', 'issued_at', 'expires_at'],
+        ['preparation_id', 'run_attempt_id', 'normalized_request_sha256', 'validation_receipt_id', 'validation_receipt_sha256', 'canonical_job_id', 'recovery_job_id', 'binding_receipt'],
+    );
     const pinnedGpu = record.pinned_gpu === null ? null : requireInteger(record.pinned_gpu, `${label}.pinned_gpu`);
     if (pinnedGpu !== null && pinnedGpu < 0) throw new Error(`${label}.pinned_gpu must be non-negative.`);
     return {
-        schema: requireLiteral(record.schema, `${label}.schema`, ['bms.launch-context.v1']),
+        schema: requireLiteral(record.schema, `${label}.schema`, ['bms.launch-context.v1', 'bms.launch-context.v2']),
         launch_context_id: requireString(record.launch_context_id, `${label}.launch_context_id`),
         project_id: requireString(record.project_id, `${label}.project_id`),
         global_experiment_id: requireString(record.global_experiment_id, `${label}.global_experiment_id`),
         domain_experiment_id: requireString(record.domain_experiment_id, `${label}.domain_experiment_id`),
         workflow_id: requireNullableString(record.workflow_id, `${label}.workflow_id`),
         workflow_revision_id: requireNullableString(record.workflow_revision_id, `${label}.workflow_revision_id`),
+        preparation_id: record.preparation_id === undefined ? undefined : requireNullableString(record.preparation_id, `${label}.preparation_id`),
+        run_attempt_id: record.run_attempt_id === undefined ? undefined : requireNullableString(record.run_attempt_id, `${label}.run_attempt_id`),
+        normalized_request_sha256: record.normalized_request_sha256 === undefined ? undefined : requireNullableString(record.normalized_request_sha256, `${label}.normalized_request_sha256`),
+        validation_receipt_id: record.validation_receipt_id === undefined ? undefined : requireNullableString(record.validation_receipt_id, `${label}.validation_receipt_id`),
+        validation_receipt_sha256: record.validation_receipt_sha256 === undefined ? undefined : requireNullableString(record.validation_receipt_sha256, `${label}.validation_receipt_sha256`),
         pinned_gpu: pinnedGpu,
         return_uri: requireString(record.return_uri, `${label}.return_uri`),
         source_receipt_id: requireString(record.source_receipt_id, `${label}.source_receipt_id`),
-        state: requireLiteral(record.state, `${label}.state`, ['issued', 'claimed', 'consumed']),
+        state: requireLiteral(record.state, `${label}.state`, ['issued', 'reserved', 'claimed', 'consumed']),
         canonical_job_id: record.canonical_job_id === undefined ? undefined : requireNullableString(record.canonical_job_id, `${label}.canonical_job_id`),
         recovery_job_id: record.recovery_job_id === undefined ? undefined : requireNullableString(record.recovery_job_id, `${label}.recovery_job_id`),
         binding_receipt: record.binding_receipt === undefined ? undefined : record.binding_receipt === null ? null : requireJsonObject(record.binding_receipt, `${label}.binding_receipt`),
@@ -1058,17 +1363,457 @@ export async function createResearchRecord(subject: ResearchRecordSubject, reque
     return (await api.post<JsonObject>(`${path}/records`, request)).data;
 }
 
-export async function retryRunGroup(projectId: string, runGroupId: string): Promise<JsonObject> {
-    return (await api.post<JsonObject>(
-        `/api/experiment-workspaces/${segment(projectId)}/run-groups/${segment(runGroupId)}/retry`,
-        { idempotency_key: crypto.randomUUID() },
+export async function getNgsMolBioBinding(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    signal?: AbortSignal,
+): Promise<NgsMolBioBindingStatus> {
+    return (await api.get<NgsMolBioBindingStatus>(
+        `/api/projects/${segment(projectId)}/experiments/${segment(globalExperimentId)}/domains/${segment(domainExperimentId)}/binding`,
+        { signal },
     )).data;
 }
 
-export async function resubmitRunGroup(projectId: string, runGroupId: string): Promise<JsonObject> {
+export async function initializeNgsMolBioBinding(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    expectedDomainRevisionId: string,
+): Promise<NgsMolBioBindingStatus> {
+    return (await api.post<NgsMolBioBindingStatus>(
+        `/api/projects/${segment(projectId)}/experiments/${segment(globalExperimentId)}/domains/${segment(domainExperimentId)}/initialize`,
+        { expected_domain_revision_id: expectedDomainRevisionId },
+        { headers: { 'Idempotency-Key': crypto.randomUUID() } },
+    )).data;
+}
+
+export async function reverifyNgsMolBioBinding(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    expectedDomainRevisionId: string,
+    expectedBindingRevisionId: string,
+): Promise<NgsMolBioBindingStatus> {
+    return (await api.post<NgsMolBioBindingStatus>(
+        `/api/projects/${segment(projectId)}/experiments/${segment(globalExperimentId)}/domains/${segment(domainExperimentId)}/binding/reverify`,
+        {
+            expected_domain_revision_id: expectedDomainRevisionId,
+            expected_binding_revision_id: expectedBindingRevisionId,
+        },
+        { headers: { 'Idempotency-Key': crypto.randomUUID() } },
+    )).data;
+}
+
+function domainOperatorPath(projectId: string, globalExperimentId: string, domainExperimentId: string): string {
+    return `/api/projects/${segment(projectId)}/experiments/${segment(globalExperimentId)}/domains/${segment(domainExperimentId)}`;
+}
+
+export async function listDomainCapabilities(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    signal?: AbortSignal,
+): Promise<DomainCapabilityList> {
+    return (await api.get<DomainCapabilityList>(
+        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/capabilities`,
+        { signal },
+    )).data;
+}
+
+export async function listDomainDatasetKinds(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    signal?: AbortSignal,
+): Promise<{ schema: string; registry_schema: string; registry_sha256: string; items: DomainDatasetKindDescriptor[] }> {
+    return (await api.get<{ schema: string; registry_schema: string; registry_sha256: string; items: DomainDatasetKindDescriptor[] }>(
+        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/dataset-kinds`,
+        { signal },
+    )).data;
+}
+
+export async function listDomainDatasets(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    signal?: AbortSignal,
+): Promise<{ schema: string; items: DomainDatasetHead[]; next_cursor: string | null; has_more: boolean }> {
+    return (await api.get<{ schema: string; items: DomainDatasetHead[]; next_cursor: string | null; has_more: boolean }>(
+        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/datasets`,
+        { params: { limit: 100 }, signal },
+    )).data;
+}
+
+export async function createDomainDataset(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    request: { name: string; dataset_kind: string; change_summary: string },
+): Promise<DomainDatasetHead> {
+    return (await api.post<DomainDatasetHead>(
+        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/datasets`,
+        request,
+        { headers: { 'Idempotency-Key': crypto.randomUUID() } },
+    )).data;
+}
+
+export async function getDomainDataset(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    datasetId: string,
+    signal?: AbortSignal,
+): Promise<DomainDatasetHead> {
+    return (await api.get<DomainDatasetHead>(
+        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/datasets/${segment(datasetId)}`,
+        { signal },
+    )).data;
+}
+
+export async function listDomainDatasetRevisions(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    datasetId: string,
+    signal?: AbortSignal,
+): Promise<{ schema: string; items: DomainDatasetRevisionSummary[]; next_cursor: string | null; has_more: boolean }> {
+    return (await api.get<{ schema: string; items: DomainDatasetRevisionSummary[]; next_cursor: string | null; has_more: boolean }>(
+        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/datasets/${segment(datasetId)}/revisions`,
+        { params: { limit: 100 }, signal },
+    )).data;
+}
+
+export async function getDomainDatasetRevision(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    datasetId: string,
+    revisionId: string,
+    signal?: AbortSignal,
+): Promise<DomainDatasetRevision> {
+    return (await api.get<DomainDatasetRevision>(
+        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/datasets/${segment(datasetId)}/revisions/${segment(revisionId)}`,
+        { signal },
+    )).data;
+}
+
+export async function listDomainDatasetRevisionMembers(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    datasetId: string,
+    revisionId: string,
+    signal?: AbortSignal,
+): Promise<{ schema: string; items: DomainDatasetMember[]; next_cursor: string | null; has_more: boolean }> {
+    return (await api.get<{ schema: string; items: DomainDatasetMember[]; next_cursor: string | null; has_more: boolean }>(
+        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/datasets/${segment(datasetId)}/revisions/${segment(revisionId)}/members`,
+        { params: { limit: 100 }, signal },
+    )).data;
+}
+
+export async function reviseDomainDataset(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    datasetId: string,
+    expectedHeadGeneration: number,
+    changeSummary: string,
+    members: DomainDatasetMemberDraft[],
+): Promise<DomainDatasetRevision> {
+    return (await api.post<DomainDatasetRevision>(
+        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/datasets/${segment(datasetId)}/revisions`,
+        {
+            expected_head_generation: expectedHeadGeneration,
+            change_summary: changeSummary,
+            members: members.map((member, ordinal) => ({ ...member, ordinal })),
+        },
+        { headers: { 'Idempotency-Key': crypto.randomUUID() } },
+    )).data;
+}
+
+async function setDomainDatasetLifecycle(
+    operation: 'archive' | 'restore',
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    datasetId: string,
+    expectedHeadGeneration: number,
+    changeSummary: string,
+): Promise<DomainDatasetHead> {
+    return (await api.post<DomainDatasetHead>(
+        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/datasets/${segment(datasetId)}/${operation}`,
+        { expected_head_generation: expectedHeadGeneration, change_summary: changeSummary },
+        { headers: { 'Idempotency-Key': crypto.randomUUID() } },
+    )).data;
+}
+
+export async function archiveDomainDataset(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    datasetId: string,
+    expectedHeadGeneration: number,
+    changeSummary: string,
+): Promise<DomainDatasetHead> {
+    return setDomainDatasetLifecycle('archive', projectId, globalExperimentId, domainExperimentId, datasetId, expectedHeadGeneration, changeSummary);
+}
+
+export async function restoreDomainDataset(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    datasetId: string,
+    expectedHeadGeneration: number,
+    changeSummary: string,
+): Promise<DomainDatasetHead> {
+    return setDomainDatasetLifecycle('restore', projectId, globalExperimentId, domainExperimentId, datasetId, expectedHeadGeneration, changeSummary);
+}
+
+export async function listDomainWorkflowPlans(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    signal?: AbortSignal,
+): Promise<{ schema: string; items: DomainWorkflowPlanHead[]; next_cursor: string | null }> {
+    return (await api.get<{ schema: string; items: DomainWorkflowPlanHead[]; next_cursor: string | null }>(
+        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/plans`,
+        { signal },
+    )).data;
+}
+
+export async function createDomainWorkflowPlan(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    request: { name: string; capability_id: string; expected_domain_revision_id: string },
+): Promise<DomainWorkflowPlanHead> {
+    return (await api.post<DomainWorkflowPlanHead>(
+        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/plans`,
+        request,
+        { headers: { 'Idempotency-Key': crypto.randomUUID() } },
+    )).data;
+}
+
+export async function getDomainWorkflowPlan(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    planId: string,
+    signal?: AbortSignal,
+): Promise<DomainWorkflowPlanHead> {
+    return (await api.get<DomainWorkflowPlanHead>(
+        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/plans/${segment(planId)}`,
+        { signal },
+    )).data;
+}
+
+export async function replaceDomainWorkflowPlanDraft(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    planId: string,
+    expectedDraftGeneration: number,
+    payload: JsonObject,
+): Promise<{ schema: string; draft_id: string; plan_id: string; generation: number; payload: JsonObject; payload_sha256: string; updated_at: string }> {
+    return (await api.put(
+        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/plans/${segment(planId)}/draft`,
+        { expected_draft_generation: expectedDraftGeneration, payload },
+    )).data;
+}
+
+export async function publishDomainWorkflowPlanRevision(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    planId: string,
+    request: { expected_head_generation: number; expected_draft_generation: number; change_summary: string },
+): Promise<DomainWorkflowPlanRevision> {
+    return (await api.post<DomainWorkflowPlanRevision>(
+        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/plans/${segment(planId)}/revisions`,
+        request,
+    )).data;
+}
+
+export async function listDomainWorkflowPlanRevisions(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    planId: string,
+    signal?: AbortSignal,
+): Promise<{ schema: string; items: DomainWorkflowPlanRevision[]; next_cursor: number | null }> {
+    return (await api.get<{ schema: string; items: DomainWorkflowPlanRevision[]; next_cursor: number | null }>(
+        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/plans/${segment(planId)}/revisions`,
+        { signal },
+    )).data;
+}
+
+export async function prepareDomainWorkflowPlanRevision(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    planId: string,
+    revisionId: string,
+    inputDatasetRevisionIds: string[],
+): Promise<DomainWorkflowPreparation> {
+    return (await api.post<DomainWorkflowPreparation>(
+        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/plans/${segment(planId)}/revisions/${segment(revisionId)}/preparations`,
+        { input_dataset_revision_ids: inputDatasetRevisionIds },
+        { headers: { 'Idempotency-Key': crypto.randomUUID() } },
+    )).data;
+}
+
+export async function issuePreparedLaunchContext(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    preparationId: string,
+    returnUri: string,
+): Promise<PreparedLaunchContext> {
+    return (await api.post<PreparedLaunchContext>(
+        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/preparations/${segment(preparationId)}/launch-contexts`,
+        { return_uri: returnUri },
+        { headers: { 'Idempotency-Key': crypto.randomUUID() } },
+    )).data;
+}
+
+export interface PreparationLaunchRequest {
+    preparation_id: string;
+    launch_context_id: string | null;
+}
+
+export async function launchDomainRunGroup(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    preparationLaunches: PreparationLaunchRequest[],
+): Promise<DomainRunGroup> {
+    return (await api.post<DomainRunGroup>(
+        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/run-groups`,
+        { preparation_launches: preparationLaunches },
+        { headers: { 'Idempotency-Key': crypto.randomUUID() } },
+    )).data;
+}
+
+export async function getDomainRunGroup(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    runGroupId: string,
+    signal?: AbortSignal,
+): Promise<DomainRunGroup> {
+    return (await api.get<DomainRunGroup>(
+        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/run-groups/${segment(runGroupId)}`,
+        { signal },
+    )).data;
+}
+
+export async function retryDomainRunGroup(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    runGroupId: string,
+    expectedRunGroupGeneration: number,
+    replacements: Array<{ run_id: string; preparation_id: string; launch_context_id: string | null }>,
+): Promise<DomainRunGroup> {
+    return (await api.post<DomainRunGroup>(
+        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/run-groups/${segment(runGroupId)}/retry`,
+        { expected_run_group_generation: expectedRunGroupGeneration, replacements },
+        { headers: { 'Idempotency-Key': crypto.randomUUID() } },
+    )).data;
+}
+
+export async function resubmitDomainRunGroup(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    runGroupId: string,
+    expectedRunGroupGeneration: number,
+    preparationLaunches: PreparationLaunchRequest[],
+): Promise<DomainRunGroup> {
+    return (await api.post<DomainRunGroup>(
+        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/run-groups/${segment(runGroupId)}/resubmit`,
+        {
+            expected_run_group_generation: expectedRunGroupGeneration,
+            preparation_launches: preparationLaunches,
+        },
+        { headers: { 'Idempotency-Key': crypto.randomUUID() } },
+    )).data;
+}
+
+export async function cancelDomainRunGroup(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    runGroupId: string,
+    expectedRunGroupGeneration: number,
+    reason: string,
+): Promise<RunControlCommandDocument> {
+    return (await api.post<RunControlCommandDocument>(
+        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/run-groups/${segment(runGroupId)}/cancel`,
+        { expected_run_group_generation: expectedRunGroupGeneration, reason },
+        { headers: { 'Idempotency-Key': crypto.randomUUID() } },
+    )).data;
+}
+
+export async function reopenDomainResult(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    receiptId: string,
+): Promise<DomainResultSurface> {
+    return (await api.get<DomainResultSurface>(
+        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/results/${segment(receiptId)}/surface`,
+    )).data;
+}
+
+export async function retryRunGroup(
+    workspaceId: string,
+    runGroupId: string,
+    expectedGeneration: number,
+    sourceDomainId: string,
+    replacements: Array<{ run_id: string; preparation_id: string; launch_context_id: string | null }>,
+): Promise<JsonObject> {
+    const replacementPreparationIds = Object.fromEntries(
+        replacements.map((item) => [item.run_id, item.preparation_id]),
+    );
+    const replacementLaunchContextIds = Object.fromEntries(
+        replacements
+            .filter((item) => item.launch_context_id !== null)
+            .map((item) => [item.run_id, item.launch_context_id as string]),
+    );
     return (await api.post<JsonObject>(
-        `/api/experiment-workspaces/${segment(projectId)}/run-groups/${segment(runGroupId)}/resubmit`,
-        { idempotency_key: crypto.randomUUID() },
+        `/api/experiment-workspaces/${segment(workspaceId)}/run-groups/${segment(runGroupId)}/retry`,
+        {
+            idempotency_key: crypto.randomUUID(),
+            expected_generation: expectedGeneration,
+            source_domain_id: sourceDomainId,
+            replacement_preparation_ids: replacementPreparationIds,
+            replacement_launch_context_ids: replacementLaunchContextIds,
+        },
+    )).data;
+}
+
+export async function resubmitRunGroup(
+    workspaceId: string,
+    runGroupId: string,
+    expectedGeneration: number,
+    sourceDomainId: string,
+    preparationLaunches: PreparationLaunchRequest[],
+): Promise<JsonObject> {
+    return (await api.post<JsonObject>(
+        `/api/experiment-workspaces/${segment(workspaceId)}/run-groups/${segment(runGroupId)}/resubmit`,
+        {
+            idempotency_key: crypto.randomUUID(),
+            expected_generation: expectedGeneration,
+            source_domain_id: sourceDomainId,
+            preparation_ids: preparationLaunches.map((item) => item.preparation_id),
+            launch_context_ids: Object.fromEntries(
+                preparationLaunches
+                    .filter((item) => item.launch_context_id !== null)
+                    .map((item) => [item.preparation_id, item.launch_context_id as string]),
+            ),
+        },
     )).data;
 }
 

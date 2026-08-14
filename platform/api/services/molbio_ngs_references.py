@@ -357,7 +357,10 @@ async def create_reference(
     if not name.strip() or len(name) > 255 or not idempotency_key.strip():
         raise StateValidationError("reference name and idempotency_key are required")
     state = await session.get(MolBioNGSDomainState, global_domain_experiment_id)
-    binding = await session.get(MolBioNGSGlobalBinding, global_domain_experiment_id)
+    binding = (
+        await session.get(MolBioNGSGlobalBinding, state.current_binding_revision_id)
+        if state is not None else None
+    )
     if state is None or binding is None or binding.binding_state != "acknowledged":
         raise DomainStateNotFound(
             "acknowledged MolBio/NGS Domain Experiment state was not found"
@@ -409,11 +412,13 @@ async def create_reference(
     resource.current_revision_id = revision.id
     resource.head_generation = 1
     resource.updated_at = now
-    _audit_and_outbox(
+    await _audit_and_outbox(
         session, domain_id=global_domain_experiment_id, resource_id=reference_id,
         state_revision_id=None, event_type="molbio_ngs.reference.created", generation=1,
         payload={"schema": "bms.molbio-ngs.reference-created.v1", "reference_id": reference_id,
-                 "reference_revision_id": revision.id, "canonical_fasta_sha256": revision.canonical_fasta_sha256},
+                 "reference_revision_id": revision.id,
+                 "reference_revision_number": revision.revision_number,
+                 "canonical_fasta_sha256": revision.canonical_fasta_sha256},
         created_by=SERVER_OWNED_ACTOR,
     )
     await session.flush()
@@ -541,7 +546,7 @@ async def append_reference_revision(
     )
     if result.rowcount != 1:
         raise RevisionConflict("reference head changed during revision save")
-    _audit_and_outbox(
+    await _audit_and_outbox(
         session,
         domain_id=resource.global_domain_experiment_id,
         resource_id=reference_id,
@@ -552,6 +557,7 @@ async def append_reference_revision(
             "schema": "bms.molbio-ngs.reference-revision-saved.v1",
             "reference_id": reference_id,
             "reference_revision_id": revision.id,
+            "reference_revision_number": revision.revision_number,
             "canonical_fasta_sha256": revision.canonical_fasta_sha256,
         },
         created_by=SERVER_OWNED_ACTOR,
@@ -812,7 +818,7 @@ async def archive_reference(
     )
     if result.rowcount != 1:
         raise RevisionConflict("reference archive state changed")
-    _audit_and_outbox(
+    await _audit_and_outbox(
         session,
         domain_id=resource.global_domain_experiment_id,
         resource_id=reference_id,
@@ -903,5 +909,9 @@ async def resolve_ngs_reference_revision_receipt(
         content_digest=revision.canonical_fasta_sha256,
         source_schema=REFERENCE_SCHEMA, availability="available",
         reopen_destination={"surface": "molbio-ngs-reference-revision",
-                            "params": {"reference_id": reference_id, "revision_id": revision.id}},
+                            "params": {
+                                "global_domain_experiment_id": global_domain_experiment_id,
+                                "reference_id": reference_id,
+                                "revision_id": revision.id,
+                            }},
     )

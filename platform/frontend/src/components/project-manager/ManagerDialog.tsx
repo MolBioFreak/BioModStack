@@ -20,7 +20,6 @@ import {
     updateProject,
     type JsonObject,
     type ProjectManagerReadModel,
-    type ProteinExperimentMode,
     type RecordKind,
 } from '../../lib/projectManager';
 import { globalExperimentForNode, selectedDomainContext } from './projectManagerState';
@@ -44,11 +43,7 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
     const [objective, setObjective] = useState('');
     const [question, setQuestion] = useState('');
     const [domainKind, setDomainKind] = useState<'protein_in_silico' | 'ngs_molbio'>('protein_in_silico');
-    const [experimentMode, setExperimentMode] = useState<ProteinExperimentMode>('design');
-    const [targetId, setTargetId] = useState('');
-    const [targetLabel, setTargetLabel] = useState('');
-    const [plannedCapabilities, setPlannedCapabilities] = useState('');
-    const [validationStrategy, setValidationStrategy] = useState('');
+    const [ngsExperimentMode, setNgsExperimentMode] = useState('analysis');
     const [recordKind, setRecordKind] = useState<RecordKind>('note');
     const [body, setBody] = useState('');
 
@@ -71,11 +66,7 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
         setObjective('');
         setQuestion('');
         setDomainKind('protein_in_silico');
-        setExperimentMode('design');
-        setTargetId('');
-        setTargetLabel('');
-        setPlannedCapabilities('');
-        setValidationStrategy('');
+        setNgsExperimentMode('analysis');
         setRecordKind('note');
         setBody('');
     }, [mode]);
@@ -100,19 +91,31 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
             if (mode === 'create_domain') {
                 const globalId = selection?.node_type === 'global_experiment' ? selectionId : selectedGlobalId;
                 if (!globalId) throw new Error('Select a Global Experiment before creating a Domain Experiment.');
-                const domainPayload: JsonObject = domainKind === 'protein_in_silico'
-                    ? {
-                        schema: 'bms.protein-in-silico-experiment.v1',
-                        experiment_mode: experimentMode,
-                        targets: [{ target_id: targetId.trim(), label: targetLabel.trim(), entity_receipt_ids: [], role: 'target' }],
-                        scientific_objective: objective,
-                        design_constraints: [],
-                        planned_capabilities: plannedCapabilities.split(',').map((value) => value.trim()).filter(Boolean),
-                        comparison_groups: [],
-                        validation_strategy: validationStrategy.split(',').map((value) => value.trim()).filter(Boolean),
-                    }
-                    : { schema: 'bms.ngs-molbio-experiment.v1' };
-                return createDomainExperiment(projectId, globalId, { schema: 'bms.domain-experiment.v1', domain_kind: domainKind, name, objective, status: 'planned', change_summary: 'Created in Project Manager', domain_payload: domainPayload });
+                if (domainKind === 'protein_in_silico') {
+                    throw new Error('Protein Domain creation requires exact producer-native receipt selection. This selector remains closed until accepted Protein capabilities are installed.');
+                }
+                const domainPayload: JsonObject = {
+                    schema: 'bms.ngs-molbio-experiment.v2',
+                    experiment_mode: ngsExperimentMode,
+                    scientific_objective: objective,
+                    planned_capability_ids: [],
+                    grouping_intent: [],
+                    acceptance_criteria: [],
+                    evidence_plan: [],
+                };
+                return createDomainExperiment(projectId, globalId, {
+                    schema: 'bms.domain-experiment.v2',
+                    domain_kind: 'ngs_molbio',
+                    domain_contract_version: '2',
+                    name,
+                    objective,
+                    status: 'planned',
+                    tags: [],
+                    source_receipt_ids: [],
+                    dataset_revision_ids: [],
+                    change_summary: 'Created in Project Manager',
+                    domain_payload: domainPayload,
+                });
             }
             if (mode === 'record') {
                 if (!selectionId || !selection) throw new Error('Select a hierarchy record before adding an ELN-lite record.');
@@ -178,16 +181,12 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
 
     if (!mode) return null;
     const confirmation = mode === 'archive' || mode === 'restore';
-    const proteinIntentReady = domainKind !== 'protein_in_silico' || (
-        targetId.trim().length > 0
-        && plannedCapabilities.split(',').some((value) => value.trim().length > 0)
-        && validationStrategy.split(',').some((value) => value.trim().length > 0)
-    );
+    const domainCreationReady = domainKind === 'ngs_molbio';
     const canSubmit = confirmation
         ? Boolean(detailQuery.data)
         : mode === 'record'
             ? body.trim().length > 0
-            : name.trim().length > 0 && (mode !== 'create_domain' || proteinIntentReady);
+            : name.trim().length > 0 && (mode !== 'create_domain' || domainCreationReady);
 
     return (
         <div className="fixed inset-0 z-[95] grid place-items-center bg-black/65 p-3" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
@@ -232,26 +231,23 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
                                 </select>
                             </label>}
                             {mode === 'create_domain' && domainKind === 'protein_in_silico' && (
-                                <div className="grid gap-3 rounded-xl border border-border-primary bg-surface p-3 sm:grid-cols-2">
-                                    <label className="text-xs font-semibold text-content-secondary">Experiment mode
-                                        <select aria-label="Protein experiment mode" value={experimentMode} onChange={(event) => setExperimentMode(event.target.value as ProteinExperimentMode)} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-content">
-                                            <option value="exploration">Exploration</option><option value="design">Design</option><option value="redesign">Redesign</option><option value="prediction">Prediction</option><option value="validation">Validation</option><option value="comparison">Comparison</option><option value="simulation">Simulation</option><option value="analysis">Analysis</option>
-                                        </select>
-                                    </label>
-                                    <label className="text-xs font-semibold text-content-secondary">Target ID
-                                        <input value={targetId} onChange={(event) => setTargetId(event.target.value)} placeholder="Canonical target identity" className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-sm text-content" />
-                                    </label>
-                                    <label className="text-xs font-semibold text-content-secondary">Target label
-                                        <input value={targetLabel} onChange={(event) => setTargetLabel(event.target.value)} placeholder="Human-readable label" className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-sm text-content" />
-                                    </label>
-                                    <label className="text-xs font-semibold text-content-secondary">Planned capabilities
-                                        <input value={plannedCapabilities} onChange={(event) => setPlannedCapabilities(event.target.value)} placeholder="RFD3, Boltz-2" className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-sm text-content" />
-                                    </label>
-                                    <label className="text-xs font-semibold text-content-secondary sm:col-span-2">Validation strategy
-                                        <input value={validationStrategy} onChange={(event) => setValidationStrategy(event.target.value)} placeholder="Boltz-2 structure validation, MD stability" className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-sm text-content" />
-                                    </label>
-                                    <p className="text-[10px] text-content-muted sm:col-span-2">Use commas to separate planned capabilities and validation steps. Project Manager stores intent and verified references; domain tools retain scientific payload authority.</p>
+                                <div className="rounded-xl border border-warning/50 bg-warning/10 p-3 text-xs text-content-secondary">
+                                    Protein Domain creation is closed until the server advertises accepted Protein capabilities and exact producer-native receipt selectors. Project Manager will not invent target or validation contracts.
                                 </div>
+                            )}
+                            {mode === 'create_domain' && domainKind === 'ngs_molbio' && (
+                                <label className="block text-xs font-semibold text-content-secondary">Experiment mode
+                                    <select value={ngsExperimentMode} onChange={(event) => setNgsExperimentMode(event.target.value)} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface px-3 py-2.5 text-content">
+                                        <option value="molecular_design">Molecular design</option>
+                                        <option value="assembly_validation">Assembly validation</option>
+                                        <option value="pcr_validation">PCR validation</option>
+                                        <option value="sequencing">Sequencing</option>
+                                        <option value="quality_control">Quality control</option>
+                                        <option value="alignment">Alignment</option>
+                                        <option value="comparison">Comparison</option>
+                                        <option value="analysis">Analysis</option>
+                                    </select>
+                                </label>
                             )}
                             <label className="block text-xs font-semibold text-content-secondary">Objective
                                 <textarea value={objective} onChange={(event) => setObjective(event.target.value)} rows={3} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface px-3 py-2.5 text-sm text-content outline-none focus:border-accent focus:ring-2 focus:ring-accent/30" />

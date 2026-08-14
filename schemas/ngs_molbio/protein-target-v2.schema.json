@@ -1,0 +1,88 @@
+{
+  "$id": "bms.protein-target.v2",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "anyOf": [
+        {
+          "properties": {
+            "source_receipt_ids": {
+              "minItems": 1
+            }
+          }
+        },
+        {
+          "properties": {
+            "dataset_member_refs": {
+              "minItems": 1
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "properties": {
+    "dataset_member_refs": {
+      "items": {
+        "$ref": "bms.protein-dataset-member-ref.v1"
+      },
+      "maxItems": 10000,
+      "type": "array",
+      "x-bms-unique-by": [
+        "dataset_revision_id",
+        "member_id"
+      ]
+    },
+    "entity_map": {
+      "$ref": "bms.protein-entity-map.v1"
+    },
+    "expected_content_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "label": {
+      "maxLength": 255,
+      "minLength": 1,
+      "type": "string"
+    },
+    "role": {
+      "enum": [
+        "target",
+        "binder",
+        "partner",
+        "template",
+        "reference",
+        "control",
+        "motif",
+        "ligand_context",
+        "other"
+      ]
+    },
+    "source_receipt_ids": {
+      "items": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 256,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "target_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "target_id",
+    "label",
+    "role",
+    "source_receipt_ids",
+    "dataset_member_refs",
+    "entity_map",
+    "expected_content_sha256"
+  ],
+  "type": "object"
+}

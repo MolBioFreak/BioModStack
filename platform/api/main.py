@@ -16,10 +16,11 @@ from database import async_session, current_launch_context_id, init_db
 from experiment_database import experiment_session_factory, get_experiment_db_path, init_experiment_db
 from molbio_database import init_molbio_db, molbio_health
 from molbio_ngs_database import init_molbio_ngs_db, molbio_ngs_health
+from molbio_ngs_database import molbio_ngs_session_factory
 from build_identity import current_build_identity
 from readiness import collect_runtime_readiness, http_readiness
 from frustrampnn_upload_limit import FrustraMPNNUploadLimitMiddleware
-from routers import analyses, analytics, boltz_api_jobs, boltzgen, conformational_mapping, designs, external_imports, experiment_workspaces, files, frameworks, frustrampnn, gpu, inputs, jobs, md_results, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_ngs_experiments, molbio_ops, msa, ngs_alignment_sessions, nucleotide_sequences, ont_devices, ont_runs, project_manager, projects, queue, rcsb, ribocentre, rna_structure, sequence_qc, shape_blueprint, smiles_converter, system, telemetry, templates, user_sequences, user_templates, viewer_resources
+from routers import analyses, analytics, boltz_api_jobs, boltzgen, conformational_mapping, designs, external_imports, experiment_workspaces, files, frameworks, frustrampnn, gpu, inputs, jobs, md_results, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_ngs_experiments, molbio_ops, msa, ngs_alignment_sessions, ngs_molbio_n5, nucleotide_sequences, ont_devices, ont_runs, payload_ownership_audit, project_manager, projects, queue, rcsb, ribocentre, rna_structure, sequence_qc, shape_blueprint, smiles_converter, system, telemetry, templates, user_sequences, user_templates, viewer_resources
 from runtime_policy import workflow_launch_block_detail, workflow_launches_allowed
 from biomodstack_runtime_profile import install_feature_enabled
 from services.analysis_worker import AnalysisWorker
@@ -32,6 +33,7 @@ from services.global_experiments.worker import (
     GlobalExperimentWorker,
     install_global_experiment_worker,
 )
+from services.ngs_molbio_n5 import reconcile_startup_admissions
 from routers.gpu import get_gpu_stats
 from services.workflow_adapter import workflow_adapter_base_url
 
@@ -105,6 +107,18 @@ async def lifespan(app: FastAPI):
     await init_experiment_db()
     await init_molbio_db()
     await init_molbio_ngs_db()
+    async with experiment_session_factory() as admission_session:
+        async with async_session() as admission_core_session:
+            pending_resource_evidence = await reconcile_startup_admissions(
+                admission_session,
+                admission_core_session,
+            )
+            await admission_session.commit()
+        if pending_resource_evidence:
+            logger.warning(
+                "[STARTUP] %s managed-workflow resource admissions await producer evidence",
+                pending_resource_evidence,
+            )
     
     # Initialize GPU orchestrator only when this runtime is allowed to own workflow launches.
     if workflow_launches_allowed():
@@ -125,6 +139,7 @@ async def lifespan(app: FastAPI):
         _global_experiment_worker = GlobalExperimentWorker(
             experiment_session_factory,
             async_session,
+            molbio_ngs_session_factory,
             database_path=get_experiment_db_path(),
         )
         install_global_experiment_worker(_global_experiment_worker)
@@ -289,6 +304,8 @@ app.include_router(experiment_workspaces.router)
 app.include_router(molbio_ngs_experiments.router)
 app.include_router(projects.router)
 app.include_router(project_manager.router)
+app.include_router(ngs_molbio_n5.router)
+app.include_router(payload_ownership_audit.router)
 # msa_cache router removed - now using file-based caching
 app.include_router(smiles_converter.router, prefix="/api/smiles", tags=["smiles"])
 app.include_router(queue.router, prefix="/api", tags=["queue"])  # /api/queue/*

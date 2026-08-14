@@ -1,0 +1,573 @@
+{
+  "$id": "bms.workflow-parameters.molbio.oligo_design.rfdpoly.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "binding_guidance": {
+      "default": false,
+      "type": "boolean",
+      "x-bms-applicability": "target receipt present",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "binding_guidance",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "boolean",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Guided binding diffusion",
+      "x-bms-supported-runtime-range": "rfdpoly+nampnn+optional_boltz/openmm; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "checkbox",
+      "x-bms-units": "not_applicable"
+    },
+    "boltz_num_samples": {
+      "default": 1,
+      "maximum": 10,
+      "minimum": 1,
+      "type": "integer",
+      "x-bms-applicability": "validate_boltz=true",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "boltz_num_samples",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "integer",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Boltz samples per design",
+      "x-bms-supported-runtime-range": "rfdpoly+nampnn+optional_boltz/openmm; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "bounded_integer",
+      "x-bms-units": "not_applicable"
+    },
+    "boltz_recycling_steps": {
+      "default": 3,
+      "maximum": 10,
+      "minimum": 1,
+      "type": "integer",
+      "x-bms-applicability": "validate_boltz=true",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "boltz_recycling_steps",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "integer",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Boltz recycling steps",
+      "x-bms-supported-runtime-range": "rfdpoly+nampnn+optional_boltz/openmm; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "bounded_integer",
+      "x-bms-units": "not_applicable"
+    },
+    "boltz_sampling_steps": {
+      "default": 200,
+      "maximum": 500,
+      "minimum": 50,
+      "type": "integer",
+      "x-bms-applicability": "validate_boltz=true",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "boltz_sampling_steps",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "integer",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Boltz sampling steps",
+      "x-bms-supported-runtime-range": "rfdpoly+nampnn+optional_boltz/openmm; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "bounded_integer",
+      "x-bms-units": "not_applicable"
+    },
+    "boltz_validation_mode": {
+      "default": "structure_only",
+      "enum": [
+        "structure_only",
+        "complex"
+      ],
+      "x-bms-applicability": "validate_boltz=true",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "boltz_validation_mode",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Boltz validation mode",
+      "x-bms-supported-runtime-range": "rfdpoly+nampnn+optional_boltz/openmm; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "select",
+      "x-bms-units": "not_applicable"
+    },
+    "checkpoint": {
+      "default": "generalized",
+      "enum": [
+        "generalized",
+        "rna_optimized"
+      ],
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "rfdpoly_checkpoint",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Checkpoint family",
+      "x-bms-supported-runtime-range": "rfdpoly+nampnn+optional_boltz/openmm; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "select",
+      "x-bms-units": "not_applicable"
+    },
+    "designs_per_job": {
+      "default": 4,
+      "maximum": 16,
+      "minimum": 1,
+      "type": "integer",
+      "x-bms-applicability": "use_swa=true",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "designs_per_job",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "integer",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Designs per child job",
+      "x-bms-supported-runtime-range": "rfdpoly+nampnn+optional_boltz/openmm; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "bounded_integer",
+      "x-bms-units": "not_applicable"
+    },
+    "diffusion_steps": {
+      "default": 50,
+      "maximum": 200,
+      "minimum": 10,
+      "type": "integer",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "rfdpoly_diffusion_steps",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "integer",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Diffusion timesteps",
+      "x-bms-supported-runtime-range": "rfdpoly+nampnn+optional_boltz/openmm; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "bounded_integer",
+      "x-bms-units": "not_applicable"
+    },
+    "hotspot_residues": {
+      "items": {
+        "pattern": "^[A-Za-z0-9]+:-?[0-9]+[A-Za-z]?$",
+        "type": "string"
+      },
+      "maxItems": 10000,
+      "type": "array",
+      "uniqueItems": true,
+      "x-bms-applicability": "target receipt present",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "hotspot_residues",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "ordered_exact_items",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Binding-site residues",
+      "x-bms-supported-runtime-range": "rfdpoly+nampnn+optional_boltz/openmm; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_residue_selector",
+      "x-bms-units": "not_applicable"
+    },
+    "max_pae": {
+      "default": 15,
+      "maximum": 50,
+      "minimum": 0,
+      "type": "number",
+      "x-bms-applicability": "validate_boltz=true",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "oligo_max_pae",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "float64",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Maximum PAE",
+      "x-bms-supported-runtime-range": "rfdpoly+nampnn+optional_boltz/openmm; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "bounded_number",
+      "x-bms-units": "not_applicable"
+    },
+    "min_plddt": {
+      "default": 70,
+      "maximum": 100,
+      "minimum": 0,
+      "type": "number",
+      "x-bms-applicability": "validate_boltz=true",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "oligo_min_plddt+boltz_min_plddt",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "float64",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Minimum pLDDT",
+      "x-bms-supported-runtime-range": "rfdpoly+nampnn+optional_boltz/openmm; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "bounded_number",
+      "x-bms-units": "%"
+    },
+    "min_ptm": {
+      "default": 0.5,
+      "maximum": 1,
+      "minimum": 0,
+      "type": "number",
+      "x-bms-applicability": "validate_boltz=true",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "oligo_min_ptm",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "float64",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Minimum pTM",
+      "x-bms-supported-runtime-range": "rfdpoly+nampnn+optional_boltz/openmm; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "bounded_number",
+      "x-bms-units": "not_applicable"
+    },
+    "nampnn_chains_to_design": {
+      "items": {
+        "pattern": "^[A-Za-z0-9]+$",
+        "type": "string"
+      },
+      "maxItems": 64,
+      "type": "array",
+      "uniqueItems": true,
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "nampnn_chains_to_design",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "ordered_exact_items",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Designed chains",
+      "x-bms-supported-runtime-range": "rfdpoly+nampnn+optional_boltz/openmm; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_chain_selector",
+      "x-bms-units": "not_applicable"
+    },
+    "nampnn_design_na_only": {
+      "default": false,
+      "type": "boolean",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "nampnn_design_na_only",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "boolean",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Nucleic-acid-only sequence design",
+      "x-bms-supported-runtime-range": "rfdpoly+nampnn+optional_boltz/openmm; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "checkbox",
+      "x-bms-units": "not_applicable"
+    },
+    "nampnn_fixed_residues": {
+      "items": {
+        "pattern": "^[A-Za-z0-9]+:-?[0-9]+[A-Za-z]?$",
+        "type": "string"
+      },
+      "maxItems": 10000,
+      "type": "array",
+      "uniqueItems": true,
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "nampnn_fixed_residues",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "ordered_exact_items",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Fixed residues",
+      "x-bms-supported-runtime-range": "rfdpoly+nampnn+optional_boltz/openmm; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_residue_selector",
+      "x-bms-units": "not_applicable"
+    },
+    "nampnn_num_seqs": {
+      "default": 4,
+      "maximum": 64,
+      "minimum": 1,
+      "type": "integer",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "nampnn_num_seqs",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "integer",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Sequences per backbone",
+      "x-bms-supported-runtime-range": "rfdpoly+nampnn+optional_boltz/openmm; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "bounded_integer",
+      "x-bms-units": "not_applicable"
+    },
+    "nampnn_seed": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "nampnn_seed",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "union_exact",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "NA-MPNN seed",
+      "x-bms-supported-runtime-range": "rfdpoly+nampnn+optional_boltz/openmm; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "optional_integer",
+      "x-bms-units": "not_applicable"
+    },
+    "nampnn_temperature": {
+      "default": 0.2,
+      "maximum": 1,
+      "minimum": 0.01,
+      "type": "number",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "nampnn_temperature",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "float64",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "NA-MPNN temperature",
+      "x-bms-supported-runtime-range": "rfdpoly+nampnn+optional_boltz/openmm; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "bounded_number",
+      "x-bms-units": "not_applicable"
+    },
+    "noise_schedule": {
+      "default": "linear",
+      "enum": [
+        "linear",
+        "cosine"
+      ],
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "rfdpoly_noise_schedule",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Noise schedule",
+      "x-bms-supported-runtime-range": "rfdpoly+nampnn+optional_boltz/openmm; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "select",
+      "x-bms-units": "not_applicable"
+    },
+    "num_designs": {
+      "default": 4,
+      "maximum": 256,
+      "minimum": 1,
+      "type": "integer",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "rfdpoly_num_designs",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "integer",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Backbone count",
+      "x-bms-supported-runtime-range": "rfdpoly+nampnn+optional_boltz/openmm; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "bounded_integer",
+      "x-bms-units": "not_applicable"
+    },
+    "openmm_compute_tier": {
+      "default": "fast",
+      "enum": [
+        "fast",
+        "standard",
+        "full"
+      ],
+      "x-bms-applicability": "openmm_enabled=true",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "openmm_compute_tier",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "OpenMM compute tier",
+      "x-bms-supported-runtime-range": "rfdpoly+nampnn+optional_boltz/openmm; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "select",
+      "x-bms-units": "not_applicable"
+    },
+    "openmm_enabled": {
+      "default": false,
+      "type": "boolean",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "openmm_enabled",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "boolean",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "OpenMM minimization",
+      "x-bms-supported-runtime-range": "rfdpoly+nampnn+optional_boltz/openmm; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "checkbox",
+      "x-bms-units": "not_applicable"
+    },
+    "polymer_chains": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "chain_id": {
+            "pattern": "^[A-Za-z][A-Za-z0-9_]{0,15}$",
+            "type": "string"
+          },
+          "fixed_sequence": {
+            "anyOf": [
+              {
+                "maxLength": 600,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "length": {
+            "maximum": 600,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "polymer_type": {
+            "enum": [
+              "dna",
+              "rna",
+              "protein"
+            ]
+          }
+        },
+        "required": [
+          "chain_id",
+          "polymer_type",
+          "length",
+          "fixed_sequence"
+        ],
+        "type": "object"
+      },
+      "maxItems": 32,
+      "minItems": 1,
+      "type": "array",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "rfdpoly_contigs+rfdpoly_polymer_chains+chain_sequences",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "ordered_exact_items",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Polymer chains, lengths, and optional fixed sequence",
+      "x-bms-supported-runtime-range": "rfdpoly+nampnn+optional_boltz/openmm; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_chain_table",
+      "x-bms-units": "not_applicable"
+    },
+    "seed": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "rfdpoly_seed",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "union_exact",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "RFDpoly seed",
+      "x-bms-supported-runtime-range": "rfdpoly+nampnn+optional_boltz/openmm; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "optional_integer",
+      "x-bms-units": "not_applicable"
+    },
+    "target_chains": {
+      "items": {
+        "pattern": "^[A-Za-z0-9]+$",
+        "type": "string"
+      },
+      "maxItems": 64,
+      "type": "array",
+      "uniqueItems": true,
+      "x-bms-applicability": "target receipt present",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "target_chains",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "ordered_exact_items",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Target chains",
+      "x-bms-supported-runtime-range": "rfdpoly+nampnn+optional_boltz/openmm; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_chain_selector",
+      "x-bms-units": "not_applicable"
+    },
+    "temperature": {
+      "default": 1,
+      "maximum": 2,
+      "minimum": 0.1,
+      "type": "number",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "rfdpoly_temperature",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "float64",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Sampling temperature",
+      "x-bms-supported-runtime-range": "rfdpoly+nampnn+optional_boltz/openmm; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "bounded_number",
+      "x-bms-units": "not_applicable"
+    },
+    "use_swa": {
+      "default": false,
+      "type": "boolean",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "use_swa",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "boolean",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Bounded child-job fanout",
+      "x-bms-supported-runtime-range": "rfdpoly+nampnn+optional_boltz/openmm; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "checkbox",
+      "x-bms-units": "not_applicable"
+    },
+    "validate_boltz": {
+      "default": false,
+      "type": "boolean",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "oligo_validate_boltz",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "boolean",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Boltz validation",
+      "x-bms-supported-runtime-range": "rfdpoly+nampnn+optional_boltz/openmm; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "checkbox",
+      "x-bms-units": "not_applicable"
+    }
+  },
+  "required": [
+    "polymer_chains",
+    "num_designs",
+    "diffusion_steps",
+    "checkpoint",
+    "noise_schedule",
+    "temperature",
+    "seed",
+    "target_chains",
+    "hotspot_residues",
+    "binding_guidance",
+    "validate_boltz",
+    "boltz_validation_mode",
+    "min_plddt",
+    "min_ptm",
+    "max_pae",
+    "boltz_sampling_steps",
+    "boltz_recycling_steps",
+    "boltz_num_samples",
+    "openmm_enabled",
+    "openmm_compute_tier",
+    "use_swa",
+    "designs_per_job",
+    "nampnn_num_seqs",
+    "nampnn_temperature",
+    "nampnn_fixed_residues",
+    "nampnn_chains_to_design",
+    "nampnn_design_na_only",
+    "nampnn_seed"
+  ],
+  "title": "molbio.oligo_design.rfdpoly parameters v1",
+  "type": "object",
+  "x-bms-source-pin": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+  "x-bms-unknown-fields": "reject_before_preparation"
+}

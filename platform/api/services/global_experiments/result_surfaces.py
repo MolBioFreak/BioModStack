@@ -151,9 +151,112 @@ def _sequence_qc_surface(payload: dict[str, Any]) -> dict[str, Any]:
     return _base_surface(payload, surface_kind="ngs", readiness=_completed(status))
 
 
+def _ont_observation_surface(payload: dict[str, Any]) -> dict[str, Any]:
+    metadata = payload["metadata"]
+    state = metadata.get("state")
+    generation = metadata.get("observed_generation")
+    event_type = metadata.get("event_type")
+    reason = metadata.get("observation_reason")
+    expected_reason = f"event={event_type}; state={state}; observed_generation={generation}"
+    if (
+        not isinstance(state, str)
+        or not state.strip()
+        or not isinstance(event_type, str)
+        or not event_type.strip()
+        or isinstance(generation, bool)
+        or not isinstance(generation, int)
+        or generation < 1
+        or not isinstance(reason, str)
+        or not reason.strip()
+        or len(reason) > 256
+        or reason != expected_reason
+    ):
+        raise ValidationFailure(
+            "verified ONT observation lacks bounded authoritative status, generation, or reason metadata"
+        )
+    terminal_digest = metadata.get("terminal_manifest_sha256")
+    terminal_generation = metadata.get("terminal_manifest_observed_generation")
+    terminal_state = metadata.get("terminal_manifest_state")
+    terminal_artifacts = metadata.get("terminal_artifacts")
+    if any(value is not None for value in (terminal_digest, terminal_generation, terminal_state)):
+        if (
+            not isinstance(terminal_digest, str)
+            or _SHA256_RE.fullmatch(terminal_digest) is None
+            or terminal_generation != generation
+            or terminal_state != state
+            or not isinstance(terminal_artifacts, list)
+            or not terminal_artifacts
+        ):
+            raise ValidationFailure("verified ONT observation terminal evidence is inconsistent")
+        for artifact in terminal_artifacts:
+            if (
+                not isinstance(artifact, dict)
+                or not isinstance(artifact.get("kind"), str)
+                or not artifact["kind"]
+                or not isinstance(artifact.get("sha256"), str)
+                or _SHA256_RE.fullmatch(artifact["sha256"]) is None
+                or isinstance(artifact.get("size_bytes"), bool)
+                or not isinstance(artifact.get("size_bytes"), int)
+                or artifact["size_bytes"] < 0
+            ):
+                raise ValidationFailure("verified ONT observation terminal artifact metadata is invalid")
+    elif terminal_artifacts not in (None, []):
+        raise ValidationFailure("verified ONT observation has artifacts without terminal authority")
+    readiness = _completed(state)
+    if state.strip().lower() == "stopped" and terminal_digest is not None:
+        readiness = "ready"
+    details = _base_surface(payload, surface_kind="ngs", readiness=readiness)
+    details["scientific_acceptance"] = {
+        "state": "review" if details["readiness"] == "ready" else "unavailable",
+        "reason": reason.strip(),
+    }
+    return details
+
+
 def _alignment_surface(payload: dict[str, Any]) -> dict[str, Any]:
     readiness = "ready" if int(payload["metadata"].get("ready_session_count") or 0) > 0 else "partial"
     return _base_surface(payload, surface_kind="ngs", readiness=readiness)
+
+
+def _exact_ngs_member_surface(payload: dict[str, Any]) -> dict[str, Any]:
+    status = payload["metadata"].get("job_status") or payload["metadata"].get("canonical_state")
+    return _base_surface(payload, surface_kind="ngs", readiness=_completed(status))
+
+
+def _evidence_assessment_surface(payload: dict[str, Any]) -> dict[str, Any]:
+    metadata = payload["metadata"]
+    assessment = str(metadata.get("scientific_assessment") or "").strip().upper()
+    acceptance_state = {
+        "PASS": "passed",
+        "FAIL": "failed",
+        "REVIEW": "review",
+    }.get(assessment)
+    reason = metadata.get("scientific_assessment_reason")
+    rule_id = metadata.get("assessment_rule_id")
+    lifecycle = metadata.get("job_lifecycle_state")
+    integrity = metadata.get("manifest_integrity")
+    expected_reason = f"rule={rule_id}; job_lifecycle_state={lifecycle}; manifest_integrity={integrity}"
+    if (
+        acceptance_state is None
+        or not all(isinstance(value, str) and value.strip() for value in (rule_id, lifecycle, integrity))
+        or not isinstance(reason, str)
+        or not reason.strip()
+        or len(reason) > 256
+        or reason != expected_reason
+    ):
+        raise ValidationFailure(
+            "verified NGS evidence assessment lacks an authoritative assessment state or reason"
+        )
+    details = _base_surface(payload, surface_kind="ngs", readiness="ready")
+    details["scientific_acceptance"] = {
+        "state": acceptance_state,
+        "reason": reason.strip(),
+    }
+    return details
+
+
+def _exact_molbio_member_surface(payload: dict[str, Any]) -> dict[str, Any]:
+    return _base_surface(payload, surface_kind="molbio", readiness="ready")
 
 
 _SURFACE_BUILDERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
@@ -168,9 +271,20 @@ _SURFACE_BUILDERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "molbio_revision": _molbio_revision_surface,
     "molbio_construct_revision": _molbio_revision_surface,
     "molbio_operation": _molbio_revision_surface,
+    "molecular_revision": _exact_molbio_member_surface,
+    "molecular_operation": _exact_molbio_member_surface,
+    "primer_revision": _exact_molbio_member_surface,
+    "pcr_experiment_revision": _exact_molbio_member_surface,
+    "sample_revision": _exact_molbio_member_surface,
+    "ngs_molbio_state_revision": _exact_molbio_member_surface,
     "ngs_expected_reference_receipt": _expected_reference_surface,
     "ngs_reference_set": _reference_set_surface,
-    "ont_instrument_run": _sequence_qc_surface,
+    "ngs_reference_revision": _exact_ngs_member_surface,
+    "ngs_comparison_panel": _exact_ngs_member_surface,
+    "ngs_job": _exact_ngs_member_surface,
+    "ngs_result_manifest": _exact_ngs_member_surface,
+    "ngs_evidence_assessment": _evidence_assessment_surface,
+    "ont_instrument_run": _ont_observation_surface,
     "ngs_pooled_assignment_release": _sequence_qc_surface,
     "sequence_qc_job": _sequence_qc_surface,
     "ngs_analysis_job": _sequence_qc_surface,
@@ -200,7 +314,7 @@ async def result_surface_for_receipt(
     else:
         details = builder(payload)
         readiness = str(details["readiness"])
-        scientific_acceptance = {
+        scientific_acceptance = details.get("scientific_acceptance") or {
             "state": "review" if readiness == "ready" else "unavailable",
             "reason": None,
         }

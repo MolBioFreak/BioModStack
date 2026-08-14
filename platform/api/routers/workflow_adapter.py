@@ -70,11 +70,19 @@ from services.execution_ownership import (
     update_execution_attempt,
     utc_timestamp,
     wait_for_unit_invocation,
+    workflow_nvidia_device_allow_paths,
     build_systemd_run_command,
     create_systemd_workflow_unit,
     TRANSIENT_WORKFLOW_OWNER_NONCE_ENV,
     TRANSIENT_WORKFLOW_UNIT_ENV,
     TRANSIENT_WORKFLOW_UNIT_NAME_ENV,
+)
+from services.resource_usage_evidence import (
+    GLOBAL_DISPATCH_AUTHORITY_PARAM,
+    GLOBAL_RESOURCE_ADMISSION_PARAM,
+    ResourceUsageEvidenceError,
+    validate_dispatch_materialization_authority,
+    validate_resource_admission_handoff,
 )
 
 
@@ -177,6 +185,42 @@ def _bind_scheduler_gpu_assignment(
     job.params = updated
     job.assigned_gpu = gpu_id
     return updated
+
+
+def _validate_resource_gpu_authority(job: Any, handoff: dict[str, Any]) -> None:
+    admitted_gpu = handoff["gpu_index"]
+    admitted_uuid = handoff["gpu_uuid"]
+    for field in ("pinned_gpu", "assigned_gpu"):
+        raw_value = getattr(job, field, None)
+        if raw_value is None:
+            if field == "assigned_gpu" and admitted_gpu is not None:
+                raise HTTPException(status_code=409, detail="admitted GPU has no scheduler assignment")
+            continue
+        if (
+            admitted_gpu is None
+            or _parse_gpu_authority(raw_value, field=f"Job.{field}") != admitted_gpu
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Job.{field} differs from resource admission",
+            )
+    if admitted_gpu is None:
+        return
+    try:
+        from routers.gpu import _query_smi_gpu_map
+
+        inventory = _query_smi_gpu_map()
+        match = inventory.get(admitted_gpu)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="live admitted GPU authority is unavailable",
+        ) from exc
+    if not isinstance(match, dict) or str(match.get("uuid") or "") != admitted_uuid:
+        raise HTTPException(
+            status_code=409,
+            detail="live GPU index/UUID differs from resource admission",
+        )
 
 
 class _AsyncWorkflowClaimLock:
@@ -374,7 +418,13 @@ def _launch_request_fingerprint(payload: WorkflowAdapterLaunchRequest, lane: str
     )
 
 
-def _runner_environment(*, identity: AdapterIdentity, unit_name: str, owner_nonce: str) -> dict[str, object]:
+def _runner_environment(
+    *,
+    identity: AdapterIdentity,
+    unit_name: str,
+    owner_nonce: str,
+    resource_handoff: dict[str, Any] | None,
+) -> dict[str, object]:
     """Pass the lane authority into systemd without passing request authority."""
     runtime_mode = DEV_RUNTIME_MODE if identity.lane == "development" else CONTAINER_RUNTIME_MODE
     environment: dict[str, object] = {
@@ -400,6 +450,9 @@ def _runner_environment(*, identity: AdapterIdentity, unit_name: str, owner_nonc
             TRANSIENT_WORKFLOW_OWNER_NONCE_ENV: owner_nonce,
         }
     )
+    if resource_handoff is not None:
+        gpu_index = resource_handoff["gpu_index"]
+        environment["CUDA_VISIBLE_DEVICES"] = "" if gpu_index is None else str(gpu_index)
     return environment
 
 
@@ -714,6 +767,8 @@ async def workflow_adapter_launch(
     owner_nonce: str | None = None
     generation: int | None = None
     attempt: int | None = None
+    resource_handoff: dict[str, Any] | None = None
+    allowed_physical_devices: tuple[str, ...] | None = None
 
     # The deterministic systemd unit is the execution claim.  The lane/job
     # lock also spans receipt planning through the systemd acceptance update,
@@ -728,6 +783,8 @@ async def workflow_adapter_launch(
             job = result.scalar_one_or_none()
             if job is None:
                 raise HTTPException(status_code=404, detail=f"Job {payload.job_id} not found")
+            if not database.launch_context_binding_ready(job):
+                raise HTTPException(status_code=409, detail="Launch-context source binding is not durably published")
 
             job_model_id = getattr(job, "model_id", None)
             job_mode = getattr(job, "mode", None)
@@ -760,6 +817,41 @@ async def workflow_adapter_launch(
                 params_mapping(getattr(job, "params", {})),
                 payload.params,
             )
+            try:
+                resource_handoff = validate_resource_admission_handoff(
+                    params.get(GLOBAL_RESOURCE_ADMISSION_PARAM)
+                )
+                raw_dispatch_authority = params.get(GLOBAL_DISPATCH_AUTHORITY_PARAM)
+                if (resource_handoff is None) != (raw_dispatch_authority is None):
+                    raise ResourceUsageEvidenceError(
+                        "resource admission and dispatch authority must be paired"
+                    )
+                if resource_handoff is not None:
+                    validate_dispatch_materialization_authority(
+                        raw_dispatch_authority,
+                        expected_handoff=resource_handoff,
+                    )
+            except ResourceUsageEvidenceError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            if resource_handoff is not None:
+                if resource_handoff["canonical_job_id"] != str(job.id):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="resource admission handoff binds another canonical Job",
+                    )
+                assigned_gpu = getattr(job, "assigned_gpu", None)
+                admitted_gpu = resource_handoff["gpu_index"]
+                if assigned_gpu != admitted_gpu:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="scheduler GPU assignment differs from source resource admission",
+                    )
+                _validate_resource_gpu_authority(job, resource_handoff)
+                if admitted_gpu is not None:
+                    try:
+                        allowed_physical_devices = workflow_nvidia_device_allow_paths(admitted_gpu)
+                    except ExecutionOwnershipError as exc:
+                        raise HTTPException(status_code=503, detail=str(exc)) from exc
             latest = latest_execution_attempt(params)
             if latest is not None and not execution_attempt_is_terminal(latest):
                 latest_lane = str(latest.get("lane", ""))
@@ -869,8 +961,15 @@ async def workflow_adapter_launch(
                 identity=identity,
                 unit_name=unit_name,
                 owner_nonce=owner_nonce,
+                resource_handoff=resource_handoff,
             ),
             working_directory=API_ROOT,
+            cpu_threads=(resource_handoff["cpu_threads"] if resource_handoff else None),
+            memory_max_bytes=(resource_handoff["dram_bytes"] if resource_handoff else None),
+            deny_physical_devices=(
+                resource_handoff is not None and resource_handoff["gpu_index"] is None
+            ),
+            allowed_physical_devices=allowed_physical_devices,
         )
         try:
             accepted_unit = await asyncio.to_thread(

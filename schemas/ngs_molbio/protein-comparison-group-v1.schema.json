@@ -1,0 +1,42 @@
+{
+  "$id": "bms.protein-comparison-group.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "compatibility_contract_id": {
+      "maxLength": 255,
+      "minLength": 1,
+      "type": "string"
+    },
+    "group_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "label": {
+      "maxLength": 255,
+      "minLength": 1,
+      "type": "string"
+    },
+    "members": {
+      "items": {
+        "$ref": "bms.protein-comparison-member.v1"
+      },
+      "maxItems": 256,
+      "minItems": 1,
+      "type": "array",
+      "x-bms-unique-by": [
+        "target_id",
+        "role"
+      ],
+      "x-bms-unique-ordinal": true
+    }
+  },
+  "required": [
+    "group_id",
+    "label",
+    "members",
+    "compatibility_contract_id"
+  ],
+  "type": "object"
+}

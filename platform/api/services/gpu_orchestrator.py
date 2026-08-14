@@ -36,6 +36,10 @@ logger = logging.getLogger(__name__)
 CODE_ROOT = Path(__file__).resolve().parents[3]
 
 from antibody_pipeline_contract import is_antibody_pipeline_mode
+from database import (
+    LAUNCH_CONTEXT_BINDING_PROVENANCE_KEY,
+    LAUNCH_CONTEXT_BINDING_PROVENANCE_SCHEMA,
+)
 from services.execution_ownership import (
     ExecutionOwnershipError,
     latest_started_execution_attempt,
@@ -2277,10 +2281,30 @@ class GPUOrchestrator:
             except (TypeError, ValueError):
                 msa_concurrency_limit = 1
             
-            # Build the base query for queued jobs
+            # Build the base query for queued jobs. A typed launch-context Job
+            # stays fenced until its source binding receipt is committed and
+            # projected back into the canonical core record.
+            launch_context_path = "$.launch_context_id"
+            binding_path = f"$.{LAUNCH_CONTEXT_BINDING_PROVENANCE_KEY}"
+            launch_context_binding_ready = or_(
+                func.json_extract(Job.provenance, launch_context_path).is_(None),
+                and_(
+                    func.json_extract(Job.provenance, f"{binding_path}.schema")
+                    == LAUNCH_CONTEXT_BINDING_PROVENANCE_SCHEMA,
+                    func.json_extract(Job.provenance, f"{binding_path}.launch_context_id")
+                    == func.json_extract(Job.provenance, launch_context_path),
+                    func.json_extract(Job.provenance, f"{binding_path}.canonical_job_id") == Job.id,
+                    func.length(func.json_extract(Job.provenance, f"{binding_path}.run_attempt_id")) > 0,
+                    func.length(
+                        func.json_extract(Job.provenance, f"{binding_path}.binding_receipt_sha256")
+                    )
+                    == 64,
+                ),
+            )
             base_conditions = [
                 Job.queue_status == "queued",
                 Job.paused == False,
+                launch_context_binding_ready,
                 # CRITICAL: Exclude jobs waiting for parent MSA job to complete
                 # Jobs with parent_job_id are linked to an MSA batch job
                 # They get their queue_status changed from pending_msa -> queued only after MSA completes

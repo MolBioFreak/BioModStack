@@ -37,8 +37,18 @@ from antibody_pipeline_contract import (
     normalize_antibody_artifact_class,
     normalize_antibody_pipeline_contract_version,
 )
-from database import current_launch_context_id, get_session, Job, Design, FrustraMPNNResult, RFD3LocalRedesignRequest, RFD3LocalRedesignCandidate, RFD3LocalRedesignArtifact
+from database import (
+    current_launch_context_id,
+    get_session,
+    Job,
+    Design,
+    FrustraMPNNResult,
+    RFD3LocalRedesignRequest,
+    RFD3LocalRedesignCandidate,
+    RFD3LocalRedesignArtifact,
+)
 from experiment_database import get_experiment_session
+from experiment_models import ExperimentRunAttempt
 from services.result_contracts import build_review_artifact_manifest, resolve_result_contract
 from paths import (
     get_code_root,
@@ -71,6 +81,7 @@ from services.global_experiments.launch_contexts import (
     LaunchContextError,
     claim_launch_context,
     consume_launch_context,
+    publish_launch_context_binding,
     release_launch_context_claim,
     resolve_launch_context,
     resolve_launch_context_for_display,
@@ -6211,6 +6222,11 @@ async def create_job(
 
     try:
         preview_context = await resolve_launch_context(experiment_session, launch_context_id)
+        if preview_context.contract_version == "2":
+            prepared_attempt = await experiment_session.get(ExperimentRunAttempt, preview_context.run_attempt_id)
+            if prepared_attempt is None:
+                raise LaunchContextError("launch_context_binding_invalid", "Reserved attempt is unavailable.", status_code=409)
+            _preallocated_job_id = prepared_attempt.scheduler_job_id
         job_data.params = await validate_bound_job_request(
             experiment_session,
             preview_context,
@@ -6232,8 +6248,17 @@ async def create_job(
                     await validate_bound_job(experiment_session, context, existing_job)
                     binding = json.loads(context.binding_receipt_json or "{}")
                     from routers.project_manager import _project_bound_job
-                    await _project_bound_job(experiment_session, context, existing_job, binding)
+                    await _project_bound_job(experiment_session, session, context, existing_job, binding)
                     await experiment_session.commit()
+                    try:
+                        await publish_launch_context_binding(
+                            session,
+                            context=context,
+                            job=existing_job,
+                            binding=binding,
+                        )
+                    except LaunchContextError as publish_exc:
+                        raise _launch_context_http_error(publish_exc) from publish_exc
                     return JobResponse.model_validate(existing_job).model_copy(update={
                         "params": _public_job_params(existing_job),
                         "output_dir": _public_job_output_dir(existing_job),
@@ -6258,8 +6283,17 @@ async def create_job(
                     canonical_batch_id=None,
                 )
                 from routers.project_manager import _project_bound_job
-                await _project_bound_job(experiment_session, context, existing_job, binding)
+                await _project_bound_job(experiment_session, session, context, existing_job, binding)
                 await experiment_session.commit()
+                try:
+                    await publish_launch_context_binding(
+                        session,
+                        context=context,
+                        job=existing_job,
+                        binding=binding,
+                    )
+                except LaunchContextError as publish_exc:
+                    raise _launch_context_http_error(publish_exc) from publish_exc
                 return JobResponse.model_validate(existing_job).model_copy(update={
                     "params": _public_job_params(existing_job),
                     "output_dir": _public_job_output_dir(existing_job),
@@ -6315,8 +6349,14 @@ async def create_job(
         created_job = await session.get(Job, str(response.id))
         if created_job is None:
             raise LaunchContextError("launch_context_job_unavailable", "Created Job cannot be projected.", status_code=409)
-        await _project_bound_job(experiment_session, consumed, created_job, binding)
+        await _project_bound_job(experiment_session, session, consumed, created_job, binding)
         await experiment_session.commit()
+        await publish_launch_context_binding(
+            session,
+            context=consumed,
+            job=created_job,
+            binding=binding,
+        )
     except LaunchContextError as exc:
         await experiment_session.rollback()
         try:
@@ -6629,7 +6669,10 @@ def _public_job_output_dir(job: Any) -> str | None:
 
 
 def _public_job_params(job: Any) -> dict[str, Any]:
-    params = job.params if isinstance(job.params, dict) else {}
+    from services.execution_ownership import strip_execution_metadata
+    from services.resource_usage_evidence import strip_resource_execution_metadata
+
+    params = strip_execution_metadata(strip_resource_execution_metadata(job.params))
     if _is_native_rfd3_job(job):
         return _rfd3_public_json(params)
     return params
@@ -7040,6 +7083,19 @@ async def resubmit_job(
     if original_job.model_id == "nanopore":
         if not alignment_access.request_is_authorized(request, original_job.id, original_job.provenance):
             raise HTTPException(status_code=403, detail="alignment access denied")
+    launch_context_id = (original_job.provenance or {}).get("launch_context_id")
+    if launch_context_id:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "PROJECT_BOUND_REORCHESTRATION_REQUIRED",
+                "message": (
+                    "Project-bound Jobs must be resubmitted through the owning Domain Run Group "
+                    "with a new preparation, attempt, and launch context."
+                ),
+                "launch_context_id": launch_context_id,
+            },
+        )
     
     # Only allow resubmit for failed or cancelled jobs
     if original_job.status not in [JobStatus.FAILED.value, JobStatus.CANCELLED.value]:

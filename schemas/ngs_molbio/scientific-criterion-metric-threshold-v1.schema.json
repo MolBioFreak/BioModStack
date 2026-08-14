@@ -1,0 +1,44 @@
+{
+  "$id": "bms.scientific-criterion.metric-threshold.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "comparator": {
+      "enum": [
+        "lt",
+        "lte",
+        "eq",
+        "gte",
+        "gt"
+      ]
+    },
+    "metric_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "threshold": {
+      "type": "number"
+    },
+    "unit": {
+      "anyOf": [
+        {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "metric_id",
+    "comparator",
+    "threshold",
+    "unit"
+  ],
+  "title": "bms.scientific-criterion.metric-threshold.v1",
+  "type": "object"
+}

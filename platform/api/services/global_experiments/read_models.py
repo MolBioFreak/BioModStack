@@ -630,7 +630,7 @@ def _run_item(
     available_actions = ["view_lineage"]
     if effective_state == "completed" and output_receipt_ids:
         available_actions.insert(0, "open_results")
-    if effective_state in {"failed", "cancelled"}:
+    if effective_state == "failed":
         available_actions.extend(["retry", "resubmit"])
 
     return {

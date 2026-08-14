@@ -7,6 +7,7 @@ interface ProjectInspectorProps {
     busy?: boolean;
     onClose?: () => void;
     onOpenCanonical: () => void;
+    onOpenNgsMolBio?: () => void;
     onAddExisting: () => void;
     onCreateDomain: () => void;
     onEdit: () => void;
@@ -36,6 +37,7 @@ export function ProjectInspector({
     busy,
     onClose,
     onOpenCanonical,
+    onOpenNgsMolBio,
     onAddExisting,
     onCreateDomain,
     onEdit,
@@ -50,6 +52,10 @@ export function ProjectInspector({
     const identity = selection.canonical_identity;
     const reconciliationIssue = selection.reconciliation.state !== 'current';
     const canOpen = actions.has('open') || Boolean(surface?.available_actions.includes('open'));
+    const isNgsMolBioDomain = selection.node_type === 'domain_experiment'
+        && (selection.summary.schema === 'bms.ngs-molbio-experiment.v2'
+            || selection.summary.schema === 'bms.ngs-molbio-experiment.v1'
+            || Array.isArray(selection.summary.planned_capability_ids));
 
     return (
         <aside aria-label="Selected node inspector" aria-busy={busy || undefined} className="flex h-full min-h-0 flex-col border-l border-border-primary bg-surface-secondary">
@@ -71,6 +77,9 @@ export function ProjectInspector({
                     )}
                     {canOpen && (
                         <button type="button" onClick={onOpenCanonical} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white outline-none focus:ring-2 focus:ring-accent">Open canonical source</button>
+                    )}
+                    {isNgsMolBioDomain && onOpenNgsMolBio && (
+                        <button type="button" onClick={onOpenNgsMolBio} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white outline-none focus:ring-2 focus:ring-accent">Open NGS/MolBio workspace</button>
                     )}
                     {actions.has('edit') && <button type="button" onClick={onEdit} className="rounded-lg border border-border-primary px-3 py-2 text-xs font-semibold text-content-secondary hover:text-content focus:ring-2 focus:ring-accent">Edit revision</button>}
                     {(actions.has('add_note') || ['project', 'global_experiment', 'domain_experiment'].includes(selection.node_type)) && <button type="button" onClick={onRecord} className="rounded-lg border border-border-primary px-3 py-2 text-xs font-semibold text-content-secondary hover:text-content focus:ring-2 focus:ring-accent">Add record</button>}

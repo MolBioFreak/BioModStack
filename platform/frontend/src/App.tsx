@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react';
-import { Navigate, Routes, Route } from 'react-router-dom';
+import { Navigate, Routes, Route, useLocation, useParams } from 'react-router-dom';
 import { HotkeysProvider } from '@blueprintjs/core';
 import { Layout } from './components/Layout';
 import { GlobalExperimentProvider } from './components/experiments/GlobalExperimentContext';
@@ -25,6 +25,39 @@ function RouteLoadingFallback() {
   );
 }
 
+function HistoricalMolBioReopenRoute() {
+  const location = useLocation();
+  const query = new URLSearchParams(location.search);
+  const sequenceId = query.get('sequence_id')?.trim();
+  const revisionId = query.get('revision_id')?.trim();
+  const primerId = query.get('primer_id')?.trim();
+  const pcrExperimentId = query.get('experiment_id')?.trim();
+
+  if (sequenceId && revisionId) {
+    if (!query.has('molbio_sequence_id')) query.set('molbio_sequence_id', sequenceId);
+    if (!query.has('molbio_revision_id')) query.set('molbio_revision_id', revisionId);
+  }
+  if (pcrExperimentId && revisionId) {
+    if (!query.has('pcr_experiment_id')) query.set('pcr_experiment_id', pcrExperimentId);
+    if (!query.has('pcr_revision_id')) query.set('pcr_revision_id', revisionId);
+  }
+  if (primerId && revisionId && !query.has('primer_revision_id')) {
+    query.set('primer_revision_id', revisionId);
+  }
+
+  const search = query.toString();
+  return <Navigate replace to={`/designer${search ? `?${search}` : ''}`} />;
+}
+
+function HistoricalDomainExperimentReopenRoute() {
+  const location = useLocation();
+  const { domainExperimentId } = useParams<{ domainExperimentId: string }>();
+  const query = new URLSearchParams(location.search);
+  if (domainExperimentId) query.set('domain_experiment_id', domainExperimentId);
+  const search = query.toString();
+  return <Navigate replace to={`/ngs${search ? `?${search}` : ''}`} />;
+}
+
 function App() {
   const { features: bmsFeatures, resolved: bmsFeaturesResolved } = useResolvedBmsFeatures();
 
@@ -45,6 +78,11 @@ function App() {
             <Route path="/designs/:jobId" element={<ResultsViewer />} />
             <Route path="/jobs" element={<Navigate replace to="/designs" />} />
             <Route path="/jobs/:jobId" element={<JobDetailPage />} />
+            <Route path="/molbio" element={<HistoricalMolBioReopenRoute />} />
+            <Route
+              path="/molbio-ngs/domain-experiments/:domainExperimentId"
+              element={<HistoricalDomainExperimentReopenRoute />}
+            />
             {/* Molecular Biology Toolkit - Seqviz-based sequence editor */}
             <Route
               path="/designer"

@@ -11,12 +11,12 @@ import uuid
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from experiment_migrations import MIGRATION_VERSION, attest_schema, health, run_all
+from experiment_migrations import LATEST_MIGRATION_VERSION, attest_schema, health, run_all
 from experiment_models import (
     ExperimentAggregateHead,
     ExperimentArtifact,
@@ -25,22 +25,31 @@ from experiment_models import (
     ExperimentDatasetRevisionMember,
     ExperimentDispatchOutbox,
     ExperimentDomainAdapterReceipt,
+    ExperimentDomainConnectorCommand,
+    ExperimentDomainConnectorConflict,
+    ExperimentDomainConnectorInbox,
+    ExperimentDomainConnectorStream,
     ExperimentExternalEntityReceipt,
     ExperimentIdempotencyClaim,
     ExperimentLineageEdge,
     ExperimentLaunchContext,
     ExperimentLogChunk,
     ExperimentLogStream,
+    ExperimentOperationalReceipt,
     ExperimentResource,
+    ExperimentResourceAdmission,
+    ExperimentResourceAdmissionPolicy,
     ExperimentResearchRecord,
     ExperimentRevision,
     ExperimentRevisionEdge,
     ExperimentRunAttempt,
+    ExperimentRunControlCommand,
     ExperimentRunEvent,
     ExperimentRunGroup,
     ExperimentRunGroupPreparation,
     ExperimentValidation,
     ExperimentWorkflowDraft,
+    ExperimentWorkflowPlanAuthority,
     ExperimentWorkflowPreparation,
     ExperimentWorkflowRevisionEdge,
     ExperimentWorkflowRevisionNode,
@@ -48,6 +57,10 @@ from experiment_models import (
 )
 from experiment_services import ExperimentServiceError, IdempotencyConflict, new_id, now, sha256_text
 from paths import get_experiment_db_path
+from services.ngs_molbio_runtime_status import (
+    NgsMolBioRuntimeAuthorityError,
+    runtime_implementation_record,
+)
 
 
 class ExperimentOperationError(ExperimentServiceError):
@@ -68,9 +81,11 @@ _WORKSPACE_TABLES: tuple[tuple[str, type[Any], str], ...] = (
     ("revisions", ExperimentRevision, "resource"),
     ("revision_edges", ExperimentRevisionEdge, "revision"),
     ("workflow_drafts", ExperimentWorkflowDraft, "resource"),
+    ("workflow_plan_authority", ExperimentWorkflowPlanAuthority, "workspace"),
     ("dataset_revision_members", ExperimentDatasetRevisionMember, "revision"),
     ("workflow_preparations", ExperimentWorkflowPreparation, "workspace"),
     ("run_groups", ExperimentRunGroup, "workspace"),
+    ("run_control_commands", ExperimentRunControlCommand, "workspace"),
     ("run_group_preparations", ExperimentRunGroupPreparation, "run_group"),
     ("workflow_runs", ExperimentWorkflowRun, "workspace"),
     ("run_attempts", ExperimentRunAttempt, "workspace"),
@@ -88,6 +103,13 @@ _WORKSPACE_TABLES: tuple[tuple[str, type[Any], str], ...] = (
     ("audit_events", ExperimentAuditEvent, "workspace"),
     ("research_records", ExperimentResearchRecord, "workspace"),
     ("domain_adapter_receipts", ExperimentDomainAdapterReceipt, "workspace"),
+    ("domain_connector_commands", ExperimentDomainConnectorCommand, "project"),
+    ("domain_connector_streams", ExperimentDomainConnectorStream, "domain_experiment"),
+    ("domain_connector_inbox", ExperimentDomainConnectorInbox, "domain_experiment"),
+    ("domain_connector_conflicts", ExperimentDomainConnectorConflict, "domain_experiment"),
+    ("resource_admissions", ExperimentResourceAdmission, "workspace"),
+    ("resource_admission_policy", ExperimentResourceAdmissionPolicy, "all"),
+    ("operational_receipts", ExperimentOperationalReceipt, "workspace"),
     ("launch_contexts", ExperimentLaunchContext, "project"),
 )
 
@@ -110,11 +132,19 @@ def _sha256_file(path: Path) -> tuple[str, int]:
     return digest.hexdigest(), size
 
 
-def _source_revision() -> str:
-    revision = str(os.getenv("BMS_BUILD_SHA") or "").strip()
-    if not revision:
-        raise ExperimentOperationError("BMS_BUILD_SHA is required for provenance-bound backup and export")
-    return revision
+def _runtime_source_identity() -> tuple[str, str]:
+    """Resolve exact backup/restoration identity from package-local successor authority."""
+    try:
+        runtime = runtime_implementation_record()
+    except NgsMolBioRuntimeAuthorityError as exc:
+        raise ExperimentOperationError(
+            "package-local NGS/MolBio runtime authority is required for provenance-bound backup"
+        ) from exc
+    revision = runtime.get("successor_source_commit")
+    tree = runtime.get("successor_source_tree")
+    if type(revision) is not str or type(tree) is not str:
+        raise ExperimentOperationError("package-local runtime source identity is incomplete")
+    return revision, tree
 
 
 def _consistent_database_digest(source: Path) -> tuple[str, int]:
@@ -149,6 +179,40 @@ def _sqlite_object_counts(database_path: Path) -> dict[str, int]:
         connection.close()
 
 
+def _sqlite_table_content_digests(database_path: Path) -> dict[str, str]:
+    connection = sqlite3.connect(str(database_path), timeout=30)
+    try:
+        tables = [
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            )
+        ]
+        result: dict[str, str] = {}
+        for table in tables:
+            quoted_table = table.replace('"', '""')
+            table_info = list(connection.execute(f'PRAGMA table_info("{quoted_table}")'))
+            columns = [str(row[1]) for row in table_info]
+            primary_key_columns = [
+                str(row[1]) for row in sorted(table_info, key=lambda item: int(item[5])) if int(row[5]) > 0
+            ]
+            ordering_columns = primary_key_columns or columns
+            order_by = ", ".join(f'"{column.replace(chr(34), chr(34) * 2)}"' for column in ordering_columns)
+            digest = hashlib.sha256()
+            digest.update((_canonical(columns) + "\n").encode("utf-8"))
+            cursor = connection.execute(f'SELECT * FROM "{quoted_table}" ORDER BY {order_by}')
+            for row in cursor:
+                normalized = [
+                    {"blob_hex": value.hex()} if isinstance(value, bytes) else value
+                    for value in row
+                ]
+                digest.update((_canonical(normalized) + "\n").encode("utf-8"))
+            result[table] = digest.hexdigest()
+        return result
+    finally:
+        connection.close()
+
+
 def _controlled_root(env_name: str, default_name: str) -> Path:
     configured = os.getenv(env_name)
     if configured:
@@ -175,6 +239,7 @@ def _backup_paths(backup_id: str) -> tuple[Path, Path]:
 
 def create_online_backup() -> dict[str, Any]:
     """Create an SQLite online backup and a hash-bound metadata receipt."""
+    source_revision, source_tree = _runtime_source_identity()
     source = get_experiment_db_path()
     if not source.exists():
         raise ExperimentOperationError("global experiment database does not exist")
@@ -190,17 +255,19 @@ def create_online_backup() -> dict[str, Any]:
         target_connection.close()
         source_connection.close()
     database_sha256, size_bytes = _sha256_file(target)
-    source_health = health(source)
+    source_health = health(target)
     migration_info = source_health.get("migration")
     schema_version = int(migration_info.get("version") or 0) if isinstance(migration_info, dict) else 0
     metadata = {
         "schema": "bms.experiment.backup.v1",
         "schema_version": schema_version,
-        "source_revision": _source_revision(),
+        "source_revision": source_revision,
+        "source_tree": source_tree,
         "backup_id": backup_id,
         "database_sha256": database_sha256,
         "size_bytes": size_bytes,
         "object_counts": _sqlite_object_counts(target),
+        "table_content_sha256": _sqlite_table_content_digests(target),
         "created_at": now(),
         "source_health": source_health,
         "artifact_manifest_snapshot": _artifact_snapshot(target),
@@ -234,12 +301,30 @@ def _artifact_snapshot(database_path: Path) -> dict[str, Any]:
         connection.close()
 
 
-def verify_backup(backup_id: str) -> dict[str, Any]:
+def verify_backup(
+    backup_id: str,
+    *,
+    verifier_id: str,
+    creation_receipt: Mapping[str, Any],
+    creation_receipt_sha256: str,
+) -> dict[str, Any]:
     """Verify a backup in an isolated SQLite connection without activating it."""
+    if not verifier_id.strip():
+        raise ExperimentOperationError("authenticated backup verifier identity is required")
+    source_revision, source_tree = _runtime_source_identity()
     database_path, metadata_path = _backup_paths(backup_id)
     if not database_path.exists() or not metadata_path.exists():
         raise BackupNotFound(f"backup not found: {backup_id}")
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if (
+        type(creation_receipt) is not dict
+        or creation_receipt.get("backup_id") != backup_id
+        or creation_receipt != metadata
+        or type(creation_receipt_sha256) is not str
+        or len(creation_receipt_sha256) != 64
+        or any(char not in "0123456789abcdef" for char in creation_receipt_sha256)
+    ):
+        raise ExperimentOperationError("backup creation receipt does not bind the requested immutable backup")
     actual_sha256, size_bytes = _sha256_file(database_path)
     if actual_sha256 != metadata.get("database_sha256") or size_bytes != metadata.get("size_bytes"):
         raise ExperimentOperationError("backup metadata does not match backup bytes")
@@ -254,15 +339,23 @@ def verify_backup(backup_id: str) -> dict[str, Any]:
             "FROM experiment_schema_migrations ORDER BY version"
         ).fetchall()
         actual_counts = _sqlite_object_counts(database_path)
+        actual_table_content_sha256 = _sqlite_table_content_digests(database_path)
         provenance_valid = (
             metadata.get("schema") == "bms.experiment.backup.v1"
-            and metadata.get("schema_version") == MIGRATION_VERSION
-            and isinstance(metadata.get("source_revision"), str)
-            and bool(metadata.get("source_revision"))
+            and metadata.get("schema_version") == LATEST_MIGRATION_VERSION
+            and metadata.get("source_revision") == source_revision
+            and metadata.get("source_tree") == source_tree
             and metadata.get("object_counts") == actual_counts
+            and metadata.get("table_content_sha256") == actual_table_content_sha256
         )
         result = {
+            "schema": "bms.experiment.backup-verification.v1",
             "backup_id": backup_id,
+            "creation_receipt_sha256": creation_receipt_sha256,
+            "source_revision": source_revision,
+            "source_tree": source_tree,
+            "verifier_id": verifier_id,
+            "verification_authority": "authenticated_operator",
             "database_sha256": actual_sha256,
             "size_bytes": size_bytes,
             "quick_check": quick_check,
@@ -270,13 +363,94 @@ def verify_backup(backup_id: str) -> dict[str, Any]:
             "attestation": schema,
             "migration_ledger": [list(row) for row in migration_rows],
             "object_counts": actual_counts,
+            "table_content_sha256": actual_table_content_sha256,
             "provenance_valid": provenance_valid,
             "verified": quick_check == "ok" and not foreign_key_errors and bool(schema["ok"]) and provenance_valid,
+            "outcome": "pass" if quick_check == "ok" and not foreign_key_errors and bool(schema["ok"]) and provenance_valid else "fail",
+            "verified_at": now(),
         }
     finally:
         connection.close()
     if not result["verified"]:
         raise ExperimentOperationError(f"backup verification failed: {result}")
+    return result
+
+
+def restore_backup_to_staging(
+    backup_id: str,
+    *,
+    verifier_id: str,
+    creation_receipt: Mapping[str, Any],
+    creation_receipt_sha256: str,
+) -> dict[str, Any]:
+    """Materialize and verify an isolated restore drill without activating it."""
+    if not verifier_id.strip():
+        raise ExperimentOperationError("authenticated restoration verifier identity is required")
+    verified_source = verify_backup(
+        backup_id,
+        verifier_id=verifier_id,
+        creation_receipt=creation_receipt,
+        creation_receipt_sha256=creation_receipt_sha256,
+    )
+    source_revision = str(verified_source["source_revision"])
+    source_tree = str(verified_source["source_tree"])
+    source_database, _source_metadata = _backup_paths(backup_id)
+    root = _controlled_root("BMS_EXPERIMENT_RESTORE_ROOT", "experiment-restores")
+    restore_id = f"restore-{backup_id}-{uuid.uuid4().hex[:12]}"
+    target = _safe_child(root, f"{restore_id}.db")
+    metadata_path = _safe_child(root, f"{restore_id}.json")
+    source_connection = sqlite3.connect(str(source_database), timeout=30)
+    target_connection = sqlite3.connect(str(target), timeout=30)
+    try:
+        source_connection.backup(target_connection)
+        target_connection.execute("PRAGMA journal_mode=DELETE")
+        target_connection.commit()
+    finally:
+        target_connection.close()
+        source_connection.close()
+    target_sha256, target_size = _sha256_file(target)
+    connection = sqlite3.connect(str(target), timeout=30)
+    try:
+        connection.execute("PRAGMA foreign_keys=ON")
+        quick_check = connection.execute("PRAGMA quick_check").fetchone()[0]
+        foreign_key_errors = [list(row) for row in connection.execute("PRAGMA foreign_key_check")]
+        attestation = attest_schema(connection)
+    finally:
+        connection.close()
+    object_counts = _sqlite_object_counts(target)
+    table_content_sha256 = _sqlite_table_content_digests(target)
+    verified = (
+        quick_check == "ok"
+        and not foreign_key_errors
+        and bool(attestation.get("ok"))
+        and object_counts == verified_source["object_counts"]
+        and table_content_sha256 == verified_source["table_content_sha256"]
+    )
+    result = {
+        "schema": "bms.experiment.restoration.v1",
+        "restore_id": restore_id,
+        "backup_id": backup_id,
+        "backup_creation_receipt_sha256": creation_receipt_sha256,
+        "source_backup_sha256": verified_source["database_sha256"],
+        "restored_database_sha256": target_sha256,
+        "restored_size_bytes": target_size,
+        "quick_check": quick_check,
+        "foreign_key_errors": foreign_key_errors,
+        "attestation": attestation,
+        "object_counts": object_counts,
+        "table_content_sha256": table_content_sha256,
+        "activated": False,
+        "verified": verified,
+        "outcome": "pass" if verified else "fail",
+        "verifier_id": verifier_id,
+        "verification_authority": "authenticated_operator",
+        "source_revision": source_revision,
+        "source_tree": source_tree,
+        "verified_at": now(),
+    }
+    metadata_path.write_text(_canonical(result) + "\n", encoding="utf-8")
+    if not verified:
+        raise ExperimentOperationError(f"isolated restoration verification failed: {result}")
     return result
 
 
@@ -310,12 +484,16 @@ async def _workspace_resource_ids(session: AsyncSession, workspace_id: str) -> s
 async def _rows_for_scope(session: AsyncSession, model: type[Any], scope: str, resource_ids: set[str]) -> list[dict[str, Any]]:
     if scope == "none":
         return []
-    if scope == "result_resource":
+    if scope == "all":
+        result = await session.execute(select(model))
+    elif scope == "result_resource":
         result = await session.execute(select(model).where(model.result_resource_id.in_(resource_ids)))
     elif scope == "workspace":
         result = await session.execute(select(model).where(model.workspace_id.in_(resource_ids)))
     elif scope == "project":
         result = await session.execute(select(model).where(model.project_id.in_(resource_ids)))
+    elif scope == "domain_experiment":
+        result = await session.execute(select(model).where(model.domain_experiment_id.in_(resource_ids)))
     elif scope == "resource":
         key = "resource_id" if hasattr(model, "resource_id") else "id"
         result = await session.execute(select(model).where(getattr(model, key).in_(resource_ids)))
@@ -330,6 +508,10 @@ async def _rows_for_scope(session: AsyncSession, model: type[Any], scope: str, r
 
 async def build_workspace_export(session: AsyncSession, workspace_id: str) -> dict[str, Any]:
     """Write a deterministic metadata/artifact bundle for one workspace."""
+    source_revision, source_tree = _runtime_source_identity()
+    start_data_version = await session.scalar(text("PRAGMA data_version"))
+    if not isinstance(start_data_version, int):
+        raise ExperimentOperationError("workspace export data-version authority is unavailable")
     resource_ids = await _workspace_resource_ids(session, workspace_id)
     tables: dict[str, list[dict[str, Any]]] = {}
     for table_name, model, scope in _WORKSPACE_TABLES:
@@ -374,11 +556,19 @@ async def build_workspace_export(session: AsyncSession, workspace_id: str) -> di
         shutil.copyfile(source, target)
         artifact_entries.append({"sha256": blob["sha256"], "size_bytes": size, "relative_path": f"artifacts/{blob['sha256']}", "available": True})
     database_sha256, database_size_bytes = _consistent_database_digest(get_experiment_db_path())
+    end_data_version = await session.scalar(text("PRAGMA data_version"))
+    if end_data_version != start_data_version:
+        if directory.exists():
+            shutil.rmtree(directory)
+        raise ExperimentOperationError(
+            "experiment source changed while the workspace export was captured"
+        )
     object_counts = {table_name: len(rows) for table_name, rows in sorted(tables.items())}
     manifest = {
         "schema": "bms.experiment.workspace-export.v1",
-        "schema_version": MIGRATION_VERSION,
-        "source_revision": _source_revision(),
+        "schema_version": LATEST_MIGRATION_VERSION,
+        "source_revision": source_revision,
+        "source_tree": source_tree,
         "database_sha256": database_sha256,
         "database_size_bytes": database_size_bytes,
         "object_counts": object_counts,
@@ -403,7 +593,16 @@ async def build_workspace_export(session: AsyncSession, workspace_id: str) -> di
     }
 
 
-def verify_workspace_export(export_id: str) -> dict[str, Any]:
+def verify_workspace_export(
+    export_id: str,
+    *,
+    verifier_id: str,
+    creation_receipt: Mapping[str, Any],
+    creation_receipt_sha256: str,
+) -> dict[str, Any]:
+    if not verifier_id.strip():
+        raise ExperimentOperationError("authenticated export verifier identity is required")
+    source_revision, source_tree = _runtime_source_identity()
     directory, manifest_path = _export_paths(export_id)
     if not manifest_path.exists():
         raise ExportNotFound(f"export not found: {export_id}")
@@ -413,6 +612,28 @@ def verify_workspace_export(export_id: str) -> dict[str, Any]:
     if recorded_digest != manifest_digest:
         raise ExperimentOperationError("workspace export manifest digest mismatch")
     manifest = json.loads(encoded)
+    artifact_entries = manifest.get("artifacts")
+    creation_authority = {
+        "export_id": export_id,
+        "workspace_id": manifest.get("workspace_id"),
+        "manifest_sha256": manifest_digest,
+        "artifact_count": len(artifact_entries) if isinstance(artifact_entries, list) else -1,
+        "artifact_bytes_available": (
+            sum(1 for item in artifact_entries if isinstance(item, dict) and item.get("available"))
+            if isinstance(artifact_entries, list)
+            else -1
+        ),
+        "relative_manifest": str(manifest_path.relative_to(directory.parent)),
+    }
+    if (
+        type(creation_receipt) is not dict
+        or creation_receipt != creation_authority
+        or manifest.get("export_id") != export_id
+        or type(creation_receipt_sha256) is not str
+        or len(creation_receipt_sha256) != 64
+        or any(char not in "0123456789abcdef" for char in creation_receipt_sha256)
+    ):
+        raise ExperimentOperationError("export creation receipt does not bind the requested immutable export")
     artifact_results: list[dict[str, Any]] = []
     for entry in manifest.get("artifacts", []):
         relative = entry.get("relative_path")
@@ -431,9 +652,9 @@ def verify_workspace_export(export_id: str) -> dict[str, Any]:
     database_digest = manifest.get("database_sha256")
     provenance_valid = (
         manifest.get("schema") == "bms.experiment.workspace-export.v1"
-        and manifest.get("schema_version") == MIGRATION_VERSION
-        and isinstance(manifest.get("source_revision"), str)
-        and bool(manifest.get("source_revision"))
+        and manifest.get("schema_version") == LATEST_MIGRATION_VERSION
+        and manifest.get("source_revision") == source_revision
+        and manifest.get("source_tree") == source_tree
         and isinstance(database_digest, str)
         and len(database_digest) == 64
         and all(char in "0123456789abcdef" for char in database_digest)
@@ -441,14 +662,28 @@ def verify_workspace_export(export_id: str) -> dict[str, Any]:
         and manifest.get("object_counts") == actual_counts
     )
     verified = all(item["verified"] for item in artifact_results) and provenance_valid
-    return {
+    result = {
+        "schema": "bms.experiment.workspace-export-verification.v1",
         "export_id": export_id,
+        "creation_receipt_sha256": creation_receipt_sha256,
+        "workspace_id": manifest.get("workspace_id"),
+        "source_revision": manifest.get("source_revision"),
+        "source_tree": manifest.get("source_tree"),
         "manifest_sha256": manifest_digest,
-        "artifact_results": artifact_results,
+        "artifact_count": len(artifact_results),
+        "verified_artifact_count": sum(1 for item in artifact_results if item["verified"]),
+        "artifact_results_sha256": _sha256_bytes(_canonical(artifact_results).encode("utf-8")),
         "object_counts": actual_counts,
         "provenance_valid": provenance_valid,
         "verified": verified,
+        "outcome": "pass" if verified else "fail",
+        "verifier_id": verifier_id,
+        "verification_authority": "authenticated_operator",
+        "verified_at": now(),
     }
+    if not verified:
+        raise ExperimentOperationError(f"workspace export verification failed: {result}")
+    return result
 
 
 async def workspace_analytics(session: AsyncSession, workspace_id: str, limit: int = 100) -> dict[str, Any]:

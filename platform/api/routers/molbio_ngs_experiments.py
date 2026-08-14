@@ -59,6 +59,8 @@ from services.molbio_ngs_member_receipts import (
 
     resolve_pcr_experiment_revision_receipt,
     resolve_primer_revision_receipt,
+    resolve_sample_revision_receipt,
+    resolve_state_revision_receipt,
     serialize_external_member_receipt,
 )
 from services.molbio_ngs_references import (
@@ -351,7 +353,7 @@ class LocalDomainCountsResponse(StrictModel):
 class DomainViewAvailabilityResponse(StrictModel):
     local_state: Literal["available"]
     persisted_global_binding: Literal["acknowledged"]
-    global_adapter: Literal["unavailable"]
+    global_adapter: Literal["available"]
 
 
 class DomainViewReopenParams(StrictModel):
@@ -379,7 +381,7 @@ class DomainExperimentViewResponse(StrictModel):
 
 class ProjectSummaryAvailabilityResponse(StrictModel):
     persisted_global_bindings: Literal["acknowledged_only"]
-    global_adapter: Literal["unavailable"]
+    global_adapter: Literal["available"]
 
 
 class ProjectSummaryReopenParams(StrictModel):
@@ -555,6 +557,15 @@ class EvidenceAssessmentRequest(StrictModel):
 
 class EvidenceAssessmentReceiptRequest(StrictModel):
     evidence_id: str = Field(min_length=1, max_length=128)
+
+
+class SampleRevisionReceiptRequest(StrictModel):
+    sample_id: str = Field(min_length=1, max_length=128)
+    sample_revision_id: str = Field(min_length=1, max_length=128)
+
+
+class StateRevisionReceiptRequest(StrictModel):
+    state_revision_id: str = Field(min_length=1, max_length=128)
 
 
 class ExternalMemberReceiptResponse(StrictModel):
@@ -1204,6 +1215,49 @@ async def import_molbio_ngs_browser_reference(
     ) as exc:
         await session.rollback()
         raise _service_http_error(exc) from exc
+
+
+@router.post(
+    "/experiments/{global_domain_experiment_id}/member-receipts/sample-revisions",
+    response_model=ExternalMemberReceiptResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def issue_sample_revision_member_receipt(
+    global_domain_experiment_id: str,
+    request: SampleRevisionReceiptRequest,
+    session: DomainSession,
+) -> dict:
+    try:
+        receipt = await resolve_sample_revision_receipt(
+            session,
+            global_domain_experiment_id=global_domain_experiment_id,
+            sample_id=request.sample_id,
+            sample_revision_id=request.sample_revision_id,
+        )
+        return await _persist_resolved_member_receipt(session, receipt)
+    except (KeyError, ValueError, DomainStateNotFound, StateIntegrityError) as exc:
+        raise _member_receipt_http_error(exc) from exc
+
+
+@router.post(
+    "/experiments/{global_domain_experiment_id}/member-receipts/state-revisions",
+    response_model=ExternalMemberReceiptResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def issue_state_revision_member_receipt(
+    global_domain_experiment_id: str,
+    request: StateRevisionReceiptRequest,
+    session: DomainSession,
+) -> dict:
+    try:
+        receipt = await resolve_state_revision_receipt(
+            session,
+            global_domain_experiment_id=global_domain_experiment_id,
+            state_revision_id=request.state_revision_id,
+        )
+        return await _persist_resolved_member_receipt(session, receipt)
+    except (KeyError, ValueError, DomainStateNotFound, StateIntegrityError) as exc:
+        raise _member_receipt_http_error(exc) from exc
 
 
 @router.post(

@@ -40,89 +40,193 @@ ATTACHMENT_OPERATIONS = {
     "link_output": "produced",
     "attach_evidence": "validated_by",
 }
+DOMAIN_OWNED_ENTITY_KINDS = frozenset({
+    "molecular_operation",
+    "molecular_revision",
+    "ngs_comparison_panel",
+    "ngs_evidence_assessment",
+    "ngs_job",
+    "ngs_molbio_state_revision",
+    "ngs_reference_revision",
+    "ngs_result_manifest",
+    "ont_instrument_run",
+    "pcr_experiment_revision",
+    "primer_revision",
+    "sample_revision",
+})
 
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-async def _reconcile_native_receipt_lineage(session: AsyncSession, workspace_id: str) -> None:
-    receipts = list((await session.scalars(
-        select(ExperimentExternalEntityReceipt)
-        .where(ExperimentExternalEntityReceipt.workspace_id == workspace_id)
-        .order_by(ExperimentExternalEntityReceipt.created_at.desc(), ExperimentExternalEntityReceipt.id)
-        .limit(1000)
-    )).all())
-    by_identity: dict[tuple[str, str], list[ExperimentExternalEntityReceipt]] = {}
-    for receipt in receipts:
-        by_identity.setdefault((receipt.entity_kind, receipt.entity_id), []).append(receipt)
-    for receipt in receipts:
-        try:
-            acknowledgement = json.loads(receipt.acknowledgement_json)
-        except json.JSONDecodeError:
-            continue
-        lineage = acknowledgement.get("metadata", {}).get("native_lineage", [])
-        if not isinstance(lineage, list):
-            continue
-        for item in lineage:
-            if not isinstance(item, dict):
-                continue
-            relation = str(item.get("relation") or "derived_from")
-            native_relation = f"native_{relation}"
-            if relation in {"compares", "compared_with"}:
-                edge_mode = "compared_with"
-                direction = "current_to_related"
-            elif relation in {"derived_from", "derives_from"}:
-                edge_mode = "derived_from"
-                direction = "current_to_related"
-            elif relation == "produced_child_analysis":
-                edge_mode = "derived_from"
-                direction = "related_to_current"
-            elif relation in {"uses_input", "references", "validated_by"}:
-                edge_mode = relation
-                direction = "current_to_related"
-            elif relation == "produced":
-                edge_mode = relation
-                direction = "current_to_related"
-            else:
-                continue
-            entity_kind = item.get("entity_kind")
-            entity_id = item.get("entity_id")
-            if not isinstance(entity_kind, str) or not isinstance(entity_id, str):
-                continue
-            candidates = by_identity.get((entity_kind, entity_id), [])
-            expected_digest = item.get("receipt_content_digest")
-            if isinstance(expected_digest, str):
-                candidates = [candidate for candidate in candidates if candidate.content_digest == expected_digest]
-            if len(candidates) != 1:
-                raise ValidationFailure(
-                    f"native lineage target is not uniquely attached: {entity_kind}:{entity_id}"
-                )
-            related = candidates[0]
-            if direction == "related_to_current":
-                source_id, target_id = related.id, receipt.id
-            else:
-                source_id, target_id = receipt.id, related.id
-            edge_key = f"native:{relation}:{source_id}:{target_id}"
-            existing = await session.scalar(
-                select(ExperimentLineageEdge).where(
-                    ExperimentLineageEdge.source_resource_id == source_id,
-                    ExperimentLineageEdge.target_resource_id == target_id,
-                    ExperimentLineageEdge.edge_mode == edge_mode,
-                    ExperimentLineageEdge.edge_key == edge_key,
+async def _reconcile_native_receipt_lineage(
+    session: AsyncSession,
+    workspace_id: str,
+    domain_experiment_id: str,
+) -> None:
+    page_size = 500
+    anchor: tuple[str, str] | None = None
+    while True:
+        statement = (
+            select(ExperimentExternalEntityReceipt)
+            .where(ExperimentExternalEntityReceipt.workspace_id == workspace_id)
+            .order_by(
+                ExperimentExternalEntityReceipt.created_at.desc(),
+                ExperimentExternalEntityReceipt.id.desc(),
+            )
+            .limit(page_size)
+        )
+        if anchor is not None:
+            statement = statement.where(
+                (ExperimentExternalEntityReceipt.created_at < anchor[0])
+                | (
+                    (ExperimentExternalEntityReceipt.created_at == anchor[0])
+                    & (ExperimentExternalEntityReceipt.id < anchor[1])
                 )
             )
-            if existing is None:
-                session.add(ExperimentLineageEdge(
-                    id=new_id("lineage"),
-                    workspace_id=workspace_id,
-                    source_resource_id=source_id,
-                    target_resource_id=target_id,
-                    edge_mode=edge_mode,
-                    edge_key=edge_key,
-                    metadata_json=canonical_json({"source": "native_adapter_receipt", "native": True, "native_relation": native_relation}),
-                    created_at=now(),
-                ))
+        receipts = list((await session.scalars(statement)).all())
+        if not receipts:
+            return
+        for receipt in receipts:
+            try:
+                acknowledgement = json.loads(receipt.acknowledgement_json)
+            except json.JSONDecodeError:
+                continue
+            metadata = acknowledgement.get("metadata")
+            if not isinstance(metadata, dict):
+                continue
+            lineage = metadata.get("native_lineage", [])
+            if not isinstance(lineage, list) or not lineage:
+                continue
+            if len(lineage) > 1_000:
+                raise ValidationFailure("native receipt lineage exceeds the supported bound")
+            receipt_owner = metadata.get("global_domain_experiment_id")
+            if receipt_owner is not None and not isinstance(receipt_owner, str):
+                raise ValidationFailure("native receipt Domain ownership metadata is invalid")
+            if receipt_owner != domain_experiment_id:
+                # Receipts owned by another Domain are unrelated to this
+                # reconciliation pass.  Domain-owned receipts with missing
+                # ownership are likewise ineligible; current attachments are
+                # rejected earlier by attach_verified_entity.
+                if receipt.entity_kind in DOMAIN_OWNED_ENTITY_KINDS or receipt_owner is not None:
+                    continue
+            for item in lineage:
+                if not isinstance(item, dict):
+                    raise ValidationFailure("native receipt lineage item is invalid")
+                relation = str(item.get("relation") or "derived_from")
+                native_relation = f"native_{relation}"
+                if relation in {"compares", "compared_with"}:
+                    edge_mode = "compared_with"
+                    direction = "current_to_related"
+                elif relation in {"derived_from", "derives_from"}:
+                    edge_mode = "derived_from"
+                    direction = "current_to_related"
+                elif relation == "produced_child_analysis":
+                    edge_mode = "derived_from"
+                    direction = "related_to_current"
+                elif relation in {"uses_input", "references"}:
+                    edge_mode = relation
+                    direction = "current_to_related"
+                elif relation == "validated_by":
+                    edge_mode = relation
+                    direction = "related_to_current"
+                elif relation == "produced":
+                    edge_mode = relation
+                    direction = "current_to_related"
+                else:
+                    continue
+                entity_kind = item.get("entity_kind")
+                entity_id = item.get("entity_id")
+                expected_digest = item.get("receipt_content_digest")
+                if (
+                    not isinstance(entity_kind, str)
+                    or not entity_kind
+                    or not isinstance(entity_id, str)
+                    or not entity_id
+                    or not isinstance(expected_digest, str)
+                    or len(expected_digest) != 64
+                    or any(character not in "0123456789abcdef" for character in expected_digest)
+                ):
+                    raise ValidationFailure(
+                        "native lineage target requires exact kind, identity, and content digest"
+                    )
+                source_digest = item.get("source_digest")
+                if source_digest is not None and source_digest != expected_digest:
+                    raise ValidationFailure("native lineage source digest diverges from receipt authority")
+                candidate_statement = select(ExperimentExternalEntityReceipt).where(
+                    ExperimentExternalEntityReceipt.workspace_id == workspace_id,
+                    ExperimentExternalEntityReceipt.entity_kind == entity_kind,
+                    ExperimentExternalEntityReceipt.entity_id == entity_id,
+                    ExperimentExternalEntityReceipt.content_digest == expected_digest,
+                )
+                candidates = list((await session.scalars(candidate_statement.limit(2))).all())
+                if not candidates:
+                    continue
+                if len(candidates) != 1:
+                    raise ValidationFailure(
+                        f"native lineage target is not uniquely attached: {entity_kind}:{entity_id}"
+                    )
+                related = candidates[0]
+                try:
+                    related_acknowledgement = json.loads(related.acknowledgement_json)
+                except json.JSONDecodeError as exc:
+                    raise ValidationFailure("native lineage target acknowledgement is invalid") from exc
+                related_metadata = related_acknowledgement.get("metadata")
+                related_owner = (
+                    related_metadata.get("global_domain_experiment_id")
+                    if isinstance(related_metadata, dict)
+                    else None
+                )
+                if (
+                    (related_owner is not None and related_owner != domain_experiment_id)
+                    or (
+                        related.entity_kind in DOMAIN_OWNED_ENTITY_KINDS
+                        and related_owner != domain_experiment_id
+                    )
+                ):
+                    raise ValidationFailure(
+                        "native lineage receipts do not share exact Domain ownership"
+                    )
+                if direction == "related_to_current":
+                    source_id, target_id = related.id, receipt.id
+                else:
+                    source_id, target_id = receipt.id, related.id
+                ordinal = item.get("ordinal")
+                role = item.get("role")
+                edge_key = f"native:{relation}:{source_id}:{target_id}:{role}:{ordinal}"
+                existing = await session.scalar(
+                    select(ExperimentLineageEdge).where(
+                        ExperimentLineageEdge.source_resource_id == source_id,
+                        ExperimentLineageEdge.target_resource_id == target_id,
+                        ExperimentLineageEdge.edge_mode == edge_mode,
+                        ExperimentLineageEdge.edge_key == edge_key,
+                    )
+                )
+                if existing is None:
+                    session.add(ExperimentLineageEdge(
+                        id=new_id("lineage"),
+                        workspace_id=workspace_id,
+                        source_resource_id=source_id,
+                        target_resource_id=target_id,
+                        edge_mode=edge_mode,
+                        edge_key=edge_key,
+                        metadata_json=canonical_json({
+                            "source": "native_adapter_receipt",
+                            "native": True,
+                            "native_relation": native_relation,
+                            "role": role,
+                            "ordinal": ordinal,
+                            "compatibility_contract_id": item.get("compatibility_contract_id"),
+                            "source_digest": item.get("source_digest") or expected_digest,
+                            "global_domain_experiment_id": receipt_owner,
+                        }),
+                        created_at=now(),
+                    ))
+        if len(receipts) < page_size:
+            return
+        last = receipts[-1]
+        anchor = (last.created_at, last.id)
 
 
 async def _domain_payload(
@@ -190,6 +294,21 @@ async def attach_verified_entity(
     if adapter.domain_kind != payload.get("domain_kind"):
         raise ValidationFailure("adapter domain kind does not match the Domain Experiment")
     source_receipt = await adapter.verify(core_session, entity_id)
+    source_metadata = source_receipt.get("metadata")
+    source_owner = (
+        source_metadata.get("global_domain_experiment_id")
+        if isinstance(source_metadata, dict)
+        else None
+    )
+    source_entity_kind = str(source_receipt.get("entity_kind") or "")
+    if source_entity_kind in DOMAIN_OWNED_ENTITY_KINDS and source_owner != domain_experiment_id:
+        raise ValidationFailure(
+            "verified native authority lacks exact ownership by the selected Domain Experiment"
+        )
+    if source_owner is not None and source_owner != domain_experiment_id:
+        raise ValidationFailure(
+            "verified native authority is owned by a different Domain Experiment"
+        )
     source_receipt["verified_at"] = _utc_now()
     source_digest = source_receipt.get("content_digest") or source_receipt.get("contract_digest")
     if not isinstance(source_digest, str):
@@ -283,7 +402,11 @@ async def attach_verified_entity(
         )
         experiment_session.add(edge)
         await experiment_session.flush()
-    await _reconcile_native_receipt_lineage(experiment_session, project_id)
+    await _reconcile_native_receipt_lineage(
+        experiment_session,
+        project_id,
+        domain_experiment_id,
+    )
     await experiment_session.flush()
     receipt_resource_id = new_id("adapter-receipt")
     experiment_session.add(

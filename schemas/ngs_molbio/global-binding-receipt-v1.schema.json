@@ -1,0 +1,178 @@
+{
+  "$id": "bms.ngs-molbio.global-binding-receipt.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "acknowledgement": {
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "const": "verified"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "adapter_id": {
+      "const": "bms.ngs-molbio.domain-binding.adapter.v1"
+    },
+    "adapter_version": {
+      "const": "1"
+    },
+    "domain_experiment": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "domain_contract_version": {
+          "const": "2"
+        },
+        "domain_kind": {
+          "const": "ngs_molbio"
+        },
+        "generation": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "lifecycle_state": {
+          "enum": [
+            "draft",
+            "planned",
+            "active",
+            "analysis",
+            "review",
+            "completed",
+            "blocked"
+          ]
+        },
+        "reopen_destination": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "revision_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "revision_id",
+        "generation",
+        "digest",
+        "reopen_destination",
+        "lifecycle_state",
+        "domain_kind",
+        "domain_contract_version"
+      ],
+      "type": "object"
+    },
+    "global_experiment": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "generation": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "reopen_destination": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "revision_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "revision_id",
+        "generation",
+        "digest",
+        "reopen_destination"
+      ],
+      "type": "object"
+    },
+    "project": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "generation": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "reopen_destination": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "revision_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "revision_id",
+        "generation",
+        "digest",
+        "reopen_destination"
+      ],
+      "type": "object"
+    },
+    "receipt_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "schema": {
+      "const": "bms.ngs-molbio.global-binding-receipt.v1"
+    },
+    "verified_at": {
+      "format": "date-time",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "receipt_id",
+    "project",
+    "global_experiment",
+    "domain_experiment",
+    "adapter_id",
+    "adapter_version",
+    "verified_at",
+    "acknowledgement"
+  ],
+  "title": "Combined hierarchy binding receipt v1",
+  "type": "object"
+}

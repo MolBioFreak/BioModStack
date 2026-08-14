@@ -1,0 +1,169 @@
+{
+  "$id": "bms.shared-global-package-acceptance.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "bms.shared-global-package-acceptance.v1"
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "runtime_implementation_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "static_package_fingerprint": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "migration_receipts": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "x-bms-unique-by": "store_id",
+      "items": {
+        "$ref": "#/$defs/migrationReceiptPointer"
+      }
+    },
+    "connector_acceptance_receipt": {
+      "$ref": "#/$defs/receiptPointer"
+    },
+    "workflow_acceptance_receipts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/receiptPointer"
+      }
+    },
+    "payload_ownership_audit_receipt": {
+      "$ref": "#/$defs/receiptPointer"
+    },
+    "backup_receipt": {
+      "$ref": "#/$defs/receiptPointer"
+    },
+    "restoration_receipt": {
+      "$ref": "#/$defs/receiptPointer"
+    },
+    "export_receipt": {
+      "$ref": "#/$defs/receiptPointer"
+    },
+    "development_runtime_receipt": {
+      "$ref": "#/$defs/receiptPointer"
+    },
+    "exact_tree_review_receipt": {
+      "$ref": "#/$defs/receiptPointer"
+    },
+    "health_acceptance_receipt": {
+      "$ref": "#/$defs/receiptPointer"
+    },
+    "browser_acceptance_receipt": {
+      "$ref": "#/$defs/receiptPointer"
+    },
+    "focused_check_receipts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/receiptPointer"
+      }
+    },
+    "no_active_jobs": {
+      "const": true
+    },
+    "outcome": {
+      "const": "pass"
+    },
+    "accepted_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "accepted_by": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "content_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "required": [
+    "schema",
+    "source_commit",
+    "source_tree",
+    "runtime_implementation_sha256",
+    "static_package_fingerprint",
+    "migration_receipts",
+    "connector_acceptance_receipt",
+    "workflow_acceptance_receipts",
+    "payload_ownership_audit_receipt",
+    "backup_receipt",
+    "restoration_receipt",
+    "export_receipt",
+    "development_runtime_receipt",
+    "exact_tree_review_receipt",
+    "health_acceptance_receipt",
+    "browser_acceptance_receipt",
+    "focused_check_receipts",
+    "no_active_jobs",
+    "outcome",
+    "accepted_at",
+    "accepted_by",
+    "content_sha256"
+  ],
+  "$defs": {
+    "migrationReceiptPointer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "store_id": {
+          "enum": ["global-experiments", "molbio-domain", "molbio-ngs-domain"]
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      },
+      "required": ["store_id", "receipt_id", "receipt_sha256", "native_identity"]
+    },
+    "receiptPointer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      },
+      "required": ["receipt_id", "receipt_sha256", "native_identity"]
+    }
+  },
+  "type": "object"
+}

@@ -8,11 +8,14 @@ from datetime import date
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from experiment_database import get_experiment_session
+from molbio_ngs_database import get_molbio_ngs_session
+from molbio_ngs_models import MolBioNGSDomainState, MolBioNGSGlobalBinding
 from experiment_models import (
     ExperimentAggregateHead,
     ExperimentAuditEvent,
@@ -38,6 +41,15 @@ from experiment_services import (
     archive_aggregate,
 )
 from routers.experiment_workspaces import _mutation_principal, _require_mutation_owner
+from services.global_experiments.worker import global_experiment_worker
+from services.ngs_molbio_connector import (
+    ConnectorConflict,
+    ConnectorUnavailable,
+    binding_status,
+    command_for_binding,
+    issue_binding_command,
+    migrated_binding_status,
+)
 
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
@@ -139,7 +151,7 @@ class ProteinInSilicoPayload(StrictRequestModel):
     experiment_mode: Literal["exploration", "design", "redesign", "prediction", "validation", "comparison", "simulation", "analysis"]
     targets: list[ProteinTarget]
     scientific_objective: str
-    design_constraints: list[dict[str, Any]]
+    design_constraints: list[Any] = Field(max_length=0)
     planned_capabilities: list[str]
     comparison_groups: list[dict[str, Any]]
     validation_strategy: list[str]
@@ -149,7 +161,47 @@ class NgsMolBioPayload(StrictRequestModel):
     schema_: Literal["bms.ngs-molbio-experiment.v1"] = Field(alias="schema")
 
 
-class DomainExperimentCreateRequest(StrictRequestModel):
+class ProteinTargetV2(StrictRequestModel):
+    schema_: Literal["bms.protein-target.v2"] = Field(alias="schema")
+    target_id: str = Field(min_length=1, max_length=128)
+    label: str = Field(min_length=1, max_length=255)
+    role: Literal["target", "binder", "partner", "template", "reference", "control", "other"]
+    molecule_type: Literal["protein", "peptide", "protein_complex"]
+    source_entity_receipt_ids: list[str] = Field(min_length=1, max_length=128)
+    source_dataset_revision_ids: list[str] = Field(max_length=64)
+    chain_ids: list[str] = Field(max_length=64)
+    copy_count: int = Field(ge=1, le=64)
+    notes: str | None = Field(default=None, max_length=4096)
+
+
+class ProteinInSilicoV2Payload(StrictRequestModel):
+    schema_: Literal["bms.protein-in-silico-experiment.v2"] = Field(alias="schema")
+    experiment_mode: Literal["exploration", "design", "redesign", "prediction", "validation", "comparison", "simulation", "analysis"]
+    targets: list[ProteinTargetV2] = Field(max_length=128)
+    scientific_objective: str = Field(max_length=8192)
+    design_constraints: list[Any] = Field(max_length=0)
+    planned_capability_ids: list[str] = Field(max_length=64)
+    comparison_groups: list[dict[str, Any]] = Field(max_length=128)
+    validation_capability_ids: list[str] = Field(max_length=64)
+    acceptance_criteria: list[dict[str, Any]] = Field(max_length=128)
+    evidence_requirements: list[dict[str, Any]] = Field(max_length=128)
+    sample_receipt_ids: list[str] = Field(max_length=128)
+    managed_reference_revision_ids: list[str] = Field(max_length=128)
+    source_dataset_revision_ids: list[str] = Field(max_length=128)
+    lifecycle_state: Literal["draft", "active", "on_hold", "completed", "archived"]
+
+
+class NgsMolBioV2Payload(StrictRequestModel):
+    schema_: Literal["bms.ngs-molbio-experiment.v2"] = Field(alias="schema")
+    experiment_mode: Literal["molecular_design", "assembly_validation", "pcr_validation", "sequencing", "quality_control", "alignment", "comparison", "analysis"]
+    scientific_objective: str = Field(max_length=8192)
+    planned_capability_ids: list[str] = Field(max_length=64)
+    grouping_intent: list[dict[str, Any]] = Field(max_length=128)
+    acceptance_criteria: list[dict[str, Any]] = Field(max_length=128)
+    evidence_plan: list[dict[str, Any]] = Field(max_length=128)
+
+
+class DomainExperimentV1CreateRequest(StrictRequestModel):
     schema_: Literal["bms.domain-experiment.v1"] = Field(default="bms.domain-experiment.v1", alias="schema")
     domain_kind: Literal["protein_in_silico", "ngs_molbio"]
     domain_contract_version: str = Field(default="1", min_length=1)
@@ -164,9 +216,26 @@ class DomainExperimentCreateRequest(StrictRequestModel):
     domain_payload: ProteinInSilicoPayload | NgsMolBioPayload
 
 
+class DomainExperimentV2CreateRequest(StrictRequestModel):
+    schema_: Literal["bms.domain-experiment.v2"] = Field(alias="schema")
+    domain_kind: Literal["protein_in_silico", "ngs_molbio"]
+    domain_contract_version: Literal["2"]
+    name: str = Field(min_length=1, max_length=255)
+    objective: str = Field(max_length=8192)
+    status: Literal["draft", "planned", "active", "analysis", "review", "completed", "blocked", "archived"]
+    tags: list[str] = Field(max_length=64)
+    source_receipt_ids: list[str] = Field(max_length=256)
+    dataset_revision_ids: list[str] = Field(max_length=128)
+    change_summary: str = Field(min_length=1, max_length=1024)
+    domain_payload: ProteinInSilicoV2Payload | NgsMolBioV2Payload
+
+
+DomainExperimentCreateRequest = DomainExperimentV1CreateRequest | DomainExperimentV2CreateRequest
+
+
 class DomainExperimentPatchRequest(StrictRequestModel):
     expected_head_generation: int = Field(ge=0)
-    schema_: Literal["bms.domain-experiment.v1"] | None = Field(default=None, alias="schema")
+    schema_: Literal["bms.domain-experiment.v1", "bms.domain-experiment.v2"] | None = Field(default=None, alias="schema")
     domain_contract_version: str | None = Field(default=None, min_length=1)
     name: str | None = Field(default=None, min_length=1, max_length=255)
     objective: str | None = None
@@ -174,9 +243,17 @@ class DomainExperimentPatchRequest(StrictRequestModel):
     tags: list[str] | None = None
     source_receipt_ids: list[str] | None = None
     dataset_ids: list[str] | None = None
-    created_by: str | None = None
+    dataset_revision_ids: list[str] | None = None
     change_summary: str | None = None
-    domain_payload: ProteinInSilicoPayload | NgsMolBioPayload | None = None
+    domain_payload: ProteinInSilicoPayload | ProteinInSilicoV2Payload | NgsMolBioPayload | NgsMolBioV2Payload | None = None
+
+
+class BindingInitializeRequest(StrictRequestModel):
+    expected_domain_revision_id: str = Field(min_length=1, max_length=128)
+
+
+class BindingReverifyRequest(BindingInitializeRequest):
+    expected_binding_revision_id: str = Field(min_length=1, max_length=128)
 
 
 class LifecycleRequest(StrictRequestModel):
@@ -191,8 +268,12 @@ class ResearchRecordRequest(StrictRequestModel):
     supersedes_record_id: str | None = None
 
 
-def _error(exc: ExperimentServiceError) -> HTTPException:
+def _error(exc: Exception) -> HTTPException:
     message = str(exc)
+    if isinstance(exc, ConnectorUnavailable):
+        return HTTPException(status_code=503, detail={"code": exc.code, "message": message})
+    if isinstance(exc, ConnectorConflict):
+        return HTTPException(status_code=409, detail={"code": exc.code, "message": message})
     if isinstance(exc, NotFound):
         return HTTPException(status_code=404, detail={"code": "not_found", "message": message})
     if isinstance(exc, RevisionConflict):
@@ -955,23 +1036,37 @@ async def create_domain_experiment_route(
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict[str, Any]:
     try:
-        await _require_mutation_owner(request, session, resource_id=project_id)
+        actor = await _require_mutation_owner(request, session, resource_id=project_id)
         await _global_experiment(session, project_id, experiment_id)
+        domain_payload = payload.model_dump(mode="json", by_alias=True)
+        if domain_payload.get("domain_contract_version") != "2":
+            raise ValidationFailure("new Domain Experiments require the frozen v2 contract")
+        domain_payload["created_by"] = actor
         head = await create_domain_experiment(
             session,
             project_id,
             experiment_id,
-            payload.model_dump(mode="json", by_alias=True),
+            domain_payload,
         )
+        command = None
+        if domain_payload.get("domain_kind") == "ngs_molbio":
+            command = await issue_binding_command(
+                session, project_id=project_id, global_experiment_id=experiment_id,
+                domain_id=head.aggregate_id, expected_domain_revision_id=str(head.current_revision_id),
+                idempotency_key=f"domain-create:{head.aggregate_id}:{head.current_revision_id}", operation="initialize",
+            )
         await session.commit()
-        return await _head_json(
+        result = await _head_json(
             session,
             head,
             exposed_kind="domain_experiment",
             storage_kind="domain_experiment",
             parent_id=experiment_id,
         )
-    except ExperimentServiceError as exc:
+        if command is not None:
+            result["binding"] = binding_status(command)
+        return result
+    except (ExperimentServiceError, ConnectorConflict, ConnectorUnavailable) as exc:
         await session.rollback()
         raise _error(exc) from exc
 
@@ -996,6 +1091,195 @@ async def get_domain_experiment(
         raise _error(exc) from exc
 
 
+async def _binding_status_response(
+    command: Any,
+    domain_session: AsyncSession,
+) -> dict[str, Any]:
+    state = await domain_session.get(MolBioNGSDomainState, command.domain_experiment_id)
+    return binding_status(
+        command,
+        local_state_id=state.global_domain_experiment_id if state is not None else None,
+        head_generation=state.head_generation if state is not None else 0,
+    )
+
+
+async def _current_local_binding(
+    domain_session: AsyncSession,
+    domain_id: str,
+) -> tuple[MolBioNGSDomainState, MolBioNGSGlobalBinding] | None:
+    state = await domain_session.get(MolBioNGSDomainState, domain_id)
+    binding = (
+        await domain_session.get(MolBioNGSGlobalBinding, state.current_binding_revision_id)
+        if state is not None
+        else None
+    )
+    if state is None or binding is None:
+        return None
+    if binding.global_domain_experiment_id != domain_id:
+        raise ConnectorConflict("local binding authority belongs to another Domain Experiment")
+    return state, binding
+
+
+async def _issue_domain_revision_reverification(
+    session: AsyncSession,
+    domain_session: AsyncSession,
+    *,
+    project_id: str,
+    experiment_id: str,
+    domain_id: str,
+    domain_revision_id: str,
+    idempotency_key: str,
+) -> Any:
+    local = None
+    try:
+        prior_binding_revision_id = (
+            await command_for_binding(
+                session,
+                project_id=project_id,
+                global_experiment_id=experiment_id,
+                domain_id=domain_id,
+            )
+        ).binding_revision_id
+    except NotFound:
+        local = await _current_local_binding(domain_session, domain_id)
+        prior_binding_revision_id = local[1].binding_revision_id if local is not None else None
+    if prior_binding_revision_id is None:
+        raise NotFound("binding authority was not found")
+    return await issue_binding_command(
+        session,
+        project_id=project_id,
+        global_experiment_id=experiment_id,
+        domain_id=domain_id,
+        expected_domain_revision_id=domain_revision_id,
+        expected_binding_revision_id=prior_binding_revision_id,
+        current_local_binding=local[1] if local is not None else None,
+        idempotency_key=idempotency_key,
+        operation="reverify",
+    )
+
+
+@router.get("/{project_id}/experiments/{experiment_id}/domains/{domain_id}/binding")
+async def get_ngs_molbio_binding(
+    project_id: str,
+    experiment_id: str,
+    domain_id: str,
+    session: AsyncSession = Depends(get_experiment_session),
+    domain_session: AsyncSession = Depends(get_molbio_ngs_session),
+) -> dict[str, Any]:
+    try:
+        command = await command_for_binding(
+            session, project_id=project_id, global_experiment_id=experiment_id, domain_id=domain_id
+        )
+        return await _binding_status_response(command, domain_session)
+    except NotFound as exc:
+        local = await _current_local_binding(domain_session, domain_id)
+        if local is None or local[1].binding_state != "needs_reverification":
+            raise _error(exc) from exc
+        project = await _project(session, project_id)
+        experiment = await _global_experiment(session, project_id, experiment_id)
+        if not project.current_revision_id or not experiment.current_revision_id:
+            raise _error(exc) from exc
+        state, binding = local
+        if binding.project_id != project_id or binding.global_experiment_id != experiment_id:
+            raise _error(exc) from exc
+        return migrated_binding_status(
+            binding,
+            project_revision_id=project.current_revision_id,
+            global_experiment_revision_id=experiment.current_revision_id,
+            local_state_id=state.global_domain_experiment_id,
+            head_generation=state.head_generation,
+        )
+    except ExperimentServiceError as exc:
+        raise _error(exc) from exc
+
+
+async def _mutate_ngs_molbio_binding(
+    *,
+    request: Request,
+    session: AsyncSession,
+    domain_session: AsyncSession,
+    project_id: str,
+    experiment_id: str,
+    domain_id: str,
+    expected_domain_revision_id: str,
+    operation: str,
+    expected_binding_revision_id: str | None,
+) -> JSONResponse:
+    await _require_mutation_owner(request, session, resource_id=project_id)
+    worker = global_experiment_worker()
+    if worker is None or not worker.ensure_dispatcher_available():
+        raise HTTPException(status_code=503, detail={"code": "connector_unavailable", "message": "sole managed connector owner is unavailable"})
+    idempotency_key = request.headers.get("Idempotency-Key")
+    try:
+        local = await _current_local_binding(domain_session, domain_id) if operation == "reverify" else None
+        command = await issue_binding_command(
+            session, project_id=project_id, global_experiment_id=experiment_id, domain_id=domain_id,
+            expected_domain_revision_id=expected_domain_revision_id,
+            expected_binding_revision_id=expected_binding_revision_id,
+            current_local_binding=local[1] if local is not None else None,
+            idempotency_key=idempotency_key or "", operation=operation,
+        )
+        if command.status == "conflicted":
+            raise HTTPException(status_code=409, detail={"code": "connector_conflict", "message": command.last_error or "durable connector conflict"})
+        await session.commit()
+        body = await _binding_status_response(command, domain_session)
+        return JSONResponse(status_code=200 if command.status in {"applied", "duplicate"} else 202, content=body)
+    except RevisionConflict as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail={"code": "stale_revision", "message": str(exc)}) from exc
+    except IdempotencyConflict as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail={"code": "idempotency_conflict", "message": str(exc)}) from exc
+    except ConnectorConflict as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc)}) from exc
+    except ConnectorUnavailable as exc:
+        await session.rollback()
+        raise HTTPException(status_code=503, detail={"code": exc.code, "message": str(exc)}) from exc
+    except ValidationFailure as exc:
+        await session.rollback()
+        raise HTTPException(status_code=422, detail={"code": "validation_failed", "message": str(exc)}) from exc
+    except NotFound as exc:
+        await session.rollback()
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": str(exc)}) from exc
+
+
+@router.post("/{project_id}/experiments/{experiment_id}/domains/{domain_id}/initialize")
+async def initialize_ngs_molbio_binding(
+    project_id: str,
+    experiment_id: str,
+    domain_id: str,
+    payload: BindingInitializeRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_experiment_session),
+    domain_session: AsyncSession = Depends(get_molbio_ngs_session),
+) -> JSONResponse:
+    return await _mutate_ngs_molbio_binding(
+        request=request, session=session, domain_session=domain_session,
+        project_id=project_id, experiment_id=experiment_id, domain_id=domain_id,
+        expected_domain_revision_id=payload.expected_domain_revision_id,
+        operation="initialize", expected_binding_revision_id=None,
+    )
+
+
+@router.post("/{project_id}/experiments/{experiment_id}/domains/{domain_id}/binding/reverify")
+async def reverify_ngs_molbio_binding(
+    project_id: str,
+    experiment_id: str,
+    domain_id: str,
+    payload: BindingReverifyRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_experiment_session),
+    domain_session: AsyncSession = Depends(get_molbio_ngs_session),
+) -> JSONResponse:
+    return await _mutate_ngs_molbio_binding(
+        request=request, session=session, domain_session=domain_session,
+        project_id=project_id, experiment_id=experiment_id, domain_id=domain_id,
+        expected_domain_revision_id=payload.expected_domain_revision_id,
+        operation="reverify", expected_binding_revision_id=payload.expected_binding_revision_id,
+    )
+
+
 @router.patch("/{project_id}/experiments/{experiment_id}/domains/{domain_id}")
 async def patch_domain_experiment(
     project_id: str,
@@ -1004,27 +1288,43 @@ async def patch_domain_experiment(
     payload: DomainExperimentPatchRequest,
     request: Request,
     session: AsyncSession = Depends(get_experiment_session),
+    domain_session: AsyncSession = Depends(get_molbio_ngs_session),
 ) -> dict[str, Any]:
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _domain_experiment(session, project_id, experiment_id, domain_id)
-        await save_hierarchy_revision(
+        revision = await save_hierarchy_revision(
             session,
             domain_id,
             "domain_experiment",
             await _merge_patch(session, head, payload),
             expected_head_generation=payload.expected_head_generation,
         )
+        command = None
+        refreshed_payload = await _payload(session, head)
+        if refreshed_payload.get("domain_kind") == "ngs_molbio":
+            command = await _issue_domain_revision_reverification(
+                session,
+                domain_session,
+                project_id=project_id,
+                experiment_id=experiment_id,
+                domain_id=domain_id,
+                domain_revision_id=revision.resource_id,
+                idempotency_key=f"domain-revision:{domain_id}:{revision.resource_id}",
+            )
         await session.commit()
         refreshed = await _domain_experiment(session, project_id, experiment_id, domain_id)
-        return await _head_json(
+        result = await _head_json(
             session,
             refreshed,
             exposed_kind="domain_experiment",
             storage_kind="domain_experiment",
             parent_id=experiment_id,
         )
-    except ExperimentServiceError as exc:
+        if command is not None:
+            result["binding"] = binding_status(command)
+        return result
+    except (ExperimentServiceError, ConnectorConflict, ConnectorUnavailable) as exc:
         await session.rollback()
         raise _error(exc) from exc
 
@@ -1037,14 +1337,40 @@ async def archive_domain_experiment(
     payload: LifecycleRequest,
     request: Request,
     session: AsyncSession = Depends(get_experiment_session),
+    domain_session: AsyncSession = Depends(get_molbio_ngs_session),
 ) -> dict[str, Any]:
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _domain_experiment(session, project_id, experiment_id, domain_id)
-        archived = await archive_aggregate(session, head.aggregate_id, expected_head_generation=payload.expected_head_generation)
+        domain_payload = await _payload(session, head)
+        archived = await archive_aggregate(
+            session,
+            head.aggregate_id,
+            expected_head_generation=payload.expected_head_generation,
+        )
+        command = None
+        if domain_payload.get("domain_kind") == "ngs_molbio":
+            command = await _issue_domain_revision_reverification(
+                session,
+                domain_session,
+                project_id=project_id,
+                experiment_id=experiment_id,
+                domain_id=domain_id,
+                domain_revision_id=str(archived.current_revision_id),
+                idempotency_key=f"domain-archive:{domain_id}:{archived.current_revision_id}",
+            )
         await session.commit()
-        return await _head_json(session, archived, exposed_kind="domain_experiment", storage_kind="domain_experiment", parent_id=experiment_id)
-    except ExperimentServiceError as exc:
+        result = await _head_json(
+            session,
+            archived,
+            exposed_kind="domain_experiment",
+            storage_kind="domain_experiment",
+            parent_id=experiment_id,
+        )
+        if command is not None:
+            result["binding"] = binding_status(command)
+        return result
+    except (ExperimentServiceError, ConnectorConflict, ConnectorUnavailable) as exc:
         await session.rollback()
         raise _error(exc) from exc
 
@@ -1057,14 +1383,40 @@ async def restore_domain_experiment(
     payload: LifecycleRequest,
     request: Request,
     session: AsyncSession = Depends(get_experiment_session),
+    domain_session: AsyncSession = Depends(get_molbio_ngs_session),
 ) -> dict[str, Any]:
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _domain_experiment(session, project_id, experiment_id, domain_id)
-        restored = await restore_aggregate(session, head.aggregate_id, expected_head_generation=payload.expected_head_generation)
+        domain_payload = await _payload(session, head)
+        restored = await restore_aggregate(
+            session,
+            head.aggregate_id,
+            expected_head_generation=payload.expected_head_generation,
+        )
+        command = None
+        if domain_payload.get("domain_kind") == "ngs_molbio":
+            command = await _issue_domain_revision_reverification(
+                session,
+                domain_session,
+                project_id=project_id,
+                experiment_id=experiment_id,
+                domain_id=domain_id,
+                domain_revision_id=str(restored.current_revision_id),
+                idempotency_key=f"domain-restore:{domain_id}:{restored.current_revision_id}",
+            )
         await session.commit()
-        return await _head_json(session, restored, exposed_kind="domain_experiment", storage_kind="domain_experiment", parent_id=experiment_id)
-    except ExperimentServiceError as exc:
+        result = await _head_json(
+            session,
+            restored,
+            exposed_kind="domain_experiment",
+            storage_kind="domain_experiment",
+            parent_id=experiment_id,
+        )
+        if command is not None:
+            result["binding"] = binding_status(command)
+        return result
+    except (ExperimentServiceError, ConnectorConflict, ConnectorUnavailable) as exc:
         await session.rollback()
         raise _error(exc) from exc
 
