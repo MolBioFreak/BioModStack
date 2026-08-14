@@ -2232,6 +2232,7 @@ def _exact_member_receipt(
         reopen_uri=reopen_uri,
         metadata={
             "canonical_state": "immutable",
+            "native_member_receipt_id": member.receipt_id,
             "native_entity_id": member.entity_id,
             "native_revision_or_generation": str(member.source_generation_or_revision),
             "source_schema": member.source_schema,
