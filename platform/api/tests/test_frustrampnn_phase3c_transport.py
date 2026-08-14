@@ -297,6 +297,8 @@ def test_standalone_workflow_uses_exact_v2_three_file_tuple_and_terminal_names()
     ) in workflow
     assert "tuple path('workflow_component_request_v2.json'), path('canonical_source.pdb')" in workflow
     assert "path('frustrampnn_structure_map_v1.json'), emit: prepared" in workflow
+    assert "--output-request .prepared_workflow_component_request_v2.json" in workflow
+    assert "mv .prepared_workflow_component_request_v2.json workflow_component_request_v2.json" in workflow
     assert "CanonicalFrustraMPNNV2(PreparePersistedFrustraMPNNCandidate.out.prepared)" in workflow
     assert "record.record_schema_version != 2" in workflow
     assert "record.launch_authority" not in workflow

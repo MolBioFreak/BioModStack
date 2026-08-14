@@ -27,9 +27,12 @@ process PreparePersistedFrustraMPNNCandidate {
       --request '${request_snapshot}' \
       --source '${source_snapshot}' \
       --structure-map '${structure_map_snapshot}' \
-      --output-request workflow_component_request_v2.json \
-      --output-source canonical_source.pdb \
-      --output-structure-map frustrampnn_structure_map_v1.json
+      --output-request .prepared_workflow_component_request_v2.json \
+      --output-source .prepared_canonical_source.pdb \
+      --output-structure-map .prepared_frustrampnn_structure_map_v1.json
+    mv .prepared_workflow_component_request_v2.json workflow_component_request_v2.json
+    mv .prepared_canonical_source.pdb canonical_source.pdb
+    mv .prepared_frustrampnn_structure_map_v1.json frustrampnn_structure_map_v1.json
     """
 }
 
