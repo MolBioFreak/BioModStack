@@ -1556,7 +1556,22 @@ async def _ingest_event(
             acknowledged_at=acknowledged_at,
             reason_code="generation_gap" if disposition == "deferred_gap" else None,
         )
-        acknowledgement_json = canonical_json(acknowledgement)
+        stored_disposition = disposition
+        stored_acknowledgement = acknowledgement
+        if disposition == "applied":
+            # The immutable inbox contract admits all rows through the deferred state.
+            # The same transaction advances an in-order row to applied after materialization.
+            stored_disposition = "deferred_gap"
+            stored_acknowledgement = _event_ack(
+                event_id=event.id,
+                binding_revision_id=event.binding_revision_id,
+                payload_sha256=event.payload_sha256,
+                disposition="deferred_gap",
+                last_applied_generation=last,
+                acknowledged_at=acknowledged_at,
+                reason_code="generation_gap",
+            )
+        stored_acknowledgement_json = canonical_json(stored_acknowledgement)
         current_row = ExperimentDomainConnectorInbox(
             event_id=event.id, source_store_id=SOURCE_STORE_ID,
             domain_experiment_id=event.global_domain_experiment_id,
@@ -1564,9 +1579,9 @@ async def _ingest_event(
             event_type=event.event_type, event_stream=event.event_stream,
             stream_generation=event.stream_generation, source_generation=event.source_generation,
             payload_json=event.payload_json, payload_sha256=event.payload_sha256,
-            envelope_json=envelope_json, envelope_sha256=envelope_sha256, disposition=disposition,
-            acknowledgement_json=acknowledgement_json,
-            acknowledgement_sha256=_digest(acknowledgement_json),
+            envelope_json=envelope_json, envelope_sha256=envelope_sha256, disposition=stored_disposition,
+            acknowledgement_json=stored_acknowledgement_json,
+            acknowledgement_sha256=_digest(stored_acknowledgement_json),
             occurred_at=event.created_at, received_at=acknowledged_at.isoformat(),
             applied_at=None,
         )
