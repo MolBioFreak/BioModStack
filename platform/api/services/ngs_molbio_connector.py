@@ -809,7 +809,10 @@ async def _claim_command(session: AsyncSession, worker_id: str, lease_seconds: i
         await session.rollback()
         return None
     await session.commit()
-    return await session.get(ExperimentDomainConnectorCommand, row.command_id)
+    claimed = await session.get(ExperimentDomainConnectorCommand, row.command_id)
+    if claimed is not None:
+        await session.refresh(claimed)
+    return claimed
 
 
 async def _append_local_binding(domain_session: AsyncSession, command: ExperimentDomainConnectorCommand, receipt_json: str) -> tuple[MolBioNGSConnectorAcknowledgement, MolBioNGSDomainState]:
@@ -1124,7 +1127,10 @@ async def _claim_outbox(session: AsyncSession, worker_id: str, lease_seconds: in
         await session.rollback()
         return None
     await session.commit()
-    return await session.get(MolBioNGSOutboxEvent, event.id)
+    claimed = await session.get(MolBioNGSOutboxEvent, event.id)
+    if claimed is not None:
+        await session.refresh(claimed)
+    return claimed
 
 
 def _event_ack(
