@@ -45,7 +45,7 @@ from molbio_ngs_models import (
     MolBioNGSOutboxEvent,
     MolBioNGSOutboxStream,
 )
-from services.global_experiments.adapters import _source_build_revision
+from services.ngs_molbio_source_authority import source_build_revision
 
 
 BINDING_ADAPTER_ID = "bms.ngs-molbio.domain-binding.adapter.v1"
@@ -1295,7 +1295,7 @@ async def _materialize_event_authority(
             "entity_revision_id": spec["entity_revision_id"],
             "content_digest": spec["content_digest"],
             "contract_digest": envelope_sha256,
-            "source_build_revision": _source_build_revision(),
+            "source_build_revision": source_build_revision(),
             "verified_at": applied_at.isoformat(),
             "verifier_id": EVENT_VERIFIER_ID,
             "availability": spec["availability"],

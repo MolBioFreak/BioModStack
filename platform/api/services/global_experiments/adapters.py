@@ -90,6 +90,10 @@ from services.molbio_ngs_member_receipts import (
 from services.molbio_ngs_references import resolve_ngs_reference_revision_receipt
 from services.molbio_ngs_evidence import resolve_evidence_assessment_receipt
 from services.ngs_comparison_panels import _validated_panel_manifest
+from services.ngs_molbio_source_authority import (
+    SourceBuildRevisionError,
+    source_build_revision,
+)
 from paths import get_inputs_dir, get_results_dir, resolve_runtime_data_path
 
 
@@ -186,20 +190,12 @@ registry = AdapterRegistry()
 
 def _source_build_revision() -> str:
     try:
-        from services.ngs_molbio_runtime_status import runtime_implementation_record
-
-        value = runtime_implementation_record().get("successor_source_commit")
-    except (ImportError, OSError, RuntimeError, ValueError) as exc:
+        return source_build_revision()
+    except SourceBuildRevisionError as exc:
         raise AdapterError(
             "source_revision_unavailable",
-            "package-local runtime source authority is unavailable",
+            str(exc),
         ) from exc
-    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40}", value) is None:
-        raise AdapterError(
-            "source_revision_unavailable",
-            "package-local runtime source revision is invalid",
-        )
-    return value
 
 
 def _search_inputs(query: str, limit: int) -> str:

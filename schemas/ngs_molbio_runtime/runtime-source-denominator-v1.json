@@ -55,6 +55,7 @@
     "platform/api/services/ngs_molbio_release_acceptance.py",
     "platform/api/services/ngs_molbio_run_control.py",
     "platform/api/services/ngs_molbio_runtime_status.py",
+    "platform/api/services/ngs_molbio_source_authority.py",
     "platform/api/services/nextflow.py",
     "platform/api/services/payload_ownership_audit.py",
     "platform/api/services/resource_usage_evidence.py",
@@ -80,5 +81,5 @@
     "scripts/build_ngs_molbio_runtime_implementation_record.py",
     "scripts/run_ngs_molbio_payload_ownership_audit.py"
   ],
-  "content_sha256": "7fb1b53f351396a098cbe91e9cbc14079d037b4697a1651bb1395b9920e859a4"
+  "content_sha256": "f25c8fab0b9b3cc256521bed19cd151f5e1b163255c82b10e988a693eb9339d5"
 }
