@@ -6,6 +6,7 @@ import {
     loadPersistedTelemetryPreferences,
     parseTelemetryTimestampMs,
     persistTelemetryPreferences,
+    resolveTelemetryGapBreakMs,
 } from '../src/components/infraTelemetryHistory.js';
 
 const PREFERENCES_STORAGE_KEY = 'bms_infra_live_telemetry_preferences_v1';
@@ -16,6 +17,7 @@ test('viewer reads bounded server-owned telemetry history without browser histor
     assert.doesNotMatch(telemetrySource, /react-plotly\.js|plotly\.js/);
     assert.match(telemetrySource, /function TimeSeriesPlot[\s\S]*?<svg/);
     assert.match(telemetrySource, /const resolution = windowMinutes >= 10 \? 'minute' : 'raw'/);
+    assert.match(telemetrySource, /resolveTelemetryGapBreakMs\(resolution, pollIntervalMs\)/);
     assert.match(telemetrySource, /fetchTelemetryHistory\(startMs, endMs, resolution, 4000\)/);
     assert.match(telemetrySource, /buildSample\(point\.payload, 1000, point\.timestamp_ms\)/);
     assert.match(telemetrySource, /Telemetry collection is stale/);
@@ -24,6 +26,12 @@ test('viewer reads bounded server-owned telemetry history without browser histor
     assert.match(telemetrySource, /persistTelemetryPreferences/);
     assert.doesNotMatch(telemetrySource, /persistTelemetryState|appendRetainedTelemetrySample|subscribeSharedTelemetryCollectorState/);
     assert.doesNotMatch(historySource, /bms_infra_live_telemetry_v1|samples: LiveSample\[\]|persistTelemetryState/);
+});
+
+test('minute telemetry joins adjacent buckets and breaks across a missing bucket', () => {
+    const gapBreakMs = resolveTelemetryGapBreakMs('minute', 1000);
+    assert.ok(gapBreakMs >= 60_000, 'adjacent minute buckets must remain connected');
+    assert.ok(gapBreakMs < 120_000, 'a missing minute bucket must preserve a visible gap');
 });
 
 test('layout has no browser telemetry collector mount', () => {

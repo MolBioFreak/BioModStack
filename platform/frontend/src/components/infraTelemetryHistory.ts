@@ -1,5 +1,18 @@
 export type PollPreset = 1000 | 2000 | 5000;
 export type WindowPreset = 1 | 3 | 5 | 10 | 15 | 30 | 60;
+export type TelemetryResolution = 'raw' | 'minute';
+
+const RAW_MIN_GAP_BREAK_MS = 12_000;
+const MINUTE_GAP_BREAK_MS = 90_000;
+
+export function resolveTelemetryGapBreakMs(
+    resolution: TelemetryResolution,
+    pollIntervalMs: PollPreset,
+): number {
+    return resolution === 'minute'
+        ? MINUTE_GAP_BREAK_MS
+        : Math.max(RAW_MIN_GAP_BREAK_MS, pollIntervalMs * 3);
+}
 
 export interface LiveSample {
     timestamp: string;

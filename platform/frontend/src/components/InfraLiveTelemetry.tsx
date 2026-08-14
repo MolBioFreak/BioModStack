@@ -18,6 +18,7 @@ import {
     loadPersistedTelemetryPreferences,
     parseTelemetryTimestampMs,
     persistTelemetryPreferences,
+    resolveTelemetryGapBreakMs,
 } from './infraTelemetryHistory';
 import type {
     LiveSample,
@@ -27,7 +28,6 @@ import type {
 import { jobPollingInterval } from '../lib/queryPolling';
 
 const SHARED_CONTROL_POLL_INTERVAL_MS = 10000;
-const MIN_GAP_BREAK_MS = 12000;
 const SHARED_SYSTEM_QUERY_KEY = ['system'];
 const SHARED_POWER_CONTROL_QUERY_KEY = ['powerControl'];
 const SHARED_FAN_CONTROL_QUERY_KEY = ['fanControl'];
@@ -1374,12 +1374,12 @@ export function InfraLiveTelemetry({
     );
     const [pollIntervalMs, setPollIntervalMs] = useState<PollPreset>(restoredState.pollIntervalMs);
     const [windowMinutes, setWindowMinutes] = useState<WindowPreset>(restoredState.windowMinutes);
+    const resolution = windowMinutes >= 10 ? 'minute' : 'raw';
     const historyQuery = useQuery({
         queryKey: ['immutable-telemetry-history', windowMinutes],
         queryFn: () => {
             const endMs = Date.now() + 1_000;
             const startMs = endMs - windowMinutes * 60_000;
-            const resolution = windowMinutes >= 10 ? 'minute' : 'raw';
             return fetchTelemetryHistory(startMs, endMs, resolution, 4000);
         },
         refetchInterval: pollIntervalMs,
@@ -1481,7 +1481,7 @@ export function InfraLiveTelemetry({
             ? samples
             : samples.filter((sample) => sample.timestampMs >= latestTimestampMs - windowMinutes * 60 * 1000);
     const plotRedrawKey = `${variant}:${traceType}:${showXAxisLabels ? 'x' : 'nx'}:${windowMinutes}`;
-    const gapBreakMs = Math.max(MIN_GAP_BREAK_MS, pollIntervalMs * 3);
+    const gapBreakMs = resolveTelemetryGapBreakMs(resolution, pollIntervalMs);
     const currentLimits = powerControlData?.data.limits ?? {};
     const currentFanControls = fanControlData?.data.gpus ?? {};
     const gpuOverrides = schedulerConfigData?.data?.overrides ?? {};
