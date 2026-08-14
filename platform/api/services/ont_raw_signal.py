@@ -1053,7 +1053,10 @@ async def close_source_identity(
     receipt = json.loads(Path(receipt_path).read_text(encoding="utf-8"))
     if receipt.get("status") != "passed" or receipt.get("duplicate_read_ids") not in (0, False):
         raise ValueError("POD5 source preflight did not pass")
-    if source.acquisition_id and receipt.get("acquisition_id") != source.acquisition_id:
+    acquisition_ids = receipt.get("acquisition_ids")
+    if source.acquisition_id and (
+        not isinstance(acquisition_ids, list) or source.acquisition_id not in acquisition_ids
+    ):
         raise ValueError("POD5 acquisition identity does not match MinKNOW authority")
     if not isinstance(receipt.get("read_count"), int) or receipt["read_count"] < 1:
         raise ValueError("POD5 source preflight did not establish a non-empty read scope")

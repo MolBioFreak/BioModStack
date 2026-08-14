@@ -122,10 +122,10 @@ def source_preflight(args: argparse.Namespace) -> dict[str, Any]:
     _verify_inputs(args)
     read_groups, acquisitions, group_counts = _pod5_partition_inventory(args.pod5)
     expected = str(args.expected_acquisition_id)
-    if expected != "external-native" and acquisitions != {expected}:
+    if expected != "external-native" and expected not in acquisitions:
         raise ValueError("POD5 acquisition_id does not match the bound MinKNOW acquisition")
-    if len(acquisitions) != 1:
-        raise ValueError("POD5 source spans more than one acquisition identity")
+    if not acquisitions:
+        raise ValueError("POD5 source has no acquisition identity")
     with args.partition_map.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle, lineterminator="\n")
         writer.writerow(("read_id", "group"))
@@ -134,7 +134,8 @@ def source_preflight(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "schema": "bms.ont.raw-signal-source-preflight.v2",
         "status": "passed",
-        "acquisition_id": next(iter(acquisitions)),
+        "acquisition_id": expected if expected != "external-native" else (next(iter(acquisitions)) if len(acquisitions) == 1 else None),
+        "acquisition_ids": sorted(acquisitions),
         "read_count": len(read_groups),
         "duplicate_read_ids": 0,
         "partition_contract": "complete_typed_run_info_repr_sha256_pod5_0.3.35",
