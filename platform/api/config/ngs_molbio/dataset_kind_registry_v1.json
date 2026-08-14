@@ -1,6 +1,6 @@
 {
   "baseline_source_commit": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
-  "content_sha256": "1b2c6bfc93425bdbf1c24c747a9ed432ce3f55b335c122a6c8ebfd8c0851a1a4",
+  "content_sha256": "b328a9bd79924a9a8e5eb1304b8af2d7a33b441b5a3829de2c896e900e1b6afc",
   "entries": [
     {
       "allowed_domain_kinds": [
@@ -55,7 +55,7 @@
         "exact_operation_plus_ordered_inputs_outputs"
       ],
       "dataset_kind": "ngs_molbio.molecular_construct_cohort.v1",
-      "enabled": false,
+      "enabled": true,
       "label": "Molecular construct cohort",
       "maximum_members": 10000,
       "minimum_members": 0,
@@ -81,7 +81,7 @@
         "same_domain_exact_sample_revision_payload"
       ],
       "dataset_kind": "ngs_molbio.sample_cohort.v1",
-      "enabled": false,
+      "enabled": true,
       "label": "Sample cohort",
       "maximum_members": 10000,
       "minimum_members": 0,
@@ -135,7 +135,7 @@
         "complete_reference_set_manifest_authority"
       ],
       "dataset_kind": "ngs_molbio.reference_comparison_panel_cohort.v1",
-      "enabled": false,
+      "enabled": true,
       "label": "Reference and comparison panel cohort",
       "maximum_members": 10000,
       "minimum_members": 0,
@@ -180,7 +180,7 @@
         "exact_release_child_reference_set_lineage"
       ],
       "dataset_kind": "ngs_molbio.acquisition_run_input_cohort.v1",
-      "enabled": false,
+      "enabled": true,
       "label": "Acquisition and run input cohort",
       "maximum_members": 10000,
       "minimum_members": 0,
@@ -243,7 +243,7 @@
         "exact_immutable_assessment_wrapper"
       ],
       "dataset_kind": "ngs_molbio.qc_analysis_result_cohort.v1",
-      "enabled": false,
+      "enabled": true,
       "label": "QC and analysis result cohort",
       "maximum_members": 10000,
       "minimum_members": 0,
@@ -297,7 +297,7 @@
         "exact_alignment_session_source_identity"
       ],
       "dataset_kind": "ngs_molbio.saved_review_comparison_cohort.v1",
-      "enabled": false,
+      "enabled": true,
       "label": "Saved review and comparison cohort",
       "maximum_members": 10000,
       "minimum_members": 0,
