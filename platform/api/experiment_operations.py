@@ -254,10 +254,13 @@ def create_online_backup() -> dict[str, Any]:
     finally:
         target_connection.close()
         source_connection.close()
-    database_sha256, size_bytes = _sha256_file(target)
     source_health = health(target)
     migration_info = source_health.get("migration")
     schema_version = int(migration_info.get("version") or 0) if isinstance(migration_info, dict) else 0
+    object_counts = _sqlite_object_counts(target)
+    table_content_sha256 = _sqlite_table_content_digests(target)
+    artifact_manifest_snapshot = _artifact_snapshot(target)
+    database_sha256, size_bytes = _sha256_file(target)
     metadata = {
         "schema": "bms.experiment.backup.v1",
         "schema_version": schema_version,
@@ -266,11 +269,11 @@ def create_online_backup() -> dict[str, Any]:
         "backup_id": backup_id,
         "database_sha256": database_sha256,
         "size_bytes": size_bytes,
-        "object_counts": _sqlite_object_counts(target),
-        "table_content_sha256": _sqlite_table_content_digests(target),
+        "object_counts": object_counts,
+        "table_content_sha256": table_content_sha256,
         "created_at": now(),
         "source_health": source_health,
-        "artifact_manifest_snapshot": _artifact_snapshot(target),
+        "artifact_manifest_snapshot": artifact_manifest_snapshot,
     }
     metadata_path.write_text(_canonical(metadata) + "\n", encoding="utf-8")
     return {"backup_id": backup_id, **metadata}
