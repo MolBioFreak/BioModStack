@@ -2390,18 +2390,17 @@ _LEGACY_FINAL_TABLE_SQL = {
         resource_id TEXT PRIMARY KEY NOT NULL REFERENCES resources(id),
         workspace_id TEXT NOT NULL REFERENCES resources(id),
         workflow_run_id TEXT NOT NULL REFERENCES workflow_runs(resource_id),
-        attempt_number INTEGER NOT NULL CHECK (attempt_number > 0),
+        preparation_id TEXT NOT NULL REFERENCES workflow_preparations(resource_id),
+        attempt_number INTEGER NOT NULL CHECK(attempt_number > 0),
         scheduler_job_id TEXT NOT NULL,
-        state TEXT NOT NULL CHECK (state IN ('pending', 'dispatching', 'dispatched', 'running', 'completed', 'failed', 'cancelled')),
+        state TEXT NOT NULL CHECK(state IN ('pending','dispatching','dispatched','running','completed','failed','cancelled')),
         external_binding_receipt_json TEXT,
         created_at TEXT NOT NULL,
-        "runtime_identity_json" TEXT,
-        "terminal_receipt_json" TEXT,
-        terminal_receipt_sha256 TEXT
-        CHECK (terminal_receipt_sha256 IS NULL OR length(terminal_receipt_sha256) = 64),
+        runtime_identity_json TEXT,
+        terminal_receipt_json TEXT,
+        terminal_receipt_sha256 TEXT CHECK(terminal_receipt_sha256 IS NULL OR length(terminal_receipt_sha256) = 64),
         UNIQUE(workflow_run_id, attempt_number),
-        UNIQUE(scheduler_job_id),
-        "preparation_id" TEXT REFERENCES workflow_preparations(resource_id)
+        UNIQUE(scheduler_job_id)
     )""",
     "run_events": """CREATE TABLE run_events (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
