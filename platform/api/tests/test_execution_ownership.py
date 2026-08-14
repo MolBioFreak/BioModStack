@@ -19,6 +19,19 @@ from services import execution_ownership as ownership
 from services import workflow_adapter
 
 
+def test_workflow_unit_discovery_requests_plain_systemd_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[tuple[str, ...]] = []
+
+    def fake_systemctl(*args: str) -> subprocess.CompletedProcess[str]:
+        captured.append(args)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(ownership, "_systemctl_user", fake_systemctl)
+
+    assert ownership.discover_active_workflow_units(ownership.DEVELOPMENT_LANE) == {}
+    assert "--plain" in captured[0]
+
+
 def test_systemd_run_command_has_deterministic_lane_ownership(tmp_path: Path) -> None:
     command = ownership.build_systemd_run_command(
         lane=ownership.DEVELOPMENT_LANE,

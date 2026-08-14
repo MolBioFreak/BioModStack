@@ -1090,4 +1090,5 @@ async def workflow_adapter_cancel(request: WorkflowAdapterCancelRequest) -> Work
 @router.get("/running-jobs", response_model=WorkflowAdapterRunningJobsResponse)
 async def workflow_adapter_running_jobs() -> WorkflowAdapterRunningJobsResponse:
     _require_adapter_identity()
-    return WorkflowAdapterRunningJobsResponse(running_jobs=nextflow.get_running_jobs())
+    running_jobs = await asyncio.to_thread(nextflow.get_running_jobs)
+    return WorkflowAdapterRunningJobsResponse(running_jobs=running_jobs)

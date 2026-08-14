@@ -947,7 +947,14 @@ def wait_for_unit_invocation(
 def _list_workflow_unit_names(lane: str) -> list[str]:
     normalized_lane = normalize_lane(lane)
     pattern = f"{UNIT_PREFIX}-{normalized_lane}-job-*.service"
-    completed = _systemctl_user("list-units", "--all", "--no-legend", "--no-pager", pattern)
+    completed = _systemctl_user(
+        "list-units",
+        "--all",
+        "--plain",
+        "--no-legend",
+        "--no-pager",
+        pattern,
+    )
     if completed.returncode != 0:
         raise SystemdCommandError((completed.stderr or completed.stdout).strip() or "systemd unit discovery failed")
     names: list[str] = []
