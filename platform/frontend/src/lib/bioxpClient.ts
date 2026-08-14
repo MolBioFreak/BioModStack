@@ -141,6 +141,56 @@ export interface BioXpOperatorDashboardAxis {
     max_steps: number | null;
     motor_temperature_c: number | null;
     motor_temperature_available: boolean;
+    telemetry_authority?: string | null;
+    physical_position_verified?: false | null;
+}
+
+export interface BioXpOperatorDashboardXAxis {
+    status: BioXpOperatorDashboardAxis | null;
+    provider: {
+        authority?: string | null;
+        state?: string;
+        reference_state?: string;
+        source_min_steps?: number | null;
+        source_max_steps?: number | null;
+        effective_absolute_min_steps?: number | null;
+        relative_limit_margin_steps?: number | null;
+        current_generation?: number | null;
+        current_board_lifecycle_generation?: number | null;
+        board_generation_fresh?: boolean | null;
+        lifecycle?: {
+            state?: string;
+            reference_state?: string;
+            generation?: number | null;
+            board_lifecycle_generation?: number | null;
+            awaiting_observation_receipt_id?: string | null;
+            last_failure?: unknown;
+            latest_receipt?: Record<string, unknown> | null;
+        };
+        live_status?: {
+            position_steps?: number | null;
+            speed_steps_s?: number | null;
+            max_speed?: number | null;
+            max_acceleration?: number | null;
+            max_current?: number | null;
+            stall_guard?: number | null;
+            left_switch_state?: number | null;
+            right_switch_state?: number | null;
+            left_switch_disabled?: boolean | null;
+            right_switch_disabled?: boolean | null;
+            profile_verified?: boolean;
+            switch_mask_verified?: boolean;
+        };
+        profile?: { verified?: boolean };
+        switch_masks?: { verified?: boolean };
+        bound: boolean;
+        physical_position_verified: false;
+    };
+    snapshot_freshness: Record<string, unknown>;
+    last_failure: unknown;
+    latest_receipt: Record<string, unknown> | null;
+    authority: string;
+    physical_position_verified: false;
 }
 
 export interface BioXpOperatorDashboard {
@@ -151,6 +201,7 @@ export interface BioXpOperatorDashboard {
     operation: { state: string | null; reason: string | null };
     enclosure: { door_closed: boolean | null; latch_closed: boolean | null };
     axes: BioXpOperatorDashboardAxis[];
+    x_axis: BioXpOperatorDashboardXAxis;
     z_axis: {
         status: BioXpOperatorDashboardAxis | null;
         provider: {
@@ -221,6 +272,9 @@ export interface BioXpOperatorActionSpec {
     required_provider_capability: string | null;
     inputs: BioXpOperatorInputSpec[];
     stages: string[];
+    aggregate_abort?: true;
+    physical_scope?: 'aggregate_oem_all_present_boards';
+    x_only?: false;
 }
 
 export interface BioXpOperatorControlCatalog {
@@ -270,7 +324,7 @@ export interface BioXpOperatorActionReceipt {
     requested_inputs: Record<string, unknown> | null;
     response: Record<string, unknown> | null;
     authority_receipt_id: string | null;
-    authority_receipt_status: string | Record<string, unknown> | null;
+    authority_receipt_status: BioXpOperatorActionReceipt['status'] | null;
     authority_fingerprint: string | null;
     observation_receipt_id: string | null;
     observes_command_id: string | null;

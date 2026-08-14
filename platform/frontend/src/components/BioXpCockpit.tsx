@@ -8,10 +8,12 @@ import {
     useUpdateBioXpFreshness,
 
     useBioXpOperatorActionHistory,
+    useBioXpOperatorActionAdmission,
     useBioXpOperatorControlCatalog,
     useBioXpOperatorDashboard,
     useInvokeBioXpOperatorAction,
     useRecoverBioXpMotion,
+    type BioXpOperatorDashboardXAxis,
 } from '../lib/bioxpClient';
 import { bioXpReceiptTimestampText } from '../lib/bioxpReceiptTimestamp';
 import { BioXpCameraPanel } from './BioXpCameraPanel';
@@ -20,6 +22,11 @@ import { BioXpQuickDashboard } from './BioXpQuickDashboard';
 
 
 type Axis = 'x' | 'y' | 'z' | 'g' | 'door';
+type XMotionConfirmationTarget = 'negative' | 'positive' | 'absolute' | 'home';
+type XMotionConfirmation = {
+    target: XMotionConfirmationTarget;
+    fingerprint: string;
+};
 type Operation =
     | 'move-negative'
     | 'move-positive'
@@ -128,11 +135,11 @@ export function BioXpCockpit() {
     });
     const [freshnessMinutes, setFreshnessMinutes] = useState('30');
     const [freshnessDisabled, setFreshnessDisabled] = useState(false);
-
-
+    const [xMotionConfirmation, setXMotionConfirmation] = useState<XMotionConfirmation | null>(null);
     const catalog = !linkConnected || operatorCatalog.isError ? undefined : operatorCatalog.data;
     const dashboard = !linkConnected || dashboardQuery.isError ? undefined : dashboardQuery.data;
     const ownershipGeneration = catalog?.ownership_generation ?? 0;
+    const xAuthorityIdentity = `${catalog?.registry_sha256 ?? ''}:${catalog?.evidence_lock_sha256 ?? ''}:${String(catalog?.source_authority_verified === true)}`;
     useEffect(() => {
         const budget = connection?.freshness_budget_seconds;
         if (budget === undefined) return;
@@ -181,6 +188,67 @@ export function BioXpCockpit() {
     const operatorActionById = (actionId: string) => (catalog?.actions ?? []).find(
         (action) => action.action_id === actionId,
     );
+    const actionUnavailableReason = (actionId: string, fallback: string) => {
+        const action = operatorActionById(actionId);
+        return action?.disabled_reason
+            ?? action?.provider_unavailable_reason
+            ?? action?.unavailable_reason
+            ?? fallback;
+    };
+    const xAbsoluteAction = operatorActionById('oem.x.move_absolute');
+    const xAbsoluteInput = xAbsoluteAction?.inputs.find((input) => input.name === 'position_steps');
+    const xAbsoluteMinimum = Math.max(60, typeof xAbsoluteInput?.minimum === 'number' ? xAbsoluteInput.minimum : 0);
+    const xAbsoluteMaximum = Math.min(90263, typeof xAbsoluteInput?.maximum === 'number' ? xAbsoluteInput.maximum : 90263);
+    const xRelativeLimitMargin = 20;
+    const xRelativeMaximum = 90263 - xRelativeLimitMargin;
+    const xRelativeAction = operatorActionById('oem.x.move_steps');
+    const xNegativeInputs = useMemo(() => ({ steps: -Math.abs(manualSteps.x) }), [manualSteps.x]);
+    const xPositiveInputs = useMemo(() => ({ steps: Math.abs(manualSteps.x) }), [manualSteps.x]);
+    const xAbsoluteInputs = useMemo(() => ({ position_steps: absoluteTargets.x }), [absoluteTargets.x]);
+    const xHomeInputs = useMemo(() => ({}), []);
+    const xConfirmationFingerprint = (target: XMotionConfirmationTarget): string => {
+        const actionId = target === 'absolute'
+            ? 'oem.x.move_absolute'
+            : target === 'home'
+                ? 'oem.x.manual_panel_home'
+                : 'oem.x.move_steps';
+        const inputs = target === 'negative'
+            ? xNegativeInputs
+            : target === 'positive'
+                ? xPositiveInputs
+                : target === 'absolute'
+                    ? xAbsoluteInputs
+                    : xHomeInputs;
+        return `${String(linkConnected)}:${generation}:${ownershipGeneration}:${xAuthorityIdentity}:${actionId}:${JSON.stringify(inputs)}`;
+    };
+    const xConfirmationAccepted = (target: XMotionConfirmationTarget): boolean => xMotionConfirmation?.target === target
+        && xMotionConfirmation.fingerprint === xConfirmationFingerprint(target);
+    const xNegativeAdmission = useBioXpOperatorActionAdmission('oem.x.move_steps', generation, ownershipGeneration, xNegativeInputs, linkConnected);
+    const xPositiveAdmission = useBioXpOperatorActionAdmission('oem.x.move_steps', generation, ownershipGeneration, xPositiveInputs, linkConnected);
+    const xAbsoluteAdmission = useBioXpOperatorActionAdmission('oem.x.move_absolute', generation, ownershipGeneration, xAbsoluteInputs, linkConnected);
+    const xHomeAdmission = useBioXpOperatorActionAdmission('oem.x.manual_panel_home', generation, ownershipGeneration, xHomeInputs, linkConnected);
+    const xRelativeMagnitudeInRange = Number.isInteger(manualSteps.x)
+        && Math.abs(manualSteps.x) >= 1
+        && Math.abs(manualSteps.x) <= xRelativeMaximum;
+    const xAdmissionReason = (admission: typeof xNegativeAdmission, fallback: string) => admission.isError
+        ? fallback
+        : admission.isFetching
+            ? 'Checking exact robot admission.'
+            : admission.data?.enabled === true
+                ? null
+                : admission.data?.disabled_reason ?? fallback;
+    const xNegativeDisabledReason = !xRelativeMagnitudeInRange
+        ? `Requested X relative magnitude must be an integer from 1 through ${xRelativeMaximum}.`
+        : xAdmissionReason(xNegativeAdmission, 'Robot rejected this signed negative X move.');
+    const xPositiveDisabledReason = !xRelativeMagnitudeInRange
+        ? `Requested X relative magnitude must be an integer from 1 through ${xRelativeMaximum}.`
+        : xAdmissionReason(xPositiveAdmission, 'Robot rejected this signed positive X move.');
+    const xAbsoluteDisabledReason = xAdmissionReason(xAbsoluteAdmission, `Robot rejected X target ${absoluteTargets.x}.`);
+    const xHomeDisabledReason = xAdmissionReason(xHomeAdmission, 'Robot rejected X Home.');
+    const xNegativeEnabled = xNegativeDisabledReason === null;
+    const xPositiveEnabled = xPositiveDisabledReason === null;
+    const xAbsoluteEnabled = xAbsoluteDisabledReason === null;
+    const xHomeEnabled = xHomeDisabledReason === null;
     const zAbsoluteAction = operatorActionById('oem.z.move_absolute');
     const zAbsoluteInput = zAbsoluteAction?.inputs.find((input) => input.name === 'position_steps');
     const zAbsoluteMinimum = typeof zAbsoluteInput?.minimum === 'number' ? zAbsoluteInput.minimum : 0;
@@ -201,6 +269,29 @@ export function BioXpCockpit() {
                     ? `Requested Z target must be an integer from ${zAbsoluteMinimum} through ${zAbsoluteMaximum}.`
                     : null;
     const zAbsoluteEnabled = zAbsoluteDisabledReason === null;
+    const xAxisDashboard: BioXpOperatorDashboardXAxis | undefined = dashboard?.x_axis;
+    const xStatus = xAxisDashboard?.status;
+    const xProvider = xAxisDashboard?.provider;
+    const xLiveStatus = xProvider?.live_status;
+    const xPosition = xStatus?.position_steps ?? xLiveStatus?.position_steps ?? 'unknown';
+    const xReference = xStatus?.reference ?? xProvider?.lifecycle?.reference_state ?? xProvider?.reference_state ?? 'unknown';
+    const xLifecycle = xProvider?.lifecycle?.state ?? xProvider?.state ?? 'unknown';
+    const xAuthority = xProvider?.authority ?? xAxisDashboard?.authority ?? 'unknown';
+    const xLeftSwitchState = xStatus?.left_switch_state ?? xLiveStatus?.left_switch_state ?? 'unknown';
+    const xRightSwitchState = xStatus?.right_switch_state ?? xLiveStatus?.right_switch_state ?? 'unknown';
+    const xLeftSwitchDisabled = xStatus?.left_switch_disabled ?? xLiveStatus?.left_switch_disabled ?? 'unknown';
+    const xRightSwitchDisabled = xStatus?.right_switch_disabled ?? xLiveStatus?.right_switch_disabled ?? 'unknown';
+    const xProfileVerified = xProvider?.profile?.verified ?? xLiveStatus?.profile_verified;
+    const xSwitchMasksVerified = xProvider?.switch_masks?.verified ?? xLiveStatus?.switch_mask_verified;
+    const xMaxSpeed = xLiveStatus?.max_speed ?? 'unknown';
+    const xMaxAcceleration = xLiveStatus?.max_acceleration ?? 'unknown';
+    const xMaxCurrent = xLiveStatus?.max_current ?? 'unknown';
+    const xStallGuard = xLiveStatus?.stall_guard ?? 'unknown';
+    const xGeneration = xProvider?.current_generation ?? 'unknown';
+    const xBoardGeneration = xProvider?.current_board_lifecycle_generation ?? 'unknown';
+    const xBoardGenerationFresh = xProvider?.board_generation_fresh;
+    const xLastFailure = xAxisDashboard?.last_failure ?? xProvider?.lifecycle?.last_failure;
+    const xLatestReceipt = xAxisDashboard?.latest_receipt ?? xProvider?.lifecycle?.latest_receipt;
 
     const invokeAction = (
         actionId: string,
@@ -236,6 +327,23 @@ export function BioXpCockpit() {
     };
 
     const runControl = (axis: Axis, operation: Operation) => {
+        if (axis === 'x') {
+            if (operation === 'move-negative') {
+                if (!xNegativeEnabled || (xRelativeAction?.requires_confirmation === true && !xConfirmationAccepted('negative'))) return;
+                invokeAction('oem.x.move_steps', xNegativeInputs);
+                setXMotionConfirmation(null);
+            } else if (operation === 'move-positive') {
+                if (!xPositiveEnabled || (xRelativeAction?.requires_confirmation === true && !xConfirmationAccepted('positive'))) return;
+                invokeAction('oem.x.move_steps', xPositiveInputs);
+                setXMotionConfirmation(null);
+            } else if (operation === 'home' || operation === 'commission-home') {
+                const homeAction = operatorActionById('oem.x.manual_panel_home');
+                if (!xHomeEnabled || (homeAction?.requires_confirmation === true && !xConfirmationAccepted('home'))) return;
+                invokeAction('oem.x.manual_panel_home', xHomeInputs);
+                setXMotionConfirmation(null);
+            }
+            return;
+        }
         if (axis === 'z') {
             if (operation === 'move-negative') {
                 invokeAction('oem.z.move_steps', { steps: -Math.abs(manualSteps.z) });
@@ -266,6 +374,12 @@ export function BioXpCockpit() {
     };
 
     const runAbsolute = (axis: 'x' | 'y' | 'z' | 'g') => {
+        if (axis === 'x') {
+            if (!xAbsoluteEnabled || (xAbsoluteAction?.requires_confirmation === true && !xConfirmationAccepted('absolute'))) return;
+            invokeAction('oem.x.move_absolute', xAbsoluteInputs);
+            setXMotionConfirmation(null);
+            return;
+        }
         if (axis === 'z') {
             invokeAction('oem.z.move_absolute', { position_steps: absoluteTargets.z });
             return;
@@ -273,10 +387,13 @@ export function BioXpCockpit() {
         invokeOperatorPath('/motion/oem/manual/absolute', { axis, position_steps: absoluteTargets[axis] });
     };
 
-    const stopAxis = (axis: Axis) => axis === 'z'
-        ? invokeAction('oem.z.stop', {}, emergencyAction)
-        : invokeOperatorPath('/motion/diagnostics/stop', { axis });
+    const stopAxis = (axis: Axis) => axis === 'x'
+        ? invokeAction('oem.x.stop', {}, emergencyAction)
+        : axis === 'z'
+            ? invokeAction('oem.z.stop', {}, emergencyAction)
+            : invokeOperatorPath('/motion/diagnostics/stop', { axis });
 
+    const abortXAggregate = () => invokeAction('oem.abort_all', {}, emergencyAction);
     const abortZ = () => invokeAction('oem.z.abort', {}, emergencyAction);
 
     const error = invokeOperatorAction.error ?? recoverMotion.error ?? updateFreshness.error ?? emergencyAction.error ?? connect.error ?? disconnect.error;
@@ -438,11 +555,28 @@ export function BioXpCockpit() {
                                 <div className="flex gap-2">
                                     <button
                                         type="button"
-                                        disabled={!linkConnected || (axis === 'z' ? operatorActionById('oem.z.stop')?.enabled !== true : operatorActionForPath('/motion/diagnostics/stop')?.enabled !== true) || (axis === 'z' ? emergencyAction.isPending : invokeOperatorAction.isPending)}
-                                        title="Immediate OEM motor stop for this component"
+                                        disabled={!linkConnected || (axis === 'x'
+                                            ? operatorActionById('oem.x.stop')?.enabled !== true
+                                            : axis === 'z'
+                                                ? operatorActionById('oem.z.stop')?.enabled !== true
+                                                : operatorActionForPath('/motion/diagnostics/stop')?.enabled !== true) || ((axis === 'x' || axis === 'z') ? emergencyAction.isPending : invokeOperatorAction.isPending)}
+                                        title={axis === 'x'
+                                            ? actionUnavailableReason('oem.x.stop', 'Immediate OEM X motor stop')
+                                            : axis === 'z'
+                                                ? actionUnavailableReason('oem.z.stop', 'Immediate OEM Z motor stop')
+                                                : 'Immediate OEM motor stop for this component'}
                                         onClick={() => stopAxis(axis)}
                                         className="rounded bg-red-800 px-3 py-1.5 text-sm font-semibold hover:bg-red-700 disabled:opacity-35"
                                     >Stop</button>
+                                    {axis === 'x' && (
+                                        <button
+                                            type="button"
+                                            disabled={!linkConnected || operatorActionById('oem.abort_all')?.enabled !== true || emergencyAction.isPending}
+                                            title={actionUnavailableReason('oem.abort_all', 'Aggregate OEM forceAbortMotion across all present motion boards')}
+                                            onClick={abortXAggregate}
+                                            className="rounded bg-red-950 px-3 py-1.5 text-sm font-semibold text-red-100 ring-1 ring-red-600 hover:bg-red-900 disabled:opacity-35"
+                                        >Aggregate Abort (all OEM boards)</button>
+                                    )}
                                     {axis === 'z' && (
                                         <button
                                             type="button"
@@ -461,12 +595,13 @@ export function BioXpCockpit() {
                                         <input
                                             type="number"
                                             min={1}
-                                            max={160000}
+                                            max={axis === 'x' ? xRelativeMaximum : 160000}
                                             step={1}
                                             value={manualSteps[axis]}
                                             onChange={(event) => {
                                                 const parsed = Number.parseInt(event.target.value || '1', 10);
-                                                const bounded = Number.isFinite(parsed) ? Math.max(1, Math.min(160000, Math.abs(parsed))) : 1;
+                                                const boundedMaximum = axis === 'x' ? xRelativeMaximum : 160000;
+                                                const bounded = Number.isFinite(parsed) ? Math.max(1, Math.min(boundedMaximum, Math.abs(parsed))) : 1;
                                                 setManualSteps((current) => ({ ...current, [axis]: bounded }));
                                             }}
                                             className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 font-mono text-sm"
@@ -489,6 +624,8 @@ export function BioXpCockpit() {
                                         <div className="mt-1 flex gap-2">
                                             <input
                                                 type="number"
+                                                min={axis === 'x' ? xAbsoluteMinimum : undefined}
+                                                max={axis === 'x' ? xAbsoluteMaximum : undefined}
                                                 step={1}
                                                 value={absoluteTargets[axis]}
                                                 onChange={(event) => {
@@ -502,14 +639,33 @@ export function BioXpCockpit() {
                                             />
                                             <button
                                                 type="button"
-                                                disabled={!linkConnected || (axis === 'z' ? !zAbsoluteEnabled : operatorActionForPath('/motion/oem/manual/absolute')?.enabled !== true) || invokeOperatorAction.isPending}
-                                                title={axis === 'z' ? zAbsoluteDisabledReason ?? 'Robot-owned exact OEM absolute move' : undefined}
+                                                disabled={!linkConnected || (axis === 'x' ? !xAbsoluteEnabled || (xAbsoluteAction?.requires_confirmation === true && !xConfirmationAccepted('absolute')) : axis === 'z' ? !zAbsoluteEnabled : operatorActionForPath('/motion/oem/manual/absolute')?.enabled !== true) || invokeOperatorAction.isPending}
+                                                title={axis === 'x' ? xAbsoluteAction?.requires_confirmation === true && !xConfirmationAccepted('absolute') ? 'Confirm this exact X absolute move first.' : xAbsoluteDisabledReason ?? 'Robot-owned exact OEM X absolute move' : axis === 'z' ? zAbsoluteDisabledReason ?? 'Robot-owned exact OEM absolute move' : undefined}
                                                 onClick={() => runAbsolute(axis)}
                                                 className={actionClass}
                                             >Go absolute</button>
                                         </div>
-                                    </label>
-                                    {axis === 'z' && (
+                                        </label>
+                                        {axis === 'x' && (
+                                        <div className="rounded border border-sky-800/70 bg-sky-950/20 p-3 text-xs text-sky-100">
+                                            <h4 className="font-semibold text-sky-50">X OEM authority</h4>
+                                            <p className="mt-1"><strong>Position:</strong> {xPosition} · <strong>Software reference state (not physical proof):</strong> {xReference}</p>
+                                            <p className="mt-1"><strong>Lifecycle:</strong> {xLifecycle} · <strong>Authority:</strong> {xAuthority}</p>
+                                            <p className="mt-1"><strong>GAP9/10:</strong> {xLeftSwitchState} / {xRightSwitchState} · <strong>GAP13/12 disabled:</strong> {String(xLeftSwitchDisabled)} / {String(xRightSwitchDisabled)}</p>
+                                            <p className="mt-1"><strong>Configured GAP4/5/6/205:</strong> {xMaxSpeed} / {xMaxAcceleration} / {xMaxCurrent} / {xStallGuard}</p>
+                                            <p className="mt-1"><strong>Source range:</strong> 0..90263 · <strong>Effective absolute minimum:</strong> 60 · <strong>Relative moves:</strong> 20-step inner margin</p>
+                                            <p className="mt-1"><strong>Connection generation:</strong> {xGeneration} · <strong>Board lifecycle generation:</strong> {xBoardGeneration} · <strong>Fresh:</strong> {xBoardGenerationFresh === true ? 'yes' : xBoardGenerationFresh === false ? 'no' : 'unknown'}</p>
+                                            <p className="mt-1"><strong>Serial-206 D1 adaptation:</strong> GAP12 right switch disabled and GAP13 left switch enabled. Masks {xSwitchMasksVerified === true ? 'verified' : xSwitchMasksVerified === false ? 'not verified' : 'unknown'}; profile {xProfileVerified === true ? 'verified' : xProfileVerified === false ? 'not verified' : 'unknown'}.</p>
+                                            <p className="mt-1 text-sky-200/80">Controller/software reference is reported exactly as published by the robot provider; it is not independent evidence of the physical X location.</p>
+                                            <div className="mt-2 flex flex-wrap gap-2">
+                                                <button type="button" className="rounded bg-red-800 px-3 py-2 text-sm font-semibold hover:bg-red-700 disabled:opacity-35" disabled={!linkConnected || operatorActionById('oem.x.stop')?.enabled !== true || emergencyAction.isPending} title={actionUnavailableReason('oem.x.stop', 'Immediate OEM X stop unavailable.')} onClick={() => stopAxis('x')}>Stop X</button>
+                                                <button type="button" className="rounded bg-red-950 px-3 py-2 text-sm font-semibold text-red-100 ring-1 ring-red-600 hover:bg-red-900 disabled:opacity-35" disabled={!linkConnected || operatorActionById('oem.abort_all')?.enabled !== true || emergencyAction.isPending} title={actionUnavailableReason('oem.abort_all', 'Aggregate OEM abort unavailable.')} onClick={abortXAggregate}>Aggregate Abort (all OEM boards)</button>
+                                            </div>
+                                            {xLastFailure != null && <details className="mt-2"><summary className="cursor-pointer text-red-200">Last X failure</summary><pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-red-200">{JSON.stringify(xLastFailure, null, 2)}</pre></details>}
+                                            {xLatestReceipt != null && <details className="mt-2"><summary className="cursor-pointer">Latest X authority receipt</summary><pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-sky-200/80">{JSON.stringify(xLatestReceipt, null, 2)}</pre></details>}
+                                        </div>
+                                        )}
+                                        {axis === 'z' && (
                                         <div className="rounded border border-cyan-800/70 bg-cyan-950/20 p-3 text-xs text-cyan-100">
                                             <p><strong>Dynamic OEM pseudo-home floor:</strong> OEM moveZ applies the robot-owned PSUDO_Z_HOME as a dynamic minimum target. A request below the current value is replaced with that value before dispatch. Z does not automatically return to pseudo-home after every movement.</p>
                                             <p className="mt-1"><strong>Clear and Home:</strong> Z Clear returns to the selected pseudo-home. Manual Home follows the OEM homing sequence and establishes controller coordinate 0.</p>
@@ -529,9 +685,34 @@ export function BioXpCockpit() {
                                     )}
                                 </div>
                             )}
+                            {axis === 'x' && (
+                                <fieldset className="mt-3 rounded border border-amber-700/70 bg-amber-950/30 p-2 text-xs text-amber-100">
+                                    <legend className="px-1 font-semibold">Confirm one exact next X action</legend>
+                                    <div className="mt-1 grid gap-2 sm:grid-cols-2">
+                                        {([
+                                            ['negative', `Move − ${Math.abs(manualSteps.x)} steps`],
+                                            ['positive', `Move + ${Math.abs(manualSteps.x)} steps`],
+                                            ['absolute', `Go absolute ${absoluteTargets.x} steps`],
+                                            ['home', 'Manual Home'],
+                                        ] as const).map(([target, text]) => (
+                                            <label key={target} className="flex items-center gap-2">
+                                                <input type="checkbox" checked={xConfirmationAccepted(target)} onChange={(event) => setXMotionConfirmation(event.target.checked ? { target, fingerprint: xConfirmationFingerprint(target) } : null)} />
+                                                {text}
+                                            </label>
+                                        ))}
+                                    </div>
+                                </fieldset>
+                            )}
                             <div className="mt-3 flex flex-wrap gap-2">
                                 {controls.map(({ label: controlLabel, operation }) => {
                                     const path = operatorPathForControl(axis, operation);
+                                    const xActionId = axis === 'x'
+                                        ? operation === 'home' || operation === 'commission-home'
+                                            ? 'oem.x.manual_panel_home'
+                                            : operation === 'move-negative' || operation === 'move-positive'
+                                                ? 'oem.x.move_steps'
+                                                : null
+                                        : null;
                                     const zActionId = axis === 'z'
                                         ? operation === 'home' || operation === 'commission-home'
                                             ? 'oem.z.manual_home'
@@ -539,9 +720,35 @@ export function BioXpCockpit() {
                                                 ? 'oem.z.move_steps'
                                                 : null
                                         : null;
-                                    const action = zActionId ? operatorActionById(zActionId) : path ? operatorActionForPath(path) : null;
-                                    const enabled = action?.enabled === true;
-                                    const unavailableReason = action?.disabled_reason ?? action?.unavailable_reason ?? 'Robot action unavailable.';
+                                    const action = xActionId
+                                        ? operatorActionById(xActionId)
+                                        : zActionId
+                                            ? operatorActionById(zActionId)
+                                            : path
+                                                ? operatorActionForPath(path)
+                                                : null;
+                                    const isXNegative = xActionId === 'oem.x.move_steps' && operation === 'move-negative';
+                                    const isXPositive = xActionId === 'oem.x.move_steps' && operation === 'move-positive';
+                                    const isXHome = xActionId === 'oem.x.manual_panel_home';
+                                    const admissionEnabled = isXNegative ? xNegativeEnabled : isXPositive ? xPositiveEnabled : isXHome ? xHomeEnabled : action?.enabled === true;
+                                    const confirmationRequired = axis === 'x' && action?.requires_confirmation === true;
+                                    const xControlConfirmationAccepted = isXNegative
+                                        ? xConfirmationAccepted('negative')
+                                        : isXPositive
+                                            ? xConfirmationAccepted('positive')
+                                            : isXHome
+                                                ? xConfirmationAccepted('home')
+                                                : false;
+                                    const enabled = admissionEnabled && (!confirmationRequired || xControlConfirmationAccepted);
+                                    const unavailableReason = confirmationRequired && !xControlConfirmationAccepted
+                                        ? 'Confirm this exact X action first.'
+                                        : isXNegative
+                                            ? xNegativeDisabledReason ?? 'Robot-owned exact negative X admission.'
+                                            : isXPositive
+                                                ? xPositiveDisabledReason ?? 'Robot-owned exact positive X admission.'
+                                                : isXHome
+                                                    ? xHomeDisabledReason ?? 'Robot-owned exact X Home admission.'
+                                                    : action?.disabled_reason ?? action?.unavailable_reason ?? 'Robot action unavailable.';
                                     return (
                                         <button
                                             key={operation}
@@ -625,8 +832,9 @@ export function BioXpCockpit() {
                                 </div>
                                 <p className="mt-1 whitespace-pre-wrap break-words text-slate-200">{record.error ?? record.machine_assessment}</p>
                                 <p className="mt-1 text-xs text-slate-400">
-                                    {record.remote_acknowledged ? 'Robot HTTP acknowledged' : 'Robot HTTP did not acknowledge'} · {record.controller_acknowledged ? 'Controller ACK' : 'No controller ACK'} · {record.physical_effect_verified ? 'Physical effect verified' : 'Physical effect unverified'}
+                                    {record.remote_acknowledged ? 'Robot HTTP acknowledged' : 'Robot HTTP did not acknowledge'} · {record.controller_acknowledged ? 'Controller ACK' : 'No controller ACK'} · {record.controller_terminal_state_verified ? 'Terminal proof verified' : 'Terminal proof unverified'} · {record.physical_effect_verified ? 'Physical effect verified' : 'Physical effect unverified'}
                                 </p>
+                                {(record.response != null || record.stage_receipts.length > 0) && <details className="mt-2"><summary className="cursor-pointer text-xs text-slate-400">Nested robot evidence</summary><pre className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap text-[11px] text-slate-400">{JSON.stringify({ response: record.response, stage_receipts: record.stage_receipts }, null, 2)}</pre></details>}
                             </article>
                         ))}
                     </div>

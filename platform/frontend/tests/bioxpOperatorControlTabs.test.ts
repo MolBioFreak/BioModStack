@@ -38,6 +38,9 @@ test('action forms and route provenance come only from the robot catalog and adm
     assert.match(source, /const authoritativeHistory = !connected \|\| historyQuery\.error \? undefined : historyQuery\.data/);
     assert.match(source, /const latestReceipt = connected && authoritativeCatalog && authoritativeHistory/);
     assert.match(source, /resetInvoke\(\)/);
+    assert.match(source, /selected\.requires_confirmation && !confirmationMatchesCurrentAction/);
+    assert.match(source, /confirmation\?\.fingerprint !== runFingerprint/);
+    assert.match(source, /I confirm this exact governed action and its published machine scope/);
     assert.match(cockpit, /!configured \|\| !linkConnected \|\| updateFreshness\.isPending/);
     assert.match(cockpit, /linkConnected && catalog && !historyQuery\.isError && invokeOperatorAction\.data/);
     assert.match(cockpit, /linkConnected && catalog && !historyQuery\.isError && emergencyAction\.data/);
@@ -81,5 +84,32 @@ test('receipts expose machine assessment and require explicit human PASS or FAIL
         'remote_acknowledged', 'duration_ms', 'Stage receipts', 'Bounded response',
         'Your physical observation', 'Record PASS', 'Record FAIL',
     ]) assert.match(source, new RegExp(label));
-    assert.match(source, /A non-empty operator observation is required/);
+    assert.match(source, /Operator observation must remain attached to the robot-owned receipt/);
+});
+
+test('operator observation text is bound to one immutable receipt command id', () => {
+    assert.match(source, /type ReceiptBoundObservation = \{/);
+    assert.match(source, /receiptCommandId: string \| null/);
+    assert.match(source, /operatorObservation\.receiptCommandId === latestReceiptCommandId/);
+    assert.match(source, /operatorObservation\.receiptCommandId !== latestReceipt\.command_id/);
+    assert.match(source, /receiptCommandId: latestReceiptCommandId/);
+});
+
+test('generic governed action confirmation is bound to exact inputs and current authority', () => {
+    assert.match(source, /type ActionConfirmation = Readonly<\{/);
+    assert.match(source, /fingerprint: string/);
+    assert.match(source, /function buildActionConfirmationFingerprint\(/);
+    for (const token of [
+        'actionId: selected.action_id',
+        'inputs: normalized',
+        'connectionGeneration: generation',
+        'ownershipGeneration: authoritativeCatalog?.ownership_generation ?? 0',
+        "registrySha256: authoritativeCatalog?.registry_sha256 ?? ''",
+        "evidenceLockSha256: authoritativeCatalog?.evidence_lock_sha256 ?? ''",
+        'sourceAuthorityVerified: authoritativeCatalog?.source_authority_verified === true',
+    ]) assert.ok(source.includes(token), `missing confirmation authority token: ${token}`);
+    assert.match(source, /confirmation\?\.fingerprint !== runFingerprint/);
+    assert.match(source, /confirmationMatchesCurrentAction/);
+    assert.match(source, /selected\.requires_confirmation && !confirmationMatchesCurrentAction/);
+    assert.doesNotMatch(source, /confirmationAccepted/);
 });
