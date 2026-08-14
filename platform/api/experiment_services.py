@@ -578,13 +578,19 @@ TYPED_CORE_JOB_ADAPTERS = {
     f"bms.core-job.{model_id}.adapter.v1": model_id
     for model_id in sorted(TYPED_CORE_JOB_MODELS)
 }
+PROJECT_SCHEDULED_TYPED_CORE_ADAPTERS = {"bms.ngs.job-reference.adapter.v1"}
 
 
 def scheduler_job_identity(attempt_id: str, scheduler: Mapping[str, Any]) -> str:
     """Keep CM attempt identity while giving typed core Jobs deterministic UUIDv5 identity."""
     params = scheduler.get("params")
     adapter_id = str(params.get("workflow_adapter") or "") if isinstance(params, dict) else ""
-    return scheduler_job_id_for_attempt(attempt_id) if adapter_id in TYPED_CORE_JOB_ADAPTERS else attempt_id
+    return (
+        scheduler_job_id_for_attempt(attempt_id)
+        if adapter_id in TYPED_CORE_JOB_ADAPTERS
+        or adapter_id in PROJECT_SCHEDULED_TYPED_CORE_ADAPTERS
+        else attempt_id
+    )
 
 
 WORKFLOW_ADAPTER_REGISTRY: dict[str, set[str]] = {
@@ -661,9 +667,18 @@ def _validate_workflow_payload(
         raise ValidationFailure(f"workflow adapter is not registered: {family}/{adapter_id}")
     if family == "typed_core_job":
         scheduler = payload.get("scheduler")
-        expected_model_id = TYPED_CORE_JOB_ADAPTERS[adapter_id]
         if not isinstance(scheduler, dict):
             raise ValidationFailure("typed core workflow requires scheduler settings")
+        expected_model_id = TYPED_CORE_JOB_ADAPTERS.get(adapter_id)
+        if (
+            expected_model_id is None
+            and capability_contract is not None
+            and adapter_id in PROJECT_SCHEDULED_TYPED_CORE_ADAPTERS
+            and scheduler.get("model_id") in TYPED_CORE_JOB_MODELS
+        ):
+            expected_model_id = str(scheduler["model_id"])
+        if expected_model_id is None:
+            raise ValidationFailure("typed core workflow adapter has no executable model authority")
         if scheduler.get("model_id") != expected_model_id:
             raise ValidationFailure("typed core workflow adapter and model_id disagree")
         if not isinstance(scheduler.get("name"), str) or not scheduler["name"].strip():
@@ -5078,13 +5093,20 @@ class ExistingJobMaterializer:
             dispatch_authority,
         )
         resource_binding = _public_materialization_resource_binding(handoff, dispatch_authority)
-        if adapter_id in TYPED_CORE_JOB_ADAPTERS:
+        if (
+            adapter_id in TYPED_CORE_JOB_ADAPTERS
+            or adapter_id in PROJECT_SCHEDULED_TYPED_CORE_ADAPTERS
+        ):
             from database import Job
 
             scheduler_job_id = str(payload.get("scheduler_job_id") or "")
             if scheduler_job_id != scheduler_job_id_for_attempt(attempt_id):
                 raise DispatchFailure("typed core scheduler job identity disagrees with its run attempt")
-            expected_model_id = TYPED_CORE_JOB_ADAPTERS[adapter_id]
+            expected_model_id = TYPED_CORE_JOB_ADAPTERS.get(adapter_id)
+            if expected_model_id is None and scheduler.get("model_id") in TYPED_CORE_JOB_MODELS:
+                expected_model_id = str(scheduler["model_id"])
+            if expected_model_id is None:
+                raise DispatchFailure("typed workflow adapter has no executable model authority")
             expected_mode = str(scheduler.get("mode") or "run")
             if scheduler.get("model_id") != expected_model_id:
                 raise DispatchFailure("typed workflow adapter and scheduler model_id disagree")
