@@ -17,6 +17,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from experiment_migrations import LATEST_MIGRATION_VERSION, attest_schema, health, run_all
+from migrations.sqlite_sha256 import register_sqlite_sha256
 from experiment_models import (
     ExperimentAggregateHead,
     ExperimentArtifact,
@@ -333,6 +334,7 @@ def verify_backup(
         raise ExperimentOperationError("backup metadata does not match backup bytes")
     connection = sqlite3.connect(str(database_path), timeout=30)
     try:
+        register_sqlite_sha256(connection)
         connection.execute("PRAGMA foreign_keys=ON")
         quick_check = connection.execute("PRAGMA quick_check").fetchone()[0]
         foreign_key_errors = [list(row) for row in connection.execute("PRAGMA foreign_key_check")]
@@ -414,6 +416,7 @@ def restore_backup_to_staging(
     target_sha256, target_size = _sha256_file(target)
     connection = sqlite3.connect(str(target), timeout=30)
     try:
+        register_sqlite_sha256(connection)
         connection.execute("PRAGMA foreign_keys=ON")
         quick_check = connection.execute("PRAGMA quick_check").fetchone()[0]
         foreign_key_errors = [list(row) for row in connection.execute("PRAGMA foreign_key_check")]
