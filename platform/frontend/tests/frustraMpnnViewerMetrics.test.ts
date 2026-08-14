@@ -174,7 +174,7 @@ test('persisted landscape normalization preserves exact residue identity', () =>
             residue: {
                 entity_instance_id: 'copy-1', source_entity_id: '1', label_asym_id: 'A', auth_asym_id: 'AUTH',
                 label_seq_id: 7, auth_seq_id: 42, insertion_code: 'A', sequence_index: 7,
-                pdb_chain_id: 'A', pdb_residue_id: 101, pdb_insertion_code: 'A', model_position: 6,
+                pdb_chain_id: 'A', pdb_residue_id: -7, pdb_insertion_code: 'A', model_position: 6,
                 residue_name: 'GLY', wt: 'G',
             },
         }],
@@ -191,7 +191,7 @@ test('persisted landscape normalization preserves exact residue identity', () =>
         residue_name: normalized.rows[0].residue_name,
     }, {
         source_entity_id: '1', label_asym_id: 'A', label_seq_id: 7, pdb_chain_id: 'A',
-        pdb_residue_id: 101, pdb_insertion_code: 'A', model_position: 6, residue_name: 'GLY',
+        pdb_residue_id: -7, pdb_insertion_code: 'A', model_position: 6, residue_name: 'GLY',
     });
     const conflicting = structuredClone(payload);
     conflicting.items[0]!.model_position = 5;

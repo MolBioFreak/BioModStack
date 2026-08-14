@@ -447,6 +447,15 @@ test('closed v2 result detail preserves authority, settings, statistics, and saf
     assert.equal(parsed.execution_receipt?.runtime_identity_sha256, hashes.g);
     assert.equal('command_plan' in parsed.execution_receipt!, false);
     assert.equal('path' in parsed.effective_settings_json!, false);
+
+    for (const [field, invalid] of [
+        ['pdb_insertion_code', 'AB'],
+        ['residue_name', 'GLYCINE'],
+    ] as const) {
+        const malformed = structuredClone(resultDetail);
+        malformed.effective_settings_json.resolved_chains[0]!.residues[0]![field] = invalid;
+        assert.throws(() => parseFrustraMpnnResultDetail(malformed), new RegExp(field));
+    }
 });
 
 test('v2 result summary enforces canonical minima, nonempty chain support, and closed finite fields', () => {

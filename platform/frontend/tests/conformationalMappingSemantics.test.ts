@@ -123,4 +123,14 @@ test('canonical landscape display requires exact 20 API slots', () => {
     }));
     assert.equal(groupExact20Landscape(rows).length, 1);
     assert.throws(() => groupExact20Landscape(rows.slice(1)), /exact-20/);
+    for (const [field, value] of [
+        ['auth_asym_id', 'OTHER'],
+        ['auth_seq_id', '8'],
+        ['insertion_code', 'A'],
+        ['wt', 'G'],
+    ] as const) {
+        const conflicting = rows.map((row) => ({ ...row }));
+        conflicting[1] = { ...conflicting[1]!, [field]: value };
+        assert.throws(() => groupExact20Landscape(conflicting), /canonical exact-20 API order/);
+    }
 });

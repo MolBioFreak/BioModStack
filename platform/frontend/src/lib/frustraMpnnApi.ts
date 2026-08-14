@@ -1381,6 +1381,18 @@ const fmOptionalInteger = (value: unknown, label: string, minimum = 0): number |
     value === null ? null : fmInteger(value, label, minimum)
 );
 
+const fmPdbInsertionCode = (value: unknown, label: string): string => {
+    const insertionCode = fmString(value, label, true);
+    if (insertionCode.length > 1) throw new Error(`${label} must contain at most one character`);
+    return insertionCode;
+};
+
+const fmResidueName = (value: unknown, label: string): string => {
+    const residueName = fmString(value, label);
+    if (residueName.length !== 3) throw new Error(`${label} must contain exactly three characters`);
+    return residueName;
+};
+
 const fmRuntimeIdentityProjection = (value: unknown): FrustraMpnnRuntimeIdentity => {
     const payload = fmRecord(value, 'runtime_identity');
     const safeKeys = [
@@ -1497,9 +1509,9 @@ export const parseFrustraMpnnEffectiveSettingsProjection = (
                     wt,
                     pdb_chain_id: fmString(residue.pdb_chain_id, `${residueLabel}.pdb_chain_id`),
                     pdb_residue_id: pdbResidueId,
-                    pdb_insertion_code: fmString(residue.pdb_insertion_code, `${residueLabel}.pdb_insertion_code`, true),
+                    pdb_insertion_code: fmPdbInsertionCode(residue.pdb_insertion_code, `${residueLabel}.pdb_insertion_code`),
                     model_position: fmInteger(residue.model_position, `${residueLabel}.model_position`, 0),
-                    residue_name: fmString(residue.residue_name, `${residueLabel}.residue_name`),
+                    residue_name: fmResidueName(residue.residue_name, `${residueLabel}.residue_name`),
                 };
             }),
         };
@@ -2993,10 +3005,10 @@ const parseFrustraMpnnLandscapeWirePage = (value: unknown): FrustraMpnnLandscape
                 insertion_code: fmString(residue.insertion_code, `${label}.residue.insertion_code`, true),
                 sequence_index: fmInteger(residue.sequence_index, `${label}.residue.sequence_index`, 1),
                 pdb_chain_id: fmString(residue.pdb_chain_id, `${label}.residue.pdb_chain_id`),
-                pdb_residue_id: fmOptionalInteger(residue.pdb_residue_id, `${label}.residue.pdb_residue_id`),
-                pdb_insertion_code: residue.pdb_insertion_code === null ? null : fmString(residue.pdb_insertion_code, `${label}.residue.pdb_insertion_code`, true),
+                pdb_residue_id: fmOptionalInteger(residue.pdb_residue_id, `${label}.residue.pdb_residue_id`, -999),
+                pdb_insertion_code: residue.pdb_insertion_code === null ? null : fmPdbInsertionCode(residue.pdb_insertion_code, `${label}.residue.pdb_insertion_code`),
                 model_position: fmInteger(residue.model_position, `${label}.residue.model_position`, 0),
-                residue_name: fmNullableString(residue.residue_name, `${label}.residue.residue_name`),
+                residue_name: residue.residue_name === null ? null : fmResidueName(residue.residue_name, `${label}.residue.residue_name`),
                 wt: residue.wt === null ? null : fmString(residue.wt, `${label}.residue.wt`),
             },
         };

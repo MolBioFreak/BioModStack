@@ -357,7 +357,11 @@ export const groupExact20Landscape = (rows: CmLandscapeRow[]): CmLandscapeResidu
                 || slot.pdb_residue_id !== first.pdb_residue_id
                 || slot.pdb_insertion_code !== first.pdb_insertion_code
                 || slot.model_position !== first.model_position
-                || slot.residue_name !== first.residue_name)
+                || slot.residue_name !== first.residue_name
+                || slot.auth_asym_id !== first.auth_asym_id
+                || slot.auth_seq_id !== first.auth_seq_id
+                || slot.insertion_code !== first.insertion_code
+                || slot.wt !== first.wt)
             || slots.some((slot, index) => slot.mutation_aa !== CANONICAL_AMINO_ACIDS[index])) {
             throw new Error('Landscape slots do not match the canonical exact-20 API order');
         }
