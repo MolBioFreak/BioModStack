@@ -732,6 +732,17 @@ def test_v2_complete_bundle_classifies_custom_threshold_boundaries_and_closes(
         "frustrampnn_result_manifest_v1.json",
     }.intersection(path.name for path in output.iterdir())
     landscape = json.loads((output / "frustrampnn_landscape_v2.json").read_text())
+    structure_map = json.loads((output / "frustrampnn_structure_map_v1.json").read_text())
+    mapped = next(row for row in structure_map["rows"] if row["status"] == "mapped")
+    exact_identity_fields = (
+        "label_seq_id",
+        "pdb_residue_id",
+        "pdb_insertion_code",
+        "residue_name",
+    )
+    assert {
+        field: landscape["residues"][0][field] for field in exact_identity_fields
+    } == {field: mapped[field] for field in exact_identity_fields}
     classes = {slot["mutation_aa"]: slot["class"] for slot in landscape["residues"][0]["slots"]}
     assert classes["A"] == "high"
     assert classes["C"] == "minimal"

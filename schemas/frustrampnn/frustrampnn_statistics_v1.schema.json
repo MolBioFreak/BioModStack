@@ -482,6 +482,18 @@
           ],
           "title": "Label Asym Id"
         },
+        "label_seq_id": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Label Seq Id"
+        },
         "model_position": {
           "minimum": 0,
           "title": "Model Position",
@@ -491,6 +503,23 @@
           "maxLength": 1,
           "minLength": 1,
           "title": "Pdb Chain Id",
+          "type": "string"
+        },
+        "pdb_insertion_code": {
+          "maxLength": 1,
+          "title": "Pdb Insertion Code",
+          "type": "string"
+        },
+        "pdb_residue_id": {
+          "maximum": 9999,
+          "minimum": -999,
+          "title": "Pdb Residue Id",
+          "type": "integer"
+        },
+        "residue_name": {
+          "maxLength": 3,
+          "minLength": 3,
+          "title": "Residue Name",
           "type": "string"
         },
         "sequence_index": {
@@ -520,13 +549,17 @@
         "entity_instance_id",
         "source_entity_id",
         "label_asym_id",
+        "label_seq_id",
         "auth_asym_id",
         "auth_seq_id",
         "insertion_code",
         "sequence_index",
         "wt",
         "pdb_chain_id",
-        "model_position"
+        "pdb_residue_id",
+        "pdb_insertion_code",
+        "model_position",
+        "residue_name"
       ],
       "title": "FrustraMPNNResolvedResidue",
       "type": "object"

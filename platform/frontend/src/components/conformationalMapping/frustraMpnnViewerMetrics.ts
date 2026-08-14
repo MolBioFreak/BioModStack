@@ -82,6 +82,11 @@ type FrustraMpnnMetricStructureMapRow = Pick<
     | 'auth_seq_id'
     | 'insertion_code'
     | 'sequence_index'
+    | 'pdb_chain_id'
+    | 'pdb_residue_id'
+    | 'pdb_insertion_code'
+    | 'model_position'
+    | 'residue_name'
 > & {
     readonly status: string;
     readonly wt?: string | null;
@@ -182,6 +187,14 @@ const exactIdentity = (residue: CmLandscapeResidue, row: FrustraMpnnMetricStruct
         || row.insertion_code !== residue.insertion_code
         || row.entity_instance_id !== residue.entity_instance_id
         || row.sequence_index !== residue.sequence_index
+        || row.source_entity_id !== residue.source_entity_id
+        || row.label_asym_id !== residue.label_asym_id
+        || row.label_seq_id !== residue.label_seq_id
+        || row.pdb_chain_id !== residue.pdb_chain_id
+        || row.pdb_residue_id !== residue.pdb_residue_id
+        || row.pdb_insertion_code !== residue.pdb_insertion_code
+        || row.model_position !== residue.model_position
+        || row.residue_name !== residue.residue_name
         || (row.wt != null && row.wt !== residue.wt)) {
         throw new Error(`FrustraMPNN/structure-map identity mismatch: ${residue.entity_instance_id}:${residue.sequence_index}`);
     }

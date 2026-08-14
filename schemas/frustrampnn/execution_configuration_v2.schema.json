@@ -608,6 +608,35 @@
           "pattern": "^[ACDEFGHIKLMNPQRSTVWY]$",
           "title": "Wt",
           "type": "string"
+        },
+        "label_seq_id": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Label Seq Id"
+        },
+        "pdb_residue_id": {
+          "maximum": 9999,
+          "minimum": -999,
+          "title": "Pdb Residue Id",
+          "type": "integer"
+        },
+        "pdb_insertion_code": {
+          "maxLength": 1,
+          "title": "Pdb Insertion Code",
+          "type": "string"
+        },
+        "residue_name": {
+          "maxLength": 3,
+          "minLength": 3,
+          "title": "Residue Name",
+          "type": "string"
         }
       },
       "required": [
@@ -620,7 +649,11 @@
         "sequence_index",
         "wt",
         "pdb_chain_id",
-        "model_position"
+        "model_position",
+        "label_seq_id",
+        "pdb_residue_id",
+        "pdb_insertion_code",
+        "residue_name"
       ],
       "title": "FrustraMPNNResolvedResidue",
       "type": "object"

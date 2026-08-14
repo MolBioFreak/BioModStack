@@ -780,7 +780,14 @@ export interface FrustraMpnnEffectiveSettingsProjection {
     resolved_chains: Array<{
         entity: FrustraMpnnInspectableEntity;
         pdb_chain_id: string;
-        residues: Array<FrustraMpnnInspectableResidue & { pdb_chain_id: string; model_position: number }>;
+        residues: Array<FrustraMpnnInspectableResidue & {
+            label_seq_id: number | null;
+            pdb_chain_id: string;
+            pdb_residue_id: number;
+            pdb_insertion_code: string;
+            model_position: number;
+            residue_name: string;
+        }>;
     }>;
     normalization_policy_id: 'frustrampnn_structure_normalizer';
     normalization_policy_version: 1;
@@ -1472,20 +1479,27 @@ export const parseFrustraMpnnEffectiveSettingsProjection = (
             pdb_chain_id: pdbChainId,
             residues: chain.residues.map((residueValue, residueIndex) => {
                 const residueLabel = `${chainLabel}.residues[${residueIndex}]`;
-                const residue = fmClosedProjection(residueValue, residueLabel, ['entity_instance_id', 'source_entity_id', 'label_asym_id', 'auth_asym_id', 'auth_seq_id', 'insertion_code', 'sequence_index', 'wt', 'pdb_chain_id', 'model_position'], ['entity_instance_id', 'source_entity_id', 'label_asym_id', 'auth_asym_id', 'auth_seq_id', 'insertion_code', 'sequence_index', 'wt', 'pdb_chain_id', 'model_position']);
+                const residueKeys = ['entity_instance_id', 'source_entity_id', 'label_asym_id', 'label_seq_id', 'auth_asym_id', 'auth_seq_id', 'insertion_code', 'sequence_index', 'wt', 'pdb_chain_id', 'pdb_residue_id', 'pdb_insertion_code', 'model_position', 'residue_name'] as const;
+                const residue = fmClosedProjection(residueValue, residueLabel, residueKeys, residueKeys);
                 const wt = fmString(residue.wt, `${residueLabel}.wt`);
                 if (!/^[ACDEFGHIKLMNPQRSTVWY]$/.test(wt)) throw new Error(`${residueLabel}.wt is invalid`);
+                const pdbResidueId = fmInteger(residue.pdb_residue_id, `${residueLabel}.pdb_residue_id`, -999);
+                if (pdbResidueId > 9999) throw new Error(`${residueLabel}.pdb_residue_id is invalid`);
                 return {
                     entity_instance_id: fmString(residue.entity_instance_id, `${residueLabel}.entity_instance_id`),
                     source_entity_id: fmNullableString(residue.source_entity_id, `${residueLabel}.source_entity_id`),
                     label_asym_id: fmNullableString(residue.label_asym_id, `${residueLabel}.label_asym_id`),
+                    label_seq_id: fmOptionalInteger(residue.label_seq_id, `${residueLabel}.label_seq_id`, 1),
                     auth_asym_id: fmString(residue.auth_asym_id, `${residueLabel}.auth_asym_id`),
                     auth_seq_id: fmInteger(residue.auth_seq_id, `${residueLabel}.auth_seq_id`),
                     insertion_code: fmString(residue.insertion_code, `${residueLabel}.insertion_code`, true),
                     sequence_index: fmInteger(residue.sequence_index, `${residueLabel}.sequence_index`, 1),
                     wt,
                     pdb_chain_id: fmString(residue.pdb_chain_id, `${residueLabel}.pdb_chain_id`),
+                    pdb_residue_id: pdbResidueId,
+                    pdb_insertion_code: fmString(residue.pdb_insertion_code, `${residueLabel}.pdb_insertion_code`, true),
                     model_position: fmInteger(residue.model_position, `${residueLabel}.model_position`, 0),
+                    residue_name: fmString(residue.residue_name, `${residueLabel}.residue_name`),
                 };
             }),
         };
@@ -2833,10 +2847,14 @@ interface FrustraMpnnLandscapeWireRow {
     candidate_id: string;
     target_id: string;
     entity_instance_id: string;
+    source_entity_id: string | null;
+    label_asym_id: string | null;
     auth_asym_id: string;
     auth_seq_id: number;
     insertion_code: string;
     sequence_index: number;
+    pdb_chain_id: string | null;
+    model_position: number | null;
     wt: string;
     mutation_aa: string;
     score: number | null;
@@ -2911,7 +2929,7 @@ const parseFrustraMpnnLandscapeWirePage = (value: unknown): FrustraMpnnLandscape
     if (!Array.isArray(page.items)) throw new Error('FrustraMPNN landscape page.items must be an array');
     const items = page.items.map((item, index): FrustraMpnnLandscapeWireRow => {
         const label = `FrustraMPNN landscape page.items[${index}]`;
-        const rowKeys = ['id', 'invocation_id', 'candidate_id', 'target_id', 'entity_instance_id', 'auth_asym_id', 'auth_seq_id', 'insertion_code', 'sequence_index', 'wt', 'mutation_aa', 'score', 'score_class', 'class', 'scoreable', 'status', 'reason', 'native', 'provenance', 'residue'] as const;
+        const rowKeys = ['id', 'invocation_id', 'candidate_id', 'target_id', 'entity_instance_id', 'source_entity_id', 'label_asym_id', 'auth_asym_id', 'auth_seq_id', 'insertion_code', 'sequence_index', 'pdb_chain_id', 'model_position', 'wt', 'mutation_aa', 'score', 'score_class', 'class', 'scoreable', 'status', 'reason', 'native', 'provenance', 'residue'] as const;
         const row = fmClosedProjection(item, label, rowKeys, rowKeys);
         const provenanceKeys = ['schema_name', 'schema_version', 'landscape_sha256', 'structure_map_sha256', 'normalized_pdb_sha256', 'raw_csv_sha256', 'threshold_policy', 'threshold_policy_sha256', 'execution_configuration_sha256', 'requested_settings_sha256', 'effective_settings_sha256', 'runtime_identity_sha256', 'source_artifact_sha256', 'threshold_policy_id'] as const;
         const provenanceRequired = ['landscape_sha256', 'structure_map_sha256', 'normalized_pdb_sha256', 'raw_csv_sha256', 'threshold_policy', 'threshold_policy_sha256'] as const;
@@ -2947,10 +2965,14 @@ const parseFrustraMpnnLandscapeWirePage = (value: unknown): FrustraMpnnLandscape
             candidate_id: fmString(row.candidate_id, `${label}.candidate_id`),
             target_id: fmString(row.target_id, `${label}.target_id`),
             entity_instance_id: fmString(row.entity_instance_id, `${label}.entity_instance_id`),
+            source_entity_id: fmNullableString(row.source_entity_id, `${label}.source_entity_id`),
+            label_asym_id: fmNullableString(row.label_asym_id, `${label}.label_asym_id`),
             auth_asym_id: fmString(row.auth_asym_id, `${label}.auth_asym_id`),
             auth_seq_id: fmInteger(row.auth_seq_id, `${label}.auth_seq_id`),
             insertion_code: fmString(row.insertion_code, `${label}.insertion_code`, true),
             sequence_index: fmInteger(row.sequence_index, `${label}.sequence_index`, 1),
+            pdb_chain_id: fmNullableString(row.pdb_chain_id, `${label}.pdb_chain_id`),
+            model_position: fmOptionalInteger(row.model_position, `${label}.model_position`, 0),
             wt: fmString(row.wt, `${label}.wt`),
             mutation_aa: fmString(row.mutation_aa, `${label}.mutation_aa`),
             score: fmNullableFinite(row.score, `${label}.score`),
@@ -3017,11 +3039,15 @@ export const normalizeFrustraMpnnLandscapePage = (
             || !/^[ACDEFGHIKLMNPQRSTVWY]$/.test(row.mutation_aa)
             || !row.residue
             || row.residue.entity_instance_id !== row.entity_instance_id
+            || row.residue.source_entity_id !== row.source_entity_id
+            || row.residue.label_asym_id !== row.label_asym_id
             || row.residue.auth_asym_id !== row.auth_asym_id
             || row.residue.auth_seq_id !== row.auth_seq_id
             || row.residue.insertion_code !== row.insertion_code
             || row.residue.sequence_index !== row.sequence_index
-            || row.residue.wt !== row.wt) {
+            || row.residue.wt !== row.wt
+            || row.residue.pdb_chain_id !== row.pdb_chain_id
+            || row.residue.model_position !== row.model_position) {
             throw new Error('Persisted FrustraMPNN landscape identity is invalid');
         }
         const canonicalClass = requireCanonicalClass(row.class);
@@ -3037,11 +3063,19 @@ export const normalizeFrustraMpnnLandscapePage = (
         return {
             candidate_id: row.candidate_id,
             entity_instance_id: row.entity_instance_id,
+            source_entity_id: row.residue.source_entity_id,
+            label_asym_id: row.residue.label_asym_id,
+            label_seq_id: row.residue.label_seq_id,
             auth_asym_id: row.auth_asym_id,
             auth_seq_id: String(row.auth_seq_id),
             insertion_code: row.insertion_code,
             sequence_index: row.sequence_index,
             wt: row.wt,
+            pdb_chain_id: row.residue.pdb_chain_id,
+            pdb_residue_id: row.residue.pdb_residue_id,
+            pdb_insertion_code: row.residue.pdb_insertion_code,
+            model_position: row.residue.model_position,
+            residue_name: row.residue.residue_name,
             mutation_aa: row.mutation_aa,
             score: row.score,
             class: canonicalClass,

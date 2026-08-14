@@ -359,11 +359,19 @@ export interface CmStateLandscapeAnalysisRowsPage {
 export interface CmLandscapeRow {
     candidate_id: string;
     entity_instance_id: string;
+    source_entity_id: string | null;
+    label_asym_id: string | null;
+    label_seq_id: number | null;
     auth_asym_id: string;
     auth_seq_id: string;
     insertion_code: string;
     sequence_index: number;
     wt: string;
+    pdb_chain_id: string;
+    pdb_residue_id: number | null;
+    pdb_insertion_code: string | null;
+    model_position: number;
+    residue_name: string | null;
     mutation_aa: string;
     score: number | null;
     class: string | null;

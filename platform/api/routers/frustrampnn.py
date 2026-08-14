@@ -993,10 +993,14 @@ class FrustraMPNNLandscapeRowResponse(BaseModel):
     candidate_id: str
     target_id: str
     entity_instance_id: str
+    source_entity_id: str | None
+    label_asym_id: str | None
     auth_asym_id: str
     auth_seq_id: int
     insertion_code: str
     sequence_index: int
+    pdb_chain_id: str | None
+    model_position: int | None = Field(default=None, ge=0)
     wt: str
     mutation_aa: str
     score: float | None = None
@@ -3547,10 +3551,15 @@ async def result_landscape(
     for row in rows:
         stored = dict(row.row_json)
         residue = stored.get("residue")
+        residue_identity = residue if isinstance(residue, dict) else {}
         items.append({
             **{name: getattr(row, name) for name in _LANDSCAPE_FIELDS},
             "candidate_id": result.candidate_id,
+            "source_entity_id": residue_identity.get("source_entity_id"),
+            "label_asym_id": residue_identity.get("label_asym_id"),
             "auth_seq_id": int(row.auth_seq_id),
+            "pdb_chain_id": residue_identity.get("pdb_chain_id"),
+            "model_position": residue_identity.get("model_position"),
             "class": row.score_class,
             "native": row.mutation_aa == row.wt,
             "provenance": dict(row.provenance_json),

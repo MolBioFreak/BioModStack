@@ -86,13 +86,17 @@ def _effective():
             "entity_instance_id": "entity-A",
             "source_entity_id": "1",
             "label_asym_id": "AA",
+            "label_seq_id": 1,
             "auth_asym_id": "X",
             "auth_seq_id": 10,
             "insertion_code": "A",
             "sequence_index": 1,
             "wt": "G",
             "pdb_chain_id": "A",
+            "pdb_residue_id": 1,
+            "pdb_insertion_code": "",
             "model_position": 0,
+            "residue_name": "GLY",
         }],
     })
     return _build_effective_settings(

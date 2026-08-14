@@ -488,7 +488,16 @@ async def test_v2_persists_exact_authority_statistics_artifacts_rows_and_replays
         for slot in residue["slots"]
     }
     assert {canonical_json_bytes(row.row_json) for row in rows} == expected_row_json
-    assert all("source_entity_id" in row.row_json["residue"] for row in rows)
+    assert all(
+        {
+            "source_entity_id",
+            "label_seq_id",
+            "pdb_residue_id",
+            "pdb_insertion_code",
+            "residue_name",
+        }.issubset(row.row_json["residue"])
+        for row in rows
+    )
     assert replay.created_at == created_at
     async with db() as session:
         assert await _counts(session) == counts == (1, 10, 40)

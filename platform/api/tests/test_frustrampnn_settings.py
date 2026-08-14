@@ -77,9 +77,13 @@ def _resolved_residue(
     return settings.FrustraMPNNResolvedResidue.model_validate(
         {
             **_residue(sequence_index, instance=instance, chain=chain),
+            "label_seq_id": sequence_index,
             "wt": wt,
             "pdb_chain_id": chain,
+            "pdb_residue_id": sequence_index,
+            "pdb_insertion_code": "",
             "model_position": model_position,
+            "residue_name": "ALA" if wt == "A" else "LEU" if wt == "L" else "VAL",
         }
     )
 
@@ -325,9 +329,13 @@ def test_resolver_builds_complete_deterministic_effective_settings() -> None:
     first_residue = effective.resolved_chains[0].residues[0]
     assert first_residue.model_dump() == {
         **_residue(10),
+        "label_seq_id": 10,
         "wt": "L",
         "pdb_chain_id": "A",
+        "pdb_residue_id": 10,
+        "pdb_insertion_code": "",
         "model_position": 9,
+        "residue_name": "LEU",
     }
     assert effective.normalization_policy_id == "frustrampnn_structure_normalizer"
     assert effective.normalization_policy_version == 1
@@ -471,9 +479,13 @@ def test_effective_settings_reject_duplicate_source_entity_or_normalized_chain()
             "residues": [
                 {
                     **_residue(2, instance="entity-1", chain="A"),
+                    "label_seq_id": 2,
                     "wt": "G",
                     "pdb_chain_id": "B",
+                    "pdb_residue_id": 2,
+                    "pdb_insertion_code": "",
                     "model_position": 1,
+                    "residue_name": "GLY",
                 }
             ],
         }
@@ -488,9 +500,13 @@ def test_effective_settings_reject_duplicate_source_entity_or_normalized_chain()
             "residues": [
                 {
                     **_residue(2, instance="entity-2", chain="B"),
+                    "label_seq_id": 2,
                     "wt": "G",
                     "pdb_chain_id": "A",
+                    "pdb_residue_id": 2,
+                    "pdb_insertion_code": "",
                     "model_position": 1,
+                    "residue_name": "GLY",
                 }
             ],
         }

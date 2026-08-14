@@ -46,13 +46,17 @@ def _identity(
         "entity_instance_id": entity,
         "source_entity_id": source_entity,
         "label_asym_id": label_asym,
+        "label_seq_id": sequence_index,
         "auth_asym_id": auth_chain,
         "auth_seq_id": auth_seq,
         "insertion_code": "",
         "sequence_index": sequence_index,
         "wt": "G",
         "pdb_chain_id": pdb_chain,
+        "pdb_residue_id": model_position + 1,
+        "pdb_insertion_code": "",
         "model_position": model_position,
+        "residue_name": "GLY",
     }
 
 

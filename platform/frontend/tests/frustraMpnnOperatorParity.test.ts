@@ -69,7 +69,16 @@ const effectiveSettings = {
     schema_version: 1,
     requested_settings: persistedRequestedSettings,
     settings_value_origin: 'operator_request',
-    resolved_chains: [],
+    resolved_chains: [{
+        entity: { entity_instance_id: 'entity-1', source_entity_id: '1', label_asym_id: 'AA', auth_asym_id: 'A' },
+        pdb_chain_id: 'A',
+        residues: [{
+            entity_instance_id: 'entity-1', source_entity_id: '1', label_asym_id: 'AA', label_seq_id: 10,
+            auth_asym_id: 'A', auth_seq_id: 42, insertion_code: 'B', sequence_index: 10, wt: 'G',
+            pdb_chain_id: 'A', pdb_residue_id: 42, pdb_insertion_code: 'B', model_position: 9,
+            residue_name: 'GLY',
+        }],
+    }],
     normalization_policy_id: 'frustrampnn_structure_normalizer',
     normalization_policy_version: 1,
     threshold_policy_id: 'frustrampnn_class_v1',
@@ -433,6 +442,7 @@ test('closed v2 result detail preserves authority, settings, statistics, and saf
     assert.equal(parsed.availability, true);
     assert.equal(parsed.effective_settings_json?.settings_value_origin, 'operator_request');
     assert.equal(parsed.effective_settings_json?.requested_settings.source_structure.selected_model_number, 1);
+    assert.deepEqual(parsed.effective_settings_json?.resolved_chains[0].residues[0], effectiveSettings.resolved_chains[0].residues[0]);
     assert.equal(parsed.statistics_json?.distributions.overall.sample_sd, 0.1);
     assert.equal(parsed.execution_receipt?.runtime_identity_sha256, hashes.g);
     assert.equal('command_plan' in parsed.execution_receipt!, false);

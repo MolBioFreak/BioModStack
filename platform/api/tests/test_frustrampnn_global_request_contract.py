@@ -67,13 +67,17 @@ def _effective():
             "entity_instance_id": "entity-1",
             "source_entity_id": "1",
             "label_asym_id": "A",
+            "label_seq_id": 10,
             "auth_asym_id": "A",
             "auth_seq_id": 10,
             "insertion_code": "",
             "sequence_index": 10,
             "wt": "L",
             "pdb_chain_id": "A",
+            "pdb_residue_id": 10,
+            "pdb_insertion_code": "",
             "model_position": 9,
+            "residue_name": "LEU",
         }
     )
     chain = FrustraMPNNResolvedChainSelection.model_validate(

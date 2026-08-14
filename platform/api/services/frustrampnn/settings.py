@@ -232,13 +232,17 @@ class FrustraMPNNResolvedResidue(_StrictFrozenModel):
     entity_instance_id: NonEmptyString
     source_entity_id: OptionalNonEmptyString
     label_asym_id: OptionalNonEmptyString
+    label_seq_id: Annotated[StrictInt, Field(ge=1)] | None
     auth_asym_id: NonEmptyString
     auth_seq_id: StrictInt
     insertion_code: Annotated[str, Field(max_length=1)] = ""
     sequence_index: Annotated[StrictInt, Field(ge=1)]
     wt: Annotated[str, Field(pattern=r"^[ACDEFGHIKLMNPQRSTVWY]$")]
     pdb_chain_id: Annotated[str, Field(min_length=1, max_length=1)]
+    pdb_residue_id: Annotated[StrictInt, Field(ge=-999, le=9999)]
+    pdb_insertion_code: Annotated[str, Field(max_length=1)]
     model_position: Annotated[StrictInt, Field(ge=0)]
+    residue_name: Annotated[str, Field(min_length=3, max_length=3)]
 
     def source_key(self) -> tuple[str, str, str, str, int, str, int]:
         return (
@@ -981,13 +985,17 @@ def resolve_effective_settings(
                     "entity_instance_id": row["entity_instance_id"],
                     "source_entity_id": row["source_entity_id"],
                     "label_asym_id": row["label_asym_id"],
+                    "label_seq_id": row["label_seq_id"],
                     "auth_asym_id": row["auth_asym_id"],
                     "auth_seq_id": row["auth_seq_id"],
                     "insertion_code": row["insertion_code"],
                     "sequence_index": row["sequence_index"],
                     "wt": row["wt"],
                     "pdb_chain_id": row["pdb_chain_id"],
+                    "pdb_residue_id": row["pdb_residue_id"],
+                    "pdb_insertion_code": row["pdb_insertion_code"],
                     "model_position": row["model_position"],
+                    "residue_name": row["residue_name"],
                 }
             )
         )

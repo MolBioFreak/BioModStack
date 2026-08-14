@@ -35,16 +35,20 @@
         "entity_instance_id": {"type": "string", "minLength": 1},
         "source_entity_id": {"type": ["string", "null"]},
         "label_asym_id": {"type": ["string", "null"]},
+        "label_seq_id": {"type": ["integer", "null"], "minimum": 1},
         "auth_asym_id": {"type": "string", "minLength": 1},
         "auth_seq_id": {"type": "integer"},
         "insertion_code": {"type": "string", "maxLength": 1},
         "sequence_index": {"type": "integer", "minimum": 1},
         "wt": {"type": "string", "pattern": "^[ACDEFGHIKLMNPQRSTVWY]$"},
         "pdb_chain_id": {"type": "string", "pattern": "^[A-Za-z0-9]$"},
+        "pdb_residue_id": {"type": "integer", "minimum": -999, "maximum": 9999},
+        "pdb_insertion_code": {"type": "string", "maxLength": 1},
         "model_position": {"type": "integer", "minimum": 0},
+        "residue_name": {"type": "string", "minLength": 3, "maxLength": 3},
         "slots": {"type": "array", "minItems": 20, "maxItems": 20, "items": {"$ref": "#/$defs/slot"}}
       },
-      "required": ["entity_instance_id", "source_entity_id", "label_asym_id", "auth_asym_id", "auth_seq_id", "insertion_code", "sequence_index", "wt", "pdb_chain_id", "model_position", "slots"]
+      "required": ["entity_instance_id", "source_entity_id", "label_asym_id", "label_seq_id", "auth_asym_id", "auth_seq_id", "insertion_code", "sequence_index", "wt", "pdb_chain_id", "pdb_residue_id", "pdb_insertion_code", "model_position", "residue_name", "slots"]
     }
   },
   "type": "object",
