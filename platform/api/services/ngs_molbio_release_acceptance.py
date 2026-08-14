@@ -10,7 +10,9 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import sqlite3
+import stat
 import uuid
 from pathlib import Path
 from typing import Any, Mapping
@@ -56,11 +58,15 @@ from molbio_ngs_models import (
     MolBioNGSIdempotencyClaim,
     MolBioNGSOutboxEvent,
 )
+from paths import get_experiment_db_path
 from services.ngs_molbio_quiescence import (
     NgsMolBioQuiescenceError,
     package_acceptance_exclusive_fence,
 )
-from services.ngs_molbio_runtime_status import runtime_implementation_record
+from services.ngs_molbio_runtime_status import (
+    NgsMolBioRuntimeAuthorityError,
+    runtime_implementation_record,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SCHEMA_PATH = _REPO_ROOT / "schemas/ngs_molbio_runtime/shared-global-package-acceptance-v1.schema.json"
@@ -305,11 +311,72 @@ async def _verify_retained_package_artifacts(
     by_digest = {row.sha256: row for row in rows}
     if set(by_digest) != set(required):
         raise SharedPackageAcceptanceError("one or more package evidence artifacts are not retained")
+    configured_root = os.getenv("BMS_EXPERIMENT_ARTIFACT_ROOT")
+    configured_path = (
+        Path(configured_root).expanduser()
+        if configured_root
+        else get_experiment_db_path().parent / "experiment-artifacts"
+    ).absolute()
+    try:
+        if configured_path.is_symlink():
+            raise SharedPackageAcceptanceError("retained package evidence root cannot be a symlink")
+        artifact_root = configured_path.resolve(strict=True)
+    except OSError as exc:
+        raise SharedPackageAcceptanceError("retained package evidence root is unavailable") from exc
+    if not artifact_root.is_dir():
+        raise SharedPackageAcceptanceError("retained package evidence root is not a directory")
     for digest, size in required.items():
         row = by_digest[digest]
         if row.size_bytes != size or row.state != "present" or not row.verified_at:
             raise SharedPackageAcceptanceError(
                 f"package evidence artifact {digest} lacks verified retained bytes"
+            )
+        relative = Path(row.storage_key)
+        if (
+            relative.is_absolute()
+            or not relative.parts
+            or any(part in {"", ".", ".."} for part in relative.parts)
+        ):
+            raise SharedPackageAcceptanceError(
+                f"package evidence artifact {digest} has an unsafe retained storage key"
+            )
+        candidate = artifact_root.joinpath(*relative.parts)
+        cursor = artifact_root
+        try:
+            for component in relative.parts:
+                cursor = cursor / component
+                if stat.S_ISLNK(os.lstat(cursor).st_mode):
+                    raise SharedPackageAcceptanceError(
+                        f"package evidence artifact {digest} traverses a symlink"
+                    )
+            candidate.resolve(strict=True).relative_to(artifact_root)
+            descriptor = os.open(candidate, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        except SharedPackageAcceptanceError:
+            raise
+        except (OSError, ValueError) as exc:
+            raise SharedPackageAcceptanceError(
+                f"package evidence artifact {digest} is not retained within the approved root"
+            ) from exc
+        observed_digest = hashlib.sha256()
+        observed_size = 0
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode):
+                raise SharedPackageAcceptanceError(
+                    f"package evidence artifact {digest} is not a regular retained file"
+                )
+            while chunk := os.read(descriptor, 1024 * 1024):
+                observed_digest.update(chunk)
+                observed_size += len(chunk)
+        except OSError as exc:
+            raise SharedPackageAcceptanceError(
+                f"package evidence artifact {digest} is unreadable"
+            ) from exc
+        finally:
+            os.close(descriptor)
+        if observed_size != size or observed_digest.hexdigest() != digest:
+            raise SharedPackageAcceptanceError(
+                f"package evidence artifact {digest} digest or size mismatch"
             )
 
 
@@ -420,6 +487,108 @@ def _validate_evidence_semantics(
             raise SharedPackageAcceptanceError("payload ownership evidence is not a passing retained audit")
         return
     raise SharedPackageAcceptanceError(f"unsupported acceptance evidence kind: {evidence_kind}")
+
+
+async def persist_shared_package_evidence(
+    session: AsyncSession,
+    evidence: Mapping[str, Any],
+    *,
+    verifier_id: str,
+) -> dict[str, Any]:
+    """Persist one exact, authenticated shared-package evidence receipt and return its pointer."""
+
+    if not verifier_id.strip():
+        raise SharedPackageAcceptanceError("authenticated package evidence verifier identity is required")
+    candidate = copy.deepcopy(dict(evidence))
+    try:
+        runtime = runtime_implementation_record()
+    except NgsMolBioRuntimeAuthorityError as exc:
+        raise SharedPackageAcceptanceError(
+            "package-local NGS/MolBio runtime implementation authority is unavailable"
+        ) from exc
+    runtime_sha256 = runtime["content_sha256"]
+    source_commit = runtime["successor_source_commit"]
+    source_tree = runtime["successor_source_tree"]
+    _validate_closed_package_evidence(
+        candidate,
+        receipt_id="<submitted-package-evidence>",
+        expected_runtime_implementation_sha256=runtime_sha256,
+    )
+    if candidate.get("verifier_id") != verifier_id:
+        raise SharedPackageAcceptanceError(
+            "package evidence verifier_id does not match the authenticated operator"
+        )
+    _validate_receipt_source_identities(
+        candidate,
+        expected_commit=source_commit,
+        expected_tree=source_tree,
+        receipt_id="<submitted-package-evidence>",
+    )
+    evidence_kind = str(candidate["evidence_kind"])
+    native_identity = str(candidate["native_identity"])
+    try:
+        body_bytes = rfc8785.dumps(candidate)
+        body = body_bytes.decode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise SharedPackageAcceptanceError("package evidence is not canonically serializable") from exc
+    if len(body_bytes) > _MAX_EVIDENCE_RECEIPT_BYTES:
+        raise SharedPackageAcceptanceError("package evidence exceeds its fail-closed byte bound")
+    receipt_sha256 = _sha256(body_bytes)
+    receipt_id = str(
+        uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"bms:shared-package-evidence:{evidence_kind}:{native_identity}",
+        )
+    )
+    expected = {
+        "receipt_id": receipt_id,
+        "operation_kind": "package_acceptance",
+        "workspace_id": None,
+        "native_identity": native_identity,
+        "state": "verified",
+        "receipt_json": body,
+        "receipt_sha256": receipt_sha256,
+        "source_revision": source_commit,
+        "occurred_at": candidate["verified_at"],
+        "verified_at": candidate["verified_at"],
+    }
+    prospective = ExperimentOperationalReceipt(**expected)
+    _validate_evidence_semantics(
+        candidate,
+        prospective,
+        evidence_kind=evidence_kind,
+        store_id=str(candidate["store_id"]) if evidence_kind == "migration" else None,
+    )
+    await _verify_retained_package_artifacts(
+        session,
+        _package_evidence_artifacts(candidate),
+    )
+    await session.execute(
+        text(
+            "INSERT OR IGNORE INTO operational_receipts "
+            "(receipt_id, operation_kind, workspace_id, native_identity, state, receipt_json, "
+            "receipt_sha256, source_revision, occurred_at, verified_at) "
+            "VALUES (:receipt_id, :operation_kind, :workspace_id, :native_identity, :state, "
+            ":receipt_json, :receipt_sha256, :source_revision, :occurred_at, :verified_at)"
+        ),
+        expected,
+    )
+    persisted = await session.get(ExperimentOperationalReceipt, receipt_id)
+    if persisted is None or any(
+        getattr(persisted, field) != value for field, value in expected.items()
+    ):
+        raise SharedPackageAcceptanceError(
+            "package evidence deterministic receipt identity conflicts with persisted authority"
+        )
+    await session.commit()
+    pointer = {
+        "receipt_id": persisted.receipt_id,
+        "receipt_sha256": persisted.receipt_sha256,
+        "native_identity": persisted.native_identity,
+    }
+    if evidence_kind == "migration":
+        pointer["store_id"] = candidate["store_id"]
+    return pointer
 
 
 async def _live_migration_authorities(
@@ -1211,5 +1380,6 @@ async def acceptance_operational_receipt(
 __all__ = [
     "SharedPackageAcceptanceError",
     "acceptance_operational_receipt",
+    "persist_shared_package_evidence",
     "validate_shared_package_acceptance",
 ]

@@ -171,6 +171,7 @@ export interface DomainWorkflowCapabilityContractCapability {
     launch_mode: DomainCapabilityLaunchMode;
     workflow_family: string;
     workflow_adapter_id: string;
+    canonical_source_destination: string;
     parameter_schema_id: string;
     plannable: true;
     exposure_state: 'accepted';

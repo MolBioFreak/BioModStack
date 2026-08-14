@@ -66,6 +66,7 @@ from experiment_services import (
 from services.ngs_molbio_release_acceptance import (
     SharedPackageAcceptanceError,
     acceptance_operational_receipt,
+    persist_shared_package_evidence,
 )
 from services.ngs_molbio_n5 import operational_receipt
 from services.ngs_molbio_run_control import (
@@ -162,6 +163,19 @@ class StrictRequestModel(BaseModel):
 
 class SharedPackageAcceptanceRequest(StrictRequestModel):
     evidence: dict[str, Any]
+
+
+class SharedPackageEvidenceIngestRequest(StrictRequestModel):
+    evidence: dict[str, Any] = Field(
+        description="One closed bms.shared-global-package-evidence.v1 evidence object"
+    )
+
+
+class SharedPackageEvidenceReceiptPointer(StrictRequestModel):
+    receipt_id: str = Field(min_length=1, max_length=255)
+    receipt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    native_identity: str = Field(min_length=1, max_length=1024)
+    store_id: str | None = None
 
 
 class WorkspaceCreateRequest(StrictRequestModel):
@@ -1073,6 +1087,32 @@ async def resubmit_workspace_run_group(
     except ExperimentServiceError as exc:
         await session.rollback()
         raise _error(exc) from exc
+
+
+@router.post(
+    "/ops/ngs-molbio/package-acceptance/evidence",
+    response_model=SharedPackageEvidenceReceiptPointer,
+    response_model_exclude_none=True,
+    status_code=status.HTTP_201_CREATED,
+)
+async def record_ngs_molbio_package_evidence(
+    payload: SharedPackageEvidenceIngestRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    try:
+        actor = _operator_principal(request)
+        return await persist_shared_package_evidence(
+            session,
+            payload.evidence,
+            verifier_id=actor,
+        )
+    except SharedPackageAcceptanceError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "package_evidence_rejected", "message": str(exc)},
+        ) from exc
 
 
 @router.post("/ops/ngs-molbio/package-acceptance", status_code=status.HTTP_201_CREATED)

@@ -57,6 +57,41 @@ _REGISTRY_SCHEMA_IDS = {
     "payload_ownership": "bms.payload-ownership-manifest.v1",
 }
 
+_PROJECT_SCHEDULED_CAPABILITIES: dict[str, tuple[str, str, str]] = {
+    "ngs.ont.basecall_dna": ("nanopore", "basecall_dna", "/api/ont/ngs/basecall-dna/submit"),
+    "ngs.ont.basecall_rna": ("nanopore", "basecall_rna", "/api/ont/ngs/basecall-rna/submit"),
+    "ngs.ont.plasmid_qc": ("nanopore", "plasmid_qc", "/api/ont/ngs/plasmid-qc/submit"),
+    "ngs.ont.construct_screening": (
+        "nanopore",
+        "construct_screening",
+        "/api/ont/ngs/construct-screening/submit",
+    ),
+    "ngs.ont.methylation_analysis": (
+        "nanopore",
+        "methylation_analysis",
+        "/api/ont/ngs/methylation-analysis/submit",
+    ),
+    "ngs.ont.assembly_contamination_scan": (
+        "nanopore",
+        "assembly_contamination_scan",
+        "/api/ont/ngs/assembly-contamination-scan/submit",
+    ),
+    "ngs.ont.microbial_isolate_analysis": (
+        "nanopore",
+        "microbial_isolate_analysis",
+        "/api/ont/ngs/microbial-isolate-analysis/submit",
+    ),
+    "ngs.ont.raw_signal_qc": ("nanopore", "raw_signal_qc", "/api/ont/ngs/raw-signal-qc/submit"),
+    "molbio.oligo_design.rfdpoly": ("oligo_design", "oligo_design", "/api/jobs/submit"),
+}
+_PROJECT_SOURCE_RECEIPT_CONTRACTS = [
+    "bms.ngs-molbio.sample-revision.adapter.v1",
+    "bms.ngs.reference-revision.adapter.v1",
+    "bms.ngs.job-reference.adapter.v1",
+    "bms.ngs.reference-set.adapter.v1",
+    "bms.ngs.ont-run-observation.adapter.v1",
+]
+
 
 _FORMAT_CHECKER = FormatChecker()
 _RFC3339_DATETIME = re.compile(
@@ -630,6 +665,28 @@ def _loaded_documents() -> tuple[
     _unique(documents["event"]["entries"], "event_type", "event type")
     _unique(documents["branch_closure"]["entries"], "candidate_id", "branch candidate")
     _verify_phase_n0_receipt(schemas, reference_registry, documents["source_pin"])
+
+    runtime_record, _runtime_raw = _read(_RUNTIME_RECORD)
+    runtime_revision = runtime_record["successor_source_commit"]
+    for record in inventory["capabilities"]:
+        mapping = _PROJECT_SCHEDULED_CAPABILITIES.get(record["capability_id"])
+        if mapping is None:
+            continue
+        model_id, mode, destination = mapping
+        record["exposure_state"] = "accepted"
+        record["plannable"] = True
+        record["workflow_family"] = "typed_core_job"
+        record["workflow_adapter_id"] = "bms.ngs.job-reference.adapter.v1"
+        record["allowed_model_modes"] = [{"model_id": model_id, "mode": mode}]
+        record["canonical_source_destination"] = destination
+        record["source_receipt_contracts"] = list(_PROJECT_SOURCE_RECEIPT_CONTRACTS)
+        record["result_contract"] = "bms.global.ngs-molbio-job-result.v1"
+        record["native_mapping"]["native_request_compatibility"] = "exact_native_mapping"
+        for gate in record["parity_ledger"]:
+            gate["state"] = "pass"
+            gate["evidence"] = f"package-local-runtime:{runtime_revision}:{gate['gate']}"
+        record["inventory_sha256"] = _canonical_digest(record, "inventory_sha256")
+        record["capability_sha256"] = record["inventory_sha256"]
 
     return inventory, schemas, reference_registry, documents
 

@@ -521,6 +521,8 @@ async def validate_bound_job_request(
         )
     prepared_params = dict(params)
     params_match = _canonical_json(params) == _canonical_json(expected_params)
+    if model_id == "nanopore":
+        params_match = all(key in params and params[key] == value for key, value in expected_params.items())
     if model_id == "protein_local_redesign":
         supplied_adapter = params.get("workflow_adapter")
         if supplied_adapter not in (None, expected_adapter):

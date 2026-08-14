@@ -28,6 +28,7 @@ import {
     type DomainWorkflowPreparation,
     type DomainWorkflowRun,
     type JsonObject,
+    type JsonValue,
     type PreparationLaunchRequest,
     type PreparedLaunchContext,
 } from '../../lib/projectManager';
@@ -55,7 +56,13 @@ interface SelectedPreparation {
     planId: string;
     planRevisionId: string;
     launchMode: DomainCapabilityLaunchMode;
+    sourceDestination: string;
     authorityKey: string;
+}
+
+interface IssuedLaunchHandoff {
+    launchContext: PreparedLaunchContext;
+    sourceDestination: string;
 }
 
 function isDomainCapabilityLaunchMode(value: unknown): value is DomainCapabilityLaunchMode {
@@ -86,6 +93,12 @@ function preparationSelectionError(
         }
         if (!isDomainCapabilityLaunchMode(selection.launchMode)) {
             return `Preparation ${selection.preparation.preparation_id} has no explicit supported launch mode.`;
+        }
+        if (
+            selection.launchMode === 'typed_launcher_handoff'
+            && (!selection.sourceDestination.startsWith('/') || selection.sourceDestination.startsWith('//'))
+        ) {
+            return `Preparation ${selection.preparation.preparation_id} has no safe canonical native launcher destination.`;
         }
     }
     return null;
@@ -178,10 +191,10 @@ function Panel({ title, children }: { title: string; children: ReactNode }) {
     );
 }
 
-type ParameterValue = string | number | boolean | ParameterValue[] | null;
-type ParameterValues = Record<string, ParameterValue>;
-type ParameterKind = 'boolean' | 'string' | 'number' | 'integer' | 'array';
-type ParameterUiControl =
+export type ParameterValue = string | number | boolean | ParameterValue[] | null;
+export type ParameterValues = Record<string, ParameterValue>;
+export type ParameterKind = 'boolean' | 'string' | 'number' | 'integer' | 'array';
+export type ParameterUiControl =
     | 'bounded_integer'
     | 'bounded_number'
     | 'checkbox'
@@ -190,14 +203,14 @@ type ParameterUiControl =
     | 'select'
     | 'typed_control'
     | 'typed_source_selector';
-type ParameterPrecision =
+export type ParameterPrecision =
     | 'boolean'
     | 'exact_utf8_or_enum'
     | 'float64'
     | 'integer'
     | 'ordered_exact_items'
     | 'union_exact';
-type ParameterDefaultPolicy =
+export type ParameterDefaultPolicy =
     | { kind: 'schema_default'; canonicalText: 'schema_default' }
     | {
         kind: 'required_explicit_or_authority_bound';
@@ -208,14 +221,14 @@ type ParameterDefaultPolicy =
         canonicalText: string;
         entries: Array<{ context: string; value: string | number | boolean | null }>;
     };
-type ParameterPersistedRepresentation = 'requested_and_effective';
-interface ParameterSupportedRuntimeRange {
+export type ParameterPersistedRepresentation = 'requested_and_effective';
+export interface ParameterSupportedRuntimeRange {
     canonicalText: string;
     runtimeClause: string;
     biomodstackSourceSha: string;
 }
 
-interface ParameterField {
+export interface ParameterField {
     name: string;
     label: string;
     description?: string;
@@ -865,6 +878,13 @@ async function derivePinnedPlanParameterSchema(plan: DomainWorkflowPlanHead): Pr
         assertNonEmptyString(capability.capability_version, 'pinned capability version');
         assertNonEmptyString(capability.workflow_family, 'pinned workflow family');
         assertNonEmptyString(capability.workflow_adapter_id, 'pinned workflow adapter');
+        assertNonEmptyString(capability.canonical_source_destination, 'pinned native launcher destination');
+        if (
+            !capability.canonical_source_destination.startsWith('/')
+            || capability.canonical_source_destination.startsWith('//')
+        ) {
+            throw new Error('pinned native launcher destination is not a safe same-origin route');
+        }
         assertNonEmptyString(capability.parameter_schema_id, 'pinned parameter schema ID');
         if (
             capability.workflow_family !== plan.workflow_family
@@ -926,7 +946,7 @@ async function derivePinnedPlanParameterSchema(plan: DomainWorkflowPlanHead): Pr
     }
 }
 
-function parameterValuesFromDraft(draft: JsonObject, fields: ParameterField[]): ParameterValues {
+export function parameterValuesFromDraft(draft: JsonObject, fields: ParameterField[]): ParameterValues {
     const existing = isObject(draft.parameters) ? draft.parameters : {};
     const values: ParameterValues = {};
     fields.forEach((field) => {
@@ -936,7 +956,93 @@ function parameterValuesFromDraft(draft: JsonObject, fields: ParameterField[]): 
     Object.entries(existing).forEach(([name, value]) => {
         if (!(name in values)) values[name] = value as ParameterValue;
     });
+    fields.forEach((field) => {
+        if (values[field.name] !== undefined || field.defaultPolicy?.kind !== 'contextual_defaults') return;
+        const matching = field.defaultPolicy.entries.filter((entry) => (
+            fields.some((candidate) => (
+                candidate.name !== field.name
+                && values[candidate.name] !== undefined
+                && !Array.isArray(values[candidate.name])
+                && String(values[candidate.name]) === entry.context
+            ))
+        ));
+        if (matching.length === 1) values[field.name] = matching[0].value;
+    });
     return values;
+}
+
+function parseApplicabilityValue(raw: string): ParameterValue {
+    if (raw === 'null') return null;
+    if (raw === 'true') return true;
+    if (raw === 'false') return false;
+    if (/^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/.test(raw)) return Number(raw);
+    return raw;
+}
+
+function fieldForApplicabilityKey(fields: ParameterField[], key: string): ParameterField | undefined {
+    return fields.find((field) => (
+        field.name === key || field.nativeKey?.split('+').includes(key)
+    ));
+}
+
+export function parameterIsVisible(field: ParameterField, fields: ParameterField[], values: ParameterValues): boolean {
+    const applicability = field.applicability;
+    if (!applicability || applicability === 'always') return true;
+    const clauses = applicability.split(' and ').map((clause) => {
+        const match = /^([a-z][a-z0-9_]*)=([A-Za-z0-9_.+/-]+)$/.exec(clause);
+        return match ? { key: match[1], expected: parseApplicabilityValue(match[2]) } : null;
+    });
+    if (clauses.some((clause) => clause === null)) return true;
+    const controllers = clauses.map((clause) => fieldForApplicabilityKey(fields, clause?.key ?? ''));
+    // Applicability may be authority-bound prose (for example, target receipt presence). Only
+    // hide a control when every machine-readable controller is present in this pinned schema.
+    if (controllers.some((controller) => controller === undefined)) return true;
+    return clauses.every((clause, index) => values[controllers[index]?.name ?? ''] === clause?.expected);
+}
+
+function jsonReadbackValue(value: JsonValue | undefined): string {
+    if (value === undefined) return 'Not supplied';
+    if (typeof value === 'string') return value || 'Empty string';
+    return JSON.stringify(value);
+}
+
+function SettingsReadback({
+    requested,
+    effective,
+}: {
+    requested: JsonObject;
+    effective?: JsonObject;
+}) {
+    const keys = [...new Set([...Object.keys(requested), ...Object.keys(effective ?? {})])].sort();
+    if (!keys.length) {
+        return <p className="text-xs text-content-muted">No settings were persisted for this capability.</p>;
+    }
+    return (
+        <div className="overflow-x-auto rounded-md border border-border-primary">
+            <table className="w-full min-w-[32rem] text-left text-xs">
+                <thead className="bg-surface-secondary text-content-muted">
+                    <tr>
+                        <th className="px-3 py-2 font-semibold">Setting</th>
+                        <th className="px-3 py-2 font-semibold">Requested</th>
+                        {effective && <th className="px-3 py-2 font-semibold">Effective</th>}
+                    </tr>
+                </thead>
+                <tbody>
+                    {keys.map((key) => (
+                        <tr key={key} className="border-t border-border-primary align-top">
+                            <th className="px-3 py-2 font-mono font-medium text-content-secondary">{key}</th>
+                            <td className="max-w-md break-words px-3 py-2 font-mono text-content-primary">{jsonReadbackValue(requested[key])}</td>
+                            {effective && (
+                                <td className="max-w-md break-words px-3 py-2 font-mono text-content-primary">
+                                    {jsonReadbackValue(effective[key])}
+                                </td>
+                            )}
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
+    );
 }
 
 function validateScalar(
@@ -1305,7 +1411,7 @@ export default function DomainWorkflowOperator({
     const [changeSummary, setChangeSummary] = useState('Publish operator-reviewed Workflow Plan');
     const [selectedPreparations, setSelectedPreparations] = useState<SelectedPreparation[]>([]);
     const [retryPreparationByRunId, setRetryPreparationByRunId] = useState<Record<string, string>>({});
-    const [issuedLaunchContexts, setIssuedLaunchContexts] = useState<PreparedLaunchContext[]>([]);
+    const [issuedLaunchContexts, setIssuedLaunchContexts] = useState<IssuedLaunchHandoff[]>([]);
     const [activeRunGroupId, setActiveRunGroupId] = useState(initialRunGroupId?.trim() ?? '');
     const [runGroupLookupId, setRunGroupLookupId] = useState(initialRunGroupId?.trim() ?? '');
     const [cancelReason, setCancelReason] = useState('Operator cancelled from the NGS/MolBio Domain workspace');
@@ -1385,8 +1491,14 @@ export default function DomainWorkflowOperator({
     });
     const typedDraftError = useMemo(() => {
         if (!parameterSchema.fields) return parameterSchema.error;
-        return validateTypedDraftParameters(planQuery.data?.draft, parameterSchema.fields);
+        return validateTypedDraftParameters(planQuery.data?.draft ?? undefined, parameterSchema.fields);
     }, [parameterSchema, planQuery.data?.draft]);
+    const visibleParameterFields = useMemo(() => (
+        parameterSchema.fields?.filter((field) => (
+            parameterIsVisible(field, parameterSchema.fields ?? [], parameterValues)
+        )) ?? []
+    ), [parameterSchema.fields, parameterValues]);
+    const hiddenConditionalFieldCount = (parameterSchema.fields?.length ?? 0) - visibleParameterFields.length;
 
     useEffect(() => {
         let cancelled = false;
@@ -1563,6 +1675,14 @@ export default function DomainWorkflowOperator({
             if (!isDomainCapabilityLaunchMode(currentPlanLaunchMode)) {
                 throw new Error('The selected Plan pinned capability has no explicit supported launch mode. Preparation selection is blocked.');
             }
+            const sourceDestination = pinnedPlanCapability?.canonical_source_destination;
+            if (
+                typeof sourceDestination !== 'string'
+                || !sourceDestination.startsWith('/')
+                || sourceDestination.startsWith('//')
+            ) {
+                throw new Error('The selected Plan has no safe pinned native launcher destination.');
+            }
             const planId = selectedPlanId.trim();
             const planRevisionId = selectedPlanRevisionId.trim();
             if (!planId || !planRevisionId) throw new Error('Select an immutable Plan revision before preparing it.');
@@ -1586,6 +1706,7 @@ export default function DomainWorkflowOperator({
                 planId,
                 planRevisionId,
                 launchMode: currentPlanLaunchMode,
+                sourceDestination,
                 authorityKey: selectionAuthorityKey,
             };
         },
@@ -1607,7 +1728,7 @@ export default function DomainWorkflowOperator({
 
     const buildPreparationLaunches = async (
         selections: SelectedPreparation[],
-    ): Promise<{ launches: PreparationLaunchRequest[]; launchContexts: PreparedLaunchContext[] }> => {
+    ): Promise<{ launches: PreparationLaunchRequest[]; launchContexts: IssuedLaunchHandoff[] }> => {
         const resolved = await Promise.all(selections.map(async (selection) => {
             if (selection.launchMode === 'managed_materialization') {
                 return {
@@ -1616,6 +1737,7 @@ export default function DomainWorkflowOperator({
                         launch_context_id: null,
                     } satisfies PreparationLaunchRequest,
                     launchContext: null,
+                    sourceDestination: selection.sourceDestination,
                 };
             }
             if (selection.launchMode !== 'typed_launcher_handoff') {
@@ -1626,17 +1748,33 @@ export default function DomainWorkflowOperator({
                 selection.preparation.preparation_id,
                 projectReturnUri,
             );
+            if (
+                launchContext.project_id !== projectId
+                || launchContext.global_experiment_id !== globalExperimentId
+                || launchContext.domain_experiment_id !== domainExperimentId
+                || launchContext.workflow_id !== selection.planId
+                || launchContext.workflow_revision_id !== selection.planRevisionId
+                || launchContext.preparation_id !== selection.preparation.preparation_id
+                || launchContext.normalized_request_sha256 !== selection.preparation.normalized_request_sha256
+                || launchContext.validation_receipt_id !== selection.preparation.validation_receipt_id
+            ) {
+                throw new Error(`Issued launch context ${launchContext.launch_context_id} does not exactly bind its selected preparation authority.`);
+            }
             return {
                 launch: {
                     preparation_id: selection.preparation.preparation_id,
                     launch_context_id: launchContext.launch_context_id,
                 } satisfies PreparationLaunchRequest,
                 launchContext,
+                sourceDestination: selection.sourceDestination,
             };
         }));
         return {
             launches: resolved.map((item) => item.launch),
-            launchContexts: resolved.flatMap((item) => item.launchContext ? [item.launchContext] : []),
+            launchContexts: resolved.flatMap((item) => item.launchContext ? [{
+                launchContext: item.launchContext,
+                sourceDestination: item.sourceDestination,
+            }] : []),
         };
     };
 
@@ -1763,6 +1901,16 @@ export default function DomainWorkflowOperator({
     ).length;
     const receiptIds = Array.from(new Set((runGroup?.runs ?? []).flatMap((run) => run.attempts.flatMap((attempt) =>
         Array.from(collectReceiptIds(attempt.terminal_receipt))))));
+    const receiptLaunchContextIds = new Map<string, Set<string>>();
+    (runGroup?.runs ?? []).forEach((run) => run.attempts.forEach((attempt) => {
+        const launchContextId = attempt.launch_context?.launch_context_id;
+        if (!launchContextId) return;
+        collectReceiptIds(attempt.terminal_receipt).forEach((receiptId) => {
+            const ids = receiptLaunchContextIds.get(receiptId) ?? new Set<string>();
+            ids.add(launchContextId);
+            receiptLaunchContextIds.set(receiptId, ids);
+        });
+    }));
     const activeError = capabilitiesQuery.error
         ?? plansQuery.error
         ?? planQuery.error
@@ -1848,6 +1996,7 @@ export default function DomainWorkflowOperator({
                                 <KeyValue label="Plan ID" value={selectedPlan.plan_id} />
                                 <KeyValue label="Capability" value={selectedPlan.capability_id} />
                                 <KeyValue label="Pinned launch mode" value={pinnedPlanCapability?.launch_mode} />
+                                <KeyValue label="Pinned native destination" value={pinnedPlanCapability?.canonical_source_destination} />
                                 <KeyValue label="Pinned parameter schema" value={parameterSchema.schemaId} />
                                 <KeyValue label="Pinned contract SHA-256" value={selectedPlan.capability_contract_sha256} />
                                 <KeyValue label="Head generation" value={selectedPlan.head_generation} />
@@ -1868,12 +2017,24 @@ export default function DomainWorkflowOperator({
                             ))}
                         </select>
                         {selectedRevision ? (
-                            <dl className="grid gap-2 sm:grid-cols-2">
-                                <KeyValue label="Revision ID" value={selectedRevision.revision_id} />
-                                <KeyValue label="Parent revision" value={selectedRevision.parent_revision_id} />
-                                <KeyValue label="Payload digest" value={selectedRevision.payload_sha256} />
-                                <KeyValue label="Dependency digest" value={selectedRevision.dependency_graph_sha256} />
-                            </dl>
+                            <>
+                                <dl className="grid gap-2 sm:grid-cols-2">
+                                    <KeyValue label="Revision ID" value={selectedRevision.revision_id} />
+                                    <KeyValue label="Parent revision" value={selectedRevision.parent_revision_id} />
+                                    <KeyValue label="Payload digest" value={selectedRevision.payload_sha256} />
+                                    <KeyValue label="Dependency digest" value={selectedRevision.dependency_graph_sha256} />
+                                </dl>
+                                <details className="rounded-md border border-border-primary p-3">
+                                    <summary className="cursor-pointer text-xs font-semibold text-content-secondary">Immutable requested settings readback</summary>
+                                    <div className="mt-3">
+                                        <SettingsReadback
+                                            requested={isObject(selectedRevision.payload.parameters)
+                                                ? selectedRevision.payload.parameters as JsonObject
+                                                : {}}
+                                        />
+                                    </div>
+                                </details>
+                            </>
                         ) : <p className="text-xs text-content-muted">No immutable Plan revision is selected.</p>}
                     </div>
                 </Panel>
@@ -1899,7 +2060,7 @@ export default function DomainWorkflowOperator({
                         </p>
                     ) : (
                         <div className="grid gap-3 md:grid-cols-2">
-                            {parameterSchema.fields.map((field) => (
+                            {visibleParameterFields.map((field) => (
                                 <ParameterControl
                                     key={field.name}
                                     field={field}
@@ -1913,6 +2074,11 @@ export default function DomainWorkflowOperator({
                                 />
                             ))}
                         </div>
+                    )}
+                    {hiddenConditionalFieldCount > 0 && (
+                        <p className="mt-3 rounded-md border border-border-primary bg-surface-secondary px-3 py-2 text-xs text-content-muted">
+                            {hiddenConditionalFieldCount} conditionally inapplicable setting{hiddenConditionalFieldCount === 1 ? ' is' : 's are'} hidden. Its persisted value is retained so the closed server schema remains complete.
+                        </p>
                     )}
                     {parameterSchema.fields && typedDraftError && (
                         <div className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-100">
@@ -1940,6 +2106,9 @@ export default function DomainWorkflowOperator({
                         ) : (
                             <p className="mt-1 text-content-muted">No Dataset revision selected. Choose exact immutable revisions in the Datasets section if this workflow requires inputs.</p>
                         )}
+                        <Link className={`${BUTTON_CLASS} mt-2 inline-block`} to={contextHref('/ngs', { section: 'datasets' })}>
+                            Select immutable Dataset sources
+                        </Link>
                         <p className="mt-2">
                             Current Plan mode: <span className="font-mono text-content-primary">{currentPlanLaunchMode ?? 'unavailable'}</span>.
                             Prepared selections retain their own pinned mode when you switch Plans. Preparing another immutable revision adds its validated preparation to the selection. Duplicate preparation IDs are rejected.
@@ -1967,6 +2136,7 @@ export default function DomainWorkflowOperator({
                                     <dl className="grid flex-1 gap-2 md:grid-cols-4">
                                         <KeyValue label={`Preparation ${index + 1}`} value={selection.preparation.preparation_id} />
                                         <KeyValue label="Pinned launch mode" value={selection.launchMode} />
+                                        <KeyValue label="Native destination" value={selection.sourceDestination} />
                                         <KeyValue label="Plan" value={selection.planId} />
                                         <KeyValue label="Plan revision" value={selection.planRevisionId} />
                                         <KeyValue label="Validation status" value={selection.preparation.status} />
@@ -1976,6 +2146,19 @@ export default function DomainWorkflowOperator({
                                     </dl>
                                     <button type="button" className={BUTTON_CLASS} onClick={() => removeSelectedPreparation(selection.preparation.preparation_id)}>Remove</button>
                                 </div>
+                                <details className="mt-3 rounded-md border border-border-secondary p-3">
+                                    <summary className="cursor-pointer text-xs font-semibold text-content-secondary">Requested/effective settings and validation receipt</summary>
+                                    <div className="mt-3 space-y-3">
+                                        <SettingsReadback
+                                            requested={selection.preparation.requested_settings}
+                                            effective={selection.preparation.effective_settings}
+                                        />
+                                        <div>
+                                            <p className="mb-1 text-xs font-semibold text-content-secondary">Validation receipt payload</p>
+                                            <pre className="max-h-64 overflow-auto rounded-md bg-surface-secondary p-3 text-[11px] text-content-primary">{JSON.stringify(selection.preparation.validation, null, 2)}</pre>
+                                        </div>
+                                    </div>
+                                </details>
                             </div>
                         ))}
                         {selectedPreparationBlocker && (
@@ -1987,13 +2170,16 @@ export default function DomainWorkflowOperator({
                 {issuedLaunchContexts.length > 0 && (
                     <div className="mt-3 space-y-3 rounded-md border border-blue-500/30 bg-blue-500/5 p-3 text-xs">
                         <p className="text-content-secondary">Fresh typed handoff contexts issued for the submitted preparation set:</p>
-                        {issuedLaunchContexts.map((launchContext) => (
+                        {issuedLaunchContexts.map(({ launchContext, sourceDestination }) => (
                             <div key={launchContext.launch_context_id} className="rounded border border-border-primary p-2">
                                 <KeyValue label="Fresh launch context" value={launchContext.launch_context_id} />
                                 <KeyValue label="Preparation" value={launchContext.preparation_id} />
+                                <KeyValue label="Exact native destination" value={sourceDestination} />
                                 <div className="mt-2 flex flex-wrap gap-2">
-                                    <Link className={BUTTON_CLASS} to={contextHref(appendLaunchContext('/molbio', launchContext.launch_context_id))}>Open MolBio Toolkit</Link>
-                                    <Link className={BUTTON_CLASS} to={contextHref(appendLaunchContext('/ngs', launchContext.launch_context_id))}>Open NGS Toolkit</Link>
+                                    <Link
+                                        className={PRIMARY_BUTTON_CLASS}
+                                        to={contextHref(appendLaunchContext(sourceDestination, launchContext.launch_context_id))}
+                                    >Open exact typed native launcher</Link>
                                 </div>
                             </div>
                         ))}
@@ -2101,11 +2287,23 @@ export default function DomainWorkflowOperator({
                                 <div className="mt-2 space-y-2">
                                     {receiptIds.map((receiptId) => {
                                         const surface = resultSurfaces[receiptId];
+                                        const launchContextIds = receiptLaunchContextIds.get(receiptId);
+                                        const launchContextId = launchContextIds?.size === 1
+                                            ? [...launchContextIds][0]
+                                            : undefined;
                                         return (
                                             <div key={receiptId} className="flex flex-wrap items-center gap-2 text-xs">
                                                 <span className="font-mono text-content-secondary">{receiptId}</span>
                                                 <button type="button" className={BUTTON_CLASS} onClick={() => reopenResultMutation.mutate(receiptId)}>Resolve canonical result surface</button>
-                                                {surface?.route && <Link className={BUTTON_CLASS} to={contextHref(surface.route)}>Reopen {surface.surface_kind} result</Link>}
+                                                {surface?.route && (
+                                                    <Link
+                                                        className={BUTTON_CLASS}
+                                                        to={contextHref(surface.route, {
+                                                            launch_context_id: launchContextId,
+                                                            run_group_id: runGroup.run_group_id,
+                                                        })}
+                                                    >Reopen {surface.surface_kind} result</Link>
+                                                )}
                                                 {surface && !surface.route && <span className="text-amber-200">Surface unavailable ({surface.readiness})</span>}
                                             </div>
                                         );
