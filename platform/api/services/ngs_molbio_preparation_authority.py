@@ -811,7 +811,6 @@ async def _fresh_receipt_authority(
         "adapter_version",
         "source_schema",
         "global_domain_experiment_id",
-        "native_member_receipt_id",
         "native_entity_id",
         "native_revision_or_generation",
     )
