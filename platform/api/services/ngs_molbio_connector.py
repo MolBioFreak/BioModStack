@@ -486,7 +486,6 @@ async def exact_local_launch_authority(
     domain_revision = await global_session.get(ExperimentRevision, domain.current_revision_id)
     if (
         project_revision is None or project_revision.subject_id != project_id
-        or project_revision.revision_number != project.head_generation
         or project_revision.schema_name != "bms.project.v1"
         or project_revision.schema_version != "1"
         or _digest(project_revision.canonical_payload) != project_revision.payload_sha256
