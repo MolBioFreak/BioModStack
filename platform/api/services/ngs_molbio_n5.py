@@ -351,8 +351,14 @@ async def _verified_member(
     if owner is not None and owner != domain_id:
         raise ValidationFailure("Dataset member native owner is wrong")
     exact_fields = ("store_id", "entity_kind", "entity_id", "entity_revision_id", "content_digest", "contract_digest", "verifier_id", "reopen_uri")
-    if any(fresh.get(key) != persisted.get(key) for key in exact_fields):
-        raise ValidationFailure("Dataset member immutable revision, generation, digest, or bytes changed")
+    mismatched_fields = [
+        key for key in exact_fields if fresh.get(key) != persisted.get(key)
+    ]
+    if mismatched_fields:
+        raise ValidationFailure(
+            "Dataset member immutable revision, generation, digest, or bytes changed: "
+            + ",".join(mismatched_fields)
+        )
     if (receipt.store_id, receipt.entity_kind, receipt.entity_id, receipt.generation_or_revision, receipt.content_digest) != (
         fresh.get("store_id"), fresh.get("entity_kind"), fresh.get("entity_id"), str(fresh.get("entity_revision_id")), fresh.get("content_digest")
     ):
