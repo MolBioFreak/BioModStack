@@ -12,6 +12,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import set_committed_value
 
 from experiment_models import (
     ExperimentAggregateHead,
@@ -808,11 +809,14 @@ async def _claim_command(session: AsyncSession, worker_id: str, lease_seconds: i
     if result.rowcount != 1:
         await session.rollback()
         return None
+    lease_expires_at = (timestamp + timedelta(seconds=lease_seconds)).isoformat()
     await session.commit()
-    claimed = await session.get(ExperimentDomainConnectorCommand, row.command_id)
-    if claimed is not None:
-        await session.refresh(claimed)
-    return claimed
+    set_committed_value(row, "status", "leased")
+    set_committed_value(row, "lease_owner", worker_id)
+    set_committed_value(row, "lease_token", token)
+    set_committed_value(row, "lease_expires_at", lease_expires_at)
+    set_committed_value(row, "updated_at", timestamp.isoformat())
+    return row
 
 
 async def _append_local_binding(domain_session: AsyncSession, command: ExperimentDomainConnectorCommand, receipt_json: str) -> tuple[MolBioNGSConnectorAcknowledgement, MolBioNGSDomainState]:
@@ -1126,11 +1130,14 @@ async def _claim_outbox(session: AsyncSession, worker_id: str, lease_seconds: in
     if result.rowcount != 1:
         await session.rollback()
         return None
+    lease_expires_at = (timestamp + timedelta(seconds=lease_seconds)).isoformat()
     await session.commit()
-    claimed = await session.get(MolBioNGSOutboxEvent, event.id)
-    if claimed is not None:
-        await session.refresh(claimed)
-    return claimed
+    set_committed_value(event, "status", "leased")
+    set_committed_value(event, "lease_owner", worker_id)
+    set_committed_value(event, "lease_token", token)
+    set_committed_value(event, "lease_expires_at", lease_expires_at)
+    set_committed_value(event, "updated_at", timestamp.isoformat())
+    return event
 
 
 def _event_ack(
