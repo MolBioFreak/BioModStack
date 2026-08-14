@@ -483,7 +483,10 @@ async def _current_hierarchy_revision_authority(
         or not isinstance(head.head_generation, int)
         or isinstance(head.head_generation, bool)
         or head.head_generation < 1
-        or revision.revision_number != head.head_generation
+        or (
+            head.aggregate_kind != "workspace"
+            and revision.revision_number != head.head_generation
+        )
         or revision.schema_name != expected_schema_name
         or revision.schema_version != "1"
         or revision_resource.id != revision.resource_id
