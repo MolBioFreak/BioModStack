@@ -363,6 +363,7 @@ def prepare(request_path: Path, plan_path: Path, assets_dir: Path, output: Path)
         "canonical_binding": {
             "request_sha256": request["request_sha256"],
             "coordinate_plan_sha256": plan["coordinate_plan_sha256"],
+            "coordinates": plan["coordinates"],
             "target_id": target["target_id"],
             "coordinate_mapping": {
                 "target_id": {"constant": target["target_id"]},

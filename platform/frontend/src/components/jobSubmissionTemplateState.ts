@@ -34,7 +34,7 @@ const DEDICATED_TEMPLATE_INITIAL_VALUES: Partial<Record<DedicatedLauncherTemplat
         runtime_policy: { use_default_params: true },
         confornets: {
             task: 'diversity',
-            runs: 2, saved_steps: [5, 10, 15, 20], confornet_count: 2, samples: 5, max_steps: 20,
+            runs: 2, saved_steps: [5, 10, 15, 20], confornet_count: 2, samples: 5, output_count: 5, max_steps: 20,
             num_recycles: 0, num_diffusion_steps: 200, learning_rate: 0.001, gradient_clip: 10,
             skip_msa: false, compute_confidence: true, save_full_confidence: false, compute_evaluation: true,
         },

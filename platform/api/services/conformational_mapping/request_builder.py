@@ -65,6 +65,7 @@ _CONFORNETS_FIELDS = frozenset(
         "saved_steps",
         "confornet_count",
         "samples",
+        "output_count",
         "max_steps",
         "num_recycles",
         "num_diffusion_steps",
@@ -268,7 +269,7 @@ def _normalize_confornets_settings(settings: Mapping[str, Any]) -> dict[str, Any
         field="confornets",
         allowed_fields=_CONFORNETS_FIELDS,
     )
-    missing = sorted(_CONFORNETS_FIELDS - set(config))
+    missing = sorted((_CONFORNETS_FIELDS - {"output_count"}) - set(config))
     if missing:
         raise ConformationalMappingRequestError(
             f"confornets settings are incomplete: missing {', '.join(missing)}"
@@ -401,6 +402,28 @@ def _normalize_confornets_settings(settings: Mapping[str, Any]) -> dict[str, Any
             "ConforNets transfer requires one run, saved step 0, and one ConforNet"
         )
 
+    reference_count = len(normalized_references) if task == "mse" else 1
+    full_output_count = (
+        reference_count * runs * len(normalized_steps) * confornet_count * samples
+    )
+    requested_output_count = config.get("output_count")
+    output_count = (
+        full_output_count
+        if requested_output_count is None
+        else _strict_positive_int(
+            requested_output_count,
+            field="confornets.output_count",
+        )
+    )
+    if output_count > full_output_count:
+        raise ConformationalMappingRequestError(
+            "confornets.output_count exceeds the configured candidate pool"
+        )
+    if task != "diversity" and output_count != full_output_count:
+        raise ConformationalMappingRequestError(
+            "confornets.output_count can select a subset only for diversity"
+        )
+
     identity = _strict_object(
         config["backend_identity"],
         field="confornets.backend_identity",
@@ -445,6 +468,7 @@ def _normalize_confornets_settings(settings: Mapping[str, Any]) -> dict[str, Any
         "saved_steps": normalized_steps,
         "confornet_count": confornet_count,
         "samples": samples,
+        "output_count": output_count,
         "max_steps": max_steps,
         "num_recycles": _strict_nonnegative_int(
             config["num_recycles"], field="confornets.num_recycles"
@@ -503,7 +527,7 @@ def build_confornets_coordinate_plan(
     *,
     target_id: str,
 ) -> list[dict[str, Any]]:
-    """Build the complete ordered ConforNets coordinate product."""
+    """Build the deterministic selected ConforNets coordinate set."""
 
     config = _normalize_confornets_settings(settings)
     task = config["task"]
@@ -518,13 +542,13 @@ def build_confornets_coordinate_plan(
     samples = config["samples"]
     saved_steps = config["saved_steps"]
 
-    coordinates: list[dict[str, Any]] = []
+    full_coordinates: list[dict[str, Any]] = []
     for reference_id in reference_ids:
         for run_index in range(runs):
             for saved_step in saved_steps:
                 for confornet_index in range(confornet_count):
                     for sample_index in range(samples):
-                        coordinates.append(
+                        full_coordinates.append(
                             {
                                 "backend": "confornets",
                                 "target_id": target_id,
@@ -538,11 +562,31 @@ def build_confornets_coordinate_plan(
                             }
                         )
 
-    expected_cardinality = (
+    full_cardinality = (
         len(reference_ids) * runs * len(saved_steps) * confornet_count * samples
     )
-    if len(coordinates) != expected_cardinality:
+    if len(full_coordinates) != full_cardinality:
         raise ConformationalMappingRequestError("ConforNets coordinate cardinality mismatch")
+    output_count = config["output_count"]
+    if task == "diversity" and output_count < full_cardinality:
+        descending_step_order = {
+            step: index for index, step in enumerate(sorted(saved_steps, reverse=True))
+        }
+        full_coordinates.sort(
+            key=lambda coordinate: (
+                coordinate["sample_index"],
+                descending_step_order[coordinate["saved_step"]],
+                coordinate["run_index"],
+                coordinate["confornet_index"],
+            )
+        )
+        coordinates = full_coordinates[:output_count]
+    else:
+        coordinates = full_coordinates
+    if len(coordinates) != output_count:
+        raise ConformationalMappingRequestError(
+            "ConforNets selected output cardinality mismatch"
+        )
     return coordinates
 
 

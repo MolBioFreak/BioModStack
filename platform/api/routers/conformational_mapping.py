@@ -602,7 +602,22 @@ def _write_all(descriptor: int, payload: bytes) -> None:
 
 
 def _server_confornets_identity() -> dict[str, str]:
-    image = get_container_dir() / "confornets-canonical.sif"
+    image_name = os.environ.get("BMS_CM_CONFORNETS_CONTAINER_PATH", "").strip()
+    configured_image = (
+        Path(image_name)
+        if image_name
+        else get_container_dir() / "confornets-canonical.sif"
+    )
+    if configured_image.is_symlink():
+        raise HTTPException(
+            status_code=503, detail="canonical ConforNets image selector may not be a symlink"
+        )
+    try:
+        image = configured_image.resolve(strict=True)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=503, detail="canonical ConforNets image is not installed"
+        ) from exc
     if not image.is_file() or image.is_symlink():
         raise HTTPException(status_code=503, detail="canonical ConforNets image is not installed")
     digest = _sha256_path(image)

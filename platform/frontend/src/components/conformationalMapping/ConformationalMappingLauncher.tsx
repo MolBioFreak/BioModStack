@@ -75,6 +75,7 @@ interface LauncherState {
     task: CmTask;
     runs: number;
     networks: number;
+    outputCount: number | null;
     savedSteps: string;
     maxSteps: number;
     numRecycles: number;
@@ -101,6 +102,8 @@ interface LauncherState {
     frustrampnnSettings: FrustraMpnnRequestedSettings;
 }
 
+const DEFAULT_OUTPUT_COUNT = 5;
+
 const DEFAULT_STATE: LauncherState = {
     name: 'Conformational mapping', notes: '', backend: 'protenix_v2_ensemble', snapshotId: '',
     sequenceId: '', checkpointId: '', configId: '', transferId: '', referenceIds: [], importIds: [],
@@ -108,7 +111,7 @@ const DEFAULT_STATE: LauncherState = {
     featureMode: 'regenerate_mutated_protein_v1', proteinMsa: true, templates: false, rnaMsa: false,
     defaultRuntime: true, nCycle: 10, nStep: 200,
     task: 'diversity',
-    runs: 2, networks: 2, savedSteps: '5,10,15,20', maxSteps: 20,
+    runs: 2, networks: 2, outputCount: DEFAULT_OUTPUT_COUNT, savedSteps: '5,10,15,20', maxSteps: 20,
     numRecycles: 0, numDiffusionSteps: 200, learningRate: 0.001, gradientClip: 10,
     skipMsa: false, computeConfidence: true, saveFullConfidence: false, computeEvaluation: true,
     stateComparisonMode: 'off', stateComparisonTargetId: '', referenceBackend: 'protenix_v2_ensemble',
@@ -198,6 +201,11 @@ const hydrateState = (values?: Record<string, unknown>): LauncherState => {
 
         runs: finite(confornets.runs ?? merged.runs, DEFAULT_STATE.runs),
         networks: finite(confornets.confornet_count ?? merged.networks, DEFAULT_STATE.networks),
+        outputCount: Object.prototype.hasOwnProperty.call(confornets, 'output_count')
+            ? finite(confornets.output_count, DEFAULT_OUTPUT_COUNT)
+            : Object.prototype.hasOwnProperty.call(merged, 'outputCount')
+                ? finite(merged.outputCount, DEFAULT_OUTPUT_COUNT)
+                : backend === 'confornets' ? null : DEFAULT_STATE.outputCount,
         savedSteps: typeof savedSteps === 'string' ? savedSteps : DEFAULT_STATE.savedSteps,
         maxSteps: finite(confornets.max_steps ?? merged.maxSteps, DEFAULT_STATE.maxSteps),
         numRecycles: finite(confornets.num_recycles ?? merged.numRecycles, DEFAULT_STATE.numRecycles),
@@ -531,7 +539,7 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
     const stepValues = useMemo(() => integerList(form.savedSteps), [form.savedSteps]);
     const snapshotTargetIds = Array.isArray(selectedSnapshot?.metadata.target_ids)
         ? selectedSnapshot.metadata.target_ids.filter((item): item is string => typeof item === 'string') : [];
-    const expectedCount = cmCoordinateCardinality({
+    const candidatePoolCount = cmCoordinateCardinality({
         backend: form.backend,
         task: form.task,
         targetCount: Math.max(snapshotTargetIds.length, selectedSnapshot ? 1 : 0),
@@ -543,6 +551,9 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
         networkCount: form.networks,
         importCount: form.importIds.length,
     });
+    const expectedCount = form.backend === 'confornets' && form.task === 'diversity'
+        ? (form.outputCount ?? candidatePoolCount)
+        : candidatePoolCount;
     const selectedInputBytes = form.backend === 'external_import'
         ? form.importIds.reduce((total, id) => total + (sourceRegistry.find((source) => source.source_id === id)?.bytes || 0), 0)
         : selectedSnapshot?.bytes || 0;
@@ -594,6 +605,9 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
             if (!Number.isInteger(form.maxSteps) || form.maxSteps < 1) errors.push('Maximum steps must be a positive integer.');
             if (form.task === 'diversity') {
                 if (!Number.isInteger(form.networks) || form.networks < 2) errors.push('Diversity requires at least two networks.');
+                if (form.outputCount !== null && (!Number.isInteger(form.outputCount) || form.outputCount < 1 || form.outputCount > candidatePoolCount)) {
+                    errors.push('Returned outputs must be a positive integer no greater than the configured candidate pool.');
+                }
                 if (!stepValues?.length || new Set(stepValues).size !== stepValues.length || stepValues.some((step) => step < 0 || step > form.maxSteps)) {
                     errors.push('Saved steps must be unique non-negative integers no greater than maximum steps.');
                 }
@@ -627,7 +641,7 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
         }
         if (expectedCount < 1) errors.push('The current controls produce no candidate coordinates.');
         return errors;
-    }, [expectedCount, form, frustrampnnConfigurationReady, referenceSources.length, seedValues, selectedCheckpoint, selectedConfig,
+    }, [candidatePoolCount, expectedCount, form, frustrampnnConfigurationReady, referenceSources.length, seedValues, selectedCheckpoint, selectedConfig,
         selectedSnapshot, selectedSource?.submission_policy, selectedTransfer, stepValues, structureSources]);
 
     const register = useMutation({
@@ -778,16 +792,21 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
             if (form.configId) payload.registered_config_id = form.configId;
             if (form.task === 'mse') payload.registered_reference_ids = form.referenceIds;
             if (form.task === 'transfer') payload.registered_transfer_id = form.transferId;
-            payload.confornets = {
+            const confornets: NonNullable<CmSubmitRequest['confornets']> = {
                 task: form.task,
                 runs: form.task === 'transfer' ? 1 : form.runs,
                 saved_steps: form.task === 'mse' ? [form.maxSteps] : form.task === 'transfer' ? [0] : stepValues!,
                 confornet_count: form.task === 'diversity' ? form.networks : 1,
-                samples: form.samples, max_steps: form.maxSteps, num_recycles: form.numRecycles,
+                samples: form.samples,
+                max_steps: form.maxSteps, num_recycles: form.numRecycles,
                 num_diffusion_steps: form.numDiffusionSteps, learning_rate: form.learningRate, gradient_clip: form.gradientClip,
                 skip_msa: form.skipMsa, compute_confidence: form.computeConfidence,
                 save_full_confidence: form.saveFullConfidence, compute_evaluation: form.computeEvaluation,
             };
+            if (form.task !== 'diversity' || form.outputCount !== null) {
+                confornets.output_count = form.task === 'diversity' ? form.outputCount! : candidatePoolCount;
+            }
+            payload.confornets = confornets;
             if (form.stateComparisonMode !== 'off' && form.stateComparisonTargetId.trim()) {
                 const targetId = form.stateComparisonTargetId.trim();
                 if (form.stateComparisonMode === 'pairwise') {
@@ -840,7 +859,11 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
                 const transfer = effectivePayload.registered_transfer_id
                     ? `${effectivePayload.registered_transfer_id}@${sourceRegistry.find((source) => source.source_id === effectivePayload.registered_transfer_id)?.sha256 || 'unresolved'}`
                     : 'none';
-                return `${String(settings?.task || 'task unresolved')} · seed ${effectivePayload.ordered_seeds[0]} · ${effectivePayload.samples_per_seed} samples/coordinate · ${String(settings?.runs ?? 'unresolved')} runs · ${String(settings?.confornet_count ?? 'unresolved')} networks · steps ${Array.isArray(settings?.saved_steps) ? settings.saved_steps.join(', ') : 'unresolved'} · checkpoint ${selectedCheckpoint ? `${selectedCheckpoint.source_id}@${selectedCheckpoint.sha256}` : 'unresolved'} · config ${selectedConfig ? `${selectedConfig.source_id}@${selectedConfig.sha256}` : 'installed defaults'} · chain ${policy?.chain_id || 'unresolved'} · test ${policy?.test_case_id || 'unresolved'} · benchmark ${policy?.benchmark_name || 'unresolved'} · references ${references} · transfer ${transfer} · ${String(settings?.num_recycles ?? 'unresolved')} recycles · ${String(settings?.num_diffusion_steps ?? 'unresolved')} diffusion steps · LR ${String(settings?.learning_rate ?? 'unresolved')} · clip ${String(settings?.gradient_clip ?? 'unresolved')} · MSA ${settings?.skip_msa ? 'skipped' : 'enabled'} · confidence ${settings?.compute_confidence ? 'on' : 'off'} · full confidence ${settings?.save_full_confidence ? 'on' : 'off'} · evaluation ${settings?.compute_evaluation ? 'on' : 'off'} · ${analysisPolicySummary}`;
+                const returnedOutputs = settings?.output_count ?? candidatePoolCount;
+                const outputPolicy = settings?.output_count === undefined
+                    ? 'full configured pool'
+                    : 'explicit returned-output limit';
+                return `${String(settings?.task || 'task unresolved')} · seed ${effectivePayload.ordered_seeds[0]} · ${String(returnedOutputs)} returned outputs from ${candidatePoolCount} configured candidates (${outputPolicy}) · ${effectivePayload.samples_per_seed} diffusion samples/network checkpoint · ${String(settings?.runs ?? 'unresolved')} runs · scientific k=${String(settings?.confornet_count ?? 'unresolved')} · steps ${Array.isArray(settings?.saved_steps) ? settings.saved_steps.join(', ') : 'unresolved'} · checkpoint ${selectedCheckpoint ? `${selectedCheckpoint.source_id}@${selectedCheckpoint.sha256}` : 'unresolved'} · config ${selectedConfig ? `${selectedConfig.source_id}@${selectedConfig.sha256}` : 'installed defaults'} · chain ${policy?.chain_id || 'unresolved'} · test ${policy?.test_case_id || 'unresolved'} · benchmark ${policy?.benchmark_name || 'unresolved'} · references ${references} · transfer ${transfer} · ${String(settings?.num_recycles ?? 'unresolved')} recycles · ${String(settings?.num_diffusion_steps ?? 'unresolved')} diffusion steps · LR ${String(settings?.learning_rate ?? 'unresolved')} · clip ${String(settings?.gradient_clip ?? 'unresolved')} · MSA ${settings?.skip_msa ? 'skipped' : 'enabled'} · confidence ${settings?.compute_confidence ? 'on' : 'off'} · full confidence ${settings?.save_full_confidence ? 'on' : 'off'} · evaluation ${settings?.compute_evaluation ? 'on' : 'off'} · ${analysisPolicySummary}`;
             }
             return `${selectedSource ? `${selectedSource.source_id}@${selectedSource.sha256}` : 'source unresolved'} · immutable mmCIF normalized at admission · ${effectivePayload.feature_policy.mode} · installed runtime defaults · ${analysisPolicySummary}`;
         })()
@@ -1027,8 +1050,8 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
                         {comparisonControls}
                     </div>}
                     {form.backend === 'confornets' && <div className="mt-4 space-y-4">
-                        <div className="grid gap-4 md:grid-cols-2"><label className="space-y-1 text-sm">Task<select value={form.task} onChange={(event) => taskChanged(event.target.value as CmTask)} className={inputClass}><option value="diversity">Diversity</option><option value="mse">Reference-guided MSE</option><option value="transfer">Transfer state</option></select></label><label className="space-y-1 text-sm">Explicit seed<input type="number" value={form.seeds} onChange={(event) => update('seeds', event.target.value)} className={inputClass} /></label><label className="space-y-1 text-sm md:col-span-2">Samples per coordinate<span className="flex items-center gap-3"><input type="range" min={1} max={100} value={form.samples} onChange={(event) => update('samples', Number(event.target.value))} className="w-full accent-orange-500" /><output className="w-10 text-right text-white">{form.samples}</output></span></label></div>
-                        {(form.task === 'diversity' || form.task === 'mse') && <div className="grid gap-4 md:grid-cols-2"><label className="space-y-1 text-sm">Runs<input type="number" min={1} value={form.runs} onChange={(event) => update('runs', Number(event.target.value))} className={inputClass} /></label>{form.task === 'diversity' && <label className="space-y-1 text-sm">Networks<input type="number" min={2} value={form.networks} onChange={(event) => update('networks', Number(event.target.value))} className={inputClass} /></label>}{form.task === 'diversity' && <label className="space-y-1 text-sm">Saved steps<input value={form.savedSteps} onChange={(event) => update('savedSteps', event.target.value)} className={inputClass} /></label>}<label className="space-y-1 text-sm">Maximum steps<input type="number" min={1} value={form.maxSteps} onChange={(event) => update('maxSteps', Number(event.target.value))} className={inputClass} /></label></div>}
+                        <div className="grid gap-4 md:grid-cols-2"><label className="space-y-1 text-sm">Task<select value={form.task} onChange={(event) => taskChanged(event.target.value as CmTask)} className={inputClass}><option value="diversity">Diversity</option><option value="mse">Reference-guided MSE</option><option value="transfer">Transfer state</option></select></label><label className="space-y-1 text-sm">Explicit seed<input type="number" value={form.seeds} onChange={(event) => update('seeds', event.target.value)} className={inputClass} /></label><label className="space-y-1 text-sm">Diffusion samples per network checkpoint<span className="flex items-center gap-3"><input type="range" min={1} max={100} value={form.samples} onChange={(event) => update('samples', Number(event.target.value))} className="w-full accent-orange-500" /><output className="w-10 text-right text-white">{form.samples}</output></span></label>{form.task === 'diversity' && <label className="space-y-1 text-sm">Returned outputs<input type="number" min={1} max={candidatePoolCount} value={form.outputCount ?? ''} placeholder="Full pool" onChange={(event) => update('outputCount', event.target.value === '' ? null : Number(event.target.value))} className={inputClass} /><span className="block text-xs text-slate-500">{form.outputCount === null ? 'Legacy full-pool behavior is preserved.' : `Selected from ${candidatePoolCount.toLocaleString()} configured run/checkpoint/network/sample candidates.`}</span></label>}</div>
+                        {(form.task === 'diversity' || form.task === 'mse') && <div className="grid gap-4 md:grid-cols-2"><label className="space-y-1 text-sm">Runs<input type="number" min={1} value={form.runs} onChange={(event) => update('runs', Number(event.target.value))} className={inputClass} /></label>{form.task === 'diversity' && <label className="space-y-1 text-sm">Scientific ConforNet count (k)<input type="number" min={2} value={form.networks} onChange={(event) => update('networks', Number(event.target.value))} className={inputClass} /></label>}{form.task === 'diversity' && <label className="space-y-1 text-sm">Saved steps<input value={form.savedSteps} onChange={(event) => update('savedSteps', event.target.value)} className={inputClass} /></label>}<label className="space-y-1 text-sm">Maximum step index<input type="number" min={1} value={form.maxSteps} onChange={(event) => update('maxSteps', Number(event.target.value))} className={inputClass} /></label></div>}
                         {form.task === 'mse' && <label className="block space-y-1 text-sm">One or two registered references<select multiple value={form.referenceIds} onChange={(event) => update('referenceIds', Array.from(event.target.selectedOptions, (option) => option.value).slice(0, 2))} className={`${inputClass} min-h-24`}>{structureSources.map((source) => <option key={source.source_id} value={source.source_id}>{sourceLabel(source)}</option>)}</select></label>}
                         {form.task === 'transfer' && <label className="block space-y-1 text-sm">Registered transfer state<select value={form.transferId} onChange={(event) => update('transferId', event.target.value)} className={inputClass}><option value="">Select…</option>{byKind('confornets_state').map((source) => <option key={source.source_id} value={source.source_id}>{sourceLabel(source)}</option>)}</select></label>}
                         {comparisonControls}

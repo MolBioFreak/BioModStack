@@ -22,6 +22,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from confornets_source_closure import required_source_paths
+
 VALID_TASKS = {"diversity", "mse", "transfer"}
 
 
@@ -41,22 +43,22 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _runtime_source_records(repo_path: Path, task: str) -> list[dict[str, Any]]:
-    task_sources = {
-        "diversity": ("scripts/run_diversity.py", "confornet/inference/diversity.py"),
-        "mse": ("scripts/run_mse_training.py", "confornet/inference/mse_training.py"),
-        "transfer": ("scripts/run_transfer.py",),
-    }
-    relatives = (
-        "preprocess.py",
-        "confornet/utils/io.py",
-        "confornet/utils/cm_coordinate_ledger.py",
-        *task_sources[task],
-    )
+def _runtime_source_records(
+    repo_path: Path,
+    task: str,
+) -> list[dict[str, Any]]:
+    repo_root = repo_path.resolve(strict=True)
+    wrapper_root = Path(__file__).resolve(strict=True).parent
     records: list[dict[str, Any]] = []
-    for relative in relatives:
-        path = (repo_path / relative).resolve(strict=True)
-        path.relative_to(repo_path.resolve(strict=True))
+    for relative in required_source_paths(task):
+        if relative.startswith("biomodstack/"):
+            path = (wrapper_root / relative.removeprefix("biomodstack/")).resolve(
+                strict=True
+            )
+            path.relative_to(wrapper_root)
+        else:
+            path = (repo_root / relative).resolve(strict=True)
+            path.relative_to(repo_root)
         if not path.is_file() or path.is_symlink():
             raise RuntimeError(f"canonical executed source is unavailable: {relative}")
         records.append({
@@ -76,6 +78,7 @@ def _run(cmd: list[str], cwd: Path, log_path: Path) -> None:
         env["PYTHONPATH"] = str(cwd) + (
             os.pathsep + existing_pythonpath if existing_pythonpath else ""
         )
+        env["BMS_CONFORNETS_REPO_PATH"] = str(cwd.resolve(strict=True))
         proc = subprocess.run(
             cmd,
             cwd=str(cwd),
@@ -150,17 +153,23 @@ def _build_run_command(request: dict[str, Any], assets_dir: Path, raw_dir: Path)
     scripts = repo_path / "scripts"
 
     if task == "diversity":
-        diversity_script = scripts / "run_diversity.py"
-        if int(params.get("k_confornets", 2)) >= 5:
-            memory_safe_script = Path(__file__).with_name("run_diversity_memory_safe.py")
-            if memory_safe_script.is_file():
-                diversity_script = memory_safe_script
+        diversity_script = Path(__file__).with_name("run_diversity_bounded.py")
+        if not diversity_script.is_file():
+            raise SystemExit(f"bounded ConforNets adapter is unavailable: {diversity_script}")
+        requested_max_step = int(params.get("max_steps", 20))
+        selected_save_steps = [int(value) for value in _save_steps(
+            params.get("save_steps", "5,10,15,20")
+        )]
+        if not selected_save_steps:
+            raise SystemExit("ConforNets diversity requires at least one saved step")
+        if max(selected_save_steps) > requested_max_step:
+            raise SystemExit("ConforNets saved step exceeds the requested maximum step")
         cmd = [sys.executable, str(diversity_script), *common]
         cmd.extend([
             "--k-confornets",
             str(params.get("k_confornets", 2)),
             "--max-steps",
-            str(params.get("max_steps", 21)),
+            str(requested_max_step + 1),
             "--num-runs",
             str(params.get("num_runs", 2)),
             "--num-samples",
@@ -172,7 +181,7 @@ def _build_run_command(request: dict[str, Any], assets_dir: Path, raw_dir: Path)
             "--grad-clip",
             str(params.get("grad_clip", 10.0)),
             "--save-steps",
-            *_save_steps(params.get("save_steps", "5,10,15,20")),
+            *(str(value) for value in selected_save_steps),
         ])
         return cmd
 
@@ -208,7 +217,9 @@ def _build_run_command(request: dict[str, Any], assets_dir: Path, raw_dir: Path)
     return cmd
 
 
-def _run_preprocess(request: dict[str, Any], assets_dir: Path, log_path: Path) -> None:
+def _build_preprocess_command(
+    request: dict[str, Any], assets_dir: Path
+) -> tuple[Path, list[str]]:
     repo_path = Path(request.get("params", {}).get("confornets_repo_path") or "")
     if not repo_path.exists() or not repo_path.is_dir():
         raise SystemExit(f"ConforNets repo path does not exist: {repo_path}")
@@ -222,7 +233,7 @@ def _run_preprocess(request: dict[str, Any], assets_dir: Path, log_path: Path) -
     ]
     if _bool((request.get("params") or {}).get("skip_msa")):
         cmd.append("--skip-msa")
-    _run(cmd, cwd=repo_path, log_path=log_path)
+    return repo_path, cmd
 
 
 def _safe_float(value: Any) -> float | None:
@@ -888,6 +899,10 @@ def main() -> None:
     (output_dir / "request.json").write_text(json.dumps(relocated_request, indent=2), encoding="utf-8")
 
     canonical_binding = relocated_request.get("canonical_binding")
+    identity: dict[str, Any] | None = None
+    source_records: list[dict[str, Any]] | None = None
+    commit: str | None = None
+    ledger_path: Path | None = None
     if canonical_binding is not None:
         if not isinstance(canonical_binding, dict):
             raise SystemExit("canonical_binding must be an object")
@@ -901,6 +916,7 @@ def main() -> None:
             "schema_version": 1,
             "request_sha256": canonical_binding["request_sha256"],
             "coordinate_plan_sha256": canonical_binding["coordinate_plan_sha256"],
+            "coordinates": canonical_binding["coordinates"],
             "target_id": canonical_binding["target_id"],
             "coordinate_mapping": canonical_binding["coordinate_mapping"],
             "native_root": str(raw_dir),
@@ -916,33 +932,57 @@ def main() -> None:
 
     log_path = output_dir / "confornets_commands.log"
     started = datetime.now(timezone.utc).isoformat()
-    _run_preprocess(relocated_request, assets_dir, log_path)
-    run_cmd = _build_run_command(relocated_request, assets_dir, raw_dir)
-    _run(run_cmd, cwd=Path(relocated_request["params"]["confornets_repo_path"]), log_path=log_path)
-
+    repo_path = Path(
+        relocated_request["params"]["confornets_repo_path"]
+    ).resolve(strict=True)
+    identity = relocated_request.get("backend_identity")
     if canonical_binding is not None:
-        ledger_path.chmod(0o440)
-        repo_path = Path(relocated_request["params"]["confornets_repo_path"]).resolve(strict=True)
+        assert identity is not None
         commit = subprocess.run(
             ["git", "-C", str(repo_path), "rev-parse", "HEAD"],
             check=True, capture_output=True, text=True,
         ).stdout.strip()
-        identity = relocated_request["backend_identity"]
         if commit != identity["backend_commit"]:
-            raise RuntimeError("executed ConforNets commit differs from registered identity")
-        checkpoint = Path(relocated_request["params"]["checkpoint_path"]).resolve(strict=True)
+            raise RuntimeError(
+                "selected ConforNets commit differs from registered identity"
+            )
+        checkpoint = Path(
+            relocated_request["params"]["checkpoint_path"]
+        ).resolve(strict=True)
         if _sha256_file(checkpoint) != relocated_request["input_hashes"]["checkpoint_sha256"]:
-            raise RuntimeError("executed ConforNets checkpoint differs from registered identity")
+            raise RuntimeError(
+                "selected ConforNets checkpoint differs from registered identity"
+            )
+        source_records = _runtime_source_records(
+            repo_path, relocated_request["task"]
+        )
+    preprocess_repo, preprocess_cmd = _build_preprocess_command(
+        relocated_request, assets_dir
+    )
+    if preprocess_repo.resolve(strict=True) != repo_path:
+        raise RuntimeError("ConforNets preprocessing and inference repositories differ")
+    _run(preprocess_cmd, cwd=repo_path, log_path=log_path)
+    run_cmd = _build_run_command(relocated_request, assets_dir, raw_dir)
+    _run(run_cmd, cwd=repo_path, log_path=log_path)
+
+    if canonical_binding is not None:
+        assert ledger_path is not None
+        assert source_records is not None
+        assert commit is not None
+        assert identity is not None
+        ledger_path.chmod(0o440)
+        if _runtime_source_records(repo_path, relocated_request["task"]) != source_records:
+            raise RuntimeError("ConforNets source identity changed during execution")
         attestation = {
-            "schema_name": "cm_confornets_runtime_attestation", "schema_version": 1,
+            "schema_name": "cm_confornets_runtime_attestation", "schema_version": 2,
             "status": "container_executed", "request_sha256": canonical_binding["request_sha256"],
             "coordinate_plan_sha256": canonical_binding["coordinate_plan_sha256"],
             "backend_commit": commit, "runtime_identity": identity["runtime_identity"],
             "container_digest": identity["container_digest"],
             "feature_identity_sha256": identity["feature_identity_sha256"],
             "checkpoint_sha256": relocated_request["input_hashes"]["checkpoint_sha256"],
-            "executed_sources": _runtime_source_records(repo_path, relocated_request["task"]),
-            "command": run_cmd,
+            "executed_sources": source_records,
+            "commands": [preprocess_cmd, run_cmd],
         }
         (raw_dir / "cm_confornets_runtime_attestation_v1.json").write_text(
             json.dumps(attestation, sort_keys=True, separators=(",", ":")), encoding="utf-8"

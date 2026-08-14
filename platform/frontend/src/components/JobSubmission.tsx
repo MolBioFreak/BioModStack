@@ -840,10 +840,22 @@ export function JobSubmission() {
                     sessionStorage.removeItem('bms.conformational-mapping.launcher.v1');
                     setWizardMode('templates');
                     setSelectedTemplateId('conformational_mapping');
+                    const legacyDefaults = getDedicatedTemplateInitialValues('conformational_mapping') || {};
+                    const legacyConfornets = {
+                        ...(
+                            legacyDefaults.confornets
+                            && typeof legacyDefaults.confornets === 'object'
+                            && !Array.isArray(legacyDefaults.confornets)
+                                ? legacyDefaults.confornets as Record<string, unknown>
+                                : {}
+                        ),
+                    };
+                    delete legacyConfornets.output_count;
                     setClonedValues({
-                        ...(getDedicatedTemplateInitialValues('conformational_mapping') || {}),
+                        ...legacyDefaults,
                         name: data.name,
                         backend: 'confornets',
+                        confornets: legacyConfornets,
                     });
                     setJobName(data.name || data.params?.job_name || data.params?.sequence_name || '');
                 }

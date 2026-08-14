@@ -1324,6 +1324,13 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     dev_container_dir = str(
         resolved.get("dev_container_dir", shared_data_root / "apptainer")
     )
+    dev_confornets_container = str(
+        os.environ.get("BMS_DEV_CM_CONFORNETS_CONTAINER_PATH")
+        or resolved.get(
+            "dev_cm_confornets_container_path",
+            shared_data_root / "dev" / "apptainer" / "confornets-canonical.sif",
+        )
+    )
     dev_ngs_runtime_sif = str(
         os.environ.get("BMS_DEV_NGS_RUNTIME_SIF")
         or resolved.get(
@@ -1392,6 +1399,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment=BMS_RESULTS_DIR={dev_results_root}
         Environment=BMS_RESULTS_ROOT={dev_results_root}
         Environment=BMS_CONTAINER_DIR={dev_container_dir}
+        Environment=BMS_CM_CONFORNETS_CONTAINER_PATH={dev_confornets_container}
         Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=127.0.0.1
         Environment=BMS_WORKFLOW_ADAPTER_PORT={DEVELOPMENT_WORKFLOW_ADAPTER_PORT}
         Environment=BMS_BUILD_SHA={build_revision}
@@ -1445,6 +1453,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment=BMS_RESULTS_DIR={dev_results_root}
         Environment=BMS_RESULTS_ROOT={dev_results_root}
         Environment=BMS_CONTAINER_DIR={dev_container_dir}
+        Environment=BMS_CM_CONFORNETS_CONTAINER_PATH={dev_confornets_container}
         Environment=BMS_NGS_RUNTIME_SIF={dev_ngs_runtime_sif}
         Environment=BMS_WEIGHTS={dev_weights_root}
         Environment=BMS_COLABFOLD_DB={dev_colabfold_db}

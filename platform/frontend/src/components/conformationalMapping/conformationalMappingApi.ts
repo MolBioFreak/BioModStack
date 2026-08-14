@@ -78,6 +78,7 @@ export interface CmConfornetsControls {
     saved_steps: number[];
     confornet_count: number;
     samples: number;
+    output_count?: number;
     max_steps: number;
     num_recycles: number;
     num_diffusion_steps: number;

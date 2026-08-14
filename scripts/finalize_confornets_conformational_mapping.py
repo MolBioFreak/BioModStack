@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import itertools
 import mimetypes
 import os
 import shutil
@@ -20,6 +19,8 @@ import tempfile
 from collections import defaultdict
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
+
+from confornets_source_closure import validate_source_evidence
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -218,6 +219,11 @@ def _validate_execution_receipt(
     attestation = _load_json(attestation_path, label="runtime attestation")
     if not isinstance(attestation, Mapping):
         raise FinalizationError("runtime attestation is malformed")
+    if (
+        attestation.get("schema_name") != "cm_confornets_runtime_attestation"
+        or attestation.get("schema_version") != 2
+    ):
+        raise FinalizationError("runtime attestation schema is not authoritative")
     for key, value in expected_identity.items():
         if attestation.get(key) != value:
             raise FinalizationError("runtime attestation identity mismatch")
@@ -227,10 +233,18 @@ def _validate_execution_receipt(
         or attestation.get("status") != "container_executed"
         or not isinstance(attestation.get("executed_sources"), list)
         or not attestation["executed_sources"]
-        or not isinstance(attestation.get("command"), list)
-        or not attestation["command"]
+        or not isinstance(attestation.get("commands"), list)
+        or not attestation["commands"]
     ):
         raise FinalizationError("runtime attestation execution binding is incomplete")
+    try:
+        validate_source_evidence(
+            request["confornets"]["task"],
+            attestation["executed_sources"],
+            attestation["commands"],
+        )
+    except ValueError as exc:
+        raise FinalizationError(str(exc)) from exc
     return True
 
 
@@ -332,38 +346,26 @@ def _validate_group_cardinality(coordinates: Sequence[Mapping[str, Any]]) -> Non
     if len(references) > 2:
         raise FinalizationError("ConforNets supports at most two references")
 
-    expected_total = 0
-    for group, rows in groups.items():
-        runs = sorted({row["run_index"] for row in rows})
-        saved_steps = sorted({row["saved_step"] for row in rows})
-        confornets = sorted({row["confornet_index"] for row in rows})
-        samples = sorted({row["sample_index"] for row in rows})
-        expected_product = set(itertools.product(runs, saved_steps, confornets, samples))
-        observed_product = {
-            (
-                row["run_index"],
-                row["saved_step"],
-                row["confornet_index"],
-                row["sample_index"],
-            )
-            for row in rows
-        }
-        if observed_product != expected_product:
-            missing = sorted(expected_product - observed_product)
-            extra = sorted(observed_product - expected_product)
+    execution_groups: dict[tuple[Any, ...], list[int]] = defaultdict(list)
+    for rows in groups.values():
+        for row in rows:
+            execution_groups[
+                (
+                    row["target_id"],
+                    row["task"],
+                    row["test_case_id"],
+                    row["reference_id"],
+                    row["run_index"],
+                    row["saved_step"],
+                    row["confornet_index"],
+                )
+            ].append(row["sample_index"])
+    for key, sample_indexes in execution_groups.items():
+        ordered = sorted(sample_indexes)
+        if ordered != list(range(len(ordered))):
             raise FinalizationError(
-                f"coordinate group {group!r} is not a complete Cartesian product: "
-                f"missing={missing}, extra={extra}"
+                f"coordinate execution group {key!r} does not select a sample prefix"
             )
-        group_cardinality = len(runs) * len(saved_steps) * len(confornets) * len(samples)
-        if len(rows) != group_cardinality:
-            raise FinalizationError(f"coordinate group {group!r} cardinality mismatch")
-        expected_total += group_cardinality
-    if expected_total != len(coordinates):
-        raise FinalizationError(
-            "ConforNets dimension formula mismatch: "
-            "sum_g(runs_g * |saved_steps_g| * confornets_g * samples_g)"
-        )
 
 
 def _validate_native_tree(native_root: Path) -> list[str]:
@@ -566,13 +568,21 @@ def _validate_single_chain(
         "coordinate_plan_sha256": plan["coordinate_plan_sha256"],
         "target_id": request["targets"][0]["target_id"],
     }
-    mapped_binding = {
+    coordinate_binding = {
         **expected_binding,
+        "coordinates": plan["coordinates"],
+    }
+    mapped_binding = {
+        **coordinate_binding,
         "coordinate_mapping": {
             "target_id": {"constant": request["targets"][0]["target_id"]},
         },
     }
-    if legacy_request.get("canonical_binding") not in (expected_binding, mapped_binding):
+    if legacy_request.get("canonical_binding") not in (
+        expected_binding,
+        coordinate_binding,
+        mapped_binding,
+    ):
         raise FinalizationError("native request canonical binding mismatch")
     return legacy_request
 
