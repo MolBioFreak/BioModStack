@@ -2228,7 +2228,14 @@ def _exact_member_receipt(
         entity_id=requested_entity_id,
         entity_revision_id=str(member.source_generation_or_revision),
         content_digest=_sha256(member.content_digest, "native member content digest"),
-        contract_digest=_sha256(member.content_digest, "native member contract digest"),
+        contract_digest=_canonical_json_sha256(
+            {
+                "adapter_id": adapter.adapter_id,
+                "source_build_revision": _source_build_revision(),
+                "native_member_receipt_id": member.receipt_id,
+                "content_digest": member.content_digest,
+            }
+        ),
         reopen_uri=reopen_uri,
         metadata={
             "canonical_state": "immutable",
