@@ -453,8 +453,11 @@ def validate_workflow_payload_for_plan(
     model_mode = {"model_id": scheduler.get("model_id"), "mode": scheduler.get("mode")}
     if model_mode not in capability_contract["allowed_model_modes"]:
         raise ValidationFailure("workflow scheduler model/mode is not permitted by the pinned capability")
-    if canonical_json(parameters) != canonical_json(scheduler_params):
-        raise ValidationFailure("workflow parameters and scheduler params must carry the same pinned settings")
+    expected_scheduler_params = {**parameters, "workflow_adapter": adapter_id}
+    if canonical_json(expected_scheduler_params) != canonical_json(scheduler_params):
+        raise ValidationFailure(
+            "workflow scheduler params must carry the exact pinned settings and adapter identity"
+        )
     schema = capability_contract["parameter_schema"]
     errors = sorted(
         Draft202012Validator(schema).iter_errors(parameters),
