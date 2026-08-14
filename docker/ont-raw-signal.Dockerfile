@@ -17,6 +17,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH=/usr/local/bin:/usr/bin:/bin
 
+COPY scripts/ont_raw_signal_validate.py /opt/bms/ont_raw_signal_validate.py
+COPY scripts/ont_raw_signal_lookup.py /opt/bms/ont_raw_signal_lookup.py
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/*
@@ -53,6 +56,8 @@ RUN set -eux; \
     blue-crab --version; \
     slow5tools --version; \
     python3 -c "import importlib.metadata, numpy, pod5, pyslow5; print(numpy.__version__, pod5.__version__, importlib.metadata.version('pyslow5'))"; \
+    python3 /opt/bms/ont_raw_signal_validate.py --help >/dev/null; \
+    python3 /opt/bms/ont_raw_signal_lookup.py --help >/dev/null; \
     find /opt/blue-crab /usr/local/lib/python3.10/site-packages -type d -name __pycache__ -prune -exec rm -rf '{}' +; \
     python3 -c 'import os; from pathlib import Path; epoch=int(os.environ["SOURCE_DATE_EPOCH"]); roots=[Path("/opt/blue-crab"), Path("/usr/local/bin"), Path("/usr/local/lib/python3.10/site-packages")]; [os.utime(path, (epoch, epoch), follow_symlinks=False) for root in roots for path in [root, *root.rglob("*")]]'
 

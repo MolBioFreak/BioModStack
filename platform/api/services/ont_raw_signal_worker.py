@@ -13,6 +13,10 @@ from services.ont_raw_signal import (
     claim_next_waveform_lookup,
     close_source_identity,
     complete_external_blow5_validation,
+    conversion_partition_groups,
+    conversion_semantic_command,
+    conversion_unit_commands,
+    derivation_cancellation_requested,
     fail_waveform_lookup,
     finish_waveform_lookup,
     publish_derivation,
@@ -148,22 +152,49 @@ class OntRawSignalWorker:
                     session, source.id, job.id, claim_token, commands["source_receipt"]
                 )
                 await transition_derivation(
-                    session, job.id, claim_token, "converting", "source_preflight_passed", source_receipt
+                    session, job.id, claim_token, "partitioning", "source_preflight_passed", source_receipt
                 )
+            groups = conversion_partition_groups(commands)
+            Path(commands["partitions"]).mkdir(mode=0o700)
+            Path(commands["outputs"]).mkdir(mode=0o700)
+            partition_receipt = await self._execute(commands["partition"], job.id, claim_token)
+            async with self._session_factory() as session:
+                await transition_derivation(
+                    session,
+                    job.id,
+                    claim_token,
+                    "partitioning",
+                    "complete_run_info_partitioning_passed",
+                    {"partition_count": len(groups), "command": partition_receipt},
+                )
+            unit_commands = {group: conversion_unit_commands(commands, group) for group in groups}
             stages = (
-                ("converting", "conversion_process_complete", commands["convert"]),
-                ("structural_check", "slow5tools_quickcheck_passed", commands["quickcheck"]),
-                ("indexing", "adjacent_index_created", commands["index_create"]),
+                ("converting", "conversion_processes_complete", "convert"),
+                ("structural_check", "slow5tools_quickcheck_passed", "quickcheck"),
+                ("indexing", "adjacent_indexes_created", "index_create"),
             )
-            for state, reason, command in stages:
+            for state, reason, command_name in stages:
                 async with self._session_factory() as session:
                     await transition_derivation(session, job.id, claim_token, state, f"{state}_started", {})
-                receipt = await self._execute(command, job.id, claim_token)
+                unit_receipts: dict[str, Any] = {}
+                for group in groups:
+                    unit_receipts[group] = await self._execute(
+                        unit_commands[group][command_name], job.id, claim_token
+                    )
                 async with self._session_factory() as session:
-                    await transition_derivation(session, job.id, claim_token, state, reason, receipt)
+                    await transition_derivation(
+                        session,
+                        job.id,
+                        claim_token,
+                        state,
+                        reason,
+                        {"partition_count": len(groups), "units": unit_receipts},
+                    )
             async with self._session_factory() as session:
                 await transition_derivation(session, job.id, claim_token, "index_validation", "index_validation_started", {})
-            validation_receipt = await self._execute(commands["semantic_validate"], job.id, claim_token)
+            validation_receipt = await self._execute(
+                conversion_semantic_command(commands, groups), job.id, claim_token
+            )
             async with self._session_factory() as session:
                 await transition_derivation(session, job.id, claim_token, "index_validation", "index_open_lookup_validation_passed", validation_receipt)
                 await transition_derivation(session, job.id, claim_token, "semantic_validation", "exhaustive_semantic_validation_passed", validation_receipt)
@@ -181,7 +212,15 @@ class OntRawSignalWorker:
             logger.exception("ONT raw-signal derivation failed: %s", job.id)
             async with self._session_factory() as session:
                 try:
-                    await transition_derivation(session, job.id, claim_token, "failed", "derivation_stage_failed", {"error_type": type(exc).__name__})
+                    cancelled = await derivation_cancellation_requested(session, job.id, claim_token)
+                    await transition_derivation(
+                        session,
+                        job.id,
+                        claim_token,
+                        "cancelled" if cancelled else "failed",
+                        "cancelled_child_terminated" if cancelled else "derivation_stage_failed",
+                        {"error_type": type(exc).__name__},
+                    )
                 except Exception:
                     logger.exception("Could not persist ONT raw-signal failure receipt: %s", job.id)
             return 1

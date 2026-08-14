@@ -31,7 +31,7 @@ from database import (
 
 
 RepresentationPreference = Literal["auto", "pod5", "blow5"]
-BLOW5_PROFILE_ID = "bms.blow5.zstd-svb-zd.v1"
+BLOW5_PROFILE_ID = "bms.blow5.partitioned-zstd-svb-zd.v2"
 EXTERNAL_BLOW5_VALIDATION_PROFILE_ID = "bms.blow5.external-validation.v1"
 BLOW5_CONTAINER_ENV = "BMS_ONT_SLOW5TOOLS_IMAGE"
 BLOW5_CONTAINER_DIGEST_ENV = "BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST"
@@ -42,8 +42,7 @@ BLOW5_MIN_FREE_BYTES_ENV = "BMS_ONT_RAW_SIGNAL_MIN_FREE_BYTES"
 BLOW5_ACQUISITION_PRESSURE_ENV = "BMS_ONT_RAW_SIGNAL_ACQUISITION_PRESSURE"
 BLOW5_DEFAULT_STAGING_ROOT = "/mnt/BioModStack/ont-raw-signal-staging"
 BLOW5_DEFAULT_MIN_FREE_BYTES = 20 * 1024 * 1024 * 1024
-RAW_SIGNAL_VALIDATOR = Path(__file__).resolve().parents[3] / "scripts" / "ont_raw_signal_validate.py"
-RAW_SIGNAL_LOOKUP = Path(__file__).resolve().parents[3] / "scripts" / "ont_raw_signal_lookup.py"
+
 _RAW_FORMATS = frozenset({"pod5", "slow5", "blow5"})
 _TERMINAL_STATES = frozenset({"stopped", "completed", "failed"})
 _READY = "ready"
@@ -187,6 +186,16 @@ async def register_native_pod5_generation(session: AsyncSession, *, run_id: str,
         )
         session.add(existing)
         await session.flush()
+    if existing.acquisition_id:
+        await request_blow5_derivation(
+            session,
+            run_id=run_id,
+            observed_generation=observed_generation,
+            source_representation_id=existing.id,
+            consumer_id="ont-terminal-reconciliation",
+            preference="auto",
+            automatic=True,
+        )
     return [_public_representation(existing)]
 
 
@@ -463,8 +472,6 @@ def _runtime_gate(snapshot: dict[str, Any]) -> str | None:
         return "validator_runtime_identity_not_pinned"
     if snapshot["container_runtime"] not in {"docker", "podman"} or shutil.which(snapshot["container_runtime"]) is None:
         return "validator_container_runtime_unavailable"
-    if not RAW_SIGNAL_VALIDATOR.is_file():
-        return "validator_runtime_missing"
     if snapshot["disk_free_bytes"] < snapshot["required_free_bytes"]:
         return "validation_capacity_gate_failed"
     return None
@@ -472,7 +479,14 @@ def _runtime_gate(snapshot: dict[str, Any]) -> str | None:
 
 def _source_paths(source: OntRawSignalRepresentation) -> list[Path]:
     manifest = source.artifact_manifest if isinstance(source.artifact_manifest, dict) else {}
-    paths = [Path(str(item["path"])) for item in manifest.get("artifacts", []) if isinstance(item, dict) and item.get("kind") == "pod5" and item.get("path")]
+    artifacts = [
+        item
+        for item in manifest.get("artifacts", [])
+        if isinstance(item, dict) and item.get("kind") == "pod5" and item.get("path")
+    ]
+    if any(not _is_sha256(item.get("sha256")) or int(item.get("bytes") or 0) < 1 for item in artifacts):
+        raise ValueError("POD5 source manifest lacks immutable size and digest authority")
+    paths = [Path(str(item["path"])) for item in artifacts]
     if not paths:
         raise ValueError("POD5 source has no governed artifact paths")
     return paths
@@ -480,18 +494,31 @@ def _source_paths(source: OntRawSignalRepresentation) -> list[Path]:
 
 def _conversion_commands(job: OntRawSignalDerivationJob, source: OntRawSignalRepresentation, snapshot: dict[str, Any]) -> dict[str, Any]:
     stage = Path(snapshot["staging_root"]) / job.id / f"attempt-{job.attempt}"
-    output = stage / "result.blow5"
-    index = Path(f"{output}.idx")
+    partitions = stage / "partitions"
+    outputs = stage / "outputs"
     inputs = _source_paths(source)
+    source_manifest = source.artifact_manifest if isinstance(source.artifact_manifest, dict) else {}
+    artifact_by_path = {
+        str(Path(str(item["path"]))): item
+        for item in source_manifest.get("artifacts", [])
+        if isinstance(item, dict) and item.get("kind") == "pod5" and item.get("path")
+    }
     image_ref = _container_image_ref(snapshot)
     input_args = [f"/inputs/{position}/{path.name}" for position, path in enumerate(inputs)]
-    validator_input_args = [item for value in input_args for item in ("--pod5", value)]
+    validator_input_args = [
+        argument
+        for path, mounted_path in zip(inputs, input_args, strict=True)
+        for argument in (
+            "--pod5", mounted_path,
+            "--expected-sha256", str(artifact_by_path[str(path)]["sha256"]),
+            "--expected-size", str(artifact_by_path[str(path)]["bytes"]),
+        )
+    ]
     base = [
         snapshot["container_runtime"], "run", "--rm", "--network=none", "--read-only",
         f"--user={snapshot['worker_uid']}:{snapshot['worker_gid']}",
         "--cpus=4", "--memory=16g", "--pids-limit=256", "--ulimit", "nofile=512:512",
         "--mount", f"type=bind,src={stage},dst=/stage",
-        "--mount", f"type=bind,src={RAW_SIGNAL_VALIDATOR},dst=/opt/bms/ont_raw_signal_validate.py,readonly",
     ]
     # Build mounts without a shell. slow5tools degrade is absent by construction.
     bind_args: list[str] = []
@@ -499,18 +526,73 @@ def _conversion_commands(job: OntRawSignalDerivationJob, source: OntRawSignalRep
         bind_args.extend(["--mount", f"type=bind,src={path.parent},dst=/inputs/{position},readonly"])
     common = base + bind_args + [image_ref]
     return {
-        "stage": str(stage), "output": str(output), "index": str(index),
+        "stage": str(stage), "partitions": str(partitions), "outputs": str(outputs),
+        "routing": str(stage / "routing.json"),
         "source_receipt": str(stage / "source-preflight-receipt.json"),
+        "partition_map": str(stage / "partition-map.csv"),
+        "common": common,
+        "validator_input_args": validator_input_args,
         "source_preflight": common + [
             "python3", "/opt/bms/ont_raw_signal_validate.py", "source-preflight", *validator_input_args,
             "--expected-acquisition-id", source.acquisition_id or "external-native",
+            "--partition-map", "/stage/partition-map.csv",
             "--receipt", "/stage/source-preflight-receipt.json",
         ],
-        "convert": common + ["blue-crab", "p2s", "-c", "zstd", "-s", "svb-zd", "--iop", "1", "--threads", "4", "--batchsize", "1000", *input_args, "-o", "/stage/result.blow5"],
-        "quickcheck": common + ["slow5tools", "quickcheck", "/stage/result.blow5"],
-        "index_create": common + ["slow5tools", "index", "/stage/result.blow5"],
-        "semantic_validate": common + ["python3", "/opt/bms/ont_raw_signal_validate.py", *validator_input_args, "--blow5", "/stage/result.blow5", "--index", "/stage/result.blow5.idx", "--receipt", "/stage/semantic-receipt.json"],
+        "partition": common + [
+            "pod5", "subset", *input_args, "--table", "/stage/partition-map.csv",
+            "--read-id-column", "read_id", "--columns", "group",
+            "--output", "/stage/partitions", "--template", "{group}.pod5",
+            "--threads", "4", "--missing-ok",
+        ],
     }
+
+
+def conversion_partition_groups(commands: dict[str, Any]) -> list[str]:
+    receipt = json.loads(Path(commands["source_receipt"]).read_text(encoding="utf-8"))
+    raw_groups = receipt.get("groups")
+    if receipt.get("status") != "passed" or not isinstance(raw_groups, list) or not raw_groups:
+        raise ValueError("source preflight did not produce a partition authority")
+    groups: list[str] = []
+    for item in raw_groups:
+        fingerprint = item.get("fingerprint") if isinstance(item, dict) else None
+        if not isinstance(fingerprint, str) or not _is_sha256(fingerprint) or int(item.get("read_count") or 0) < 1:
+            raise ValueError("source preflight produced an invalid run-info partition")
+        groups.append(fingerprint)
+    if len(groups) != len(set(groups)):
+        raise ValueError("source preflight produced duplicate run-info partitions")
+    return sorted(groups)
+
+
+def conversion_unit_commands(commands: dict[str, Any], fingerprint: str) -> dict[str, list[str]]:
+    if not _is_sha256(fingerprint):
+        raise ValueError("conversion unit requires a run-info fingerprint")
+    common = list(commands["common"])
+    partition = f"/stage/partitions/{fingerprint}.pod5"
+    output = f"/stage/outputs/{fingerprint}.blow5"
+    return {
+        "convert": common + [
+            "blue-crab", "p2s", "-c", "zstd", "-s", "svb-zd", "--iop", "1",
+            "--threads", "4", "--batchsize", "1000", partition, "-o", output,
+        ],
+        "quickcheck": common + ["slow5tools", "quickcheck", output],
+        "index_create": common + ["slow5tools", "index", output],
+    }
+
+
+def conversion_semantic_command(commands: dict[str, Any], groups: list[str]) -> list[str]:
+    outputs = [
+        argument
+        for fingerprint in groups
+        for argument in (
+            "--blow5", f"/stage/outputs/{fingerprint}.blow5",
+            "--index", f"/stage/outputs/{fingerprint}.blow5.idx",
+        )
+    ]
+    return list(commands["common"]) + [
+        "python3", "/opt/bms/ont_raw_signal_validate.py", "semantic-dataset",
+        *list(commands["validator_input_args"]), *outputs,
+        "--routing", "/stage/routing.json", "--receipt", "/stage/semantic-receipt.json",
+    ]
 
 
 def _external_blow5_validation_commands(job: OntRawSignalDerivationJob, source: OntRawSignalRepresentation, snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -523,7 +605,6 @@ def _external_blow5_validation_commands(job: OntRawSignalDerivationJob, source: 
         "--cpus=1", "--memory=2g", "--pids-limit=64", "--ulimit", "nofile=128:128",
         "--mount", f"type=bind,src={blow5.parent},dst=/input,readonly",
         "--mount", f"type=bind,src={stage},dst=/stage",
-        "--mount", f"type=bind,src={RAW_SIGNAL_VALIDATOR},dst=/opt/bms/ont_raw_signal_validate.py,readonly",
         image_ref,
     ]
     return {
@@ -569,7 +650,16 @@ async def complete_external_blow5_validation(
     return source
 
 
-async def request_blow5_derivation(session: AsyncSession, *, run_id: str, observed_generation: int, source_representation_id: str, consumer_id: str, preference: RepresentationPreference) -> dict[str, Any]:
+async def request_blow5_derivation(
+    session: AsyncSession,
+    *,
+    run_id: str,
+    observed_generation: int,
+    source_representation_id: str,
+    consumer_id: str,
+    preference: RepresentationPreference,
+    automatic: bool = False,
+) -> dict[str, Any]:
     if preference not in {"auto", "blow5"}:
         raise ValueError("BLOW5 derivation accepts auto or blow5 preference")
     if not consumer_id or len(consumer_id) > 128:
@@ -580,7 +670,7 @@ async def request_blow5_derivation(session: AsyncSession, *, run_id: str, observ
     if source is None or source.run_id != run_id or source.observed_generation != observed_generation or source.format not in {"pod5", "blow5"}:
         raise ValueError("source representation is not POD5 or external BLOW5 for the exact dataset generation")
     validation_only = source.format == "blow5"
-    if validation_only and source.source_kind != "external_import":
+    if validation_only and source.source_kind != "external_native":
         raise ValueError("validation-only admission is limited to external BLOW5")
     if source.source_kind == "minknow_native" and not source.acquisition_id:
         raise ValueError("native POD5 acquisition identity is absent from the sealed MinKNOW observation")
@@ -608,7 +698,7 @@ async def request_blow5_derivation(session: AsyncSession, *, run_id: str, observ
             id=_id("ont-raw-event"), job_id=existing.id, state=state,
             reason_code=existing.reason_code,
             receipt={
-                "automatic_whole_run_conversion": False,
+                "automatic_whole_run_conversion": automatic,
                 "operation": "external_validation" if validation_only else "pod5_to_blow5_conversion",
                 "profile_id": existing.profile_id,
                 "resource_snapshot": snapshot,
@@ -660,7 +750,10 @@ async def cancel_derivation(session: AsyncSession, job_id: str) -> dict[str, Any
     return {"job_id": job.id, "state": job.state, "reason_code": job.reason_code, "cancel_requested": True}
 
 
-def _validated_blow5_paths(representation: OntRawSignalRepresentation) -> tuple[Path, Path]:
+def _validated_blow5_paths(
+    representation: OntRawSignalRepresentation,
+    read_id: str | None = None,
+) -> tuple[Path, Path]:
     if representation.format != "blow5" or representation.state != "ready":
         raise ValueError("raw waveform requires a ready BLOW5 representation")
     receipts = representation.validation_receipts if isinstance(representation.validation_receipts, dict) else {}
@@ -669,15 +762,37 @@ def _validated_blow5_paths(representation: OntRawSignalRepresentation) -> tuple[
     manifest = representation.artifact_manifest if isinstance(representation.artifact_manifest, dict) else {}
     raw_artifacts = manifest.get("artifacts")
     artifacts: list[Any] = raw_artifacts if isinstance(raw_artifacts, list) else []
-    paths = {
-        str(item.get("kind")): Path(str(item.get("path"))).expanduser().resolve()
-        for item in artifacts
-        if isinstance(item, dict) and item.get("kind") in {"blow5", "blow5_index"} and item.get("path")
-    }
-    blow5 = paths.get("blow5")
-    index = paths.get("blow5_index")
+    blow5_artifacts = [item for item in artifacts if isinstance(item, dict) and item.get("kind") == "blow5" and item.get("path")]
+    index_artifacts = [item for item in artifacts if isinstance(item, dict) and item.get("kind") == "blow5_index" and item.get("path")]
+    if len(blow5_artifacts) == 1 and len(index_artifacts) == 1:
+        blow5 = Path(str(blow5_artifacts[0]["path"])).expanduser().resolve()
+        index = Path(str(index_artifacts[0]["path"])).expanduser().resolve()
+    else:
+        if read_id is None:
+            raise ValueError("partitioned BLOW5 lookup requires a read ID")
+        routing_artifact = next(
+            (item for item in artifacts if isinstance(item, dict) and item.get("kind") == "read_routing" and item.get("path")),
+            None,
+        )
+        if routing_artifact is None:
+            raise ValueError("partitioned BLOW5 representation lacks a routing artifact")
+        routing_path = Path(str(routing_artifact["path"])).expanduser().resolve(strict=True)
+        routing = json.loads(routing_path.read_text(encoding="utf-8"))
+        fingerprint = (routing.get("read_to_group") or {}).get(read_id)
+        group = (routing.get("groups") or {}).get(fingerprint) if isinstance(fingerprint, str) else None
+        if (
+            not isinstance(group, dict)
+            or not _is_sha256(fingerprint)
+            or group.get("blow5") != f"{fingerprint}.blow5"
+            or group.get("index") != f"{fingerprint}.blow5.idx"
+        ):
+            raise KeyError(read_id)
+        blow5 = routing_path.parent / "outputs" / f"{fingerprint}.blow5"
+        index = routing_path.parent / "outputs" / f"{fingerprint}.blow5.idx"
     if blow5 is None or index is None or index != Path(f"{blow5}.idx"):
         raise ValueError("raw waveform representation lacks an adjacent index")
+    if not blow5.is_file() or not index.is_file():
+        raise ValueError("raw waveform representation artifacts are unavailable")
     return blow5, index
 
 
@@ -694,7 +809,7 @@ async def request_waveform_lookup(
     representation = await session.get(OntRawSignalRepresentation, representation_id)
     if representation is None or representation.run_id != run_id or representation.observed_generation != observed_generation:
         raise ValueError("representation does not belong to the exact run generation")
-    _validated_blow5_paths(representation)
+    _validated_blow5_paths(representation, read_id)
     existing = (await session.execute(select(OntRawSignalLookup).where(
         OntRawSignalLookup.representation_id == representation_id,
         OntRawSignalLookup.read_id == read_id,
@@ -742,7 +857,7 @@ async def claim_next_waveform_lookup(session: AsyncSession, *, lease_seconds: in
         lookup.completed_at = _now()
         await session.commit()
         return None
-    blow5, index = _validated_blow5_paths(representation)
+    blow5, index = _validated_blow5_paths(representation, lookup.read_id)
     del index
     snapshot = _resource_snapshot(0)
     gate = _runtime_gate(snapshot)
@@ -763,7 +878,6 @@ async def claim_next_waveform_lookup(session: AsyncSession, *, lease_seconds: in
         "--cpus=1", "--memory=1g", "--pids-limit=64", "--ulimit", "nofile=128:128",
         "--mount", f"type=bind,src={blow5.parent},dst=/input,readonly",
         "--mount", f"type=bind,src={output_root},dst=/output",
-        "--mount", f"type=bind,src={RAW_SIGNAL_LOOKUP},dst=/opt/bms/ont_raw_signal_lookup.py,readonly",
         image_ref, "python", "/opt/bms/ont_raw_signal_lookup.py",
         "--blow5", f"/input/{blow5.name}", "--read-id", lookup.read_id,
         "--max-samples", str(RAW_SIGNAL_MAX_WAVEFORM_SAMPLES), "--output", "/output/waveform.json",
@@ -822,13 +936,18 @@ async def renew_waveform_lookup_lease(session: AsyncSession, lookup_id: str, cla
 async def claim_next_derivation(session: AsyncSession, *, lease_seconds: int = 300) -> tuple[OntRawSignalDerivationJob, OntRawSignalRepresentation, dict[str, Any]] | None:
     """Claim one request. SQLite write serialization keeps the one-job policy."""
     active = (await session.execute(select(OntRawSignalDerivationJob).where(
-        OntRawSignalDerivationJob.state.in_(("admitted", "converting", "structural_check", "indexing", "index_validation", "semantic_validation", "publishing"))
+        OntRawSignalDerivationJob.state.in_(("admitted", "partitioning", "converting", "structural_check", "indexing", "index_validation", "semantic_validation", "publishing"))
     ))).scalars().first()
     if active is not None:
         return None
     job = (await session.execute(select(OntRawSignalDerivationJob).where(
         OntRawSignalDerivationJob.state == "requested"
     ).order_by(OntRawSignalDerivationJob.created_at, OntRawSignalDerivationJob.id).limit(1))).scalar_one_or_none()
+    if job is None:
+        job = (await session.execute(select(OntRawSignalDerivationJob).where(
+            OntRawSignalDerivationJob.state == "deferred",
+            OntRawSignalDerivationJob.updated_at < _now() - timedelta(seconds=60),
+        ).order_by(OntRawSignalDerivationJob.updated_at, OntRawSignalDerivationJob.id).limit(1))).scalar_one_or_none()
     if job is None:
         return None
     source = await session.get(OntRawSignalRepresentation, job.source_representation_id)
@@ -845,6 +964,7 @@ async def claim_next_derivation(session: AsyncSession, *, lease_seconds: int = 3
         job.reason_code = gate
         job.resource_snapshot = snapshot
         job.completed_at = _now()
+        job.updated_at = _now()
         await session.commit()
         return None
     job.state = "admitted"
@@ -853,6 +973,7 @@ async def claim_next_derivation(session: AsyncSession, *, lease_seconds: int = 3
     job.lease_expires_at = _now() + timedelta(seconds=lease_seconds)
     job.resource_snapshot = snapshot
     job.attempt += 1
+    job.completed_at = None
     job.updated_at = _now()
     session.add(OntRawSignalDerivationEvent(
         id=_id("ont-raw-event"), job_id=job.id, state=job.state,
@@ -864,12 +985,14 @@ async def claim_next_derivation(session: AsyncSession, *, lease_seconds: int = 3
 
 
 async def transition_derivation(session: AsyncSession, job_id: str, claim_token: str, state: str, reason_code: str, receipt: dict[str, Any]) -> OntRawSignalDerivationJob:
-    allowed = {"converting", "structural_check", "indexing", "index_validation", "semantic_validation", "publishing", "ready", "failed", "cancelled"}
+    allowed = {"partitioning", "converting", "structural_check", "indexing", "index_validation", "semantic_validation", "publishing", "ready", "failed", "cancelled"}
     if state not in allowed:
         raise ValueError("invalid raw-signal derivation state")
     job = await session.get(OntRawSignalDerivationJob, job_id)
     if job is None or job.claim_token != claim_token:
         raise ValueError("raw-signal derivation lease ownership lost")
+    if job.cancel_requested_at is not None and state != "cancelled":
+        raise ValueError("raw-signal derivation cancellation requested")
     if job.lease_expires_at is None or job.lease_expires_at <= _now():
         raise ValueError("raw-signal derivation lease expired")
     job.state = state
@@ -888,6 +1011,15 @@ async def transition_derivation(session: AsyncSession, job_id: str, claim_token:
     ))
     await session.commit()
     return job
+
+
+async def derivation_cancellation_requested(
+    session: AsyncSession,
+    job_id: str,
+    claim_token: str,
+) -> bool:
+    job = await session.get(OntRawSignalDerivationJob, job_id)
+    return bool(job is not None and job.claim_token == claim_token and job.cancel_requested_at is not None)
 
 
 async def renew_derivation_lease(
@@ -938,46 +1070,72 @@ async def publish_derivation(session: AsyncSession, job: OntRawSignalDerivationJ
     publish_root = Path(os.getenv(BLOW5_STAGING_ROOT_ENV, BLOW5_DEFAULT_STAGING_ROOT)).parent / "ont-raw-signal" / job.run_id / str(job.observed_generation)
     final_directory = publish_root / job.id
     if final_directory.is_dir() and not stage.exists():
-        output = final_directory / "result.blow5"
-        index = final_directory / "result.blow5.idx"
+        outputs = final_directory / "outputs"
+        routing_path = final_directory / "routing.json"
         semantic_receipt = final_directory / "semantic-receipt.json"
         recovering_atomic_publication = True
     else:
-        output = Path(commands["output"])
-        index = Path(commands["index"])
+        outputs = Path(commands["outputs"])
+        routing_path = Path(commands["routing"])
         semantic_receipt = stage / "semantic-receipt.json"
         recovering_atomic_publication = False
-    if not output.is_file() or not index.is_file() or not semantic_receipt.is_file():
+    if not outputs.is_dir() or not routing_path.is_file() or not semantic_receipt.is_file():
         raise ValueError("validated BLOW5 publication unit is incomplete")
     semantic = json.loads(semantic_receipt.read_text(encoding="utf-8"))
-    if semantic.get("status") != "passed" or semantic.get("duplicate_read_ids") not in (0, False):
+    partition_counts = semantic.get("partition_counts")
+    if (
+        semantic.get("status") != "passed"
+        or semantic.get("duplicate_read_ids") not in (0, False)
+        or not isinstance(partition_counts, dict)
+        or not partition_counts
+        or semantic.get("routing_sha256") != hashlib.sha256(routing_path.read_bytes()).hexdigest()
+    ):
         raise ValueError("exhaustive semantic validation receipt did not pass")
+    for fingerprint, read_count in partition_counts.items():
+        if not _is_sha256(fingerprint) or int(read_count) < 1:
+            raise ValueError("semantic receipt contains an invalid conversion partition")
+        if not (outputs / f"{fingerprint}.blow5").is_file() or not (outputs / f"{fingerprint}.blow5.idx").is_file():
+            raise ValueError("semantic receipt names an incomplete conversion partition")
     publish_root.mkdir(parents=True, exist_ok=True)
     if not recovering_atomic_publication:
         if final_directory.exists():
             raise ValueError("raw-signal publication destination already exists")
-        for path in (output, index, semantic_receipt):
+        for path in (*sorted(outputs.iterdir()), routing_path, semantic_receipt):
             with path.open("rb") as handle:
                 os.fsync(handle.fileno())
+        for directory in (outputs, stage):
+            directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
         os.replace(stage, final_directory)
-        output = final_directory / "result.blow5"
-        index = final_directory / "result.blow5.idx"
+        outputs = final_directory / "outputs"
+        routing_path = final_directory / "routing.json"
     directory_fd = os.open(publish_root, os.O_RDONLY | os.O_DIRECTORY)
     try:
         os.fsync(directory_fd)
     finally:
         os.close(directory_fd)
-    artifacts = [_file_artifact(output, _id("ont-artifact"), kind="blow5"), _file_artifact(index, _id("ont-artifact"), kind="blow5_index")]
+    artifacts: list[dict[str, Any]] = []
+    for fingerprint, read_count in sorted(partition_counts.items()):
+        blow5_artifact = _file_artifact(outputs / f"{fingerprint}.blow5", _id("ont-artifact"), kind="blow5")
+        index_artifact = _file_artifact(outputs / f"{fingerprint}.blow5.idx", _id("ont-artifact"), kind="blow5_index")
+        blow5_artifact.update({"partition_fingerprint": fingerprint, "read_count": int(read_count)})
+        index_artifact.update({"partition_fingerprint": fingerprint})
+        artifacts.extend((blow5_artifact, index_artifact))
+    artifacts.append(_file_artifact(routing_path, _id("ont-artifact"), kind="read_routing"))
     manifest = {"schema": "bms.ont.raw-signal-artifacts.v1", "run_id": job.run_id, "observed_generation": job.observed_generation, "format": "blow5", "artifacts": artifacts}
     representation = OntRawSignalRepresentation(
         id=_id("ont-raw-rep"), run_id=job.run_id, observed_generation=job.observed_generation,
         role="derived", source_kind="pod5_to_blow5", format="blow5",
-        source_fidelity="verified_signal_and_mapping_contract_exact", state="ready", reason_code="indexed_blow5_ready_native_pod5_retained",
+        source_fidelity="verified_signal_and_full_common_field_contract_exact", state="ready", reason_code="partitioned_indexed_blow5_ready_native_pod5_retained",
         artifact_manifest=manifest, manifest_sha256=_digest(manifest),
         parent_representation_ids=[source.id], parent_manifest_sha256s=[source.manifest_sha256],
         compression={"record": "zstd", "signal": "svb-zd"},
         runtime_identity={"profile_id": BLOW5_PROFILE_ID, "container_digest": job.resource_snapshot.get("container_digest")},
         validation_receipts={"semantic": semantic, "adjacent_index": True}, profile_id=BLOW5_PROFILE_ID,
+        read_count=int(semantic["read_count"]),
         published_at=_now(), created_at=_now(),
     )
     session.add(representation)
@@ -1002,7 +1160,7 @@ async def recover_expired_derivations(session: AsyncSession) -> int:
         lookup.completed_at = now
         lookup.updated_at = now
     rows = list((await session.execute(select(OntRawSignalDerivationJob).where(
-        OntRawSignalDerivationJob.state.in_(("admitted", "converting", "structural_check", "indexing", "index_validation", "semantic_validation", "publishing")),
+        OntRawSignalDerivationJob.state.in_(("admitted", "partitioning", "converting", "structural_check", "indexing", "index_validation", "semantic_validation", "publishing")),
         OntRawSignalDerivationJob.lease_expires_at < now,
     ))).scalars())
     for row in rows:
