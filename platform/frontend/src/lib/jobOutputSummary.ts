@@ -15,8 +15,10 @@ export function getCompletedScientificResultStatus(
 }
 
 export function getJobOutputSummary(job: Job): JobOutputSummary {
-    if (typeof job.frustrampnn_result_count === 'number') {
-        const count = job.frustrampnn_result_count;
+    const isFrustraMpnnOutput = job.model_id === 'frustrampnn'
+        || (job.frustrampnn_result_count ?? 0) > 0;
+    if (isFrustraMpnnOutput) {
+        const count = job.frustrampnn_result_count ?? 0;
         return {
             count,
             label: `${count.toLocaleString()} FrustraMPNN result${count === 1 ? '' : 's'}`,

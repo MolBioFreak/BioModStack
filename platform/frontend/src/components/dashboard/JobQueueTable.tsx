@@ -120,7 +120,7 @@ export function JobQueueTable({
     const formatCreatedAt = (value: string) => new Date(value).toLocaleString();
 
     const renderDesignCountCell = (job: Job) => {
-        if (typeof job.frustrampnn_result_count === 'number') {
+        if (job.model_id === 'frustrampnn' || (job.frustrampnn_result_count ?? 0) > 0) {
             const output = getJobOutputSummary(job);
             return (
                 <div className="flex flex-col" title="Persisted governed FrustraMPNN result entities">
@@ -513,7 +513,7 @@ export function JobQueueTable({
                                     </span>
                                 </td>
                                 <td className="px-4 py-3">
-                                    <StatusBadge status={job.status} errorMessage={job.error_message} acceptedResultCount={job.frustrampnn_result_count} />
+                                    <StatusBadge status={job.status} errorMessage={job.error_message} acceptedResultCount={job.model_id === 'frustrampnn' ? job.frustrampnn_result_count : undefined} />
                                 </td>
                                 <td className="px-4 py-3">{renderDesignCountCell(job)}</td>
                                 <td className="px-4 py-3 text-sm text-slate-400">
@@ -583,7 +583,7 @@ export function JobQueueTable({
                             </span>
                         </td>
                         <td className="px-4 py-3">
-                            <StatusBadge status={job.status} errorMessage={job.error_message} acceptedResultCount={job.frustrampnn_result_count} />
+                            <StatusBadge status={job.status} errorMessage={job.error_message} acceptedResultCount={job.model_id === 'frustrampnn' ? job.frustrampnn_result_count : undefined} />
                         </td>
                         <td className="px-4 py-3">{renderDesignCountCell(job)}</td>
                         <td className="px-4 py-3 text-sm text-slate-400">
@@ -649,7 +649,7 @@ export function JobQueueTable({
                                 <span className="rounded bg-blue-500/20 px-2 py-1 text-[11px] text-blue-400">
                                     {getModeDisplayName(job.mode)}
                                 </span>
-                                <StatusBadge status={job.status} errorMessage={job.error_message} acceptedResultCount={job.frustrampnn_result_count} />
+                                <StatusBadge status={job.status} errorMessage={job.error_message} acceptedResultCount={job.model_id === 'frustrampnn' ? job.frustrampnn_result_count : undefined} />
                             </div>
                         </div>
                         <div className="shrink-0 text-right text-[11px] text-slate-400">

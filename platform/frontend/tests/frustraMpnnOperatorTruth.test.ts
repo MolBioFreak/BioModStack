@@ -30,6 +30,17 @@ test('generic output summary preserves requested design semantics', () => {
     assert.deepEqual(output, { count: 4, label: '4 designs' });
 });
 
+test('API default zero FrustraMPNN count does not relabel unrelated jobs', () => {
+    const output = getJobOutputSummary({
+        ...baseJob,
+        model_id: 'protenix',
+        design_count: 0,
+        requested_design_count: 5,
+        frustrampnn_result_count: 0,
+    });
+    assert.deepEqual(output, { count: 5, label: '5 designs' });
+});
+
 test('completed FrustraMPNN execution with zero accepted results is explicit and non-green', () => {
     assert.deepEqual(getCompletedScientificResultStatus('completed', 0), {
         styleKey: 'no_results',
