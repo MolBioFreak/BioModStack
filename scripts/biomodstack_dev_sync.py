@@ -12,6 +12,7 @@ import argparse
 import fcntl
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -30,6 +31,7 @@ SyncDecision = Literal[
     "blocked-dirty",
     "blocked-diverged",
     "blocked-health-unavailable",
+    "deferred-active-work",
     "fast-forward-deploy",
     "deploy-current",
     "idle",
@@ -43,15 +45,19 @@ def plan_sync(
     remote_revision: str,
     deployed_revision: str | None,
     remote_descends_from_local: bool,
+    active_work: bool,
 ) -> SyncDecision:
     if dirty:
         return "blocked-dirty"
     if not remote_descends_from_local:
         return "blocked-diverged"
-    if local_revision != remote_revision:
-        return "fast-forward-deploy"
     if deployed_revision is None:
         return "blocked-health-unavailable"
+    deployment_needed = local_revision != remote_revision or deployed_revision != remote_revision
+    if deployment_needed and active_work:
+        return "deferred-active-work"
+    if local_revision != remote_revision:
+        return "fast-forward-deploy"
     if deployed_revision != remote_revision:
         return "deploy-current"
     return "idle"
@@ -129,6 +135,40 @@ def _deployed_revision(root: Path) -> str | None:
     return revision if isinstance(revision, str) and len(revision) == 40 else None
 
 
+def _development_database(root: Path) -> Path:
+    sys.path.insert(0, str(root))
+    import biomodstack_services as services  # pylint: disable=import-outside-toplevel
+
+    profile = services.install_profile_snapshot(project_root=root)
+    configured = profile.get("dev_db_path") if isinstance(profile, dict) else None
+    return Path(str(configured or (Path.home() / ".biomodstack-dev" / "biomodstack.db"))).expanduser().resolve()
+
+
+def _active_development_work(root: Path) -> tuple[bool, int]:
+    database = _development_database(root)
+    if not database.is_file():
+        raise RuntimeError(f"Development jobs database is unavailable: {database}")
+    connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True, timeout=3)
+    try:
+        connection.execute("PRAGMA query_only = ON")
+        row = connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM jobs
+            WHERE lower(status) IN ('queued', 'running', 'awaiting_input')
+               OR lower(queue_status) IN ('queued', 'running', 'paused', 'pending_msa')
+               OR awaiting_input = 1
+               OR (nextflow_run_id IS NOT NULL AND completed_at IS NULL)
+            """
+        ).fetchone()
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"Development active-work check failed: {exc}") from exc
+    finally:
+        connection.close()
+    count = int(row[0]) if row is not None else 0
+    return count > 0, count
+
+
 def _write_receipt(state_dir: Path, payload: dict[str, object]) -> None:
     state_dir.mkdir(parents=True, exist_ok=True)
     path = state_dir / "dev-sync.json"
@@ -168,24 +208,38 @@ def sync_once(root: Path, state_dir: Path) -> SyncDecision:
             check=False,
         ).returncode == 0
         deployed = _deployed_revision(root)
+        active_work, active_work_count = _active_development_work(root)
         decision = plan_sync(
             dirty=dirty,
             local_revision=local,
             remote_revision=remote,
             deployed_revision=deployed,
             remote_descends_from_local=ancestry,
+            active_work=active_work,
         )
         receipt: dict[str, object] = {
             "decision": decision,
             "local_revision": local,
             "remote_revision": remote,
             "deployed_revision_before": deployed,
+            "active_work_count": active_work_count,
             "poll_interval_seconds": SYNC_INTERVAL_SECONDS,
         }
         if decision.startswith("blocked-"):
             _write_receipt(state_dir, receipt)
             raise RuntimeError(f"Development sync {decision}: canonical={local} origin/test={remote}")
         if decision == "idle":
+            _write_receipt(state_dir, receipt)
+            return decision
+        if decision == "deferred-active-work":
+            _write_receipt(state_dir, receipt)
+            return decision
+
+        active_work, active_work_count = _active_development_work(root)
+        if active_work:
+            decision = "deferred-active-work"
+            receipt["decision"] = decision
+            receipt["active_work_count"] = active_work_count
             _write_receipt(state_dir, receipt)
             return decision
         if decision == "fast-forward-deploy":
