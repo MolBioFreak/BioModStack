@@ -551,7 +551,7 @@ def _derivation_resource_snapshot(
     snapshot = _resource_snapshot(_source_bytes(source))
     marker = run.last_minknow_payload if isinstance(run.last_minknow_payload, dict) else {}
     if marker.get("schema") == "bms.ont.external-raw-signal-registration.v1":
-        snapshot["acquisition_pressure"] = "clear"
+        snapshot["active_acquisition_pressure"] = "clear"
         snapshot["acquisition_pressure_source"] = "sealed_external_registration"
     return snapshot
 
