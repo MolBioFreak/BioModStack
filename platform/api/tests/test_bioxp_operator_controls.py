@@ -11,6 +11,7 @@ import pytest
 from routers import bioxp
 from routers.bioxp.operator_controls import _translate_robot_error
 from services.bioxp.errors import ConnectionStateError, RobotResponseError
+from services.bioxp.operator_models import OperatorActionHistory
 from services.bioxp.operator_semantic_quarantine import OPERATOR_SEMANTIC_QUARANTINE_BY_PATH
 from services.bioxp.robot_client import DEFAULT_ROBOT_ROUTES
 
@@ -189,6 +190,18 @@ def receipt(*, action_id="motion.home_xy", key="invoke-12345678", command_id="cm
         "error": None,
         "stage_receipts": [],
     }
+
+
+def test_history_accepts_explicit_legacy_authority_status_omission_marker():
+    legacy = receipt()
+    legacy["authority_receipt_status"] = {"omitted": "item_limit"}
+
+    parsed = OperatorActionHistory.model_validate({
+        "schema_version": "bioxp.operator_action_history.v1",
+        "receipts": [legacy],
+    })
+
+    assert parsed.receipts[0].model_dump(exclude_none=True)["authority_receipt_status"] == {"omitted": "item_limit"}
 
 
 class FakeRobotClient:
@@ -893,7 +906,7 @@ def test_x_lifecycle_last_failure_rejects_invented_and_partial_families():
             "command_issued": True,
             "recorded_generation": 6,
             "current_generation": 7,
-            "primitive_result": {"ok": False},
+            "primitive_result": _exact_x_pending_ticket(),
         },
         {
             "ok": False,
@@ -904,7 +917,7 @@ def test_x_lifecycle_last_failure_rejects_invented_and_partial_families():
         {
             "ok": False,
             "failure": "xy_interrupted_or_generation_changed",
-            "primitive_result": {"omitted": "list_item_limit", "start_index": 0},
+            "primitive_result": {"omitted": "item_limit"},
         },
         {
             "ok": False,
@@ -1074,7 +1087,7 @@ def test_x_failure_branch_validators_reject_sparse_cross_branch_authority():
         "terminal_speed": {"board": 5, "motor": 0, "ack": None, "speed": 0, "ok": True},
         "target_event_128_observed": True, "controller_terminal_state_verified": True,
         "physical_effect_verified": False, "reference_before": base["reference_before"],
-        "physical_motion": True, "wait": {}, "wait_verified": True, "events": [],
+        "physical_motion": True, "wait": {"omitted": "item_limit"}, "wait_verified": True, "events": [],
         "controller_error_events": [], "target_events": [], "target_event_128_verified": True,
         "target_position_verified": True,
         "acceleration_set": base["acceleration_set"] or _exact_x_parameter_write(value=350),
@@ -1363,6 +1376,7 @@ def test_history_accepts_robot_startup_reconciliation_receipts(monkeypatch):
         "status": "reconciliation_required",
         "remote_acknowledged": False,
         "controller_acknowledged": False,
+        "controller_terminal_state_verified": False,
         "automatic_retry": False,
         "physical_outcome": "ambiguous",
     }

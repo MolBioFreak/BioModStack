@@ -2862,6 +2862,7 @@ class OperatorDashboardXPrimitiveOperationResult(
         | OperatorDashboardXRelativePositionUnavailable
         | OperatorDashboardXRelativeLimitFailure
         | OperatorDashboardXRelativeMoveFailure
+        | OperatorDashboardXPendingTicket
         | OperatorDashboardXOmissionMarker
     ]
 ):
@@ -3296,7 +3297,7 @@ class OperatorActionReceipt(BaseModel):
     requested_inputs: dict[str, Any] | None = Field(default=None, max_length=64)
     response: dict[str, JsonValue] | None = None
     authority_receipt_id: str | None = Field(default=None, max_length=128)
-    authority_receipt_status: ActionStatus | None = None
+    authority_receipt_status: ActionStatus | OperatorDashboardXOmissionMarker | None = None
     authority_fingerprint: str | None = Field(
         default=None,
         min_length=64,

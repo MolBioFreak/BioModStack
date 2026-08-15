@@ -324,7 +324,7 @@ export interface BioXpOperatorActionReceipt {
     requested_inputs: Record<string, unknown> | null;
     response: Record<string, unknown> | null;
     authority_receipt_id: string | null;
-    authority_receipt_status: BioXpOperatorActionReceipt['status'] | null;
+    authority_receipt_status: BioXpOperatorActionReceipt['status'] | { omitted: string } | null;
     authority_fingerprint: string | null;
     observation_receipt_id: string | null;
     observes_command_id: string | null;
