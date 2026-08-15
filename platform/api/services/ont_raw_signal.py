@@ -544,6 +544,18 @@ def _source_bytes(source: OntRawSignalRepresentation) -> int:
     )
 
 
+def _derivation_resource_snapshot(
+    run: OntInstrumentRun,
+    source: OntRawSignalRepresentation,
+) -> dict[str, Any]:
+    snapshot = _resource_snapshot(_source_bytes(source))
+    marker = run.last_minknow_payload if isinstance(run.last_minknow_payload, dict) else {}
+    if marker.get("schema") == "bms.ont.external-raw-signal-registration.v1":
+        snapshot["acquisition_pressure"] = "clear"
+        snapshot["acquisition_pressure_source"] = "sealed_external_registration"
+    return snapshot
+
+
 def _resource_snapshot(source_bytes: int) -> dict[str, Any]:
     root = Path(os.getenv(BLOW5_STAGING_ROOT_ENV, BLOW5_DEFAULT_STAGING_ROOT)).expanduser()
     probe = root
@@ -814,7 +826,7 @@ async def request_blow5_derivation(
         ))
     ).scalar_one_or_none()
     if existing is None:
-        snapshot = _resource_snapshot(_source_bytes(source))
+        snapshot = _derivation_resource_snapshot(run, source)
         gate = _runtime_gate(snapshot) if validation_only else _qualification_gate(snapshot)
         state = "deferred" if gate else "requested"
         existing = OntRawSignalDerivationJob(
@@ -838,7 +850,7 @@ async def request_blow5_derivation(
         session.add_all((existing, event))
         await session.flush()
     elif existing.state == "deferred":
-        snapshot = _resource_snapshot(_source_bytes(source))
+        snapshot = _derivation_resource_snapshot(run, source)
         gate = _runtime_gate(snapshot) if validation_only else _qualification_gate(snapshot)
         existing.resource_snapshot = snapshot
         existing.updated_at = _now()
@@ -1082,13 +1094,14 @@ async def claim_next_derivation(session: AsyncSession, *, lease_seconds: int = 3
     if job is None:
         return None
     source = await session.get(OntRawSignalRepresentation, job.source_representation_id)
-    if source is None:
+    run = await session.get(OntInstrumentRun, job.run_id)
+    if source is None or run is None:
         job.state = "failed"
-        job.reason_code = "source_representation_missing"
+        job.reason_code = "source_representation_missing" if source is None else "source_run_missing"
         job.completed_at = _now()
         await session.commit()
         return None
-    snapshot = _resource_snapshot(_source_bytes(source))
+    snapshot = _derivation_resource_snapshot(run, source)
     gate = _runtime_gate(snapshot) if job.profile_id == EXTERNAL_BLOW5_VALIDATION_PROFILE_ID else _qualification_gate(snapshot)
     if gate:
         job.state = "deferred"
