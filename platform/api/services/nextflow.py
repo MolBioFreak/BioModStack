@@ -2032,7 +2032,8 @@ async def launch_nextflow_job(
                 # Revalidate every immutable input at the literal adapter call
                 # boundary. A later retry re-enters this same launch path.
                 ont_submission_trust.verify_launch_input_snapshots(launch_params)
-                adapter_response = launch_via_workflow_adapter(
+                adapter_response = await asyncio.to_thread(
+                    launch_via_workflow_adapter,
                     job_id=job_id,
                     model_id=model_id,
                     mode=mode,
