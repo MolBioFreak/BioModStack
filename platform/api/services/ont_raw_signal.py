@@ -847,7 +847,9 @@ async def request_blow5_derivation(
                 "resource_snapshot": snapshot,
             }, created_at=_now(),
         )
-        session.add_all((existing, event))
+        session.add(existing)
+        await session.flush()
+        session.add(event)
         await session.flush()
     elif existing.state == "deferred":
         snapshot = _derivation_resource_snapshot(run, source)
