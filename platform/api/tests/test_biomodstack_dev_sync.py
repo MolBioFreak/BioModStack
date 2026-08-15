@@ -155,6 +155,8 @@ def test_active_development_work_reads_jobs_fail_closed(tmp_path: Path, monkeypa
         "CREATE TABLE jobs (status TEXT, queue_status TEXT, awaiting_input INTEGER, nextflow_run_id TEXT, completed_at TEXT)"
     )
     connection.execute("INSERT INTO jobs VALUES ('running', 'running', 0, 'run-1', NULL)")
+    connection.execute("INSERT INTO jobs VALUES ('cancelled', 'failed', 0, 'stale-run', NULL)")
+    connection.execute("INSERT INTO jobs VALUES ('awaiting_input', 'completed', 1, 'waiting-run', NULL)")
     connection.commit()
     connection.close()
     monkeypatch.setattr(sync, "_development_database", lambda _root: database)

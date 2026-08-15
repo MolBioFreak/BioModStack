@@ -155,10 +155,8 @@ def _active_development_work(root: Path) -> tuple[bool, int]:
             """
             SELECT COUNT(*)
             FROM jobs
-            WHERE lower(status) IN ('queued', 'running', 'awaiting_input')
-               OR lower(queue_status) IN ('queued', 'running', 'paused', 'pending_msa')
-               OR awaiting_input = 1
-               OR (nextflow_run_id IS NOT NULL AND completed_at IS NULL)
+            WHERE lower(status) IN ('queued', 'running', 'cancelling', 'canceling', 'finalizing')
+               OR lower(queue_status) IN ('queued', 'running', 'pending_msa', 'cancelling', 'canceling', 'finalizing')
             """
         ).fetchone()
     except sqlite3.Error as exc:
