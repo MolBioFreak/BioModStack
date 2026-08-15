@@ -14,6 +14,9 @@ const alignmentMocks = vi.hoisted(() => ({
     isAlignmentAccessDenied: vi.fn(),
     rotateAlignmentAccess: vi.fn(),
 }));
+const contextMocks = vi.hoisted(() => ({
+    updateQueryParams: vi.fn(),
+}));
 
 vi.mock('../../src/lib/api', async (importOriginal) => ({
     ...(await importOriginal<typeof import('../../src/lib/api')>()),
@@ -21,8 +24,13 @@ vi.mock('../../src/lib/api', async (importOriginal) => ({
 }));
 vi.mock('../../src/components/experiments/GlobalExperimentContext', () => ({
     useGlobalExperimentContext: () => ({
+        workspaceId: null,
+        globalExperimentId: null,
+        stateRevisionId: null,
+        selectedDomainExperiment: null,
+        availability: { canMutateDomain: false, reason: 'Select an NGS domain experiment.' },
         contextHref: (pathname: string) => pathname,
-        updateQueryParams: vi.fn(),
+        updateQueryParams: contextMocks.updateQueryParams,
     }),
 }));
 vi.mock('../../src/components/ngs/useSequenceQcManifest', () => ({
@@ -94,6 +102,7 @@ beforeEach(() => {
     ngsApiMocks.fetchFullJob.mockReset();
     ngsApiMocks.fetchJobStages.mockReset();
     ngsApiMocks.fetchJobs.mockReset();
+    contextMocks.updateQueryParams.mockReset();
     alignmentMocks.fetchAlignmentSessions.mockReset();
     alignmentMocks.fetchAlignmentSessions.mockResolvedValue([]);
     alignmentMocks.isAlignmentAccessDenied.mockReset();
@@ -120,6 +129,39 @@ afterEach(async () => {
 });
 
 describe('completed NGS result routing', () => {
+    it('keeps a clean NGS landing URL on the workflow launcher after jobs load', async () => {
+        const completedJob = {
+            id: 'job-123',
+            name: 'AAZ605 FASTQ QC',
+            model_id: 'nanopore',
+            mode: 'ont_fastq_qc',
+            status: 'completed',
+            created_at: '2026-08-10T00:00:00Z',
+            params: { fastq_files: ['/inputs/AAZ605.fastq'] },
+        };
+        ngsApiMocks.fetchJobs.mockResolvedValue({ data: { jobs: [completedJob], total: 1 } });
+
+        await act(async () => {
+            root.render(
+                <QueryClientProvider client={client}>
+                    <MemoryRouter initialEntries={['/ngs']}>
+                        <Routes>
+                            <Route path="/ngs" element={<NGSToolkit />} />
+                        </Routes>
+                    </MemoryRouter>
+                </QueryClientProvider>,
+            );
+            await Promise.resolve();
+        });
+        await waitUntil(() => expect(ngsApiMocks.fetchJobs).toHaveBeenCalled());
+        for (let attempt = 0; attempt < 5; attempt += 1) {
+            await flush();
+        }
+
+        expect(contextMocks.updateQueryParams).not.toHaveBeenCalled();
+        expect(container.textContent).not.toContain('Nanopore Jobs');
+    });
+
     it('maps NGS deep links to the Run Inspector view', () => {
         expect(isNgsJob({ model_id: 'nanopore', mode: 'ont_fastq_qc' })).toBe(true);
         for (const modelId of ['ont_fastq_qc', 'ont_plasmid_qc', 'ont_construct_screening', 'wf_clone_validation']) {

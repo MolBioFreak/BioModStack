@@ -2293,13 +2293,13 @@ export function NGSToolkit() {
     const selectedJob = fullJobQuery.data && isNgsJob(fullJobQuery.data) ? fullJobQuery.data : null;
 
     useEffect(() => {
-        if (requestedJobId) {
+        if (view !== 'runs' || requestedJobId) {
             return;
         }
         if (!selectedJobId && filteredJobs.length > 0) {
             updateQueryParams({ job_id: filteredJobs[0].id }, { replace: true });
         }
-    }, [filteredJobs, selectedJobId, updateQueryParams]);
+    }, [filteredJobs, requestedJobId, selectedJobId, updateQueryParams, view]);
 
     useEffect(() => {
         setShowRawTopLoci(false);
