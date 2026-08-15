@@ -564,9 +564,18 @@ async def validate_bound_job_request(
         or not params_match
         or (model_id == "protein_local_redesign" and expected_pinned_gpu != pinned_gpu)
     ):
+        mismatched_params = sorted(
+            key for key, value in expected_params.items()
+            if key not in params or params.get(key) != value
+        )
+        detail = (
+            "Job request does not match the bound Workflow Revision: "
+            f"expected model/mode {scheduler.get('model_id')}/{scheduler.get('mode')}, "
+            f"received {model_id}/{mode}, mismatched params={mismatched_params}."
+        )
         raise LaunchContextError(
             "launch_context_workflow_mismatch",
-            "Job request does not match the bound Workflow Revision.",
+            detail,
             status_code=409,
         )
     return await _attach_typed_resource_authority(
