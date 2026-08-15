@@ -70,6 +70,27 @@ def _external_pod5_root() -> Path:
     return root
 
 
+def _open_external_pod5_root() -> tuple[Path, int]:
+    """Open each root component without following filesystem indirection."""
+    configured = os.getenv(EXTERNAL_POD5_ROOT_ENV, "").strip()
+    if not configured:
+        raise RuntimeError(f"{EXTERNAL_POD5_ROOT_ENV} is not configured")
+    root = Path(configured).expanduser().absolute()
+    current_fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in root.parts[1:]:
+            next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=current_fd)
+            os.close(current_fd)
+            current_fd = next_fd
+        return root, current_fd
+    except OSError as exc:
+        os.close(current_fd)
+        raise RuntimeError("external POD5 root could not be opened without symbolic links") from exc
+    except BaseException:
+        os.close(current_fd)
+        raise
+
+
 def _candidate_identity(relative: str, info: os.stat_result) -> str:
     return _digest({
         "relative_path": relative,
@@ -79,6 +100,23 @@ def _candidate_identity(relative: str, info: os.stat_result) -> str:
         "mtime_ns": info.st_mtime_ns,
         "ctime_ns": info.st_ctime_ns,
     })
+
+
+def _descriptor_pod5_candidates(directory_fd: int, prefix: Path = Path()) -> list[tuple[str, os.stat_result]]:
+    candidates: list[tuple[str, os.stat_result]] = []
+    with os.scandir(directory_fd) as entries:
+        for entry in entries:
+            relative = prefix / entry.name
+            info = entry.stat(follow_symlinks=False)
+            if stat.S_ISDIR(info.st_mode):
+                child_fd = os.open(entry.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory_fd)
+                try:
+                    candidates.extend(_descriptor_pod5_candidates(child_fd, relative))
+                finally:
+                    os.close(child_fd)
+            elif stat.S_ISREG(info.st_mode) and entry.name.lower().endswith(".pod5"):
+                candidates.append((relative.as_posix(), info))
+    return candidates
 
 
 def _assert_confined_regular_file(path: Path, root: Path) -> os.stat_result:
@@ -96,33 +134,57 @@ def _assert_confined_regular_file(path: Path, root: Path) -> os.stat_result:
 
 
 def list_external_pod5_candidates() -> list[dict[str, Any]]:
-    root = _external_pod5_root()
-    candidates: list[dict[str, Any]] = []
-    for path in sorted(root.rglob("*.pod5")):
+    """Return path-opaque POD5 candidates from one descriptor-pinned server root."""
+    _root, root_fd = _open_external_pod5_root()
+    try:
+        return [
+            {
+                "candidate_id": _candidate_identity(relative, info),
+                "display_name": relative,
+                "size_bytes": info.st_size,
+                "modified_at_ns": info.st_mtime_ns,
+            }
+            for relative, info in sorted(_descriptor_pod5_candidates(root_fd), key=lambda item: item[0])
+        ]
+    finally:
+        os.close(root_fd)
+
+
+def _open_descriptor_candidate(candidate_id: str) -> tuple[Path, int]:
+    if not _is_sha256(candidate_id):
+        raise KeyError("external POD5 candidate was not found")
+    root, root_fd = _open_external_pod5_root()
+    try:
+        match = next(
+            ((relative, info) for relative, info in _descriptor_pod5_candidates(root_fd) if secrets.compare_digest(_candidate_identity(relative, info), candidate_id)),
+            None,
+        )
+        if match is None:
+            raise KeyError("external POD5 candidate was not found")
+        relative, expected = match
+        parts = Path(relative).parts
+        parent_fd = os.dup(root_fd)
         try:
-            info = _assert_confined_regular_file(path, root)
-        except (OSError, ValueError):
-            continue
-        relative = path.relative_to(root).as_posix()
-        candidates.append({
-            "candidate_id": _candidate_identity(relative, info),
-            "display_name": relative,
-            "size_bytes": info.st_size,
-            "modified_at_ns": info.st_mtime_ns,
-        })
-    return candidates
+            for part in parts[:-1]:
+                next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+                os.close(parent_fd)
+                parent_fd = next_fd
+            file_fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+        finally:
+            os.close(parent_fd)
+        observed = os.fstat(file_fd)
+        if _candidate_identity(relative, observed) != candidate_id or (observed.st_dev, observed.st_ino) != (expected.st_dev, expected.st_ino):
+            os.close(file_fd)
+            raise ValueError("external POD5 candidate changed before registration")
+        return root / relative, file_fd
+    finally:
+        os.close(root_fd)
 
 
 def resolve_external_pod5_candidate(candidate_id: str) -> Path:
-    if not _is_sha256(candidate_id):
-        raise KeyError("external POD5 candidate was not found")
-    root = _external_pod5_root()
-    for candidate in list_external_pod5_candidates():
-        if secrets.compare_digest(candidate["candidate_id"], candidate_id):
-            path = root / candidate["display_name"]
-            _assert_confined_regular_file(path, root)
-            return path
-    raise KeyError("external POD5 candidate was not found")
+    path, file_fd = _open_descriptor_candidate(candidate_id)
+    os.close(file_fd)
+    return path
 
 
 def _now() -> datetime:
@@ -300,10 +362,12 @@ def _resolve_input_file(record: InputFile, expected_format: str) -> Path:
     return candidate
 
 
-def _file_artifact(path: Path, artifact_id: str, *, kind: str) -> dict[str, Any]:
+def _file_artifact(path: Path, artifact_id: str, *, kind: str, opened_fd: int | None = None) -> dict[str, Any]:
     flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
-    fd = os.open(path, flags)
+    fd = os.open(path, flags) if opened_fd is None else opened_fd
+    close_fd = opened_fd is None
     try:
+        os.lseek(fd, 0, os.SEEK_SET)
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode):
             raise ValueError("raw-signal artifact must be a regular file")
@@ -321,7 +385,8 @@ def _file_artifact(path: Path, artifact_id: str, *, kind: str) -> dict[str, Any]
             raise ValueError("raw-signal source path changed while it was being registered")
         return {"artifact_id": artifact_id, "kind": kind, "bytes": info.st_size, "sha256": digest.hexdigest(), "path": str(path)}
     finally:
-        os.close(fd)
+        if close_fd:
+            os.close(fd)
 
 
 async def register_external_source(
@@ -333,6 +398,8 @@ async def register_external_source(
     input_file_id: str,
     index_input_file_id: str | None,
     source_fidelity: str,
+    source_path_override: Path | None = None,
+    source_artifact_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Register format-native external evidence using opaque tracked input IDs."""
     normalized_format = str(format).lower()
@@ -345,8 +412,12 @@ async def register_external_source(
     source = await session.get(InputFile, input_file_id)
     if source is None:
         raise KeyError(input_file_id)
-    source_path = _resolve_input_file(source, normalized_format)
-    artifacts = [_file_artifact(source_path, source.id, kind=normalized_format)]
+    source_path = source_path_override or _resolve_input_file(source, normalized_format)
+    artifacts = [
+        dict(source_artifact_override)
+        if source_artifact_override is not None
+        else _file_artifact(source_path, source.id, kind=normalized_format)
+    ]
     validation_receipts: dict[str, Any] = {}
     state = _UNAVAILABLE
     reason = "source_validation_required"
@@ -407,6 +478,8 @@ async def create_external_run_registration(
     external_registration_key: str | None = None,
     candidate_id: str | None = None,
     source_sha256: str | None = None,
+    source_path_override: Path | None = None,
+    source_artifact_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create one sealed external generation without MinKNOW or POD5 ancestry."""
     now = _now()
@@ -427,8 +500,12 @@ async def create_external_run_registration(
     input_record = await session.get(InputFile, input_file_id)
     if input_record is None:
         raise KeyError(input_file_id)
-    source_path = _resolve_input_file(input_record, format)
-    source_artifact = _file_artifact(source_path, f"{run_id}:source", kind=format)
+    source_path = source_path_override or _resolve_input_file(input_record, format)
+    source_artifact = (
+        dict(source_artifact_override)
+        if source_artifact_override is not None
+        else _file_artifact(source_path, f"{run_id}:source", kind=format)
+    )
     terminal_manifest = {
         "schema": "bms.ont.instrument-terminal-artifacts.v1",
         "schema_version": 1,
@@ -482,6 +559,8 @@ async def create_external_run_registration(
         input_file_id=input_file_id,
         index_input_file_id=index_input_file_id,
         source_fidelity=source_fidelity,
+        source_path_override=source_path,
+        source_artifact_override=source_artifact,
     )
     return {"run_id": run_id, "observed_generation": 1, "representation": representation}
 
@@ -569,12 +648,11 @@ async def register_external_pod5_candidate(
         experiment_group=experiment_group,
         sample_id=sample_id,
     )
-    root_before = _external_pod5_root().stat()
-    source_path = resolve_external_pod5_candidate(candidate_id)
-    probe = _file_artifact(source_path, "candidate", kind="pod5")
-    root_after = _external_pod5_root().stat()
-    if (root_before.st_dev, root_before.st_ino) != (root_after.st_dev, root_after.st_ino):
-        raise ValueError("external POD5 root changed during registration")
+    source_path, source_fd = _open_descriptor_candidate(candidate_id)
+    try:
+        probe = _file_artifact(source_path, "candidate", kind="pod5", opened_fd=source_fd)
+    finally:
+        os.close(source_fd)
 
     registration_key = _digest({
         "candidate_id": candidate_id,
@@ -596,6 +674,7 @@ async def register_external_pod5_candidate(
         NAMESPACE_URL,
         f"bms:external-pod5:{candidate_id}:{probe['sha256']}",
     ))
+    probe["artifact_id"] = input_file_id
     await session.execute(
         sqlite_insert(InputFile.__table__).values(
             id=input_file_id,
@@ -627,6 +706,8 @@ async def register_external_pod5_candidate(
                 external_registration_key=registration_key,
                 candidate_id=candidate_id,
                 source_sha256=probe["sha256"],
+                source_path_override=source_path,
+                source_artifact_override=probe,
             )
     except IntegrityError:
         replay = await _external_registration_replay(
