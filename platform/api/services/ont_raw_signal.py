@@ -590,7 +590,7 @@ async def _external_registration_replay(
     *,
     registration_key: str,
     candidate_id: str,
-    source_sha256: str,
+    source_sha256: str | None,
     sample_id: str | None,
     experiment_group: str,
 ) -> dict[str, Any] | None:
@@ -606,9 +606,10 @@ async def _external_registration_replay(
     marker = run.last_minknow_payload if isinstance(run.last_minknow_payload, dict) else {}
     expected = {
         "candidate_id": candidate_id,
-        "source_sha256": source_sha256,
         "sample_id": sample_id,
     }
+    if source_sha256 is not None:
+        expected["source_sha256"] = source_sha256
     if (
         run.experiment_group != experiment_group
         or run.sample_id != sample_id
@@ -643,6 +644,21 @@ async def register_external_pod5_candidate(
     experiment_group = experiment_group.strip()
     if not experiment_group:
         raise ValueError("exact Domain Experiment ID is required")
+    registration_key = _digest({
+        "candidate_id": candidate_id,
+        "experiment_group": experiment_group,
+        "sample_id": sample_id,
+    })
+    replay = await _external_registration_replay(
+        session,
+        registration_key=registration_key,
+        candidate_id=candidate_id,
+        source_sha256=None,
+        sample_id=sample_id,
+        experiment_group=experiment_group,
+    )
+    if replay is not None:
+        return replay
     await _validate_external_registration_context(
         domain_session,
         experiment_group=experiment_group,
@@ -654,11 +670,6 @@ async def register_external_pod5_candidate(
     finally:
         os.close(source_fd)
 
-    registration_key = _digest({
-        "candidate_id": candidate_id,
-        "experiment_group": experiment_group,
-        "sample_id": sample_id,
-    })
     replay = await _external_registration_replay(
         session,
         registration_key=registration_key,

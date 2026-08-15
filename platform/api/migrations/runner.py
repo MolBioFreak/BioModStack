@@ -47,6 +47,9 @@ from migrations.add_ont_raw_signal_ledger import migrate as migrate_ont_raw_sign
 from migrations.add_ont_external_registration_identity import (
     migrate as migrate_ont_external_registration_identity,
 )
+from migrations.enforce_ont_external_registration_immutability import (
+    migrate as migrate_ont_external_registration_immutability,
+)
 from run_migration import migrate as migrate_stage_tracking
 
 
@@ -95,6 +98,7 @@ MIGRATIONS: List[Migration] = [
     Migration(27, "add_frustrampnn_reviews", migrate_frustrampnn_reviews),
     Migration(28, "add_ont_raw_signal_ledger", migrate_ont_raw_signal_ledger),
     Migration(29, "add_ont_external_registration_identity", migrate_ont_external_registration_identity),
+    Migration(30, "enforce_ont_external_registration_immutability", migrate_ont_external_registration_immutability),
 ]
 
 
