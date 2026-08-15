@@ -507,10 +507,7 @@ workflow PROTEIN_LOCAL_REDESIGN {
             .set { megaCsv }
 
         PrepProteinLocalFAMPNN.out.pdbs
-            .collect()
-            .map { allPdbs -> partitionProteinLocalGpuBatches(allPdbs, params.gpus) }
-            .flatten()
-            .groupTuple()
+            .map { pdbs -> [0, pdbs] }
             .set { fampnnPdbs }
 
         def defaultGpu = params.pinned_gpus ? params.pinned_gpus.toString().split(',')[0].trim().toInteger() : (params.gpu_id ?: 0)

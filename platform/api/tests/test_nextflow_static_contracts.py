@@ -42,6 +42,13 @@ DIRECT_ENTRYPOINTS = {
 }
 
 
+def test_protein_local_fampnn_batches_process_output_without_collect_group_operator_collision() -> None:
+    source = (REPO_ROOT / "workflows" / "protein_local_redesign.nf").read_text(encoding="utf-8")
+
+    assert "PrepProteinLocalFAMPNN.out.pdbs\n            .map { pdbs -> [0, pdbs] }\n            .set { fampnnPdbs }" in source
+    assert "PrepProteinLocalFAMPNN.out.pdbs\n            .collect()" not in source
+
+
 def test_protein_local_redesign_shell_quotes_every_native_dynamic_argument() -> None:
     source = (REPO_ROOT / "workflows" / "protein_local_redesign.nf").read_text(encoding="utf-8")
 
