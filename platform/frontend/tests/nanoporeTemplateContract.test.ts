@@ -233,3 +233,17 @@ test('NGS instrument panel renders only safe device truth and an intent status',
     assert.match(ontApi, /output_summary: Record<'fastq' \| 'pod5' \| 'bam', number>/u);
     assert.doesNotMatch(ontApi, /fake_or_demo_device\?: boolean|is_ctc\?: boolean|channel_count\?: number|output_director(?:y|ies)|rpc_ports|connection_error/u);
 });
+
+test('NGS instrument panel registers one governed existing POD5 candidate before BLOW5 preparation', () => {
+    const panel = readSource('src/components/ngs/OntInstrumentPanel.tsx');
+    const api = readSource('src/lib/api.ts');
+
+    assert.match(panel, /Register existing POD5/u);
+    assert.match(panel, /fetchOntExternalPod5Candidates/u);
+    assert.match(panel, /registerOntExternalPod5Candidate/u);
+    assert.match(panel, /exactDomainExperimentId/u);
+    assert.doesNotMatch(panel, /BMS_ONT_EXTERNAL_POD5_ROOT|\/mnt\/BioModStack/u);
+    assert.match(api, /\/api\/ont\/raw-signal\/external-pod5-candidates/u);
+    assert.match(api, /candidate_id: candidateId/u);
+    assert.match(api, /experiment_group: experimentGroup/u);
+});

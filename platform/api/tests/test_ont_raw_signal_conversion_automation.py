@@ -416,3 +416,41 @@ def test_mixed_run_end_to_end_conversion(tmp_path: Path) -> None:
     assert semantic["partition_count"] == 2
     assert semantic["indexed_lookup_count"] == 2
     assert semantic["total_signal_samples_compared"] > 0
+
+
+def test_existing_pod5_candidates_are_server_rooted_and_path_opaque(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = tmp_path / "existing-pod5"
+    source_root.mkdir()
+    source = source_root / "BFX6NB_4.pod5"
+    source.write_bytes(b"sealed-pod5")
+    (source_root / "ignore.fastq").write_bytes(b"reads")
+    monkeypatch.setenv(ont_raw_signal.EXTERNAL_POD5_ROOT_ENV, str(source_root))
+
+    candidates = ont_raw_signal.list_external_pod5_candidates()
+
+    assert candidates == [{
+        "candidate_id": hashlib.sha256(b"BFX6NB_4.pod5").hexdigest(),
+        "display_name": "BFX6NB_4.pod5",
+        "size_bytes": len(b"sealed-pod5"),
+        "modified_at_ns": source.stat().st_mtime_ns,
+    }]
+    assert str(source_root) not in json.dumps(candidates)
+
+
+def test_existing_pod5_candidates_exclude_symlinks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = tmp_path / "existing-pod5"
+    source_root.mkdir()
+    outside = tmp_path / "outside.pod5"
+    outside.write_bytes(b"outside")
+    (source_root / "escaped.pod5").symlink_to(outside)
+    monkeypatch.setenv(ont_raw_signal.EXTERNAL_POD5_ROOT_ENV, str(source_root))
+
+    assert ont_raw_signal.list_external_pod5_candidates() == []
+    with pytest.raises(KeyError):
+        ont_raw_signal.resolve_external_pod5_candidate(hashlib.sha256(b"escaped.pod5").hexdigest())

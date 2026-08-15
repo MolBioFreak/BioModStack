@@ -7,10 +7,12 @@ import {
     fetchMolBioNgsSampleRevision,
     fetchMolBioNgsSamples,
     fetchOntDeviceStatus,
+    fetchOntExternalPod5Candidates,
     fetchOntInstrumentRunGeneration,
     fetchOntInstrumentRuns,
     fetchOntRawSignalCapabilities,
     requestOntBlow5Preparation,
+    registerOntExternalPod5Candidate,
     fetchOntProtocolOptions,
     requestMk1dReconnect,
     startOntRunIntent,
@@ -151,6 +153,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
     const [selectedPosition, setSelectedPosition] = useState('');
     const [sampleSelection, setSampleSelection] = useState<{ domainId: string; sampleId: string } | null>(null);
     const [selectedRunGeneration, setSelectedRunGeneration] = useState<SelectedRunGeneration | null>(null);
+    const [selectedExternalPod5CandidateId, setSelectedExternalPod5CandidateId] = useState('');
     const [rawSignalPreference, setRawSignalPreference] = useState<OntRawSignalPreference>('auto');
     const [message, setMessage] = useState('');
 
@@ -253,6 +256,11 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
         enabled: exactDomainExperimentId !== null,
         retry: false,
     });
+    const externalPod5CandidatesQuery = useQuery({
+        queryKey: ['ont-external-pod5-candidates'],
+        queryFn: fetchOntExternalPod5Candidates,
+        retry: false,
+    });
     const durableRuns = useMemo(
         () => exactDomainExperimentId
             ? (durableRunsQuery.data ?? []).filter((run) => run.experiment_group === exactDomainExperimentId)
@@ -303,6 +311,29 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
         void queryClient.invalidateQueries({ queryKey: ['ont-instrument-runs', exactDomainExperimentId] });
         void durableRunsQuery.refetch();
     };
+
+    const registerExternalPod5 = useMutation({
+        mutationFn: async () => {
+            if (!exactDomainExperimentId) throw new Error('Select an exact Domain Experiment.');
+            if (!selectedExternalPod5CandidateId) throw new Error('Select one existing POD5 candidate.');
+            return registerOntExternalPod5Candidate(
+                selectedExternalPod5CandidateId,
+                exactDomainExperimentId,
+                selectedSample?.id,
+            );
+        },
+        onSuccess: (registration) => {
+            setSelectedRunGeneration({
+                runId: registration.run_id,
+                observedGeneration: registration.observed_generation,
+            });
+            setMessage(registration.already_registered
+                ? 'Existing POD5 registration reopened.'
+                : 'Existing POD5 registered as one sealed run generation.');
+            void queryClient.invalidateQueries({ queryKey: ['ont-instrument-runs', exactDomainExperimentId] });
+        },
+        onError: (error) => setMessage(errorMessage(error, 'Existing POD5 registration failed.')),
+    });
 
     const prepareBlow5 = useMutation({
         mutationFn: async (sourceRepresentationId: string) => {
@@ -535,6 +566,36 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                     <button type="button" disabled={!canStart} title={domainIntentBlocker ?? undefined} onClick={() => startRun.mutate()} className="rounded-lg bg-[var(--accent-secondary)] px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">Validate run intent</button>
                     {message ? <p className="text-xs text-[var(--text-secondary)]">{message}</p> : null}
                 </div>
+            </div>
+
+            <div className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4">
+                <div>
+                    <h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Register existing POD5</h3>
+                    <p className="mt-1 text-xs text-[var(--text-secondary)]">Select one server-governed POD5. BMS records its exact bytes and keeps the source unchanged.</p>
+                </div>
+                {externalPod5CandidatesQuery.isError ? <p role="alert" className="text-sm text-amber-100">Existing POD5 candidates are unavailable: {errorMessage(externalPod5CandidatesQuery.error, 'unknown candidate-list failure')}</p> : null}
+                <select
+                    aria-label="Existing POD5 candidate"
+                    value={selectedExternalPod5CandidateId}
+                    onChange={(event) => setSelectedExternalPod5CandidateId(event.target.value)}
+                    disabled={externalPod5CandidatesQuery.isLoading || registerExternalPod5.isPending}
+                    className="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)] disabled:opacity-50"
+                >
+                    <option value="">Select one existing POD5…</option>
+                    {(externalPod5CandidatesQuery.data?.candidates ?? []).map((candidate) => (
+                        <option key={candidate.candidate_id} value={candidate.candidate_id}>
+                            {candidate.display_name} · {(candidate.size_bytes / (1024 ** 3)).toFixed(2)} GiB
+                        </option>
+                    ))}
+                </select>
+                <button
+                    type="button"
+                    disabled={!exactDomainExperimentId || !selectedExternalPod5CandidateId || registerExternalPod5.isPending}
+                    onClick={() => registerExternalPod5.mutate()}
+                    className="rounded-lg border border-cyan-500/50 px-3 py-2 text-sm font-semibold text-cyan-100 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                    {registerExternalPod5.isPending ? 'Registering immutable POD5…' : 'Register selected POD5'}
+                </button>
             </div>
 
             <div className="space-y-4 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4">

@@ -4610,12 +4610,42 @@ export interface OntRawSignalWaveform {
     samples: number[] | null;
 }
 
+export interface OntExternalPod5Candidate {
+    candidate_id: string;
+    display_name: string;
+    size_bytes: number;
+    modified_at_ns: number;
+}
+
+export interface OntExternalPod5Registration {
+    run_id: string;
+    observed_generation: number;
+    representation: OntRawSignalRepresentation;
+    already_registered: boolean;
+}
+
 export const fetchOntInstrumentRuns = (limit = 100) =>
     apiData(api.get<OntRunSummary[]>('/api/ont/runs', { params: { limit } }));
 export const fetchOntInstrumentRunGeneration = (runId: string, observedGeneration: number) =>
     apiData(api.get<OntRunGeneration>(
         `/api/ont/runs/${encodeURIComponent(runId)}/generations/${encodeURIComponent(String(observedGeneration))}`,
     ));
+export const fetchOntExternalPod5Candidates = () =>
+    apiData(api.get<{ candidates: OntExternalPod5Candidate[] }>(
+        '/api/ont/raw-signal/external-pod5-candidates',
+    ));
+export const registerOntExternalPod5Candidate = (
+    candidateId: string,
+    experimentGroup: string,
+    sampleId?: string,
+) => apiData(api.post<OntExternalPod5Registration>(
+    '/api/ont/raw-signal/external-pod5-candidates/register',
+    {
+        candidate_id: candidateId,
+        experiment_group: experimentGroup,
+        sample_id: sampleId || null,
+    },
+));
 export const fetchOntRawSignalCapabilities = (
     runId: string,
     observedGeneration: number,

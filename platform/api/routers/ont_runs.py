@@ -335,6 +335,14 @@ class OntRawSignalExternalRunRequest(OntRawSignalExternalRegisterRequest):
     experiment_group: str | None = Field(default=None, max_length=255)
 
 
+class OntExternalPod5CandidateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    experiment_group: str = Field(min_length=1, max_length=255)
+    sample_id: str | None = Field(default=None, max_length=255)
+
+
 class OntRawSignalDerivationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -761,6 +769,38 @@ async def ont_get_instrument_run(run_id: str) -> dict[str, Any]:
     if record is None:
         raise HTTPException(status_code=404, detail=f"unknown ONT instrument run: {run_id}")
     return record
+
+
+@router.get("/raw-signal/external-pod5-candidates")
+async def ont_list_external_pod5_candidates() -> dict[str, Any]:
+    """List path-opaque POD5 candidates from the single governed server root."""
+    try:
+        return {"candidates": ont_raw_signal.list_external_pod5_candidates()}
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/raw-signal/external-pod5-candidates/register", status_code=201)
+async def ont_register_external_pod5_candidate(
+    request: OntExternalPod5CandidateRequest,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Register one governed POD5 candidate as a sealed, durable run generation."""
+    try:
+        result = await ont_raw_signal.register_external_pod5_candidate(
+            session,
+            candidate_id=request.candidate_id,
+            sample_id=request.sample_id,
+            experiment_group=request.experiment_group,
+        )
+        await session.commit()
+        return result
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="external POD5 candidate not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.post("/raw-signal/external-runs", status_code=201)

@@ -14,7 +14,7 @@ import stat
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,6 +40,7 @@ BLOW5_CONVERSION_ENABLED_ENV = "BMS_ONT_BLOW5_CONVERSION_QUALIFIED"
 BLOW5_STAGING_ROOT_ENV = "BMS_ONT_RAW_SIGNAL_STAGING_ROOT"
 BLOW5_MIN_FREE_BYTES_ENV = "BMS_ONT_RAW_SIGNAL_MIN_FREE_BYTES"
 BLOW5_ACQUISITION_PRESSURE_ENV = "BMS_ONT_RAW_SIGNAL_ACQUISITION_PRESSURE"
+EXTERNAL_POD5_ROOT_ENV = "BMS_ONT_EXTERNAL_POD5_ROOT"
 BLOW5_DEFAULT_STAGING_ROOT = "/mnt/BioModStack/ont-raw-signal-staging"
 BLOW5_DEFAULT_MIN_FREE_BYTES = 20 * 1024 * 1024 * 1024
 
@@ -49,6 +50,46 @@ _READY = "ready"
 _PREPARABLE = "preparable"
 _UNAVAILABLE = "unavailable"
 RAW_SIGNAL_MAX_WAVEFORM_SAMPLES = 20_000
+
+
+def _external_pod5_root() -> Path:
+    configured = os.getenv(EXTERNAL_POD5_ROOT_ENV, "").strip()
+    if not configured:
+        raise RuntimeError(f"{EXTERNAL_POD5_ROOT_ENV} is not configured")
+    root = Path(configured).expanduser().resolve(strict=True)
+    if not root.is_dir() or root.is_symlink():
+        raise RuntimeError("external POD5 root must be a real directory")
+    return root
+
+
+def list_external_pod5_candidates() -> list[dict[str, Any]]:
+    root = _external_pod5_root()
+    candidates: list[dict[str, Any]] = []
+    for path in sorted(root.rglob("*.pod5")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        relative = path.relative_to(root).as_posix()
+        info = path.stat()
+        candidates.append({
+            "candidate_id": hashlib.sha256(relative.encode("utf-8")).hexdigest(),
+            "display_name": relative,
+            "size_bytes": info.st_size,
+            "modified_at_ns": info.st_mtime_ns,
+        })
+    return candidates
+
+
+def resolve_external_pod5_candidate(candidate_id: str) -> Path:
+    if not _is_sha256(candidate_id):
+        raise KeyError("external POD5 candidate was not found")
+    root = _external_pod5_root()
+    for candidate in list_external_pod5_candidates():
+        if secrets.compare_digest(candidate["candidate_id"], candidate_id):
+            path = (root / candidate["display_name"]).resolve(strict=True)
+            if path.parent != root and root not in path.parents:
+                break
+            return path
+    raise KeyError("external POD5 candidate was not found")
 
 
 def _now() -> datetime:
@@ -217,6 +258,11 @@ def _file_artifact(path: Path, artifact_id: str, *, kind: str) -> dict[str, Any]
         digest = hashlib.sha256()
         while chunk := os.read(fd, 1024 * 1024):
             digest.update(chunk)
+        after = os.fstat(fd)
+        before_identity = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+        after_identity = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+        if before_identity != after_identity:
+            raise ValueError("raw-signal source changed while it was being registered")
         return {"artifact_id": artifact_id, "kind": kind, "bytes": info.st_size, "sha256": digest.hexdigest(), "path": str(path)}
     finally:
         os.close(fd)
@@ -352,6 +398,72 @@ async def create_external_run_registration(
         source_fidelity=source_fidelity,
     )
     return {"run_id": run_id, "observed_generation": 1, "representation": representation}
+
+
+async def register_external_pod5_candidate(
+    session: AsyncSession,
+    *,
+    candidate_id: str,
+    sample_id: str | None,
+    experiment_group: str,
+) -> dict[str, Any]:
+    """Immutably register one server-governed POD5 candidate as a sealed run."""
+    if not experiment_group.strip():
+        raise ValueError("exact Domain Experiment ID is required")
+    source_path = resolve_external_pod5_candidate(candidate_id)
+    probe = _file_artifact(source_path, "candidate", kind="pod5")
+    input_file_id = str(uuid5(NAMESPACE_URL, f"bms:external-pod5:{probe['sha256']}"))
+    tracked = await session.get(InputFile, input_file_id)
+    if tracked is None:
+        tracked = InputFile(
+            id=input_file_id,
+            filename=source_path.name,
+            file_type="pod5",
+            directory=str(source_path.parent),
+            size_bytes=probe["bytes"],
+        )
+        session.add(tracked)
+        await session.flush()
+
+    runs = list((await session.execute(
+        select(OntInstrumentRun).where(OntInstrumentRun.position_id == "external")
+    )).scalars())
+    for run in runs:
+        marker = run.last_minknow_payload if isinstance(run.last_minknow_payload, dict) else {}
+        if marker.get("input_file_id") != input_file_id or run.experiment_group != experiment_group:
+            continue
+        representations = await list_representations(
+            session,
+            run_id=run.id,
+            observed_generation=run.observed_generation,
+        )
+        if representations:
+            return {
+                "run_id": run.id,
+                "observed_generation": run.observed_generation,
+                "representation": representations[0],
+                "already_registered": True,
+            }
+
+    result = await create_external_run_registration(
+        session,
+        format="pod5",
+        input_file_id=input_file_id,
+        index_input_file_id=None,
+        source_fidelity="native",
+        sample_id=sample_id,
+        experiment_group=experiment_group,
+    )
+    representation = await session.get(
+        OntRawSignalRepresentation,
+        result["representation"]["representation_id"],
+    )
+    manifest = representation.artifact_manifest if representation is not None else {}
+    artifacts = manifest.get("artifacts", []) if isinstance(manifest, dict) else []
+    if not artifacts or artifacts[0].get("sha256") != probe["sha256"]:
+        raise ValueError("raw-signal source changed between intake validation steps")
+    result["already_registered"] = False
+    return result
 
 
 async def list_representations(session: AsyncSession, *, run_id: str, observed_generation: int) -> list[dict[str, Any]]:
