@@ -3218,7 +3218,7 @@ async def _preparation_plan_scope(
         or domain.aggregate_id != plan.parent_id
         or not domain.parent_id
         or global_experiment is None
-        or global_experiment.aggregate_kind != "global_experiment"
+        or global_experiment.aggregate_kind not in {"experiment", "global_experiment"}
         or global_experiment.workspace_id != workspace_id
         or global_experiment.aggregate_id != domain.parent_id
     ):
