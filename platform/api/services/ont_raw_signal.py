@@ -632,6 +632,65 @@ async def _external_registration_replay(
     }
 
 
+async def _adopt_legacy_external_registration(
+    session: AsyncSession,
+    *,
+    registration_key: str,
+    candidate_id: str,
+    source_path: Path,
+    source_sha256: str,
+    sample_id: str | None,
+    experiment_group: str,
+) -> dict[str, Any] | None:
+    """Upgrade one exact pre-key registration without creating a duplicate run."""
+    sample_clause = OntInstrumentRun.sample_id.is_(None) if sample_id is None else OntInstrumentRun.sample_id == sample_id
+    runs = (
+        await session.execute(
+            select(OntInstrumentRun).where(
+                OntInstrumentRun.external_registration_key.is_(None),
+                OntInstrumentRun.experiment_group == experiment_group,
+                sample_clause,
+            )
+        )
+    ).scalars().all()
+    for run in runs:
+        marker = run.last_minknow_payload if isinstance(run.last_minknow_payload, dict) else {}
+        if marker.get("schema") != "bms.ont.external-raw-signal-registration.v1":
+            continue
+        tracked = await session.get(InputFile, marker.get("input_file_id"))
+        if tracked is None or Path(tracked.directory) / tracked.filename != source_path:
+            continue
+        source = (
+            await session.execute(
+                select(OntRawSignalRepresentation).where(
+                    OntRawSignalRepresentation.run_id == run.id,
+                    OntRawSignalRepresentation.observed_generation == run.observed_generation,
+                    OntRawSignalRepresentation.role == "source",
+                )
+            )
+        ).scalar_one_or_none()
+        artifacts = source.artifact_manifest.get("artifacts", []) if source is not None and isinstance(source.artifact_manifest, dict) else []
+        if not any(item.get("sha256") == source_sha256 for item in artifacts if isinstance(item, dict)):
+            continue
+        run.external_registration_key = registration_key
+        run.last_minknow_payload = {
+            **marker,
+            "candidate_id": candidate_id,
+            "source_sha256": source_sha256,
+            "sample_id": sample_id,
+        }
+        await session.flush()
+        return await _external_registration_replay(
+            session,
+            registration_key=registration_key,
+            candidate_id=candidate_id,
+            source_sha256=source_sha256,
+            sample_id=sample_id,
+            experiment_group=experiment_group,
+        )
+    return None
+
+
 async def register_external_pod5_candidate(
     session: AsyncSession,
     domain_session: AsyncSession,
@@ -669,6 +728,18 @@ async def register_external_pod5_candidate(
         probe = _file_artifact(source_path, "candidate", kind="pod5", opened_fd=source_fd)
     finally:
         os.close(source_fd)
+
+    adopted = await _adopt_legacy_external_registration(
+        session,
+        registration_key=registration_key,
+        candidate_id=candidate_id,
+        source_path=source_path,
+        source_sha256=probe["sha256"],
+        sample_id=sample_id,
+        experiment_group=experiment_group,
+    )
+    if adopted is not None:
+        return adopted
 
     replay = await _external_registration_replay(
         session,
