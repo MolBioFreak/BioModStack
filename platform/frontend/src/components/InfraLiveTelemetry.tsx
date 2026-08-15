@@ -14,12 +14,15 @@ import {
 import type { GPUStatus, PerGpuFanStatus, SystemStatus } from '../lib/api';
 import { resolveCpuFrequencyScaleMhz, resolveCpuPowerScaleWatts } from './infraTelemetryScaling';
 import {
+    downsampleTelemetryTail,
     isValidPollPreset,
     loadPersistedTelemetryPreferences,
     mergeMinuteHistoryWithRawTail,
     parseTelemetryTimestampMs,
     persistTelemetryPreferences,
+    resolveTelemetryDisplayIntervalMs,
     resolveTelemetryGapBreakMs,
+    resolveTelemetryWindowBounds,
 } from './infraTelemetryHistory';
 import type {
     LiveSample,
@@ -1377,31 +1380,46 @@ export function InfraLiveTelemetry({
     const [pollIntervalMs, setPollIntervalMs] = useState<PollPreset>(restoredState.pollIntervalMs);
     const [windowMinutes, setWindowMinutes] = useState<WindowPreset>(restoredState.windowMinutes);
     const resolution = windowMinutes >= 10 ? 'minute' : 'raw';
+    const usesRangeAwareDisplay = windowMinutes >= 15;
+    const displayIntervalMs = resolveTelemetryDisplayIntervalMs(windowMinutes, pollIntervalMs);
     const historyQuery = useQuery({
         queryKey: ['immutable-telemetry-history', windowMinutes],
         queryFn: async () => {
-            const endMs = Date.now() + 1_000;
-            const startMs = endMs - windowMinutes * 60_000;
+            const nowMs = Date.now();
+            const requestEndMs = nowMs + 1_000;
+            const [stableStartMs, stableEndMs] = resolveTelemetryWindowBounds(
+                nowMs,
+                windowMinutes,
+                displayIntervalMs,
+            );
+            const startMs = usesRangeAwareDisplay
+                ? stableStartMs
+                : requestEndMs - windowMinutes * 60_000;
             if (resolution === 'raw') {
-                return fetchTelemetryHistory(startMs, endMs, 'raw', 4000);
+                return fetchTelemetryHistory(startMs, requestEndMs, 'raw', 4000);
             }
-            const rawTailStartMs = Math.max(startMs, endMs - MINUTE_LIVE_TAIL_MS);
+            const rawTailStartMs = Math.max(startMs, requestEndMs - MINUTE_LIVE_TAIL_MS);
             const [minuteHistory, rawTail] = await Promise.all([
-                fetchTelemetryHistory(startMs, endMs, 'minute', 4000),
-                fetchTelemetryHistory(rawTailStartMs, endMs, 'raw', 4000),
+                fetchTelemetryHistory(startMs, requestEndMs, 'minute', 4000),
+                fetchTelemetryHistory(rawTailStartMs, requestEndMs, 'raw', 4000),
             ]);
+            const rawTailPoints = usesRangeAwareDisplay
+                ? downsampleTelemetryTail(rawTail.data.points, displayIntervalMs)
+                : rawTail.data.points;
             return {
                 ...minuteHistory,
                 data: {
                     ...minuteHistory.data,
+                    start_ms: usesRangeAwareDisplay ? stableStartMs : minuteHistory.data.start_ms,
+                    end_ms: usesRangeAwareDisplay ? stableEndMs : minuteHistory.data.end_ms,
                     generated_at_ms: rawTail.data.generated_at_ms,
-                    points: mergeMinuteHistoryWithRawTail(minuteHistory.data.points, rawTail.data.points),
+                    points: mergeMinuteHistoryWithRawTail(minuteHistory.data.points, rawTailPoints),
                 },
             };
         },
-        refetchInterval: pollIntervalMs,
+        refetchInterval: displayIntervalMs,
         refetchIntervalInBackground: false,
-        refetchOnWindowFocus: true,
+        refetchOnWindowFocus: !usesRangeAwareDisplay,
     });
     const historyPoints = historyQuery.data?.data.points ?? [];
     const samples = historyPoints.map((point) => buildSample(point.payload, 1000, point.timestamp_ms));
@@ -1523,7 +1541,7 @@ export function InfraLiveTelemetry({
 
                 <div className={`flex flex-wrap items-start justify-end ${dashboardSizing.controlsGapClass}`}>
                     <SegmentedControl
-                        label="Poll"
+                        label={usesRangeAwareDisplay ? 'Base poll' : 'Poll'}
                         value={pollIntervalMs}
                         options={POLL_PRESETS}
                         onChange={setPollIntervalMs}
@@ -1536,6 +1554,16 @@ export function InfraLiveTelemetry({
                         onChange={setWindowMinutes}
                         compact={compact}
                     />
+                    {usesRangeAwareDisplay ? (
+                        <div title="Long-window charts fetch and repaint at a range-aware cadence while host telemetry collection remains live.">
+                            <div className={`font-semibold uppercase text-[var(--text-muted)] ${compact ? 'mb-1 text-[9px]' : 'mb-2 text-xs'}`}>
+                                Display
+                            </div>
+                            <div className={`rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] font-semibold text-[var(--text-primary)] ${compact ? 'px-2.5 py-1.5 text-[10px]' : 'px-3 py-2 text-sm'}`}>
+                                {displayIntervalMs / 1000}s
+                            </div>
+                        </div>
+                    ) : null}
                     <div>
                         <div
                             className={`font-semibold uppercase text-[var(--text-muted)] ${compact ? 'mb-1 text-[9px]' : 'mb-2 text-xs'}`}

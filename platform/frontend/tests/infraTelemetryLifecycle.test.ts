@@ -3,11 +3,14 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
+    downsampleTelemetryTail,
     loadPersistedTelemetryPreferences,
     mergeMinuteHistoryWithRawTail,
     parseTelemetryTimestampMs,
     persistTelemetryPreferences,
+    resolveTelemetryDisplayIntervalMs,
     resolveTelemetryGapBreakMs,
+    resolveTelemetryWindowBounds,
 } from '../src/components/infraTelemetryHistory.js';
 
 const PREFERENCES_STORAGE_KEY = 'bms_infra_live_telemetry_preferences_v1';
@@ -19,9 +22,12 @@ test('viewer reads bounded server-owned telemetry history without browser histor
     assert.match(telemetrySource, /function TimeSeriesPlot[\s\S]*?<svg/);
     assert.match(telemetrySource, /const resolution = windowMinutes >= 10 \? 'minute' : 'raw'/);
     assert.match(telemetrySource, /resolveTelemetryGapBreakMs\(resolution, pollIntervalMs\)/);
-    assert.match(telemetrySource, /fetchTelemetryHistory\(startMs, endMs, 'minute', 4000\)/);
-    assert.match(telemetrySource, /fetchTelemetryHistory\(rawTailStartMs, endMs, 'raw', 4000\)/);
-    assert.match(telemetrySource, /mergeMinuteHistoryWithRawTail\(minuteHistory\.data\.points, rawTail\.data\.points\)/);
+    assert.match(telemetrySource, /fetchTelemetryHistory\(startMs, requestEndMs, 'minute', 4000\)/);
+    assert.match(telemetrySource, /fetchTelemetryHistory\(rawTailStartMs, requestEndMs, 'raw', 4000\)/);
+    assert.match(telemetrySource, /downsampleTelemetryTail\(rawTail\.data\.points, displayIntervalMs\)/);
+    assert.match(telemetrySource, /mergeMinuteHistoryWithRawTail\(minuteHistory\.data\.points, rawTailPoints\)/);
+    assert.match(telemetrySource, /refetchInterval: displayIntervalMs/);
+    assert.match(telemetrySource, /refetchOnWindowFocus: !usesRangeAwareDisplay/);
     assert.match(telemetrySource, /buildSample\(point\.payload, 1000, point\.timestamp_ms\)/);
     assert.match(telemetrySource, /Telemetry collection is stale/);
     assert.match(telemetrySource, /const xMin = xDomain\?\.\[0\]/);
@@ -44,6 +50,35 @@ test('minute telemetry joins a raw live tail and preserves missing-bucket gaps',
         merged.map((point) => point.timestamp_ms),
         [0, 60_000, 120_000, 180_000, 181_000],
         'raw samples must replace only the still-open minute tail',
+    );
+});
+
+test('long telemetry windows use stable range-aware display cadence', () => {
+    assert.equal(resolveTelemetryDisplayIntervalMs(1, 1000), 1000);
+    assert.equal(resolveTelemetryDisplayIntervalMs(10, 5000), 5000);
+    assert.equal(resolveTelemetryDisplayIntervalMs(15, 1000), 15_000);
+    assert.equal(resolveTelemetryDisplayIntervalMs(30, 1000), 30_000);
+    assert.equal(resolveTelemetryDisplayIntervalMs(60, 1000), 60_000);
+
+    const first = resolveTelemetryWindowBounds(125_000, 60, 60_000);
+    const sameBucket = resolveTelemetryWindowBounds(179_999, 60, 60_000);
+    const nextBucket = resolveTelemetryWindowBounds(180_001, 60, 60_000);
+    assert.deepEqual(first, sameBucket, 'the 1h domain must not translate between minute cadence boundaries');
+    assert.equal(nextBucket[1] - first[1], 60_000, 'the 1h domain must advance by one complete cadence step');
+    assert.equal(first[1] - first[0], 60 * 60_000, 'the selected window width must remain exact');
+});
+
+test('long telemetry windows keep a sparse fresh raw tail', () => {
+    const rawTail = [1_000, 14_000, 15_000, 29_000, 30_000, 44_000, 59_000].map((timestamp_ms) => ({ timestamp_ms }));
+    assert.deepEqual(
+        downsampleTelemetryTail(rawTail, 30_000).map((point) => point.timestamp_ms),
+        [29_000, 59_000],
+        '30m display must keep only the newest raw sample in each 30s display bucket',
+    );
+    assert.deepEqual(
+        downsampleTelemetryTail(rawTail, 60_000).map((point) => point.timestamp_ms),
+        [59_000],
+        '1h display must retain the newest live sample without rendering one-second tail noise',
     );
 });
 

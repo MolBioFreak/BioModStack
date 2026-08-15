@@ -3,8 +3,40 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 
+import { sanitizeMolstarCss } from '../build/molstarCssHygiene.js';
+
 const readSource = (...parts: string[]) => fs.readFileSync(path.join(process.cwd(), ...parts), 'utf8');
 
+
+test('Molstar CSS sanitizer removes Firefox parser warnings without changing valid rules', () => {
+  const css = [
+    '.msp-plugin button::-moz-focus-inner,.msp-plugin input::-moz-focus-inner{border:0;padding:0}',
+    '.msp-plugin .field:-ms-input-placeholder{color:#9c835f}',
+    '.msp-plugin .icon{display:block-inline;font-weight:light}',
+    '.msp-plugin .track{background-color:tint(rgb(51, 43, 31), 60%)}',
+    '.msp-plugin .dot{border-color:tint(rgb(51, 43, 31), 50%)}',
+    '.msp-plugin .file{filter:alpha(opacity=0);opacity:0}',
+    '.msp-plugin .valid{display:grid;grid-template-columns:repeat(6, auto)}',
+  ].join('');
+
+  const sanitized = sanitizeMolstarCss(css);
+  for (const obsolete of ['::-moz-focus-inner', ':-ms-input-placeholder', 'block-inline', 'font-weight:light', 'tint(', 'filter:alpha(']) {
+    assert.equal(sanitized.includes(obsolete), false, `${obsolete} must be absent`);
+  }
+  assert.match(sanitized, /display:inline-block/u);
+  assert.match(sanitized, /font-weight:300/u);
+  assert.match(sanitized, /background-color:#adaaa5/u);
+  assert.match(sanitized, /border-color:#99958f/u);
+  assert.match(sanitized, /opacity:0/u);
+  assert.match(sanitized, /display:grid;grid-template-columns:repeat\(6, auto\)/u);
+});
+
+test('vite applies the sanitizer only to the Molstar viewer stylesheet', () => {
+  const source = readSource('vite.config.ts');
+  assert.match(source, /molstarCssHygienePlugin/u);
+  assert.match(source, /molstar\/build\/viewer\/molstar\.css/u);
+  assert.match(source, /sanitizeMolstarCss/u);
+});
 
 test('vite no longer carries a PDBe eval-warning suppression', () => {
   const source = readSource('vite.config.ts');

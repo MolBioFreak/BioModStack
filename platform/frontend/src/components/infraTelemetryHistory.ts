@@ -5,6 +5,43 @@ export type TelemetryResolution = 'raw' | 'minute';
 const RAW_MIN_GAP_BREAK_MS = 12_000;
 const MINUTE_GAP_BREAK_MS = 90_000;
 
+export function resolveTelemetryDisplayIntervalMs(
+    windowMinutes: WindowPreset,
+    pollIntervalMs: PollPreset,
+): number {
+    if (windowMinutes === 15) return 15_000;
+    if (windowMinutes === 30) return 30_000;
+    if (windowMinutes === 60) return 60_000;
+    return pollIntervalMs;
+}
+
+export function resolveTelemetryWindowBounds(
+    nowMs: number,
+    windowMinutes: WindowPreset,
+    displayIntervalMs: number,
+): [number, number] {
+    const endMs = Math.ceil(nowMs / displayIntervalMs) * displayIntervalMs;
+    return [endMs - windowMinutes * 60_000, endMs];
+}
+
+export function downsampleTelemetryTail<T extends { timestamp_ms: number }>(
+    points: readonly T[],
+    displayIntervalMs: number,
+): T[] {
+    const sampled: T[] = [];
+    let bucket = Number.NaN;
+    for (const point of points) {
+        const pointBucket = Math.floor(point.timestamp_ms / displayIntervalMs);
+        if (pointBucket === bucket) {
+            sampled[sampled.length - 1] = point;
+        } else {
+            sampled.push(point);
+            bucket = pointBucket;
+        }
+    }
+    return sampled;
+}
+
 export function resolveTelemetryGapBreakMs(
     resolution: TelemetryResolution,
     pollIntervalMs: PollPreset,
