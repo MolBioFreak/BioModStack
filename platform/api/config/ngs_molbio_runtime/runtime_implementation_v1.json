@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "b2653a1b2051afe51ae07e1ead5fe87bf25e2a053dc660da881a39bcf13bf018",
+  "content_sha256": "c5860d0bc3ec22ea5a54e6349ac5330f82861c54c2b334bb8416e63bce46d150",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "77673329001f48e610f13ed115fed62f56d7d10b93cc5ee30cea033c34bb3659",
@@ -353,6 +353,11 @@
       "size_bytes": 6210
     },
     {
+      "path": "platform/frontend/src/components/NGSToolkit.tsx",
+      "sha256": "7034b367c7b5457600f593363268fdd086672cd701753a55aff20c7ee57c2e29",
+      "size_bytes": 282492
+    },
+    {
       "path": "platform/frontend/src/components/experiments/GlobalExperimentContext.tsx",
       "sha256": "cb3e26ba2edfe72c6740ce48aca1a3c2c489375788ae807341ffd4c15a7143d0",
       "size_bytes": 15499
@@ -419,8 +424,8 @@
     },
     {
       "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json",
-      "sha256": "3bfbb99892d75da43665ba8c418709ba3ca9d328efcc21e0016669fee043dcce",
-      "size_bytes": 4363
+      "sha256": "ef3f6ba9422cc610bf26f763a68fe9c41577c1ccff0ed348d8774eb772fb0cfe",
+      "size_bytes": 4418
     },
     {
       "path": "schemas/ngs_molbio_runtime/runtime-implementation-v1.schema.json",
@@ -449,11 +454,11 @@
     }
   ],
   "source_denominator": {
-    "content_sha256": "f25c8fab0b9b3cc256521bed19cd151f5e1b163255c82b10e988a693eb9339d5",
+    "content_sha256": "93ac9157b314abdc063c3dafb84595ec26ec1e795d1d94762dbc567cb3d8d307",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
   },
-  "successor_source_commit": "84be7b3cad4bb834f0cce51f7e82760d8d1dd2a1",
-  "successor_source_tree": "21651bcefef7c1a992057121d8df3fdeb9ce44c4",
+  "successor_source_commit": "8f3bd3c3244b78689f18a8e9794c4200aa9267e4",
+  "successor_source_tree": "c9df2984ce2574240108fa0a53cff76100382771",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
