@@ -714,23 +714,60 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                                             </div>
                                         ))}
                                     </div>
-                                    {rawSignalQuery.data.representations.map((representation) => (
-                                        <div key={representation.representation_id} className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] p-2">
-                                            <span className="font-semibold text-[var(--text-primary)]">{representation.format.toUpperCase()}</span>
-                                            {' '}· {representation.role} · {representation.state} · {representation.reason_code}
-                                            <div className="break-all font-mono">{representation.representation_id} · manifest {representation.manifest_sha256}</div>
-                                            {representation.state !== 'ready' && (representation.format === 'pod5' || representation.format === 'blow5') ? (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => prepareBlow5.mutate(representation.representation_id)}
-                                                    disabled={prepareBlow5.isPending}
-                                                    className="mt-2 rounded border border-cyan-500/50 px-2 py-1 font-semibold text-cyan-200 disabled:opacity-40"
-                                                >
-                                                    {representation.format === 'blow5' ? 'Validate indexed BLOW5' : 'Prepare indexed BLOW5'}
-                                                </button>
-                                            ) : null}
-                                        </div>
-                                    ))}
+                                    {rawSignalQuery.data.representations.map((representation) => {
+                                        const semantic = representation.validation_receipts.semantic;
+                                        const containerDigest = typeof representation.runtime_identity.container_digest === 'string'
+                                            ? representation.runtime_identity.container_digest
+                                            : null;
+                                        return (
+                                            <div key={representation.representation_id} className="space-y-2 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] p-2">
+                                                <div>
+                                                    <span className="font-semibold text-[var(--text-primary)]">{representation.format.toUpperCase()}</span>
+                                                    {' '}· {representation.role} · {representation.state} · {representation.reason_code}
+                                                    <div className="break-all font-mono">{representation.representation_id} · manifest {representation.manifest_sha256}</div>
+                                                </div>
+                                                {representation.role === 'derived' ? (
+                                                    <div className="space-y-2 rounded border border-emerald-500/30 bg-emerald-500/5 p-2" aria-label="Raw-signal publication receipt">
+                                                        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                                                            <div><span className="font-semibold text-[var(--text-primary)]">Publication</span><div>{representation.published_at ?? 'not published'}</div></div>
+                                                            <div><span className="font-semibold text-[var(--text-primary)]">Reads</span><div>{representation.read_count ?? 'unknown'}</div></div>
+                                                            <div><span className="font-semibold text-[var(--text-primary)]">Partitions</span><div>{semantic?.partition_count ?? 'unknown'}</div></div>
+                                                            <div><span className="font-semibold text-[var(--text-primary)]">Indexed lookups</span><div>{semantic?.indexed_lookup_count ?? 'unknown'}</div></div>
+                                                            <div><span className="font-semibold text-[var(--text-primary)]">Semantic receipt</span><div>{semantic?.status ?? 'missing'}</div></div>
+                                                            <div><span className="font-semibold text-[var(--text-primary)]">Signal contract</span><div>{semantic?.signal_samples ?? 'unknown'}</div></div>
+                                                            <div><span className="font-semibold text-[var(--text-primary)]">Duplicate reads</span><div>{semantic?.duplicate_read_ids ?? 'unknown'}</div></div>
+                                                            <div><span className="font-semibold text-[var(--text-primary)]">Compared samples</span><div>{semantic?.total_signal_samples_compared ?? 'unknown'}</div></div>
+                                                        </div>
+                                                        <div>Adjacent indexes: <span className="font-semibold text-[var(--text-primary)]">{representation.validation_receipts.adjacent_index ? 'validated' : 'not validated'}</span></div>
+                                                        <div>Mapping contract: <span className="break-all font-mono text-[var(--text-primary)]">{semantic?.mapping_contract ?? 'unknown'}</span></div>
+                                                        <div>Parent representation: <span className="break-all font-mono text-[var(--text-primary)]">{representation.parent_representation_ids.join(', ') || 'none'}</span></div>
+                                                        <div>Parent manifest: <span className="break-all font-mono text-[var(--text-primary)]">{representation.parent_manifest_sha256s.join(', ') || 'none'}</span></div>
+                                                        <div>Runtime: <span className="break-all font-mono text-[var(--text-primary)]">{representation.profile_id ?? 'unknown'}{containerDigest ? ` · ${containerDigest}` : ''}</span></div>
+                                                        <div className="space-y-1">
+                                                            <div className="font-semibold text-[var(--text-primary)]">Published artifacts ({representation.artifact_count})</div>
+                                                            {representation.artifacts.map((artifact) => (
+                                                                <div key={artifact.artifact_id ?? `${artifact.kind}-${artifact.sha256}`} className="rounded border border-[var(--border-primary)] p-2">
+                                                                    <div><span className="font-semibold text-[var(--text-primary)]">{artifact.kind ?? 'artifact'}</span>{artifact.read_count !== undefined ? ` · ${artifact.read_count} reads` : ''}{artifact.bytes !== undefined ? ` · ${artifact.bytes} bytes` : ''}</div>
+                                                                    {artifact.partition_fingerprint ? <div>Partition: <span className="break-all font-mono text-[var(--text-primary)]">{artifact.partition_fingerprint}</span></div> : null}
+                                                                    <div>SHA-256: <span className="break-all font-mono text-[var(--text-primary)]">{artifact.sha256 ?? 'missing'}</span></div>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                ) : null}
+                                                {representation.state !== 'ready' && (representation.format === 'pod5' || representation.format === 'blow5') ? (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => prepareBlow5.mutate(representation.representation_id)}
+                                                        disabled={prepareBlow5.isPending}
+                                                        className="mt-2 rounded border border-cyan-500/50 px-2 py-1 font-semibold text-cyan-200 disabled:opacity-40"
+                                                    >
+                                                        {representation.format === 'blow5' ? 'Validate indexed BLOW5' : 'Prepare indexed BLOW5'}
+                                                    </button>
+                                                ) : null}
+                                            </div>
+                                        );
+                                    })}
                                     {(() => {
                                         const readyBlow5 = rawSignalQuery.data.representations.find(
                                             (representation) => representation.format === 'blow5' && representation.state === 'ready',

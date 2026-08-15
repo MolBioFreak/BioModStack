@@ -4579,8 +4579,38 @@ export interface OntRawSignalRepresentation {
     reason_code: string;
     manifest_sha256: string;
     artifact_count: number;
+    artifacts: Array<{
+        artifact_id?: string;
+        kind?: string;
+        bytes?: number;
+        sha256?: string;
+        partition_fingerprint?: string;
+        read_count?: number;
+    }>;
     read_count: number | null;
     profile_id: string | null;
+    compression: Record<string, unknown>;
+    parent_representation_ids: string[];
+    parent_manifest_sha256s: string[];
+    runtime_identity: Record<string, unknown>;
+    validation_receipts: {
+        adjacent_index?: boolean;
+        semantic?: {
+            status?: string;
+            mapping_contract?: string;
+            signal_samples?: string;
+            read_count?: number;
+            partition_count?: number;
+            indexed_lookup_count?: number;
+            duplicate_read_ids?: number;
+            total_signal_samples_compared?: number;
+            routing_sha256?: string;
+            partition_counts?: Record<string, number>;
+        };
+        [key: string]: unknown;
+    };
+    published_at: string | null;
+    created_at: string;
     validation: {
         source_identity_closed: boolean;
         adjacent_index_validated: boolean;

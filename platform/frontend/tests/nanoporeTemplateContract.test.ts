@@ -255,4 +255,8 @@ test('NGS instrument panel exposes indexed-BLOW5 waveform inspection', () => {
     assert.match(panel, /requestOntRawSignalWaveform/u);
     assert.match(panel, /fetchOntRawSignalWaveform/u);
     assert.match(panel, /aria-label="Raw electrical signal waveform"/u);
+    assert.match(panel, /aria-label="Raw-signal publication receipt"/u);
+    assert.match(panel, /Published artifacts/u);
+    assert.match(panel, /Adjacent indexes/u);
+    assert.match(panel, /Parent manifest/u);
 });

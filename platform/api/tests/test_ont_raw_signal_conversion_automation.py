@@ -99,6 +99,23 @@ def _source(path: Path, acquisition_id: str) -> OntRawSignalRepresentation:
     )
 
 
+def test_public_raw_signal_representation_is_path_opaque(tmp_path: Path) -> None:
+    source_path = tmp_path / "source.pod5"
+    source_path.write_bytes(b"source")
+    representation = _source(source_path, "acquisition")
+    representation.parent_representation_ids = ["parent-representation"]
+    representation.parent_manifest_sha256s = ["b" * 64]
+    representation.runtime_identity = {"container_digest": "c" * 64}
+    representation.validation_receipts = {"adjacent_index": True, "semantic": {"status": "passed"}}
+
+    public = ont_raw_signal._public_representation(representation)
+
+    assert public["artifacts"][0]["sha256"] == _sha256(source_path)
+    assert "path" not in public["artifacts"][0]
+    assert public["parent_manifest_sha256s"] == ["b" * 64]
+    assert public["validation_receipts"]["semantic"]["status"] == "passed"
+
+
 def _job(stage_root: Path) -> tuple[OntRawSignalDerivationJob, dict[str, Any]]:
     job = OntRawSignalDerivationJob(
         id="job-1",

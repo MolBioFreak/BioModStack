@@ -157,10 +157,29 @@ def _public_representation(record: OntRawSignalRepresentation) -> dict[str, Any]
         "reason_code": record.reason_code,
         "manifest_sha256": record.manifest_sha256,
         "artifact_count": len(artifacts),
+        "artifacts": [
+            {
+                key: artifact.get(key)
+                for key in (
+                    "artifact_id",
+                    "kind",
+                    "bytes",
+                    "sha256",
+                    "partition_fingerprint",
+                    "read_count",
+                )
+                if artifact.get(key) is not None
+            }
+            for artifact in artifacts
+            if isinstance(artifact, dict)
+        ],
         "read_count": record.read_count,
         "profile_id": record.profile_id,
         "compression": dict(record.compression or {}),
         "parent_representation_ids": list(record.parent_representation_ids or []),
+        "parent_manifest_sha256s": list(record.parent_manifest_sha256s or []),
+        "runtime_identity": dict(record.runtime_identity or {}),
+        "validation_receipts": dict(record.validation_receipts or {}),
         "validation": {
             "source_identity_closed": bool((record.validation_receipts or {}).get("source_preflight")),
             "adjacent_index_validated": bool((record.validation_receipts or {}).get("adjacent_index")),
