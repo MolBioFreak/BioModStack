@@ -45,7 +45,9 @@ MIGRATION_V15_VERSION = 15
 MIGRATION_V15_NAME = "idempotency_response_digest_authority"
 MIGRATION_V16_VERSION = 16
 MIGRATION_V16_NAME = "run_control_cancellation_authority"
-LATEST_MIGRATION_VERSION = MIGRATION_V16_VERSION
+MIGRATION_V17_VERSION = 17
+MIGRATION_V17_NAME = "resource_admission_operational_receipt_authority"
+LATEST_MIGRATION_VERSION = MIGRATION_V17_VERSION
 MIGRATION_V2_CHECKSUM = "db24d1ef056e560f10eb2fe9f8ef4dac0d4e4dbe90fd0a49efed88f0d111935c"
 MIGRATION_V3_CHECKSUM = "46f1a1d28a02334e87d628070e2bd9c6d78e158caa23d583951fdc582e7b11d2"
 MIGRATION_V4_CHECKSUM = "ec2966efee9129f8890019bee0d569de2cdf8d2a9fc4bb2e05138839880f375b"
@@ -2059,6 +2061,45 @@ PRAGMA foreign_key_check;
 
 MIGRATION_V16_CHECKSUM = hashlib.sha256(MIGRATION_V16_SQL.encode("utf-8")).hexdigest()
 
+MIGRATION_V17_SQL = r'''
+DROP TRIGGER IF EXISTS trg_experiment_operational_receipt_immutable_update;
+DROP TRIGGER IF EXISTS trg_experiment_operational_receipt_immutable_delete;
+DROP INDEX IF EXISTS ix_experiment_operational_receipts_kind_time;
+ALTER TABLE operational_receipts RENAME TO operational_receipts_v16;
+CREATE TABLE operational_receipts (
+    receipt_id TEXT PRIMARY KEY NOT NULL,
+    operation_kind TEXT NOT NULL CHECK(operation_kind IN ('backup','export','restoration','payload_audit','package_acceptance','resource_admission')),
+    workspace_id TEXT REFERENCES resources(id),
+    native_identity TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('created','verified','failed','sealed')),
+    receipt_json TEXT NOT NULL,
+    receipt_sha256 TEXT NOT NULL CHECK(length(receipt_sha256) = 64),
+    source_revision TEXT,
+    occurred_at TEXT NOT NULL,
+    verified_at TEXT,
+    CHECK(sha256(receipt_json) = lower(receipt_sha256))
+);
+INSERT INTO operational_receipts(
+    receipt_id, operation_kind, workspace_id, native_identity, state,
+    receipt_json, receipt_sha256, source_revision, occurred_at, verified_at
+)
+SELECT receipt_id, operation_kind, workspace_id, native_identity, state,
+       receipt_json, receipt_sha256, source_revision, occurred_at, verified_at
+FROM operational_receipts_v16;
+DROP TABLE operational_receipts_v16;
+CREATE INDEX ix_experiment_operational_receipts_kind_time
+    ON operational_receipts(operation_kind, occurred_at, receipt_id);
+CREATE TRIGGER trg_experiment_operational_receipt_immutable_update
+BEFORE UPDATE ON operational_receipts
+BEGIN SELECT RAISE(ABORT, 'operational receipt is immutable'); END;
+CREATE TRIGGER trg_experiment_operational_receipt_immutable_delete
+BEFORE DELETE ON operational_receipts
+BEGIN SELECT RAISE(ABORT, 'operational receipt is immutable'); END;
+PRAGMA foreign_key_check;
+'''
+
+MIGRATION_V17_CHECKSUM = hashlib.sha256(MIGRATION_V17_SQL.encode("utf-8")).hexdigest()
+
 _MIGRATION_TRIGGER_NAMES = (
     "trg_experiment_resource_owner_same_workspace_insert",
     "trg_experiment_resource_owner_same_workspace_update",
@@ -2166,6 +2207,10 @@ def _migration_v15_checksum() -> str:
 
 def _migration_v16_checksum() -> str:
     return MIGRATION_V16_CHECKSUM
+
+
+def _migration_v17_checksum() -> str:
+    return MIGRATION_V17_CHECKSUM
 
 
 def _migration_v9_checksum() -> str:
@@ -2297,10 +2342,11 @@ def _accepted_migration_ledgers() -> tuple[list[tuple[int, str, str]], ...]:
     v14 = (MIGRATION_V14_VERSION, MIGRATION_V14_NAME, _migration_v14_checksum())
     v15 = (MIGRATION_V15_VERSION, MIGRATION_V15_NAME, _migration_v15_checksum())
     v16 = (MIGRATION_V16_VERSION, MIGRATION_V16_NAME, _migration_v16_checksum())
+    v17 = (MIGRATION_V17_VERSION, MIGRATION_V17_NAME, _migration_v17_checksum())
     v1 = (LEGACY_MIGRATION_VERSION, LEGACY_MIGRATION_NAME, LEGACY_MIGRATION_CHECKSUM)
     return (
-        [v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16],
-        [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16],
+        [v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17],
+        [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17],
     )
 
 
@@ -2466,6 +2512,7 @@ def _expected_schema_definition_manifest(*, legacy_lineage: bool = False) -> dic
         )
         _apply_idempotency_response_digest_upgrade(expected)
         _apply_run_control_upgrade(expected)
+        _apply_operational_receipt_upgrade(expected)
         manifest = _schema_definition_manifest(expected)
         if legacy_lineage:
             for table_name, definition in _LEGACY_FINAL_TABLE_SQL.items():
@@ -3241,6 +3288,41 @@ def _apply_run_control_upgrade(connection: sqlite3.Connection) -> None:
         connection.execute(f"PRAGMA foreign_keys = {foreign_keys}")
 
 
+def _apply_operational_receipt_upgrade(connection: sqlite3.Connection) -> None:
+    """Allow sealed resource-admission receipts in durable operations authority."""
+    foreign_keys = int(connection.execute("PRAGMA foreign_keys").fetchone()[0])
+    legacy_alter_table = int(connection.execute("PRAGMA legacy_alter_table").fetchone()[0])
+    try:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute("PRAGMA legacy_alter_table = ON")
+        connection.executescript("BEGIN IMMEDIATE;\n" + MIGRATION_V17_SQL)
+        violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise sqlite3.IntegrityError(f"V17 foreign-key violations: {violations!r}")
+        connection.execute(
+            """
+            INSERT INTO experiment_schema_migrations(
+                version, name, checksum, description, applied_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                MIGRATION_V17_VERSION,
+                MIGRATION_V17_NAME,
+                _migration_v17_checksum(),
+                "Sealed resource-admission operational receipt authority",
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        connection.commit()
+    except Exception:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
+    finally:
+        connection.execute(f"PRAGMA legacy_alter_table = {legacy_alter_table}")
+        connection.execute(f"PRAGMA foreign_keys = {foreign_keys}")
+
+
 def run_all(db_path: str | Path) -> None:
     _verify_frozen_migration_sources()
     path = Path(db_path).expanduser().resolve()
@@ -3261,6 +3343,7 @@ def run_all(db_path: str | Path) -> None:
     v14 = (MIGRATION_V14_VERSION, MIGRATION_V14_NAME, _migration_v14_checksum())
     v15 = (MIGRATION_V15_VERSION, MIGRATION_V15_NAME, _migration_v15_checksum())
     v16 = (MIGRATION_V16_VERSION, MIGRATION_V16_NAME, _migration_v16_checksum())
+    v17 = (MIGRATION_V17_VERSION, MIGRATION_V17_NAME, _migration_v17_checksum())
     try:
         connection.execute(
             """
@@ -3417,6 +3500,15 @@ def run_all(db_path: str | Path) -> None:
             [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15],
         ):
             _apply_run_control_upgrade(connection)
+
+        rows = connection.execute(
+            "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
+        ).fetchall()
+        if rows in (
+            [v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16],
+            [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16],
+        ):
+            _apply_operational_receipt_upgrade(connection)
 
         rows = connection.execute(
             "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
