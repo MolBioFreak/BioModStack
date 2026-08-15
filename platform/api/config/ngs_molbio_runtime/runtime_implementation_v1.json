@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "1238b5786a5e616b6f721be525527915f10597cca4c14a1fdd97f39ffd5b5741",
+  "content_sha256": "de1a649c3146b22f87cbc4e818ba0baf781a5b68e8894c241ca5fd3e9ab6b90f",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "77673329001f48e610f13ed115fed62f56d7d10b93cc5ee30cea033c34bb3659",
@@ -104,8 +104,8 @@
     },
     {
       "path": "platform/api/experiment_services.py",
-      "sha256": "b7aa3de102763251161181aecd95ce188e45e89576616b77a6a1f3d35b8fd16f",
-      "size_bytes": 260234
+      "sha256": "f9bdc5a1066d2c8cbd1921d6147a5243d1a0fa4255e9486f44da006698ab41f0",
+      "size_bytes": 260254
     },
     {
       "path": "platform/api/main.py",
@@ -452,8 +452,8 @@
     "content_sha256": "f25c8fab0b9b3cc256521bed19cd151f5e1b163255c82b10e988a693eb9339d5",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
   },
-  "successor_source_commit": "3ac86f37c829fae40761951edaf0750729e34d46",
-  "successor_source_tree": "ee1e1755640ba85f150a49a18cdb902a3e10f3ec",
+  "successor_source_commit": "d2150b2d376e610b24db3953b21083d3fc84f78c",
+  "successor_source_tree": "d2708012029a0dfc718b1b9f6343ba56845638ee",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
