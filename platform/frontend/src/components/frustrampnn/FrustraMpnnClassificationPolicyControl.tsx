@@ -56,6 +56,9 @@ export function FrustraMpnnClassificationPolicyControl({
                     <option value="custom">Custom thresholds</option>
                 </select>
             </label>
+            <p className="text-xs text-slate-500">
+                Canonical classification marks scores at or below −1 as highly frustrated and scores at or above 0.58 as minimally frustrated. Scores between those limits are neutral. Custom thresholds change classification only; they do not alter the underlying FrustraMPNN scores.
+            </p>
             <div className="grid gap-3 sm:grid-cols-2">
                 <label className="block text-sm text-slate-700">
                     High maximum

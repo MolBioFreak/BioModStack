@@ -13,6 +13,7 @@ import { fetchFullJob, fetchJobs } from '../lib/api';
 import type { Job } from '../lib/api';
 import { jobPollingInterval } from '../lib/queryPolling';
 import { isNgsJob } from '../lib/ngsResultRouting';
+import { getJobOutputSummary } from '../lib/jobOutputSummary';
 
 const QUICK_VIEWER_COMPACT_KEY = 'bms_dashboard_quick_viewer_compact_v1';
 type QuickViewerSize = 'micro' | 'compact' | 'standard' | 'large' | 'xlarge';
@@ -318,7 +319,7 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
                     <option value="">Select a job...</option>
                     {completedJobs.map((job: Job) => (
                         <option key={job.id} value={job.id}>
-                            {job.name} ({job.design_count} designs)
+                            {job.name} ({getJobOutputSummary(job).label})
                         </option>
                     ))}
                 </select>

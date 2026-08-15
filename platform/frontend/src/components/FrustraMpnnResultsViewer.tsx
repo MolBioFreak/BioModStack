@@ -19,6 +19,7 @@ import {
     type FrustraMpnnLandscapeFilters,
     type FrustraMpnnRequestedSettings,
 } from '../lib/frustraMpnnApi.js';
+import { assertTerminalSourceAuthority } from '../lib/frustraMpnnViewerAuthority.js';
 import { StructureWorkbench } from '../structureViewer/StructureWorkbench.js';
 import {
     collectCompleteFrustraMpnnLandscape,
@@ -258,9 +259,7 @@ export default function FrustraMpnnResultsViewer({
             if (detail.data.source_artifact_sha256 !== structureMap.data.source_sha256) {
                 throw new Error('source_hash_conflict: result source SHA-256 does not match structure-map source authority.');
             }
-            if (!terminalResult.source_artifact || terminalResult.source_artifact.sha256 !== detail.data.source_artifact_sha256) {
-                throw new Error('terminal_source_hash_conflict: result and terminal source SHA-256 authorities disagree.');
-            }
+            assertTerminalSourceAuthority(terminalResult.source_artifact, detail.data.source_artifact_sha256);
             const sourceIsIdentityAuthority = structureMap.data.identity_authority === 'pdb_self_identity_v1'
                 || structureMap.data.identity_authority === 'mmcif_atom_site_v1';
             if (sourceIsIdentityAuthority) {

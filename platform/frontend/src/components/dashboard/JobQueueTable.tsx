@@ -4,6 +4,7 @@ import type { Job } from '../../lib/api';
 import { isNgsJob, ngsResultHref } from '../../lib/ngsResultRouting';
 import { JobDetailsPanel } from '../JobDetailsPanel';
 import { getModeDisplayName, getStageDisplayName } from '../../constants/displayNames';
+import { getCompletedScientificResultStatus, getJobOutputSummary } from '../../lib/jobOutputSummary';
 
 type SortColumn = 'name' | 'mode' | 'status' | 'designs' | 'created';
 type SortDirection = 'asc' | 'desc';
@@ -119,6 +120,17 @@ export function JobQueueTable({
     const formatCreatedAt = (value: string) => new Date(value).toLocaleString();
 
     const renderDesignCountCell = (job: Job) => {
+        if (typeof job.frustrampnn_result_count === 'number') {
+            const output = getJobOutputSummary(job);
+            return (
+                <div className="flex flex-col" title="Persisted governed FrustraMPNN result entities">
+                    <span className="text-slate-300">{output.count}</span>
+                    <span className="text-[11px] leading-tight text-slate-500">
+                        {output.count === 1 ? 'result' : 'results'}
+                    </span>
+                </div>
+            );
+        }
         const displayCount = getDisplayDesignCount(job);
         const hasSeparateStoredCount =
             typeof job.requested_design_count === 'number' &&
@@ -183,7 +195,7 @@ export function JobQueueTable({
                         if (batchJobs.some((job) => job.status === 'cancelled')) return statusOrder.cancelled;
                         return statusOrder.completed;
                     case 'designs':
-                        return batchJobs.reduce((sum, job) => sum + getDisplayDesignCount(job), 0);
+                        return batchJobs.reduce((sum, job) => sum + getJobOutputSummary(job).count, 0);
                     case 'created':
                         return new Date(item.firstDate).getTime();
                 }
@@ -198,7 +210,7 @@ export function JobQueueTable({
                 case 'status':
                     return statusOrder[job.status] ?? statusOrder.cancelled;
                 case 'designs':
-                    return getDisplayDesignCount(job);
+                    return getJobOutputSummary(job).count;
                 case 'created':
                     return new Date(job.created_at).getTime();
             }
@@ -501,7 +513,7 @@ export function JobQueueTable({
                                     </span>
                                 </td>
                                 <td className="px-4 py-3">
-                                    <StatusBadge status={job.status} errorMessage={job.error_message} />
+                                    <StatusBadge status={job.status} errorMessage={job.error_message} acceptedResultCount={job.frustrampnn_result_count} />
                                 </td>
                                 <td className="px-4 py-3">{renderDesignCountCell(job)}</td>
                                 <td className="px-4 py-3 text-sm text-slate-400">
@@ -571,7 +583,7 @@ export function JobQueueTable({
                             </span>
                         </td>
                         <td className="px-4 py-3">
-                            <StatusBadge status={job.status} errorMessage={job.error_message} />
+                            <StatusBadge status={job.status} errorMessage={job.error_message} acceptedResultCount={job.frustrampnn_result_count} />
                         </td>
                         <td className="px-4 py-3">{renderDesignCountCell(job)}</td>
                         <td className="px-4 py-3 text-sm text-slate-400">
@@ -637,11 +649,11 @@ export function JobQueueTable({
                                 <span className="rounded bg-blue-500/20 px-2 py-1 text-[11px] text-blue-400">
                                     {getModeDisplayName(job.mode)}
                                 </span>
-                                <StatusBadge status={job.status} errorMessage={job.error_message} />
+                                <StatusBadge status={job.status} errorMessage={job.error_message} acceptedResultCount={job.frustrampnn_result_count} />
                             </div>
                         </div>
                         <div className="shrink-0 text-right text-[11px] text-slate-400">
-                            <div>{getDisplayDesignCount(job)} designs</div>
+                            <div>{getJobOutputSummary(job).label}</div>
                             <div className="mt-1">{new Date(job.created_at).toLocaleDateString()}</div>
                         </div>
                     </div>
@@ -821,7 +833,7 @@ export function JobQueueTable({
                             <SortHeader column="name">Name</SortHeader>
                             <SortHeader column="mode">Mode</SortHeader>
                             <SortHeader column="status">Status</SortHeader>
-                            <SortHeader column="designs">Designs</SortHeader>
+                            <SortHeader column="designs">Outputs</SortHeader>
                             <SortHeader column="created">Created</SortHeader>
                             <th className="sticky top-0 z-10 bg-slate-900/95 px-4 py-3 text-left text-sm font-medium text-slate-400 backdrop-blur">
                                 Actions
@@ -835,14 +847,16 @@ export function JobQueueTable({
     );
 }
 
-function StatusBadge({ status, errorMessage }: { status: string; errorMessage?: string | null }) {
+function StatusBadge({ status, errorMessage, acceptedResultCount }: { status: string; errorMessage?: string | null; acceptedResultCount?: number }) {
     const completedWithError = status === 'completed' && !!errorMessage;
+    const scientificResultStatus = getCompletedScientificResultStatus(status as Job['status'], acceptedResultCount);
     const styles: Record<string, string> = {
         queued: 'bg-slate-500/20 text-slate-400',
         running: 'bg-blue-500/20 text-blue-400 animate-pulse',
         awaiting_input: 'bg-amber-500/20 text-amber-400',
         completed: 'bg-green-500/20 text-green-400',
         completed_error: 'bg-amber-500/20 text-amber-400',
+        no_results: 'bg-amber-500/20 text-amber-300',
         failed: 'bg-red-500/20 text-red-400',
         cancelled: 'bg-orange-500/20 text-orange-400',
     };
@@ -851,8 +865,16 @@ function StatusBadge({ status, errorMessage }: { status: string; errorMessage?: 
     const truncatedError = errorMessage
         ? errorMessage.split('\n')[0].substring(0, 100) + (errorMessage.length > 100 ? '...' : '')
         : null;
-    const badgeStyle = completedWithError ? styles.completed_error : (styles[status] ?? styles.queued);
-    const badgeLabel = completedWithError ? 'completed*' : status.replace('_', ' ');
+    const badgeStyle = scientificResultStatus
+        ? styles[scientificResultStatus.styleKey]
+        : completedWithError
+            ? styles.completed_error
+            : (styles[status] ?? styles.queued);
+    const badgeLabel = scientificResultStatus
+        ? scientificResultStatus.label
+        : completedWithError
+            ? 'completed*'
+            : status.replace('_', ' ');
 
     return (
         <div className="group relative inline-block">

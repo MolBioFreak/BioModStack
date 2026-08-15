@@ -73,6 +73,10 @@ export function FrustraMpnnSourceStructurePolicyControl({
                 )}
             </label>
 
+            <p className="text-xs text-slate-500">
+                Source model selects one coordinate model from a multi-model PDB or mmCIF file. Only the selected model is analyzed; this source exposes {modelChoices.length || 'an uninspected number of'} model{modelChoices.length === 1 ? '' : 's'}.
+            </p>
+
             <label className="block text-sm text-slate-700">
                 Preferred alternate location
                 <select
@@ -93,6 +97,9 @@ export function FrustraMpnnSourceStructurePolicyControl({
                     ))}
                 </select>
             </label>
+            <p className="text-xs text-slate-500">
+                Blank uses atoms with an empty alternate-location label. When the source supplies alternate conformers, the normalizer applies the persisted occupancy policy and records the effective choice in the structure map.
+            </p>
             {!inspection && (
                 <p className="text-xs text-slate-500">
                     Source choices will be constrained after exact source inspection is produced.
