@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import argparse
+import array
 import hashlib
 import importlib.util
 import inspect
 import json
 import os
+import sqlite3
+import socket
 import subprocess
+import threading
 import sys
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,6 +21,7 @@ from typing import Any
 import numpy as np
 import pod5
 import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 pytestmark = [
     pytest.mark.filterwarnings("ignore:Call to deprecated function.*:DeprecationWarning"),
@@ -27,7 +33,9 @@ if str(ROOT / "platform" / "api") not in sys.path:
     sys.path.insert(0, str(ROOT / "platform" / "api"))
 
 from database import OntRawSignalDerivationJob, OntRawSignalRepresentation
+from migrations.seal_ont_external_source_identity import migrate as seal_external_source_identity
 from services import ont_raw_signal
+from services.ont_raw_signal_worker import OntRawSignalWorker
 
 QUALIFICATION_ROOT = Path("/mnt/BioModStack/ont-raw-signal-qualification/BFX6NB_1_JAN26-EL-Q2-01/subset-pod5")
 QUALIFICATION_PARTITIONS = (
@@ -66,7 +74,40 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _run_with_source_fds(command: list[str], fds: list[int], socket_path: Path, *, timeout: int) -> None:
+    socket_path.unlink(missing_ok=True)
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(socket_path))
+    server.listen(1)
+    errors: list[BaseException] = []
+
+    def send() -> None:
+        try:
+            connection, _ = server.accept()
+            with connection:
+                connection.sendmsg(
+                    [b"F"],
+                    [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array("i", fds))],
+                )
+        except BaseException as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=send, daemon=True)
+    thread.start()
+    try:
+        result = subprocess.run(command, check=False, timeout=timeout, capture_output=True, text=True)
+        if result.returncode:
+            raise RuntimeError(f"container failed: {result.stderr}")
+    finally:
+        server.close()
+        thread.join(timeout=5)
+        socket_path.unlink(missing_ok=True)
+    assert not errors
+
+
 def _source(path: Path, acquisition_id: str) -> OntRawSignalRepresentation:
+    info = path.stat()
+    root_info = path.parent.stat()
     return OntRawSignalRepresentation(
         id="source-1",
         run_id="run-1",
@@ -84,6 +125,14 @@ def _source(path: Path, acquisition_id: str) -> OntRawSignalRepresentation:
                     "path": str(path),
                     "bytes": path.stat().st_size,
                     "sha256": _sha256(path),
+                    "device": info.st_dev,
+                    "inode": info.st_ino,
+                    "mtime_ns": info.st_mtime_ns,
+                    "ctime_ns": info.st_ctime_ns,
+                    "governed_root_path": str(path.parent),
+                    "governed_root_device": root_info.st_dev,
+                    "governed_root_inode": root_info.st_ino,
+                    "governed_relative_path": path.name,
                 }
             ]
         },
@@ -158,7 +207,7 @@ def test_contract_02_source_paths_require_immutable_authority(tmp_path: Path) ->
     source_path.write_bytes(b"pod5")
     source = _source(source_path, "acquisition")
     source.artifact_manifest["artifacts"][0].pop("sha256")
-    with pytest.raises(ValueError, match="immutable size and digest authority"):
+    with pytest.raises(ValueError, match="immutable size, digest, and filesystem identity authority"):
         ont_raw_signal._source_paths(source)
 
 
@@ -171,9 +220,14 @@ def test_contract_03_commands_bind_sealed_digest_and_partition_map(tmp_path: Pat
     command = commands["source_preflight"]
     assert command[command.index("--expected-sha256") + 1] == _sha256(source_path)
     assert command[command.index("--expected-size") + 1] == str(source_path.stat().st_size)
-    assert commands["partition"][-8:] == [
-        "--read-id-column", "read_id", "--columns", "group", "--output", "/stage/partitions", "--template", "{group}.pod5", "--threads", "4", "--missing-ok"
-    ][-8:]
+    assert command[command.index("--expected-inode") + 1] == str(source_path.stat().st_ino)
+    partition = commands["partition"]
+    assert partition[partition.index("partition-pod5") - 1:partition.index("partition-pod5") + 1] == [
+        "/opt/bms/ont_raw_signal_validate.py", "partition-pod5"
+    ]
+    assert partition[partition.index("--table") + 1] == "/stage/partition-map.csv"
+    assert partition[partition.index("--output") + 1] == "/stage/partitions"
+    assert partition[partition.index("--receipt") + 1] == "/stage/partition-receipt.json"
 
 
 def test_contract_04_partition_authority_rejects_invalid_groups(tmp_path: Path) -> None:
@@ -219,6 +273,30 @@ def test_contract_08_terminal_registration_requests_automatic_conversion() -> No
     assert 'consumer_id="ont-terminal-reconciliation"' in source
     assert 'preference="auto"' in source
     assert "automatic=True" in source
+
+
+def test_native_terminal_artifact_is_sealed_for_descriptor_conversion(tmp_path: Path) -> None:
+    source_path = tmp_path / "native.pod5"
+    source_path.write_bytes(b"native-pod5")
+    terminal = {
+        "kind": "pod5",
+        "path": str(source_path),
+        "bytes": source_path.stat().st_size,
+        "sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
+    }
+    artifacts = ont_raw_signal._seal_native_pod5_artifacts([terminal])
+    representation = OntRawSignalRepresentation(
+        format="pod5",
+        artifact_manifest={"artifacts": artifacts},
+    )
+    assert ont_raw_signal._source_paths(representation) == [source_path]
+    assert all(
+        isinstance(artifacts[0][field], int)
+        for field in (
+            "device", "inode", "mtime_ns", "ctime_ns",
+            "governed_root_device", "governed_root_inode",
+        )
+    )
 
 
 def test_contract_09_partitioned_waveform_uses_digest_bound_route(tmp_path: Path) -> None:
@@ -330,8 +408,13 @@ def test_validator_fixture_01_preflight_partitions_complete_run_info(tmp_path: P
     source = tmp_path / "mixed.pod5"
     acquisition_id, _reads = _write_mixed_pod5(source)
     partition_map = tmp_path / "partition-map.csv"
+    source_info = source.stat()
+    root_info = source.parent.stat()
     args = argparse.Namespace(
-        pod5=[source], expected_sha256=[_sha256(source)], expected_size=[source.stat().st_size],
+        pod5=[source], expected_sha256=[_sha256(source)], expected_size=[source_info.st_size],
+        governed_root=[source.parent], expected_root_device=[root_info.st_dev], expected_root_inode=[root_info.st_ino],
+        expected_device=[source_info.st_dev], expected_inode=[source_info.st_ino],
+        expected_mtime_ns=[source_info.st_mtime_ns], expected_ctime_ns=[source_info.st_ctime_ns],
         expected_acquisition_id=acquisition_id, partition_map=partition_map,
     )
     receipt = validator.source_preflight(args)
@@ -385,8 +468,13 @@ def test_validator_fixture_02_rejects_wrong_run_info_partition(tmp_path: Path, m
     blow5.write_bytes(b"fixture")
     index.write_bytes(b"index")
     monkeypatch.setattr(validator, "_slow5_open", lambda _path: _FakeSlow5([_slow5_record(reads[0])]))
+    source_info = source.stat()
+    root_info = source.parent.stat()
     args = argparse.Namespace(
-        pod5=[source], expected_sha256=[_sha256(source)], expected_size=[source.stat().st_size],
+        pod5=[source], expected_sha256=[_sha256(source)], expected_size=[source_info.st_size],
+        governed_root=[source.parent], expected_root_device=[root_info.st_dev], expected_root_inode=[root_info.st_ino],
+        expected_device=[source_info.st_dev], expected_inode=[source_info.st_ino],
+        expected_mtime_ns=[source_info.st_mtime_ns], expected_ctime_ns=[source_info.st_ctime_ns],
         blow5=[blow5], index=[index], routing=tmp_path / "routing.json",
     )
     with pytest.raises(ValueError, match="wrong complete-run-info partition"):
@@ -414,19 +502,34 @@ def test_mixed_run_end_to_end_conversion(tmp_path: Path) -> None:
     snapshot["container_digest"] = image_id.removeprefix("sha256:")
     source = _source(source_path, acquisition_id)
     commands = ont_raw_signal._conversion_commands(job, source, snapshot)
-    Path(commands["stage"]).mkdir(parents=True, mode=0o700)
-    Path(commands["partitions"]).mkdir(mode=0o700)
-    Path(commands["outputs"]).mkdir(mode=0o700)
-    subprocess.run(commands["source_preflight"], check=True, timeout=120)
-    groups = ont_raw_signal.conversion_partition_groups(commands)
-    assert len(groups) == 2
-    subprocess.run(commands["partition"], check=True, timeout=120)
-    for group in groups:
-        unit = ont_raw_signal.conversion_unit_commands(commands, group)
-        subprocess.run(unit["convert"], check=True, timeout=120)
-        subprocess.run(unit["quickcheck"], check=True, timeout=30)
-        subprocess.run(unit["index_create"], check=True, timeout=30)
-    subprocess.run(ont_raw_signal.conversion_semantic_command(commands, groups), check=True, timeout=180)
+    pinned_fds = ont_raw_signal.pin_conversion_source_descriptors(commands)
+    selected_inode = os.fstat(pinned_fds[1]).st_ino
+    replacement = tmp_path / "replacement.pod5"
+    replacement.write_bytes(b"path-replaced-after-pin")
+    replacement.replace(source_path)
+    assert source_path.stat().st_ino != selected_inode
+    try:
+        Path(commands["stage"]).mkdir(parents=True, mode=0o700)
+        Path(commands["partitions"]).mkdir(mode=0o700)
+        Path(commands["outputs"]).mkdir(mode=0o700)
+        _run_with_source_fds(commands["source_preflight"], pinned_fds, Path(commands["fd_socket"]), timeout=120)
+        groups = ont_raw_signal.conversion_partition_groups(commands)
+        assert len(groups) == 2
+        _run_with_source_fds(commands["partition"], pinned_fds, Path(commands["fd_socket"]), timeout=120)
+        for group in groups:
+            unit = ont_raw_signal.conversion_unit_commands(commands, group)
+            subprocess.run(unit["convert"], check=True, timeout=120)
+            subprocess.run(unit["quickcheck"], check=True, timeout=30)
+            subprocess.run(unit["index_create"], check=True, timeout=30)
+        _run_with_source_fds(
+            ont_raw_signal.conversion_semantic_command(commands, groups),
+            pinned_fds,
+            Path(commands["fd_socket"]),
+            timeout=180,
+        )
+    finally:
+        for fd in pinned_fds:
+            os.close(fd)
     semantic = json.loads((Path(commands["stage"]) / "semantic-receipt.json").read_text(encoding="utf-8"))
     assert semantic["status"] == "passed"
     assert semantic["read_count"] == 2
@@ -474,6 +577,55 @@ def test_existing_pod5_candidates_exclude_symlinks(
         ont_raw_signal.resolve_external_pod5_candidate(hashlib.sha256(b"escaped.pod5").hexdigest())
 
 
+def test_existing_pod5_root_rejects_lexical_parent_traversal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    governed = tmp_path / "governed"
+    governed.mkdir()
+    monkeypatch.setenv(
+        ont_raw_signal.EXTERNAL_POD5_ROOT_ENV,
+        str(governed / ".." / "governed"),
+    )
+
+    with pytest.raises(RuntimeError, match="parent traversal"):
+        ont_raw_signal.list_external_pod5_candidates()
+
+
+def test_conversion_pins_selected_inode_across_path_replacement(tmp_path: Path) -> None:
+    source_path = tmp_path / "source.pod5"
+    source_path.write_bytes(b"sealed-pod5")
+    source = _source(source_path, "acquisition")
+    original_inode = source_path.stat().st_ino
+    job, snapshot = _job(tmp_path / "staging")
+    commands = ont_raw_signal._conversion_commands(job, source, snapshot)
+
+    replacement = tmp_path / "replacement.pod5"
+    replacement.write_bytes(b"sealed-pod5")
+    replacement.replace(source_path)
+
+    assert source_path.stat().st_ino != original_inode
+    with pytest.raises(ValueError, match="filesystem identity changed"):
+        ont_raw_signal.pin_conversion_source_descriptors(commands)
+
+
+def test_conversion_rejects_governed_root_replaced_by_symlink(tmp_path: Path) -> None:
+    root = tmp_path / "governed"
+    root.mkdir()
+    source_path = root / "source.pod5"
+    source_path.write_bytes(b"sealed-pod5")
+    source = _source(source_path, "acquisition")
+    job, snapshot = _job(tmp_path / "stage")
+    commands = ont_raw_signal._conversion_commands(job, source, snapshot)
+
+    moved = tmp_path / "moved"
+    root.rename(moved)
+    root.symlink_to(moved, target_is_directory=True)
+
+    with pytest.raises(OSError):
+        ont_raw_signal.pin_conversion_source_descriptors(commands)
+
+
 def test_existing_pod5_candidate_token_is_bound_to_file_identity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -504,3 +656,141 @@ def test_existing_pod5_root_rejects_symlinked_ancestors(
 
     with pytest.raises(RuntimeError, match="symbolic links"):
         ont_raw_signal.list_external_pod5_candidates()
+
+
+def test_external_registration_trigger_seals_generation_and_source_identity(tmp_path: Path) -> None:
+    database = tmp_path / "migration.db"
+    connection = sqlite3.connect(database)
+    connection.execute(
+        """CREATE TABLE ont_instrument_runs (
+            id TEXT PRIMARY KEY,
+            external_registration_key TEXT,
+            experiment_group TEXT,
+            sample_id TEXT,
+            last_minknow_payload TEXT,
+            observed_generation INTEGER
+        )"""
+    )
+    connection.execute(
+        "INSERT INTO ont_instrument_runs VALUES ('run', 'key', 'experiment', NULL, '{}', 1)"
+    )
+    connection.execute(
+        "INSERT INTO ont_instrument_runs VALUES ('unkeyed', NULL, 'experiment', NULL, '{}', 1)"
+    )
+    connection.commit()
+    connection.close()
+
+    seal_external_source_identity(str(database))
+    connection = sqlite3.connect(database)
+    connection.execute(
+        """UPDATE ont_instrument_runs SET
+            external_source_device=1,
+            external_source_inode=2,
+            external_source_bytes=3,
+            external_source_mtime_ns=4,
+            external_source_ctime_ns=5,
+            external_source_root_device=6,
+            external_source_root_inode=7,
+            external_source_relative_path='source.pod5'
+        WHERE id IN ('run', 'unkeyed')"""
+    )
+    connection.commit()
+    for statement in (
+        "UPDATE ont_instrument_runs SET observed_generation=2 WHERE id='run'",
+        "UPDATE ont_instrument_runs SET observed_generation=2 WHERE id='unkeyed'",
+        "UPDATE ont_instrument_runs SET external_source_inode=9 WHERE id='run'",
+        "UPDATE ont_instrument_runs SET external_source_inode=9 WHERE id='unkeyed'",
+    ):
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(statement)
+            connection.commit()
+        connection.rollback()
+    for run_id in ("run", "unkeyed"):
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute("DELETE FROM ont_instrument_runs WHERE id=?", (run_id,))
+            connection.commit()
+        connection.rollback()
+    connection.close()
+
+
+def test_source_read_lease_blocks_in_place_writer_until_cleanup(tmp_path: Path) -> None:
+    source_path = tmp_path / "source.pod5"
+    source_path.write_bytes(b"sealed")
+    source = _source(source_path, "acquisition")
+    job, snapshot = _job(tmp_path)
+    commands = ont_raw_signal._conversion_commands(job, source, snapshot)
+    pinned = ont_raw_signal.pin_conversion_source_descriptors(commands)
+    writer = subprocess.Popen(
+        [sys.executable, "-c", "from pathlib import Path; Path(__import__('sys').argv[1]).write_bytes(b'mutated')", str(source_path)],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        deadline = time.monotonic() + 2.0
+        while not ont_raw_signal.source_lease_break_requested() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert ont_raw_signal.source_lease_break_requested()
+        assert writer.poll() is None
+        assert source_path.read_bytes() == b"sealed"
+    finally:
+        for descriptor in pinned:
+            os.close(descriptor)
+    assert writer.wait(timeout=5) == 0
+    assert source_path.read_bytes() == b"mutated"
+
+
+@pytest.mark.asyncio
+async def test_worker_transfers_exact_source_descriptor_and_cleans_socket(tmp_path: Path) -> None:
+    source_path = tmp_path / "source.pod5"
+    source_path.write_bytes(b"selected-inode")
+    root_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    source_fd = os.open(source_path, os.O_RDONLY)
+    socket_path = tmp_path / "source-fd.sock"
+    script = """
+import array, os, socket, sys
+connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+connection.connect(sys.argv[1])
+_, ancillary, _, _ = connection.recvmsg(1, socket.CMSG_SPACE(2 * array.array('i').itemsize))
+received = array.array('i')
+for level, kind, data in ancillary:
+    if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
+        received.frombytes(data[:len(data) - (len(data) % received.itemsize)])
+assert len(received) == 2
+assert os.read(received[1], 64) == b'selected-inode'
+for descriptor in received:
+    os.close(descriptor)
+"""
+    worker = OntRawSignalWorker(None)
+    ont_raw_signal._SOURCE_LEASE_BREAK.clear()
+    try:
+        receipt = await worker._execute(
+            [sys.executable, "-c", script, str(socket_path)],
+            "job",
+            "claim",
+            source_fds=[root_fd, source_fd],
+            fd_socket=str(socket_path),
+        )
+        assert receipt["returncode"] == 0
+        assert not socket_path.exists()
+    finally:
+        os.close(root_fd)
+        os.close(source_fd)
+
+
+@pytest.mark.asyncio
+async def test_registration_holds_source_descriptor_through_outer_transaction(tmp_path: Path) -> None:
+    source = tmp_path / "source.pod5"
+    source.write_bytes(b"source")
+    fd = os.open(source, os.O_RDONLY)
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as session:
+        async with session.begin():
+            ont_raw_signal._hold_source_descriptors_through_transaction(session, [fd])
+            async with session.begin_nested():
+                os.fstat(fd)
+            os.fstat(fd)
+        with pytest.raises(OSError):
+            os.fstat(fd)
+    await engine.dispose()

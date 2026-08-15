@@ -806,6 +806,9 @@ async def ont_register_external_pod5_candidate(
         raise HTTPException(status_code=409, detail="external POD5 registration conflict") from exc
     except (OSError, RuntimeError) as exc:
         raise HTTPException(status_code=503, detail="external POD5 source is unavailable") from exc
+    finally:
+        if session.in_transaction():
+            await session.rollback()
 
 
 @router.post("/raw-signal/external-runs", status_code=201)

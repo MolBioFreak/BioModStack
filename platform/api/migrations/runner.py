@@ -50,6 +50,9 @@ from migrations.add_ont_external_registration_identity import (
 from migrations.enforce_ont_external_registration_immutability import (
     migrate as migrate_ont_external_registration_immutability,
 )
+from migrations.seal_ont_external_source_identity import (
+    migrate as seal_ont_external_source_identity,
+)
 from run_migration import migrate as migrate_stage_tracking
 
 
@@ -99,6 +102,7 @@ MIGRATIONS: List[Migration] = [
     Migration(28, "add_ont_raw_signal_ledger", migrate_ont_raw_signal_ledger),
     Migration(29, "add_ont_external_registration_identity", migrate_ont_external_registration_identity),
     Migration(30, "enforce_ont_external_registration_immutability", migrate_ont_external_registration_immutability),
+    Migration(31, "seal_ont_external_source_identity", seal_ont_external_source_identity),
 ]
 
 

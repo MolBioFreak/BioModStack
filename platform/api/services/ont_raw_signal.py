@@ -5,20 +5,24 @@ Conversion stays fail-closed until the exact local fidelity profile is qualified
 """
 from __future__ import annotations
 
+import asyncio
+import fcntl
 import hashlib
 import json
 import os
 import secrets
+import signal
 import shutil
 import stat
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
-from sqlalchemy import select
+from sqlalchemy import event, select, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from molbio_ngs_models import MolBioNGSDomainState, MolBioNGSSample
@@ -48,6 +52,20 @@ EXTERNAL_POD5_ROOT_ENV = "BMS_ONT_EXTERNAL_POD5_ROOT"
 BLOW5_DEFAULT_STAGING_ROOT = "/mnt/BioModStack/ont-raw-signal-staging"
 BLOW5_DEFAULT_MIN_FREE_BYTES = 20 * 1024 * 1024 * 1024
 
+_SOURCE_LEASE_BREAK = threading.Event()
+
+
+def _record_source_lease_break(_signum: int, _frame: Any) -> None:
+    _SOURCE_LEASE_BREAK.set()
+
+
+if threading.current_thread() is threading.main_thread():
+    signal.signal(signal.SIGIO, _record_source_lease_break)
+
+
+def source_lease_break_requested() -> bool:
+    return _SOURCE_LEASE_BREAK.is_set()
+
 _RAW_FORMATS = frozenset({"pod5", "slow5", "blow5"})
 _TERMINAL_STATES = frozenset({"stopped", "completed", "failed"})
 _READY = "ready"
@@ -75,7 +93,10 @@ def _open_external_pod5_root() -> tuple[Path, int]:
     configured = os.getenv(EXTERNAL_POD5_ROOT_ENV, "").strip()
     if not configured:
         raise RuntimeError(f"{EXTERNAL_POD5_ROOT_ENV} is not configured")
-    root = Path(configured).expanduser().absolute()
+    expanded = Path(configured).expanduser()
+    if ".." in expanded.parts:
+        raise RuntimeError("external POD5 root must not contain parent traversal")
+    root = expanded.absolute()
     current_fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
     try:
         for part in root.parts[1:]:
@@ -150,7 +171,7 @@ def list_external_pod5_candidates() -> list[dict[str, Any]]:
         os.close(root_fd)
 
 
-def _open_descriptor_candidate(candidate_id: str) -> tuple[Path, int]:
+def _open_descriptor_candidate(candidate_id: str) -> tuple[Path, int, int, str]:
     if not _is_sha256(candidate_id):
         raise KeyError("external POD5 candidate was not found")
     root, root_fd = _open_external_pod5_root()
@@ -176,14 +197,16 @@ def _open_descriptor_candidate(candidate_id: str) -> tuple[Path, int]:
         if _candidate_identity(relative, observed) != candidate_id or (observed.st_dev, observed.st_ino) != (expected.st_dev, expected.st_ino):
             os.close(file_fd)
             raise ValueError("external POD5 candidate changed before registration")
-        return root / relative, file_fd
-    finally:
+        return root / relative, file_fd, root_fd, relative
+    except BaseException:
         os.close(root_fd)
+        raise
 
 
 def resolve_external_pod5_candidate(candidate_id: str) -> Path:
-    path, file_fd = _open_descriptor_candidate(candidate_id)
+    path, file_fd, root_fd, _relative = _open_descriptor_candidate(candidate_id)
     os.close(file_fd)
+    os.close(root_fd)
     return path
 
 
@@ -292,13 +315,29 @@ def _require_sealed_generation(run: OntInstrumentRun, event: OntInstrumentRunEve
     _sealed_manifest(run, event.observed_generation)
 
 
+def _seal_native_pod5_artifacts(terminal_artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    artifacts: list[dict[str, Any]] = []
+    for position, terminal_artifact in enumerate(terminal_artifacts):
+        path = Path(str(terminal_artifact.get("path", "")))
+        sealed = _file_artifact(
+            path,
+            str(terminal_artifact.get("artifact_id") or f"native-pod5-{position}"),
+            kind="pod5",
+        )
+        if sealed["bytes"] != terminal_artifact.get("bytes") or sealed["sha256"] != terminal_artifact.get("sha256"):
+            raise ValueError("native POD5 differs from the sealed terminal manifest")
+        artifacts.append(sealed)
+    return artifacts
+
+
 async def register_native_pod5_generation(session: AsyncSession, *, run_id: str, observed_generation: int) -> list[dict[str, Any]]:
     """Register immutable MinKNOW POD5 shards from the sealed acquisition manifest."""
     run, _event = await _exact_generation(session, run_id, observed_generation)
     manifest = _sealed_manifest(run, observed_generation)
-    artifacts = [dict(item) for item in manifest.get("artifacts", []) if isinstance(item, dict) and item.get("kind") == "pod5"]
-    if not artifacts:
+    terminal_artifacts = [dict(item) for item in manifest.get("artifacts", []) if isinstance(item, dict) and item.get("kind") == "pod5"]
+    if not terminal_artifacts:
         return []
+    artifacts = _seal_native_pod5_artifacts(terminal_artifacts)
     source_manifest = {
         "schema": "bms.ont.raw-signal-artifacts.v1",
         "run_id": run_id,
@@ -383,10 +422,43 @@ def _file_artifact(path: Path, artifact_id: str, *, kind: str, opened_fd: int | 
         visible_identity = (visible.st_dev, visible.st_ino, visible.st_size, visible.st_mtime_ns, visible.st_ctime_ns)
         if visible_identity != after_identity:
             raise ValueError("raw-signal source path changed while it was being registered")
-        return {"artifact_id": artifact_id, "kind": kind, "bytes": info.st_size, "sha256": digest.hexdigest(), "path": str(path)}
+        parent_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            parent_info = os.fstat(parent_fd)
+        finally:
+            os.close(parent_fd)
+        return {
+            "artifact_id": artifact_id,
+            "kind": kind,
+            "bytes": info.st_size,
+            "sha256": digest.hexdigest(),
+            "path": str(path),
+            "device": info.st_dev,
+            "inode": info.st_ino,
+            "mtime_ns": info.st_mtime_ns,
+            "ctime_ns": info.st_ctime_ns,
+            "governed_root_path": str(path.parent),
+            "governed_root_device": parent_info.st_dev,
+            "governed_root_inode": parent_info.st_ino,
+            "governed_relative_path": path.name,
+        }
     finally:
         if close_fd:
             os.close(fd)
+
+
+def _hold_source_descriptors_through_transaction(session: AsyncSession, fds: list[int]) -> None:
+    """Close governed source descriptors only after outer commit or rollback."""
+    state = {"fds": list(fds)}
+
+    def close_descriptors(_session: Any, transaction: Any) -> None:
+        if transaction.parent is not None:
+            return
+        held = state.pop("fds", [])
+        for fd in held:
+            os.close(fd)
+
+    event.listen(session.sync_session, "after_transaction_end", close_descriptors)
 
 
 async def register_external_source(
@@ -530,6 +602,14 @@ async def create_external_run_registration(
         sample_id=sample_id,
         experiment_group=experiment_group,
         external_registration_key=external_registration_key,
+        external_source_device=source_artifact.get("device"),
+        external_source_inode=source_artifact.get("inode"),
+        external_source_bytes=source_artifact.get("bytes"),
+        external_source_mtime_ns=source_artifact.get("mtime_ns"),
+        external_source_ctime_ns=source_artifact.get("ctime_ns"),
+        external_source_root_device=source_artifact.get("governed_root_device"),
+        external_source_root_inode=source_artifact.get("governed_root_inode"),
+        external_source_relative_path=source_artifact.get("governed_relative_path"),
         kit=None,
         output_directories={},
         output_files={"fastq": [], "pod5": [], "bam": []},
@@ -638,12 +718,16 @@ async def _adopt_legacy_external_registration(
     registration_key: str,
     candidate_id: str,
     source_path: Path,
-    source_sha256: str,
+    source_artifact: dict[str, Any],
     sample_id: str | None,
     experiment_group: str,
 ) -> dict[str, Any] | None:
     """Upgrade one exact pre-key registration without creating a duplicate run."""
-    sample_clause = OntInstrumentRun.sample_id.is_(None) if sample_id is None else OntInstrumentRun.sample_id == sample_id
+    sample_clause = (
+        OntInstrumentRun.sample_id.is_(None)
+        if sample_id is None
+        else OntInstrumentRun.sample_id == sample_id
+    )
     runs = (
         await session.execute(
             select(OntInstrumentRun).where(
@@ -653,12 +737,20 @@ async def _adopt_legacy_external_registration(
             )
         )
     ).scalars().all()
+    identity_values = {
+        "external_source_device": source_artifact["device"],
+        "external_source_inode": source_artifact["inode"],
+        "external_source_bytes": source_artifact["bytes"],
+        "external_source_mtime_ns": source_artifact["mtime_ns"],
+        "external_source_ctime_ns": source_artifact["ctime_ns"],
+        "external_source_root_device": source_artifact["governed_root_device"],
+        "external_source_root_inode": source_artifact["governed_root_inode"],
+        "external_source_relative_path": source_artifact["governed_relative_path"],
+    }
+    matches: list[tuple[OntInstrumentRun, dict[str, Any]]] = []
     for run in runs:
         marker = run.last_minknow_payload if isinstance(run.last_minknow_payload, dict) else {}
         if marker.get("schema") != "bms.ont.external-raw-signal-registration.v1":
-            continue
-        tracked = await session.get(InputFile, marker.get("input_file_id"))
-        if tracked is None or Path(tracked.directory) / tracked.filename != source_path:
             continue
         source = (
             await session.execute(
@@ -669,26 +761,130 @@ async def _adopt_legacy_external_registration(
                 )
             )
         ).scalar_one_or_none()
-        artifacts = source.artifact_manifest.get("artifacts", []) if source is not None and isinstance(source.artifact_manifest, dict) else []
-        if not any(item.get("sha256") == source_sha256 for item in artifacts if isinstance(item, dict)):
+        artifacts = (
+            source.artifact_manifest.get("artifacts", [])
+            if source is not None and isinstance(source.artifact_manifest, dict)
+            else []
+        )
+        exact = [
+            item
+            for item in artifacts
+            if isinstance(item, dict)
+            and item.get("kind") == "pod5"
+            and item.get("path") == str(source_path)
+            and item.get("bytes") == source_artifact["bytes"]
+            and item.get("sha256") == source_artifact["sha256"]
+        ]
+        if len(exact) != 1:
             continue
-        run.external_registration_key = registration_key
-        run.last_minknow_payload = {
-            **marker,
-            "candidate_id": candidate_id,
-            "source_sha256": source_sha256,
-            "sample_id": sample_id,
-        }
-        await session.flush()
-        return await _external_registration_replay(
+        matches.append((run, marker))
+    if len(matches) > 1:
+        raise ValueError("ambiguous legacy external POD5 registration authority")
+    if not matches:
+        return None
+    run, marker = matches[0]
+    upgraded_marker = {
+        **marker,
+        "candidate_id": candidate_id,
+        "source_sha256": source_artifact["sha256"],
+        "sample_id": sample_id,
+    }
+    for attempt in range(3):
+        try:
+            async with session.begin_nested():
+                adoption = await session.execute(
+                    update(OntInstrumentRun)
+                    .where(
+                        OntInstrumentRun.id == run.id,
+                        OntInstrumentRun.external_registration_key.is_(None),
+                    )
+                    .values(
+                        external_registration_key=registration_key,
+                        last_minknow_payload=upgraded_marker,
+                        **identity_values,
+                    )
+                    .execution_options(synchronize_session=False)
+                )
+        except (IntegrityError, OperationalError):
+            adoption = None
+        session.expire_all()
+        replay = await _external_registration_replay(
             session,
             registration_key=registration_key,
             candidate_id=candidate_id,
-            source_sha256=source_sha256,
+            source_sha256=source_artifact["sha256"],
             sample_id=sample_id,
             experiment_group=experiment_group,
         )
-    return None
+        if replay is not None:
+            return replay
+        if adoption is not None and adoption.rowcount == 1:
+            raise ValueError("legacy external POD5 adoption was not durably replayable")
+        if attempt < 2:
+            await asyncio.sleep(0.05 * (attempt + 1))
+    raise ValueError("legacy external POD5 registration conflicted with concurrent authority")
+
+
+async def _backfill_keyed_external_source_identity(
+    session: AsyncSession,
+    *,
+    registration_key: str,
+    source_path: Path,
+    source_artifact: dict[str, Any],
+) -> None:
+    run = (
+        await session.execute(
+            select(OntInstrumentRun).where(
+                OntInstrumentRun.external_registration_key == registration_key
+            )
+        )
+    ).scalar_one_or_none()
+    if run is None or run.external_source_device is not None:
+        return
+    source = (
+        await session.execute(
+            select(OntRawSignalRepresentation).where(
+                OntRawSignalRepresentation.run_id == run.id,
+                OntRawSignalRepresentation.observed_generation == run.observed_generation,
+                OntRawSignalRepresentation.role == "source",
+            )
+        )
+    ).scalar_one_or_none()
+    artifacts = (
+        source.artifact_manifest.get("artifacts", [])
+        if source is not None and isinstance(source.artifact_manifest, dict)
+        else []
+    )
+    exact = [
+        item
+        for item in artifacts
+        if isinstance(item, dict)
+        and item.get("kind") == "pod5"
+        and item.get("path") == str(source_path)
+        and item.get("bytes") == source_artifact["bytes"]
+        and item.get("sha256") == source_artifact["sha256"]
+    ]
+    if len(exact) != 1:
+        raise ValueError("legacy external POD5 authority does not match the selected source")
+    await session.execute(
+        update(OntInstrumentRun)
+        .where(
+            OntInstrumentRun.id == run.id,
+            OntInstrumentRun.external_source_device.is_(None),
+        )
+        .values(
+            external_source_device=source_artifact["device"],
+            external_source_inode=source_artifact["inode"],
+            external_source_bytes=source_artifact["bytes"],
+            external_source_mtime_ns=source_artifact["mtime_ns"],
+            external_source_ctime_ns=source_artifact["ctime_ns"],
+            external_source_root_device=source_artifact["governed_root_device"],
+            external_source_root_inode=source_artifact["governed_root_inode"],
+            external_source_relative_path=source_artifact["governed_relative_path"],
+        )
+        .execution_options(synchronize_session=False)
+    )
+    session.expire_all()
 
 
 async def register_external_pod5_candidate(
@@ -718,23 +914,62 @@ async def register_external_pod5_candidate(
     )
     if replay is not None:
         return replay
+    # Release the read snapshot before taking serialized SQLite adoption authority.
+    await session.rollback()
     await _validate_external_registration_context(
         domain_session,
         experiment_group=experiment_group,
         sample_id=sample_id,
     )
-    source_path, source_fd = _open_descriptor_candidate(candidate_id)
+    source_path, source_fd, root_fd, relative_path = _open_descriptor_candidate(candidate_id)
     try:
         probe = _file_artifact(source_path, "candidate", kind="pod5", opened_fd=source_fd)
-    finally:
+        root_info = os.fstat(root_fd)
+        root_path = source_path
+        for _part in Path(relative_path).parts:
+            root_path = root_path.parent
+        probe.update({
+            "governed_root_path": str(root_path),
+            "governed_root_device": root_info.st_dev,
+            "governed_root_inode": root_info.st_ino,
+            "governed_relative_path": relative_path,
+        })
+    except BaseException:
         os.close(source_fd)
+        os.close(root_fd)
+        raise
+    try:
+        if session.bind is not None and session.bind.dialect.name == "sqlite":
+            await session.execute(text("BEGIN IMMEDIATE"))
+    except BaseException:
+        os.close(source_fd)
+        os.close(root_fd)
+        raise
+    _hold_source_descriptors_through_transaction(session, [source_fd, root_fd])
+
+    await _backfill_keyed_external_source_identity(
+        session,
+        registration_key=registration_key,
+        source_path=source_path,
+        source_artifact=probe,
+    )
+    replay = await _external_registration_replay(
+        session,
+        registration_key=registration_key,
+        candidate_id=candidate_id,
+        source_sha256=probe["sha256"],
+        sample_id=sample_id,
+        experiment_group=experiment_group,
+    )
+    if replay is not None:
+        return replay
 
     adopted = await _adopt_legacy_external_registration(
         session,
         registration_key=registration_key,
         candidate_id=candidate_id,
         source_path=source_path,
-        source_sha256=probe["sha256"],
+        source_artifact=probe,
         sample_id=sample_id,
         experiment_group=experiment_group,
     )
@@ -951,60 +1186,139 @@ def _runtime_gate(snapshot: dict[str, Any]) -> str | None:
     return None
 
 
-def _source_paths(source: OntRawSignalRepresentation) -> list[Path]:
+def _external_source_identity(run: OntInstrumentRun | None) -> dict[str, Any] | None:
+    if run is None:
+        return None
+    values = {
+        "device": run.external_source_device,
+        "inode": run.external_source_inode,
+        "bytes": run.external_source_bytes,
+        "mtime_ns": run.external_source_mtime_ns,
+        "ctime_ns": run.external_source_ctime_ns,
+        "governed_root_device": run.external_source_root_device,
+        "governed_root_inode": run.external_source_root_inode,
+        "governed_relative_path": run.external_source_relative_path,
+    }
+    if any(value is None for value in values.values()):
+        return None
+    return {
+        **{key: int(values[key]) for key in (
+            "device", "inode", "bytes", "mtime_ns", "ctime_ns",
+            "governed_root_device", "governed_root_inode",
+        )},
+        "governed_relative_path": str(values["governed_relative_path"]),
+    }
+
+
+def _source_paths(
+    source: OntRawSignalRepresentation,
+    source_identity: dict[str, Any] | None = None,
+) -> list[Path]:
     manifest = source.artifact_manifest if isinstance(source.artifact_manifest, dict) else {}
     artifacts = [
         item
         for item in manifest.get("artifacts", [])
         if isinstance(item, dict) and item.get("kind") == "pod5" and item.get("path")
     ]
-    if any(not _is_sha256(item.get("sha256")) or int(item.get("bytes") or 0) < 1 for item in artifacts):
-        raise ValueError("POD5 source manifest lacks immutable size and digest authority")
+    identity_fields = ("device", "inode", "mtime_ns", "ctime_ns")
+    if any(
+        not _is_sha256(item.get("sha256"))
+        or int(item.get("bytes") or 0) < 1
+        or (
+            source_identity is None
+            and any(not isinstance(item.get(field), int) for field in identity_fields)
+        )
+        for item in artifacts
+    ):
+        raise ValueError(
+            "POD5 source manifest lacks immutable size, digest, and filesystem identity authority"
+        )
     paths = [Path(str(item["path"])) for item in artifacts]
     if not paths:
         raise ValueError("POD5 source has no governed artifact paths")
     return paths
 
 
-def _conversion_commands(job: OntRawSignalDerivationJob, source: OntRawSignalRepresentation, snapshot: dict[str, Any]) -> dict[str, Any]:
+def _conversion_commands(
+    job: OntRawSignalDerivationJob,
+    source: OntRawSignalRepresentation,
+    snapshot: dict[str, Any],
+    run: OntInstrumentRun | None = None,
+) -> dict[str, Any]:
     stage = Path(snapshot["staging_root"]) / job.id / f"attempt-{job.attempt}"
     partitions = stage / "partitions"
     outputs = stage / "outputs"
-    inputs = _source_paths(source)
+    source_identity = _external_source_identity(run)
+    inputs = _source_paths(source, source_identity)
     source_manifest = source.artifact_manifest if isinstance(source.artifact_manifest, dict) else {}
     artifact_by_path = {
-        str(Path(str(item["path"]))): item
+        str(Path(str(item["path"]))): {
+            **item,
+            **(source_identity or {}),
+        }
         for item in source_manifest.get("artifacts", [])
         if isinstance(item, dict) and item.get("kind") == "pod5" and item.get("path")
     }
     image_ref = _container_image_ref(snapshot)
-    input_args = [f"/inputs/{position}/{path.name}" for position, path in enumerate(inputs)]
-    validator_input_args = [
-        argument
-        for path, mounted_path in zip(inputs, input_args, strict=True)
-        for argument in (
+    source_authorities: list[dict[str, Any]] = []
+    input_args: list[str] = []
+    for position, path in enumerate(inputs):
+        artifact = artifact_by_path[str(path)]
+        relative = Path(str(artifact.get("governed_relative_path") or ""))
+        if not relative.parts or relative.is_absolute() or ".." in relative.parts:
+            raise ValueError("POD5 source lacks valid governed-root relative-path authority")
+        root_path = path
+        for _part in relative.parts:
+            root_path = root_path.parent
+        if root_path / relative != path:
+            raise ValueError("POD5 source path conflicts with governed-root authority")
+        for field in ("governed_root_device", "governed_root_inode"):
+            if not isinstance(artifact.get(field), int):
+                raise ValueError("POD5 source lacks governed-root inode authority")
+        input_args.append(f"/proc/self/fd/unbound-source-{position}")
+        source_authorities.append({
+            "path": str(path),
+            "root_path": str(root_path),
+            "relative_path": relative.as_posix(),
+            "root_device": artifact["governed_root_device"],
+            "root_inode": artifact["governed_root_inode"],
+            "device": artifact["device"],
+            "inode": artifact["inode"],
+            "bytes": artifact["bytes"],
+            "mtime_ns": artifact["mtime_ns"],
+            "ctime_ns": artifact["ctime_ns"],
+        })
+    validator_input_args: list[str] = []
+    for position, (path, mounted_path) in enumerate(zip(inputs, input_args, strict=True)):
+        artifact = artifact_by_path[str(path)]
+        validator_input_args.extend((
             "--pod5", mounted_path,
-            "--expected-sha256", str(artifact_by_path[str(path)]["sha256"]),
-            "--expected-size", str(artifact_by_path[str(path)]["bytes"]),
-        )
-    ]
+            "--governed-root", f"/proc/self/fd/unbound-root-{position}",
+            "--expected-root-device", str(artifact["governed_root_device"]),
+            "--expected-root-inode", str(artifact["governed_root_inode"]),
+            "--expected-sha256", str(artifact["sha256"]),
+            "--expected-size", str(artifact["bytes"]),
+            "--expected-device", str(artifact["device"]),
+            "--expected-inode", str(artifact["inode"]),
+            "--expected-mtime-ns", str(artifact["mtime_ns"]),
+            "--expected-ctime-ns", str(artifact["ctime_ns"]),
+        ))
+    validator_input_args.extend(("--fd-socket", "/stage/source-fd.sock"))
     base = [
         snapshot["container_runtime"], "run", "--rm", "--network=none", "--read-only",
         f"--user={snapshot['worker_uid']}:{snapshot['worker_gid']}",
         "--cpus=4", "--memory=16g", "--pids-limit=256", "--ulimit", "nofile=512:512",
         "--mount", f"type=bind,src={stage},dst=/stage",
     ]
-    # Build mounts without a shell. slow5tools degrade is absent by construction.
-    bind_args: list[str] = []
-    for position, path in enumerate(inputs):
-        bind_args.extend(["--mount", f"type=bind,src={path.parent},dst=/inputs/{position},readonly"])
-    common = base + bind_args + [image_ref]
+    common = base + [image_ref]
     return {
         "stage": str(stage), "partitions": str(partitions), "outputs": str(outputs),
         "routing": str(stage / "routing.json"),
         "source_receipt": str(stage / "source-preflight-receipt.json"),
+        "fd_socket": str(stage / "source-fd.sock"),
         "partition_map": str(stage / "partition-map.csv"),
         "common": common,
+        "source_authorities": source_authorities,
         "validator_input_args": validator_input_args,
         "source_preflight": common + [
             "python3", "/opt/bms/ont_raw_signal_validate.py", "source-preflight", *validator_input_args,
@@ -1013,12 +1327,81 @@ def _conversion_commands(job: OntRawSignalDerivationJob, source: OntRawSignalRep
             "--receipt", "/stage/source-preflight-receipt.json",
         ],
         "partition": common + [
-            "pod5", "subset", *input_args, "--table", "/stage/partition-map.csv",
+            "python3", "/opt/bms/ont_raw_signal_validate.py", "partition-pod5",
+            *validator_input_args, "--table", "/stage/partition-map.csv",
             "--read-id-column", "read_id", "--columns", "group",
             "--output", "/stage/partitions", "--template", "{group}.pod5",
             "--threads", "4", "--missing-ok",
+            "--receipt", "/stage/partition-receipt.json",
         ],
     }
+
+
+def pin_conversion_source_descriptors(commands: dict[str, Any]) -> list[int]:
+    """Open exact governed root/source descriptors for the full conversion."""
+    if threading.current_thread() is not threading.main_thread():
+        raise RuntimeError("raw-signal source leases require the main service thread")
+    signal.signal(signal.SIGIO, _record_source_lease_break)
+    _SOURCE_LEASE_BREAK.clear()
+    pinned: list[int] = []
+    try:
+        for authority in commands.get("source_authorities", []):
+            root_fd = os.open(
+                str(authority["root_path"]),
+                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            )
+            pinned.append(root_fd)
+            root_info = os.fstat(root_fd)
+            if (root_info.st_dev, root_info.st_ino) != (
+                int(authority["root_device"]),
+                int(authority["root_inode"]),
+            ):
+                raise ValueError("governed raw-signal root identity changed before conversion")
+            current_fd = os.dup(root_fd)
+            try:
+                parts = Path(str(authority["relative_path"])).parts
+                for part in parts[:-1]:
+                    next_fd = os.open(
+                        part,
+                        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                        dir_fd=current_fd,
+                    )
+                    os.close(current_fd)
+                    current_fd = next_fd
+                file_fd = os.open(
+                    parts[-1],
+                    os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                    dir_fd=current_fd,
+                )
+            finally:
+                os.close(current_fd)
+            pinned.append(file_fd)
+            info = os.fstat(file_fd)
+            observed = (
+                info.st_dev,
+                info.st_ino,
+                info.st_size,
+                info.st_mtime_ns,
+                info.st_ctime_ns,
+            )
+            expected = tuple(
+                int(authority[field])
+                for field in ("device", "inode", "bytes", "mtime_ns", "ctime_ns")
+            )
+            if not stat.S_ISREG(info.st_mode) or observed != expected:
+                raise ValueError("raw-signal source filesystem identity changed before conversion")
+            try:
+                fcntl.fcntl(file_fd, fcntl.F_SETLEASE, fcntl.F_RDLCK)
+            except OSError as exc:
+                raise RuntimeError("raw-signal source read lease is unavailable") from exc
+        return pinned
+    except BaseException:
+        for descriptor in pinned:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        raise
 
 
 def conversion_partition_groups(commands: dict[str, Any]) -> list[str]:
@@ -1461,7 +1844,11 @@ async def claim_next_derivation(session: AsyncSession, *, lease_seconds: int = 3
         reason_code=job.reason_code, receipt={"claim_token": job.claim_token, "resource_snapshot": snapshot}, created_at=_now(),
     ))
     await session.commit()
-    commands = _external_blow5_validation_commands(job, source, snapshot) if job.profile_id == EXTERNAL_BLOW5_VALIDATION_PROFILE_ID else _conversion_commands(job, source, snapshot)
+    commands = (
+        _external_blow5_validation_commands(job, source, snapshot)
+        if job.profile_id == EXTERNAL_BLOW5_VALIDATION_PROFILE_ID
+        else _conversion_commands(job, source, snapshot, run)
+    )
     return job, source, commands
 
 
@@ -1658,7 +2045,13 @@ async def recover_expired_derivations(session: AsyncSession) -> int:
                     reason_code=row.reason_code, receipt={"representation_id": representation.id, "recovered_after_db_commit": True}, created_at=now,
                 ))
                 continue
-            commands = _conversion_commands(row, source, dict(row.resource_snapshot or {}))
+            run = await session.get(OntInstrumentRun, row.run_id)
+            commands = _conversion_commands(
+                row,
+                source,
+                dict(row.resource_snapshot or {}),
+                run,
+            )
             final_directory = Path(os.getenv(BLOW5_STAGING_ROOT_ENV, BLOW5_DEFAULT_STAGING_ROOT)).parent / "ont-raw-signal" / row.run_id / str(row.observed_generation) / row.id
             if final_directory.is_dir():
                 try:

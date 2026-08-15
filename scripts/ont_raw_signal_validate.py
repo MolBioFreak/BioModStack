@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import array
 import csv
 import hashlib
 import json
+import os
+import socket
 import sys
 from collections import Counter
 from pathlib import Path
@@ -13,6 +16,33 @@ from typing import Any
 
 import numpy as np
 import pod5
+import lib_pod5 as p5b
+from pod5.tools.pod5_subset import build_targets_dict, parse_table_mapping
+
+
+def _receive_source_descriptors(args: argparse.Namespace) -> list[int]:
+    expected = len(args.pod5) * 2
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.connect(str(args.fd_socket))
+        _message, ancillary, _flags, _address = client.recvmsg(
+            1,
+            socket.CMSG_SPACE(expected * array.array("i").itemsize),
+        )
+    received = array.array("i")
+    for level, kind, data in ancillary:
+        if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
+            usable = len(data) - (len(data) % received.itemsize)
+            received.frombytes(data[:usable])
+    descriptors = received.tolist()
+    if len(descriptors) != expected:
+        for descriptor in descriptors:
+            os.close(descriptor)
+        raise ValueError("source descriptor transfer count is invalid")
+    for descriptor in descriptors:
+        os.set_inheritable(descriptor, True)
+    args.governed_root = [Path(f"/proc/self/fd/{descriptors[index]}") for index in range(0, expected, 2)]
+    args.pod5 = [Path(f"/proc/self/fd/{descriptors[index]}") for index in range(1, expected, 2)]
+    return descriptors
 
 
 def _write(path: Path, payload: dict[str, Any]) -> None:
@@ -81,20 +111,79 @@ def _slow5_open(path: Path):
 
 def _verify_inputs(args: argparse.Namespace) -> None:
     if not (
-        len(args.pod5) == len(args.expected_sha256) == len(args.expected_size)
+        len(args.pod5)
+        == len(args.expected_sha256)
+        == len(args.expected_size)
+        == len(args.expected_device)
+        == len(args.expected_inode)
+        == len(args.expected_mtime_ns)
+        == len(args.expected_ctime_ns)
+        == len(args.governed_root)
+        == len(args.expected_root_device)
+        == len(args.expected_root_inode)
     ):
         raise ValueError("each POD5 input requires one immutable size and digest authority")
-    for path, expected_sha256, expected_size in zip(
-        args.pod5, args.expected_sha256, args.expected_size, strict=True
+    for path, root, expected_root_device, expected_root_inode, expected_sha256, expected_size, device, inode, mtime_ns, ctime_ns in zip(
+        args.pod5,
+        args.governed_root,
+        args.expected_root_device,
+        args.expected_root_inode,
+        args.expected_sha256,
+        args.expected_size,
+        args.expected_device,
+        args.expected_inode,
+        args.expected_mtime_ns,
+        args.expected_ctime_ns,
+        strict=True,
     ):
-        if path.stat().st_size != expected_size:
-            raise ValueError("POD5 input size differs from the sealed artifact manifest")
+        root_info = root.stat()
+        if (root_info.st_dev, root_info.st_ino) != (expected_root_device, expected_root_inode):
+            raise ValueError("governed POD5 root identity differs from sealed authority")
+        if not getattr(args, "received_fds", None):
+            try:
+                path.relative_to(root)
+            except ValueError as exc:
+                raise ValueError("POD5 input escaped the governed root mount") from exc
+        info = path.stat()
+        if getattr(args, "received_fds", None):
+            observed_identity = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+            expected_identity = (device, inode, expected_size, mtime_ns)
+        else:
+            observed_identity = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+            expected_identity = (device, inode, expected_size, mtime_ns, ctime_ns)
+        if observed_identity != expected_identity:
+            raise ValueError("POD5 input filesystem identity differs from sealed authority")
         digest = hashlib.sha256()
         with path.open("rb") as handle:
             for block in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(block)
         if digest.hexdigest() != expected_sha256:
             raise ValueError("POD5 input digest differs from the sealed artifact manifest")
+
+
+def partition_pod5(args: argparse.Namespace) -> dict[str, Any]:
+    _verify_inputs(args)
+    targets = parse_table_mapping(
+        args.table,
+        args.template,
+        args.columns,
+        args.read_id_column,
+        False,
+    )
+    args.output.mkdir(parents=True, exist_ok=True)
+    p5b.subset_pod5s_with_mapping(
+        list(args.pod5),
+        args.output,
+        build_targets_dict(targets),
+        args.missing_ok,
+        False,
+        False,
+    )
+    return {
+        "schema": "bms.ont.raw-signal-partition.v1",
+        "status": "passed",
+        "source_identity": "verified_in_mount_namespace",
+    }
 
 
 def _pod5_partition_inventory(
@@ -312,10 +401,21 @@ def external_blow5_validate(args: argparse.Namespace) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="mode")
+    def add_source_authority(target: argparse.ArgumentParser) -> None:
+        target.add_argument("--pod5", action="append", type=Path, required=True)
+        target.add_argument("--governed-root", action="append", type=Path, required=True)
+        target.add_argument("--expected-root-device", action="append", type=int, required=True)
+        target.add_argument("--expected-root-inode", action="append", type=int, required=True)
+        target.add_argument("--expected-sha256", action="append", required=True)
+        target.add_argument("--expected-size", action="append", type=int, required=True)
+        target.add_argument("--expected-device", action="append", type=int, required=True)
+        target.add_argument("--expected-inode", action="append", type=int, required=True)
+        target.add_argument("--expected-mtime-ns", action="append", type=int, required=True)
+        target.add_argument("--expected-ctime-ns", action="append", type=int, required=True)
+        target.add_argument("--fd-socket", type=Path)
+
     source = subparsers.add_parser("source-preflight")
-    source.add_argument("--pod5", action="append", type=Path, required=True)
-    source.add_argument("--expected-sha256", action="append", required=True)
-    source.add_argument("--expected-size", action="append", type=int, required=True)
+    add_source_authority(source)
     source.add_argument("--expected-acquisition-id", required=True)
     source.add_argument("--partition-map", type=Path, required=True)
     source.add_argument("--receipt", type=Path, required=True)
@@ -323,23 +423,37 @@ def main() -> int:
     external.add_argument("--blow5", type=Path, required=True)
     external.add_argument("--index", type=Path, required=True)
     external.add_argument("--receipt", type=Path, required=True)
+    partition = subparsers.add_parser("partition-pod5")
+    add_source_authority(partition)
+    partition.add_argument("--table", type=Path, required=True)
+    partition.add_argument("--read-id-column", required=True)
+    partition.add_argument("--columns", nargs="+", required=True)
+    partition.add_argument("--output", type=Path, required=True)
+    partition.add_argument("--template", required=True)
+    partition.add_argument("--threads", type=int, required=True)
+    partition.add_argument("--missing-ok", action="store_true")
+    partition.add_argument("--receipt", type=Path, required=True)
     semantic = subparsers.add_parser("semantic-dataset")
-    semantic.add_argument("--pod5", action="append", type=Path, required=True)
-    semantic.add_argument("--expected-sha256", action="append", required=True)
-    semantic.add_argument("--expected-size", action="append", type=int, required=True)
+    add_source_authority(semantic)
     semantic.add_argument("--blow5", action="append", type=Path, required=True)
     semantic.add_argument("--index", action="append", type=Path, required=True)
     semantic.add_argument("--routing", type=Path, required=True)
     semantic.add_argument("--receipt", type=Path, required=True)
     args = parser.parse_args()
+    args.received_fds = []
+
     receipt = args.receipt
     try:
+        if args.mode in {"source-preflight", "partition-pod5", "semantic-dataset"} and args.fd_socket:
+            args.received_fds = _receive_source_descriptors(args)
         if args.mode == "source-preflight":
             payload = source_preflight(args)
         elif args.mode == "external-blow5":
             if not args.index.is_file():
                 raise ValueError("external BLOW5 validation requires an adjacent index")
             payload = external_blow5_validate(args)
+        elif args.mode == "partition-pod5":
+            payload = partition_pod5(args)
         elif args.mode == "semantic-dataset":
             payload = semantic_validate(args)
         else:
@@ -351,6 +465,10 @@ def main() -> int:
             _write(receipt, {"schema": "bms.ont.raw-signal-validation-failure.v1", "status": "failed", "error_type": type(exc).__name__})
         print(str(exc), file=sys.stderr)
         return 1
+    finally:
+        for descriptor in args.received_fds:
+            os.close(descriptor)
+
 
 
 if __name__ == "__main__":

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import array
 import hashlib
 import logging
 import os
+import socket
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -19,10 +22,12 @@ from services.ont_raw_signal import (
     derivation_cancellation_requested,
     fail_waveform_lookup,
     finish_waveform_lookup,
+    pin_conversion_source_descriptors,
     publish_derivation,
     recover_expired_derivations,
     renew_derivation_lease,
     renew_waveform_lookup_lease,
+    source_lease_break_requested,
     transition_derivation,
 )
 
@@ -72,34 +77,103 @@ class OntRawSignalWorker:
             "stderr_sha256": hashlib.sha256(stderr).hexdigest(),
         }
 
-    async def _execute(self, command: list[str], job_id: str, claim_token: str, *, waveform: bool = False) -> dict[str, Any]:
-        self._child = await asyncio.create_subprocess_exec(
-            *command,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent"},
-            start_new_session=True,
-        )
-        communication = asyncio.create_task(self._child.communicate())
-        while not communication.done():
-            try:
-                await asyncio.wait_for(asyncio.shield(communication), timeout=60.0)
-            except asyncio.TimeoutError:
+    async def _execute(
+        self,
+        command: list[str],
+        job_id: str,
+        claim_token: str,
+        *,
+        waveform: bool = False,
+        source_fds: list[int] | None = None,
+        fd_socket: str | None = None,
+    ) -> dict[str, Any]:
+        if source_fds and source_lease_break_requested():
+            raise RuntimeError("raw-signal source write lease break was requested")
+        descriptor_server: socket.socket | None = None
+        descriptor_thread: threading.Thread | None = None
+        descriptor_errors: list[BaseException] = []
+        if source_fds:
+            if not fd_socket:
+                raise RuntimeError("source descriptor socket is missing")
+            socket_path = Path(fd_socket)
+            socket_path.unlink(missing_ok=True)
+            descriptor_server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            descriptor_server.bind(str(socket_path))
+            descriptor_server.listen(1)
+            descriptor_server.settimeout(0.5)
+
+            def send_descriptors() -> None:
                 try:
-                    async with self._session_factory() as session:
-                        if waveform:
-                            await renew_waveform_lookup_lease(session, job_id, claim_token)
-                        else:
-                            await renew_derivation_lease(session, job_id, claim_token)
-                except Exception:
-                    if self._child is not None and self._child.returncode is None:
-                        self._child.terminate()
-                        await self._child.wait()
-                    communication.cancel()
-                    self._child = None
-                    raise
-        stdout, stderr = await communication
+                    assert descriptor_server is not None
+                    while True:
+                        try:
+                            connection, _ = descriptor_server.accept()
+                            break
+                        except socket.timeout:
+                            continue
+                    with connection:
+                        payload = array.array("i", source_fds)
+                        connection.sendmsg(
+                            [b"F"],
+                            [(socket.SOL_SOCKET, socket.SCM_RIGHTS, payload)],
+                        )
+                except BaseException as exc:
+                    descriptor_errors.append(exc)
+
+            descriptor_thread = threading.Thread(target=send_descriptors, daemon=True)
+            descriptor_thread.start()
+        try:
+            self._child = await asyncio.create_subprocess_exec(
+                *command,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent"},
+                start_new_session=True,
+            )
+            communication = asyncio.create_task(self._child.communicate())
+            last_renewal = asyncio.get_running_loop().time()
+            while not communication.done():
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(communication),
+                        timeout=0.25 if source_fds else 60.0,
+                    )
+                except asyncio.TimeoutError:
+                    if source_fds and source_lease_break_requested():
+                        if self._child.returncode is None:
+                            self._child.terminate()
+                            await self._child.wait()
+                        communication.cancel()
+                        raise RuntimeError("raw-signal source write lease break was requested")
+                    now = asyncio.get_running_loop().time()
+                    if now - last_renewal < 60.0:
+                        continue
+                    try:
+                        async with self._session_factory() as session:
+                            if waveform:
+                                await renew_waveform_lookup_lease(session, job_id, claim_token)
+                            else:
+                                await renew_derivation_lease(session, job_id, claim_token)
+                        last_renewal = now
+                    except Exception:
+                        if self._child is not None and self._child.returncode is None:
+                            self._child.terminate()
+                            await self._child.wait()
+                        communication.cancel()
+                        self._child = None
+                        raise
+            stdout, stderr = await communication
+        finally:
+            if descriptor_server is not None:
+                descriptor_server.close()
+            if descriptor_thread is not None:
+                descriptor_thread.join(timeout=5.0)
+            if fd_socket:
+                Path(fd_socket).unlink(missing_ok=True)
+        if descriptor_errors:
+            self._child = None
+            raise RuntimeError("source descriptor transfer failed") from descriptor_errors[0]
         receipt = self._command_receipt(command, int(self._child.returncode or 0), stdout, stderr)
         self._child = None
         if receipt["returncode"] != 0:
@@ -129,8 +203,11 @@ class OntRawSignalWorker:
         job, source, commands = claimed
         claim_token = str(job.claim_token)
         stage = Path(commands["stage"])
-        stage.mkdir(parents=True, mode=0o700, exist_ok=False)
+        pinned_source_fds: list[int] = []
         try:
+            if job.profile_id != EXTERNAL_BLOW5_VALIDATION_PROFILE_ID:
+                pinned_source_fds = pin_conversion_source_descriptors(commands)
+            stage.mkdir(parents=True, mode=0o700, exist_ok=False)
             if job.profile_id == EXTERNAL_BLOW5_VALIDATION_PROFILE_ID:
                 async with self._session_factory() as session:
                     await transition_derivation(session, job.id, claim_token, "structural_check", "external_quickcheck_started", {})
@@ -146,7 +223,10 @@ class OntRawSignalWorker:
                     representation = await complete_external_blow5_validation(session, live_job, live_source, commands)
                     await transition_derivation(session, job.id, claim_token, "ready", "external_indexed_blow5_validated", {"representation_id": representation.id, "validation": validation_receipt})
                 return 1
-            source_receipt = await self._execute(commands["source_preflight"], job.id, claim_token)
+            source_receipt = await self._execute(
+                commands["source_preflight"], job.id, claim_token,
+                source_fds=pinned_source_fds, fd_socket=commands["fd_socket"],
+            )
             async with self._session_factory() as session:
                 source = await close_source_identity(
                     session, source.id, job.id, claim_token, commands["source_receipt"]
@@ -157,7 +237,10 @@ class OntRawSignalWorker:
             groups = conversion_partition_groups(commands)
             Path(commands["partitions"]).mkdir(mode=0o700)
             Path(commands["outputs"]).mkdir(mode=0o700)
-            partition_receipt = await self._execute(commands["partition"], job.id, claim_token)
+            partition_receipt = await self._execute(
+                commands["partition"], job.id, claim_token,
+                source_fds=pinned_source_fds, fd_socket=commands["fd_socket"],
+            )
             async with self._session_factory() as session:
                 await transition_derivation(
                     session,
@@ -193,8 +276,11 @@ class OntRawSignalWorker:
             async with self._session_factory() as session:
                 await transition_derivation(session, job.id, claim_token, "index_validation", "index_validation_started", {})
             validation_receipt = await self._execute(
-                conversion_semantic_command(commands, groups), job.id, claim_token
+                conversion_semantic_command(commands, groups), job.id, claim_token,
+                source_fds=pinned_source_fds, fd_socket=commands["fd_socket"],
             )
+            if source_lease_break_requested():
+                raise RuntimeError("raw-signal source write lease break was requested")
             async with self._session_factory() as session:
                 await transition_derivation(session, job.id, claim_token, "index_validation", "index_open_lookup_validation_passed", validation_receipt)
                 await transition_derivation(session, job.id, claim_token, "semantic_validation", "exhaustive_semantic_validation_passed", validation_receipt)
@@ -224,6 +310,9 @@ class OntRawSignalWorker:
                 except Exception:
                     logger.exception("Could not persist ONT raw-signal failure receipt: %s", job.id)
             return 1
+        finally:
+            for fd in pinned_source_fds:
+                os.close(fd)
 
     async def _run(self) -> None:
         while not self._stop.is_set():
