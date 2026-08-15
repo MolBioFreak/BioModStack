@@ -30,15 +30,25 @@ export function downsampleTelemetryTail<T extends { timestamp_ms: number }>(
 ): T[] {
     const sampled: T[] = [];
     let bucket = Number.NaN;
+    let first: T | undefined;
+    let latest: T | undefined;
+
+    const flushBucket = () => {
+        if (!first || !latest) return;
+        sampled.push(first);
+        if (latest.timestamp_ms !== first.timestamp_ms) sampled.push(latest);
+    };
+
     for (const point of points) {
         const pointBucket = Math.floor(point.timestamp_ms / displayIntervalMs);
-        if (pointBucket === bucket) {
-            sampled[sampled.length - 1] = point;
-        } else {
-            sampled.push(point);
+        if (pointBucket !== bucket) {
+            flushBucket();
             bucket = pointBucket;
+            first = point;
         }
+        latest = point;
     }
+    flushBucket();
     return sampled;
 }
 

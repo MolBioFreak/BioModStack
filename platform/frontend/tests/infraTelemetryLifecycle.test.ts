@@ -68,17 +68,17 @@ test('long telemetry windows use stable range-aware display cadence', () => {
     assert.equal(first[1] - first[0], 60 * 60_000, 'the selected window width must remain exact');
 });
 
-test('long telemetry windows keep a sparse fresh raw tail', () => {
+test('long telemetry windows keep a sparse, connected, fresh raw tail', () => {
     const rawTail = [1_000, 14_000, 15_000, 29_000, 30_000, 44_000, 59_000].map((timestamp_ms) => ({ timestamp_ms }));
     assert.deepEqual(
         downsampleTelemetryTail(rawTail, 30_000).map((point) => point.timestamp_ms),
-        [29_000, 59_000],
-        '30m display must keep only the newest raw sample in each 30s display bucket',
+        [1_000, 29_000, 30_000, 59_000],
+        '30m display must keep the first and newest raw sample in each 30s display bucket',
     );
     assert.deepEqual(
         downsampleTelemetryTail(rawTail, 60_000).map((point) => point.timestamp_ms),
-        [59_000],
-        '1h display must retain the newest live sample without rendering one-second tail noise',
+        [1_000, 59_000],
+        '1h display must keep a connected bucket start and the newest live sample',
     );
 });
 
