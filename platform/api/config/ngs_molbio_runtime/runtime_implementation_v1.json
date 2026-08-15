@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "e336176898850d2b1ab9c5af9f3ea957484171ef51eab14c877c33709bfe62f5",
+  "content_sha256": "b2653a1b2051afe51ae07e1ead5fe87bf25e2a053dc660da881a39bcf13bf018",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "77673329001f48e610f13ed115fed62f56d7d10b93cc5ee30cea033c34bb3659",
@@ -329,8 +329,8 @@
     },
     {
       "path": "platform/api/services/nextflow.py",
-      "sha256": "2e60e5d67d8a74c8949392bf299694b554c27f8dcc86586da031edd8be8db045",
-      "size_bytes": 199961
+      "sha256": "8deebd295a293cb72d6cc4970630c24866e1bdf76e4f9c4d6fecd64155df4a3f",
+      "size_bytes": 200006
     },
     {
       "path": "platform/api/services/payload_ownership_audit.py",
@@ -409,8 +409,8 @@
     },
     {
       "path": "platform/frontend/vite.config.ts",
-      "sha256": "76fcaf879cabadd8a9cc66236a7760f3209afa3e5df4e62714a08959aaa0a4cf",
-      "size_bytes": 8276
+      "sha256": "57781bba3116ba0595e2e10398c4057917b69a3a246272a9a8661881a2b18a52",
+      "size_bytes": 8772
     },
     {
       "path": "schemas/ngs_molbio/binding-status-v1.schema.json",
@@ -452,8 +452,8 @@
     "content_sha256": "f25c8fab0b9b3cc256521bed19cd151f5e1b163255c82b10e988a693eb9339d5",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
   },
-  "successor_source_commit": "21058c8d15faf5850383fbb20bdca4ba459d28a4",
-  "successor_source_tree": "5437024b1cd325166e6452d85c148c0cef9d77c9",
+  "successor_source_commit": "84be7b3cad4bb834f0cce51f7e82760d8d1dd2a1",
+  "successor_source_tree": "21651bcefef7c1a992057121d8df3fdeb9ce44c4",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
