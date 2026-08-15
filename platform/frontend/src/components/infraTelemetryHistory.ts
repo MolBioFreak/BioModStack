@@ -14,6 +14,19 @@ export function resolveTelemetryGapBreakMs(
         : Math.max(RAW_MIN_GAP_BREAK_MS, pollIntervalMs * 3);
 }
 
+export function mergeMinuteHistoryWithRawTail<T extends { timestamp_ms: number }>(
+    minutePoints: readonly T[],
+    rawPoints: readonly T[],
+): T[] {
+    const latestMinuteTimestampMs = minutePoints.at(-1)?.timestamp_ms;
+    if (latestMinuteTimestampMs == null) return [...rawPoints];
+    const rawTailStartMs = latestMinuteTimestampMs + 60_000;
+    return [
+        ...minutePoints,
+        ...rawPoints.filter((point) => point.timestamp_ms >= rawTailStartMs),
+    ];
+}
+
 export interface LiveSample {
     timestamp: string;
     timestampMs: number;

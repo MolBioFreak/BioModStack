@@ -16,6 +16,7 @@ import { resolveCpuFrequencyScaleMhz, resolveCpuPowerScaleWatts } from './infraT
 import {
     isValidPollPreset,
     loadPersistedTelemetryPreferences,
+    mergeMinuteHistoryWithRawTail,
     parseTelemetryTimestampMs,
     persistTelemetryPreferences,
     resolveTelemetryGapBreakMs,
@@ -28,6 +29,7 @@ import type {
 import { jobPollingInterval } from '../lib/queryPolling';
 
 const SHARED_CONTROL_POLL_INTERVAL_MS = 10000;
+const MINUTE_LIVE_TAIL_MS = 120_000;
 const SHARED_SYSTEM_QUERY_KEY = ['system'];
 const SHARED_POWER_CONTROL_QUERY_KEY = ['powerControl'];
 const SHARED_FAN_CONTROL_QUERY_KEY = ['fanControl'];
@@ -1377,10 +1379,25 @@ export function InfraLiveTelemetry({
     const resolution = windowMinutes >= 10 ? 'minute' : 'raw';
     const historyQuery = useQuery({
         queryKey: ['immutable-telemetry-history', windowMinutes],
-        queryFn: () => {
+        queryFn: async () => {
             const endMs = Date.now() + 1_000;
             const startMs = endMs - windowMinutes * 60_000;
-            return fetchTelemetryHistory(startMs, endMs, resolution, 4000);
+            if (resolution === 'raw') {
+                return fetchTelemetryHistory(startMs, endMs, 'raw', 4000);
+            }
+            const rawTailStartMs = Math.max(startMs, endMs - MINUTE_LIVE_TAIL_MS);
+            const [minuteHistory, rawTail] = await Promise.all([
+                fetchTelemetryHistory(startMs, endMs, 'minute', 4000),
+                fetchTelemetryHistory(rawTailStartMs, endMs, 'raw', 4000),
+            ]);
+            return {
+                ...minuteHistory,
+                data: {
+                    ...minuteHistory.data,
+                    generated_at_ms: rawTail.data.generated_at_ms,
+                    points: mergeMinuteHistoryWithRawTail(minuteHistory.data.points, rawTail.data.points),
+                },
+            };
         },
         refetchInterval: pollIntervalMs,
         refetchIntervalInBackground: false,
