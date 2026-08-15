@@ -25,7 +25,7 @@ def test_sync_units_make_sixty_second_policy_obvious() -> None:
     timer = units["biomodstack-dev-sync.timer"]
     service = units["biomodstack-dev-sync.service"]
     assert "Description=BioModStack Development origin/test sync every 60 seconds" in timer
-    assert "OnUnitActiveSec=60s" in timer
+    assert "OnUnitInactiveSec=60s" in timer
     assert "Persistent=true" in timer
     assert f"ExecStart=/usr/bin/env python3 {MODULE_PATH} --once" in service
 
