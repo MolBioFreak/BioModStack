@@ -213,6 +213,7 @@ class OntInstrumentRun(Base):
             "(terminal_artifact_manifest IS NULL) = (terminal_artifact_manifest_sha256 IS NULL)",
             name="ck_ont_run_terminal_manifest_pair",
         ),
+        UniqueConstraint("external_registration_key", name="uq_ont_run_external_registration_key"),
     )
 
     id = Column(String(80), primary_key=True)
@@ -223,6 +224,7 @@ class OntInstrumentRun(Base):
     observed_generation = Column(Integer, nullable=False)
     sample_id = Column(String(255), nullable=True)
     experiment_group = Column(String(255), nullable=True)
+    external_registration_key = Column(String(64), nullable=True)
     kit = Column(String(255), nullable=True)
     output_directories = Column(JSON, nullable=False, default=dict)
     output_files = Column(JSON, nullable=False, default=dict)

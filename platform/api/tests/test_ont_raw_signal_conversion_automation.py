@@ -431,11 +431,12 @@ def test_existing_pod5_candidates_are_server_rooted_and_path_opaque(
 
     candidates = ont_raw_signal.list_external_pod5_candidates()
 
+    source_info = source.stat()
     assert candidates == [{
-        "candidate_id": hashlib.sha256(b"BFX6NB_4.pod5").hexdigest(),
+        "candidate_id": ont_raw_signal._candidate_identity("BFX6NB_4.pod5", source_info),
         "display_name": "BFX6NB_4.pod5",
         "size_bytes": len(b"sealed-pod5"),
-        "modified_at_ns": source.stat().st_mtime_ns,
+        "modified_at_ns": source_info.st_mtime_ns,
     }]
     assert str(source_root) not in json.dumps(candidates)
 
@@ -454,3 +455,35 @@ def test_existing_pod5_candidates_exclude_symlinks(
     assert ont_raw_signal.list_external_pod5_candidates() == []
     with pytest.raises(KeyError):
         ont_raw_signal.resolve_external_pod5_candidate(hashlib.sha256(b"escaped.pod5").hexdigest())
+
+
+def test_existing_pod5_candidate_token_is_bound_to_file_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = tmp_path / "existing-pod5"
+    source_root.mkdir()
+    source = source_root / "BFX6NB_4.pod5"
+    source.write_bytes(b"first")
+    monkeypatch.setenv(ont_raw_signal.EXTERNAL_POD5_ROOT_ENV, str(source_root))
+    stale_token = ont_raw_signal.list_external_pod5_candidates()[0]["candidate_id"]
+
+    source.write_bytes(b"replacement-with-different-identity")
+
+    assert ont_raw_signal.list_external_pod5_candidates()[0]["candidate_id"] != stale_token
+    with pytest.raises(KeyError):
+        ont_raw_signal.resolve_external_pod5_candidate(stale_token)
+
+
+def test_existing_pod5_root_rejects_symlinked_ancestors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_root = tmp_path / "real-root"
+    real_root.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(real_root, target_is_directory=True)
+    monkeypatch.setenv(ont_raw_signal.EXTERNAL_POD5_ROOT_ENV, str(alias))
+
+    with pytest.raises(RuntimeError, match="symbolic links"):
+        ont_raw_signal.list_external_pod5_candidates()

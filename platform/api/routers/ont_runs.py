@@ -18,6 +18,7 @@ from pydantic import (
     model_validator,
 )
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Job, current_launch_context_id, get_session
@@ -777,18 +778,20 @@ async def ont_list_external_pod5_candidates() -> dict[str, Any]:
     try:
         return {"candidates": ont_raw_signal.list_external_pod5_candidates()}
     except (OSError, RuntimeError) as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail="external POD5 source is unavailable") from exc
 
 
 @router.post("/raw-signal/external-pod5-candidates/register", status_code=201)
 async def ont_register_external_pod5_candidate(
     request: OntExternalPod5CandidateRequest,
     session: AsyncSession = Depends(get_session),
+    domain_session: AsyncSession = Depends(get_molbio_ngs_session),
 ) -> dict[str, Any]:
     """Register one governed POD5 candidate as a sealed, durable run generation."""
     try:
         result = await ont_raw_signal.register_external_pod5_candidate(
             session,
+            domain_session,
             candidate_id=request.candidate_id,
             sample_id=request.sample_id,
             experiment_group=request.experiment_group,
@@ -799,8 +802,10 @@ async def ont_register_external_pod5_candidate(
         raise HTTPException(status_code=404, detail="external POD5 candidate not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        raise HTTPException(status_code=409, detail="external POD5 registration conflict") from exc
     except (OSError, RuntimeError) as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail="external POD5 source is unavailable") from exc
 
 
 @router.post("/raw-signal/external-runs", status_code=201)

@@ -17,7 +17,11 @@ from typing import Any, Literal
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from sqlalchemy import select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from molbio_ngs_models import MolBioNGSDomainState, MolBioNGSSample
 
 from database import (
     InputFile,
@@ -56,22 +60,52 @@ def _external_pod5_root() -> Path:
     configured = os.getenv(EXTERNAL_POD5_ROOT_ENV, "").strip()
     if not configured:
         raise RuntimeError(f"{EXTERNAL_POD5_ROOT_ENV} is not configured")
-    root = Path(configured).expanduser().resolve(strict=True)
-    if not root.is_dir() or root.is_symlink():
+    root = Path(configured).expanduser().absolute()
+    for component in (root, *root.parents):
+        if component.is_symlink():
+            raise RuntimeError("external POD5 root must not contain symbolic links")
+    root = root.resolve(strict=True)
+    if not root.is_dir():
         raise RuntimeError("external POD5 root must be a real directory")
     return root
+
+
+def _candidate_identity(relative: str, info: os.stat_result) -> str:
+    return _digest({
+        "relative_path": relative,
+        "device": info.st_dev,
+        "inode": info.st_ino,
+        "bytes": info.st_size,
+        "mtime_ns": info.st_mtime_ns,
+        "ctime_ns": info.st_ctime_ns,
+    })
+
+
+def _assert_confined_regular_file(path: Path, root: Path) -> os.stat_result:
+    relative = path.relative_to(root)
+    current = root
+    for part in relative.parts:
+        current = current / part
+        info = current.lstat()
+        if stat.S_ISLNK(info.st_mode):
+            raise ValueError("external POD5 candidate path contains a symbolic link")
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError("external POD5 candidate is not a regular file")
+    return info
 
 
 def list_external_pod5_candidates() -> list[dict[str, Any]]:
     root = _external_pod5_root()
     candidates: list[dict[str, Any]] = []
     for path in sorted(root.rglob("*.pod5")):
-        if path.is_symlink() or not path.is_file():
+        try:
+            info = _assert_confined_regular_file(path, root)
+        except (OSError, ValueError):
             continue
         relative = path.relative_to(root).as_posix()
-        info = path.stat()
         candidates.append({
-            "candidate_id": hashlib.sha256(relative.encode("utf-8")).hexdigest(),
+            "candidate_id": _candidate_identity(relative, info),
             "display_name": relative,
             "size_bytes": info.st_size,
             "modified_at_ns": info.st_mtime_ns,
@@ -85,9 +119,8 @@ def resolve_external_pod5_candidate(candidate_id: str) -> Path:
     root = _external_pod5_root()
     for candidate in list_external_pod5_candidates():
         if secrets.compare_digest(candidate["candidate_id"], candidate_id):
-            path = (root / candidate["display_name"]).resolve(strict=True)
-            if path.parent != root and root not in path.parents:
-                break
+            path = root / candidate["display_name"]
+            _assert_confined_regular_file(path, root)
             return path
     raise KeyError("external POD5 candidate was not found")
 
@@ -263,6 +296,10 @@ def _file_artifact(path: Path, artifact_id: str, *, kind: str) -> dict[str, Any]
         after_identity = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
         if before_identity != after_identity:
             raise ValueError("raw-signal source changed while it was being registered")
+        visible = path.lstat()
+        visible_identity = (visible.st_dev, visible.st_ino, visible.st_size, visible.st_mtime_ns, visible.st_ctime_ns)
+        if visible_identity != after_identity:
+            raise ValueError("raw-signal source path changed while it was being registered")
         return {"artifact_id": artifact_id, "kind": kind, "bytes": info.st_size, "sha256": digest.hexdigest(), "path": str(path)}
     finally:
         os.close(fd)
@@ -348,15 +385,25 @@ async def create_external_run_registration(
     source_fidelity: str,
     sample_id: str | None,
     experiment_group: str | None,
+    external_registration_key: str | None = None,
+    candidate_id: str | None = None,
+    source_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Create one sealed external generation without MinKNOW or POD5 ancestry."""
     now = _now()
-    run_id = _id("ont-external-run")
+    run_id = (
+        f"ont-external-run-{external_registration_key[:32]}"
+        if external_registration_key
+        else _id("ont-external-run")
+    )
     marker = {
         "schema": "bms.ont.external-raw-signal-registration.v1",
         "format": format,
         "input_file_id": input_file_id,
         "index_input_file_id": index_input_file_id,
+        "candidate_id": candidate_id,
+        "source_sha256": source_sha256,
+        "sample_id": sample_id,
     }
     input_record = await session.get(InputFile, input_file_id)
     if input_record is None:
@@ -386,6 +433,7 @@ async def create_external_run_registration(
         observed_generation=1,
         sample_id=sample_id,
         experiment_group=experiment_group,
+        external_registration_key=external_registration_key,
         kit=None,
         output_directories={},
         output_files={"fastq": [], "pod5": [], "bam": []},
@@ -419,60 +467,161 @@ async def create_external_run_registration(
     return {"run_id": run_id, "observed_generation": 1, "representation": representation}
 
 
+async def _validate_external_registration_context(
+    domain_session: AsyncSession,
+    *,
+    experiment_group: str,
+    sample_id: str | None,
+) -> None:
+    domain = await domain_session.get(MolBioNGSDomainState, experiment_group)
+    if domain is None or domain.current_state_revision_id is None:
+        raise ValueError("exact active Domain Experiment is required")
+    if sample_id is None:
+        return
+    sample = await domain_session.get(MolBioNGSSample, sample_id)
+    if (
+        sample is None
+        or sample.global_domain_experiment_id != experiment_group
+        or sample.archived_at is not None
+    ):
+        raise ValueError("sample is not an active member of the exact Domain Experiment")
+
+
+async def _external_registration_replay(
+    session: AsyncSession,
+    *,
+    registration_key: str,
+    candidate_id: str,
+    source_sha256: str,
+    sample_id: str | None,
+    experiment_group: str,
+) -> dict[str, Any] | None:
+    run = (
+        await session.execute(
+            select(OntInstrumentRun).where(
+                OntInstrumentRun.external_registration_key == registration_key
+            )
+        )
+    ).scalar_one_or_none()
+    if run is None:
+        return None
+    marker = run.last_minknow_payload if isinstance(run.last_minknow_payload, dict) else {}
+    expected = {
+        "candidate_id": candidate_id,
+        "source_sha256": source_sha256,
+        "sample_id": sample_id,
+    }
+    if (
+        run.experiment_group != experiment_group
+        or run.sample_id != sample_id
+        or any(marker.get(key) != value for key, value in expected.items())
+    ):
+        raise ValueError("external POD5 registration identity conflicts with existing authority")
+    representations = await list_representations(
+        session,
+        run_id=run.id,
+        observed_generation=run.observed_generation,
+    )
+    source = next((item for item in representations if item["role"] == "source"), None)
+    if source is None or source["manifest_sha256"] is None:
+        raise ValueError("external POD5 registration is incomplete")
+    return {
+        "run_id": run.id,
+        "observed_generation": run.observed_generation,
+        "representation": source,
+        "already_registered": True,
+    }
+
+
 async def register_external_pod5_candidate(
     session: AsyncSession,
+    domain_session: AsyncSession,
     *,
     candidate_id: str,
     sample_id: str | None,
     experiment_group: str,
 ) -> dict[str, Any]:
     """Immutably register one server-governed POD5 candidate as a sealed run."""
-    if not experiment_group.strip():
+    experiment_group = experiment_group.strip()
+    if not experiment_group:
         raise ValueError("exact Domain Experiment ID is required")
+    await _validate_external_registration_context(
+        domain_session,
+        experiment_group=experiment_group,
+        sample_id=sample_id,
+    )
+    root_before = _external_pod5_root().stat()
     source_path = resolve_external_pod5_candidate(candidate_id)
     probe = _file_artifact(source_path, "candidate", kind="pod5")
-    input_file_id = str(uuid5(NAMESPACE_URL, f"bms:external-pod5:{probe['sha256']}"))
-    tracked = await session.get(InputFile, input_file_id)
-    if tracked is None:
-        tracked = InputFile(
+    root_after = _external_pod5_root().stat()
+    if (root_before.st_dev, root_before.st_ino) != (root_after.st_dev, root_after.st_ino):
+        raise ValueError("external POD5 root changed during registration")
+
+    registration_key = _digest({
+        "candidate_id": candidate_id,
+        "experiment_group": experiment_group,
+        "sample_id": sample_id,
+    })
+    replay = await _external_registration_replay(
+        session,
+        registration_key=registration_key,
+        candidate_id=candidate_id,
+        source_sha256=probe["sha256"],
+        sample_id=sample_id,
+        experiment_group=experiment_group,
+    )
+    if replay is not None:
+        return replay
+
+    input_file_id = str(uuid5(
+        NAMESPACE_URL,
+        f"bms:external-pod5:{candidate_id}:{probe['sha256']}",
+    ))
+    await session.execute(
+        sqlite_insert(InputFile.__table__).values(
             id=input_file_id,
             filename=source_path.name,
             file_type="pod5",
             directory=str(source_path.parent),
             size_bytes=probe["bytes"],
-        )
-        session.add(tracked)
-        await session.flush()
-
-    runs = list((await session.execute(
-        select(OntInstrumentRun).where(OntInstrumentRun.position_id == "external")
-    )).scalars())
-    for run in runs:
-        marker = run.last_minknow_payload if isinstance(run.last_minknow_payload, dict) else {}
-        if marker.get("input_file_id") != input_file_id or run.experiment_group != experiment_group:
-            continue
-        representations = await list_representations(
-            session,
-            run_id=run.id,
-            observed_generation=run.observed_generation,
-        )
-        if representations:
-            return {
-                "run_id": run.id,
-                "observed_generation": run.observed_generation,
-                "representation": representations[0],
-                "already_registered": True,
-            }
-
-    result = await create_external_run_registration(
-        session,
-        format="pod5",
-        input_file_id=input_file_id,
-        index_input_file_id=None,
-        source_fidelity="native",
-        sample_id=sample_id,
-        experiment_group=experiment_group,
+        ).on_conflict_do_nothing(index_elements=["id"])
     )
+    tracked = await session.get(InputFile, input_file_id)
+    if (
+        tracked is None
+        or tracked.filename != source_path.name
+        or tracked.directory != str(source_path.parent)
+        or tracked.size_bytes != probe["bytes"]
+    ):
+        raise ValueError("tracked POD5 identity conflicts with existing authority")
+
+    try:
+        async with session.begin_nested():
+            result = await create_external_run_registration(
+                session,
+                format="pod5",
+                input_file_id=input_file_id,
+                index_input_file_id=None,
+                source_fidelity="native",
+                sample_id=sample_id,
+                experiment_group=experiment_group,
+                external_registration_key=registration_key,
+                candidate_id=candidate_id,
+                source_sha256=probe["sha256"],
+            )
+    except IntegrityError:
+        replay = await _external_registration_replay(
+            session,
+            registration_key=registration_key,
+            candidate_id=candidate_id,
+            source_sha256=probe["sha256"],
+            sample_id=sample_id,
+            experiment_group=experiment_group,
+        )
+        if replay is None:
+            raise ValueError("external POD5 registration conflicted with concurrent authority")
+        return replay
+
     representation = await session.get(
         OntRawSignalRepresentation,
         result["representation"]["representation_id"],
