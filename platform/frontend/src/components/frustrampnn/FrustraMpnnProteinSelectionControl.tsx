@@ -60,7 +60,7 @@ export function FrustraMpnnProteinSelectionControl({
             </label>
 
             <p className="text-xs text-slate-500">
-                All protein entities analyzes every protein chain in the governed structure. DNA, RNA, ligands, ions, and solvent remain outside the residue landscape. Choose a narrower mode to restrict analysis to exact chains or residues.
+                All protein entities analyzes every mapped protein residue in the governed structure. Residues that cannot be mapped or scored remain outside the landscape, as do DNA, RNA, ligands, ions, and solvent. Choose a narrower mode to restrict analysis to exact chains or residues.
             </p>
 
             {!inspection && (

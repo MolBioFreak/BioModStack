@@ -92,13 +92,13 @@ export function FrustraMpnnSourceStructurePolicyControl({
                     )}
                     {observedAltlocs.map((altloc) => (
                         <option key={altloc || 'blank'} value={altloc}>
-                            {altloc === '' ? 'Blank (occupancy policy)' : altloc}
+                            {altloc === '' ? 'Blank alternate location' : altloc}
                         </option>
                     ))}
                 </select>
             </label>
             <p className="text-xs text-slate-500">
-                Blank uses atoms with an empty alternate-location label. When the source supplies alternate conformers, the normalizer applies the persisted occupancy policy and records the effective choice in the structure map.
+                The normalizer first uses the explicitly preferred alternate location. For atom names without that label, it uses a blank alternate location. Duplicate matching atoms are rejected as ambiguous. The structure map records the effective choice.
             </p>
             {!inspection && (
                 <p className="text-xs text-slate-500">

@@ -4,6 +4,7 @@ import test from 'node:test';
 import type { Job } from '../src/lib/api.js';
 import { assertTerminalSourceAuthority } from '../src/lib/frustraMpnnViewerAuthority.js';
 import {
+    getBatchJobOutputSummary,
     getCompletedScientificResultStatus,
     getJobOutputSummary,
 } from '../src/lib/jobOutputSummary.js';
@@ -38,6 +39,26 @@ test('API default zero FrustraMPNN count does not relabel unrelated jobs', () =>
         requested_design_count: 5,
         frustrampnn_result_count: 0,
     });
+    assert.deepEqual(output, { count: 5, label: '5 designs' });
+});
+
+test('FrustraMPNN batch summary uses accepted results and exposes empty-result status input', () => {
+    const output = getBatchJobOutputSummary([
+        { ...baseJob, id: 'job-1', frustrampnn_result_count: 0 },
+        { ...baseJob, id: 'job-2', frustrampnn_result_count: 0 },
+    ]);
+    assert.deepEqual(output, {
+        count: 0,
+        label: '0 FrustraMPNN results',
+        acceptedResultCount: 0,
+    });
+});
+
+test('generic batch summary preserves design semantics', () => {
+    const output = getBatchJobOutputSummary([
+        { ...baseJob, id: 'job-1', model_id: 'boltz2', requested_design_count: 2, frustrampnn_result_count: 0 },
+        { ...baseJob, id: 'job-2', model_id: 'protenix', design_count: 3, frustrampnn_result_count: 0 },
+    ]);
     assert.deepEqual(output, { count: 5, label: '5 designs' });
 });
 

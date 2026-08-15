@@ -4,7 +4,11 @@ import type { Job } from '../../lib/api';
 import { isNgsJob, ngsResultHref } from '../../lib/ngsResultRouting';
 import { JobDetailsPanel } from '../JobDetailsPanel';
 import { getModeDisplayName, getStageDisplayName } from '../../constants/displayNames';
-import { getCompletedScientificResultStatus, getJobOutputSummary } from '../../lib/jobOutputSummary';
+import {
+    getBatchJobOutputSummary,
+    getCompletedScientificResultStatus,
+    getJobOutputSummary,
+} from '../../lib/jobOutputSummary';
 
 type SortColumn = 'name' | 'mode' | 'status' | 'designs' | 'created';
 type SortDirection = 'asc' | 'desc';
@@ -443,7 +447,7 @@ export function JobQueueTable({
                 const batchJobs = item.jobs;
                 const batchId = item.batchId;
                 const batchName = batchJobs[0]?.batch_name || 'Batch';
-                const totalDesigns = batchJobs.reduce((sum, job) => sum + getDisplayDesignCount(job), 0);
+                const batchOutput = getBatchJobOutputSummary(batchJobs);
                 const anyRunning = batchJobs.some((job) => job.status === 'running');
                 const anyAwaiting = batchJobs.some((job) => job.status === 'awaiting_input');
                 const anyFailed = batchJobs.some((job) => job.status === 'failed');
@@ -474,9 +478,9 @@ export function JobQueueTable({
                                     <span className="text-sm text-accent">({batchJobs.length} sims)</span>
                                 </div>
                                 <div className="flex flex-wrap items-center gap-4 text-sm">
-                                    <span className="text-slate-400">{totalDesigns} designs</span>
+                                    <span className="text-slate-400">{batchOutput.label}</span>
                                     <span className="text-slate-400">{formatCreatedAt(item.firstDate)}</span>
-                                    <StatusBadge status={batchStatus} />
+                                    <StatusBadge status={batchStatus} acceptedResultCount={batchOutput.acceptedResultCount} />
                                     {batchStatus === 'completed' && !ngsBatch && (
                                         <Link
                                             to={`/results?batch_id=${batchId}`}
@@ -727,7 +731,7 @@ export function JobQueueTable({
 
                         const batchJobs = item.jobs;
                         const batchName = batchJobs[0]?.batch_name || 'Batch';
-                        const totalDesigns = batchJobs.reduce((sum, job) => sum + getDisplayDesignCount(job), 0);
+                        const batchOutput = getBatchJobOutputSummary(batchJobs);
                         const anyRunning = batchJobs.some((job) => job.status === 'running');
                         const anyAwaiting = batchJobs.some((job) => job.status === 'awaiting_input');
                         const anyFailed = batchJobs.some((job) => job.status === 'failed');
@@ -759,12 +763,12 @@ export function JobQueueTable({
                                             </div>
                                             <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-300">
                                                 <span>{batchJobs.length} sims</span>
-                                                <span>{totalDesigns} designs</span>
+                                                <span>{batchOutput.label}</span>
                                                 <span>{new Date(item.firstDate).toLocaleDateString()}</span>
                                             </div>
                                         </div>
                                         <div className="shrink-0">
-                                            <StatusBadge status={batchStatus} />
+                                            <StatusBadge status={batchStatus} acceptedResultCount={batchOutput.acceptedResultCount} />
                                         </div>
                                     </div>
                                 </button>
