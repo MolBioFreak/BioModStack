@@ -851,7 +851,7 @@ async def request_blow5_derivation(
         await session.flush()
         session.add(event)
         await session.flush()
-    elif existing.state == "deferred":
+    elif existing.state in {"deferred", "failed"}:
         snapshot = _derivation_resource_snapshot(run, source)
         gate = _runtime_gate(snapshot) if validation_only else _qualification_gate(snapshot)
         existing.resource_snapshot = snapshot
@@ -860,6 +860,10 @@ async def request_blow5_derivation(
         if gate is None:
             existing.state = "requested"
             existing.completed_at = None
+            existing.claim_token = None
+            existing.lease_expires_at = None
+        else:
+            existing.state = "deferred"
         session.add(OntRawSignalDerivationEvent(
             id=_id("ont-raw-event"), job_id=existing.id, state=existing.state,
             reason_code=existing.reason_code, receipt={"explicit_reassessment": True, "resource_snapshot": snapshot}, created_at=_now(),
@@ -1206,11 +1210,6 @@ async def close_source_identity(
         raise ValueError("POD5 acquisition identity does not match MinKNOW authority")
     if not isinstance(receipt.get("read_count"), int) or receipt["read_count"] < 1:
         raise ValueError("POD5 source preflight did not establish a non-empty read scope")
-    source.state = _READY
-    source.reason_code = "pod5_acquisition_identity_closed"
-    source.read_count = receipt["read_count"]
-    source.validation_receipts = {**dict(source.validation_receipts or {}), "source_preflight": receipt}
-    await session.commit()
     return source
 
 
