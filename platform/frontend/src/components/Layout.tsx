@@ -633,7 +633,7 @@ export function Layout({ children }: LayoutProps) {
                                     Mol Bio Toolkit
                                 </Link>
                                 <Link
-                                    to={{ pathname: '/ngs', search: location.search }}
+                                    to="/ngs"
                                     data-bms-primary-nav-active={isActive('/ngs') ? 'true' : undefined}
                                     className={TOPBAR_NAV_ITEM_CLASSNAME}
                                     style={{

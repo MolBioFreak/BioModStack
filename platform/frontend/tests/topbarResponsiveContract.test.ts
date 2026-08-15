@@ -37,6 +37,17 @@ test('Cordova compact shell uses the mobile header independent of scaled CSS vie
     assert.ok(source.includes("? 'order-2 min-w-0 w-full overflow-x-auto"), 'mobile nav rail should keep full-width horizontal scrolling without md ordering overrides');
 });
 
+test('NGS primary navigation clears unrelated page query state', () => {
+    const source = layoutSource();
+    const ngsLabelIndex = source.indexOf('NGS Toolkit');
+    const ngsLinkStart = source.lastIndexOf('<Link', ngsLabelIndex);
+    const ngsLinkEnd = source.indexOf('</Link>', ngsLabelIndex);
+    const ngsLink = source.slice(ngsLinkStart, ngsLinkEnd);
+
+    assert.ok(ngsLink.includes('to="/ngs"'), 'NGS primary navigation must open the clean launcher route');
+    assert.ok(!ngsLink.includes('location.search'), 'NGS primary navigation must not inherit stale job or result query state');
+});
+
 test('primary navigation rail is separate from utility menus so dropdowns are not clipped', () => {
     const source = layoutSource();
     const railStart = source.indexOf('<DragScrollRail');
