@@ -87,6 +87,7 @@ def render_sync_units(project_root: Path, executable_path: Path | None = None) -
 
         [Timer]
         OnBootSec={SYNC_INTERVAL_SECONDS}s
+        OnActiveSec={SYNC_INTERVAL_SECONDS}s
         OnUnitInactiveSec={SYNC_INTERVAL_SECONDS}s
         AccuracySec=1s
         Persistent=true
