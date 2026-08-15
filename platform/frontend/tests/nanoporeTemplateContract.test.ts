@@ -247,3 +247,12 @@ test('NGS instrument panel registers one governed existing POD5 candidate before
     assert.match(api, /candidate_id: candidateId/u);
     assert.match(api, /experiment_group: experimentGroup/u);
 });
+
+test('NGS instrument panel exposes indexed-BLOW5 waveform inspection', () => {
+    const panel = readSource('src/components/ngs/OntInstrumentPanel.tsx');
+
+    assert.match(panel, /Indexed BLOW5 waveform inspection/u);
+    assert.match(panel, /requestOntRawSignalWaveform/u);
+    assert.match(panel, /fetchOntRawSignalWaveform/u);
+    assert.match(panel, /aria-label="Raw electrical signal waveform"/u);
+});

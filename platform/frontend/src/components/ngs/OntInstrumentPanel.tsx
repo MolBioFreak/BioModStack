@@ -11,7 +11,9 @@ import {
     fetchOntInstrumentRunGeneration,
     fetchOntInstrumentRuns,
     fetchOntRawSignalCapabilities,
+    fetchOntRawSignalWaveform,
     requestOntBlow5Preparation,
+    requestOntRawSignalWaveform,
     registerOntExternalPod5Candidate,
     fetchOntProtocolOptions,
     requestMk1dReconnect,
@@ -20,6 +22,7 @@ import {
     type OntLiveDevice,
     type OntProtocolOption,
     type OntRawSignalPreference,
+    type OntRawSignalWaveform,
     type OntRunSummary,
 } from '../../lib/api';
 import { jobPollingInterval } from '../../lib/queryPolling';
@@ -155,6 +158,10 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
     const [selectedRunGeneration, setSelectedRunGeneration] = useState<SelectedRunGeneration | null>(null);
     const [selectedExternalPod5CandidateId, setSelectedExternalPod5CandidateId] = useState('');
     const [rawSignalPreference, setRawSignalPreference] = useState<OntRawSignalPreference>('auto');
+    const [waveformReadId, setWaveformReadId] = useState('');
+    const [waveform, setWaveform] = useState<OntRawSignalWaveform | null>(null);
+    const [waveformError, setWaveformError] = useState<string | null>(null);
+    const [waveformLoading, setWaveformLoading] = useState(false);
     const [message, setMessage] = useState('');
 
     useEffect(() => {
@@ -350,6 +357,43 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
             void rawSignalQuery.refetch();
         },
     });
+
+    const waveformPoints = useMemo(() => {
+        const samples = waveform?.state === 'ready' ? waveform.samples : null;
+        if (!samples?.length) return '';
+        const min = Math.min(...samples);
+        const max = Math.max(...samples);
+        return samples.map((value, index) => {
+            const x = samples.length > 1 ? (index * 600) / (samples.length - 1) : 0;
+            const y = max > min ? 118 - ((value - min) * 116) / (max - min) : 60;
+            return `${x},${y}`;
+        }).join(' ');
+    }, [waveform]);
+
+    const inspectWaveform = async (representationId: string) => {
+        if (!effectiveSelectedRunGeneration || !waveformReadId.trim()) return;
+        setWaveformLoading(true);
+        setWaveform(null);
+        setWaveformError(null);
+        try {
+            let current = await requestOntRawSignalWaveform(
+                effectiveSelectedRunGeneration.runId,
+                effectiveSelectedRunGeneration.observedGeneration,
+                representationId,
+                waveformReadId.trim(),
+            );
+            for (let attempt = 0; attempt < 30 && (current.state === 'requested' || current.state === 'running'); attempt += 1) {
+                await new Promise((resolve) => window.setTimeout(resolve, 1000));
+                current = await fetchOntRawSignalWaveform(current.lookup_id);
+            }
+            setWaveform(current);
+            if (current.state !== 'ready') setWaveformError(current.reason_code);
+        } catch (error) {
+            setWaveformError(errorMessage(error, 'Raw waveform lookup failed.'));
+        } finally {
+            setWaveformLoading(false);
+        }
+    };
 
     const reconnectMk1d = useMutation({
         mutationFn: async () => (await requestMk1dReconnect()).data,
@@ -687,6 +731,43 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                                             ) : null}
                                         </div>
                                     ))}
+                                    {(() => {
+                                        const readyBlow5 = rawSignalQuery.data.representations.find(
+                                            (representation) => representation.format === 'blow5' && representation.state === 'ready',
+                                        );
+                                        if (!readyBlow5) return null;
+                                        return (
+                                            <div className="space-y-2 rounded border border-emerald-500/40 bg-emerald-500/5 p-3">
+                                                <div className="font-semibold text-[var(--text-primary)]">Indexed BLOW5 waveform inspection</div>
+                                                <div className="flex flex-wrap gap-2">
+                                                    <input
+                                                        aria-label="Raw waveform read ID"
+                                                        value={waveformReadId}
+                                                        onChange={(event) => setWaveformReadId(event.target.value)}
+                                                        placeholder="Exact read ID"
+                                                        className="min-w-[20rem] flex-1 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 font-mono text-xs text-[var(--text-primary)]"
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void inspectWaveform(readyBlow5.representation_id)}
+                                                        disabled={!waveformReadId.trim() || waveformLoading}
+                                                        className="rounded border border-emerald-500/50 px-2 py-1 font-semibold text-emerald-200 disabled:opacity-40"
+                                                    >
+                                                        {waveformLoading ? 'Inspecting…' : 'Inspect raw waveform'}
+                                                    </button>
+                                                </div>
+                                                {waveformError ? <div role="alert" className="text-amber-100">Waveform unavailable: {waveformError}</div> : null}
+                                                {waveform?.state === 'ready' && waveformPoints ? (
+                                                    <div className="space-y-1">
+                                                        <div>Read <span className="font-mono text-[var(--text-primary)]">{waveform.read_id}</span> · {waveform.sample_count} samples returned</div>
+                                                        <svg aria-label="Raw electrical signal waveform" viewBox="0 0 600 120" className="h-36 w-full rounded bg-slate-950" preserveAspectRatio="none">
+                                                            <polyline points={waveformPoints} fill="none" stroke="rgb(52 211 153)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+                                                        </svg>
+                                                    </div>
+                                                ) : null}
+                                            </div>
+                                        );
+                                    })()}
                                 </>
                             ) : null}
                         </div>
