@@ -750,6 +750,7 @@ async def resolve_managed_reference_for_launch(
         and member.get("reopen_destination") == {
             "surface": "molbio-ngs-reference-revision",
             "params": {
+                "global_domain_experiment_id": global_domain_experiment_id,
                 "reference_id": revision.reference_id,
                 "revision_id": revision.id,
             },
