@@ -358,6 +358,25 @@ async def create_external_run_registration(
         "input_file_id": input_file_id,
         "index_input_file_id": index_input_file_id,
     }
+    input_record = await session.get(InputFile, input_file_id)
+    if input_record is None:
+        raise KeyError(input_file_id)
+    source_path = _resolve_input_file(input_record, format)
+    source_artifact = _file_artifact(source_path, f"{run_id}:source", kind=format)
+    terminal_manifest = {
+        "schema": "bms.ont.instrument-terminal-artifacts.v1",
+        "schema_version": 1,
+        "run_id": run_id,
+        "minknow_run_id_sha256": hashlib.sha256(b"").hexdigest(),
+        "terminal_state": "completed",
+        "observed_generation": 1,
+        "artifacts": [{
+            "kind": format,
+            "path": str(source_path),
+            "bytes": source_artifact["bytes"],
+            "sha256": source_artifact["sha256"],
+        }],
+    }
     run = OntInstrumentRun(
         id=run_id,
         position_id="external",
@@ -372,8 +391,8 @@ async def create_external_run_registration(
         output_files={"fastq": [], "pod5": [], "bam": []},
         handoff_ready=False,
         last_minknow_payload=marker,
-        terminal_artifact_manifest=None,
-        terminal_artifact_manifest_sha256=None,
+        terminal_artifact_manifest=terminal_manifest,
+        terminal_artifact_manifest_sha256=_digest(terminal_manifest),
         created_at=now,
     )
     event = OntInstrumentRunEvent(
