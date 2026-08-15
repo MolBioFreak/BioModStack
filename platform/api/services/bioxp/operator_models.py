@@ -925,7 +925,7 @@ class OperatorDashboardXReferenceSuccess(BaseModel):
     persisted: Literal[True]
     verified: Literal[True]
     durable_clean: Literal[True]
-    authority_untrusted: Literal[False]
+    authority_untrusted: Literal[False] = False
 
     @model_validator(mode="after")
     def bind_reference_axes_and_rows(self):

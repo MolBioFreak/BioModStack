@@ -11,7 +11,7 @@ import pytest
 from routers import bioxp
 from routers.bioxp.operator_controls import _translate_robot_error
 from services.bioxp.errors import ConnectionStateError, RobotResponseError
-from services.bioxp.operator_models import OperatorActionHistory
+from services.bioxp.operator_models import OperatorActionHistory, OperatorDashboardXReference
 from services.bioxp.operator_semantic_quarantine import OPERATOR_SEMANTIC_QUARANTINE_BY_PATH
 from services.bioxp.robot_client import DEFAULT_ROBOT_ROUTES
 
@@ -202,6 +202,31 @@ def test_history_accepts_explicit_legacy_authority_status_omission_marker():
     })
 
     assert parsed.receipts[0].model_dump(exclude_none=True)["authority_receipt_status"] == {"omitted": "item_limit"}
+
+
+def test_reference_success_derives_trusted_authority_when_field_is_absent():
+    parsed = OperatorDashboardXReference.model_validate(
+        {
+            "ok": True,
+            "persisted": True,
+            "verified": True,
+            "durable_clean": True,
+            "axes": ["x"],
+            "rows": {
+                "x": {
+                    "axis": "x",
+                    "state": "unknown",
+                    "origin_position_steps": None,
+                    "source": None,
+                    "note": None,
+                    "updated_at": None,
+                    "last_motion_kind": None,
+                }
+            },
+        }
+    )
+
+    assert parsed.model_dump()["authority_untrusted"] is False
 
 
 class FakeRobotClient:
