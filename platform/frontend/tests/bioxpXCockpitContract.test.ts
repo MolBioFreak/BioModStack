@@ -50,8 +50,9 @@ test('X authority panel is a normal read-only truth surface with governed moveme
     assert.match(source, /useBioXpOperatorActionAdmission\('oem\.x\.move_steps'.*xPositiveInputs/);
     assert.match(source, /useBioXpOperatorActionAdmission\('oem\.x\.move_absolute'.*xAbsoluteInputs/);
     assert.match(source, /useBioXpOperatorActionAdmission\('oem\.x\.manual_panel_home'.*xHomeInputs/);
-    assert.match(source, /xMotionConfirmation/);
-    assert.match(source, /requires_confirmation/);
+    assert.doesNotMatch(source, /xMotionConfirmation/);
+    assert.doesNotMatch(source, /Confirm one exact next X action/);
+    assert.doesNotMatch(source, /Confirm this exact X action first/);
     assert.match(panel, /Source range/);
     assert.match(panel, /0\.\.90263/);
     assert.match(panel, /Effective absolute minimum/);
@@ -78,21 +79,12 @@ test('receipt history keeps terminal proof and nested robot evidence visible', (
 test('X absolute input and action gate use the effective 60 through 90263 envelope', () => {
     assert.match(source, /min=\{axis === 'x' \? xAbsoluteMinimum : undefined\}/);
     assert.match(source, /max=\{axis === 'x' \? xAbsoluteMaximum : undefined\}/);
-    assert.match(source, /axis === 'x' \? !xAbsoluteEnabled \|\| \(xAbsoluteAction\?\.requires_confirmation === true && !xConfirmationAccepted\('absolute'\)\)/);
-    assert.match(source, /xAbsoluteAction\?\.requires_confirmation === true && !xConfirmationAccepted\('absolute'\) \? 'Confirm this exact X absolute move first\.'/);
+    assert.match(source, /axis === 'x' \? !xAbsoluteEnabled/);
 });
 
-test('X confirmation is bound to one exact action, inputs, and current authority', () => {
-    assert.match(source, /type XMotionConfirmationTarget = 'negative' \| 'positive' \| 'absolute' \| 'home'/);
-    assert.match(source, /type XMotionConfirmation = \{/);
-    assert.match(source, /fingerprint: string/);
-    assert.match(source, /const xConfirmationFingerprint = \(target: XMotionConfirmationTarget\): string/);
-    for (const token of ['linkConnected', 'generation', 'ownershipGeneration', 'xAuthorityIdentity', 'actionId', 'JSON.stringify(inputs)']) {
-        assert.ok(source.includes(token), `missing confirmation fingerprint token: ${token}`);
-    }
-    for (const target of ['negative', 'positive', 'absolute', 'home']) {
-        assert.match(source, new RegExp(`xConfirmationAccepted\\('${target}'\\)`));
-    }
-    assert.match(source, /setXMotionConfirmation\(event\.target\.checked \? \{ target, fingerprint: xConfirmationFingerprint\(target\) \} : null\)/);
-    assert.doesNotMatch(source, /const \[xMotionConfirmed, setXMotionConfirmed\]/);
+test('normal X controls use robot-owned exact admissions without a second UI confirmation gate', () => {
+    assert.doesNotMatch(source, /XMotionConfirmation/);
+    assert.doesNotMatch(source, /xConfirmationFingerprint/);
+    assert.doesNotMatch(source, /xConfirmationAccepted/);
+    assert.doesNotMatch(source, /setXMotionConfirmation/);
 });
