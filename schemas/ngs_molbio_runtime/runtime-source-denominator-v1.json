@@ -3,6 +3,7 @@
   "paths": [
     "biomodstack_services.py",
     "docs/reports/ngs-molbio-phase-n0-verification-v1.json",
+    "docs/specs/2026-08-12-ngs-molbio-global-project-integration-sow.md",
     "platform/api/config/ngs_molbio/adapter_registry_v1.json",
     "platform/api/config/ngs_molbio/capability_inventory_v1.json",
     "platform/api/config/ngs_molbio/schema_registry_v1.json",
@@ -84,5 +85,5 @@
     "scripts/build_ngs_molbio_runtime_implementation_record.py",
     "scripts/run_ngs_molbio_payload_ownership_audit.py"
   ],
-  "content_sha256": "47735e33d4d89738c717e25bfaefc2de08d3a204d0d532c4d9535577b515f81e"
+  "content_sha256": "83af9726831a20da4357147ce8d9d97e2e3acb238dffd264901c0b2b5017e70a"
 }
