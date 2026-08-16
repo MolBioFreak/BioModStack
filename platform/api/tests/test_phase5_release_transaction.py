@@ -547,7 +547,10 @@ def test_install_and_activation_touch_only_production_core_after_old_owner_stop(
     monkeypatch.setattr(
         release.services,
         "render_user_units",
-        lambda *a, **k: {release.services.CORE_RUNTIME_SERVICE: "candidate core\n"},
+        lambda *a, **k: {
+            release.services.TELEMETRY_SERVICE: "candidate telemetry\n",
+            release.services.CORE_RUNTIME_SERVICE: "candidate core\n",
+        },
     )
     events = []
     monkeypatch.setattr(
@@ -584,8 +587,14 @@ def test_install_and_activation_touch_only_production_core_after_old_owner_stop(
     assert (
         systemd_dir / release.services.CORE_RUNTIME_SERVICE
     ).read_text() == "candidate core\n"
+    assert (
+        systemd_dir / release.services.TELEMETRY_SERVICE
+    ).read_text() == "candidate telemetry\n"
     assert all((systemd_dir / u).read_bytes() == b for u, b in protected.items())
-    assert release.MANAGED_UNIT_NAMES == (release.services.CORE_RUNTIME_SERVICE,)
+    assert release.MANAGED_UNIT_NAMES == (
+        release.services.TELEMETRY_SERVICE,
+        release.services.CORE_RUNTIME_SERVICE,
+    )
 
 
 def _health(identity: release.BuildIdentity, *, revision: str | None = None) -> bytes:
@@ -792,6 +801,9 @@ def test_candidate_failure_restores_core_without_touching_development_units(
         (systemd_dir / u).write_bytes(b)
     old = b"old production core\n"
     (systemd_dir / unit).write_bytes(old)
+    telemetry_unit = release.services.TELEMETRY_SERVICE
+    old_telemetry = b"old telemetry\n"
+    (systemd_dir / telemetry_unit).write_bytes(old_telemetry)
     backend = release.ProductionReleaseBackend(
         repo_root=tmp_path, state_dir=tmp_path / "state", allow_first_install=True
     )
@@ -809,6 +821,12 @@ def test_candidate_failure_restores_core_without_touching_development_units(
         "images": {s: None for s in release.BUILD_SERVICES},
         "image_refs": dict(backend.image_refs),
         "units": {
+            telemetry_unit: {
+                "base": base64.b64encode(old_telemetry).decode(),
+                "drop_ins": {},
+                "active": False,
+                "enabled": False,
+            },
             unit: {
                 "base": base64.b64encode(old).decode(),
                 "drop_ins": {},
@@ -824,7 +842,9 @@ def test_candidate_failure_restores_core_without_touching_development_units(
         },
     }
     (systemd_dir / unit).write_bytes(b"failed candidate\n")
+    (systemd_dir / telemetry_unit).write_bytes(b"failed telemetry\n")
     backend.restore_known_good(snapshot)
+    assert (systemd_dir / telemetry_unit).read_bytes() == old_telemetry
     assert (systemd_dir / unit).read_bytes() == old and all(
         (systemd_dir / u).read_bytes() == b for u, b in protected.items()
     )
@@ -876,7 +896,7 @@ def test_managed_stop_fails_when_production_core_reads_back_active(
     monkeypatch.setattr(backend, "_run", fake_run)
     with pytest.raises(release.ReleaseValidationError, match="remained active"):
         backend.stop_installed_owner()
-    assert observed == [release.services.CORE_RUNTIME_SERVICE]
+    assert observed == list(release.MANAGED_UNIT_NAMES)
 
 
 class _FirstInstallCandidateStopFailureBackend(_FailingValidationBackend):
@@ -908,9 +928,12 @@ def test_snapshot_and_rollback_restore_exact_core_enabled_and_active_truth(
     systemd_dir.mkdir()
     monkeypatch.setattr(release.services, "get_user_systemd_dir", lambda: systemd_dir)
     unit = release.services.CORE_RUNTIME_SERVICE
+    telemetry_unit = release.services.TELEMETRY_SERVICE
     prior = b"known-good core\n"
+    prior_telemetry = b"known-good telemetry\n"
     (systemd_dir / unit).write_bytes(prior)
-    active = {unit}
+    (systemd_dir / telemetry_unit).write_bytes(prior_telemetry)
+    active = {unit, telemetry_unit}
     enabled = set()
     backend = release.ProductionReleaseBackend(
         repo_root=tmp_path, state_dir=tmp_path / "state"
@@ -962,9 +985,10 @@ def test_snapshot_and_rollback_restore_exact_core_enabled_and_active_truth(
     backend.restart_known_good(snapshot)
     backend._validate_known_good_once(snapshot)
     assert (
-        active == {unit}
+        active == {unit, telemetry_unit}
         and enabled == set()
         and (systemd_dir / unit).read_bytes() == prior
+        and (systemd_dir / telemetry_unit).read_bytes() == prior_telemetry
     )
 
 
@@ -977,6 +1001,12 @@ def test_known_good_validation_records_only_production_core_root(
     )
     unit = release.services.CORE_RUNTIME_SERVICE
     units = {
+        release.services.TELEMETRY_SERVICE: {
+            "base": base64.b64encode(b"telemetry unit\n").decode(),
+            "drop_ins": {},
+            "active": True,
+            "enabled": True,
+        },
         unit: {
             "base": base64.b64encode(b"unit\n").decode(),
             "drop_ins": {},
@@ -1004,7 +1034,10 @@ def test_known_good_validation_records_only_production_core_root(
         backend, "_observe_runtime_surfaces", lambda *a, **k: {"ready": True}
     )
     validation = backend._snapshot_known_good_validation(units)
-    assert validation["unit_roots"] == {unit: str(root)} and validation[
+    assert validation["unit_roots"] == {
+        release.services.TELEMETRY_SERVICE: str(root),
+        unit: str(root),
+    } and validation[
         "runtime_roots"
     ] == [str(root)]
 

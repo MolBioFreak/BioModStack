@@ -222,6 +222,39 @@
         "backend_coordinates": null,
         "provenance_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
         "related_paths": []
+      },
+      {
+        "relative_path": "runtime/protenix-runtime-attestation.json",
+        "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "bytes": 20,
+        "media_type": "application/json",
+        "semantic_role": "runtime_attestation",
+        "candidate_id": null,
+        "backend_coordinates": null,
+        "provenance_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "related_paths": []
+      },
+      {
+        "relative_path": "runtime/runtime-image-receipt.json",
+        "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "bytes": 21,
+        "media_type": "application/json",
+        "semantic_role": "runtime_image_receipt",
+        "candidate_id": null,
+        "backend_coordinates": null,
+        "provenance_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "related_paths": []
+      },
+      {
+        "relative_path": "runtime/execution-snapshot-receipt.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "bytes": 22,
+        "media_type": "application/json",
+        "semantic_role": "execution_snapshot_receipt",
+        "candidate_id": null,
+        "backend_coordinates": null,
+        "provenance_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "related_paths": []
       }
     ]
   },
@@ -235,6 +268,7 @@
     "runtime_identity": "protenix-runtime",
     "container_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "checkpoint_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "runtime_attestation_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
     "feature_policy_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
     "expected_cardinality": 1,
     "expected_coordinates": [{"backend": "protenix_v2_ensemble", "target_id": "target-a", "ordered_seed": 101, "sample_index": 0}],
@@ -248,7 +282,7 @@
       }
     ],
     "native_manifest_path": "cm_native_artifacts_v1.json",
-    "native_manifest_sha256": "fc4fc60153f3a439486aa797cf08f92d297a529be3a4433c897f9caa0f0caff3",
+    "native_manifest_sha256": "13431e9fc61c1840ecb5f53abbfb535a6e3599fa1f332a18e2220cb647013e1c",
     "warnings": [],
     "omissions": [],
     "terminal_status": "complete",
@@ -366,7 +400,7 @@
     "schema_name": "cm_analysis",
     "schema_version": 1,
     "analysis_id": "analysis-1",
-    "source_ensemble_sha256": "bdb8aa7508f028cf14082588b8737768f2872edf8e16a15cecd9b227829a08fc",
+    "source_ensemble_sha256": "a425274fdc3aedfcb6d696f6f130e8e065d23c3edb975521dfea2789271a0e41",
     "source_landscape_sha256": "0fbf64dc5f859fb18f4227b26a934a7a4143eb0c02ace7b1f251577531c3ad60",
     "formula_version": "cm_analysis_v1",
     "expected_strata": ["101", "202"],
@@ -406,8 +440,8 @@
   "cm_mutagenesis_handoff_v1": {
     "schema_name": "cm_mutagenesis_handoff",
     "schema_version": 1,
-    "source_ensemble_sha256": "bdb8aa7508f028cf14082588b8737768f2872edf8e16a15cecd9b227829a08fc",
-    "source_analysis_sha256": "54745cc3a853ad5c8e0fafba6efa912ab2849472c46a67b29c40514052d463fe",
+    "source_ensemble_sha256": "a425274fdc3aedfcb6d696f6f130e8e065d23c3edb975521dfea2789271a0e41",
+    "source_analysis_sha256": "24e56d7982f04b3f23f3249224eaeb57079f00c58e91f76098078e25f4d8dfb3",
     "source_complex_sha256": "2f09caffc7afa62060e6110eb5b0d6f456a3db19e9216c033e33e1e7b214d371",
     "source_structure_map_sha256": "b69cb8e18bb7a414a80775e4f084952a210257a4b2c88b920a26954dce18759f",
     "target_id": "target-a",
@@ -429,5 +463,68 @@
     "resampling_settings": {"ordered_seeds": [101, 202]},
     "adapter_version": "1",
     "idempotency_key": "bbfe3cd1e1368233832739716718e7a5625c413341a4731873dee514c8988554"
+  },
+  "cm_runtime_image_receipt_v1": {
+    "schema_name": "cm_runtime_image_receipt",
+    "schema_version": 1,
+    "status": "verified_immutable_snapshot",
+    "measurement_method": "fixture",
+    "expected_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "observed_source": {
+      "path": "protenix.sif", "device": 1, "inode": 2, "bytes": 3,
+      "mtime_ns": 4, "ctime_ns": 5,
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "verified_snapshot": {
+      "name": "runtime-image.sif", "bytes": 3,
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  "cm_protenix_execution_snapshot_v1": {
+    "schema_name": "cm_protenix_execution_snapshot",
+    "schema_version": 1,
+    "status": "verified_before_execution",
+    "checkpoint": {
+      "source_path": "checkpoint/protenix-v2.pt",
+      "snapshot_path": "checkpoint/protenix-v2.pt",
+      "expected_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "observed_source": {"device": 1, "inode": 2, "mode": 292, "size": 6, "mtime_ns": 4, "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "bytes": 6},
+      "verified_snapshot": {"sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "bytes": 6, "mode": 292}
+    },
+    "wrapper": {
+      "source_path": "run_protenix_inference.py",
+      "snapshot_path": "bms-wrapper/run_protenix_inference.py",
+      "expected_sha256": null,
+      "observed_source": {"device": 1, "inode": 2, "mode": 292, "size": 7, "mtime_ns": 4, "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "bytes": 7},
+      "verified_snapshot": {"sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "bytes": 7, "mode": 292}
+    }
+  },
+  "cm_protenix_runtime_attestation_v1": {
+    "schema_name": "cm_protenix_runtime_attestation",
+    "schema_version": 1,
+    "status": "observed_and_verified",
+    "runtime_image": {
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bytes": 3, "measurement": "fixture",
+      "host_observed_source": {"path": "protenix.sif", "device": 1, "inode": 2, "bytes": 3, "mtime_ns": 4, "ctime_ns": 5, "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+      "host_verified_snapshot": {"name": "runtime-image.sif", "bytes": 3, "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+      "receipt": {"schema_name": "cm_runtime_image_receipt", "schema_version": 1, "status": "verified_immutable_snapshot", "sha256": "9999999999999999999999999999999999999999999999999999999999999999", "bytes": 10}
+    },
+    "execution_snapshot": {
+      "receipt": {
+        "schema_name": "cm_protenix_execution_snapshot", "schema_version": 1, "status": "verified_before_execution",
+        "checkpoint": {"source_path": "checkpoint/protenix-v2.pt", "snapshot_path": "checkpoint/protenix-v2.pt", "expected_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "observed_source": {"device": 1, "inode": 2, "mode": 292, "size": 6, "mtime_ns": 4, "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "bytes": 6}, "verified_snapshot": {"sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "bytes": 6, "mode": 292}},
+        "wrapper": {"source_path": "run_protenix_inference.py", "snapshot_path": "bms-wrapper/run_protenix_inference.py", "expected_sha256": null, "observed_source": {"device": 1, "inode": 2, "mode": 292, "size": 7, "mtime_ns": 4, "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "bytes": 7}, "verified_snapshot": {"sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "bytes": 7, "mode": 292}}
+      },
+      "sha256": "8888888888888888888888888888888888888888888888888888888888888888", "bytes": 11
+    },
+    "checkpoint": {"sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "bytes": 6, "relative_path": "checkpoint/protenix-v2.pt"},
+    "backend_source": {"distribution": "protenix", "distribution_version": "2.0", "commit": "1111111111111111111111111111111111111111", "measurement": "fixture", "manifest_sha256": "be7aacf90297ef5426ff0e370512e3553ea7a64cbb236b6116421b98d6ddf44a", "files": [{"relative_path": "root_0_protenix/__init__.py", "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "bytes": 8}]},
+    "executed_wrapper": {"relative_path": "run_protenix_inference.py", "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "bytes": 7},
+    "backend_version": "2.0", "backend_commit": "1111111111111111111111111111111111111111", "runtime_identity": "fixture", "container_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "checkpoint_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "model_id": "protenix-v2",
+    "started_at": "2026-07-18T00:00:00Z", "completed_at": "2026-07-18T00:01:00Z", "command": ["run_protenix_inference.py"],
+    "global_artifacts": [
+      {"semantic_role": "runtime_input", "relative_path": "runtime/x.json"}, {"semantic_role": "feature_policy", "relative_path": "runtime/x.json"}, {"semantic_role": "log", "relative_path": "runtime/x.json"}, {"semantic_role": "runtime_config", "relative_path": "runtime/x.json"}, {"semantic_role": "composition_audit", "relative_path": "runtime/x.json"}, {"semantic_role": "coordinate_ledger", "relative_path": "runtime/x.json"}, {"semantic_role": "coordinate_context", "relative_path": "runtime/x.json"}, {"semantic_role": "preprocessing_record", "relative_path": "runtime/x.json"}, {"semantic_role": "msa_record", "relative_path": "runtime/x.json"}, {"semantic_role": "template_record", "relative_path": "runtime/x.json"}, {"semantic_role": "runtime_attestation", "relative_path": "runtime/x.json"}, {"semantic_role": "runtime_image_receipt", "relative_path": "runtime/x.json"}, {"semantic_role": "execution_snapshot_receipt", "relative_path": "runtime/x.json"}
+    ],
+    "attestation_sha256": "d2a415146383aca8c3220ce94383bdc7719aec9e11d7a75cc461b952dbf98431"
   }
 }

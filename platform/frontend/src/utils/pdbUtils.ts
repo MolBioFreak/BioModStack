@@ -211,6 +211,105 @@ export function parsePDB(pdbContent: string): ParsedPDB {
     };
 }
 
+function tokenizeMmCifRow(line: string): string[] {
+    return line.match(/'(?:[^']|'')*'|"(?:[^"]|"")*"|\S+/g)?.map((token) => {
+        if ((token.startsWith("'") && token.endsWith("'")) || (token.startsWith('"') && token.endsWith('"'))) {
+            return token.slice(1, -1);
+        }
+        return token;
+    }) ?? [];
+}
+
+function mmCifValue(value: string | undefined): string | undefined {
+    if (!value || value === '.' || value === '?') return undefined;
+    return value;
+}
+
+function mmCifAtomLine(record: Record<string, string>, serialFallback: number): { model: number; line: string } | null {
+    const group = mmCifValue(record.group_PDB) || 'ATOM';
+    const atomName = mmCifValue(record.label_atom_id) || mmCifValue(record.auth_atom_id);
+    const residueName = mmCifValue(record.label_comp_id) || mmCifValue(record.auth_comp_id);
+    const chainId = mmCifValue(record.auth_asym_id) || mmCifValue(record.label_asym_id) || 'A';
+    const residueNumber = mmCifValue(record.auth_seq_id) || mmCifValue(record.label_seq_id);
+    const x = mmCifValue(record.Cartn_x);
+    const y = mmCifValue(record.Cartn_y);
+    const z = mmCifValue(record.Cartn_z);
+    if (!atomName || !residueName || !residueNumber || !x || !y || !z) return null;
+    const serial = Number.parseInt(mmCifValue(record.id) || '', 10) || serialFallback;
+    const model = Number.parseInt(mmCifValue(record.pdbx_PDB_model_num) || '1', 10) || 1;
+    const insertionCode = mmCifValue(record.pdbx_PDB_ins_code) || ' ';
+    const occupancy = Number(mmCifValue(record.occupancy) || '1').toFixed(2);
+    const bFactor = Number(mmCifValue(record.B_iso_or_equiv) || '0').toFixed(2);
+    const element = (mmCifValue(record.type_symbol) || atomName.slice(0, 1)).toUpperCase().slice(0, 2);
+    const recordName = group === 'HETATM' ? 'HETATM' : 'ATOM  ';
+    const atomLabel = atomName.length < 4 ? ` ${atomName}`.padEnd(4, ' ') : atomName.slice(0, 4);
+    const chainColumn = chainId.slice(-1);
+    const residueColumn = Number.parseInt(residueNumber, 10);
+    if (!Number.isFinite(residueColumn)) return null;
+    const line = `${recordName}${String(serial).padStart(5, ' ')} ${atomLabel} ${residueName.padStart(3, ' ').slice(-3)} ${chainColumn}${String(residueColumn).padStart(4, ' ')}${insertionCode.slice(0, 1).padEnd(1, ' ')}   ${Number(x).toFixed(3).padStart(8, ' ')}${Number(y).toFixed(3).padStart(8, ' ')}${Number(z).toFixed(3).padStart(8, ' ')}${occupancy.padStart(6, ' ')}${bFactor.padStart(6, ' ')}          ${element.padStart(2, ' ')}  `;
+    return { model, line };
+}
+
+export function parseMmCIF(cifContent: string): ParsedPDB {
+    const lines = cifContent.split(/\r?\n/);
+    for (let start = 0; start < lines.length; start += 1) {
+        if (lines[start].trim() !== 'loop_') continue;
+        const headers: string[] = [];
+        let cursor = start + 1;
+        while (cursor < lines.length && lines[cursor].trim().startsWith('_')) {
+            headers.push(lines[cursor].trim());
+            cursor += 1;
+        }
+        if (!headers.some((header) => header.startsWith('_atom_site.'))) continue;
+        const columnNames = headers.map((header) => header.slice('_atom_site.'.length).split(/[. ]/, 1)[0]);
+        const modelLines = new Map<number, string[]>();
+        let serialFallback = 1;
+        let pending: string[] = [];
+        for (; cursor < lines.length; cursor += 1) {
+            const raw = lines[cursor].trim();
+            if (!raw || raw === '#' || raw === 'loop_' || raw.startsWith('data_') || raw.startsWith('_')) {
+                if (pending.length) break;
+                if (raw === '#' || raw === 'loop_' || raw.startsWith('data_') || raw.startsWith('_')) break;
+                continue;
+            }
+            pending = [...pending, ...tokenizeMmCifRow(raw)];
+            while (pending.length >= columnNames.length) {
+                const values = pending.splice(0, columnNames.length);
+                const record: Record<string, string> = {};
+                columnNames.forEach((name, index) => { record[name] = values[index]; });
+                const atom = mmCifAtomLine(record, serialFallback);
+                serialFallback += 1;
+                if (!atom) continue;
+                const block = modelLines.get(atom.model) || [];
+                block.push(atom.line);
+                modelLines.set(atom.model, block);
+            }
+        }
+        if (!modelLines.size) return { chains: [], models: [] };
+        const orderedModels = Array.from(modelLines.keys()).sort((a, b) => a - b);
+        const pdbLines: string[] = [];
+        if (orderedModels.length === 1) {
+            pdbLines.push(...(modelLines.get(orderedModels[0]) || []), 'END');
+        } else {
+            orderedModels.forEach((model) => {
+                pdbLines.push(`MODEL     ${String(model).padStart(4, ' ')}`);
+                pdbLines.push(...(modelLines.get(model) || []), 'ENDMDL');
+            });
+            pdbLines.push('END');
+        }
+        return parsePDB(pdbLines.join('\\n'));
+    }
+    return { chains: [], models: [] };
+}
+
+export async function parseStructureFile(file: File): Promise<ParsedPDB> {
+    const content = await file.text();
+    if (/\\.(?:cif|mmcif)$/i.test(file.name) || content.includes('_atom_site.')) {
+        return parseMmCIF(content);
+    }
+    return parsePDB(content);
+}
+
 export async function parsePDBFile(file: File): Promise<ParsedPDB> {
     const content = await file.text();
     return parsePDB(content);

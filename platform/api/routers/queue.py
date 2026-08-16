@@ -678,6 +678,19 @@ async def retry_job(job_id: str, session: AsyncSession = Depends(get_session)):
     
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    launch_context_id = (job.provenance or {}).get("launch_context_id")
+    if launch_context_id:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "PROJECT_BOUND_REORCHESTRATION_REQUIRED",
+                "message": (
+                    "Project-bound Jobs must be retried through the owning Domain Run Group "
+                    "with a replacement preparation, attempt, and launch context."
+                ),
+                "launch_context_id": launch_context_id,
+            },
+        )
     
     if job.queue_status != 'failed':
         raise HTTPException(status_code=400, detail="Can only retry failed jobs")
@@ -695,6 +708,14 @@ async def retry_job(job_id: str, session: AsyncSession = Depends(get_session)):
     job.completed_at = None
     job.current_stage = None
     job.stage_progress = None
+    if str(job.model_id or "").strip().lower() == "protein_local_redesign":
+        from services.rfd3_local_redesign import requeue_failed_request_for_job
+
+        if not await requeue_failed_request_for_job(session, job_id=str(job.id)):
+            raise HTTPException(
+                status_code=409,
+                detail="RFD3 local-redesign request is not in a retryable failed state",
+            )
     await session.commit()
     
     return {
@@ -706,31 +727,38 @@ async def retry_job(job_id: str, session: AsyncSession = Depends(get_session)):
 
 @router.delete("/clear-all")
 async def cancel_all_queued(session: AsyncSession = Depends(get_session)):
-    """Cancel ALL queued/paused jobs (not running jobs)."""
+    """Cancel all queued/paused non-MD jobs through the canonical lifecycle."""
     result = await session.execute(
-        select(Job).where(Job.queue_status.in_(['queued', 'paused']))
+        select(Job).where(Job.queue_status.in_(["queued", "paused"]))
     )
     jobs = result.scalars().all()
     md_owned = await get_md_owned_job_ids(session)
     jobs = [job for job in jobs if job.id not in md_owned]
-    
-    cancelled_count = 0
-    cancelled_names = []
+    selected_ids = {str(job.id) for job in jobs}
+
+    cancelled_ids: set[str] = set()
+    cancelled_names: list[str] = []
     for job in jobs:
-        job.queue_status = 'failed'
-        job.paused = False
-        job.status = 'cancelled'
-        job.error_message = 'Bulk cancelled by user'
-        cancelled_count += 1
-        cancelled_names.append(job.name)
-    
+        if str(job.id) in cancelled_ids:
+            continue
+        _, lineage = await cancel_job_lineage(
+            str(job.id),
+            session,
+            error_message="Bulk cancelled by user",
+        )
+        for member in lineage:
+            member_id = str(member.id)
+            if member_id in selected_ids and member_id not in cancelled_ids:
+                cancelled_ids.add(member_id)
+                cancelled_names.append(str(member.name))
+
     await session.commit()
-    
+
     return {
         "success": True,
-        "cancelled_count": cancelled_count,
+        "cancelled_count": len(cancelled_ids),
         "cancelled_jobs": cancelled_names[:10],  # First 10 for display
-        "message": f"Cancelled {cancelled_count} jobs"
+        "message": f"Cancelled {len(cancelled_ids)} jobs",
     }
 
 

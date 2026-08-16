@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { StructureSceneState } from '../src/structureViewer/contracts/sceneState.js';
+import type { StructureScenePresentation } from '../src/structureViewer/contracts/scenePresentation.js';
 import { viewerOk, type ViewerResult } from '../src/structureViewer/contracts/viewerResults.js';
 import {
     StructureSceneController,
@@ -92,4 +93,35 @@ test('dispose cancels in-flight work and emits one scoped terminal event', async
     assert.equal((await loading).status, 'cancelled');
     assert.equal(disposeCalls, 1);
     assert.deepEqual(events.at(-1), { type: 'disposed', sceneId: 'A', documentId: 'A-doc' });
+});
+
+test('presentation capture combines live engine state with controller-owned analytical layers', async () => {
+    const live: StructureScenePresentation = {
+        camera: { mode: 'orthographic', target: [1, 2, 3], position: [4, 5, 6], up: [0, 1, 0], radius: 9 },
+        representations: [{
+            representationId: 'A-doc:polymer:cartoon:0', documentId: 'A-doc', kind: 'cartoon', visible: false, opacity: 0.4,
+        }],
+    };
+    const initial = {
+        ...scene('A', 1),
+        presentation: {
+            layers: [{ layerId: 'metric:native', metricId: 'native', visible: true, opacity: 0.7, order: 0 }],
+        },
+    } satisfies StructureSceneState;
+    const reconcileScene = async () => viewerOk(undefined);
+    const adapter: StructureSceneEngineAdapter = {
+        loadScene: reconcileScene,
+        reconcileScene,
+        subscribeResidueClicks: clickSubscription,
+        diagnostics,
+        capturePresentation: () => viewerOk(live),
+        dispose: async () => undefined,
+    };
+    const controller = new StructureSceneController(adapter);
+    assert.equal((await controller.loadScene(initial)).status, 'ok');
+
+    assert.deepEqual(controller.capturePresentation(), {
+        status: 'ok',
+        value: { ...live, layers: initial.presentation.layers },
+    });
 });

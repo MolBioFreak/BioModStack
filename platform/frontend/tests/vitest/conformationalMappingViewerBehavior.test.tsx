@@ -116,6 +116,15 @@ test('mounted viewer manages governed alternative overlays across candidate card
     assert.deepEqual(JSON.parse(workbench.props['data-overlays']).map((item: { id: string }) => item.id), ['candidate-2']);
     assert.match(JSON.stringify(JSON.parse(workbench.props['data-overlays'])), /\/api\/conformational-mapping\/requests\/request-viewer\/artifacts\/artifact-2/u);
 
+    const progressLens = two.renderer.root.findAllByType('button').find((node) => text(node) === 'Progress');
+    const logsLens = two.renderer.root.findAllByType('button').find((node) => text(node) === 'Logs');
+    const ensembleLens = two.renderer.root.findAllByType('button').find((node) => text(node) === 'Ensemble');
+    assert.equal(progressLens?.props['aria-pressed'], true);
+    assert.equal(logsLens?.props['aria-pressed'], false);
+    assert.equal(ensembleLens?.props['aria-pressed'], true);
+    await act(async () => logsLens?.props.onClick());
+    assert.equal(two.renderer.root.findAllByType('button').find((node) => text(node) === 'Logs')?.props['aria-pressed'], true);
+
     const checkedAlternative = two.renderer.root.findAllByType('input').find((node) => node.props.checked === true);
     assert.ok(checkedAlternative);
     await act(async () => checkedAlternative.props.onChange({ target: { checked: false } }));

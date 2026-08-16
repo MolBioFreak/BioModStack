@@ -81,6 +81,9 @@ def test_protenix_binds_a_self_contained_declared_canonical_runtime() -> None:
 def test_canonical_protenix_uses_api_interpreter_only_for_contract_scripts() -> None:
     source = MODULE_PATH.read_text(encoding="utf-8")
 
+    assert "PrepareProtenixExecution" in source
+    assert "prepare_runtime_image_attestation.py" in source
+    assert "prepare_protenix_execution_snapshot.py" in source
     assert (
         "${params.api_python} ${params.code_root}/scripts/prepare_protenix_conformational_mapping.py"
         in source
@@ -89,5 +92,6 @@ def test_canonical_protenix_uses_api_interpreter_only_for_contract_scripts() -> 
         "${params.api_python} ${params.code_root}/scripts/finalize_protenix_conformational_mapping.py"
         in source
     )
-    assert "python3 ${params.code_root}/scripts/run_protenix_inference.py" in source
+    assert 'python3 "\\$WRAPPER"' in source
+    assert "attest_protenix_runtime.py" in source
     assert "${params.api_python} ${params.code_root}/scripts/run_protenix_inference.py" not in source

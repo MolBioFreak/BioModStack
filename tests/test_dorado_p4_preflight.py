@@ -69,6 +69,31 @@ def test_lock_resolves_only_exact_compatible_models() -> None:
         module.resolve_model(lock, "dna", "dna_r10.4.1_e8.2_400bps_sup@v5.2.0")
 
 
+def test_runtime_scientific_tools_are_version_bound(monkeypatch, tmp_path: Path) -> None:
+    module = _load_module()
+    lock = module.load_lock(LOCK)
+    responses = {
+        ("samtools", "--version"): "samtools 1.24\nUsing htslib 1.24\n",
+        ("samtools", "consensus", "--help"): "Usage: samtools consensus [options] <in.bam>\n",
+        ("modkit", "--version"): "modkit 0.6.4\n",
+        ("/opt/igv-reports/bin/pip", "show", "igv-reports"): "Name: igv-reports\nVersion: 1.16.3\n",
+        ("create_report", "--help"): "usage: create_report [options]\n",
+    }
+
+    def fake_run(command, **_kwargs):
+        key = tuple(command[3:])
+        return type("Completed", (), {"returncode": 0, "stdout": responses[key], "stderr": ""})()
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    evidence = module._verify_scientific_tools(tmp_path / "runtime.sif", lock)
+    assert evidence["consensus_method"]["identity"] == "samtools_1.24_bayesian_consensus"
+    assert evidence["samtools"]["output_sha256"]
+
+    responses[("modkit", "--version")] = "modkit 0.6.3\n"
+    with pytest.raises(ValueError, match="modkit version mismatch"):
+        module._verify_scientific_tools(tmp_path / "runtime.sif", lock)
+
+
 def test_real_dna_and_rna_fixtures_are_chemistry_qualified() -> None:
     module = _load_module()
     dna = _preflight(module, FIXTURES / "barcode")

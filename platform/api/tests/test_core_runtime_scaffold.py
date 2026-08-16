@@ -115,7 +115,7 @@ def test_compose_core_runtime_contract() -> None:
     assert api["environment"]["BMS_CORE_RUNTIME_MODE"] == "${BMS_CORE_RUNTIME_MODE:-1}"
     assert (
         api["environment"]["BMS_WORKFLOW_ADAPTER_URL"]
-        == "${BMS_WORKFLOW_ADAPTER_URL:-http://127.0.0.1:18001}"
+        == "${BMS_WORKFLOW_ADAPTER_URL:-http://127.0.0.1:18101}"
     )
     assert (
         api["environment"]["BMS_HOST_AGENT_URL"]
@@ -328,7 +328,8 @@ def test_core_runtime_env_example_documents_transition_knobs() -> None:
         "BMS_WEB_HOST_PORT=18080",
         "CORS_ORIGINS=http://127.0.0.1,http://127.0.0.1:18082,http://127.0.0.1:18080,http://localhost,https://localhost,http://localhost:18082,http://localhost:18080,https://localhost:18082,https://127.0.0.1",
         "BMS_CORE_RUNTIME_MODE=1",
-        "BMS_WORKFLOW_ADAPTER_URL=http://127.0.0.1:18001",
+        "BMS_WORKFLOW_ADAPTER_LANE=production",
+        "BMS_WORKFLOW_ADAPTER_URL=http://127.0.0.1:18101",
         "BMS_FEATURE_BIOXP=1",
         "BMS_BIOXP_MUTATIONS_ENABLED=0",
         "BMS_BIOXP_ALLOWED_HOSTS=robot",

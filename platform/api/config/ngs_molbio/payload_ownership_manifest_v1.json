@@ -1,0 +1,114 @@
+{
+  "classes": [
+    {
+      "active_authority": "Mol Bio store and governed Mol Bio artifacts",
+      "forbidden_global_payloads": [
+        "canonical_sequence_bytes",
+        "complete_molecular_document",
+        "complete_operation_payload"
+      ],
+      "payload_class": "molecular_sequence_document_construct_primer_pcr_operation",
+      "permitted_global_fields": [
+        "stable_id",
+        "revision",
+        "digest",
+        "byte_size",
+        "media_type",
+        "semantic_role",
+        "bounded_metadata"
+      ]
+    },
+    {
+      "active_authority": "NGS/MolBio domain store",
+      "forbidden_global_payloads": [
+        "complete_local_state_payload",
+        "complete_sample_payload",
+        "complete_evidence_wrapper"
+      ],
+      "payload_class": "local_scientific_state_sample_binding_evidence_assessment",
+      "permitted_global_fields": [
+        "stable_id",
+        "revision",
+        "generation",
+        "digest",
+        "lifecycle",
+        "semantic_role",
+        "bounded_metadata"
+      ]
+    },
+    {
+      "active_authority": "Core NGS/instrument store and governed NGS artifact roots",
+      "forbidden_global_payloads": [
+        "raw_signal_bytes",
+        "read_collection",
+        "alignment_payload",
+        "complete_ngs_manifest",
+        "complete_qc_report"
+      ],
+      "payload_class": "raw_signal_reads_alignments_ngs_manifests_qc_instrument_observations",
+      "permitted_global_fields": [
+        "stable_id",
+        "generation",
+        "digest",
+        "byte_size",
+        "media_type",
+        "lifecycle",
+        "bounded_metadata"
+      ]
+    },
+    {
+      "active_authority": "Global experiments.db Project/Experiment store",
+      "forbidden_global_payloads": [
+        "domain_native_scientific_payload",
+        "complete_domain_manifest",
+        "base64_scientific_payload"
+      ],
+      "payload_class": "project_membership_receipt_digest_lineage_eln",
+      "permitted_global_fields": [
+        "identity",
+        "revision",
+        "generation",
+        "digest",
+        "byte_size",
+        "media_type",
+        "lifecycle",
+        "semantic_role",
+        "bounded_metadata",
+        "canonical_route",
+        "eln_text"
+      ]
+    },
+    {
+      "active_authority": "Producer-native protein/CM/MD/Frustra stores and governed artifact roots",
+      "forbidden_global_payloads": [
+        "complete_structure",
+        "complete_ensemble",
+        "complete_trajectory",
+        "complete_landscape_grid",
+        "raw_model_metrics",
+        "complete_result_manifest"
+      ],
+      "payload_class": "protein_sequences_complexes_targets_structures_ensembles_trajectories_landscapes_metrics_manifests",
+      "permitted_global_fields": [
+        "stable_id",
+        "revision",
+        "generation",
+        "digest",
+        "byte_size",
+        "media_type",
+        "lifecycle",
+        "semantic_role",
+        "bounded_metadata",
+        "canonical_route"
+      ]
+    }
+  ],
+  "content_sha256": "aa8a8a9a88a807f0c5fc41c3f0d02d6ece03ccc46b6fed66ac04c6965cc54700",
+  "retained_audit_baseline_state": "missing",
+  "scanner_baseline_state": "missing",
+  "scanner_id": "bms.payload-ownership-scanner.v1",
+  "scanner_version": "1",
+  "schema": "bms.payload-ownership-manifest.v1",
+  "source_commit": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+  "source_tree": "f89094ba373e3dd8fa181fd17d942e54a6f0f63e"
+}

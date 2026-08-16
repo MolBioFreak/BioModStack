@@ -68,6 +68,31 @@ def test_complex_producer_boundary_emits_typed_manifest_without_adapter_inferenc
     assert "predicted.getName()" not in complex_helper
 
 
+def test_complex_producer_binding_preserves_nested_keys_across_nextflow_staging() -> None:
+    module = (REPO_ROOT / "modules" / "structure_prediction.nf").read_text(encoding="utf-8")
+    protenix = (REPO_ROOT / "modules" / "protenix.nf").read_text(encoding="utf-8")
+    complex_helper = module.split("def complexCanonicalProducerOutputs", 1)[1].split(
+        "// Generate MSA", 1
+    )[0]
+    protenix_process = protenix.split("process ProtenixFromComplex", 1)[1].split(
+        "process ", 1
+    )[0]
+
+    assert (
+        'tuple val(input_sample), path("producer_candidates.json"), '
+        'path("predictions/**/*.cif"), emit: canonical_structures, optional: true'
+    ) in protenix_process
+    assert "manifest.candidates.size() != predictedFiles.size()" in complex_helper
+    assert "(manifestNames as Set).size() != manifestNames.size()" in complex_helper
+    assert "ambiguous output filenames" in complex_helper
+    assert "binds one output more than once" in complex_helper
+    assert "boundKeys" in complex_helper
+    assert "record.producer_output_key.toString().tokenize('/')[-1] == stagedOutputName" in complex_helper
+    assert "record.producer_artifact_sha256 == artifactDigest" in complex_helper
+    assert "boundKeys != manifestKeys" in complex_helper
+    assert "predicted.baseName" not in complex_helper
+
+
 def test_complex_producer_coordinates_are_explicit_typed_and_preserved(tmp_path: Path) -> None:
     module = _prepare_module()
     source = tmp_path / "candidate_sample_0.cif"
@@ -126,7 +151,7 @@ def test_complex_producer_coordinates_are_explicit_typed_and_preserved(tmp_path:
         module._decode_metadata(encoded_fabricated, source=source)
 
 
-def _minimal_mmcif() -> bytes:
+def _minimal_mmcif(*, include_dna: bool = False) -> bytes:
     columns = [
         "group_PDB", "id", "type_symbol", "label_atom_id", "label_alt_id",
         "label_comp_id", "label_asym_id", "label_entity_id", "label_seq_id",
@@ -142,8 +167,58 @@ def _minimal_mmcif() -> bytes:
             "1", "GLY", "A", atom, "1",
         ]
         lines.append(" ".join(row) + "\n")
+    if include_dna:
+        for atom_id, (atom, element) in enumerate(
+            (("P", "P"), ("OP1", "O"), ("OP2", "O"), ("O5P", "O")),
+            5,
+        ):
+            row = [
+                "ATOM", str(atom_id), element, atom, ".", "DA", "B", "2", "1", "?",
+                str(atom_id), str(atom_id + 1), str(atom_id + 2), "1.0", "20.0",
+                "1", "DA", "B", atom, "1",
+            ]
+            lines.append(" ".join(row) + "\n")
     lines.append("#\n")
     return "".join(lines).encode("utf-8")
+
+
+@pytest.mark.parametrize("suffix", [".cif", ".mmcif"])
+def test_complex_metadata_accepts_mixed_protein_dna_mmcif_aliases_and_rejects_pdb_claim(
+    tmp_path: Path,
+    suffix: str,
+) -> None:
+    module = _prepare_module()
+    source = tmp_path / f"candidate_sample_0{suffix}"
+    source.write_bytes(_minimal_mmcif(include_dna=True))
+    source_sha = __import__("hashlib").sha256(source.read_bytes()).hexdigest()
+    identity = {
+        "producer_method": "protenix",
+        "producer_sample": "batch-a",
+        "producer_rank": 0,
+        "producer_output_key": f"batch-a/candidate_sample_0{suffix}",
+    }
+    metadata = {
+        "parent_job_id": "job-complex-1",
+        "parent_workflow_id": "complex_prediction",
+        "producer_stage": "complex_prediction:protenix:protein_only",
+        "producer_candidate_key": "frustrampnn/sources/protenix/candidate.pdb",
+        **identity,
+        "producer_identity_sha256": module.producer_identity_sha256(identity),
+        "producer_artifact_sha256": source_sha,
+        "source_format": "mmcif",
+        "requiredness": "required",
+        "checkpoint_id": "megascale.ckpt",
+    }
+
+    def decode(candidate: dict[str, object]) -> dict[str, object]:
+        encoded = base64.b64encode(
+            json.dumps(candidate, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).decode("ascii")
+        return module._decode_metadata(encoded, source=source)
+
+    assert decode(metadata)["source_format"] == "mmcif"
+    with pytest.raises(ValueError, match="source_format"):
+        decode(dict(metadata, source_format="pdb"))
 
 
 def test_complex_request_preserves_original_producer_provenance_and_binding(tmp_path: Path) -> None:
@@ -298,8 +373,9 @@ def test_complex_module_exposes_typed_canonical_candidate_channel() -> None:
 def test_complex_prediction_uses_one_canonical_component_for_actual_candidates() -> None:
     workflow = _workflow()
 
-    assert "include { CanonicalFrustraMPNN } from '../modules/frustrampnn.nf'" in workflow
-    assert workflow.count("CanonicalFrustraMPNN(") == 1
+    assert "include { CanonicalFrustraMPNNV2 } from '../modules/frustrampnn.nf'" in workflow
+    assert workflow.count("CanonicalFrustraMPNNV2(") == 1
+    assert "CanonicalFrustraMPNN(" not in workflow
     assert "FrustrampnnQC" not in workflow
     assert "AggregateFrustrationReports" not in workflow
     assert "placeholder.pdb" not in workflow
@@ -307,7 +383,7 @@ def test_complex_prediction_uses_one_canonical_component_for_actual_candidates()
     assert "complex_prediction_wf.out.structures.flatten()" in workflow
     assert "PrepareComplexPredictionFrustraMPNNCandidate" in workflow
     assert "MaterializeComplexPredictionFrustraMPNNCandidate" in workflow
-    assert "CanonicalFrustraMPNN.out.result" in workflow
+    assert "CanonicalFrustraMPNNV2.out.result" in workflow
     assert re.search(r"emit:\s+structures\s+frustrampnn_results", workflow)
 
 
@@ -345,8 +421,43 @@ def test_complex_candidate_preparation_materializes_exact_pdb_before_component()
     assert "path('prepared_source.pdb')" in prepare_block
     assert "path('prepared_request.json')" in prepare_block
     assert "canonical_source.pdb" in materialize_block
-    assert "workflow_component_request_v1.json" in materialize_block
-    assert "CanonicalFrustraMPNN(MaterializeComplexPredictionFrustraMPNNCandidate.out.prepared)" in workflow
+    assert "workflow_component_request_v2.json" in materialize_block
+    assert "frustrampnn_structure_map_v1.json" in materialize_block
+    assert "workflow_component_request_v1.json" not in materialize_block
+    assert "CanonicalFrustraMPNNV2(MaterializeComplexPredictionFrustraMPNNCandidate.out.prepared)" in workflow
+
+
+def test_complex_prediction_transports_complete_bounded_typed_v2_settings() -> None:
+    workflow = _workflow()
+    prepare_block = workflow.split("process PrepareComplexPredictionFrustraMPNNCandidate", 1)[1]
+    prepare_block = prepare_block.split("process MaterializeComplexPredictionFrustraMPNNCandidate", 1)[0]
+    enabled = workflow.split("if (params.run_frustrampnn == true)", 1)[1].split("} else {", 1)[0]
+
+    assert "FRUSTRAMPNN_SETTINGS_MAX_BYTES" in workflow
+    assert "requireCompleteFrustraMPNNSettings" in workflow
+    assert "frustrampnn_settings_value_origin" in enabled
+    assert "canonicalJsonBytes(rawSettings)" in enabled
+    assert "Arrays.equals(settingsBytes, canonicalSettingsBytes)" in enabled
+    assert "--request-version 2" in prepare_block
+    assert "--structure-map prepared_structure_map.json" in prepare_block
+    assert "--settings-base64" in prepare_block
+    assert "--settings-sha256" in prepare_block
+    assert "--settings-value-origin" in prepare_block
+
+
+def test_complex_prediction_reports_closed_v2_publication_marker_before_completion() -> None:
+    workflow = _workflow()
+    reporter = workflow.split("process ReportComplexPredictionFrustraMPNNComplete", 1)[1]
+    reporter = reporter.split("workflow COMPLEX_PREDICTION", 1)[0]
+
+    validator_index = reporter.index("validate_frustrampnn_publication_markers.py")
+    stage_reporter_index = reporter.index("stage_reporter.py")
+    assert validator_index < stage_reporter_index
+    assert "stageInMode 'copy'" in reporter
+    assert "--job-root '${params.out_dir}'" in reporter
+    assert "published_*.json" in reporter
+    assert "json.loads" not in reporter
+    assert "set(payload)" not in reporter
 
 
 def test_complex_prediction_reports_terminal_states_and_protein_only_scope() -> None:

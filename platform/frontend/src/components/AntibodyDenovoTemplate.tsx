@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { submitJob, uploadFile, extractChain, annotateFrameworkCdrs, downloadSabdabFramework, launchAntibodyIteration, launchManualMutagenesis, previewBoltzGenDesignSpec, type BoltzGenPreviewResponse, type CDRAnnotationResponse, type RfScreeningScope } from '../lib/api';
+import { completeCurrentLaunchContext, submitJob, uploadFile, extractChain, annotateFrameworkCdrs, downloadSabdabFramework, launchAntibodyIteration, launchManualMutagenesis, previewBoltzGenDesignSpec, type BoltzGenPreviewResponse, type CDRAnnotationResponse, type RfScreeningScope } from '../lib/api';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { getModelByNumber, parsePDBFile, type Chain, type ParsedPDB } from '../utils/pdbUtils';
 import { EpitopeSelector } from './EpitopeSelector';
@@ -44,6 +44,11 @@ import {
     applyModelIntegrationDefault,
     createModelIntegrationSelection,
 } from './modelIntegrationControlState';
+import { FrustraMpnnSettingsPanel } from './frustrampnn/FrustraMpnnSettingsPanel.js';
+import {
+    buildFrustraMpnnLaunchParams,
+    hydrateFrustraMpnnSettings,
+} from './frustrampnn/frustraMpnnSettingsState.js';
 
 interface AntibodyDenovoTemplateProps {
     onBack: () => void;
@@ -379,6 +384,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const initialFrustrampnnSelection = createModelIntegrationSelection(initialValues?.run_frustrampnn, false);
     const frustrampnnSelectionRef = useRef(initialFrustrampnnSelection);
     const [runFrustrampnn, setRunFrustrampnn] = useState(initialFrustrampnnSelection.value);
+    const [frustrampnnSettings, setFrustrampnnSettings] = useState(() => (
+        hydrateFrustraMpnnSettings(initialValues?.frustrampnn_settings)
+    ));
     const configuredFrustrampnnDefault = frustrampnnIntegrationQuery.data?.workflows?.antibody_design?.default_enabled;
     useEffect(() => {
         const previous = frustrampnnSelectionRef.current;
@@ -972,10 +980,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
     const submitMutation = useMutation({
         mutationFn: async (data: UntypedApiValue) => submitJob(data),
-        onSuccess: () => {
+        onSuccess: async (response) => {
             clearAntibodyRefinementLaunchState();
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
-            navigate('/');
+            navigate(await completeCurrentLaunchContext(response.data) ?? '/');
         }
     });
 
@@ -999,10 +1007,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
     const launchMutagenesisMutation = useMutation({
         mutationFn: async (data: UntypedApiValue) => launchManualMutagenesis(data),
-        onSuccess: () => {
+        onSuccess: async (response) => {
             clearAntibodyRefinementLaunchState();
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
-            navigate('/');
+            navigate(await completeCurrentLaunchContext(response.data) ?? '/');
         },
     });
 
@@ -1310,6 +1318,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             if (initialValues.run_thermompnn !== undefined) setUseThermoMPNN(initialValues.run_thermompnn);
             else if (initialValues.run_stability_scoring !== undefined) setUseThermoMPNN(initialValues.run_stability_scoring);
             if (typeof initialValues.run_frustrampnn === 'boolean') updateRunFrustrampnn(initialValues.run_frustrampnn);
+            if (initialValues.frustrampnn_settings !== undefined) {
+                setFrustrampnnSettings(hydrateFrustraMpnnSettings(initialValues.frustrampnn_settings));
+            }
             if (initialValues.run_structure_validation !== undefined) setRunStructureValidation(initialValues.run_structure_validation !== false);
             if (initialValues.run_anarcii_post !== undefined) setRunAnarciiPost(initialValues.run_anarcii_post);
             if (initialValues.anarcii_include_children !== undefined) setAnarciiIncludeChildren(initialValues.anarcii_include_children);
@@ -1878,7 +1889,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     run_stability_scoring: effectiveUseThermoMPNN,
                     run_structure_validation: effectiveRunStructureValidation,
                     structure_validator: structureValidator,
-                    run_frustrampnn: effectiveRunFrustrampnn,
+                    ...buildFrustraMpnnLaunchParams(effectiveRunFrustrampnn, frustrampnnSettings),
                     run_anarcii_post: effectiveRunAnarciiPost,
                     anarcii_include_children: anarciiIncludeChildren,
                     interactive_swa: interactiveWorkflow,
@@ -2112,7 +2123,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             return;
                         }
 
-                        await launchAntibodyIteration({
+                        const response = await launchAntibodyIteration({
                             source_job_id: refinementParentJobId,
                             action: mutagenesisLaunchMode === 'seeded_refinement' ? 'mutation_seeded_refinement' : 'cdr_indel_round',
                             design_ids: refinementDesignIds ?? [],
@@ -2122,7 +2133,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         });
                         clearAntibodyRefinementLaunchState();
                         queryClient.invalidateQueries({ queryKey: ['jobs'] });
-                        navigate('/');
+                        navigate(await completeCurrentLaunchContext(response.data) ?? '/');
                         return;
                     }
 
@@ -2136,7 +2147,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     }
 
                     if (mutagenesisLaunchMode === 'seeded_refinement') {
-                        await launchAntibodyIteration({
+                        const response = await launchAntibodyIteration({
                             source_job_id: refinementParentJobId,
                             action: 'mutation_seeded_refinement',
                             design_ids: refinementDesignIds ?? [],
@@ -2151,7 +2162,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         });
                         clearAntibodyRefinementLaunchState();
                         queryClient.invalidateQueries({ queryKey: ['jobs'] });
-                        navigate('/');
+                        navigate(await completeCurrentLaunchContext(response.data) ?? '/');
                         return;
                     }
 
@@ -2170,7 +2181,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     return;
                 }
 
-                await launchAntibodyIteration({
+                const response = await launchAntibodyIteration({
                     source_job_id: refinementParentJobId,
                     action: 'ui_refinement',
                     design_ids: refinementDesignIds ?? [],
@@ -2179,7 +2190,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 });
                 clearAntibodyRefinementLaunchState();
                 queryClient.invalidateQueries({ queryKey: ['jobs'] });
-                navigate('/');
+                navigate(await completeCurrentLaunchContext(response.data) ?? '/');
                 return;
             }
 
@@ -2319,6 +2330,13 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             </div>
         </div>
     ) : null;
+
+    const frustrampnnSettingsControl = (
+        <FrustraMpnnSettingsPanel
+            value={frustrampnnSettings}
+            onChange={setFrustrampnnSettings}
+        />
+    );
 
     return (
         <div className="bg-slate-800/30 border border-slate-700 rounded-xl p-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -2675,6 +2693,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                 }}
                                 fallbackLabel="Frustration analysis"
                                 integration={frustrampnnIntegrationQuery.data}
+                                settingsControl={frustrampnnSettingsControl}
                             />
                         </div>
                     </div>
@@ -4815,7 +4834,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     )}
 
                     {/* Globally configured frustration analysis */}
-                    {showQcPanels && (
+                    {!isRefinementMode && showQcPanels && (
                     <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4">
                         <ModelIntegrationControl
                             modelId="frustrampnn"
@@ -4824,6 +4843,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             onChange={updateRunFrustrampnn}
                             fallbackLabel="Frustration analysis"
                             integration={frustrampnnIntegrationQuery.data}
+                            settingsControl={frustrampnnSettingsControl}
                         />
                     </div>
                     )}
@@ -5389,6 +5409,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         if (typeof p.run_thermompnn === 'boolean') { setUseThermoMPNN(p.run_thermompnn); loaded.push('run_thermompnn'); }
                         else if (typeof p.run_stability_scoring === 'boolean') { setUseThermoMPNN(p.run_stability_scoring); loaded.push('run_stability_scoring'); }
                         if (typeof p.run_frustrampnn === 'boolean') { updateRunFrustrampnn(p.run_frustrampnn); loaded.push('run_frustrampnn'); }
+                        if (p.frustrampnn_settings !== undefined) {
+                            setFrustrampnnSettings(hydrateFrustraMpnnSettings(p.frustrampnn_settings));
+                            loaded.push('frustrampnn_settings');
+                        }
                         if (typeof p.run_structure_validation === 'boolean') { setRunStructureValidation(p.run_structure_validation); loaded.push('run_structure_validation'); }
                         if (typeof p.run_anarcii_post === 'boolean') { setRunAnarciiPost(p.run_anarcii_post); loaded.push('run_anarcii_post'); }
                         if (typeof p.anarcii_include_children === 'boolean') { setAnarciiIncludeChildren(p.anarcii_include_children); loaded.push('anarcii_include_children'); }
@@ -5648,7 +5672,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     ppiflow_objective_threshold: qualitySettings.ppiflow_objective_threshold,
                     run_post_validation_maturation: false,
                     run_post_boltz_maturation: false,
-                    run_frustrampnn: runFrustrampnn,
+                    ...buildFrustraMpnnLaunchParams(runFrustrampnn, frustrampnnSettings),
                     run_anarcii_post: runAnarciiPost,
                     anarcii_include_children: anarciiIncludeChildren,
                     interactive_swa: interactiveWorkflow,

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 MANIFEST_SCHEMA_VERSION = 2
-REFERENCE_COPY_FALLBACK_NOTE = "reference-copy fallback consensus is not verified"
+CONSENSUS_METHOD = "samtools_1.24_bayesian_consensus"
 
 
 def _sha256_file(path: Path) -> str:
@@ -36,13 +36,14 @@ class ArtifactSpec:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build qc_manifest.json for FASTQ plasmid QC")
     parser.add_argument("--out", required=True, type=Path)
-    parser.add_argument("--job-id", required=False, default="unknown")
+    parser.add_argument("--job-id", required=True)
+    parser.add_argument("--workflow-id", required=True)
+    parser.add_argument("--input-mode", required=True)
     parser.add_argument("--sample-name", required=False, default=None)
     parser.add_argument("--reference-fasta", required=True, type=Path)
     parser.add_argument(
         "--expected-sha256",
-        required=False,
-        default=None,
+        required=True,
         help="Expected reference SHA-256 from upstream provenance; never inferred from the observed file",
     )
     parser.add_argument("--summary", required=False, type=Path)
@@ -140,22 +141,17 @@ def _artifact_payload(spec: ArtifactSpec, manifest_dir: Path) -> dict[str, Any] 
 
 def _consensus_method(status: str) -> str:
     normalized = status.strip().lower()
-    if normalized == "ok":
-        return "samtools_consensus"
-    if normalized == "pileup_majority_fallback":
-        return "mpileup_majority_fallback"
-    if normalized == "reference_copy_fallback":
-        return "reference_copy_fallback"
-    return normalized or "not_run"
+    if normalized in {"ok", "samtools_consensus", CONSENSUS_METHOD}:
+        return CONSENSUS_METHOD
+    if "fallback" in normalized:
+        raise ValueError("consensus fallback status labels are forbidden")
+    raise ValueError(
+        f"unsupported consensus method/status {status!r}; "
+        f"required method is {CONSENSUS_METHOD}"
+    )
 
 
 def _interpretation_for_status(status: str) -> dict[str, Any]:
-    normalized = status.strip().lower()
-    if normalized == "reference_copy_fallback":
-        return {
-            "verified_construct_status": "fail",
-            "notes": [REFERENCE_COPY_FALLBACK_NOTE],
-        }
     return {
         "verified_construct_status": "review_required",
         "notes": ["sequence-QC evidence generated; construct verification requires review"],
@@ -202,22 +198,30 @@ def build_manifest(
     consensus_fasta: Path | None,
     consensus_status: str,
     artifacts: Iterable[ArtifactSpec],
-    expected_sha256: str | None = None,
+    expected_sha256: str,
+    workflow_id: str = "ont_fastq_qc",
+    input_mode: str = "fastq",
     workflow_status: str | None = None,
     verification_status: str | None = None,
     verification_reason_codes: Iterable[str] = (),
 ) -> dict[str, Any]:
+    normalized_job_id = str(job_id or "").strip()
+    if not normalized_job_id or normalized_job_id.lower() == "unknown":
+        raise ValueError("sequence-QC manifest requires an exact non-placeholder job identity")
+    normalized_workflow_id = str(workflow_id or "").strip()
+    normalized_input_mode = str(input_mode or "").strip()
+    if not normalized_workflow_id or not normalized_input_mode:
+        raise ValueError("sequence-QC manifest requires workflow_id and input_mode")
     manifest_dir = out.parent.resolve()
     manifest_dir.mkdir(parents=True, exist_ok=True)
     ref_name, ref_seq = read_first_fasta_record(reference_fasta)
-    expected_sequence_sha256 = hashlib.sha256(ref_seq.encode("ascii")).hexdigest()
-    normalized_provided_expected_sha256: str | None = None
-    if expected_sha256 is not None:
-        normalized_provided_expected_sha256 = str(expected_sha256).strip().lower()
-        if re.fullmatch(r"[0-9a-f]{64}", normalized_provided_expected_sha256) is None:
-            raise ValueError("expected_sha256 must be a 64-character hexadecimal SHA-256 digest")
-        if normalized_provided_expected_sha256 != expected_sequence_sha256:
-            raise ValueError("expected_sha256 does not match the normalized expected reference sequence")
+    observed_reference_sha256 = hashlib.sha256(ref_seq.encode("ascii")).hexdigest()
+    normalized_provided_expected_sha256 = str(expected_sha256).strip().lower()
+    if re.fullmatch(r"[0-9a-f]{64}", normalized_provided_expected_sha256) is None:
+        raise ValueError("expected_sha256 must be a 64-character hexadecimal SHA-256 digest")
+    if normalized_provided_expected_sha256 != observed_reference_sha256:
+        raise ValueError("expected_sha256 does not match the normalized expected reference sequence")
+    expected_sequence_sha256 = normalized_provided_expected_sha256
     reference_source_sha256 = hashlib.sha256(reference_fasta.read_bytes()).hexdigest()
     consensus_name = None
     consensus_length = None
@@ -228,8 +232,6 @@ def build_manifest(
         observed_sequence_sha256 = hashlib.sha256(consensus_seq.encode("ascii")).hexdigest()
 
     method = _consensus_method(consensus_status)
-    if method == "reference_copy_fallback":
-        raise ValueError("reference_copy_fallback is forbidden: observed consensus must be derived from reads")
     normalized_workflow_status, normalized_verification_status, normalized_reason_codes = _status_contract(
         observed_sequence_sha256=observed_sequence_sha256,
         workflow_status=workflow_status,
@@ -237,9 +239,13 @@ def build_manifest(
         verification_reason_codes=verification_reason_codes,
     )
     payload: dict[str, Any] = {
+        "schema": "sequence_qc.manifest.v1",
         "artifact_schema_version": MANIFEST_SCHEMA_VERSION,
-        "job_id": str(job_id or "unknown"),
-        "sample_name": sample_name or str(job_id or "unknown"),
+        "workflow_id": normalized_workflow_id,
+        "job_id": normalized_job_id,
+        "input_mode": normalized_input_mode,
+        "analysis_status": normalized_workflow_status,
+        "sample_name": sample_name or normalized_job_id,
         "workflow_status": normalized_workflow_status,
         "verification_status": normalized_verification_status,
         "verification_reason_codes": normalized_reason_codes,
@@ -298,6 +304,9 @@ def build_manifest(
         if artifact is not None:
             payload["artifacts"].append(artifact)
 
+    payload["manifest_sha256"] = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
     out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return payload
 
@@ -320,8 +329,8 @@ def artifact_specs_from_args(args: argparse.Namespace) -> list[ArtifactSpec]:
         ("alignment_stats", args.alignment_stats, False),
         ("coverage", args.coverage, False),
         ("per_base_support", args.per_base_support, True),
-        ("consensus", args.consensus, False),
-        ("consensus_index", args.consensus_index, False),
+        ("consensus", args.consensus, True),
+        ("consensus_index", args.consensus_index, True),
         ("consensus_log", args.consensus_log, False),
         ("alignment_bam", args.alignment_bam, False),
         ("alignment_bai", args.alignment_bai, False),
@@ -335,21 +344,17 @@ def artifact_specs_from_args(args: argparse.Namespace) -> list[ArtifactSpec]:
         ("igv_report_sites_bed", args.igv_report_sites_bed, False),
         ("igv_report_sites_tsv", args.igv_report_sites_tsv, False),
         ("igv_track_config", args.igv_track_config, False),
-        ("igv_report", args.igv_report, False),
+        ("igv_report", args.igv_report, True),
         ("log", args.igv_report_log, False),
         ("log", args.log, False),
     ]
     for kind, path, required in maybe_specs:
         if path is not None:
-            missing_reason = None
-            if kind == "consensus" and str(args.consensus_status).strip().lower() == "unavailable":
-                missing_reason = "Unable to derive observed consensus from aligned reads"
             specs.append(
                 ArtifactSpec(
                     kind,
                     path,
                     required,
-                    unavailable_reason=missing_reason,
                 )
             )
     return specs
@@ -360,6 +365,8 @@ def main() -> int:
     build_manifest(
         out=args.out,
         job_id=args.job_id,
+        workflow_id=args.workflow_id,
+        input_mode=args.input_mode,
         sample_name=args.sample_name,
         reference_fasta=args.reference_fasta,
         consensus_fasta=args.consensus,

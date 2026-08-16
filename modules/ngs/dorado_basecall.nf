@@ -263,20 +263,29 @@ process DoradoDemux {
     dorado demux --no-classify --output-dir demux ${doradoShellQuote(bam)} > demux.log 2>&1
     shopt -s globstar nullglob
     declare -A alias_to_barcode=()
+    declare -A barcode_to_alias=()
     while IFS=\$'\t' read -r alias canonical_barcode; do
-      [[ -n "\${alias}" && -n "\${canonical_barcode}" ]] && alias_to_barcode["\${alias}"]="\${canonical_barcode}"
+      if [[ -n "\${alias}" && -n "\${canonical_barcode}" ]]; then
+        alias_to_barcode["\${alias}"]="\${canonical_barcode}"
+        barcode_to_alias["\${canonical_barcode}"]="\${alias}"
+      fi
     done < <(jq -r '.barcoding.sample_sheet.assignments[]? | [.alias,.barcode] | @tsv' ${doradoShellQuote(preflight_json)})
+    is_canonical_label() {
+      local value="\$1"
+      [[ "\${value}" == 'unclassified' || "\${value}" =~ ^barcode(0[1-9]|[1-8][0-9]|9[0-6])\$ ]]
+    }
     canonical_label() {
-      local candidate="\$1" segment stem
-      if [[ "/\${candidate}/" =~ /(barcode[0-9]+|unclassified)/ ]]; then printf '%s\n' "\${BASH_REMATCH[1]}"; return; fi
-      IFS='/' read -r -a segments <<<"\${candidate}"
-      for segment in "\${segments[@]}"; do
-        if [[ -n "\${alias_to_barcode[\${segment}]:-}" ]]; then printf '%s\n' "\${alias_to_barcode[\${segment}]}"; return; fi
-        stem="\${segment%.bam}"
-        if [[ "\${stem}" =~ ^(barcode[0-9]+|unclassified)\$ ]]; then printf '%s\n' "\${BASH_REMATCH[1]}"; return; fi
-        if [[ -n "\${alias_to_barcode[\${stem}]:-}" ]]; then printf '%s\n' "\${alias_to_barcode[\${stem}]}"; return; fi
+      local candidate="\$1" filename stem mapped
+      filename="\${candidate##*/}"
+      stem="\${filename%.bam}"
+      for segment in "\${filename}" "\${stem}"; do
+        if is_canonical_label "\${segment}"; then printf '%s\n' "\${segment}"; return 0; fi
+        if is_canonical_label "\${stem}"; then printf '%s\n' "\${stem}"; return 0; fi
+        mapped="\${alias_to_barcode[\${segment}]:-}"
+        if is_canonical_label "\${mapped}"; then printf '%s\n' "\${mapped}"; return 0; fi
       done
-      printf '%s\n' unclassified
+      echo "CRITICAL_FAILURE: UNKNOWN_DEMUX_LABEL candidate=\${candidate}" >&2
+      return 1
     }
     source_bams=(demux/**/*.bam)
     if (( \${#source_bams[@]} == 0 )); then echo 'Dorado demux emitted no BAM units' >&2; exit 1; fi
@@ -284,7 +293,11 @@ process DoradoDemux {
     for source_bam in "\${source_bams[@]}"; do
       [[ -L "\${source_bam}" ]] && { echo 'demux symlink forbidden' >&2; exit 1; }
       samtools quickcheck -u -v "\${source_bam}"
-      labels+=("\$(canonical_label "\${source_bam}")")
+      if ! source_label="\$(canonical_label "\${source_bam}")"; then
+        echo "CRITICAL_FAILURE: UNKNOWN_DEMUX_LABEL" >&2
+        exit 86
+      fi
+      labels+=("\${source_label}")
     done
     mapfile -t labels < <(printf '%s\n' "\${labels[@]}" | sort -u)
     source_calls_sha="\$(sha256sum ${doradoShellQuote(bam)} | cut -d' ' -f1)"
@@ -295,17 +308,21 @@ process DoradoDemux {
     for label in "\${labels[@]}"; do
       label_bams=()
       for source_bam in "\${source_bams[@]}"; do
-        source_label="\$(canonical_label "\${source_bam}")"
+        if ! source_label="\$(canonical_label "\${source_bam}")"; then
+          echo "CRITICAL_FAILURE: UNKNOWN_DEMUX_LABEL" >&2
+          exit 86
+        fi
         [[ "\${source_label}" == "\${label}" ]] && label_bams+=("\${source_bam}")
       done
       unit_bam="demux/units/\${label}.bam"
       if (( \${#label_bams[@]} == 1 )); then cp "\${label_bams[0]}" "\${unit_bam}"; else samtools merge -u -f "\${unit_bam}" "\${label_bams[@]}"; fi
       samtools quickcheck -u -v "\${unit_bam}"
       reads="\$(samtools view -c "\${unit_bam}")"; sha="\$(sha256sum "\${unit_bam}" | cut -d' ' -f1)"
+      sample_alias="\${barcode_to_alias[\${label}]:-}"
       unit_manifest="demux/manifests/\${label}.json"
-      jq -n --arg schema 'biomodstack.dorado_barcode_unit.v1' --arg unit_id "\${label}" --arg bam_path "\${unit_bam}" --arg bam_sha256 "\${sha}" --arg source_calls_sha256 "\${source_calls_sha}" --arg preflight_sha256 "\${preflight_sha}" --argjson read_count "\${reads}" '{schema:\$schema,unit_id:\$unit_id,bam_path:\$bam_path,bam_sha256:\$bam_sha256,read_count:\$read_count,source_calls_sha256:\$source_calls_sha256,preflight_sha256:\$preflight_sha256}' > "\${unit_manifest}"
+      jq -n --arg schema 'biomodstack.dorado_barcode_unit.v1' --arg unit_id "\${label}" --arg sample_alias "\${sample_alias}" --arg bam_path "\${unit_bam}" --arg bam_sha256 "\${sha}" --arg source_calls_sha256 "\${source_calls_sha}" --arg preflight_sha256 "\${preflight_sha}" --argjson read_count "\${reads}" '{schema:\$schema,unit_id:\$unit_id,sample_alias:(if \$sample_alias == "" then null else \$sample_alias end),bam_path:\$bam_path,bam_sha256:\$bam_sha256,read_count:\$read_count,source_calls_sha256:\$source_calls_sha256,preflight_sha256:\$preflight_sha256}' > "\${unit_manifest}"
       unit_manifest_sha="\$(sha256sum "\${unit_manifest}" | cut -d' ' -f1)"
-      item="\$(jq -n --arg unit_id "\${label}" --arg bam_path "\${unit_bam}" --arg bam_sha256 "\${sha}" --arg unit_manifest_path "\${unit_manifest}" --arg unit_manifest_sha256 "\${unit_manifest_sha}" --arg source_calls_sha256 "\${source_calls_sha}" --arg preflight_sha256 "\${preflight_sha}" --argjson read_count "\${reads}" '{unit_id:\$unit_id,bam_path:\$bam_path,bam_sha256:\$bam_sha256,unit_manifest_path:\$unit_manifest_path,unit_manifest_sha256:\$unit_manifest_sha256,read_count:\$read_count,source_calls_sha256:\$source_calls_sha256,preflight_sha256:\$preflight_sha256,resubmission_params:{bam_path:\$bam_path,barcode_unit:\$unit_id}}')"
+      item="\$(jq -n --arg unit_id "\${label}" --arg sample_alias "\${sample_alias}" --arg bam_path "\${unit_bam}" --arg bam_sha256 "\${sha}" --arg unit_manifest_path "\${unit_manifest}" --arg unit_manifest_sha256 "\${unit_manifest_sha}" --arg source_calls_sha256 "\${source_calls_sha}" --arg preflight_sha256 "\${preflight_sha}" --argjson read_count "\${reads}" '{unit_id:\$unit_id,sample_alias:(if \$sample_alias == "" then null else \$sample_alias end),bam_path:\$bam_path,bam_sha256:\$bam_sha256,unit_manifest_path:\$unit_manifest_path,unit_manifest_sha256:\$unit_manifest_sha256,read_count:\$read_count,source_calls_sha256:\$source_calls_sha256,preflight_sha256:\$preflight_sha256,resubmission_params:{bam_path:\$bam_path,barcode_unit:\$unit_id,sample_alias:(if \$sample_alias == "" then null else \$sample_alias end)}}')"
       units="\$(jq --argjson item "\${item}" '. + [\$item]' <<<"\${units}")"; total=\$((total + reads))
     done
     (( total == source_read_count )) || { echo "demux read-count parity failed: source=\${source_read_count} units=\${total}" >&2; exit 1; }

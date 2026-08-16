@@ -60,8 +60,9 @@ test('CM result shell uses the shared workbench with an explicit fullscreen canv
     assert.match(viewer, /data-cm-viewer-fullscreen/);
     assert.match(viewer, /requestFullscreen\(\)/);
     assert.match(viewer, /height="100%"/);
-    assert.match(viewer, /showMetricWorkbench=\{metricWorkbenchOpen\}/);
-    assert.match(viewer, /showSequenceTrack=\{metricWorkbenchOpen\}/);
+    assert.match(viewer, /showMetricWorkbench=\{false\}/);
+    assert.match(viewer, /showSequenceTrack=\{false\}/);
+    assert.match(viewer, /<FrustraWorkbench/);
     assert.match(viewer, /Structural hypotheses in API order/);
     assert.match(viewer, /Compare as structural overlay/);
     assert.match(viewer, /firstAlternative/);
@@ -80,9 +81,21 @@ test('downloads use content-addressed CM request-scoped API identities', () => {
 test('launcher exposes state-conditioned FrustraMPNN comparison as an explicit typed payload option', () => {
     const launcher = source('conformationalMapping/ConformationalMappingLauncher.tsx');
     const api = source('conformationalMapping/conformationalMappingApi.ts');
-    assert.match(launcher, /State-conditioned FrustraMPNN comparison target/);
+    assert.match(launcher, /State-landscape comparison/);
     assert.match(launcher, /payload\.state_landscape_comparison/);
     assert.match(api, /state_landscape_comparison\?:/);
+});
+
+test('launcher uses the shared global FrustraMPNN settings plane and fails closed on configuration', () => {
+    const launcher = source('conformationalMapping/ConformationalMappingLauncher.tsx');
+    const api = source('conformationalMapping/conformationalMappingApi.ts');
+    assert.match(launcher, /FrustraMpnnSettingsPanel/);
+    assert.match(launcher, /useModelIntegrationConfig\(/);
+    assert.match(launcher, /workflows\?\.conformational_mapping/);
+    assert.match(launcher, /frustrampnnConfigurationReady/);
+    assert.match(launcher, /frustrampnn_settings: form\.frustrampnnSettings/);
+    assert.match(launcher, /hydrateFrustraMpnnSettings/);
+    assert.match(api, /frustrampnn_settings: FrustraMpnnRequestedSettings/);
 });
 
 test('launcher can register a pasted canonical protein sequence into the existing immutable source registry', () => {
@@ -94,8 +107,9 @@ test('launcher can register a pasted canonical protein sequence into the existin
     assert.match(launcher, /source_kind === 'protein_sequence'/);
     assert.match(launcher, /update\('sequenceId', source\.source_id\)/);
     assert.match(launcher, /RCSB PDB tie-in/);
-    assert.match(launcher, /registerCmRcsbMmcif/);
-    assert.match(launcher, /Register raw mmCIF/);
+    assert.match(launcher, /Search RCSB/);
+    assert.match(launcher, /Register selected RCSB mmCIF/);
+    assert.match(launcher, /searchCmRcsb/);
     assert.match(api, /registerCmRcsbMmcif/);
     assert.match(api, /sources\/rcsb/);
 });
@@ -115,4 +129,93 @@ test('normal external import is mmCIF-only with server-derived snapshot authorit
         /if \(form\.backend === 'external_import'\) \{\s*payload\.registered_snapshot_id/,
     );
     assert.doesNotMatch(launcher, /form\.snapshotId\) errors\.push\('Select the matching ordered complete-complex snapshot bundle/);
+});
+
+test('template makes Protenix-only controls conditional on the selected backend', () => {
+    const template = readFileSync(resolve(process.cwd(), '../api/config/templates/conformational_mapping.yaml'), 'utf8');
+    const paramBlock = (name: string): string => {
+        const start = template.indexOf(`  - name: ${name}\n`);
+        assert.notEqual(start, -1, `missing template parameter ${name}`);
+        const next = template.indexOf('\n  - name: ', start + 1);
+        return template.slice(start, next === -1 ? undefined : next);
+    };
+
+    for (const name of ['ordered_seeds', 'samples_per_seed', 'feature_policy', 'runtime_policy']) {
+        const block = paramBlock(name);
+        assert.match(block, /condition:\s*\n\s+param: backend\s*\n\s+values: \[protenix_v2_ensemble\]/);
+    }
+});
+
+test('server-owned policy and singular external artifact contracts stay out of editable launcher state', () => {
+    const launcher = source('conformationalMapping/ConformationalMappingLauncher.tsx');
+    const state = source('jobSubmissionTemplateState.ts');
+    const template = readFileSync(resolve(process.cwd(), '../api/config/templates/conformational_mapping.yaml'), 'utf8');
+    assert.match(launcher, /registered_artifact_ids/);
+    assert.doesNotMatch(launcher, /form\.analysis/);
+    assert.doesNotMatch(state, /analysis_policy|chain_id:|test_case_id:|benchmark_name:/);
+    assert.match(template, /registered_artifact_ids/);
+    assert.doesNotMatch(template, /name: registered_artifact_id,|name: analysis_policy/);
+});
+
+test('launcher is a full-width card-grid run workspace with one backend authority', () => {
+    const launcher = source('conformationalMapping/ConformationalMappingLauncher.tsx');
+    assert.match(launcher, /data-bms-cm-launcher="canonical"/);
+    assert.match(launcher, /className="w-full space-y-5 text-slate-200"/);
+    assert.doesNotMatch(launcher, /mx-auto max-w-7xl/);
+    assert.match(launcher, />Run record</);
+    assert.match(launcher, />Scientific controls</);
+    assert.match(launcher, />Source browser</);
+    assert.match(launcher, />Input preview</);
+    assert.match(launcher, />Pre-submit summary</);
+    assert.doesNotMatch(launcher, />Backend<select/);
+    assert.match(launcher, /order-1 xl:order-1/);
+    assert.match(launcher, /order-2 xl:order-3/);
+    assert.match(launcher, /order-3 xl:order-4/);
+    assert.match(launcher, /order-4 xl:order-2/);
+    assert.match(launcher, /const effectivePayload = validationErrors\.length === 0 \? buildPayload\(\) : null/);
+});
+
+test('run notes and general CM source paths are typed without unrelated metadata systems', () => {
+    const launcher = source('conformationalMapping/ConformationalMappingLauncher.tsx');
+    const api = source('conformationalMapping/conformationalMappingApi.ts');
+    assert.match(launcher, /notes: string/);
+    assert.match(api, /notes: string/);
+    assert.match(launcher, /notes: form\.notes\.trim\(\)/);
+    for (const label of ['Upload', 'Your Runs', 'RCSB', 'Cached']) {
+        assert.match(launcher, new RegExp(`label: '${label}'`));
+    }
+    assert.doesNotMatch(launcher, /label: 'Presets'/);
+    assert.doesNotMatch(launcher, /SAbDab|project|campaign/i);
+});
+
+test('launcher does not promote browser-augmented metadata into server-owned source identity', () => {
+    const launcher = source('conformationalMapping/ConformationalMappingLauncher.tsx');
+    const api = source('conformationalMapping/conformationalMappingApi.ts');
+    const sourceLabelBlock = launcher.match(/const sourceLabel = \(source: CmSource\): string => \{[\s\S]*?\n\};/)?.[0] || '';
+    assert.match(sourceLabelBlock, /source\.source_id/);
+    assert.doesNotMatch(sourceLabelBlock, /source\.metadata/);
+    for (const authorityLabel of ['Selected input', 'Input authority']) {
+        const start = launcher.indexOf(`>${authorityLabel}<`);
+        assert.notEqual(start, -1, `missing ${authorityLabel} surface`);
+        assert.doesNotMatch(launcher.slice(start, start + 900), /selectedSource\.metadata/);
+    }
+    assert.doesNotMatch(launcher, /const contextSource: CmSource|const sourceWithContext: CmSource/);
+    assert.doesNotMatch(launcher, /normalizedMetadata|source\.metadata\]/);
+    assert.doesNotMatch(api, /defaultRcsbModel|defaultRcsbSample/);
+});
+
+test('ConforNets starts with one explicit seed and server-derived chain authority', () => {
+    const launcher = source('conformationalMapping/ConformationalMappingLauncher.tsx');
+    assert.match(launcher, /seeds: '101'/);
+    assert.doesNotMatch(launcher, /selectedChainIds/);
+    assert.match(launcher, /submission_policy/);
+    assert.match(launcher, /availableChainIds/);
+    assert.match(launcher, /managed_checkpoint === true/);
+    assert.doesNotMatch(launcher, /metadata\.managed === true/);
+    assert.match(launcher, /if \(!selectedSnapshot\) errors\.push/);
+    assert.match(launcher, /if \(form\.configId && !selectedConfig\) errors\.push/);
+    assert.match(launcher, /referenceSources\.length !== form\.referenceIds\.length/);
+    assert.match(launcher, /if \(form\.task === 'transfer' && !selectedTransfer\) errors\.push/);
+    assert.match(launcher, /form\.task === 'diversity' \|\| form\.task === 'mse'/);
+    assert.doesNotMatch(launcher, />Chain ID<input/);
 });

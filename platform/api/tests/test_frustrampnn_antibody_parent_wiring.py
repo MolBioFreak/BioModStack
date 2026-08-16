@@ -20,7 +20,8 @@ def _canonical_slice() -> str:
 
 def test_antibody_uses_only_public_canonical_frustrampnn() -> None:
     source = _workflow()
-    assert "include { CanonicalFrustraMPNN } from '../modules/frustrampnn'" in source
+    assert "include { CanonicalFrustraMPNNV2 } from '../modules/frustrampnn'" in source
+    assert "CanonicalFrustraMPNN(" not in source
     assert "from '../modules/antibody_frustrampnn_parent'" in source
     assert source.count("workflow ANTIBODY_DENOVO {") == 1
     assert "FrustrampnnQC" not in source
@@ -35,8 +36,8 @@ def test_antibody_uses_only_public_canonical_frustrampnn() -> None:
         assert FRUSTRAMPNN_PARENT.read_text(encoding="utf-8").count(
             f"process {process_name} {{"
         ) == 1
-    assert "CanonicalFrustraMPNN(PrepareAntibodyFrustraMPNNCandidate.out.prepared)" in source
-    assert "PublishAntibodyFrustraMPNNCandidate(CanonicalFrustraMPNN.out.result)" in source
+    assert "CanonicalFrustraMPNNV2(PrepareAntibodyFrustraMPNNCandidate.out.prepared)" in source
+    assert "PublishAntibodyFrustraMPNNCandidate(CanonicalFrustraMPNNV2.out.result)" in source
 
 
 def test_antibody_final_adapter_never_mints_identity_from_path_or_order() -> None:
@@ -77,6 +78,28 @@ def test_antibody_prepare_publish_and_terminal_report_are_scheduled_and_strict()
     )[0]
 
 
+def test_antibody_transports_complete_bounded_typed_v2_settings() -> None:
+    workflow = _workflow()
+    parent = FRUSTRAMPNN_PARENT.read_text(encoding="utf-8")
+    preparer = parent.split("process PrepareAntibodyFrustraMPNNCandidate", 1)[1].split(
+        "process PublishAntibodyFrustraMPNNCandidate", 1
+    )[0]
+    enabled = workflow.split("if (params.run_frustrampnn == true)", 1)[1].split("} else {", 1)[0]
+
+    assert "FRUSTRAMPNN_SETTINGS_MAX_BYTES" in workflow
+    assert "requireCompleteFrustraMPNNSettings" in workflow
+    assert "frustrampnn_settings_value_origin" in enabled
+    assert "canonicalJsonBytes(rawSettings)" in enabled
+    assert "Arrays.equals(settingsBytes, canonicalSettingsBytes)" in enabled
+    assert "workflow_component_request_v2.json" in preparer
+    assert "frustrampnn_structure_map_v1.json" in preparer
+    assert "--request-version 2" in preparer
+    assert "--settings-base64" in preparer
+    assert "--settings-sha256" in preparer
+    assert "--settings-value-origin" in preparer
+    assert "workflow_component_request_v1.json" not in preparer
+
+
 def test_antibody_disabled_branch_is_scheduled_and_emits_typed_status() -> None:
     source = _workflow()
     disabled = FRUSTRAMPNN_PARENT.read_text(encoding="utf-8").split(
@@ -95,7 +118,7 @@ def test_antibody_iggm_sequence_change_fails_before_canonical_invocation() -> No
     source = _workflow()
     guard = source.index("antibody_denovo:frustrampnn_stale_post_iggm_structure")
     iggm = source.index("IGGM_AFFINITY_MATURATION(maturation_input)")
-    canonical = source.index("CanonicalFrustraMPNN(PrepareAntibodyFrustraMPNNCandidate.out.prepared)")
+    canonical = source.index("CanonicalFrustraMPNNV2(PrepareAntibodyFrustraMPNNCandidate.out.prepared)")
     assert guard < iggm < canonical
     assert "run_affinity_maturation == true && params.run_frustrampnn == true" in source
 

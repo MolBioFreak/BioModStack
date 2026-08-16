@@ -17,6 +17,7 @@ import {
     type QueuedJob,
 } from '../lib/api';
 import { jobPollingInterval } from '../lib/queryPolling';
+import { isNgsJob as isNgsJobIdentity } from '../lib/ngsResultRouting';
 import { buildGpuCatalog, formatGpuLabel, listGpuCatalogEntries, type GpuCatalogEntry, type GpuCatalogLike } from './gpuCatalog';
 import { formatGpuList, resolveQueueGpuDisplay } from './jobQueueGpuDisplay';
 import { BMS_PANEL_OVERFLOW } from './ui/bmsStyle';
@@ -105,16 +106,6 @@ function isMsaJob(modelId: string): boolean {
     return modelId.toLowerCase() === 'msa_batch';
 }
 
-function isNgsJob(modelId: string, mode?: string): boolean {
-    const modelKey = modelId.toLowerCase();
-    const modeKey = (mode || '').toLowerCase();
-    return (
-        modelKey === 'nanopore' ||
-        modelKey.includes('nanopore') ||
-        modeKey === 'methylation_analysis' ||
-        modeKey === 'nanopore_methylation'
-    );
-}
 
 function isMolecularDynamicsJob(modelId: string, mode?: string): boolean {
     const modelKey = modelId.toLowerCase();
@@ -452,8 +443,8 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
         cancelMutation.isPending || pinMutation.isPending || cancelAllMutation.isPending || killActiveMutation.isPending || forceLaunchMutation.isPending;
 
     const genericCancelled = cancelledJobsRaw.filter(j => !isMolecularDynamicsJob(j.model_id, j.mode));
-    const visibleQueue = showNgsJobs ? queue : queue.filter(j => !isNgsJob(j.model_id, j.mode));
-    const cancelledJobs = showNgsJobs ? genericCancelled : genericCancelled.filter(j => !isNgsJob(j.model_id, j.mode));
+    const visibleQueue = showNgsJobs ? queue : queue.filter(j => !isNgsJobIdentity({ model_id: j.model_id, mode: j.mode }));
+    const cancelledJobs = showNgsJobs ? genericCancelled : genericCancelled.filter(j => !isNgsJobIdentity({ model_id: j.model_id, mode: j.mode }));
 
     // Separate running, paused, queued, and pending_msa jobs
     const runningJobs = visibleQueue.filter(j => j.queue_status === 'running');

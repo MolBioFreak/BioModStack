@@ -4,6 +4,22 @@ This document describes the live structure-design surface exposed by BioModStack
 It is capability-first: it focuses on workflows, model families, and launcher
 surfaces that are actually present in the repo and model registry today.
 
+## Mandatory model-control policy
+
+Every model in this document is governed by
+[Model configuration, operator control, and agent parity](Model_Configuration_Operator_Control_and_Agent_Parity.md).
+All relevant scientific and inference settings must be available through suitable
+typed browser controls and the same typed API used by AI agents. Model settings,
+effective execution values, lineage, data, statistics, visualization, capture,
+and exports must use global reusable mechanisms where applicable. Workflow cards
+may add context. They do not receive permission to hide supported model settings
+or create reduced parallel result authorities.
+
+The active FrustraMPNN global tranche is specified in
+[FrustraMPNN global configuration and analysis workbench](specs/frustrampnn-global-configuration-analysis-workbench.md).
+It must reach 100% before workflow-specific Structure Prediction, RFD3, and CM
+consumer tranches are considered seamless integration work.
+
 ## Main workflow families
 
 ### Antibody de novo and refinement

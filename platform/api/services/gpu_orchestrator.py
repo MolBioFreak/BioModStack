@@ -21,6 +21,7 @@ import re
 import shutil
 import subprocess
 from datetime import datetime, timedelta
+from enum import Enum
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Any
 from dataclasses import dataclass, replace
@@ -35,6 +36,18 @@ logger = logging.getLogger(__name__)
 CODE_ROOT = Path(__file__).resolve().parents[3]
 
 from antibody_pipeline_contract import is_antibody_pipeline_mode
+from database import (
+    LAUNCH_CONTEXT_BINDING_PROVENANCE_KEY,
+    LAUNCH_CONTEXT_BINDING_PROVENANCE_SCHEMA,
+)
+from services.execution_ownership import (
+    ExecutionOwnershipError,
+    latest_started_execution_attempt,
+    parse_unit_identity,
+    release_scheduler_gpu_assignment,
+    show_unit_properties,
+    unit_has_empty_cgroup,
+)
 from services.gpu_config import read_scheduler_config, mutate_scheduler_config
 from services.gpu_metadata import GPU_CAPABILITIES
 from services.gpu_stage_activity import job_uses_assigned_gpu
@@ -45,7 +58,7 @@ from services.stage_review import (
     refresh_gate_payload,
     resolve_nextflow_run_dir,
 )
-from services.workflow_adapter import workflow_adapter_enabled
+from services.workflow_adapter import workflow_adapter_enabled, workflow_adapter_lane
 
 
 @dataclass
@@ -593,6 +606,11 @@ async def _commit_reconciled_job_mutations(session: Any) -> int:
             for attribute in state.attrs
             if attribute.history.has_changes()
         }
+        if str(getattr(candidate, "status", "") or "").lower() in {"completed", "failed", "cancelled", "awaiting_input"} or str(
+            getattr(candidate, "queue_status", "") or ""
+        ).lower() in {"completed", "failed", "cancelled"}:
+            values["params"] = release_scheduler_gpu_assignment(getattr(candidate, "params", {}))
+            values["assigned_gpu"] = None
         if values:
             pending.append((str(candidate.id), values))
         session.expunge(candidate)
@@ -626,6 +644,15 @@ def _has_terminal_nextflow_history(history_entry: Any) -> bool:
         return False
     status = history_entry[0] if isinstance(history_entry, (tuple, list)) else history_entry
     return str(status or "").strip().upper() in {"OK", "ERR"}
+
+
+def _job_requires_result_output_for_terminal_history(job: Any) -> bool:
+    from services.result_state_integrity import (
+        job_expects_design_results,
+        job_expects_rfd3_local_redesign_candidates,
+    )
+
+    return job_expects_design_results(job) or job_expects_rfd3_local_redesign_candidates(job)
 
 
 def _reconcile_terminal_history_without_process(
@@ -1115,19 +1142,69 @@ def _collect_live_vram_by_job_for_scheduler(running_jobs: List[Any], gpu_stats: 
 
 
 def _normalize_job_params(raw_params: Any) -> Dict[str, Any]:
-    """Ensure job params are a dict, handling JSON-encoded strings safely."""
+    """Ensure job params are a copied dict, handling JSON-encoded strings."""
     if raw_params is None:
         return {}
     if isinstance(raw_params, dict):
-        return raw_params
+        return dict(raw_params)
     if isinstance(raw_params, str):
         try:
             import json
             loaded = json.loads(raw_params)
-            return loaded if isinstance(loaded, dict) else {}
+            return dict(loaded) if isinstance(loaded, dict) else {}
         except Exception:
             return {}
     return {}
+
+
+async def _claim_job_for_gpu(
+    session: Any,
+    job: Any,
+    gpu_id: int,
+    vram_estimate_mb: int,
+) -> Dict[str, Any] | None:
+    """Atomically claim a queued job before crossing into the launch boundary."""
+    from sqlalchemy import update
+    from database import Job
+    from services.execution_ownership import attach_scheduler_gpu_assignment
+
+    original = _normalize_job_params(getattr(job, "params", None))
+    try:
+        scheduler_params = attach_scheduler_gpu_assignment(original, int(gpu_id))
+    except ExecutionOwnershipError:
+        return None
+    transition = await session.execute(
+        update(Job)
+        .where(
+            Job.id == str(job.id),
+            Job.status == "queued",
+            Job.queue_status == "queued",
+            Job.paused.is_(False),
+            Job.assigned_gpu.is_(None),
+            Job.started_at.is_(None),
+            Job.nextflow_run_id.is_(None),
+        )
+        .values(
+            status="running",
+            queue_status="running",
+            started_at=datetime.utcnow(),
+            assigned_gpu=int(gpu_id),
+            vram_estimate_mb=int(vram_estimate_mb),
+            params=scheduler_params,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if int(transition.rowcount or 0) != 1:
+        await session.rollback()
+        await session.refresh(job)
+        return None
+    job.params = scheduler_params
+    job.assigned_gpu = int(gpu_id)
+    job.vram_estimate_mb = int(vram_estimate_mb)
+    job.status = "running"
+    job.queue_status = "running"
+    job.started_at = job.started_at or datetime.utcnow()
+    return scheduler_params
 
 
 def _md_analysis_has_gpu_assignment(job: Any) -> bool:
@@ -1256,6 +1333,106 @@ def _read_nextflow_history_statuses(job_ids: List[str]) -> Dict[str, Tuple[str, 
         found[job_id] = (status_token, duration)
 
     return found
+
+
+class _AdapterTransientOwnerLiveness(str, Enum):
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+    UNKNOWN = "unknown"
+
+
+async def _adapter_transient_owner_liveness(
+    job: Any,
+    *,
+    lane: str,
+) -> _AdapterTransientOwnerLiveness:
+    """Resolve lane-owned systemd liveness without guessing on query failure."""
+    try:
+        receipt = latest_started_execution_attempt(getattr(job, "params", None))
+    except ExecutionOwnershipError as exc:
+        logger.critical(
+            "[COMPLETION] Holding job %s because its newest transient ownership receipt "
+            "is malformed or not in the started state: %s",
+            job.id,
+            exc,
+        )
+        return _AdapterTransientOwnerLiveness.UNKNOWN
+    if receipt is None:
+        logger.critical(
+            "[COMPLETION] Holding job %s because no transient ownership receipt exists",
+            job.id,
+        )
+        return _AdapterTransientOwnerLiveness.UNKNOWN
+    receipt_lane = str(receipt.get("lane", "")).strip().lower()
+    if receipt_lane != lane:
+        logger.critical(
+            "[COMPLETION] Holding job %s because its latest transient receipt belongs "
+            "to lane %r instead of %r",
+            job.id,
+            receipt_lane or "<missing>",
+            lane,
+        )
+        return _AdapterTransientOwnerLiveness.UNKNOWN
+
+    unit_name = str(receipt.get("unit", "")).strip()
+    expected_invocation_id = str(receipt.get("invocation_id", "")).strip()
+    try:
+        identity = parse_unit_identity(unit_name)
+        if identity.job_id != str(job.id):
+            raise ExecutionOwnershipError(
+                f"Receipt unit belongs to job {identity.job_id!r}, not {str(job.id)!r}"
+            )
+    except ExecutionOwnershipError as exc:
+        logger.critical(
+            "[COMPLETION] Holding job %s because its transient ownership receipt is invalid: %s",
+            job.id,
+            exc,
+        )
+        return _AdapterTransientOwnerLiveness.UNKNOWN
+
+    try:
+        properties = await asyncio.to_thread(show_unit_properties, unit_name, lane)
+        cgroup_nonempty = not unit_has_empty_cgroup(properties)
+    except ExecutionOwnershipError as exc:
+        logger.critical(
+            "[COMPLETION] Holding job %s because transient owner liveness is unavailable: %s",
+            job.id,
+            exc,
+        )
+        return _AdapterTransientOwnerLiveness.UNKNOWN
+
+    actual_invocation_id = properties.invocation_id.strip()
+    if not expected_invocation_id or actual_invocation_id != expected_invocation_id:
+        logger.critical(
+            "[COMPLETION] Holding job %s because unit %s is active with an "
+            "ownership conflict (receipt InvocationID=%r, systemd InvocationID=%r)",
+            job.id,
+            unit_name,
+            expected_invocation_id,
+            actual_invocation_id,
+        )
+        return _AdapterTransientOwnerLiveness.UNKNOWN
+
+    owner_state = properties.active_state.strip().lower()
+    if owner_state in {"active", "activating", "deactivating"}:
+        logger.debug(
+            "[COMPLETION] Job %s remains owned by active transient unit %s",
+            job.id,
+            unit_name,
+        )
+        return _AdapterTransientOwnerLiveness.ACTIVE
+
+    if owner_state == "inactive" and not cgroup_nonempty:
+        return _AdapterTransientOwnerLiveness.INACTIVE
+
+    logger.critical(
+        "[COMPLETION] Holding job %s because unit %s has unresolved systemd state %r "
+        "or a nonempty cgroup",
+        job.id,
+        unit_name,
+        properties.active_state,
+    )
+    return _AdapterTransientOwnerLiveness.UNKNOWN
 
 
 def _compute_auto_limit(
@@ -2104,11 +2281,30 @@ class GPUOrchestrator:
             except (TypeError, ValueError):
                 msa_concurrency_limit = 1
             
-            # Build the base query for queued jobs
+            # Build the base query for queued jobs. A typed launch-context Job
+            # stays fenced until its source binding receipt is committed and
+            # projected back into the canonical core record.
+            launch_context_path = "$.launch_context_id"
+            binding_path = f"$.{LAUNCH_CONTEXT_BINDING_PROVENANCE_KEY}"
+            launch_context_binding_ready = or_(
+                func.json_extract(Job.provenance, launch_context_path).is_(None),
+                and_(
+                    func.json_extract(Job.provenance, f"{binding_path}.schema")
+                    == LAUNCH_CONTEXT_BINDING_PROVENANCE_SCHEMA,
+                    func.json_extract(Job.provenance, f"{binding_path}.launch_context_id")
+                    == func.json_extract(Job.provenance, launch_context_path),
+                    func.json_extract(Job.provenance, f"{binding_path}.canonical_job_id") == Job.id,
+                    func.length(func.json_extract(Job.provenance, f"{binding_path}.run_attempt_id")) > 0,
+                    func.length(
+                        func.json_extract(Job.provenance, f"{binding_path}.binding_receipt_sha256")
+                    )
+                    == 64,
+                ),
+            )
             base_conditions = [
                 Job.queue_status == "queued",
                 Job.paused == False,
-                Job.vram_estimate_mb.isnot(None),
+                launch_context_binding_ready,
                 # CRITICAL: Exclude jobs waiting for parent MSA job to complete
                 # Jobs with parent_job_id are linked to an MSA batch job
                 # They get their queue_status changed from pending_msa -> queued only after MSA completes
@@ -2154,8 +2350,8 @@ class GPUOrchestrator:
             # CPU-ONLY FAST PATH: Launch vram_estimate_mb == 0 jobs directly
             # These jobs (e.g. FASTQ-only nanopore) don't need GPU allocation.
             # ═══════════════════════════════════════════════════════════════════════
-            cpu_only_jobs = [j for j in pending_jobs if (j.vram_estimate_mb or 0) == 0]
-            gpu_jobs = [j for j in pending_jobs if (j.vram_estimate_mb or 0) > 0]
+            cpu_only_jobs = [j for j in pending_jobs if j.vram_estimate_mb == 0]
+            gpu_jobs = [j for j in pending_jobs if j.vram_estimate_mb != 0]
             
             for job in cpu_only_jobs:
                 try:
@@ -2368,21 +2564,37 @@ class GPUOrchestrator:
                 if i > 0:
                     await asyncio.sleep(0.5)
                 
+                scheduler_params = await _claim_job_for_gpu(
+                    session,
+                    job,
+                    int(gpu_id),
+                    int(job_info.vram_estimate_mb),
+                )
+                if scheduler_params is None:
+                    logger.info("[LAUNCH SKIPPED] %s lost its queued-to-running claim", job.name)
+                    continue
+                await session.commit()
                 try:
-                    # Launch Nextflow with GPU assignment
                     await self.launch_nextflow_job(
                         job_id=job.id,
                         model_id=job.model_id,
                         mode=job.mode,
-                        params={**job.params, 'gpu_id': gpu_id},
+                        params=scheduler_params,
                         output_dir=job.child_output_dir or job.output_dir
                     )
-                    
-                    # Update job status
-                    job.queue_status = "running"
-                    job.assigned_gpu = gpu_id
-                    job.started_at = datetime.utcnow()
-                    job.vram_estimate_mb = job_info.vram_estimate_mb
+
+                    # The adapter may have appended an execution receipt in a
+                    # separate session. Refresh before publishing scheduler state
+                    # so this session cannot overwrite that receipt.
+                    await session.refresh(job)
+                    if str(job.status or "").strip().lower() not in {
+                        "completed",
+                        "failed",
+                        "cancelled",
+                        "awaiting_input",
+                    }:
+                        job.queue_status = "running"
+                        job.started_at = datetime.utcnow()
 
                     if _gpu_quick_enable(gpu_id, config):
                         used_quick_enable_gpu_ids.add(gpu_id)
@@ -2391,8 +2603,30 @@ class GPUOrchestrator:
                     
                 except Exception as e:
                     logger.error(f"[LAUNCH FAILED] {job.name}: {e}")
-                    job.queue_status = "failed"
-                    job.error_message = str(e)
+                    # Reopen this publication under an immediate SQLite write
+                    # lock. A cancellation or input gate that committed first
+                    # remains authoritative; one that starts later serializes
+                    # after this terminal publication.
+                    await session.rollback()
+                    from sqlalchemy import text
+
+                    await session.execute(text("BEGIN IMMEDIATE"))
+                    failed_result = await session.execute(
+                        select(Job)
+                        .where(Job.id == job.id)
+                        .execution_options(populate_existing=True)
+                    )
+                    job = failed_result.scalar_one_or_none()
+                    if job is None:
+                        continue
+                    terminal_statuses = {"cancelled", "completed", "failed", "awaiting_input"}
+                    if str(job.status or "").lower() not in terminal_statuses:
+                        job.status = "failed"
+                        job.queue_status = "failed"
+                        job.completed_at = datetime.utcnow()
+                        job.error_message = str(e)
+                    job.assigned_gpu = None
+                    job.params = release_scheduler_gpu_assignment(job.params)
 
             if used_quick_enable_gpu_ids:
                 def consume_quick_enable_tokens(latest_config: Dict[str, Any]) -> None:
@@ -2460,6 +2694,7 @@ class GPUOrchestrator:
                 
                 # Get all running processes once (expensive operation)
                 adapter_authoritative = workflow_adapter_enabled()
+                adapter_lane = workflow_adapter_lane() if adapter_authoritative else None
                 all_processes = ""
                 gpu_has_activity = {}
                 if not adapter_authoritative:
@@ -2533,6 +2768,21 @@ class GPUOrchestrator:
                     # retain the one-minute grace period for missing-process heuristics.
                     if not job_is_running and job.started_at:
                         age_seconds = (datetime.utcnow() - job.started_at).total_seconds()
+                        if adapter_authoritative and (
+                            age_seconds > 60 or _has_terminal_nextflow_history(terminal_history)
+                        ):
+                            if adapter_lane is None:
+                                logger.critical(
+                                    "[COMPLETION] Holding job %s because adapter lane authority is unavailable",
+                                    job.id,
+                                )
+                                continue
+                            owner_liveness = await _adapter_transient_owner_liveness(
+                                job,
+                                lane=adapter_lane,
+                            )
+                            if owner_liveness is not _AdapterTransientOwnerLiveness.INACTIVE:
+                                continue
                         if age_seconds > 60 or _has_terminal_nextflow_history(terminal_history):
                             history_status = terminal_history
                             history_outcome = None
@@ -2652,9 +2902,12 @@ class GPUOrchestrator:
                                         reconciled += 1
                                         continue
                                 else:
-                                    from services.result_state_integrity import job_expects_design_results
+                                    from services.result_state_integrity import (
+                                        job_expects_design_results,
+                                        job_expects_rfd3_local_redesign_candidates,
+                                    )
 
-                                    if job_expects_design_results(job):
+                                    if job_expects_design_results(job) or job_expects_rfd3_local_redesign_candidates(job):
                                         job.status = "failed"
                                         job.queue_status = "failed"
                                         job.current_stage = "Result Ingestion Failed"
@@ -2756,8 +3009,6 @@ class GPUOrchestrator:
                                 history_status = nextflow_history_status(job)
                                 gate_present = has_stage_gate(job)
                                 result_output_dir = job.child_output_dir or job.output_dir
-                                from services.result_state_integrity import job_expects_design_results
-
                                 is_md_parent = job.model_id == "molecular_dynamics" and job.mode == "simulate"
                                 if history_status == "OK" and is_md_parent and not result_output_dir:
                                     job.status = "failed"
@@ -2768,7 +3019,11 @@ class GPUOrchestrator:
                                     job.completed_at = datetime.utcnow()
                                     reconciled += 1
                                     continue
-                                if history_status == "OK" and job_expects_design_results(job) and not result_output_dir:
+                                if (
+                                    history_status == "OK"
+                                    and _job_requires_result_output_for_terminal_history(job)
+                                    and not result_output_dir
+                                ):
                                     job.status = "failed"
                                     job.queue_status = "failed"
                                     job.current_stage = "Result Ingestion Failed"

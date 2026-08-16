@@ -23,6 +23,7 @@ import { projectResidueMetricLayer } from './metrics/metricProjection.js';
 import type { StructureSceneController } from './runtime/StructureSceneController.js';
 
 export interface StructureViewerHostProps extends MolstarViewerProps {
+    readonly restoredPresentation?: StructureScenePresentation | null;
     readonly metricLayers?: readonly MetricLayer[];
     readonly activeMetricId?: string;
     readonly showMetricWorkbench?: boolean;
@@ -108,6 +109,7 @@ export default function StructureViewerHost({
     selections: callerSelections,
     onResidueClick: callerResidueClick,
     onControllerReady: callerControllerReady,
+    restoredPresentation,
     ...viewerProps
 }: StructureViewerHostProps) {
     const documentId = viewerProps.structureDocumentId ?? 'primary';
@@ -133,6 +135,13 @@ export default function StructureViewerHost({
     const [layerOpacity, setLayerOpacity] = useState(1);
     const [cameraResetToken, setCameraResetToken] = useState(0);
     const [controller, setController] = useState<StructureSceneController | null>(null);
+    useEffect(() => {
+        const layer = restoredPresentation?.layers?.[0];
+        if (!layer) return;
+        setLayerVisible(layer.visible);
+        setLayerOpacity(layer.opacity);
+        if (layer.metricId) setSelectedMetricId(layer.metricId);
+    }, [restoredPresentation]);
     const handleControllerReady = useCallback((next: StructureSceneController | null) => {
         setController(next);
         callerControllerReady?.(next);
@@ -308,6 +317,8 @@ export default function StructureViewerHost({
         callerResidueClick?.(residue);
     };
     const scenePresentation = useMemo<StructureScenePresentation>(() => ({
+        camera: restoredPresentation?.camera,
+        representations: restoredPresentation?.representations,
         layers: activeLayer ? [{
             layerId: `metric:${activeLayer.descriptor.id}`,
             metricId: activeLayer.descriptor.id,
@@ -322,7 +333,7 @@ export default function StructureViewerHost({
         tooltipQueries,
         hiddenQueries,
         nonSelectedColor: residueMetricLayer?.nonSelectedColor ?? (legacyColors?.selections.length ? { r: 68, g: 68, b: 68 } : undefined),
-    }), [activeLayer, colorQueries, filters, hiddenQueries, layerOpacity, layerVisible, legacyColors, measurements, residueMetricLayer, residues, tooltipQueries]);
+    }), [activeLayer, colorQueries, filters, hiddenQueries, layerOpacity, layerVisible, legacyColors, measurements, residueMetricLayer, residues, restoredPresentation, tooltipQueries]);
 
     const residueLayer = filteredLayer?.descriptor.dimension === 'residue-scalar' ? filteredLayer : undefined;
     const pairLayer = filteredLayer?.descriptor.dimension === 'residue-pair-matrix'

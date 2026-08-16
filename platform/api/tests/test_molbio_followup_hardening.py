@@ -211,7 +211,7 @@ async def test_health_rejects_same_name_conditional_noop_immutable_trigger(
             )
 
         health = await molbio_health(engine=engine)
-        assert health["immutable_trigger_count"] == 20
+        assert health["immutable_trigger_count"] == 22
         assert health["immutable_triggers_current"] is False
         assert health["status"] == "degraded"
     finally:

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 
 import {
+    completeCurrentLaunchContext,
     listShapeGeometries,
     submitShapeBlueprint,
     uploadShapeGeometry,
@@ -109,9 +110,9 @@ export default function ShapeBlueprintTemplate() {
                 guidance_profile: 'rfd3_ca_shape_transfer_control_v1',
             }));
         },
-        onSuccess: (response) => {
+        onSuccess: async (response) => {
             sessionStorage.removeItem(SHAPE_CLIENT_REQUEST_KEY);
-            navigate(`/designs/${response.data.job_id}`);
+            navigate(await completeCurrentLaunchContext(response.data) ?? `/designs/${response.data.job_id}`);
         },
         onError: (cause: unknown) => setError(requestError(cause, 'Shape request failed.')),
     });

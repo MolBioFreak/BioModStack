@@ -1,0 +1,36 @@
+{
+  "$id": "bms.molbio-ngs.reference-created.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "canonical_fasta_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "reference_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "reference_revision_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "reference_revision_number": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "schema": {
+      "const": "bms.molbio-ngs.reference-created.v1"
+    }
+  },
+  "required": [
+    "schema",
+    "reference_id",
+    "reference_revision_id",
+    "canonical_fasta_sha256",
+    "reference_revision_number"
+  ],
+  "type": "object"
+}

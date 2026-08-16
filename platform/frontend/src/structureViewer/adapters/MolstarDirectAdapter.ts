@@ -30,7 +30,7 @@ import { createDirectMolstarEngineOwner } from '../runtime/createDirectMolstarEn
 import type { MolstarEngineOwner } from '../runtime/MolstarEngineOwner';
 import type { MDPlaybackState, MDSceneState } from '../contracts/mdTrajectory';
 import { assessMeasurement, type ViewerMeasurement } from '../contracts/measurements';
-import type { StructureCameraState, StructureComponentType } from '../contracts/scenePresentation';
+import type { StructureCameraState, StructureRepresentationKind, StructureRepresentationState, StructureScenePresentation, StructureComponentType } from '../contracts/scenePresentation';
 import { resolveSceneRenderingProfile, type StructureSceneState } from '../contracts/sceneState';
 import {
     absoluteContourValue,
@@ -86,7 +86,17 @@ export interface MolstarDirectPresentation {
     readonly nonSelectedColor?: string | number | { r: number; g: number; b: number };
     readonly tooltipSelections?: readonly MolstarDirectQuery[];
     readonly hiddenSelections?: readonly MolstarDirectQuery[];
+    readonly representations?: readonly StructureRepresentationState[];
 }
+
+const representationKind = (name: string): StructureRepresentationKind | undefined => ({
+    cartoon: 'cartoon',
+    'molecular-surface': 'surface',
+    'ball-and-stick': 'ball-and-stick',
+    spacefill: 'spacefill',
+    line: 'line',
+    'gaussian-surface': 'gaussian-surface',
+}[name] as StructureRepresentationKind | undefined);
 
 export interface MolstarDirectResidueClick {
     readonly documentId: string;
@@ -640,6 +650,66 @@ export class MolstarDirectAdapter {
         return task.catch((error) => viewerError(error));
     }
 
+    private representationEntries() {
+        const plugin = this.requirePlugin();
+        return plugin.managers.structure.hierarchy.current.structures.flatMap((structureRef) => {
+            const structure = structureRef.cell.obj?.data;
+            const documentId = structure ? this.documentStructures.get(structure) : undefined;
+            if (!documentId) return [];
+            return structureRef.components.flatMap((component, componentIndex) => component.representations.flatMap((representation, representationIndex) => {
+                const params = representation.cell.transform.params as { type?: { name?: string; params?: { alpha?: number } } } | undefined;
+                const kind = representationKind(params?.type?.name ?? '');
+                if (!kind) throw new Error(`Mol* representation kind ${params?.type?.name ?? '<missing>'} is not supported by the saved-review contract`);
+                return [{
+                    representation,
+                    state: {
+                        representationId: `${documentId}:${component.key ?? componentIndex}:${kind}:${representationIndex}`,
+                        documentId,
+                        kind,
+                        visible: !representation.cell.state.isHidden,
+                        opacity: params?.type?.params?.alpha ?? 1,
+                    } satisfies StructureRepresentationState,
+                }];
+            }));
+        });
+    }
+
+    capturePresentation(): ViewerResult<StructureScenePresentation> {
+        const canvas = this.requirePlugin().canvas3d;
+        if (!canvas) return viewerUnsupported('Mol* canvas is unavailable for presentation capture', 'camera');
+        const state = canvas.camera.state;
+        const vector = (value: ArrayLike<number>): [number, number, number] => [value[0]!, value[1]!, value[2]!];
+        return viewerOk({
+            camera: {
+                mode: canvas.props.camera.mode,
+                target: vector(state.target),
+                position: vector(state.position),
+                up: vector(state.up),
+                radius: state.radius,
+            },
+            representations: this.representationEntries().map((entry) => entry.state),
+        });
+    }
+
+    private async applyRepresentations(states: readonly StructureRepresentationState[]): Promise<void> {
+        const plugin = this.requirePlugin();
+        const entries = new Map(this.representationEntries().map((entry) => [entry.state.representationId, entry]));
+        if (states.length !== entries.size) throw new Error('Saved representation set does not match the loaded Mol* hierarchy');
+        const update = plugin.state.data.build();
+        for (const state of states) {
+            const entry = entries.get(state.representationId);
+            if (!entry || entry.state.documentId !== state.documentId || entry.state.kind !== state.kind) {
+                throw new Error(`Saved representation ${state.representationId} does not match the loaded Mol* hierarchy`);
+            }
+            plugin.managers.structure.hierarchy.toggleVisibility([entry.representation], state.visible ? 'show' : 'hide');
+            update.to(entry.representation.cell).update((params: { type?: { params?: { alpha?: number } } }) => {
+                if (!params.type?.params) throw new Error(`Mol* representation ${state.representationId} has no opacity parameters`);
+                params.type.params.alpha = state.opacity;
+            });
+        }
+        await update.commit({ revertOnError: true });
+    }
+
     applyPresentation(presentation: MolstarDirectPresentation): Promise<void> {
         const generation = ++this.presentationGeneration;
         const task = this.presentationQueue.then(async () => {
@@ -648,6 +718,7 @@ export class MolstarDirectAdapter {
             const colors = presentation.colorSelections ?? [];
             const tooltips = presentation.tooltipSelections ?? [];
             const hidden = presentation.hiddenSelections ?? [];
+            if (presentation.representations) await this.applyRepresentations(presentation.representations);
 
             if (colors.length > 0 || hidden.length > 0) {
                 await this.applyColorSelections(plugin, colors, presentation.nonSelectedColor);

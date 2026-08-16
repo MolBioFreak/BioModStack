@@ -43,6 +43,7 @@ const expectedUniqueTopics: ModelDocumentationTopic[] = [
   'esmfold2',
   'fampnn',
   'fold_cp',
+  'frustrampnn',
   'laproteina',
   'ligandmpnn',
   'ppiflow',
@@ -135,7 +136,7 @@ test('workflow model inventory is source-grounded and exposes the total unique m
 
   const workflowsById = new Map(WORKFLOW_MODEL_INVENTORY.map((entry) => [entry.workflowId, entry]));
   assert.deepEqual(workflowsById.get('mutagenesis')?.modelTopics, ['boltz2', 'rf3', 'esmfold2']);
-  assert.deepEqual(workflowsById.get('structure_prediction')?.modelTopics, ['boltz2', 'rf3', 'protenix', 'esmfold2']);
+  assert.deepEqual(workflowsById.get('structure_prediction')?.modelTopics, ['boltz2', 'rf3', 'protenix', 'esmfold2', 'frustrampnn']);
   assert.equal(workflowsById.has('antibody_child'), false);
   assert.deepEqual(workflowsById.get('protein_modification_experimental')?.modelTopics, ['laproteina', 'disco', 'rfdiffusion', 'fampnn', 'proteinmpnn', 'boltz2']);
   assert.equal(workflowsById.has('protein_local_redesign'), false);
@@ -143,7 +144,7 @@ test('workflow model inventory is source-grounded and exposes the total unique m
   assert.equal(workflowsById.has('protein_hunter_experimental'), false);
   assert.deepEqual(getWorkflowModelTopics('protein_hunter_experimental'), []);
   assert.equal(workflowsById.has('esmfold2'), false);
-  assert.deepEqual(getWorkflowModelTopics('esmfold2_experimental'), ['boltz2', 'rf3', 'protenix', 'esmfold2']);
+  assert.deepEqual(getWorkflowModelTopics('esmfold2_experimental'), ['boltz2', 'rf3', 'protenix', 'esmfold2', 'frustrampnn']);
   assert.equal(workflowsById.has('confornets_experimental'), false);
   assert.deepEqual(getWorkflowModelTopics('confornets_experimental'), ['confornets', 'protenix']);
 

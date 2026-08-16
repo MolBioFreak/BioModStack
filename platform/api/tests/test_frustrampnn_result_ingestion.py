@@ -14,7 +14,11 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, Design, FrustraMPNNResult, Job
 from services.frustrampnn.contracts import canonical_json_bytes
-from services.frustrampnn.manifests import MANIFEST_PATH, build_result_manifest
+from services.frustrampnn.manifests import (
+    MANIFEST_PATH,
+    V2_MANIFEST_PATH,
+    build_result_manifest,
+)
 from services.frustrampnn.persistence import FrustraMPNNPersistenceError
 from services import result_ingester
 from services.result_ingester import ingest_job_results
@@ -549,6 +553,178 @@ async def test_explicit_terminal_outputs_use_only_canonical_manifest_ingestion(
         assert await session.get(FrustraMPNNResult, ("job-1", "invoke-1")) is not None
         retired_name = "ingest_frustration_" + "data"
         assert not hasattr(result_ingester, retired_name)
+
+
+@pytest.mark.asyncio
+async def test_standalone_child_discovers_published_v2_result_and_manifest_paths(
+    tmp_path: Path,
+    db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_root = tmp_path / "job-v2"
+    root = job_root / "frustrampnn" / "results" / "candidate-v2"
+    root.parent.mkdir(parents=True)
+    MANIFEST_FIXTURE._v2_bundle(root, monkeypatch)
+    request = json.loads(
+        (root / "workflow_component_request_v2.json").read_text(encoding="utf-8")
+    )
+    relative_result = (root / "workflow_component_result_v2.json").relative_to(job_root)
+    relative_manifest = (root / V2_MANIFEST_PATH).relative_to(job_root)
+    async with db() as session:
+        session.add(
+            Job(
+                id="job-v2",
+                name="job-v2",
+                status="running",
+                queue_status="running",
+                model_id="frustrampnn",
+                mode="component",
+                params={
+                    "_frustrampnn_child_v1": {
+                        "selection": [
+                            {
+                                "design_id": None,
+                                "source_job_id": None,
+                                "normalized_source_sha256": request["normalized_pdb_sha256"],
+                            }
+                        ]
+                    }
+                },
+                output_dir=str(job_root),
+                stage_outputs={
+                    "canonical_frustrampnn": [
+                        str(relative_result),
+                        str(relative_manifest),
+                    ]
+                },
+                completed_stages=["canonical_frustrampnn"],
+                awaiting_input=False,
+            )
+        )
+        await session.commit()
+
+    async with db() as session:
+        assert await ingest_job_results(
+            "job-v2", str(job_root), session, commit=False
+        ) == 1
+        result = await session.get(FrustraMPNNResult, ("job-v2", "invoke-v2"))
+        assert result is not None
+        assert result.statistics_sha256
+        assert result.statistics_json["schema_version"] == 1
+
+
+@pytest.mark.asyncio
+async def test_v2_stage_outputs_reject_mixed_manifest_and_terminal_generations(
+    tmp_path: Path,
+    db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_root = tmp_path / "job-v2-mixed"
+    root = job_root / "frustrampnn" / "results" / "candidate-v2"
+    root.parent.mkdir(parents=True)
+    MANIFEST_FIXTURE._v2_bundle(root, monkeypatch)
+    v1_root = tmp_path / "v1-source"
+    _bundle(v1_root, job_id="job-1")
+    (root / "workflow_component_result_v1.json").write_bytes(
+        (v1_root / "workflow_component_result_v1.json").read_bytes()
+    )
+    request = json.loads(
+        (root / "workflow_component_request_v2.json").read_text(encoding="utf-8")
+    )
+    async with db() as session:
+        session.add(
+            Job(
+                id="job-v2",
+                name="job-v2",
+                status="running",
+                queue_status="running",
+                model_id="frustrampnn",
+                mode="component",
+                params={
+                    "_frustrampnn_child_v1": {
+                        "selection": [
+                            {
+                                "design_id": None,
+                                "source_job_id": None,
+                                "normalized_source_sha256": request[
+                                    "normalized_pdb_sha256"
+                                ],
+                            }
+                        ]
+                    }
+                },
+                output_dir=str(job_root),
+                stage_outputs={
+                    "canonical_frustrampnn": [
+                        str(root / V2_MANIFEST_PATH),
+                        str(root / "workflow_component_result_v1.json"),
+                    ]
+                },
+                completed_stages=["canonical_frustrampnn"],
+                awaiting_input=False,
+            )
+        )
+        await session.commit()
+
+    async with db() as session:
+        with pytest.raises(FrustraMPNNPersistenceError, match="generations are mixed"):
+            await ingest_job_results("job-v2", str(job_root), session, commit=False)
+        assert await session.get(FrustraMPNNResult, ("job-v2", "invoke-v2")) is None
+
+
+@pytest.mark.asyncio
+async def test_v2_stage_outputs_reject_unmanifested_bundle_child(
+    tmp_path: Path,
+    db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_root = tmp_path / "job-v2-unmanifested"
+    root = job_root / "frustrampnn" / "results" / "candidate-v2"
+    root.parent.mkdir(parents=True)
+    MANIFEST_FIXTURE._v2_bundle(root, monkeypatch)
+    (root / "unmanifested.txt").write_text("not authoritative", encoding="utf-8")
+    request = json.loads(
+        (root / "workflow_component_request_v2.json").read_text(encoding="utf-8")
+    )
+    async with db() as session:
+        session.add(
+            Job(
+                id="job-v2",
+                name="job-v2",
+                status="running",
+                queue_status="running",
+                model_id="frustrampnn",
+                mode="component",
+                params={
+                    "_frustrampnn_child_v1": {
+                        "selection": [
+                            {
+                                "design_id": None,
+                                "source_job_id": None,
+                                "normalized_source_sha256": request[
+                                    "normalized_pdb_sha256"
+                                ],
+                            }
+                        ]
+                    }
+                },
+                output_dir=str(job_root),
+                stage_outputs={
+                    "canonical_frustrampnn": [
+                        str(root / V2_MANIFEST_PATH),
+                        str(root / "workflow_component_result_v2.json"),
+                    ]
+                },
+                completed_stages=["canonical_frustrampnn"],
+                awaiting_input=False,
+            )
+        )
+        await session.commit()
+
+    async with db() as session:
+        with pytest.raises(FrustraMPNNPersistenceError, match="manifest|path set|unmanifested"):
+            await ingest_job_results("job-v2", str(job_root), session, commit=False)
+        assert await session.get(FrustraMPNNResult, ("job-v2", "invoke-v2")) is None
 
 
 @pytest.mark.asyncio

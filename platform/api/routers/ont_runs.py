@@ -8,17 +8,64 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import Job, get_session
-from services.molbio_ngs_receipts import consume_molbio_ngs_receipt
-from services.ngs_comparison_panels import consume_comparison_panel_receipt, materialize_comparison_launch
-from paths import get_allowed_roots, resolve_allowed_path
+from database import Job, current_launch_context_id, get_session
+from experiment_database import get_experiment_session
+from molbio_ngs_database import get_molbio_ngs_session
+from molbio_ngs_services import (
+    DomainStateNotFound,
+    MolBioNGSServiceError,
+    resolve_state_analysis_launch_policy,
+)
+from services.molbio_ngs_evidence import attach_instrument_run_evidence
+from services.molbio_ngs_receipts import (
+    build_molbio_revision_binding,
+    consume_molbio_ngs_receipt,
+    validate_molbio_ngs_receipt,
+)
+from services.molbio_ngs_references import resolve_managed_reference_for_launch
+from services.ngs_comparison_panels import (
+    consume_comparison_panel_receipt,
+    materialize_comparison_launch,
+    validate_comparison_panel_receipt,
+)
+from paths import (
+    get_allowed_roots,
+    get_molbio_ngs_reference_root,
+    resolve_allowed_path,
+)
 from schemas import JobCreate, JobResponse
-from services import alignment_access, ont_run_control, ont_submission_trust
+from services import alignment_access, ont_raw_signal, ont_run_control, ont_submission_trust
+from services.ont_barcode_batches import (
+    BarcodeBatchError,
+    BarcodeBatchRequest,
+    create_barcoded_reference_set,
+    get_reference_set,
+    list_reference_sets,
+)
 from services.ont_barcode_units import load_barcode_unit, load_barcode_units
+from services.ont_pooled_reference_assignment import (
+    ASSIGNMENT_WORKFLOW_ID,
+    PooledAssignmentError,
+    PooledAssignmentReleaseRequest,
+    PooledReferenceAssignmentRequest,
+    get_pooled_assignment_manifest,
+    get_pooled_assignment_targets,
+    release_pooled_assignment,
+    submit_pooled_reference_assignment,
+)
 from services.ont_ngs_contract import (
     get_ont_workflow_spec,
     normalize_ont_launch_params,
@@ -38,6 +85,7 @@ ONT_WORKFLOW_MODEL_MODES: dict[str, str] = {
     "ont_construct_screening": "construct_screening",
     "ont_methylation_analysis": "methylation_analysis",
     "ont_fastq_qc": "fastq_qc",
+    "ont_pooled_reference_assignment": "pooled_reference_assignment",
     "wf_clone_validation": "clone_validation",
 }
 
@@ -49,6 +97,21 @@ ONT_PRIMARY_INPUT_KEYS: dict[str, str] = {
 
 ONT_SERVER_CONTROLLED_PROVENANCE_PARAMS = ont_submission_trust.ONT_SERVER_CONTROLLED_PROVENANCE_PARAMS
 ONT_SERVER_CONTROLLED_RUNTIME_PARAMS = ont_submission_trust.ONT_SERVER_CONTROLLED_RUNTIME_PARAMS
+ONT_MANAGED_REFERENCE_EVIDENCE_PARAMS = frozenset(
+    {
+        "expected_result_manifest_schema",
+        "global_domain_experiment_id",
+        "molbio_ngs_state_revision_id",
+        "ngs_reference_artifact_id",
+        "ngs_reference_id",
+        "ngs_reference_revision_id",
+        "selected_reference_sha256",
+        "state_membership_receipt_id",
+        "expected_reference_fasta_sha256",
+        "managed_reference_snapshot_sha256",
+        "managed_reference_snapshot_size_bytes",
+    }
+)
 
 
 class OntRestartRequest(BaseModel):
@@ -130,13 +193,59 @@ def _instrument_handoff_tuning_params(raw_params: Any) -> dict[str, Any]:
     return normalized
 
 
+class OntManagedReferenceRequest(BaseModel):
+    """Opaque immutable identities; the server alone resolves the FASTA path."""
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    global_domain_experiment_id: str = Field(min_length=1, max_length=128)
+    molbio_ngs_state_revision_id: str = Field(min_length=1, max_length=128)
+    ngs_reference_revision_id: str = Field(min_length=1, max_length=128)
+
+    @field_validator("*")
+    @classmethod
+    def require_nonempty_identity(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("managed reference identities must be nonempty")
+        return normalized
+
+
 class OntNgsSubmitRequest(BaseModel):
     """Request body for submitting an ONT/NGS analysis workflow."""
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     name: str | None = Field(default=None, description="Optional job name. Defaults to the workflow display name.")
     params: dict[str, Any] = Field(default_factory=dict)
     pinned_gpu: int | None = Field(default=None)
     source_instrument_run_id: str | None = Field(default=None)
+    managed_reference: OntManagedReferenceRequest | None = None
+
+    @model_validator(mode="after")
+    def validate_managed_reference_exclusivity(self) -> "OntNgsSubmitRequest":
+        if "managed_reference" in self.params or any(
+            key in self.params
+            for key in ("managed_reference_path", "managed_reference_fasta_path")
+        ):
+            raise ValueError("managed_reference is accepted only as the typed top-level object")
+        if self.managed_reference is None:
+            return self
+        conflicting = sorted(
+            {
+                "molbio_ngs_receipt_id",
+                "reference_fasta",
+                "ngs_comparison_panel_receipt_id",
+                "comparison_panel_snapshot",
+                "comparison_panel_min_mapq",
+            }.intersection(self.params)
+        )
+        if conflicting:
+            raise ValueError(
+                "managed_reference is mutually exclusive with receipt, reference_fasta, and comparison-panel launch fields: "
+                + ", ".join(conflicting)
+            )
+        return self
 
 
 class OntRunIntentRequest(BaseModel):
@@ -157,6 +266,97 @@ class OntIntentStartRequest(BaseModel):
 
     confirm_start: StrictBool
     intent_generation: int = Field(ge=1)
+
+
+class OntOutputCounts(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    fastq: int = Field(ge=0)
+    pod5: int = Field(ge=0)
+    bam: int = Field(ge=0)
+
+
+class OntRunGenerationReopenParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    observed_generation: int = Field(ge=1)
+
+
+class OntRunGenerationReopenDestination(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    surface: Literal["ont-instrument-run-generation"]
+    params: OntRunGenerationReopenParams
+
+
+class OntRunSummaryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    position_id: str
+    status: Literal[
+        "armed",
+        "starting",
+        "running",
+        "stopping",
+        "stopped",
+        "completed",
+        "failed",
+        "unknown",
+    ]
+    observed_at: datetime
+    observed_generation: int = Field(ge=1)
+    created_at: datetime
+    sample_id: str | None
+    experiment_group: str | None
+    output_counts: OntOutputCounts
+    terminal_manifest_sha256: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{64}$"
+    )
+    reopen_destination: OntRunGenerationReopenDestination
+
+
+class OntRunGenerationResponse(OntRunSummaryResponse):
+    event_id: str
+    event_type: str
+
+
+class OntRawSignalExternalRegisterRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    format: Literal["pod5", "slow5", "blow5"]
+    input_file_id: str = Field(min_length=1, max_length=36)
+    index_input_file_id: str | None = Field(default=None, min_length=1, max_length=36)
+    source_fidelity: Literal["unknown", "native", "known_degraded", "verified_exact_samples"] = "unknown"
+
+
+class OntRawSignalExternalRunRequest(OntRawSignalExternalRegisterRequest):
+    sample_id: str | None = Field(default=None, max_length=255)
+    experiment_group: str | None = Field(default=None, max_length=255)
+
+
+class OntExternalPod5CandidateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    experiment_group: str = Field(min_length=1, max_length=255)
+    sample_id: str | None = Field(default=None, max_length=255)
+
+
+class OntRawSignalDerivationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_representation_id: str = Field(min_length=1, max_length=96)
+    consumer_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
+    representation_preference: Literal["auto", "blow5"] = "auto"
+
+
+class OntRawSignalWaveformRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    representation_id: str = Field(min_length=1, max_length=96)
+    read_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.-]+$")
 
 
 class OntBarcodeUnitSubmitRequest(BaseModel):
@@ -325,7 +525,13 @@ def _job_create_for_ont_submit(
     *,
     trusted_server_params: frozenset[str] = frozenset(),
     trusted_result_paths: frozenset[str] = frozenset(),
+    trusted_reference_fasta: Path | None = None,
 ) -> JobCreate:
+    canonical_id = resolve_ont_workflow_alias(workflow_id)
+    if canonical_id == ASSIGNMENT_WORKFLOW_ID:
+        raise ValueError(
+            "pooled reference assignment requires the dedicated atomic submission endpoint"
+        )
     submitted_params = dict(request.params)
     if any(key in submitted_params for key in ("comparison_panel_snapshot", "comparison_panel_min_mapq", "ngs_comparison_panel_receipt_id")):
         raise ValueError(
@@ -340,8 +546,14 @@ def _job_create_for_ont_submit(
             "server-controlled ONT provenance/runtime parameters cannot be supplied by a generic submit request: "
             + ", ".join(submitted_server_controlled)
         )
+    if (
+        request.source_instrument_run_id
+        and "source_instrument_run_id" not in trusted_server_params
+    ):
+        raise ValueError(
+            "server-controlled ONT instrument snapshot authority cannot be supplied by a generic submit request"
+        )
 
-    canonical_id = resolve_ont_workflow_alias(workflow_id)
     spec = get_ont_workflow_spec(canonical_id)
     params = normalize_ont_launch_params(canonical_id, submitted_params)
     path_contract = {
@@ -358,9 +570,23 @@ def _job_create_for_ont_submit(
     }
     for key, is_directory in path_contract.items():
         if str(params.get(key) or "").strip():
-            params[key] = _confine_submitted_path(
+            if key == "reference_fasta" and trusted_reference_fasta is not None:
+                trusted_path = str(trusted_reference_fasta)
+                if str(params[key]) != trusted_path or not trusted_reference_fasta.is_file():
+                    raise ValueError("managed reference path does not match server-resolved authority")
+                params[key] = trusted_path
+                continue
+            confined_path = _confine_submitted_path(
                 params[key], key, directory=is_directory, allow_results=key in trusted_result_paths
             )
+            if key == "reference_fasta":
+                confined_reference = Path(confined_path)
+                managed_root = get_molbio_ngs_reference_root().resolve()
+                if confined_reference == managed_root or managed_root in confined_reference.parents:
+                    raise ValueError(
+                        "managed reference paths cannot be supplied by ordinary callers; use managed_reference identities"
+                    )
+            params[key] = confined_path
     input_mode, input_path = _validate_ont_input_contract(canonical_id, params)
     reference_raw = str(params.get("reference_fasta") or "").strip()
     if reference_raw:
@@ -393,17 +619,30 @@ async def _create_pipeline_job(
     job: JobCreate,
     background_tasks: BackgroundTasks,
     session: AsyncSession,
+    experiment_session: AsyncSession,
     response: Response,
     request: Request,
+    *,
+    commit: bool = True,
 ) -> JobResponse:
     # Import lazily so importing the ONT router does not import the entire jobs
     # router stack unless a launch request actually reaches this endpoint.
     from routers.jobs import create_job  # noqa: PLC0415
 
+    launch_context_id = current_launch_context_id.get()
+    if launch_context_id:
+        job = job.model_copy(update={"launch_context_id": launch_context_id})
+        commit = True
     token, token_digest = alignment_access.issue_alignment_access_token()
     trust_token = ont_submission_trust.begin_trusted_ont_job_creation(token_digest)
     try:
-        created = await create_job(job, background_tasks, session)
+        created = await create_job(
+            job,
+            background_tasks,
+            session,
+            _commit=commit,
+            experiment_session=experiment_session,
+        )
     finally:
         ont_submission_trust.end_trusted_ont_job_creation(trust_token)
     alignment_access.set_alignment_access_cookie(created.id, token, response, request)
@@ -484,6 +723,46 @@ async def ont_start_instrument_run(position: str, payload: dict[str, Any]) -> di
     )
 
 
+@router.get("/runs", response_model=list[OntRunSummaryResponse])
+async def ont_list_instrument_runs(
+    limit: int = Query(100, ge=1, le=500),
+) -> list[OntRunSummaryResponse]:
+    """List persisted run summaries without contacting MinKNOW."""
+    try:
+        return [
+            OntRunSummaryResponse.model_validate(item)
+            for item in await ont_run_control.list_instrument_runs(limit=limit)
+        ]
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get(
+    "/runs/{run_id}/generations/{observed_generation}",
+    response_model=OntRunGenerationResponse,
+)
+async def ont_get_instrument_run_generation(
+    run_id: str,
+    observed_generation: int,
+) -> OntRunGenerationResponse:
+    """Read one exact persisted generation without contacting MinKNOW."""
+    try:
+        record = await ont_run_control.get_instrument_run_generation(
+            run_id, observed_generation
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"unknown ONT instrument run generation: "
+                f"{run_id}/{observed_generation}"
+            ),
+        )
+    return OntRunGenerationResponse.model_validate(record)
+
+
 @router.get("/runs/{run_id}")
 async def ont_get_instrument_run(run_id: str) -> dict[str, Any]:
     """Read the durable BMS ledger without contacting MinKNOW or mutating it."""
@@ -491,6 +770,181 @@ async def ont_get_instrument_run(run_id: str) -> dict[str, Any]:
     if record is None:
         raise HTTPException(status_code=404, detail=f"unknown ONT instrument run: {run_id}")
     return record
+
+
+@router.get("/raw-signal/external-pod5-candidates")
+async def ont_list_external_pod5_candidates() -> dict[str, Any]:
+    """List path-opaque POD5 candidates from the single governed server root."""
+    try:
+        return {"candidates": ont_raw_signal.list_external_pod5_candidates()}
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail="external POD5 source is unavailable") from exc
+
+
+@router.post("/raw-signal/external-pod5-candidates/register", status_code=201)
+async def ont_register_external_pod5_candidate(
+    request: OntExternalPod5CandidateRequest,
+    session: AsyncSession = Depends(get_session),
+    domain_session: AsyncSession = Depends(get_molbio_ngs_session),
+) -> dict[str, Any]:
+    """Register one governed POD5 candidate as a sealed, durable run generation."""
+    try:
+        result = await ont_raw_signal.register_external_pod5_candidate(
+            session,
+            domain_session,
+            candidate_id=request.candidate_id,
+            sample_id=request.sample_id,
+            experiment_group=request.experiment_group,
+        )
+        await session.commit()
+        return result
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="external POD5 candidate not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        raise HTTPException(status_code=409, detail="external POD5 registration conflict") from exc
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail="external POD5 source is unavailable") from exc
+    finally:
+        if session.in_transaction():
+            await session.rollback()
+
+
+@router.post("/raw-signal/external-runs", status_code=201)
+async def ont_create_external_raw_signal_run(
+    request: OntRawSignalExternalRunRequest,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Create one sealed external SLOW5/BLOW5/POD5 generation without invented ancestry."""
+    try:
+        result = await ont_raw_signal.create_external_run_registration(
+            session,
+            format=request.format,
+            input_file_id=request.input_file_id,
+            index_input_file_id=request.index_input_file_id,
+            source_fidelity=request.source_fidelity,
+            sample_id=request.sample_id,
+            experiment_group=request.experiment_group,
+        )
+        await session.commit()
+        return result
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="tracked input not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/runs/{run_id}/generations/{observed_generation}/raw-signal")
+async def ont_get_raw_signal_capabilities(
+    run_id: str,
+    observed_generation: int,
+    representation_preference: Literal["auto", "pod5", "blow5"] = Query("auto"),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Return independent, typed raw-signal readiness for one exact generation."""
+    try:
+        response = await ont_raw_signal.capabilities(
+            session,
+            run_id=run_id,
+            observed_generation=observed_generation,
+            preference=representation_preference,
+        )
+        return response
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="unknown ONT run generation") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/runs/{run_id}/generations/{observed_generation}/raw-signal/external", status_code=201)
+async def ont_register_external_raw_signal(
+    run_id: str,
+    observed_generation: int,
+    request: OntRawSignalExternalRegisterRequest,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Register external native evidence through opaque tracked input IDs."""
+    try:
+        result = await ont_raw_signal.register_external_source(
+            session,
+            run_id=run_id,
+            observed_generation=observed_generation,
+            format=request.format,
+            input_file_id=request.input_file_id,
+            index_input_file_id=request.index_input_file_id,
+            source_fidelity=request.source_fidelity,
+        )
+        await session.commit()
+        return result
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="run generation or tracked input not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/runs/{run_id}/generations/{observed_generation}/raw-signal/derive-blow5", status_code=202)
+async def ont_request_blow5_derivation(
+    run_id: str,
+    observed_generation: int,
+    request: OntRawSignalDerivationRequest,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Create a durable fail-closed derivation request outside the HTTP worker."""
+    try:
+        result = await ont_raw_signal.request_blow5_derivation(
+            session,
+            run_id=run_id,
+            observed_generation=observed_generation,
+            source_representation_id=request.source_representation_id,
+            consumer_id=request.consumer_id,
+            preference=request.representation_preference,
+        )
+        await session.commit()
+        return result
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="unknown ONT run generation") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/runs/{run_id}/generations/{observed_generation}/raw-signal/waveforms", status_code=202)
+async def ont_request_raw_signal_waveform(
+    run_id: str,
+    observed_generation: int,
+    request: OntRawSignalWaveformRequest,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    try:
+        return await ont_raw_signal.request_waveform_lookup(
+            session, run_id=run_id, observed_generation=observed_generation,
+            representation_id=request.representation_id, read_id=request.read_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/raw-signal/waveforms/{lookup_id}")
+async def ont_get_raw_signal_waveform(
+    lookup_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    try:
+        return await ont_raw_signal.get_waveform_lookup(session, lookup_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="unknown raw-signal waveform lookup") from exc
+
+
+@router.post("/raw-signal/derivations/{job_id}/cancel", status_code=202)
+async def ont_cancel_raw_signal_derivation(
+    job_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Request durable cancellation without accepting process or path controls."""
+    try:
+        return await ont_raw_signal.cancel_derivation(session, job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="unknown raw-signal derivation") from exc
 
 
 @router.post("/runs/{run_id}/reconcile")
@@ -521,6 +975,30 @@ async def ont_handoff_plasmid_qc(run_id: str, payload: dict[str, Any]) -> dict[s
     )
 
 
+@router.post("/ngs/pooled-reference-assignment/submit", status_code=201)
+async def ont_submit_pooled_reference_assignment(
+    request: PooledReferenceAssignmentRequest,
+    background_tasks: BackgroundTasks,
+    http_request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Atomically stage receipts and launch one review-only pooled assignment."""
+    try:
+        return await submit_pooled_reference_assignment(
+            session=session,
+            request=request,
+            background_tasks=background_tasks,
+            http_request=http_request,
+            response=response,
+        )
+    except PooledAssignmentError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
 @router.post("/ngs/{workflow_id}/submit", response_model=JobResponse, status_code=201)
 async def ont_submit_ngs_workflow(
     workflow_id: str,
@@ -529,6 +1007,8 @@ async def ont_submit_ngs_workflow(
     http_request: Request,
     response: Response,
     session: AsyncSession = Depends(get_session),
+    experiment_session: AsyncSession = Depends(get_experiment_session),
+    molbio_ngs_session: AsyncSession = Depends(get_molbio_ngs_session),
 ) -> JobResponse:
     """Submit a canonical ONT/NGS Nextflow analysis job.
 
@@ -537,70 +1017,140 @@ async def ont_submit_ngs_workflow(
     job creation path so queueing, runtime policy, validation, and orchestrator
     behavior remain identical to other BioModStack jobs.
     """
+    managed_launch = None
     try:
         submitted = dict(request.params)
+        caller_managed_evidence = sorted(
+            ONT_MANAGED_REFERENCE_EVIDENCE_PARAMS.intersection(submitted)
+        )
+        if caller_managed_evidence:
+            raise ValueError(
+                "managed-reference evidence parameters are server-controlled: "
+                + ", ".join(caller_managed_evidence)
+            )
         if str(submitted.get("molbio_sequence_id") or "").strip():
             raise ValueError("molbio_sequence_id is not accepted at submission; submit a server-issued molbio_ngs_receipt_id")
         receipt_id = str(submitted.pop("molbio_ngs_receipt_id", "") or "").strip()
         panel_receipt_id = str(submitted.pop("ngs_comparison_panel_receipt_id", "") or "").strip()
         canonical_id = resolve_ont_workflow_alias(workflow_id)
+        workflow_spec = get_ont_workflow_spec(canonical_id)
+        if canonical_id in ONT_REFERENCE_REQUIRED_WORKFLOWS:
+            if str(submitted.get("reference_fasta") or "").strip():
+                raise ValueError(
+                    "reference_fasta is server-controlled for reference-required NGS workflows; submit an immutable MolBio receipt"
+                )
+            if not receipt_id and request.managed_reference is None:
+                raise ValueError(
+                    f"workflow {canonical_id!r} requires a server-issued molbio_ngs_receipt_id or exact managed-reference authority"
+                )
         _validate_comparison_panel_launch(canonical_id, receipt_id, panel_receipt_id)
-        receipt = None
-        panel_receipt = None
+        if request.managed_reference is not None:
+            expected_result_manifest_schema = await resolve_state_analysis_launch_policy(
+                molbio_ngs_session,
+                global_domain_experiment_id=request.managed_reference.global_domain_experiment_id,
+                state_revision_id=request.managed_reference.molbio_ngs_state_revision_id,
+                canonical_workflow_id=workflow_spec.workflow_id,
+            )
+            managed_launch = await resolve_managed_reference_for_launch(
+                molbio_ngs_session,
+                global_domain_experiment_id=request.managed_reference.global_domain_experiment_id,
+                molbio_ngs_state_revision_id=request.managed_reference.molbio_ngs_state_revision_id,
+                ngs_reference_revision_id=request.managed_reference.ngs_reference_revision_id,
+            )
+            submitted.update(
+                {
+                    "reference_fasta": str(managed_launch.reference_fasta_path),
+                    "global_domain_experiment_id": managed_launch.global_domain_experiment_id,
+                    "molbio_ngs_state_revision_id": managed_launch.molbio_ngs_state_revision_id,
+                    "ngs_reference_id": managed_launch.ngs_reference_id,
+                    "ngs_reference_revision_id": managed_launch.ngs_reference_revision_id,
+                    "ngs_reference_artifact_id": managed_launch.ngs_reference_artifact_id,
+                    "state_membership_receipt_id": managed_launch.state_membership_receipt_id,
+                    "selected_reference_sha256": managed_launch.selected_reference_sha256,
+                    "expected_reference_fasta_sha256": managed_launch.expected_reference_fasta_sha256,
+                    "managed_reference_snapshot_sha256": managed_launch.launch_snapshot_sha256,
+                    "managed_reference_snapshot_size_bytes": managed_launch.launch_snapshot_size_bytes,
+                    "expected_result_manifest_schema": expected_result_manifest_schema,
+                }
+            )
+        receipt_authority = None
+        panel_receipt_authority = None
         if receipt_id:
-            receipt = await consume_molbio_ngs_receipt(session, receipt_id=receipt_id)
-            submitted["reference_fasta"] = receipt.reference_snapshot_path
+            receipt_authority = await validate_molbio_ngs_receipt(
+                session, receipt_id=receipt_id
+            )
+            submitted["reference_fasta"] = receipt_authority.reference_snapshot_path
         if panel_receipt_id:
-            panel_receipt = await consume_comparison_panel_receipt(
+            if receipt_authority is None:
+                raise ValueError("comparison panel launch has no expected receipt authority")
+            panel_receipt_authority = await validate_comparison_panel_receipt(
                 session, receipt_id=panel_receipt_id, expected_receipt_id=receipt_id
             )
             staged = materialize_comparison_launch(
-                expected_fasta=receipt.reference_snapshot_path,
-                expected_sha256=receipt.reference_snapshot_sha256,
-                panel_receipt=panel_receipt,
+                expected_fasta=receipt_authority.reference_snapshot_path,
+                expected_sha256=receipt_authority.reference_snapshot_sha256,
+                panel_receipt=panel_receipt_authority,
             )
             submitted["reference_fasta"] = staged["reference_fasta"]
-        job = _job_create_for_ont_submit(workflow_id, request.model_copy(update={"params": submitted}))
-        if receipt is not None:
-            job.params["molbio_revision_binding"] = {
-                "sequence_id": receipt.sequence_id,
-                "revision_id": receipt.revision_id,
-                "revision_sha256": receipt.revision_sha256,
-                "reference_snapshot_sha256": receipt.reference_snapshot_sha256,
-                "receipt_id": receipt.id,
-                "binding_source": "server_issued_one_time_receipt",
-            }
-            receipt.consumed_at = datetime.utcnow()
-            # Flush the one-time state before queueing so a competing submit
-            # cannot observe an unused receipt while this request is creating a job.
-            await session.flush()
-        if panel_receipt is not None:
-            panel_receipt.consumed_at = datetime.utcnow()
+        submit_request = request.model_copy(update={"params": submitted})
+        if managed_launch is not None:
+            job = _job_create_for_ont_submit(
+                workflow_id,
+                submit_request,
+                trusted_server_params=ONT_MANAGED_REFERENCE_EVIDENCE_PARAMS,
+                trusted_reference_fasta=managed_launch.reference_fasta_path,
+            )
+        else:
+            job = _job_create_for_ont_submit(workflow_id, submit_request)
+        if receipt_authority is not None:
+            job.params["molbio_revision_binding"] = build_molbio_revision_binding(
+                receipt_authority
+            )
+        if panel_receipt_authority is not None:
             job.params["comparison_panel_snapshot"] = staged["comparison_panel_snapshot"]
             job.params["comparison_panel_binding"] = {
-                "panel_id": panel_receipt.panel_id,
-                "panel_version": panel_receipt.panel_version,
-                "panel_snapshot_sha256": panel_receipt.panel_snapshot_sha256,
-                "receipt_id": panel_receipt.id,
+                "panel_id": panel_receipt_authority.panel_id,
+                "panel_version": panel_receipt_authority.panel_version,
+                "panel_snapshot_sha256": panel_receipt_authority.panel_snapshot_sha256,
+                "receipt_id": panel_receipt_authority.id,
                 "task_input_root": staged["input_root"],
                 "binding_source": "server_approved_panel_receipt",
             }
-            await session.flush()
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DomainStateNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except MolBioNGSServiceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     try:
-        created = await _create_pipeline_job(job, background_tasks, session, response, http_request)
+        receipt = None
+        panel_receipt = None
+        # These claims and job insertion share one transaction. Every fallible
+        # policy, snapshot, manifest, and job-shape check above is non-consuming.
+        if receipt_id:
+            receipt = await consume_molbio_ngs_receipt(
+                session, receipt_id=receipt_id
+            )
+        if panel_receipt_id:
+            panel_receipt = await consume_comparison_panel_receipt(
+                session,
+                receipt_id=panel_receipt_id,
+                expected_receipt_id=receipt_id,
+            )
+        created = await _create_pipeline_job(
+            job,
+            background_tasks,
+            session,
+            experiment_session,
+            response,
+            http_request,
+            commit=not receipt_id and not panel_receipt_id,
+        )
     except Exception:
-        # The receipt pair is a launch transaction: a queueing failure must not
-        # strand either one-time receipt as consumed.
-        if receipt is not None:
-            receipt.consumed_at = None
-        if panel_receipt is not None:
-            panel_receipt.consumed_at = None
-        await session.commit()
+        await session.rollback()
         raise
     if receipt is not None:
         receipt.consumed_job_id = created.id
@@ -608,7 +1158,69 @@ async def ont_submit_ngs_workflow(
         panel_receipt.consumed_job_id = created.id
     if receipt is not None or panel_receipt is not None:
         await session.commit()
+    if managed_launch is not None:
+        public_params = dict(created.params)
+        public_params.pop("reference_fasta", None)
+        created = created.model_copy(update={"params": public_params})
     return created
+@barcode_router.get("/{assignment_job_id}/pooled-assignment/manifest")
+async def ont_get_pooled_assignment_manifest(
+    assignment_job_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Read and revalidate one canonical immutable pooled manifest."""
+    try:
+        return await get_pooled_assignment_manifest(
+            session, assignment_job_id=assignment_job_id
+        )
+    except PooledAssignmentError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
+@barcode_router.get("/{assignment_job_id}/pooled-assignment/targets")
+async def ont_get_pooled_assignment_targets(
+    assignment_job_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Read persisted pooled target identities and immutable revision bindings."""
+    try:
+        return await get_pooled_assignment_targets(
+            session, assignment_job_id=assignment_job_id
+        )
+    except PooledAssignmentError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
+@barcode_router.post("/{assignment_job_id}/pooled-assignment/release", status_code=201)
+async def ont_release_pooled_assignment(
+    assignment_job_id: str,
+    request: PooledAssignmentReleaseRequest,
+    background_tasks: BackgroundTasks,
+    http_request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Atomically release selected reviewed targets into consensus-QC children."""
+    try:
+        return await release_pooled_assignment(
+            session=session,
+            assignment_job_id=assignment_job_id,
+            request=request,
+            background_tasks=background_tasks,
+            http_request=http_request,
+            response=response,
+        )
+    except PooledAssignmentError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
 
 
 @barcode_router.get("/{job_id}/barcode-units")
@@ -642,7 +1254,94 @@ async def ont_get_barcode_unit(
     return unit
 
 
-@barcode_router.post("/{job_id}/barcode-units/{unit_id}/submit", response_model=JobResponse, status_code=201)
+@barcode_router.post("/{source_job_id}/barcode-batches", status_code=201)
+async def ont_submit_barcode_batch(
+    source_job_id: str,
+    request: BarcodeBatchRequest,
+    background_tasks: BackgroundTasks,
+    http_request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Atomically create all intended barcode children from one completed demux."""
+    source_job, output_dir, manifest_sha256 = await _authorized_barcode_source(
+        source_job_id, http_request, session
+    )
+    try:
+        return await create_barcoded_reference_set(
+            session=session,
+            source_job=source_job,
+            source_root=output_dir,
+            source_demux_manifest_sha256=manifest_sha256,
+            request=request,
+            background_tasks=background_tasks,
+            http_request=http_request,
+            response=response,
+        )
+    except BarcodeBatchError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
+@barcode_router.get("/{source_job_id}/reference-sets")
+async def ont_list_reference_sets(
+    source_job_id: str,
+    http_request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """List immutable reference-set manifests for an authorized source demux."""
+    await _authorized_barcode_source(source_job_id, http_request, session)
+    try:
+        return await list_reference_sets(session, source_job_id=source_job_id)
+    except BarcodeBatchError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
+@barcode_router.get("/{source_job_id}/reference-sets/{reference_set_id}")
+async def ont_get_reference_set(
+    source_job_id: str,
+    reference_set_id: str,
+    http_request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Read one immutable reference-set manifest and its child bindings."""
+    await _authorized_barcode_source(source_job_id, http_request, session)
+    try:
+        return await get_reference_set(
+            session,
+            source_job_id=source_job_id,
+            reference_set_id=reference_set_id,
+        )
+    except BarcodeBatchError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
+@barcode_router.get("/{source_job_id}/reference-sets/{reference_set_id}/manifest")
+async def ont_get_reference_set_manifest(
+    source_job_id: str,
+    reference_set_id: str,
+    http_request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Read the canonical JSON payload of one immutable reference-set manifest."""
+    result = await ont_get_reference_set(
+        source_job_id=source_job_id,
+        reference_set_id=reference_set_id,
+        http_request=http_request,
+        session=session,
+    )
+    return result["manifest"]
+
+
+@barcode_router.post("/{job_id}/barcode-units/{unit_id}/submit", status_code=410)
 async def ont_submit_barcode_unit(
     job_id: str,
     unit_id: str,
@@ -651,35 +1350,13 @@ async def ont_submit_barcode_unit(
     http_request: Request,
     response: Response,
     session: AsyncSession = Depends(get_session),
-) -> JobResponse:
-    """Submit one isolated barcode BAM with exact source lineage and no override map."""
-    source_job, unit = await _authorized_barcode_unit(job_id, unit_id, http_request, session)
-    trusted = {
-        "bam_source_sha256": unit["bam_sha256"],
-        "source_ont_job_id": source_job.id,
-        "source_barcode_unit": unit["unit_id"],
-        "source_barcode_manifest_sha256": unit["manifest_sha256"],
-    }
-    submit = OntNgsSubmitRequest(
-        name=request.name or f"{source_job.name} {unit_id}",
-        params={
-            "bam_path": unit["bam_path"],
-            "reference_fasta": request.reference_fasta,
-            "bam_force_realign": True,
-            **trusted,
-        },
-        pinned_gpu=request.pinned_gpu,
+) -> dict[str, Any]:
+    """Retired: browser paths are never an authority for barcode submissions."""
+    del job_id, unit_id, request, background_tasks, http_request, response, session
+    raise HTTPException(
+        status_code=410,
+        detail="single barcode submission is retired; use the server-authorized barcode-batches endpoint",
     )
-    try:
-        job = _job_create_for_ont_submit(
-            request.target_workflow,
-            submit,
-            trusted_server_params=frozenset(trusted),
-            trusted_result_paths=frozenset({"bam_path"}),
-        )
-    except (KeyError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return await _create_pipeline_job(job, background_tasks, session, response, http_request)
 
 
 @router.post("/runs/{run_id}/handoff/plasmid-qc/submit", response_model=JobResponse, status_code=201)
@@ -690,9 +1367,18 @@ async def ont_submit_plasmid_qc_from_run(
     http_request: Request,
     response: Response,
     session: AsyncSession = Depends(get_session),
+    experiment_session: AsyncSession = Depends(get_experiment_session),
+    molbio_ngs_session: AsyncSession = Depends(get_molbio_ngs_session),
 ) -> JobResponse:
     """Submit generic plasmid QC from a durable artifact and a one-time MolBio receipt."""
-    allowed_fields = {"name", "params", "pinned_gpu", "molbio_ngs_receipt_id"}
+    allowed_fields = {
+        "name",
+        "params",
+        "pinned_gpu",
+        "molbio_ngs_receipt_id",
+        "global_domain_experiment_id",
+        "molbio_ngs_state_revision_id",
+    }
     if not isinstance(payload, dict) or set(payload) - allowed_fields:
         raise HTTPException(status_code=422, detail="instrument handoff accepts only a name, tuning params, pinned_gpu, and molbio_ngs_receipt_id")
     name = payload.get("name")
@@ -708,16 +1394,53 @@ async def ont_submit_plasmid_qc_from_run(
     receipt_id = str(payload.get("molbio_ngs_receipt_id") or "").strip()
     if not receipt_id:
         raise HTTPException(status_code=422, detail="instrument handoff requires a server-issued molbio_ngs_receipt_id")
+    global_domain_experiment_id = str(
+        payload.get("global_domain_experiment_id") or ""
+    ).strip()
+    state_revision_id = str(payload.get("molbio_ngs_state_revision_id") or "").strip()
+    if not global_domain_experiment_id or not state_revision_id:
+        raise HTTPException(
+            status_code=422,
+            detail="instrument handoff requires an exact Domain Experiment and state revision",
+        )
     try:
-        receipt = await consume_molbio_ngs_receipt(session, receipt_id=receipt_id)
+        receipt_authority = await validate_molbio_ngs_receipt(
+            session, receipt_id=receipt_id
+        )
         handoff = await ont_run_control.build_plasmid_qc_handoff(
             run_id,
-            {"reference_fasta": receipt.reference_snapshot_path},
+            {"reference_fasta": receipt_authority.reference_snapshot_path},
         )
+        observed_generation = handoff["params"].get(
+            "source_instrument_observed_generation"
+        )
+        if (
+            isinstance(observed_generation, bool)
+            or not isinstance(observed_generation, int)
+            or observed_generation < 1
+        ):
+            raise ValueError("instrument handoff lacks an exact observed generation")
+        instrument_receipt = await attach_instrument_run_evidence(
+            molbio_ngs_session,
+            session,
+            global_domain_experiment_id=global_domain_experiment_id,
+            state_revision_id=state_revision_id,
+            run_id=run_id,
+            observed_generation=observed_generation,
+            idempotency_key=(
+                f"plasmid-qc-handoff:{global_domain_experiment_id}:"
+                f"{state_revision_id}:{run_id}:{observed_generation}"
+            ),
+        )
+        await molbio_ngs_session.commit()
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"unknown ONT instrument run: {run_id}") from exc
+    except DomainStateNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except MolBioNGSServiceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     submit_request = OntNgsSubmitRequest(
         name=(name or "ONT plasmid QC").strip(),
@@ -734,14 +1457,40 @@ async def ont_submit_plasmid_qc_from_run(
             ),
             trusted_result_paths=frozenset({"fastq_path"}),
         )
-        receipt.consumed_at = datetime.utcnow()
-        await session.flush()
-        created = await _create_pipeline_job(job, background_tasks, session, response, http_request)
+        job.params["molbio_revision_binding"] = build_molbio_revision_binding(
+            receipt_authority
+        )
+        job.params.update(
+            {
+                "global_domain_experiment_id": global_domain_experiment_id,
+                "molbio_ngs_state_revision_id": state_revision_id,
+                "ont_instrument_run_receipt_id": instrument_receipt.receipt_id,
+                "ont_instrument_run_binding": {
+                    "run_id": run_id,
+                    "observed_generation": observed_generation,
+                    "observation_sha256": instrument_receipt.content_digest,
+                    "receipt_id": instrument_receipt.receipt_id,
+                },
+            }
+        )
+        # Final job creation is the sole consumer; claim and insert are one
+        # transaction and any downstream error rolls both back.
+        receipt = await consume_molbio_ngs_receipt(
+            session, receipt_id=receipt_id
+        )
+        created = await _create_pipeline_job(
+            job,
+            background_tasks,
+            session,
+            experiment_session,
+            response,
+            http_request,
+            commit=False,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception:
-        receipt.consumed_at = None
-        await session.commit()
+        await session.rollback()
         raise
     receipt.consumed_job_id = created.id
     await session.commit()

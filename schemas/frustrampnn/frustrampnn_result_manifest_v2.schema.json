@@ -1,0 +1,31 @@
+{
+  "$id": "https://biomodstack.local/schemas/frustrampnn/frustrampnn_result_manifest_v2.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "frustrampnn_result_manifest_v2",
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "cardinality": {
+      "type": ["object", "null"], "additionalProperties": false,
+      "properties": {"kind": {"enum": ["rows", "residues", "slots", "records"]}, "count": {"type": "integer", "minimum": 0}},
+      "required": ["kind", "count"]
+    },
+    "artifact": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "relative_path": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*//)(?!\\./).+$"},
+        "schema_name": {"type": ["string", "null"]}, "schema_version": {"type": ["integer", "null"], "minimum": 1},
+        "sha256": {"$ref": "#/$defs/sha256"}, "bytes": {"type": "integer", "minimum": 0}, "cardinality": {"$ref": "#/$defs/cardinality"}
+      },
+      "required": ["relative_path", "schema_name", "schema_version", "sha256", "bytes", "cardinality"]
+    }
+  },
+  "type": "object", "additionalProperties": false,
+  "properties": {
+    "schema_name": {"const": "frustrampnn_result_manifest"}, "schema_version": {"const": 2},
+    "invocation_id": {"type": "string", "minLength": 1}, "parent_job_id": {"type": "string", "minLength": 1}, "candidate_id": {"type": "string", "minLength": 1},
+    "request_sha256": {"$ref": "#/$defs/sha256"}, "source_artifact_sha256": {"$ref": "#/$defs/sha256"}, "execution_configuration_sha256": {"$ref": "#/$defs/sha256"},
+    "statistics_sha256": {"$ref": "#/$defs/sha256"}, "comparison_compatibility_id": {"$ref": "#/$defs/sha256"},
+    "artifact_count": {"const": 10}, "artifacts": {"type": "array", "minItems": 10, "maxItems": 10, "items": {"$ref": "#/$defs/artifact"}}
+  },
+  "required": ["schema_name", "schema_version", "invocation_id", "parent_job_id", "candidate_id", "request_sha256", "source_artifact_sha256", "execution_configuration_sha256", "statistics_sha256", "comparison_compatibility_id", "artifact_count", "artifacts"]
+}

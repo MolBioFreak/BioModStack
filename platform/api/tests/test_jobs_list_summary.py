@@ -46,6 +46,7 @@ async def test_jobs_list_summary_omits_heavy_fields_but_keeps_rows_selectable(tm
             selection_dataset_name="dataset-a",
             stage_family="fampnn",
             stage_mode="sequence_design",
+            pinned_gpu=1,
         )
         session.add(job)
         session.add_all(
@@ -86,6 +87,7 @@ async def test_jobs_list_summary_omits_heavy_fields_but_keeps_rows_selectable(tm
     assert summary_job["selection_dataset_name"] == "dataset-a"
     assert summary_job["stage_family"] == "fampnn"
     assert summary_job["stage_mode"] == "sequence_design"
+    assert summary_job["pinned_gpu"] == 1
     assert summary_job["params"] == {}
     assert summary_job["provenance"] is None
     assert summary_job["saved_selection_sets"] is None

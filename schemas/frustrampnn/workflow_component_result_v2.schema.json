@@ -1,0 +1,28 @@
+{
+  "$id": "https://biomodstack.local/schemas/frustrampnn/workflow_component_result_v2.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "workflow_component_result_v2",
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "manifest": {
+      "type": ["object", "null"], "additionalProperties": false,
+      "properties": {"relative_path": {"const": "frustrampnn_result_manifest_v2.json"}, "sha256": {"$ref": "#/$defs/sha256"}},
+      "required": ["relative_path", "sha256"]
+    },
+    "payload": {
+      "type": ["object", "null"], "additionalProperties": false,
+      "properties": {"relative_path": {"const": "frustrampnn_summary_v2.json"}, "schema_name": {"const": "frustrampnn_summary"}, "schema_version": {"const": 2}, "sha256": {"$ref": "#/$defs/sha256"}},
+      "required": ["relative_path", "schema_name", "schema_version", "sha256"]
+    }
+  },
+  "type": "object", "additionalProperties": false,
+  "properties": {
+    "schema_name": {"const": "workflow_component_result"}, "schema_version": {"const": 2},
+    "component_id": {"const": "frustrampnn"}, "component_contract_version": {"const": "2.0"},
+    "request_sha256": {"$ref": "#/$defs/sha256"}, "invocation_id": {"type": "string", "minLength": 1}, "parent_job_id": {"type": "string", "minLength": 1}, "parent_workflow_id": {"type": "string", "minLength": 1}, "candidate_id": {"type": "string", "minLength": 1},
+    "status": {"enum": ["succeeded", "failed", "not_run"]},
+    "failure_class": {"type": ["string", "null"]}, "diagnostic": {"type": ["string", "null"], "maxLength": 2048},
+    "result_manifest": {"$ref": "#/$defs/manifest"}, "result_payload": {"$ref": "#/$defs/payload"}
+  },
+  "required": ["schema_name", "schema_version", "component_id", "component_contract_version", "request_sha256", "invocation_id", "parent_job_id", "parent_workflow_id", "candidate_id", "status", "failure_class", "diagnostic", "result_manifest", "result_payload"]
+}

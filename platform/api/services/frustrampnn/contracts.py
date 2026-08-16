@@ -6,10 +6,12 @@ import hashlib
 import json
 import math
 from collections import Counter
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
 
 from jsonschema import Draft202012Validator, FormatChecker
+from pydantic import ValidationError
 
 AA_ORDER = "ACDEFGHIKLMNPQRSTVWY"
 SUCCESS_RESULT_ARTIFACT_PATHS = (
@@ -21,6 +23,18 @@ SUCCESS_RESULT_ARTIFACT_PATHS = (
     "frustrampnn_stdout.log",
     "frustrampnn_stderr.log",
     "frustrampnn_execution_receipt_v1.json",
+)
+V2_MANIFEST_ARTIFACT_PATHS = (
+    "workflow_component_request_v2.json",
+    "normalized_input.pdb",
+    "frustrampnn_structure_map_v1.json",
+    "raw_frustrampnn.csv",
+    "frustrampnn_landscape_v2.json",
+    "frustrampnn_summary_v2.json",
+    "frustrampnn_stdout.log",
+    "frustrampnn_stderr.log",
+    "frustrampnn_execution_receipt_v2.json",
+    "frustrampnn_statistics_v1.json",
 )
 AUTHORITY_ARTIFACT_PATH = "authority_artifact_v1.json"
 EXTERNAL_SUCCESS_RESULT_ARTIFACT_PATHS = (
@@ -38,12 +52,25 @@ FAILURE_CLASSES = frozenset({
 })
 SCHEMA_FILENAMES = {
     "workflow_component_request_v1": "workflow_component_request_v1.schema.json",
+    "workflow_component_request_v2": "workflow_component_request_v2.schema.json",
+    "capability_inventory_v1": "capability_inventory_v1.schema.json",
+    "frustrampnn_requested_settings_v1": "settings_v1.schema.json",
+    "frustrampnn_effective_settings_v1": "effective_settings_v1.schema.json",
+    "frustrampnn_execution_configuration_v2": "execution_configuration_v2.schema.json",
+    "frustrampnn_settings_v1": "settings_v1.schema.json",
+    "frustrampnn_global_configuration_v2": "execution_configuration_v2.schema.json",
     "workflow_component_result_v1": "workflow_component_result_v1.schema.json",
+    "workflow_component_result_v2": "workflow_component_result_v2.schema.json",
     "frustrampnn_structure_map_v1": "frustrampnn_structure_map_v1.schema.json",
     "frustrampnn_landscape_v1": "frustrampnn_landscape_v1.schema.json",
+    "frustrampnn_landscape_v2": "frustrampnn_landscape_v2.schema.json",
     "frustrampnn_summary_v1": "frustrampnn_summary_v1.schema.json",
+    "frustrampnn_summary_v2": "frustrampnn_summary_v2.schema.json",
     "frustrampnn_execution_receipt_v1": "frustrampnn_execution_receipt_v1.schema.json",
+    "frustrampnn_execution_receipt_v2": "frustrampnn_execution_receipt_v2.schema.json",
     "frustrampnn_result_manifest_v1": "frustrampnn_result_manifest_v1.schema.json",
+    "frustrampnn_result_manifest_v2": "frustrampnn_result_manifest_v2.schema.json",
+    "frustrampnn_statistics_v1": "frustrampnn_statistics_v1.schema.json",
     "frustrampnn_comparison_v1": "frustrampnn_comparison_v1.schema.json",
     "frustrampnn_guidance_v1": "frustrampnn_guidance_v1.schema.json",
     "frustrampnn_multistate_comparison_v1": "frustrampnn_multistate_comparison_v1.schema.json",
@@ -164,6 +191,29 @@ def load_schema(schema_key: str) -> dict[str, Any]:
     return schema
 
 
+def project_summary_artifact(instance: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate and return the immutable artifact within a persisted summary."""
+
+    if not isinstance(instance, Mapping):
+        raise ContractValidationError("persisted FrustraMPNN summary must be an object")
+    identity = (instance.get("schema_name"), instance.get("schema_version"))
+    if identity == ("frustrampnn_summary", 1):
+        schema_key = "frustrampnn_summary_v1"
+    elif identity == ("frustrampnn_summary", 2):
+        schema_key = "frustrampnn_summary_v2"
+    else:
+        raise ContractValidationError(
+            f"unsupported persisted FrustraMPNN summary identity: {identity!r}"
+        )
+    schema = load_schema(schema_key)
+    properties = schema.get("properties")
+    if not isinstance(properties, Mapping):
+        raise ContractValidationError(f"{schema_key} has no property map")
+    artifact = {key: instance[key] for key in properties if key in instance}
+    validate_schema(schema_key, artifact)
+    return artifact
+
+
 def _schema_validate(schema_key: str, instance: Any) -> None:
     _check_canonical_value(instance)
     errors = sorted(
@@ -218,6 +268,184 @@ def _validate_request(instance: Mapping[str, Any]) -> None:
             raise ContractValidationError(
                 "PDB-coordinate authority cannot invent mmCIF entity/label identity"
             )
+
+
+def _typed_requested_settings(instance: Mapping[str, Any]):
+    from .settings import FrustraMPNNRequestedSettings
+
+    try:
+        return FrustraMPNNRequestedSettings.model_validate(instance)
+    except ValidationError as exc:
+        raise ContractValidationError(f"requested settings are invalid: {exc}") from exc
+
+
+def _typed_effective_settings(instance: Mapping[str, Any]):
+    from .settings import FrustraMPNNEffectiveSettings
+
+    try:
+        return FrustraMPNNEffectiveSettings.model_validate(instance)
+    except ValidationError as exc:
+        raise ContractValidationError(f"effective settings are invalid: {exc}") from exc
+
+
+def _validate_settings_v1(instance: Mapping[str, Any]) -> None:
+    _typed_requested_settings(instance)
+
+
+def _validate_execution_configuration_v2(instance: Mapping[str, Any]) -> None:
+    from .configuration import ConfigurationValidationError, validate_configuration
+
+    try:
+        validate_configuration(instance)
+    except ConfigurationValidationError as exc:
+        raise ContractValidationError(
+            f"execution configuration receipt is invalid: {exc}"
+        ) from exc
+
+
+def _validate_request_v2(instance: Mapping[str, Any]) -> None:
+    from .configuration import (
+        ConfigurationValidationError,
+        FrustraMPNNExecutionConfigurationV2,
+        validate_configuration,
+    )
+    from .settings import (
+        classification_policy_sha256,
+        effective_settings_sha256,
+        requested_settings_sha256,
+    )
+
+    validate_relative_path(instance["source_artifact"]["relative_path"])
+    if tuple(instance["requested_outputs"]) != CANONICAL_REQUESTED_OUTPUTS:
+        raise ContractValidationError(
+            "requested outputs must be the exact canonical ordered set"
+        )
+
+    requested = _typed_requested_settings(instance["requested_settings"])
+    effective = _typed_effective_settings(instance["effective_settings"])
+    if instance["settings_value_origin"] != requested.settings_value_origin:
+        raise ContractValidationError(
+            "settings value origin does not match requested settings"
+        )
+    if instance["settings_value_origin"] != effective.settings_value_origin:
+        raise ContractValidationError(
+            "settings value origin does not match effective settings"
+        )
+    if effective.requested_settings != requested:
+        raise ContractValidationError(
+            "effective settings do not contain the exact requested settings"
+        )
+    if instance["requested_settings_sha256"] != requested_settings_sha256(requested):
+        raise ContractValidationError("requested settings SHA-256 does not match")
+    if instance["effective_settings_sha256"] != effective_settings_sha256(effective):
+        raise ContractValidationError("effective settings SHA-256 does not match")
+    if instance["classification_policy_sha256"] != classification_policy_sha256(
+        requested.classification_policy
+    ):
+        raise ContractValidationError(
+            "classification policy SHA-256 does not match requested settings"
+        )
+    if (
+        instance["capability_inventory_byte_sha256"]
+        != effective.capability_inventory_byte_sha256
+    ):
+        raise ContractValidationError(
+            "capability inventory byte SHA-256 does not match effective settings"
+        )
+    resolution = effective.resolution_identity
+    producer_provenance = instance.get("producer_provenance")
+    source_binding = (
+        producer_provenance.get("source_to_normalized_binding")
+        if isinstance(producer_provenance, Mapping)
+        else None
+    )
+    allowed_source_sha256 = {resolution.source_artifact_sha256}
+    if isinstance(source_binding, Mapping):
+        if not isinstance(producer_provenance, Mapping):
+            raise ContractValidationError("producer provenance is not an exact mapping")
+        if (
+            producer_provenance.get("original_source_sha256")
+            != source_binding.get("source_sha256")
+            or source_binding.get("source_sha256") != resolution.source_artifact_sha256
+            or source_binding.get("normalized_pdb_sha256")
+            != resolution.normalized_pdb_sha256
+        ):
+            raise ContractValidationError(
+                "producer source-to-normalized binding does not match effective resolution identity"
+            )
+        allowed_source_sha256.add(resolution.normalized_pdb_sha256)
+    if instance["source_artifact"]["sha256"] not in allowed_source_sha256:
+        raise ContractValidationError(
+            "source artifact SHA-256 does not match its declared representation authority"
+        )
+    if instance["structure_map_sha256"] != resolution.structure_map_sha256:
+        raise ContractValidationError(
+            "structure map SHA-256 does not match effective resolution identity"
+        )
+    if instance["normalized_pdb_sha256"] != resolution.normalized_pdb_sha256:
+        raise ContractValidationError(
+            "normalized PDB SHA-256 does not match effective resolution identity"
+        )
+
+    configuration_payload = instance["execution_configuration"]
+    try:
+        validate_configuration(configuration_payload)
+        configuration = FrustraMPNNExecutionConfigurationV2.model_validate(
+            configuration_payload
+        )
+    except (ConfigurationValidationError, ValidationError) as exc:
+        raise ContractValidationError(
+            f"execution configuration receipt is invalid: {exc}"
+        ) from exc
+    if configuration.effective_settings != effective:
+        raise ContractValidationError(
+            "execution configuration does not contain the exact effective settings"
+        )
+    if instance["settings_value_origin"] != configuration.settings_value_origin:
+        raise ContractValidationError(
+            "settings value origin does not match execution configuration"
+        )
+    if instance["requested_settings_sha256"] != configuration.requested_settings_sha256:
+        raise ContractValidationError(
+            "requested settings SHA-256 does not match execution configuration"
+        )
+    if instance["effective_settings_sha256"] != configuration.effective_settings_sha256:
+        raise ContractValidationError(
+            "effective settings SHA-256 does not match execution configuration"
+        )
+    if (
+        instance["classification_policy_sha256"]
+        != configuration.classification_policy_sha256
+    ):
+        raise ContractValidationError(
+            "classification policy SHA-256 does not match execution configuration"
+        )
+    if (
+        instance["capability_inventory_byte_sha256"]
+        != configuration.capability_inventory_byte_sha256
+    ):
+        raise ContractValidationError(
+            "capability inventory byte SHA-256 does not match execution configuration"
+        )
+    if instance["runtime_identity_sha256"] != configuration.runtime_identity_sha256:
+        raise ContractValidationError(
+            "runtime identity SHA-256 does not match execution configuration"
+        )
+    if instance["structure_map_sha256"] != configuration.structure_map_sha256:
+        raise ContractValidationError(
+            "structure map SHA-256 does not match execution configuration"
+        )
+    if instance["normalized_pdb_sha256"] != configuration.normalized_pdb_sha256:
+        raise ContractValidationError(
+            "normalized PDB SHA-256 does not match execution configuration"
+        )
+    if (
+        instance["execution_configuration_sha256"]
+        != configuration.configuration_sha256
+    ):
+        raise ContractValidationError(
+            "execution configuration SHA-256 does not match receipt"
+        )
 
 
 def _validate_result(instance: Mapping[str, Any]) -> None:
@@ -418,15 +646,311 @@ def _validate_manifest(instance: Mapping[str, Any]) -> None:
         validate_relative_path(path)
 
 
+def _validate_typed_selection(selection: Mapping[str, Any], *, label: str) -> None:
+    chains = selection["chains"]
+    positions = selection["positions"]
+    if chains is not None and chains != sorted(chains):
+        raise ContractValidationError(f"{label} chains are not in canonical order")
+    if positions is not None and positions != sorted(positions):
+        raise ContractValidationError(f"{label} positions are not in canonical order")
+    if positions is not None and chains is None:
+        raise ContractValidationError(f"{label} positions require chains")
+    expected_path = f"raw_frustrampnn_shard_{selection['ordinal']:04d}.csv"
+    if selection["shard_relative_path"] != expected_path:
+        raise ContractValidationError(f"{label} shard path disagrees with ordinal")
+
+
+def _validate_closed_timing(
+    started_at: str,
+    ended_at: str,
+    duration_seconds: float,
+    *,
+    label: str,
+) -> tuple[datetime, datetime]:
+    if (
+        isinstance(duration_seconds, bool)
+        or not isinstance(duration_seconds, (int, float))
+        or not math.isfinite(duration_seconds)
+        or duration_seconds < 0
+    ):
+        raise ContractValidationError(f"{label} duration is invalid")
+    try:
+        started = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+        ended = datetime.fromisoformat(ended_at.replace("Z", "+00:00"))
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ContractValidationError(f"{label} timing is invalid") from exc
+    if ended < started or not math.isclose(
+        (ended - started).total_seconds(),
+        duration_seconds,
+        rel_tol=0,
+        abs_tol=1e-9,
+    ):
+        raise ContractValidationError(f"{label} timing/duration is inconsistent")
+    return started, ended
+
+
+def _validate_execution_receipt_v2(instance: Mapping[str, Any]) -> None:
+    plan = instance["command_plan"]
+    entries = plan["entries"]
+    commands = instance["commands"]
+    if [entry["ordinal"] for entry in entries] != list(range(len(entries))):
+        raise ContractValidationError("command plan ordinals are not contiguous and ordered")
+    for entry in entries:
+        _validate_typed_selection(entry, label="command-plan selection")
+    if plan["plan_sha256"] != canonical_sha256({"entries": entries}):
+        raise ContractValidationError("command plan SHA-256 does not match canonical plan")
+    if instance["command_count"] != len(entries) or len(commands) != len(entries):
+        raise ContractValidationError("command count does not match the command plan")
+
+    modes = {
+        "all" if entry["chains"] is None else
+        "entities" if entry["positions"] is None else "residues"
+        for entry in entries
+    }
+    if len(modes) != 1 or ("all" in modes and len(entries) != 1) or (
+        "entities" in modes and len(entries) != 1
+    ):
+        raise ContractValidationError("command plan mixes incompatible selection grammars")
+    seen_chains: set[str] = set()
+    seen_position_groups: set[tuple[int, ...]] = set()
+    for entry in entries:
+        chains = entry["chains"] or []
+        if seen_chains.intersection(chains):
+            raise ContractValidationError("command plan repeats a selected chain")
+        seen_chains.update(chains)
+        if entry["positions"] is not None:
+            position_group = tuple(entry["positions"])
+            if position_group in seen_position_groups:
+                raise ContractValidationError(
+                    "command plan leaves identical position tuples split across shards"
+                )
+            seen_position_groups.add(position_group)
+
+    for entry, command in zip(entries, commands, strict=True):
+        _validate_typed_selection(command, label="command selection")
+        for field in ("ordinal", "chains", "positions", "shard_relative_path"):
+            if command[field] != entry[field]:
+                raise ContractValidationError(
+                    "command selection does not match its command-plan entry"
+                )
+        argv = command["argv"]
+        if command["argv_sha256"] != canonical_sha256(argv):
+            raise ContractValidationError("command argv SHA-256 does not match exact argv")
+        chains = command["chains"]
+        positions = command["positions"]
+        expected_tail: list[str] = []
+        if chains is not None:
+            expected_tail.extend(["--chains", ",".join(chains)])
+        if positions is not None:
+            expected_tail.extend(["--positions", ",".join(map(str, positions))])
+        if expected_tail and argv[-len(expected_tail):] != expected_tail:
+            raise ContractValidationError(
+                "command argv typed selection does not match command selection"
+            )
+        if not expected_tail and any(flag in argv for flag in ("--chains", "--positions")):
+            raise ContractValidationError("unrestricted command argv contains selection fragments")
+        if argv.count("--chains") != (1 if chains is not None else 0) or argv.count(
+            "--positions"
+        ) != (1 if positions is not None else 0):
+            raise ContractValidationError("command argv selection grammar is not exact")
+        if command["status"] == "succeeded":
+            if (
+                command["exit_code"] != 0
+                or command["shard_sha256"] is None
+                or not isinstance(command["shard_row_count"], int)
+                or command["shard_row_count"] <= 0
+                or command["started_at"] is None
+                or command["ended_at"] is None
+                or command["duration_seconds"] is None
+            ):
+                raise ContractValidationError(
+                    "succeeded command status/exit/shard/timing receipt is incomplete"
+                )
+            _validate_closed_timing(
+                command["started_at"],
+                command["ended_at"],
+                command["duration_seconds"],
+                label="succeeded command",
+            )
+            if positions is not None and command["shard_row_count"] != (
+                len(chains or []) * len(positions) * len(AA_ORDER)
+            ):
+                raise ContractValidationError(
+                    "selected-residue command shard row count is not exact"
+                )
+        elif command["shard_sha256"] is not None or command["shard_row_count"] is not None:
+            raise ContractValidationError("failed/not-run command cannot bind a partial shard")
+
+    receipt_started, receipt_ended = _validate_closed_timing(
+        instance["started_at"],
+        instance["ended_at"],
+        instance["duration_seconds"],
+        label="execution receipt",
+    )
+    for command in commands:
+        if command["started_at"] is None or command["ended_at"] is None:
+            continue
+        command_started, command_ended = _validate_closed_timing(
+            command["started_at"],
+            command["ended_at"],
+            command["duration_seconds"],
+            label="command",
+        )
+        if command_started < receipt_started or command_ended > receipt_ended:
+            raise ContractValidationError("command timing falls outside the execution receipt")
+
+
+def _validate_threshold_policy(instance: Mapping[str, Any], *, label: str) -> None:
+    policy = instance["threshold_policy"]
+    if instance["threshold_policy_sha256"] != canonical_sha256(policy):
+        raise ContractValidationError(f"{label} threshold policy hash mismatch")
+    if policy["high_max"] >= policy["minimal_min"]:
+        raise ContractValidationError(f"{label} threshold policy boundaries are invalid")
+    if policy["mode"] == "canonical" and (
+        policy["high_max"] != -1.0 or policy["minimal_min"] != 0.58
+    ):
+        raise ContractValidationError(
+            f"{label} canonical threshold policy boundaries are invalid"
+        )
+
+
+def _validate_landscape_v2(instance: Mapping[str, Any]) -> None:
+    _validate_threshold_policy(instance, label="landscape")
+    policy = instance["threshold_policy"]
+    residue_keys: set[tuple[Any, ...]] = set()
+    position_keys: set[tuple[str, int]] = set()
+    previous_position: tuple[str, int] | None = None
+    for residue in instance["residues"]:
+        identity = (
+            residue["entity_instance_id"], residue["source_entity_id"],
+            residue["label_asym_id"], residue["auth_asym_id"],
+            residue["auth_seq_id"], residue["insertion_code"],
+            residue["sequence_index"],
+        )
+        position = (residue["pdb_chain_id"], residue["model_position"])
+        if identity in residue_keys or position in position_keys:
+            raise ContractValidationError("duplicate v2 landscape residue identity")
+        if previous_position is not None and position <= previous_position:
+            raise ContractValidationError("v2 landscape residues are not in canonical order")
+        previous_position = position
+        residue_keys.add(identity)
+        position_keys.add(position)
+        slots = residue["slots"]
+        if [slot["mutation_aa"] for slot in slots] != list(AA_ORDER):
+            raise ContractValidationError("v2 landscape slots are not canonical AA order")
+        for slot in slots:
+            score = slot["score"]
+            expected_class = (
+                "high" if score <= policy["high_max"] else
+                "minimal" if score >= policy["minimal_min"] else "neutral"
+            )
+            if slot["class"] != expected_class:
+                raise ContractValidationError(
+                    "v2 landscape class disagrees with threshold policy"
+                )
+            if slot["native"] != (slot["mutation_aa"] == residue["wt"]):
+                raise ContractValidationError("v2 landscape native slot is inconsistent")
+
+
+def _validate_summary_v2(instance: Mapping[str, Any]) -> None:
+    _validate_threshold_policy(instance, label="summary")
+    _validate_summary(instance)
+    if instance["missingness_by_reason"]:
+        raise ContractValidationError(
+            "complete selected v2 summary cannot contain missingness"
+        )
+
+
+def _validate_manifest_v2(instance: Mapping[str, Any]) -> None:
+    _validate_manifest(instance)
+    records = instance["artifacts"]
+    paths = [record["relative_path"] for record in records]
+    if paths != list(V2_MANIFEST_ARTIFACT_PATHS):
+        raise ContractValidationError(
+            "v2 manifest artifact paths are not the exact canonical generation"
+        )
+    expected = {
+        "workflow_component_request_v2.json": ("workflow_component_request", 2, None),
+        "normalized_input.pdb": (None, None, ("residues",)),
+        "frustrampnn_structure_map_v1.json": (
+            "frustrampnn_structure_map", 1, ("residues",)
+        ),
+        "raw_frustrampnn.csv": (None, None, ("rows",)),
+        "frustrampnn_landscape_v2.json": (
+            "frustrampnn_landscape", 2, ("residues",)
+        ),
+        "frustrampnn_summary_v2.json": ("frustrampnn_summary", 2, ("records",)),
+        "frustrampnn_stdout.log": (None, None, None),
+        "frustrampnn_stderr.log": (None, None, None),
+        "frustrampnn_execution_receipt_v2.json": (
+            "frustrampnn_execution_receipt", 2, ("records",)
+        ),
+        "frustrampnn_statistics_v1.json": (
+            "frustrampnn_statistics", 1, ("records",)
+        ),
+    }
+    for record in records:
+        schema_name, schema_version, kinds = expected[record["relative_path"]]
+        if record["schema_name"] != schema_name or record["schema_version"] != schema_version:
+            raise ContractValidationError("v2 manifest artifact schema identity is not exact")
+        is_log = record["relative_path"].endswith(".log")
+        if record["bytes"] < 0 or (not is_log and record["bytes"] == 0):
+            raise ContractValidationError("v2 manifest artifact byte count is invalid")
+        cardinality = record["cardinality"]
+        if kinds is None:
+            if cardinality is not None:
+                raise ContractValidationError("v2 manifest log cardinality must be null")
+        elif (
+            not isinstance(cardinality, Mapping)
+            or cardinality["kind"] not in kinds
+            or cardinality["count"] <= 0
+        ):
+            raise ContractValidationError("v2 manifest artifact cardinality is invalid")
+
+
+def _validate_result_v2(instance: Mapping[str, Any]) -> None:
+    status = instance["status"]
+    if status == "succeeded":
+        if (
+            instance["failure_class"] is not None
+            or instance["diagnostic"] is not None
+            or instance["result_manifest"] is None
+            or instance["result_payload"] is None
+        ):
+            raise ContractValidationError(
+                "succeeded v2 result must bind request/manifest/payload without failure"
+            )
+    elif (
+        instance["failure_class"] not in FAILURE_CLASSES
+        or not instance["diagnostic"]
+        or instance["result_manifest"] is not None
+        or instance["result_payload"] is not None
+    ):
+        raise ContractValidationError(
+            "failed/not-run v2 result requires failure fields and no success manifest"
+        )
+
+
 def validate_schema(schema_key: str, instance: Any) -> None:
     _schema_validate(schema_key, instance)
     validators = {
         "workflow_component_request_v1": _validate_request,
+        "workflow_component_request_v2": _validate_request_v2,
+        "frustrampnn_requested_settings_v1": _validate_settings_v1,
+        "frustrampnn_effective_settings_v1": _typed_effective_settings,
+        "frustrampnn_execution_configuration_v2": _validate_execution_configuration_v2,
+        "frustrampnn_settings_v1": _validate_settings_v1,
+        "frustrampnn_global_configuration_v2": _validate_execution_configuration_v2,
         "workflow_component_result_v1": _validate_result,
         "frustrampnn_structure_map_v1": _validate_structure_map,
         "frustrampnn_landscape_v1": _validate_landscape,
         "frustrampnn_summary_v1": _validate_summary,
         "frustrampnn_result_manifest_v1": _validate_manifest,
+        "frustrampnn_execution_receipt_v2": _validate_execution_receipt_v2,
+        "frustrampnn_landscape_v2": _validate_landscape_v2,
+        "frustrampnn_summary_v2": _validate_summary_v2,
+        "frustrampnn_result_manifest_v2": _validate_manifest_v2,
+        "workflow_component_result_v2": _validate_result_v2,
     }
     validator = validators.get(schema_key)
     if validator is not None:
@@ -435,7 +959,7 @@ def validate_schema(schema_key: str, instance: Any) -> None:
 
 __all__ = [
     "AA_ORDER", "AUTHORITY_ARTIFACT_PATH", "ContractValidationError",
-    "canonical_json_bytes",
+    "canonical_json_bytes", "project_summary_artifact",
     "canonical_json_loads", "canonical_sha256", "load_schema", "request_sha256",
     "validate_relative_path", "validate_schema",
 ]

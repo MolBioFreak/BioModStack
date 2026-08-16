@@ -15,6 +15,7 @@ import {
 } from '../src/components/conformationalMapping/frustraMpnnViewerMetrics.js';
 import type { CmLandscapeResidue, CmStructureMap } from '../src/components/conformationalMapping/conformationalMappingSemantics.js';
 import { CANONICAL_AMINO_ACIDS } from '../src/components/conformationalMapping/conformationalMappingSemantics.js';
+import { normalizeFrustraMpnnLandscapePage } from '../src/lib/frustraMpnnApi.js';
 import { MetricLegendPanel } from '../src/structureViewer/extensions/metrics/MetricLegendPanel.js';
 import { MetricRegistry } from '../src/structureViewer/metrics/MetricRegistry.js';
 import { projectResidueMetricLayer } from '../src/structureViewer/metrics/metricProjection.js';
@@ -30,10 +31,14 @@ const provenance = {
 
 const residue = (overrides: Partial<CmLandscapeResidue> = {}): CmLandscapeResidue => ({
     key: 'copy-1:7', entity_instance_id: 'copy-1', auth_asym_id: 'AUTH', auth_seq_id: '42',
-    insertion_code: 'A', sequence_index: 7, wt: 'G',
+    source_entity_id: '1', label_asym_id: 'A', label_seq_id: 7,
+    insertion_code: 'A', sequence_index: 7, wt: 'G', pdb_chain_id: 'A',
+    pdb_residue_id: 7, pdb_insertion_code: '', model_position: 6, residue_name: 'GLY',
     slots: CANONICAL_AMINO_ACIDS.map((mutation_aa, index): CmLandscapeRow => ({
         candidate_id: 'candidate-1', entity_instance_id: 'copy-1', auth_asym_id: 'AUTH', auth_seq_id: '42',
-        insertion_code: 'A', sequence_index: 7, wt: 'G', mutation_aa,
+        source_entity_id: '1', label_asym_id: 'A', label_seq_id: 7,
+        insertion_code: 'A', sequence_index: 7, wt: 'G', pdb_chain_id: 'A',
+        pdb_residue_id: 7, pdb_insertion_code: '', model_position: 6, residue_name: 'GLY', mutation_aa,
         score: mutation_aa === 'G' ? -1.25 : index / 10 - 0.8,
         class: mutation_aa === 'G' ? 'high' : index < 4 ? 'high' : index > 13 ? 'minimally_frustrated' : 'neutral',
         scoreable: true, status: 'ok', reason: null, provenance,
@@ -49,7 +54,7 @@ const structureMap = (overrides: Partial<CmStructureMap['rows'][number]> = {}): 
         entity_instance_id: 'copy-1', source_entity_id: '1', source_model: 1,
         label_asym_id: 'A', auth_asym_id: 'AUTH', label_seq_id: 7, auth_seq_id: 42,
         insertion_code: 'A', residue_name: 'GLY', sequence_index: 7, pdb_chain_id: 'A', pdb_residue_id: 7,
-        pdb_insertion_code: '', backbone_atoms: {}, selected_altloc: '', model_decision: 'selected', status: 'mapped', reason: null,
+        pdb_insertion_code: '', model_position: 6, backbone_atoms: {}, selected_altloc: '', model_decision: 'selected', status: 'mapped', reason: null,
         ...overrides,
     }],
 });
@@ -152,6 +157,50 @@ test('structure-map identity disagreement fails closed instead of guessing a res
     }), /identity mismatch/i);
 });
 
+test('persisted landscape normalization preserves exact residue identity', () => {
+    const payload = {
+        candidate_id: 'candidate-1', total: 1, limit: 1, offset: 0, next_offset: null,
+        items: [{
+            id: 'row-1', invocation_id: 'invoke-1', candidate_id: 'candidate-1', target_id: 'target-1',
+            source_entity_id: '1', label_asym_id: 'A', pdb_chain_id: 'A', model_position: 6,
+            entity_instance_id: 'copy-1', auth_asym_id: 'AUTH', auth_seq_id: 42,
+            insertion_code: 'A', sequence_index: 7, wt: 'G', mutation_aa: 'A', score: -0.5,
+            score_class: 'neutral', class: 'neutral', scoreable: true, status: 'ok', reason: null,
+            native: false, provenance: {
+                landscape_sha256: sha('1'), structure_map_sha256: sha('2'), normalized_pdb_sha256: sha('3'),
+                raw_csv_sha256: sha('4'), threshold_policy: { high_max: -1, minimal_min: 0.58 },
+                threshold_policy_sha256: sha('5'),
+            },
+            residue: {
+                entity_instance_id: 'copy-1', source_entity_id: '1', label_asym_id: 'A', auth_asym_id: 'AUTH',
+                label_seq_id: 7, auth_seq_id: 42, insertion_code: 'A', sequence_index: 7,
+                pdb_chain_id: 'A', pdb_residue_id: -7, pdb_insertion_code: 'A', model_position: 6,
+                residue_name: 'GLY', wt: 'G',
+            },
+        }],
+    };
+    const normalized = normalizeFrustraMpnnLandscapePage('job-1', payload);
+    assert.deepEqual(normalized.rows[0] && {
+        source_entity_id: normalized.rows[0].source_entity_id,
+        label_asym_id: normalized.rows[0].label_asym_id,
+        label_seq_id: normalized.rows[0].label_seq_id,
+        pdb_chain_id: normalized.rows[0].pdb_chain_id,
+        pdb_residue_id: normalized.rows[0].pdb_residue_id,
+        pdb_insertion_code: normalized.rows[0].pdb_insertion_code,
+        model_position: normalized.rows[0].model_position,
+        residue_name: normalized.rows[0].residue_name,
+    }, {
+        source_entity_id: '1', label_asym_id: 'A', label_seq_id: 7, pdb_chain_id: 'A',
+        pdb_residue_id: -7, pdb_insertion_code: 'A', model_position: 6, residue_name: 'GLY',
+    });
+    const conflicting = structuredClone(payload);
+    conflicting.items[0]!.model_position = 5;
+    assert.throws(
+        () => normalizeFrustraMpnnLandscapePage('job-1', conflicting),
+        /landscape identity is invalid/i,
+    );
+});
+
 test('viewer residue selection resolves the exact canonical 20-slot profile', () => {
     const expected = residue();
     const bundle = createFrustraMpnnViewerMetrics({
@@ -181,15 +230,13 @@ test('complete landscape collection follows bounded monotonic pages and validate
     await assert.rejects(() => collectCompleteFrustraMpnnLandscape(async () => ({ ...pages[0], next_offset: null, rows: [...rows, ...rows] }), 20), /bounded/i);
 });
 
-test('canonical conformational viewer uses the shared metric workbench, not a global substitution dropdown', () => {
+test('canonical conformational viewer delegates FrustraMPNN numerical authority to the global workbench', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/components/conformationalMapping/ConformationalMappingViewer.tsx'), 'utf8');
     assert.doesNotMatch(source, /landscapeMutation|Landscape substitution/);
-    assert.match(source, /collectCompleteFrustraMpnnLandscape/);
-    assert.match(source, /metricLayers=\{frustraMpnnMetrics\?\.layers\}/);
-    assert.match(source, /showMetricWorkbench=\{metricWorkbenchOpen\}/);
-    assert.match(source, /showSequenceTrack=\{metricWorkbenchOpen\}/);
-    assert.match(source, /onMetricSelection=\{setFrustraMpnnSelection\}/);
-    assert.match(source, /Exact-20 residue profile/);
+    assert.doesNotMatch(source, /collectCompleteFrustraMpnnLandscape|metricLayers=\{frustraMpnnMetrics|setFrustraMpnnSelection|Exact-20 residue profile/);
+    assert.match(source, /showMetricWorkbench=\{false\}/);
+    assert.match(source, /showSequenceTrack=\{false\}/);
+    assert.match(source, /<FrustraWorkbench/);
 });
 
 test('generic structure viewer cannot reactivate the retired position-guessed frustration layer', () => {

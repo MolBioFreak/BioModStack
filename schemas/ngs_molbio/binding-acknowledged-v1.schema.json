@@ -1,0 +1,30 @@
+{
+  "$id": "bms.molbio-ngs.binding-acknowledged.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "binding_receipt_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "binding_revision_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "binding_revision_number": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "schema": {
+      "const": "bms.molbio-ngs.binding-acknowledged.v1"
+    }
+  },
+  "required": [
+    "schema",
+    "binding_revision_id",
+    "binding_revision_number",
+    "binding_receipt_sha256"
+  ],
+  "type": "object"
+}

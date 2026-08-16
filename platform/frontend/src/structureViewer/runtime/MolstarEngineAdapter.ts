@@ -1,5 +1,6 @@
 import type { ResidueRef } from '../contracts/structureIdentity.js';
 import type { StructureSceneState } from '../contracts/sceneState.js';
+import type { StructureScenePresentation } from '../contracts/scenePresentation.js';
 import type { MDPlaybackState, MDSourceFrameRef } from '../contracts/mdTrajectory.js';
 import type { ViewerResult } from '../contracts/viewerResults.js';
 import type { SpatialVolumeDescriptorV1, VolumePresentationStateV1, VolumeRegistrationV1, VolumeSegmentationV1 } from '../contracts/spatialVolumes.js';
@@ -36,5 +37,6 @@ export interface MolstarEngineAdapter {
     capturePng?(signal: AbortSignal): Promise<ViewerResult<Blob>>;
     exportSelectionMmcif?(signal: AbortSignal): Promise<ViewerResult<Blob>>;
     getCanvasElement?(): ViewerResult<HTMLCanvasElement>;
+    capturePresentation?(): ViewerResult<StructureScenePresentation>;
     dispose(): Promise<void>;
 }

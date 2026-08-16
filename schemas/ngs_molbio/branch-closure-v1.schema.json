@@ -1,0 +1,72 @@
+{
+  "$id": "bms.ngs-molbio.branch-closure.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "baseline_source_commit": {
+      "const": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517"
+    },
+    "content_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "entries": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_id": {
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "decision": {
+            "enum": [
+              "absorbed",
+              "skip_patch_equivalent",
+              "preserve_target_policy",
+              "landed_requires_repair",
+              "reconcile_semantically"
+            ]
+          },
+          "evidence": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "required_follow_up": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "candidate_id",
+          "decision",
+          "evidence",
+          "required_follow_up"
+        ],
+        "type": "object"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "type": "array"
+    },
+    "schema": {
+      "const": "bms.ngs-molbio.branch-closure.v1"
+    }
+  },
+  "required": [
+    "schema",
+    "baseline_source_commit",
+    "entries",
+    "content_sha256"
+  ],
+  "type": "object"
+}

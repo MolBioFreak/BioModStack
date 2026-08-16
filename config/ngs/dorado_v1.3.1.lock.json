@@ -4,7 +4,21 @@
     "version": "1.3.1+7c84b01de",
     "source_commit": "7c84b01de1e46d4c5b2d5208fc430f27579a6c22",
     "source_tree": "19dbc819cb81afab03a37b324e87a012d02bbc77",
-    "sif_sha256": "2af01c5973eb86736949ea7d29342bb9f24611036906266c35e27c54d2032fad"
+    "sif_sha256": "f339b0499cb4e4dec116eaa011bc1b434a316f0ac11c69ce91a25ee9e229ae35"
+  },
+  "scientific_tools": {
+    "samtools": {
+      "version": "1.24",
+      "source_url": "https://github.com/samtools/samtools/releases/download/1.24/samtools-1.24.tar.bz2",
+      "source_sha256": "89b2a440123eeaa400392ce1736e7d60ce9041843027d76819753c5a8246bfdd",
+      "consensus_method": "samtools_1.24_bayesian_consensus"
+    },
+    "modkit": {
+      "version": "0.6.4",
+      "source_url": "https://github.com/nanoporetech/modkit/releases/download/v0.6.4/modkit_v0.6.4_u16_x86_64.tar.gz",
+      "source_sha256": "fb332c691431bd336eb0a81cbca17d2a35caf442ac48277ed3e296c2fe061d80"
+    },
+    "igv_reports": {"version": "1.16.3"}
   },
   "model_aggregate_algorithm": "sha256(sorted(relative_path NUL size NUL file_sha256 LF))",
   "models": {

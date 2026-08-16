@@ -64,3 +64,14 @@ def test_protenix_complex_command_is_v2_and_routes_to_complex_workflow() -> None
     assert _flag_value(cmd, "--pred_method") == "protenix"
     assert _flag_value(cmd, "--protenix_model_weights") == "protenix-v2"
     assert "--complex_json_path" in cmd
+
+
+def test_protenix_gpu_label_keeps_runtime_image_and_weight_bind() -> None:
+    config = (API_ROOT.parent.parent / "nextflow.config").read_text(encoding="utf-8")
+    start = config.index("    withLabel: Protenix {")
+    end = config.index("\n    }", start)
+    block = config[start:end]
+
+    assert 'container = "${params.container_dir}/protenix.sif"' in block
+    assert "ext.containerOptions =" in block
+    assert "--bind ${params.protenix_weights}:/protenix_weights" in block

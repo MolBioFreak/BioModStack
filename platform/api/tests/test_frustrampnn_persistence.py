@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import csv
 from dataclasses import replace
+import hashlib
 import importlib
 import importlib.util
 import json
@@ -10,6 +11,7 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
+import rfc8785
 from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -22,7 +24,10 @@ from database import (
     Job,
 )
 from services.frustrampnn.analysis import summarize_landscape
-from services.frustrampnn.contracts import canonical_json_bytes, canonical_json_loads
+from services.frustrampnn.contracts import (
+    canonical_json_bytes,
+    canonical_json_loads,
+)
 from services.frustrampnn.manifests import MANIFEST_PATH, build_result_manifest
 
 
@@ -42,6 +47,19 @@ def _fixture_module():
 MANIFEST_FIXTURE = _fixture_module()
 
 
+def _component_fixture_module():
+    name = "_frustrampnn_component_fixture_for_persistence"
+    path = TESTS_DIR / "test_frustrampnn_component_phase3.py"
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+COMPONENT_FIXTURE = _component_fixture_module()
+
+
 def _persistence():
     path = (
         Path(__file__).resolve().parents[1]
@@ -51,6 +69,50 @@ def _persistence():
     )
     assert path.is_file(), "FrustraMPNN persistence service is missing"
     return importlib.import_module("services.frustrampnn.persistence")
+
+
+@pytest.mark.parametrize(
+    "statistics",
+    [
+        {"integral_float": 1.0, "nonintegral_float": 1.25},
+        {"integral_float": -0.0, "nonintegral_float": -12.5},
+    ],
+)
+def test_statistics_persistence_requires_exact_rfc8785_float_bytes(
+    statistics: dict[str, float],
+) -> None:
+    persistence = _persistence()
+    canonical = rfc8785.dumps(statistics)
+
+    assert persistence._canonical_object(
+        canonical, "frustrampnn_statistics_v1.json"
+    ) == statistics
+
+    alternate = canonical_json_bytes(statistics)
+    assert alternate != canonical
+    with pytest.raises(
+        persistence.FrustraMPNNPersistenceError,
+        match="exact canonical JSON object",
+    ):
+        persistence._canonical_object(
+            alternate, "frustrampnn_statistics_v1.json"
+        )
+
+
+def test_nonstatistics_persistence_keeps_existing_canonical_profile() -> None:
+    persistence = _persistence()
+    payload = {"integral_float": 1.0, "nonintegral_float": 1.0e-7}
+
+    assert persistence._canonical_object(
+        canonical_json_bytes(payload), "frustrampnn_summary_v2.json"
+    ) == payload
+    with pytest.raises(
+        persistence.FrustraMPNNPersistenceError,
+        match="exact canonical JSON object",
+    ):
+        persistence._canonical_object(
+            rfc8785.dumps(payload), "frustrampnn_summary_v2.json"
+        )
 
 
 def _load_json(root: Path, relative: str) -> dict:
@@ -79,6 +141,54 @@ def _bundle(root: Path, *, source_artifact_id: str | None = "design-1") -> tuple
         _write_json(root, "workflow_component_request_v1.json", request)
         MANIFEST_FIXTURE._rehash_bundle(root)
     return _publish_manifest(root)
+
+
+def _v2_bundle(
+    root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    residues: list[tuple[str, int]] | None = None,
+    thresholds: tuple[float, float] = (-0.5, 0.5),
+    scores: dict[str, float] | None = None,
+    distinct_source_identity: bool = False,
+) -> tuple[dict, dict]:
+    component = importlib.import_module("scripts.run_frustrampnn_component")
+    selected_residues = residues or [("A", 1)]
+    inputs = root.parent / f"{root.name}-inputs"
+    inputs.mkdir()
+    if distinct_source_identity:
+        physical_source = COMPONENT_FIXTURE._multi_residue_pdb
+        monkeypatch.setattr(
+            COMPONENT_FIXTURE,
+            "_multi_residue_pdb",
+            lambda selected: b"HEADER    ORIGINAL SOURCE AUTHORITY\n"
+            + physical_source(selected),
+        )
+    request, normalized, structure_map, _ = COMPONENT_FIXTURE._v2_inputs(
+        inputs,
+        residues=selected_residues,
+        selected=[
+            (chain, index)
+            for index, (chain, _residue_id) in enumerate(selected_residues)
+        ],
+        thresholds=thresholds,
+    )
+    COMPONENT_FIXTURE._mock_v2_runtime(
+        component,
+        monkeypatch,
+        inputs,
+        scores=scores,
+    )
+    manifest = component.run_component(
+        request=request,
+        source_structure=normalized,
+        structure_map=structure_map,
+        output_dir=root,
+        container=inputs / "mock.sif",
+        physical_gpu_id=3,
+    )
+    terminal = _load_json(root, "workflow_component_result_v2.json")
+    return manifest, terminal
 
 
 def _republish(root: Path) -> tuple[dict, dict]:
@@ -167,6 +277,35 @@ async def _seed_job(
         await session.commit()
 
 
+async def _seed_v2_child_job(sessions: async_sessionmaker, root: Path) -> None:
+    request = _load_json(root, "workflow_component_request_v2.json")
+    async with sessions() as session:
+        session.add(
+            Job(
+                id=request["parent_job_id"],
+                name=request["parent_job_id"],
+                status="completed",
+                model_id="frustrampnn",
+                mode="component",
+                params={
+                    "requested_settings_sha256": "0" * 64,
+                    "effective_settings": {"mutable_job_param": True},
+                    "statistics": {"mutable_job_param": True},
+                    "_frustrampnn_child_v1": {
+                        "selection": [
+                            {
+                                "design_id": None,
+                                "source_job_id": None,
+                                "normalized_source_sha256": request["normalized_pdb_sha256"],
+                            }
+                        ]
+                    }
+                },
+            )
+        )
+        await session.commit()
+
+
 async def _counts(session) -> tuple[int, int, int]:
     counts: list[int] = []
     for model in (FrustraMPNNResult, FrustraMPNNArtifact, FrustraMPNNLandscapeRow):
@@ -229,10 +368,344 @@ async def test_complete_manifest_bundle_persists_exact_authority_and_rows(
     assert {row.mutation_aa for row in rows} == set("ACDEFGHIKLMNPQRSTVWY")
     assert all(row.row_json["residue"]["auth_seq_id"] == 1 for row in rows)
     assert all(row.provenance_json["landscape_sha256"] == summary["landscape_sha256"] for row in rows)
+    assert (
+        result.settings_sha256,
+        result.effective_settings_sha256,
+        result.effective_settings_json,
+        result.capability_inventory_sha256,
+        result.statistics_sha256,
+        result.statistics_json,
+        result.comparison_compatibility_id,
+    ) == (None, None, None, None, None, None, None)
 
 
 @pytest.mark.asyncio
-async def test_identical_replay_returns_existing_and_repairs_canonical_summary_projection(
+async def test_v2_persists_exact_authority_statistics_artifacts_rows_and_replays(
+    tmp_path: Path,
+    db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _persistence()
+    root = tmp_path / "v2-bundle"
+    manifest, terminal = _v2_bundle(
+        root,
+        monkeypatch,
+        residues=[("A", 1), ("A", 2)],
+        scores={"A": -0.75, "G": 0.75},
+        distinct_source_identity=True,
+    )
+    await _seed_v2_child_job(db, root)
+    request = _load_json(root, "workflow_component_request_v2.json")
+    statistics = _load_json(root, "frustrampnn_statistics_v1.json")
+    landscape = _load_json(root, "frustrampnn_landscape_v2.json")
+
+    async with db() as session:
+        result = await module.ingest_result_bundle(
+            session,
+            root,
+            parent_job_id="job-v2",
+            terminal_envelope=terminal,
+        )
+        artifacts = (
+            await session.execute(
+                select(FrustraMPNNArtifact)
+                .where(FrustraMPNNArtifact.invocation_id == "invoke-v2")
+                .order_by(FrustraMPNNArtifact.relative_path)
+            )
+        ).scalars().all()
+        rows = (
+            await session.execute(
+                select(FrustraMPNNLandscapeRow).where(
+                    FrustraMPNNLandscapeRow.invocation_id == "invoke-v2"
+                )
+            )
+        ).scalars().all()
+        created_at = result.created_at
+        counts = await _counts(session)
+        replay = await module.ingest_result_bundle(
+            session,
+            root,
+            parent_job_id="job-v2",
+            terminal_envelope=terminal,
+        )
+
+    assert result.settings_sha256 == request["requested_settings_sha256"]
+    assert result.effective_settings_sha256 == request["effective_settings_sha256"]
+    assert result.effective_settings_json == request["effective_settings"]
+    assert result.source_artifact_sha256 == request["source_artifact"]["sha256"]
+    assert request["source_artifact"]["sha256"] != request["normalized_pdb_sha256"]
+    assert (
+        result.capability_inventory_sha256
+        == request["capability_inventory_byte_sha256"]
+        == statistics["capability_inventory_byte_sha256"]
+    )
+    assert result.statistics_sha256 == statistics["statistics_sha256"]
+    assert result.statistics_json == statistics
+    assert (
+        result.comparison_compatibility_id
+        == statistics["comparison_compatibility_id"]
+        == manifest["comparison_compatibility_id"]
+    )
+    assert result.terminal_result_json == terminal
+    assert result.runtime_identity_json == _load_json(
+        root, "frustrampnn_execution_receipt_v2.json"
+    )
+    assert result.assigned_gpu_json == {
+        "physical_device_id": "3",
+        "task_visible_device_index": 0,
+    }
+    assert len(artifacts) == 10
+    records = {record["relative_path"]: record for record in manifest["artifacts"]}
+    assert {artifact.relative_path for artifact in artifacts} == set(records)
+    assert (
+        records["normalized_input.pdb"]["sha256"]
+        == request["normalized_pdb_sha256"]
+    )
+    for artifact in artifacts:
+        record = records[artifact.relative_path]
+        payload = (root / artifact.relative_path).read_bytes()
+        assert artifact.metadata_json == record
+        assert artifact.content_sha256 == hashlib.sha256(payload).hexdigest() == record["sha256"]
+        assert artifact.size_bytes == len(payload) == record["bytes"]
+        assert artifact.media_type in {
+            "application/json",
+            "chemical/x-pdb",
+            "text/csv",
+            "text/plain",
+        }
+    assert len(rows) == 2 * 20
+    assert len({row.id for row in rows}) == 2 * 20
+    expected_row_json = {
+        canonical_json_bytes(
+            {
+                "residue": {
+                    key: value for key, value in residue.items() if key != "slots"
+                },
+                "slot": slot,
+            }
+        )
+        for residue in landscape["residues"]
+        for slot in residue["slots"]
+    }
+    assert {canonical_json_bytes(row.row_json) for row in rows} == expected_row_json
+    assert all(
+        {
+            "source_entity_id",
+            "label_seq_id",
+            "pdb_residue_id",
+            "pdb_insertion_code",
+            "residue_name",
+        }.issubset(row.row_json["residue"])
+        for row in rows
+    )
+    assert replay.created_at == created_at
+    async with db() as session:
+        assert await _counts(session) == counts == (1, 10, 40)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "contradiction"),
+    [
+        ("settings_sha256", "0" * 64),
+        ("effective_settings_sha256", "1" * 64),
+        ("effective_settings_json", {"contradiction": "effective_settings"}),
+        ("capability_inventory_sha256", "2" * 64),
+        ("statistics_sha256", "3" * 64),
+        ("statistics_json", {"contradiction": "statistics"}),
+        ("comparison_compatibility_id", "4" * 64),
+    ],
+)
+async def test_v2_replay_conflicts_on_each_new_authority_field_without_repair(
+    tmp_path: Path,
+    db,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    contradiction,
+) -> None:
+    module = _persistence()
+    root = tmp_path / f"v2-conflict-{field}"
+    _, terminal = _v2_bundle(root, monkeypatch)
+    await _seed_v2_child_job(db, root)
+
+    async with db() as session:
+        result = await module.ingest_result_bundle(
+            session,
+            root,
+            parent_job_id="job-v2",
+            terminal_envelope=terminal,
+        )
+        setattr(result, field, copy.deepcopy(contradiction))
+        await session.commit()
+        counts = await _counts(session)
+
+        with pytest.raises(module.FrustraMPNNConflictError, match="result authority"):
+            await module.ingest_result_bundle(
+                session,
+                root,
+                parent_job_id="job-v2",
+                terminal_envelope=terminal,
+            )
+
+    async with db() as verification:
+        persisted = await verification.get(FrustraMPNNResult, ("job-v2", "invoke-v2"))
+        assert persisted is not None
+        assert canonical_json_bytes(getattr(persisted, field)) == canonical_json_bytes(
+            contradiction
+        )
+        assert await _counts(verification) == counts == (1, 10, 20)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "authority",
+    ["artifact_storage_path", "artifact_metadata", "landscape_score", "landscape_row"],
+)
+async def test_v2_replay_conflicts_on_artifact_and_landscape_contradictions(
+    tmp_path: Path,
+    db,
+    monkeypatch: pytest.MonkeyPatch,
+    authority: str,
+) -> None:
+    module = _persistence()
+    root = tmp_path / f"v2-{authority}"
+    _, terminal = _v2_bundle(root, monkeypatch)
+    await _seed_v2_child_job(db, root)
+
+    async with db() as session:
+        await module.ingest_result_bundle(
+            session,
+            root,
+            parent_job_id="job-v2",
+            terminal_envelope=terminal,
+        )
+        if authority.startswith("artifact_"):
+            persisted = (
+                await session.execute(
+                    select(FrustraMPNNArtifact).where(
+                        FrustraMPNNArtifact.parent_job_id == "job-v2",
+                        FrustraMPNNArtifact.invocation_id == "invoke-v2",
+                    )
+                )
+            ).scalars().first()
+            assert persisted is not None
+            if authority == "artifact_storage_path":
+                persisted.storage_path += ".contradiction"
+            else:
+                persisted.metadata_json = {"contradiction": "artifact metadata"}
+        else:
+            persisted = (
+                await session.execute(
+                    select(FrustraMPNNLandscapeRow).where(
+                        FrustraMPNNLandscapeRow.parent_job_id == "job-v2",
+                        FrustraMPNNLandscapeRow.invocation_id == "invoke-v2",
+                    )
+                )
+            ).scalars().first()
+            assert persisted is not None
+            if authority == "landscape_score":
+                persisted.score = 123.0
+            else:
+                persisted.row_json = {"contradiction": "landscape row"}
+        await session.commit()
+        counts = await _counts(session)
+
+        with pytest.raises(module.FrustraMPNNConflictError, match="artifact|landscape"):
+            await module.ingest_result_bundle(
+                session,
+                root,
+                parent_job_id="job-v2",
+                terminal_envelope=terminal,
+            )
+        assert await _counts(session) == counts == (1, 10, 20)
+
+
+@pytest.mark.asyncio
+async def test_v2_statistics_physical_tamper_fails_before_persistence(
+    tmp_path: Path,
+    db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _persistence()
+    root = tmp_path / "v2-statistics-tamper"
+    _, terminal = _v2_bundle(root, monkeypatch)
+    await _seed_v2_child_job(db, root)
+    statistics = _load_json(root, "frustrampnn_statistics_v1.json")
+    statistics["target_id"] = "tampered-target"
+    _write_json(root, "frustrampnn_statistics_v1.json", statistics)
+
+    async with db() as session:
+        with pytest.raises(module.FrustraMPNNPersistenceError, match="manifest|statistics"):
+            await module.ingest_result_bundle(
+                session,
+                root,
+                parent_job_id="job-v2",
+                terminal_envelope=terminal,
+            )
+        assert await _counts(session) == (0, 0, 0)
+
+
+@pytest.mark.asyncio
+async def test_v2_insert_failure_rolls_back_result_artifacts_and_rows(
+    tmp_path: Path,
+    db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _persistence()
+    root = tmp_path / "v2-insert-rollback"
+    _, terminal = _v2_bundle(root, monkeypatch)
+    await _seed_v2_child_job(db, root)
+
+    def fail_landscape_insert(*_args, **_kwargs):
+        raise RuntimeError("injected v2 landscape insert failure")
+
+    event.listen(FrustraMPNNLandscapeRow, "before_insert", fail_landscape_insert)
+    try:
+        async with db() as session:
+            with pytest.raises(module.FrustraMPNNPersistenceError, match="injected v2"):
+                await module.ingest_result_bundle(
+                    session,
+                    root,
+                    parent_job_id="job-v2",
+                    terminal_envelope=terminal,
+                )
+            assert await _counts(session) == (0, 0, 0)
+    finally:
+        event.remove(FrustraMPNNLandscapeRow, "before_insert", fail_landscape_insert)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_status", ["failed", "not_run"])
+async def test_v2_non_success_terminal_never_persists_success(
+    tmp_path: Path,
+    db,
+    monkeypatch: pytest.MonkeyPatch,
+    terminal_status: str,
+) -> None:
+    module = _persistence()
+    root = tmp_path / f"v2-{terminal_status}"
+    _, terminal = _v2_bundle(root, monkeypatch)
+    await _seed_v2_child_job(db, root)
+    terminal["status"] = terminal_status
+    terminal["failure_class"] = "inference_nonzero_exit"
+    terminal["diagnostic"] = f"terminal was {terminal_status}"
+    terminal["result_manifest"] = None
+    terminal["result_payload"] = None
+    _write_json(root, "workflow_component_result_v2.json", terminal)
+
+    async with db() as session:
+        with pytest.raises(module.FrustraMPNNPersistenceError, match="result|success|manifest"):
+            await module.ingest_result_bundle(
+                session,
+                root,
+                parent_job_id="job-v2",
+                terminal_envelope=terminal,
+            )
+        assert await _counts(session) == (0, 0, 0)
+
+
+@pytest.mark.asyncio
+async def test_identical_replay_returns_existing_and_preserves_historical_design_fields(
     tmp_path: Path, db
 ) -> None:
     module = _persistence()
@@ -248,12 +721,9 @@ async def test_identical_replay_returns_existing_and_repairs_canonical_summary_p
         created_at = first.created_at
         counts = await _counts(session)
         design = await session.get(Design, "design-1")
-        summary = first.summary_json
-        assert design.frustration_high_count == summary["native_slot_counts"]["high"]
-        assert design.frustration_min_count == summary["native_slot_counts"]["minimal"]
-        assert design.frustration_pct_high == pytest.approx(
-            summary["native_slot_fractions"]["high"] * 100.0
-        )
+        assert design.frustration_high_count is None
+        assert design.frustration_min_count is None
+        assert design.frustration_pct_high is None
         assert design.frustration_residues is None
         assert design.frustration_csv_path is None
         assert design.frustrampnn_contract_version == "1.0"
@@ -273,11 +743,9 @@ async def test_identical_replay_returns_existing_and_repairs_canonical_summary_p
         assert replay.invocation_id == first.invocation_id
         assert replay.created_at == created_at
         assert await _counts(session) == counts == (1, 10, 20)
-        assert design.frustration_high_count == summary["native_slot_counts"]["high"]
-        assert design.frustration_min_count == summary["native_slot_counts"]["minimal"]
-        assert design.frustration_pct_high == pytest.approx(
-            summary["native_slot_fractions"]["high"] * 100.0
-        )
+        assert design.frustration_high_count == 99
+        assert design.frustration_min_count is None
+        assert design.frustration_pct_high is None
 
 
 @pytest.mark.asyncio
@@ -537,7 +1005,7 @@ async def test_exact_source_id_without_matching_physical_hash_fails_without_writ
 
 
 @pytest.mark.asyncio
-async def test_exact_authoritative_design_link_gets_canonical_summary_projection_without_legacy_rows(
+async def test_exact_authoritative_design_link_updates_canonical_status_without_legacy_writes(
     tmp_path: Path, db
 ) -> None:
     module = _persistence()
@@ -552,12 +1020,9 @@ async def test_exact_authoritative_design_link_gets_canonical_summary_projection
         )
         design = await session.get(Design, "design-1")
         assert result.design_id == "design-1"
-        summary = result.summary_json
-        assert design.frustration_high_count == summary["native_slot_counts"]["high"]
-        assert design.frustration_min_count == summary["native_slot_counts"]["minimal"]
-        assert design.frustration_pct_high == pytest.approx(
-            summary["native_slot_fractions"]["high"] * 100.0
-        )
+        assert design.frustration_high_count is None
+        assert design.frustration_min_count is None
+        assert design.frustration_pct_high is None
         assert design.frustration_csv_path is None
         assert design.frustration_residues is None
         assert design.frustrampnn_contract_version == "1.0"

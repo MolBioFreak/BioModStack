@@ -442,6 +442,41 @@ def test_safety_interrupt_bypasses_active_request_lease_without_allowing_disconn
     asyncio.run(exercise())
 
 
+def test_x_safety_interrupt_bypasses_active_request_lease(tmp_path: Path) -> None:
+    _, BioXpProfile, _, _ = _load()
+    clients: list[FakeRobotClient] = []
+    service = _service(tmp_path, clients)
+
+    async def exercise() -> None:
+        await service.save_profile(BioXpProfile(api_url="http://robot:8123"))
+        connected = await service.connect()
+        robot = clients[0]
+        robot.request_started = asyncio.Event()
+        robot.request_release = asyncio.Event()
+        robot.blocking_route_name = "invoke_operator_action"
+        robot.blocking_action_id = "oem.x.move_steps"
+        movement_task = asyncio.create_task(service.request_active(
+            "invoke_operator_action",
+            expected_generation=connected.generation,
+            path_params={"action_id": "oem.x.move_steps"},
+            json_data={"expected_generation": 7, "idempotency_key": "x-move-action", "inputs": {"steps": 20}},
+        ))
+        await robot.request_started.wait()
+        for action_id in ("oem.x.stop", "oem.abort_all"):
+            receipt = await asyncio.wait_for(service.request_active_safety_interrupt(
+                "invoke_operator_action",
+                expected_generation=connected.generation,
+                path_params={"action_id": action_id},
+                json_data={"expected_generation": 7, "idempotency_key": f"{action_id}-action", "inputs": {}},
+            ), timeout=0.1)
+            assert receipt["kwargs"]["path_params"] == {"action_id": action_id}
+            assert movement_task.done() is False
+        robot.request_release.set()
+        await movement_task
+
+    asyncio.run(exercise())
+
+
 def test_multi_request_lease_serializes_disconnect_until_canonical_readback(tmp_path: Path) -> None:
     _, BioXpProfile, _, _ = _load()
     clients: list[FakeRobotClient] = []

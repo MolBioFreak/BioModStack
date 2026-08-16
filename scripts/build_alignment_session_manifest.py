@@ -39,6 +39,10 @@ def parse_required(value: str) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--job-id", required=True)
+    parser.add_argument("--expected-source-reference-sha256", required=True)
+    parser.add_argument("--workflow-id", required=True)
+    parser.add_argument("--input-mode", choices=("fastq", "bam", "pod5"), required=True)
     parser.add_argument("--out", type=Path, default=Path("qc_manifest.json"))
     parser.add_argument("--mode", choices=("primary", "dimer_candidates"), default="dimer_candidates")
     parser.add_argument(
@@ -87,13 +91,35 @@ def main() -> int:
     reference_path = next((Path(raw_path) for kind, raw_path, _required in declarations if kind == "reference"), None)
     if reference_path is None or not reference_path.is_file():
         raise ValueError("alignment-session manifest requires a reference artifact")
+    expected_source_sha256 = args.expected_source_reference_sha256.strip().lower()
+    if len(expected_source_sha256) != 64 or any(character not in "0123456789abcdef" for character in expected_source_sha256):
+        raise ValueError("authorized source reference SHA-256 is invalid")
+    if args.workflow_id not in {"ont_fastq_qc", "ont_plasmid_qc", "ont_construct_screening", "wf_clone_validation"}:
+        raise ValueError("canonical workflow_id is invalid")
+    normalized_reference = "".join(
+        line.strip().upper()
+        for line in reference_path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.startswith(">")
+    )
+    midpoint = len(normalized_reference) // 2
+    if (
+        len(normalized_reference) % 2 != 0
+        or normalized_reference[:midpoint] != normalized_reference[midpoint:]
+        or hashlib.sha256(normalized_reference[:midpoint].encode("ascii")).hexdigest() != expected_source_sha256
+    ):
+        raise ValueError("dimer reference is not derived from the authorized source reference")
     payload = {
         "artifact_schema_version": 2,
-        "schema": "biomodstack.alignment_session.v1",
+        "schema": "sequence_qc.manifest.v1",
+        "workflow_id": args.workflow_id,
+        "job_id": args.job_id,
+        "input_mode": args.input_mode,
+        "analysis_status": "completed",
         "alignment_session": {
             "mode": args.mode,
             "reference_sequence_sha256": _normalized_fasta_sha256(reference_path),
-            "binding": "server-generated manifest binds BAM, index, and normalized reference digests",
+            "source_reference_sequence_sha256": expected_source_sha256,
+            "binding": "authorized source reference binds an exact tandem dimer reference plus BAM and index digests",
         },
         "artifacts": artifacts,
     }

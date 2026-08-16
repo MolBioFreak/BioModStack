@@ -13,8 +13,45 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
         jq \
         unzip \
         ca-certificates \
-        samtools \
-        minimap2
+        minimap2 \
+        build-essential \
+        autoconf \
+        automake \
+        pkg-config \
+        zlib1g-dev \
+        libbz2-dev \
+        liblzma-dev \
+        libcurl4-gnutls-dev \
+        libssl-dev \
+        libncurses-dev \
+        libdeflate-dev \
+        python3 \
+        python3-pip \
+        python3-venv
+
+    # ── samtools 1.24 Bayesian consensus ─────────────────────────────────
+    SAMTOOLS_VERSION="1.24"
+    SAMTOOLS_URL="https://github.com/samtools/samtools/releases/download/1.24/samtools-1.24.tar.bz2"
+    SAMTOOLS_SHA256="89b2a440123eeaa400392ce1736e7d60ce9041843027d76819753c5a8246bfdd"
+    SAMTOOLS_TARBALL="/tmp/samtools-${SAMTOOLS_VERSION}.tar.bz2"
+    curl -fsSL --retry 3 --retry-delay 2 -o "${SAMTOOLS_TARBALL}" "${SAMTOOLS_URL}"
+    printf '%s  %s\n' "${SAMTOOLS_SHA256}" "${SAMTOOLS_TARBALL}" | sha256sum -c -
+    tar -xjf "${SAMTOOLS_TARBALL}" -C /tmp
+    (
+        cd "/tmp/samtools-${SAMTOOLS_VERSION}"
+        ./configure --prefix=/usr/local
+        make -j"$(nproc)"
+        make install
+    )
+    test "$(samtools --version | awk 'NR == 1 {print $2}')" = "${SAMTOOLS_VERSION}"
+    rm -rf "/tmp/samtools-${SAMTOOLS_VERSION}" "${SAMTOOLS_TARBALL}"
+
+    # ── igv-reports (pinned static-report generator) ───────────────────────
+    IGV_REPORTS_VERSION="1.16.3"
+    python3 -m venv /opt/igv-reports
+    /opt/igv-reports/bin/pip install --no-cache-dir --disable-pip-version-check \
+        "igv-reports==${IGV_REPORTS_VERSION}"
+    ln -s /opt/igv-reports/bin/create_report /usr/local/bin/create_report
 
     # ── Dorado v1.3.1 (Jan 2026) ──────────────────────────────────────────
     # Pre-built Linux x86_64 binary with CUDA support
@@ -23,70 +60,21 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
         | tar xzf - -C /opt
     ln -s /opt/dorado-${DORADO_VERSION}-linux-x64/bin/dorado /usr/local/bin/dorado
 
-    # ── modkit (resolve current release asset dynamically) ───────────────────
-    MODKIT_REPO="nanoporetech/modkit"
-    MODKIT_VERSION="latest"   # set to e.g. v0.7.0 to pin
-    MODKIT_TMP="/tmp/modkit_download"
-    MODKIT_EXTRACT="/tmp/modkit_extract"
-    rm -f "${MODKIT_TMP}" /usr/local/bin/modkit
-    rm -rf "${MODKIT_EXTRACT}"
+    # ── modkit v0.6.4, pinned ABI-compatible release asset ─────────────────
+    MODKIT_VERSION="0.6.4"
+    MODKIT_URL="https://github.com/nanoporetech/modkit/releases/download/v0.6.4/modkit_v0.6.4_u16_x86_64.tar.gz"
+    MODKIT_SHA256="fb332c691431bd336eb0a81cbca17d2a35caf442ac48277ed3e296c2fe061d80"
+    MODKIT_TARBALL="/tmp/modkit-${MODKIT_VERSION}.tar.gz"
+    MODKIT_EXTRACT="/tmp/modkit-${MODKIT_VERSION}"
+    curl -fsSL --retry 3 --retry-delay 2 -o "${MODKIT_TARBALL}" "${MODKIT_URL}"
+    printf '%s  %s\n' "${MODKIT_SHA256}" "${MODKIT_TARBALL}" | sha256sum -c -
     mkdir -p "${MODKIT_EXTRACT}"
-
-    if [ "${MODKIT_VERSION}" = "latest" ]; then
-        MODKIT_API_URL="https://api.github.com/repos/${MODKIT_REPO}/releases/latest"
-    else
-        MODKIT_API_URL="https://api.github.com/repos/${MODKIT_REPO}/releases/tags/${MODKIT_VERSION}"
-    fi
-
-    echo "Querying modkit release metadata: ${MODKIT_API_URL}"
-    MODKIT_JSON="$(curl -fsSL --retry 3 --retry-delay 2 "${MODKIT_API_URL}")"
-    MODKIT_TAG="$(printf '%s' "${MODKIT_JSON}" | jq -r '.tag_name // empty')"
-    echo "Resolved modkit tag: ${MODKIT_TAG}"
-
-    MODKIT_URL="$(printf '%s' "${MODKIT_JSON}" \
-        | jq -r '.assets[].browser_download_url' \
-        | grep -Ei 'modkit.*(linux|centos).*(x86_64|amd64)|modkit.*(x86_64|amd64).*(linux|centos)' \
-        | head -n1 || true)"
-
-    if [ -z "${MODKIT_URL}" ]; then
-        echo "No architecture-specific asset matched filter; trying any asset containing modkit." >&2
-        MODKIT_URL="$(printf '%s' "${MODKIT_JSON}" \
-            | jq -r '.assets[].browser_download_url' \
-            | grep -Ei 'modkit' \
-            | head -n1 || true)"
-    fi
-
-    if [ -z "${MODKIT_URL}" ]; then
-        echo "ERROR: unable to find a downloadable modkit asset in release ${MODKIT_TAG}." >&2
-        exit 1
-    fi
-
-    echo "Downloading modkit asset: ${MODKIT_URL}"
-    curl -fsSL --retry 3 --retry-delay 2 -o "${MODKIT_TMP}" "${MODKIT_URL}"
-
-    case "${MODKIT_URL}" in
-        *.tar.gz|*.tgz)
-            tar -xzf "${MODKIT_TMP}" -C "${MODKIT_EXTRACT}"
-            ;;
-        *.zip)
-            unzip -q "${MODKIT_TMP}" -d "${MODKIT_EXTRACT}"
-            ;;
-        *)
-            install -m 0755 "${MODKIT_TMP}" /usr/local/bin/modkit
-            ;;
-    esac
-
-    if [ ! -x /usr/local/bin/modkit ]; then
-        MODKIT_BIN="$(find "${MODKIT_EXTRACT}" -type f \( -name modkit -o -name 'modkit*' \) | head -n1 || true)"
-        if [ -z "${MODKIT_BIN}" ]; then
-            echo "ERROR: modkit binary not found after extracting ${MODKIT_URL}" >&2
-            exit 1
-        fi
-        install -m 0755 "${MODKIT_BIN}" /usr/local/bin/modkit
-    fi
-
-    rm -f "${MODKIT_TMP}"
-    rm -rf "${MODKIT_EXTRACT}"
+    tar -xzf "${MODKIT_TARBALL}" -C "${MODKIT_EXTRACT}"
+    MODKIT_BIN="$(printf '%s\n' "${MODKIT_EXTRACT}"/dist_modkit_*/modkit)"
+    test -x "${MODKIT_BIN}"
+    install -m 0755 "${MODKIT_BIN}" /usr/local/bin/modkit
+    test "$(modkit --version)" = "modkit ${MODKIT_VERSION}"
+    rm -rf "${MODKIT_EXTRACT}" "${MODKIT_TARBALL}"
 
     # ── Cleanup ────────────────────────────────────────────────────────────
     apt-get clean
@@ -104,9 +92,25 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
     fi
 
 %test
-    dorado --version
-    modkit --version
-    samtools --version | head -1
+    set -eu
+    dorado_version="$(dorado --version)"
+    test -n "${dorado_version}"
+    test "$(modkit --version)" = "modkit 0.6.4"
+    samtools_version="$(samtools --version)"
+    set -- ${samtools_version}
+    test "$1" = "samtools"
+    test "$2" = "1.24"
+    consensus_help="$(samtools consensus --help 2>&1 || true)"
+    case "${consensus_help}" in
+        *"samtools consensus"*) ;;
+        *) echo "samtools consensus capability is missing" >&2; exit 1 ;;
+    esac
+    test -x /usr/local/bin/create_report
+    igv_metadata="$(/opt/igv-reports/bin/pip show igv-reports)"
+    case "${igv_metadata}" in
+        *"Version: 1.16.3"*) ;;
+        *) echo "igv-reports 1.16.3 is missing" >&2; exit 1 ;;
+    esac
     echo "Container build tests passed"
 
 %help

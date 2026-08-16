@@ -23,10 +23,11 @@ import urllib.request
 from biomodstack_services import (
     API_SERVICE,
     CONTAINER_RUNTIME_MODE,
+    DEVELOPMENT_WORKFLOW_ADAPTER_PORT,
+    DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE,
     DEV_RUNTIME_MODE,
     FRONTEND_SERVICE,
     ServiceManagerError,
-    WORKFLOW_ADAPTER_SERVICE,
     daemon_reload,
     git_build_identity,
     listener_pids,
@@ -49,8 +50,12 @@ CANONICAL_DEVELOPMENT_ROOT = Path("/home/dalab/biomodstack/dev-test-canonical")
 CANONICAL_PRODUCTION_ROOT = Path("/home/dalab/biomodstack/prod-main-canonical")
 CONTROL_PATH = "/api/tailnet-environment"
 PRODUCTION_API_PORT = 18000
-WORKFLOW_ADAPTER_PORT = 18001
-DEFAULT_CONTROL_TARGET = "http://127.0.0.1:18001"
+# Tailnet's authenticated selector is a Development control surface. Keep the
+# old local names as aliases for compatibility with callers, but never bind the
+# selector policy to the Production execution adapter.
+WORKFLOW_ADAPTER_PORT = DEVELOPMENT_WORKFLOW_ADAPTER_PORT
+WORKFLOW_ADAPTER_SERVICE = DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE
+DEFAULT_CONTROL_TARGET = f"http://127.0.0.1:{DEVELOPMENT_WORKFLOW_ADAPTER_PORT}"
 LEGACY_CONTROL_TARGET = "http://127.0.0.1:8001/api/workflow-adapter/tailnet-environment"
 PRIOR_LOOPBACK_CONTROL_TARGET = "http://127.0.0.2:8001"
 STATS_TOOLKIT_TARGET = "http://127.0.0.1:18180"
@@ -935,6 +940,7 @@ def _install_adapter_control_policy(
         f"Environment=BMS_MANAGED_API_IMAGE_ID={api_image_id}\n"
         f"Environment=BMS_MANAGED_WEB_IMAGE_ID={web_image_id}\n"
         "Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=127.0.0.1\n"
+        "Environment=BMS_WORKFLOW_ADAPTER_LANE=development\n"
         "Environment=BMS_TAILNET_CONTROL_TRUSTED_PROXY_HOSTS=127.0.0.1,::1\n"
         f"Environment=BMS_TAILNET_CONTROL_ALLOWED_TAILSCALE_USERS={login}\n"
         "ExecStartPre=\n"

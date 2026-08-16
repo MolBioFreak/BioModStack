@@ -40,6 +40,7 @@ def test_build_sequence_qc_manifest_declares_typed_artifacts_and_sequence_proven
         "per_base_support.tsv",
         "fastq_consensus.fasta.fai",
         "fastq_qc.log",
+        "igv_report.html",
     ]:
         (tmp_path / name).write_text("placeholder\n", encoding="utf-8")
 
@@ -48,6 +49,7 @@ def test_build_sequence_qc_manifest_declares_typed_artifacts_and_sequence_proven
         job_id="job-42",
         sample_name="sample-A",
         reference_fasta=reference,
+        expected_sha256="1dff3e84fe7877e0673b69bbddcf40124e396e3f9943dd890c91b6a09adb9af0",
         consensus_fasta=consensus,
         consensus_status="samtools_consensus",
         artifacts=[
@@ -57,7 +59,7 @@ def test_build_sequence_qc_manifest_declares_typed_artifacts_and_sequence_proven
             module.ArtifactSpec("per_base_support", tmp_path / "per_base_support.tsv", True),
             module.ArtifactSpec("consensus", consensus, True),
             module.ArtifactSpec("consensus_index", tmp_path / "fastq_consensus.fasta.fai", True),
-            module.ArtifactSpec("igv_report", tmp_path / "missing_igv_report.html", False),
+            module.ArtifactSpec("igv_report", tmp_path / "igv_report.html", True),
             module.ArtifactSpec("log", tmp_path / "fastq_qc.log", True),
         ],
     )
@@ -70,6 +72,7 @@ def test_build_sequence_qc_manifest_declares_typed_artifacts_and_sequence_proven
     assert manifest["reference"]["expected_sha256"] == manifest["sequence_digests"]["expected_reference_sha256"]
     assert manifest["reference"]["source_file_sha256"]
     assert manifest["consensus"]["status"] == "samtools_consensus"
+    assert manifest["consensus"]["method"] == "samtools_1.24_bayesian_consensus"
     assert manifest["consensus"]["fallback"] is False
     assert manifest["consensus"]["observed_sha256"] == manifest["sequence_digests"]["observed_consensus_sha256"]
     assert manifest["sequence_digests"]["expected_reference_sha256"] == manifest["sequence_digests"]["observed_consensus_sha256"]
@@ -85,11 +88,10 @@ def test_build_sequence_qc_manifest_declares_typed_artifacts_and_sequence_proven
     assert manifest["verification_reason_codes"] == ["phase1_manual_review_required"]
 
     normalized = load_sequence_qc_manifest(tmp_path / "qc_manifest.json")
-    missing_report = next(artifact for artifact in normalized["artifacts"] if artifact["kind"] == "igv_report")
-    assert missing_report["required"] is False
-    assert missing_report["path"] is None
-    assert missing_report["state"] == "missing_after_workflow"
-    assert missing_report["declared_path"] == "missing_igv_report.html"
+    report = next(artifact for artifact in normalized["artifacts"] if artifact["kind"] == "igv_report")
+    assert report["required"] is True
+    assert report["path"] == "igv_report.html"
+    assert report["state"] == "present"
 
 
 def test_build_sequence_qc_manifest_rejects_reference_copy_fallback(tmp_path: Path) -> None:
@@ -99,14 +101,58 @@ def test_build_sequence_qc_manifest_rejects_reference_copy_fallback(tmp_path: Pa
     reference.write_text(">expected\nACGT\n", encoding="utf-8")
     consensus.write_text(">observed\nACGT\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="reference_copy_fallback is forbidden"):
+    with pytest.raises(ValueError, match="fallback status labels are forbidden"):
         module.build_manifest(
             out=tmp_path / "qc_manifest.json",
             job_id="job-fallback",
             sample_name="sample-fallback",
             reference_fasta=reference,
+            expected_sha256="1dff3e84fe7877e0673b69bbddcf40124e396e3f9943dd890c91b6a09adb9af0",
             consensus_fasta=consensus,
             consensus_status="reference_copy_fallback",
+            artifacts=[],
+        )
+
+
+@pytest.mark.parametrize("job_id", ["", "   ", "unknown", "UNKNOWN"])
+def test_build_sequence_qc_manifest_rejects_placeholder_job_identity(
+    tmp_path: Path,
+    job_id: str,
+) -> None:
+    module = _load_module()
+    reference = tmp_path / "reference.fasta"
+    consensus = tmp_path / "consensus.fasta"
+    reference.write_text(">expected\nACGT\n", encoding="utf-8")
+    consensus.write_text(">observed\nACGT\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="exact non-placeholder job identity"):
+        module.build_manifest(
+            out=tmp_path / "qc_manifest.json",
+            job_id=job_id,
+            sample_name=None,
+            reference_fasta=reference,
+            expected_sha256="1dff3e84fe7877e0673b69bbddcf40124e396e3f9943dd890c91b6a09adb9af0",
+            consensus_fasta=consensus,
+            consensus_status="samtools_consensus",
+            artifacts=[],
+        )
+
+
+def test_build_sequence_qc_manifest_rejects_nonapproved_consensus_method(tmp_path: Path) -> None:
+    module = _load_module()
+    reference = tmp_path / "reference.fasta"
+    consensus = tmp_path / "consensus.fasta"
+    reference.write_text(">expected\nACGT\n", encoding="utf-8")
+    consensus.write_text(">observed\nACGT\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="required method is samtools_1.24_bayesian_consensus"):
+        module.build_manifest(
+            out=tmp_path / "qc_manifest.json",
+            job_id="job-bcftools",
+            sample_name="sample-bcftools",
+            reference_fasta=reference,
+            expected_sha256="1dff3e84fe7877e0673b69bbddcf40124e396e3f9943dd890c91b6a09adb9af0",
+            consensus_fasta=consensus,
+            consensus_status="bcftools_consensus",
             artifacts=[],
         )
 
@@ -136,6 +182,7 @@ def test_manifest_rejects_mismatched_expected_digest_and_phase1_pass(tmp_path: P
             job_id="job-invalid-pass",
             sample_name="sample-invalid-pass",
             reference_fasta=reference,
+            expected_sha256="1dff3e84fe7877e0673b69bbddcf40124e396e3f9943dd890c91b6a09adb9af0",
             consensus_fasta=consensus,
             consensus_status="samtools_consensus",
             artifacts=[],
@@ -143,55 +190,25 @@ def test_manifest_rejects_mismatched_expected_digest_and_phase1_pass(tmp_path: P
         )
 
 
-def test_missing_consensus_is_typed_incomplete_and_cannot_pass(tmp_path: Path) -> None:
+def test_missing_consensus_status_is_rejected_without_a_manifest(tmp_path: Path) -> None:
     module = _load_module()
     reference = tmp_path / "reference.fasta"
     reference.write_text(">expected\nACGT\n", encoding="utf-8")
     missing_consensus = tmp_path / "fastq_consensus.fasta"
 
-    manifest = module.build_manifest(
-        out=tmp_path / "qc_manifest.json",
-        job_id="job-no-consensus",
-        sample_name="sample-no-consensus",
-        reference_fasta=reference,
-        consensus_fasta=missing_consensus,
-        consensus_status="unavailable",
-        artifacts=[
-            module.ArtifactSpec(
-                "consensus",
-                missing_consensus,
-                False,
-                missing_reason="Unable to derive observed consensus from aligned reads",
-            )
-        ],
-    )
-
-    assert manifest["workflow_status"] == "completed_with_unavailable_observation"
-    assert manifest["verification_status"] == "review_required"
-    assert manifest["verification_reason_codes"] == ["observed_consensus_unavailable"]
-    assert manifest["sequence_digests"]["observed_consensus_sha256"] is None
-    assert manifest["consensus"]["path"] == "fastq_consensus.fasta"
-    assert manifest["consensus"]["observed_sha256"] is None
-    consensus_artifact = next(item for item in manifest["artifacts"] if item["kind"] == "consensus")
-    assert consensus_artifact["state"] == "missing_after_workflow"
-    assert "Unable to derive observed consensus" in consensus_artifact["missing_reason"]
-
-    normalized = load_sequence_qc_manifest(tmp_path / "qc_manifest.json")
-    normalized_consensus = next(item for item in normalized["artifacts"] if item["kind"] == "consensus")
-    assert normalized_consensus["path"] is None
-    assert normalized_consensus["declared_path"] == "fastq_consensus.fasta"
-
-    with pytest.raises(ValueError, match="cannot be pass without an observed consensus"):
+    with pytest.raises(ValueError, match="unsupported consensus method/status"):
         module.build_manifest(
             out=tmp_path / "invalid-pass.json",
             job_id="job-invalid-pass",
             sample_name="sample-invalid-pass",
             reference_fasta=reference,
+            expected_sha256="1dff3e84fe7877e0673b69bbddcf40124e396e3f9943dd890c91b6a09adb9af0",
             consensus_fasta=missing_consensus,
             consensus_status="unavailable",
             artifacts=[],
             verification_status="pass",
         )
+    assert not (tmp_path / "qc_manifest.json").exists()
 
 
 def test_build_sequence_qc_manifest_cli_writes_json(tmp_path: Path) -> None:
@@ -217,10 +234,16 @@ def test_build_sequence_qc_manifest_cli_writes_json(tmp_path: Path) -> None:
             str(output),
             "--job-id",
             "job-cli",
+            "--workflow-id",
+            "ont_fastq_qc",
+            "--input-mode",
+            "fastq",
             "--sample-name",
             "sample-cli",
             "--reference-fasta",
             str(reference),
+            "--expected-sha256",
+            "472e73d796e20aa8ff9059e6316f218e0322548f661ec4dc267507ed66317404",
             "--summary",
             str(summary),
             "--per-base-support",
@@ -249,5 +272,5 @@ def test_build_sequence_qc_manifest_cli_writes_json(tmp_path: Path) -> None:
     assert any(artifact["kind"] == "per_base_support" for artifact in payload["artifacts"])
     assert any(artifact["kind"] == "alignment_bam" and artifact["path"] == "aligned.bam" for artifact in payload["artifacts"])
     assert any(artifact["kind"] == "alignment_bai" and artifact["path"] == "aligned.bam.bai" for artifact in payload["artifacts"])
-    assert any(artifact["kind"] == "igv_report" and artifact["required"] is False and artifact["state"] == "missing_after_workflow" for artifact in payload["artifacts"])
+    assert any(artifact["kind"] == "igv_report" and artifact["required"] is True and artifact["state"] == "missing_after_workflow" for artifact in payload["artifacts"])
     assert any(artifact["kind"] == "modified_bases" and artifact["state"] == "not_applicable_to_input_mode" for artifact in payload["artifacts"])

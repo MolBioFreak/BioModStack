@@ -216,7 +216,13 @@ def build_guidance_plan(
     guidance_id: str | None = None,
 ) -> dict[str, Any]:
     """Build a deterministic, immutable decision-support plan."""
-    if not landscape.get("configuration_id") or not landscape.get("configuration_sha256"):
+    if landscape.get("schema_version") == 2:
+        configuration_id = landscape.get("execution_configuration_id")
+        configuration_sha256 = landscape.get("execution_configuration_sha256")
+    else:
+        configuration_id = landscape.get("configuration_id")
+        configuration_sha256 = landscape.get("configuration_sha256")
+    if not configuration_id or not configuration_sha256:
         raise GuidanceValidationError("global configuration identity is required for guidance")
     normalized_objective = _validate_objective(objective)
     if not isinstance(rationale, str) or not rationale.strip():
@@ -234,8 +240,8 @@ def build_guidance_plan(
         "schema_version": 1,
         "guidance_id": guidance_id,
         "source_landscape_sha256": _landscape_hash(landscape),
-        "configuration_id": landscape.get("configuration_id"),
-        "configuration_sha256": landscape.get("configuration_sha256"),
+        "configuration_id": configuration_id,
+        "configuration_sha256": configuration_sha256,
         "region": normalized_region,
         "objective": normalized_objective,
         "constraints": normalized_constraints,

@@ -13,6 +13,7 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from services.molbio_authority import SERVER_OWNED_ACTOR
 from molbio_models import (
     MolecularDocument,
     MolecularOperation,
@@ -197,7 +198,7 @@ async def _emit_history_events(
                 entity_id=entity_id,
                 event_kind=event_kind,
                 payload=payload,
-                actor=actor,
+                actor=SERVER_OWNED_ACTOR,
             ),
             MolBioOutboxEvent(
                 id=str(uuid.uuid4()),
@@ -242,7 +243,7 @@ async def create_operation(
         provenance=_json_value(provenance or {}),
         idempotency_key=idempotency_key,
         request_fingerprint=request_fingerprint,
-        created_by=created_by,
+        created_by=SERVER_OWNED_ACTOR,
     )
     session.add(operation)
     await session.flush()
@@ -293,7 +294,7 @@ async def record_sequence_revision(
         snapshot=sequence_snapshot(sequence),
         provenance=_json_value(provenance or {}),
         operation_id=operation_id,
-        created_by=created_by,
+        created_by=SERVER_OWNED_ACTOR,
     )
     session.add(revision)
     await session.flush()
@@ -309,7 +310,7 @@ async def record_sequence_revision(
             "content_sha256": revision.content_sha256,
             "operation_id": operation_id,
         },
-        actor=created_by,
+        actor=SERVER_OWNED_ACTOR,
     )
     return revision
 
@@ -326,7 +327,7 @@ async def record_sequence_deletion(
         sequence,
         change_kind="delete",
         provenance=provenance,
-        created_by=created_by,
+        created_by=SERVER_OWNED_ACTOR,
     )
     document = await session.get(MolecularDocument, sequence.id)
     if document is not None:
@@ -356,7 +357,7 @@ async def record_primer_revision(
         sequence_sha256=sha256_text(primer.sequence),
         snapshot=primer_snapshot(primer),
         provenance=_json_value(provenance or {}),
-        created_by=created_by,
+        created_by=SERVER_OWNED_ACTOR,
     )
     session.add(revision)
     await _emit_history_events(
@@ -369,7 +370,7 @@ async def record_primer_revision(
             "revision_number": revision.revision_number,
             "sequence_sha256": revision.sequence_sha256,
         },
-        actor=created_by,
+        actor=SERVER_OWNED_ACTOR,
     )
     return revision
 
@@ -438,7 +439,7 @@ async def _record_inline_sequence_input(
             }
         ),
         operation_id=operation.id,
-        created_by=created_by,
+        created_by=SERVER_OWNED_ACTOR,
     )
     session.add(revision)
     await session.flush()
@@ -453,7 +454,7 @@ async def _record_inline_sequence_input(
             "content_sha256": revision.content_sha256,
             "operation_id": operation.id,
         },
-        actor=created_by,
+        actor=SERVER_OWNED_ACTOR,
     )
     return revision
 
@@ -486,7 +487,7 @@ async def record_generated_sequence(
         warnings=warnings,
         provenance=provenance,
         idempotency_key=idempotency_key,
-        created_by=created_by,
+        created_by=SERVER_OWNED_ACTOR,
     )
     revision = await record_sequence_revision(
         session,
@@ -494,7 +495,7 @@ async def record_generated_sequence(
         change_kind="operation_result",
         provenance=provenance,
         operation_id=operation.id,
-        created_by=created_by,
+        created_by=SERVER_OWNED_ACTOR,
     )
     inputs: list[tuple[MolecularRevision, str, dict[str, Any] | None]] = []
     for input_revision, role, snapshot in input_revisions:
@@ -531,7 +532,7 @@ async def record_generated_sequence(
             inline_sequence,
             operation=operation,
             provenance=provenance,
-            created_by=created_by,
+            created_by=SERVER_OWNED_ACTOR,
         )
         inputs.append(
             (
@@ -720,7 +721,7 @@ async def persist_pcr_experiment(
         provenance=provenance,
         idempotency_key=f"pcr-operation:{idempotency_key}" if idempotency_key else None,
         request_fingerprint=request_fingerprint,
-        created_by=created_by,
+        created_by=SERVER_OWNED_ACTOR,
     )
 
     if template_was_persisted:
@@ -735,7 +736,7 @@ async def persist_pcr_experiment(
             template,
             operation=operation,
             provenance=provenance,
-            created_by=created_by,
+            created_by=SERVER_OWNED_ACTOR,
         )
     product_revision: MolecularRevision | None = None
     if product_sequence is not None:
@@ -746,7 +747,7 @@ async def persist_pcr_experiment(
             change_kind="pcr_product",
             provenance=provenance,
             operation_id=operation.id,
-            created_by=created_by,
+            created_by=SERVER_OWNED_ACTOR,
         )
 
     experiment = PCRExperiment(
@@ -782,7 +783,7 @@ async def persist_pcr_experiment(
         notes=notes,
         review_state=review_state,
         provenance=_json_value(provenance),
-        created_by=created_by,
+        created_by=SERVER_OWNED_ACTOR,
     )
     session.add(experiment_revision)
     await session.flush()
@@ -822,7 +823,7 @@ async def persist_pcr_experiment(
             "template_sha256": experiment_revision.template_sha256,
             "product_sha256": product_snapshot.get("sha256"),
         },
-        actor=created_by,
+        actor=SERVER_OWNED_ACTOR,
     )
     return PCRPersistenceResult(
         experiment_id=experiment.id,
@@ -842,7 +843,6 @@ async def revise_pcr_review_state(
     experiment_id: str,
     review_state: str,
     notes: str | None = None,
-    actor: str | None = None,
     provenance: dict[str, Any] | None = None,
 ) -> PCRExperimentRevision:
     """Append a review-state revision; never mutate an experimental snapshot."""
@@ -862,7 +862,7 @@ async def revise_pcr_review_state(
     review_provenance["review_transition"] = {
         "from": current.review_state,
         "to": review_state,
-        "actor": actor,
+        "actor": SERVER_OWNED_ACTOR,
         "at": datetime.utcnow().isoformat() + "Z",
     }
     revision = PCRExperimentRevision(
@@ -891,7 +891,7 @@ async def revise_pcr_review_state(
         notes=current.notes if notes is None else notes,
         review_state=review_state,
         provenance=review_provenance,
-        created_by=actor,
+        created_by=SERVER_OWNED_ACTOR,
     )
     session.add(revision)
     await session.flush()
@@ -908,6 +908,6 @@ async def revise_pcr_review_state(
             "to": review_state,
             "revision_id": revision.id,
         },
-        actor=actor,
+        actor=SERVER_OWNED_ACTOR,
     )
     return revision

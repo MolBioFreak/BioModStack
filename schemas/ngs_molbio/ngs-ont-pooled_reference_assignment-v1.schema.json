@@ -1,0 +1,49 @@
+{
+  "$id": "bms.workflow-parameters.ngs.ont.pooled_reference_assignment.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "min_alignment_score_margin": {
+      "default": 10,
+      "maximum": 1000000,
+      "minimum": 0,
+      "type": "integer",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "pooled_assignment_min_alignment_score_margin",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "integer",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Ambiguous score margin",
+      "x-bms-supported-runtime-range": "dorado=1.3.1; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "bounded_integer",
+      "x-bms-units": "not_applicable"
+    },
+    "min_mapq": {
+      "default": 20,
+      "maximum": 60,
+      "minimum": 0,
+      "type": "integer",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "pooled_assignment_min_mapq",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "integer",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Minimum competitive MAPQ",
+      "x-bms-supported-runtime-range": "dorado=1.3.1; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "bounded_integer",
+      "x-bms-units": "not_applicable"
+    }
+  },
+  "required": [
+    "min_mapq",
+    "min_alignment_score_margin"
+  ],
+  "title": "ngs.ont.pooled_reference_assignment parameters v1",
+  "type": "object",
+  "x-bms-source-pin": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+  "x-bms-unknown-fields": "reject_before_preparation"
+}

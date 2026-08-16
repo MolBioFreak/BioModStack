@@ -58,6 +58,7 @@ export interface CmStructureMapRow {
     pdb_chain_id: string;
     pdb_residue_id: number;
     pdb_insertion_code: string;
+    model_position: number;
     backbone_atoms: Record<string, string | null>;
     selected_altloc: string;
     model_decision: string;
@@ -112,11 +113,19 @@ export interface CmAnalysis {
 export interface CmLandscapeResidue {
     key: string;
     entity_instance_id: string;
+    source_entity_id: string | null;
+    label_asym_id: string | null;
+    label_seq_id: number | null;
     auth_asym_id: string;
     auth_seq_id: string;
     insertion_code: string;
     sequence_index: number;
     wt: string;
+    pdb_chain_id: string;
+    pdb_residue_id: number | null;
+    pdb_insertion_code: string | null;
+    model_position: number;
+    residue_name: string | null;
     slots: CmLandscapeRow[];
 }
 
@@ -341,14 +350,31 @@ export const groupExact20Landscape = (rows: CmLandscapeRow[]): CmLandscapeResidu
         const first = slots[0];
         const identity = `${first.entity_instance_id}\u0000${first.sequence_index}`;
         if (slots.some((slot) => `${slot.entity_instance_id}\u0000${slot.sequence_index}` !== identity)
+            || slots.some((slot) => slot.source_entity_id !== first.source_entity_id
+                || slot.label_asym_id !== first.label_asym_id
+                || slot.label_seq_id !== first.label_seq_id
+                || slot.pdb_chain_id !== first.pdb_chain_id
+                || slot.pdb_residue_id !== first.pdb_residue_id
+                || slot.pdb_insertion_code !== first.pdb_insertion_code
+                || slot.model_position !== first.model_position
+                || slot.residue_name !== first.residue_name
+                || slot.auth_asym_id !== first.auth_asym_id
+                || slot.auth_seq_id !== first.auth_seq_id
+                || slot.insertion_code !== first.insertion_code
+                || slot.wt !== first.wt)
             || slots.some((slot, index) => slot.mutation_aa !== CANONICAL_AMINO_ACIDS[index])) {
             throw new Error('Landscape slots do not match the canonical exact-20 API order');
         }
         residues.push({
             key: `${first.entity_instance_id}:${first.sequence_index}`,
-            entity_instance_id: first.entity_instance_id, auth_asym_id: first.auth_asym_id,
+            entity_instance_id: first.entity_instance_id, source_entity_id: first.source_entity_id,
+            label_asym_id: first.label_asym_id, label_seq_id: first.label_seq_id,
+            auth_asym_id: first.auth_asym_id,
             auth_seq_id: first.auth_seq_id, insertion_code: first.insertion_code,
-            sequence_index: first.sequence_index, wt: first.wt, slots,
+            sequence_index: first.sequence_index, wt: first.wt,
+            pdb_chain_id: first.pdb_chain_id, pdb_residue_id: first.pdb_residue_id,
+            pdb_insertion_code: first.pdb_insertion_code, model_position: first.model_position,
+            residue_name: first.residue_name, slots,
         });
     }
     return residues;

@@ -7,7 +7,8 @@ from pathlib import Path
 import re
 from typing import Any
 
-_UNIT_ID = re.compile(r"^(?:barcode[0-9]{2,3}|unclassified)$")
+_UNIT_ID = re.compile(r"^(?:barcode(?:0[1-9]|[1-8][0-9]|9[0-6])|unclassified)$")
+_SAMPLE_ALIAS = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 
 
 def _sha256(path: Path) -> str:
@@ -117,7 +118,15 @@ def load_barcode_unit(
         raise ValueError("barcode unit manifest is unreadable or malformed") from exc
     if unit_payload.get("schema") != "biomodstack.dorado_barcode_unit.v1" or any(
         unit_payload.get(key) != item.get(key)
-        for key in ("unit_id", "bam_path", "bam_sha256", "read_count", "source_calls_sha256", "preflight_sha256")
+        for key in (
+            "unit_id",
+            "sample_alias",
+            "bam_path",
+            "bam_sha256",
+            "read_count",
+            "source_calls_sha256",
+            "preflight_sha256",
+        )
     ):
         raise ValueError("barcode unit manifest does not match the aggregate manifest")
     source_calls_sha256 = str(unit_payload.get("source_calls_sha256") or "").lower()
@@ -136,9 +145,18 @@ def load_barcode_unit(
     read_count = item.get("read_count")
     if isinstance(read_count, bool) or not isinstance(read_count, int) or read_count < 0:
         raise ValueError("barcode unit read_count is invalid")
+    sample_alias = item.get("sample_alias")
+    if sample_alias is not None and (
+        not isinstance(sample_alias, str)
+        or not _SAMPLE_ALIAS.fullmatch(sample_alias)
+        or sample_alias == "unclassified"
+        or re.fullmatch(r"barcode[0-9]+", sample_alias)
+    ):
+        raise ValueError("barcode unit sample_alias is invalid")
     return {
         "schema": "biomodstack.ont_barcode_resubmission_unit.v1",
         "unit_id": requested,
+        "sample_alias": sample_alias,
         "bam_path": str(bam),
         "bam_sha256": observed,
         "read_count": read_count,

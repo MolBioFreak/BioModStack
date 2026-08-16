@@ -13,7 +13,8 @@ COMPAT_ENV_FILENAME = "env.sh"
 DEFAULT_CONTAINER_STATE_PATH = "/var/lib/biomodstack"
 BMS_PORT_REGISTRY: dict[str, int] = {
     "production_api": 18000,
-    "workflow_adapter": 18001,
+    "development_workflow_adapter": 18001,
+    "production_workflow_adapter": 18101,
     "development_api": 18002,
     "production_web": 18080,
     "production_tailnet_proxy": 18081,
@@ -24,7 +25,11 @@ BMS_PORT_REGISTRY: dict[str, int] = {
     "mk1d_host_agent": 18798,
 }
 DEFAULT_API_HOST_PORT = BMS_PORT_REGISTRY["production_api"]
-DEFAULT_WORKFLOW_ADAPTER_PORT = BMS_PORT_REGISTRY["workflow_adapter"]
+DEFAULT_DEVELOPMENT_WORKFLOW_ADAPTER_PORT = BMS_PORT_REGISTRY["development_workflow_adapter"]
+DEFAULT_PRODUCTION_WORKFLOW_ADAPTER_PORT = BMS_PORT_REGISTRY["production_workflow_adapter"]
+# Compatibility constant for unqualified callers. Lane-aware code must use
+# one of the explicit Development or Production constants above.
+DEFAULT_WORKFLOW_ADAPTER_PORT = DEFAULT_PRODUCTION_WORKFLOW_ADAPTER_PORT
 DEFAULT_DEV_API_HOST_PORT = BMS_PORT_REGISTRY["development_api"]
 DEFAULT_WEB_HOST_PORT = BMS_PORT_REGISTRY["production_web"]
 DEFAULT_TAILNET_PROXY_PORT = BMS_PORT_REGISTRY["production_tailnet_proxy"]
@@ -44,7 +49,11 @@ DEFAULT_CORS_ORIGINS = [
     f"https://localhost:{DEFAULT_DEV_WEB_HOST_PORT}",
     "https://127.0.0.1",
 ]
-DEFAULT_WORKFLOW_ADAPTER_URL = f"http://127.0.0.1:{DEFAULT_WORKFLOW_ADAPTER_PORT}"
+DEFAULT_DEVELOPMENT_WORKFLOW_ADAPTER_URL = f"http://127.0.0.1:{DEFAULT_DEVELOPMENT_WORKFLOW_ADAPTER_PORT}"
+DEFAULT_PRODUCTION_WORKFLOW_ADAPTER_URL = f"http://127.0.0.1:{DEFAULT_PRODUCTION_WORKFLOW_ADAPTER_PORT}"
+# The unqualified URL is retained for old callers and now denotes the stable
+# Production control plane. New code must select a lane explicitly.
+DEFAULT_WORKFLOW_ADAPTER_URL = DEFAULT_PRODUCTION_WORKFLOW_ADAPTER_URL
 DEFAULT_COMPOSE_PROJECT_NAME = "biomodstack-core-runtime"
 
 # Migrate only listener defaults that this repository historically owned. Do
@@ -55,7 +64,7 @@ _LEGACY_PORT_MIGRATIONS = {
     "dev_web_host_port": {5173: DEFAULT_DEV_WEB_HOST_PORT},
 }
 _LEGACY_CONFIG_MIGRATIONS = {
-    "workflow_adapter_url": {"http://127.0.0.1:8001": DEFAULT_WORKFLOW_ADAPTER_URL},
+    "workflow_adapter_url": {"http://127.0.0.1:8001": DEFAULT_PRODUCTION_WORKFLOW_ADAPTER_URL},
 }
 _LEGACY_CORS_ORIGIN_MIGRATIONS = {
     "http://127.0.0.1:5173": "http://127.0.0.1:18082",
@@ -65,10 +74,12 @@ _LEGACY_CORS_ORIGIN_MIGRATIONS = {
 
 _PATH_FIELDS = (
     "data_root",
+    "results_dir",
     "inputs_dir",
     "db_path",
     "container_dir",
     "dev_data_root",
+    "dev_results_dir",
     "weights_root",
     "colabfold_db",
     "msa_cache_dir",
@@ -79,6 +90,8 @@ _CONFIG_FIELDS = (
     "inputs_container_path",
     "db_container_path",
     "workflow_adapter_url",
+    "development_workflow_adapter_url",
+    "production_workflow_adapter_url",
     "compose_project_name",
     "api_image",
     "web_image",
@@ -94,7 +107,8 @@ _IMAGE_ENV_FIELDS = {
 _INT_FIELDS = ("api_host_port", "dev_api_host_port", "dev_web_host_port", "web_host_port")
 # Host-side operational endpoints; application surfaces may never claim them.
 RESERVED_AUXILIARY_PORTS: dict[int, str] = {
-    DEFAULT_WORKFLOW_ADAPTER_PORT: "workflow adapter",
+    DEFAULT_DEVELOPMENT_WORKFLOW_ADAPTER_PORT: "Development workflow adapter",
+    DEFAULT_PRODUCTION_WORKFLOW_ADAPTER_PORT: "Production workflow adapter",
     DEFAULT_TAILNET_PROXY_PORT: "Production Tailnet proxy",
     DEFAULT_STATS_WEB_PORT: "Stats web",
     DEFAULT_STATS_API_PORT: "Stats API",
@@ -424,6 +438,7 @@ def resolve_runtime_paths(
             return Path(profile_value).expanduser().resolve()
         return data_root / leaf
 
+    results_dir = resolve_data_like("BMS_RESULTS_DIR", "results_dir", "bms_results")
     weights_root = resolve_data_like("BMS_WEIGHTS", "weights_root", "weights")
     colabfold_db = resolve_data_like("BMS_COLABFOLD_DB", "colabfold_db", "colabfold_db")
     msa_cache_dir = resolve_data_like("BMS_MSA_CACHE", "msa_cache_dir", "msa_cache")
@@ -433,6 +448,14 @@ def resolve_runtime_paths(
         Path(profile_dev_data_root).expanduser().resolve()
         if isinstance(profile_dev_data_root, str) and profile_dev_data_root.strip()
         else _default_dev_data_root()
+    )
+    profile_dev_results_dir = normalized_profile.get("dev_results_dir")
+    dev_results_dir = (
+        Path(profile_dev_results_dir).expanduser().resolve()
+        if isinstance(profile_dev_results_dir, str) and profile_dev_results_dir.strip()
+        else Path(os.getenv("BMS_DEV_RESULTS_DIR", "")).expanduser().resolve()
+        if os.getenv("BMS_DEV_RESULTS_DIR")
+        else dev_data_root / "bms_results"
     )
 
     container_state_path = os.getenv("BMS_CONTAINER_STATE_PATH") or str(
@@ -455,8 +478,14 @@ def resolve_runtime_paths(
         else:
             resolved_cors_origins = list(DEFAULT_CORS_ORIGINS)
 
+    development_workflow_adapter_url = os.getenv("BMS_DEVELOPMENT_WORKFLOW_ADAPTER_URL") or str(
+        normalized_profile.get("development_workflow_adapter_url") or DEFAULT_DEVELOPMENT_WORKFLOW_ADAPTER_URL
+    )
+    production_workflow_adapter_url = os.getenv("BMS_PRODUCTION_WORKFLOW_ADAPTER_URL") or str(
+        normalized_profile.get("production_workflow_adapter_url") or DEFAULT_PRODUCTION_WORKFLOW_ADAPTER_URL
+    )
     workflow_adapter_url = os.getenv("BMS_WORKFLOW_ADAPTER_URL") or str(
-        normalized_profile.get("workflow_adapter_url") or DEFAULT_WORKFLOW_ADAPTER_URL
+        normalized_profile.get("workflow_adapter_url") or production_workflow_adapter_url
     )
     compose_project_name = os.getenv("COMPOSE_PROJECT_NAME") or str(
         normalized_profile.get("compose_project_name") or DEFAULT_COMPOSE_PROJECT_NAME
@@ -471,7 +500,7 @@ def resolve_runtime_paths(
         "project_root": str(root),
         "data_root": str(data_root),
         "inputs_dir": str(inputs_dir),
-        "results_dir": str(data_root / "bms_results"),
+        "results_dir": str(results_dir),
         "analysis_cache_dir": str(data_root / "analysis_cache"),
         "work_dir": str(data_root / "work"),
         "db_path": str(db_path),
@@ -481,6 +510,7 @@ def resolve_runtime_paths(
         "msa_cache_dir": str(msa_cache_dir),
         "sabdab_cache_dir": str(sabdab_cache_dir),
         "dev_data_root": str(dev_data_root),
+        "dev_results_dir": str(dev_results_dir),
         "dev_inputs_dir": str(dev_data_root / "inputs"),
         "dev_db_path": str(dev_data_root / "biomodstack.db"),
         "dev_work_dir": str(dev_data_root / "work"),
@@ -505,6 +535,8 @@ def resolve_runtime_paths(
         "web_host_port": _coerce_env_int("BMS_WEB_HOST_PORT", int(normalized_profile.get("web_host_port") or DEFAULT_WEB_HOST_PORT)),
         "cors_origins": resolved_cors_origins,
         "workflow_adapter_url": workflow_adapter_url,
+        "development_workflow_adapter_url": development_workflow_adapter_url,
+        "production_workflow_adapter_url": production_workflow_adapter_url,
         "compose_project_name": compose_project_name,
         "features": features,
         **image_selectors,
@@ -558,6 +590,8 @@ def _compat_env_lines(resolved: Mapping[str, object]) -> list[str]:
         f'export BMS_DATA="${{BMS_DATA:-{resolved["data_root"]}}}"',
         f'export BMS_INPUTS="${{BMS_INPUTS:-{resolved["inputs_dir"]}}}"',
         f'export BMS_DB_PATH="${{BMS_DB_PATH:-{resolved["db_path"]}}}"',
+        f'export BMS_RESULTS_DIR="${{BMS_RESULTS_DIR:-{resolved["results_dir"]}}}"',
+        f'export BMS_DEV_RESULTS_DIR="${{BMS_DEV_RESULTS_DIR:-{resolved["dev_results_dir"]}}}"',
         f'export BMS_CONTAINER_DIR="${{BMS_CONTAINER_DIR:-{resolved["container_dir"]}}}"',
         f'export BMS_WEIGHTS="${{BMS_WEIGHTS:-{resolved["weights_root"]}}}"',
         f'export BMS_COLABFOLD_DB="${{BMS_COLABFOLD_DB:-{resolved["colabfold_db"]}}}"',
@@ -574,9 +608,12 @@ def _compat_env_lines(resolved: Mapping[str, object]) -> list[str]:
         f'export BMS_WEB_HOST_PORT="${{BMS_WEB_HOST_PORT:-{resolved["web_host_port"]}}}"',
         f'export CORS_ORIGINS="${{CORS_ORIGINS:-{cors_origins}}}"',
         f'export BMS_CORE_RUNTIME_MODE="${{BMS_CORE_RUNTIME_MODE:-{core_runtime_mode}}}"',
+        'export BMS_WORKFLOW_ADAPTER_LANE="${BMS_WORKFLOW_ADAPTER_LANE:-production}"',
         f'export BMS_FEATURE_BIOXP="${{BMS_FEATURE_BIOXP:-{1 if resolved["features"]["bioxp"] else 0}}}"',
         f'export BMS_FEATURE_MOLECULAR_DYNAMICS="${{BMS_FEATURE_MOLECULAR_DYNAMICS:-{1 if resolved["features"]["molecular_dynamics"] else 0}}}"',
         f'export BMS_WORKFLOW_ADAPTER_URL="${{BMS_WORKFLOW_ADAPTER_URL:-{resolved["workflow_adapter_url"]}}}"',
+        f'export BMS_DEVELOPMENT_WORKFLOW_ADAPTER_URL="${{BMS_DEVELOPMENT_WORKFLOW_ADAPTER_URL:-{resolved["development_workflow_adapter_url"]}}}"',
+        f'export BMS_PRODUCTION_WORKFLOW_ADAPTER_URL="${{BMS_PRODUCTION_WORKFLOW_ADAPTER_URL:-{resolved["production_workflow_adapter_url"]}}}"',
         f'export COMPOSE_PROJECT_NAME="${{COMPOSE_PROJECT_NAME:-{resolved["compose_project_name"]}}}"',
         "",
     ]
@@ -597,6 +634,8 @@ def _core_runtime_env_lines(resolved: Mapping[str, object]) -> list[str]:
         f'BMS_DATA={resolved["data_root"]}',
         f'BMS_INPUTS={resolved["inputs_dir"]}',
         f'BMS_DB_PATH={resolved["db_path"]}',
+        f'BMS_RESULTS_DIR={resolved["results_dir"]}',
+        f'BMS_DEV_RESULTS_DIR={resolved["dev_results_dir"]}',
         f'BMS_CONTAINER_DIR={resolved["container_dir"]}',
         f'BMS_WEIGHTS={resolved["weights_root"]}',
         f'BMS_COLABFOLD_DB={resolved["colabfold_db"]}',
@@ -612,9 +651,12 @@ def _core_runtime_env_lines(resolved: Mapping[str, object]) -> list[str]:
         f'BMS_WEB_HOST_PORT={resolved["web_host_port"]}',
         f'CORS_ORIGINS={cors_origins}',
         f'BMS_CORE_RUNTIME_MODE={core_runtime_mode}',
+        'BMS_WORKFLOW_ADAPTER_LANE=production',
         f'BMS_FEATURE_BIOXP={1 if resolved["features"]["bioxp"] else 0}',
         f'BMS_FEATURE_MOLECULAR_DYNAMICS={1 if resolved["features"]["molecular_dynamics"] else 0}',
         f'BMS_WORKFLOW_ADAPTER_URL={resolved["workflow_adapter_url"]}',
+        f'BMS_DEVELOPMENT_WORKFLOW_ADAPTER_URL={resolved["development_workflow_adapter_url"]}',
+        f'BMS_PRODUCTION_WORKFLOW_ADAPTER_URL={resolved["production_workflow_adapter_url"]}',
         f'COMPOSE_PROJECT_NAME={resolved["compose_project_name"]}',
         "",
     ]

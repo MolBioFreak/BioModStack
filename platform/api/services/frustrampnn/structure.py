@@ -7,6 +7,7 @@ import math
 import os
 import shlex
 import stat
+import tempfile
 import uuid
 from collections import defaultdict
 from pathlib import Path
@@ -176,6 +177,8 @@ def derive_mmcif_atom_site_authority(source_bytes: bytes) -> dict[str, Any]:
         residue = _required(
             row[positions["label_comp_id"]], "label_comp_id"
         ).upper()
+        if residue in _CLEAR_NONPROTEIN_RESIDUES:
+            continue
         letter = _authority_residue_letter(residue)
         if letter is None:
             raise StructureNormalizationError(
@@ -308,7 +311,7 @@ def _open_parent(path: Path) -> tuple[int, str]:
         raise StructureNormalizationError(f"symlink/invalid path component: {path}: {exc}") from exc
 
 
-def _read_regular_no_follow(path: Path) -> bytes:
+def _read_regular_no_follow(path: Path, *, max_bytes: int | None = None) -> bytes:
     parent, leaf = _open_parent(path)
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
@@ -320,9 +323,20 @@ def _read_regular_no_follow(path: Path) -> bytes:
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode):
             raise StructureNormalizationError("source must be a regular file")
+        if max_bytes is not None and metadata.st_size > max_bytes:
+            raise StructureNormalizationError(
+                f"source exceeds the {max_bytes}-byte safety bound"
+            )
         with os.fdopen(descriptor, "rb", closefd=True) as handle:
             descriptor = -1
-            return handle.read()
+            if max_bytes is None:
+                return handle.read()
+            payload = handle.read(max_bytes + 1)
+            if len(payload) > max_bytes:
+                raise StructureNormalizationError(
+                    f"source exceeds the {max_bytes}-byte safety bound"
+                )
+            return payload
     finally:
         if descriptor >= 0:
             os.close(descriptor)
@@ -830,10 +844,10 @@ def _publish_pair(output: Path, pdb: bytes, sidecar: Path, mapping: bytes) -> No
             os.close(parent)
 
 
-def read_structure_bytes(path: Path | str) -> bytes:
+def read_structure_bytes(path: Path | str, *, max_bytes: int | None = None) -> bytes:
     """Read exactly one regular structure generation without following any symlink."""
 
-    return _read_regular_no_follow(Path(path))
+    return _read_regular_no_follow(Path(path), max_bytes=max_bytes)
 
 
 def _normalize_structure(
@@ -1230,7 +1244,77 @@ def normalize_structure_bytes(
     )
 
 
+def inspect_and_normalize_structure_bytes(
+    *,
+    source_bytes: bytes,
+    source_suffix: str,
+    selected_model: int,
+    preferred_altloc: str,
+    protein_selection: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Inspect original bytes and normalize the requested live projection."""
+
+    suffix = source_suffix.lower()
+    if suffix == ".pdb":
+        atoms, models = _parse_pdb(source_bytes)
+        authority = {
+            "kind": "pdb_self_identity_v1",
+            "identity_domain": "candidate_local",
+            "authority_artifact_sha256": hashlib.sha256(source_bytes).hexdigest(),
+        }
+    elif suffix in {".cif", ".mmcif"}:
+        authority = derive_mmcif_atom_site_authority(source_bytes)
+        atoms, models, _ = _parse_mmcif(source_bytes, authority)
+    else:
+        raise StructureNormalizationError("structure source must be .pdb, .cif, or .mmcif")
+
+    observed_models = sorted(set(models))
+    if selected_model not in observed_models:
+        raise StructureNormalizationError(
+            f"selected model {selected_model} is not present in the live source"
+        )
+    if len(preferred_altloc) > 1 or preferred_altloc in {".", "?"}:
+        raise StructureNormalizationError(
+            "preferred alternate location must be blank or one explicit character"
+        )
+    selected_model_altlocs = {
+        str(atom.get("altloc") or "")
+        for atom in atoms
+        if atom.get("model") == selected_model
+    }
+    if preferred_altloc and preferred_altloc not in selected_model_altlocs:
+        raise StructureNormalizationError(
+            f"preferred altloc {preferred_altloc!r} is not present in selected model {selected_model}"
+        )
+    observed_altlocs = sorted(
+        {str(atom.get("altloc") or "") for atom in atoms},
+        key=lambda value: (value != "", value),
+    )
+
+    with tempfile.TemporaryDirectory(prefix="frustrampnn-source-preview-") as directory:
+        root = Path(directory)
+        structure_map = normalize_structure_bytes(
+            source_bytes=source_bytes,
+            input_path=root / f"source{suffix}",
+            output_pdb_path=root / "normalized.pdb",
+            map_path=root / "structure-map.json",
+            target_id="source-preview",
+            parent_job_id="source-preview",
+            candidate_id="source-preview",
+            identity_authority=authority,
+            protein_selection=protein_selection or {"mode": "all_protein_entities"},
+            selected_model=selected_model,
+            altloc_policy=f"blank_or_explicit:{preferred_altloc or '<blank>'}",
+        )
+    return {
+        "source_models": observed_models,
+        "observed_altlocs": observed_altlocs,
+        "structure_map": structure_map,
+    }
+
+
 __all__ = [
     "NORMALIZER_VERSION", "StructureNormalizationError", "normalize_structure",
     "normalize_structure_bytes", "read_structure_bytes",
+    "inspect_and_normalize_structure_bytes",
 ]

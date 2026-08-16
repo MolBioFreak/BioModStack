@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
 import type { Data, Layout, PlotMouseEvent } from 'plotly.js';
 import type { IGV as IgvLibrary } from 'igv';
-import { fetchJobLogs, fetchJobStages, fetchJobs, type Job, type JobLogs } from '../lib/api';
+import { api, fetchFullJob, fetchJobLogs, fetchJobStages, fetchJobs, fetchOntRawSignalCapabilities, fetchPooledAssignmentManifest, type Job, type JobLogs } from '../lib/api';
 import {
     awaitCurrentGeneration,
     createGenerationBoundResourceWithTimeout,
@@ -18,18 +18,32 @@ import {
     type AlignmentReadLocus,
     type PendingSessionNavigation,
 } from '../lib/ngsAlignmentViewer';
-import { fetchAlignmentSessions, type AlignmentSession } from '../lib/ngsAlignmentSession';
+import {
+    fetchAlignmentSessions,
+    isAlignmentAccessDenied,
+    rotateAlignmentAccess,
+    type AlignmentSession,
+} from '../lib/ngsAlignmentSession';
+import {
+    isNgsJob,
+    ngsJobShouldPoll,
+    ngsToolkitSearchForView,
+    ngsToolkitViewFromSearch,
+    type NgsToolkitView,
+} from '../lib/ngsResultRouting';
 import { normalizeNanoporeCloneState } from '../lib/nanoporeCloneState';
 import { jobPollingInterval } from '../lib/queryPolling';
 import { NanoporeTemplate } from './NanoporeTemplate';
 import { OntInstrumentPanel } from './ngs/OntInstrumentPanel';
 import { RawReadInspector } from './ngs/RawReadInspector';
 import { BarcodeUnitsPanel } from './ngs/BarcodeUnitsPanel';
+import { PooledAssignmentReviewPanel } from './ngs/PooledAssignmentReviewPanel';
 import { SequenceQcManifestPanel } from './ngs/SequenceQcManifestPanel';
 import { useSequenceQcManifest } from './ngs/useSequenceQcManifest';
 import { useThemeColors, useThemePlotlyLayout } from './useThemeColors';
+import { useGlobalExperimentContext } from './experiments/GlobalExperimentContext';
 
-type ToolkitView = 'launch' | 'instrument' | 'runs';
+type ToolkitView = NgsToolkitView;
 type LogTab = 'parsed' | 'command' | 'stderr' | 'nextflow';
 type StageOutputsMap = Record<string, string[]>;
 
@@ -2080,12 +2094,55 @@ function formatParamValue(value: unknown): string {
 }
 
 export function NGSToolkit() {
+    const queryClient = useQueryClient();
+    const { updateQueryParams, contextHref } = useGlobalExperimentContext();
+    const location = useLocation();
     const navigate = useNavigate();
-    const [view, setView] = useState<ToolkitView>('launch');
+    const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
+    const requestedJobId = searchParams.get('job_id');
+    const requestedRunId = searchParams.get('run_id');
+    const requestedReferenceSetId = searchParams.get('reference_set_id');
+    const requestedAssignmentId = searchParams.get('assignment_id');
+    const requestedRunQuery = useQuery({
+        queryKey: ['ont-run', requestedRunId],
+        queryFn: () => api.get<Record<string, unknown>>(`/api/ont/runs/${encodeURIComponent(requestedRunId as string)}`),
+        enabled: Boolean(requestedRunId),
+    });
+    const requestedReferenceSetQuery = useQuery({
+        queryKey: ['ont-reference-set', requestedJobId, requestedReferenceSetId],
+        queryFn: () => api.get<Record<string, unknown>>(
+            `/api/jobs/${encodeURIComponent(requestedJobId as string)}/reference-sets/${encodeURIComponent(requestedReferenceSetId as string)}`,
+        ),
+        enabled: Boolean(requestedJobId && requestedReferenceSetId),
+    });
+    const requestedAssignmentQuery = useQuery({
+        queryKey: ['ont-pooled-assignment', requestedJobId, requestedAssignmentId],
+        queryFn: () => fetchPooledAssignmentManifest(requestedJobId as string),
+        enabled: Boolean(requestedJobId && requestedAssignmentId),
+    });
+    const [view, setView] = useState<ToolkitView>(() => ngsToolkitViewFromSearch(location.search));
     const [initialValues, setInitialValues] = useState<Record<string, unknown> | undefined>(undefined);
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
-    const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+    const selectedJobId = useMemo(
+        () => new URLSearchParams(location.search).get('job_id')?.trim() || null,
+        [location.search],
+    );
+    const selectedJobIdRef = useRef<string | null>(selectedJobId);
+    const alignmentAccessRecoveryGenerationRef = useRef(0);
+    if (selectedJobIdRef.current !== selectedJobId) {
+        selectedJobIdRef.current = selectedJobId;
+        alignmentAccessRecoveryGenerationRef.current += 1;
+    }
+    useEffect(() => {
+        setView(ngsToolkitViewFromSearch(location.search));
+    }, [location.search]);
+    const selectView = useCallback((nextView: ToolkitView) => {
+        navigate({
+            pathname: location.pathname,
+            search: ngsToolkitSearchForView(location.search, nextView),
+        });
+    }, [location.pathname, location.search, navigate]);
     const [logsModalOpen, setLogsModalOpen] = useState(false);
     const [logsLoading, setLogsLoading] = useState(false);
     const [logsData, setLogsData] = useState<JobLogs | null>(null);
@@ -2114,6 +2171,7 @@ export function NGSToolkit() {
     const [motifMinCoverage, setMotifMinCoverage] = useState<number>(DEFAULT_MOTIF_MIN_COVERAGE);
     const [requireStrandConcordance, setRequireStrandConcordance] = useState(true);
     const igvContainerRef = useRef<HTMLDivElement | null>(null);
+    const runInspectorRef = useRef<HTMLDivElement | null>(null);
     const igvLoadTokenRef = useRef(0);
     const igvBrowserRef = useRef<UntypedApiValue | null>(null);
     const igvLibraryRef = useRef<UntypedApiValue | null>(null);
@@ -2157,39 +2215,53 @@ export function NGSToolkit() {
         };
     }, []);
 
-    useEffect(() => {
-        const raw = localStorage.getItem('clonedJobData');
-        if (!raw) return;
-        try {
-            const parsed = JSON.parse(raw);
-            if (parsed?.model_id === 'nanopore') {
-                const clonedJob = {
-                    name: parsed.name,
-                    params: parsed.params || {},
-                } as Job;
-                setInitialValues(normalizeNanoporeCloneState(clonedJob));
-                setView('launch');
-            }
-        } catch (e) {
-            console.error('Failed to parse cloned nanopore data:', e);
-        } finally {
-            localStorage.removeItem('clonedJobData');
-        }
-    }, []);
-
-    const { data: jobsData, isLoading } = useQuery({
+    const {
+        data: jobsData,
+        isLoading,
+        isError: jobsQueryIsError,
+        error: jobsQueryError,
+    } = useQuery({
         queryKey: ['jobs', 'ngs'],
-        queryFn: () => fetchJobs({ include_children: true, model_id: 'nanopore', limit: 100, summary: true }),
+        queryFn: async () => {
+            const jobsByModel = await Promise.all(
+                ['nanopore', 'ont_fastq_qc', 'ont_plasmid_qc', 'ont_construct_screening', 'wf_clone_validation']
+                    .map(async (model_id) => {
+                        const jobs: Job[] = [];
+                        let offset = 0;
+                        let total = 0;
+                        do {
+                            const response = await fetchJobs({
+                                include_children: true,
+                                model_id,
+                                limit: 500,
+                                offset,
+                                summary: true,
+                            });
+                            jobs.push(...response.data.jobs);
+                            total = response.data.total;
+                            if (response.data.jobs.length === 0) break;
+                            offset += response.data.jobs.length;
+                        } while (offset < total && jobs.length < total);
+                        return jobs;
+                    }),
+            );
+            return {
+                data: {
+                    jobs: Array.from(
+                        new Map(
+                            jobsByModel.flat().map((job) => [job.id, job]),
+                        ).values(),
+                    ),
+                    total: jobsByModel.reduce((count, jobs) => count + jobs.length, 0),
+                },
+            };
+        },
         refetchInterval: (query) => jobPollingInterval(5000, query),
     });
 
     const nanoporeJobs = useMemo(() => {
         const jobs = jobsData?.data.jobs || [];
-        return jobs.filter((j) =>
-            j.model_id === 'nanopore' ||
-            j.mode === 'methylation_analysis' ||
-            j.mode === 'nanopore_methylation'
-        );
+        return jobs.filter(isNgsJob);
     }, [jobsData]);
 
     const filteredJobs = useMemo(() => {
@@ -2203,29 +2275,48 @@ export function NGSToolkit() {
         });
     }, [nanoporeJobs, search, statusFilter]);
 
-    const selectedJob = useMemo(() => {
+    const selectedJobSummary = useMemo(() => {
         if (!selectedJobId) return null;
         return nanoporeJobs.find((job) => job.id === selectedJobId) || null;
     }, [selectedJobId, nanoporeJobs]);
+    const fullJobQuery = useQuery({
+        queryKey: ['full-job', selectedJobId],
+        queryFn: () => fetchFullJob(selectedJobId as string),
+        enabled: Boolean(selectedJobId),
+        retry: false,
+        refetchInterval: (query) => {
+            const currentJob = query.state.data as Job | undefined;
+            const status = currentJob?.status ?? selectedJobSummary?.status;
+            return ngsJobShouldPoll(status) ? jobPollingInterval(4000, query) : false;
+        },
+    });
+    const selectedJob = fullJobQuery.data && isNgsJob(fullJobQuery.data) ? fullJobQuery.data : null;
 
     useEffect(() => {
-        if (!selectedJobId && filteredJobs.length > 0) {
-            setSelectedJobId(filteredJobs[0].id);
+        if (view !== 'runs' || requestedJobId) {
             return;
         }
-        if (selectedJobId && !filteredJobs.some((job) => job.id === selectedJobId)) {
-            setSelectedJobId(filteredJobs.length > 0 ? filteredJobs[0].id : null);
+        if (!selectedJobId && filteredJobs.length > 0) {
+            updateQueryParams({ job_id: filteredJobs[0].id }, { replace: true });
         }
-    }, [filteredJobs, selectedJobId]);
+    }, [filteredJobs, requestedJobId, selectedJobId, updateQueryParams, view]);
 
     useEffect(() => {
         setShowRawTopLoci(false);
     }, [selectedJob?.id]);
 
+    useEffect(() => {
+        if (view !== 'runs' || !selectedJobId || selectedJob?.id !== selectedJobId) return;
+        const inspector = runInspectorRef.current;
+        if (!inspector) return;
+        inspector.focus({ preventScroll: true });
+        inspector.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }, [selectedJob?.id, selectedJobId, view]);
+
     const { data: stagesData, isLoading: stagesLoading } = useQuery({
         queryKey: ['job-stages', selectedJobId],
         queryFn: () => fetchJobStages(selectedJobId as string),
-        enabled: !!selectedJobId,
+        enabled: selectedJob?.id === selectedJobId,
         refetchInterval: (query) => selectedJob?.status === 'running'
             ? jobPollingInterval(4000, query)
             : false,
@@ -2233,6 +2324,7 @@ export function NGSToolkit() {
     const {
         data: alignmentSessions = [],
         error: alignmentSessionsError,
+        refetch: refetchAlignmentSessions,
     } = useQuery<AlignmentSession[]>({
         queryKey: ['ngs-alignment-sessions', selectedJobId],
         queryFn: () => fetchAlignmentSessions(selectedJobId as string),
@@ -2240,6 +2332,51 @@ export function NGSToolkit() {
         retry: false,
         staleTime: 30_000,
     });
+    const [alignmentAccessRecoveryState, setAlignmentAccessRecoveryState] = useState<{
+        jobId: string | null;
+        pending: boolean;
+        error: string | null;
+    }>({ jobId: null, pending: false, error: null });
+    const alignmentAccessRecoveryPending = (
+        alignmentAccessRecoveryState.jobId === selectedJobId
+        && alignmentAccessRecoveryState.pending
+    );
+    const alignmentAccessRecoveryError = alignmentAccessRecoveryState.jobId === selectedJobId
+        ? alignmentAccessRecoveryState.error
+        : null;
+    const alignmentAccessDenied = isAlignmentAccessDenied(alignmentSessionsError);
+    const restoreAlignmentAccess = useCallback(async () => {
+        if (!selectedJobId || alignmentAccessRecoveryPending) return;
+        const recoveryJobId = selectedJobId;
+        const recoveryGeneration = alignmentAccessRecoveryGenerationRef.current + 1;
+        alignmentAccessRecoveryGenerationRef.current = recoveryGeneration;
+        const recoveryIsCurrent = () => (
+            selectedJobIdRef.current === recoveryJobId
+            && alignmentAccessRecoveryGenerationRef.current === recoveryGeneration
+        );
+        setAlignmentAccessRecoveryState({ jobId: recoveryJobId, pending: true, error: null });
+        try {
+            await rotateAlignmentAccess(recoveryJobId);
+            if (!recoveryIsCurrent()) return;
+            const refreshed = await refetchAlignmentSessions({ throwOnError: true });
+            if (!recoveryIsCurrent()) return;
+            if (refreshed.error) throw refreshed.error;
+            await queryClient.invalidateQueries({ queryKey: ['sequence-qc-manifest', recoveryJobId] });
+        } catch (reason: unknown) {
+            if (!recoveryIsCurrent()) return;
+            setAlignmentAccessRecoveryState({
+                jobId: recoveryJobId,
+                pending: false,
+                error: reason instanceof Error ? reason.message : String(reason),
+            });
+        } finally {
+            if (recoveryIsCurrent()) {
+                setAlignmentAccessRecoveryState((current) => (
+                    current.jobId === recoveryJobId ? { ...current, pending: false } : current
+                ));
+            }
+        }
+    }, [alignmentAccessRecoveryPending, queryClient, refetchAlignmentSessions, selectedJobId]);
 
     const stats = useMemo(() => {
         return {
@@ -2261,8 +2398,28 @@ export function NGSToolkit() {
     const currentStage = stagePayload?.current_stage || selectedJob?.current_stage || null;
     const currentStageKey = currentStage ? normalizeStageKey(currentStage) : '';
     const forceCompleteByJobStatus = selectedJob?.status === 'completed';
-    const stageOutputs = useMemo(() => (stagePayload?.stage_outputs || {}) as StageOutputsMap, [stagePayload?.stage_outputs]);
+    const stageOutputs = useMemo(
+        () => (stagePayload?.stage_outputs || selectedJob?.stage_outputs || {}) as StageOutputsMap,
+        [selectedJob?.stage_outputs, stagePayload?.stage_outputs],
+    );
     const selectedJobParams = (selectedJob?.params || {}) as Record<string, unknown>;
+    const rawSignalRunId = typeof selectedJobParams.source_instrument_run_id === 'string'
+        ? selectedJobParams.source_instrument_run_id.trim()
+        : '';
+    const rawSignalObservedGeneration = typeof selectedJobParams.source_instrument_observed_generation === 'number'
+        && Number.isInteger(selectedJobParams.source_instrument_observed_generation)
+        && selectedJobParams.source_instrument_observed_generation > 0
+        ? selectedJobParams.source_instrument_observed_generation
+        : null;
+    const rawSignalCapabilitiesQuery = useQuery({
+        queryKey: ['ont-raw-signal-for-job', rawSignalRunId, rawSignalObservedGeneration],
+        queryFn: () => fetchOntRawSignalCapabilities(rawSignalRunId, rawSignalObservedGeneration as number, 'blow5'),
+        enabled: Boolean(rawSignalRunId && rawSignalObservedGeneration),
+        staleTime: 30_000,
+    });
+    const rawSignalRepresentationId = rawSignalCapabilitiesQuery.data?.modes.raw_waveform.state === 'ready'
+        ? rawSignalCapabilitiesQuery.data.modes.raw_waveform.representation_id
+        : null;
     const selectedReferenceFastaPath = typeof selectedJobParams.reference_fasta === 'string'
         ? selectedJobParams.reference_fasta
         : null;
@@ -3750,6 +3907,26 @@ export function NGSToolkit() {
 
     return (
         <div className="min-h-screen bg-[var(--bg-primary)] p-6 space-y-6 text-[var(--text-primary)]">
+            {(requestedJobId || requestedRunId || requestedReferenceSetId || requestedAssignmentId) && (
+                <aside className="rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-secondary)] px-4 py-3 text-xs" aria-label="Exact NGS source context">
+                    {requestedJobId && <span className="mr-3">Job <code>{requestedJobId}</code></span>}
+                    {requestedRunId && (
+                        <span className="mr-3">Run <code>{requestedRunId}</code>{' '}
+                            <strong>{requestedRunQuery.data ? 'loaded' : requestedRunQuery.isError ? 'unavailable' : 'loading'}</strong>
+                        </span>
+                    )}
+                    {requestedReferenceSetId && (
+                        <span className="mr-3">Reference set <code>{requestedReferenceSetId}</code>{' '}
+                            <strong>{requestedReferenceSetQuery.data ? 'loaded' : requestedReferenceSetQuery.isError ? 'unavailable' : 'loading'}</strong>
+                        </span>
+                    )}
+                    {requestedAssignmentId && (
+                        <span>Assignment <code>{requestedAssignmentId}</code>{' '}
+                            <strong>{requestedAssignmentQuery.data?.data.manifest_id === requestedAssignmentId ? 'loaded' : requestedAssignmentQuery.isError || requestedAssignmentQuery.data ? 'unavailable' : 'loading'}</strong>
+                        </span>
+                    )}
+                </aside>
+            )}
             <header className="space-y-2">
                 <div className="flex items-center justify-between">
                     <div>
@@ -3764,7 +3941,7 @@ export function NGSToolkit() {
                             Mol Bio Toolkit
                         </button>
                         <button
-                            onClick={() => setView('launch')}
+                            onClick={() => selectView('launch')}
                             className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${view === 'launch'
                                 ? 'text-white'
                                 : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]'
@@ -3774,7 +3951,7 @@ export function NGSToolkit() {
                             Analyze existing data
                         </button>
                         <button
-                            onClick={() => setView('instrument')}
+                            onClick={() => selectView('instrument')}
                             className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${view === 'instrument'
                                 ? 'text-white'
                                 : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]'
@@ -3784,7 +3961,7 @@ export function NGSToolkit() {
                             Instrument intent
                         </button>
                         <button
-                            onClick={() => setView('runs')}
+                            onClick={() => selectView('runs')}
                             className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${view === 'runs'
                                 ? 'text-white'
                                 : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]'
@@ -3815,11 +3992,11 @@ export function NGSToolkit() {
 
             {view === 'launch' ? (
                 <NanoporeTemplate
-                    onBack={() => setView('runs')}
+                    onBack={() => selectView('runs')}
                     initialValues={initialValues}
                 />
             ) : view === 'instrument' ? (
-                <OntInstrumentPanel onAnalyzeExistingData={() => setView('launch')} />
+                <OntInstrumentPanel onAnalyzeExistingData={() => selectView('launch')} />
             ) : (
                 <section className="space-y-4">
                     <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
@@ -3886,7 +4063,7 @@ export function NGSToolkit() {
                         <div className="px-4 py-3 border-b border-[var(--border-primary)] flex items-center justify-between">
                             <h2 className="text-sm font-semibold text-[var(--text-primary)]">Nanopore Jobs</h2>
                             <button
-                                onClick={() => setView('launch')}
+                                onClick={() => selectView('launch')}
                                 className="px-3 py-1.5 text-xs rounded text-white transition-colors"
                                 style={{ backgroundColor: 'var(--accent-secondary)' }}
                             >
@@ -3906,7 +4083,11 @@ export function NGSToolkit() {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {isLoading ? (
+                                    {jobsQueryIsError ? (
+                                        <tr>
+                                            <td colSpan={6} role="alert" className="px-4 py-6 text-center text-rose-300">Nanopore job summaries could not be loaded. {jobsQueryError instanceof Error ? jobsQueryError.message : String(jobsQueryError)}</td>
+                                        </tr>
+                                    ) : isLoading ? (
                                         <tr>
                                             <td colSpan={6} className="px-4 py-6 text-center text-[var(--text-secondary)]">Loading nanopore jobs...</td>
                                         </tr>
@@ -3943,7 +4124,7 @@ export function NGSToolkit() {
                                                 <td className="px-4 py-2">
                                                     <div className="flex gap-2">
                                                         <button
-                                                            onClick={() => setSelectedJobId(job.id)}
+                                                            onClick={() => updateQueryParams({ job_id: job.id })}
                                                             className="px-2 py-1 text-xs rounded bg-[var(--bg-tertiary)] hover:bg-[var(--bg-secondary)] text-[var(--text-primary)]"
                                                         >
                                                             Inspect
@@ -3955,17 +4136,26 @@ export function NGSToolkit() {
                                                             Logs
                                                         </button>
                                                         <button
-                                                            onClick={() => navigate(`/jobs/${job.id}`)}
+                                                            onClick={() => navigate(contextHref('/ngs', { section: 'analyses', job_id: job.id }))}
                                                             className="px-2 py-1 text-xs rounded bg-[var(--bg-tertiary)] hover:bg-[var(--bg-secondary)] text-[var(--text-primary)]"
                                                         >
                                                             Open
                                                         </button>
                                                         <button
                                                             onClick={() => {
-                                                                setInitialValues(normalizeNanoporeCloneState(job));
-                                                                setView('launch');
+                                                                if (!selectedJob || selectedJob.id !== job.id) return;
+                                                                setInitialValues(normalizeNanoporeCloneState(selectedJob));
+                                                                selectView('launch');
                                                             }}
-                                                            className="px-2 py-1 text-xs rounded text-white"
+                                                            disabled={!fullJobQuery.isSuccess || selectedJob?.id !== job.id}
+                                                            title={selectedJobId !== job.id
+                                                                ? 'Inspect this run and wait for full detail before reusing parameters.'
+                                                                : fullJobQuery.isError
+                                                                    ? 'Full job detail failed; parameter reuse is disabled.'
+                                                                    : !fullJobQuery.isSuccess
+                                                                        ? 'Loading full job detail before parameter reuse.'
+                                                                        : undefined}
+                                                            className="px-2 py-1 text-xs rounded text-white disabled:opacity-40 disabled:cursor-not-allowed"
                                                             style={{ backgroundColor: 'var(--accent-secondary)' }}
                                                         >
                                                             Reuse Params
@@ -3980,25 +4170,49 @@ export function NGSToolkit() {
                         </div>
                     </div>
 
-                    <div className="bg-[var(--bg-secondary)] rounded-lg border border-[var(--border-primary)] p-4 space-y-4">
+                    <div
+                        ref={runInspectorRef}
+                        data-testid="ngs-run-inspector"
+                        tabIndex={-1}
+                        className="bg-[var(--bg-secondary)] rounded-lg border border-[var(--border-primary)] p-4 space-y-4 focus:outline-none focus:ring-2 focus:ring-[var(--accent-secondary)]"
+                    >
                         <div className="flex items-center justify-between">
                             <h3 className="text-sm font-semibold text-[var(--text-primary)]">Run Inspector</h3>
-                            {selectedJob && (
+                            {selectedJobId && (
                                 <div className="flex items-center gap-2">
+                                    {selectedJob ? (
+                                        <a
+                                            href={contextHref('/ngs', { section: 'evidence', job_id: selectedJob.id })}
+                                            className="px-3 py-1.5 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]"
+                                        >
+                                            Evidence
+                                        </a>
+                                    ) : (
+                                        <span className="px-3 py-1.5 text-xs rounded border border-[var(--border-primary)] text-[var(--text-secondary)] opacity-50">Evidence</span>
+                                    )}
                                     <button
                                         onClick={() => void openIgvModal()}
+                                        disabled={!selectedJob}
                                         title={igvMissingReason || 'Open IGV genome viewer'}
                                         className="px-3 py-1.5 text-xs rounded border transition-colors text-[var(--text-primary)] border-[var(--border-primary)] hover:bg-[var(--bg-tertiary)]"
                                     >
                                         Open IGV
                                     </button>
-                                    <span className="text-xs text-[var(--text-secondary)]">{selectedJob.id}</span>
+                                    <span className="text-xs text-[var(--text-secondary)]">{selectedJobId}</span>
                                 </div>
                             )}
                         </div>
 
-                        {!selectedJob ? (
+                        {!selectedJobId ? (
                             <p className="text-sm text-[var(--text-secondary)]">Select a run to inspect.</p>
+                        ) : fullJobQuery.isLoading ? (
+                            <p className="text-sm text-[var(--text-secondary)]">Loading full job detail…{selectedJobSummary ? ` List status: ${selectedJobSummary.status}.` : ''}</p>
+                        ) : fullJobQuery.isError ? (
+                            <p role="alert" className="rounded border border-rose-500/40 bg-rose-500/10 p-3 text-sm text-rose-200">
+                                Full job detail failed to load. Inspector, evidence links, artifacts, and parameter reuse remain disabled. {fullJobQuery.error instanceof Error ? fullJobQuery.error.message : String(fullJobQuery.error)}
+                            </p>
+                        ) : !selectedJob ? (
+                            <p role="alert" className="text-sm text-rose-300">Full job detail returned no job record.</p>
                         ) : (
                             <>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
@@ -4069,10 +4283,20 @@ export function NGSToolkit() {
                                     onNavigateLocus={navigateToVerifiedLocus}
                                 />
 
+                                <PooledAssignmentReviewPanel
+                                    key={`pooled-assignment-review-${selectedJob.id}`}
+                                    jobId={selectedJob.id}
+                                    jobStatus={selectedJob.status}
+                                    mode={selectedJob.mode}
+                                    ontWorkflowId={selectedJob.params?.ont_workflow_id}
+                                    stageOutputs={stageOutputs}
+                                    files={selectedJob.files}
+                                    results={selectedJob.results}
+                                />
+
                                 <BarcodeUnitsPanel
                                     jobId={selectedJob.id}
                                     enabled={selectedJob.status === 'completed' && selectedJob.model_id === 'nanopore' && selectedJob.mode === 'basecall_dna' && Boolean(selectedJob.params?.barcode_kit)}
-                                    defaultReference={typeof selectedJob.params?.reference_fasta === 'string' ? selectedJob.params.reference_fasta : ''}
                                 />
 
                                 <div className="space-y-2">
@@ -4123,9 +4347,26 @@ export function NGSToolkit() {
                                         </div>
                                     </div>
                                     {!igvReady && (
-                                        <p className="text-xs text-[var(--text-secondary)]">
-                                            IGV unavailable: {igvMissingReason}
-                                        </p>
+                                        <div className="space-y-2">
+                                            <p className="text-xs text-[var(--text-secondary)]">
+                                                IGV unavailable: {igvMissingReason}
+                                            </p>
+                                            {alignmentAccessDenied && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void restoreAlignmentAccess()}
+                                                    disabled={alignmentAccessRecoveryPending}
+                                                    className="px-2.5 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] disabled:opacity-50"
+                                                >
+                                                    {alignmentAccessRecoveryPending ? 'Restoring access…' : 'Restore this browser’s access'}
+                                                </button>
+                                            )}
+                                            {alignmentAccessRecoveryError && (
+                                                <p role="alert" className="text-xs text-rose-300">
+                                                    {alignmentAccessRecoveryError}
+                                                </p>
+                                            )}
+                                        </div>
                                     )}
                                     {(igvReportDownloadHref || igvTrackConfigDownloadHref) && (
                                         <div className="flex flex-wrap items-center gap-2 pt-1">
@@ -4133,10 +4374,10 @@ export function NGSToolkit() {
                                                 <a
                                                     href={igvReportDownloadHref}
                                                     target="_blank"
-                                                    rel="noreferrer"
+                                                    rel="noopener"
                                                     className="px-2 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
                                                 >
-                                                    Open IGV report
+                                                    Open compact IGV report
                                                 </a>
                                             )}
                                             {igvTrackConfigDownloadHref && (
@@ -4913,6 +5154,11 @@ export function NGSToolkit() {
                                         jobId={selectedJob.id}
                                         sessionId={selectedAlignmentSession.session_id}
                                         currentLocus={igvCurrentLocus}
+                                        rawSignalBinding={rawSignalRunId && rawSignalObservedGeneration && rawSignalRepresentationId ? {
+                                            runId: rawSignalRunId,
+                                            observedGeneration: rawSignalObservedGeneration,
+                                            representationId: rawSignalRepresentationId,
+                                        } : null}
                                     />
                                 )}
                             </div>

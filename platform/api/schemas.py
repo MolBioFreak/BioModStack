@@ -2,7 +2,7 @@
 Pydantic schemas for API request/response validation.
 """
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 from typing import Optional, List, Any, Literal
 from datetime import datetime
 from enum import Enum
@@ -42,6 +42,25 @@ class JobCreate(BaseModel):
     batch_id: Optional[str] = Field(None, description="Batch ID for grouping")
     batch_name: Optional[str] = Field(None, description="Human-readable batch name")
     sequence_length: Optional[int] = Field(None, description="Sequence length for VRAM estimation")
+    launch_context_id: Optional[str] = Field(
+        None,
+        min_length=1,
+        max_length=128,
+        description="Opaque server-owned Project launch context; hierarchy identity is never accepted here",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def require_native_rfd3_gpu_pin(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        model_id = str(data.get("model_id") or "").strip().lower()
+        mode = str(data.get("mode") or "").strip().lower()
+        if model_id == "protein_local_redesign" and mode == "local_redesign":
+            pinned_gpu = data.get("pinned_gpu")
+            if isinstance(pinned_gpu, bool) or not isinstance(pinned_gpu, int) or pinned_gpu < 0:
+                raise ValueError("native RFD3 local redesign requires one explicit non-negative integer pinned_gpu")
+        return data
     
     model_config = ConfigDict(
         json_schema_extra={
@@ -99,6 +118,7 @@ class JobResponse(BaseModel):
     provenance: Optional[dict] = None
     saved_selection_sets: Optional[List[dict]] = None
     # GPU assignment
+    pinned_gpu: Optional[int] = None
     assigned_gpu: Optional[int] = None
     vram_estimate_mb: Optional[int] = None
     # Stage tracking for multi-stage pipelines
@@ -109,6 +129,11 @@ class JobResponse(BaseModel):
     awaiting_stage: Optional[str] = None
     awaiting_payload: Optional[dict] = None
     decision_history: Optional[List[dict]] = None
+    launch_context_id: Optional[str] = None
+    launch_context_binding: Optional[dict] = None
+    return_uri: Optional[str] = None
+    frustrampnn_result_count: int = 0
+    frustrampnn_reopen_destination: Optional[dict] = None
     
     model_config = ConfigDict(from_attributes=True)
     
@@ -127,6 +152,44 @@ class JobList(BaseModel):
     """Response schema for job list."""
     jobs: List[JobResponse]
     total: int
+
+
+class LaunchContextCreateRequest(BaseModel):
+    """Request a server-owned launcher handoff within the hierarchy in the URL."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    workflow_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    workflow_revision_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    return_uri: str = Field(min_length=1, max_length=1000)
+
+
+class LaunchContextResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    schema_name: Literal["bms.launch-context.v1", "bms.launch-context.v2"] = Field(
+        alias="schema", serialization_alias="schema"
+    )
+    launch_context_id: str
+    project_id: str
+    global_experiment_id: str
+    domain_experiment_id: str
+    workflow_id: Optional[str]
+    workflow_revision_id: Optional[str]
+    preparation_id: Optional[str] = None
+    run_attempt_id: Optional[str] = None
+    normalized_request_sha256: Optional[str] = None
+    validation_receipt_id: Optional[str] = None
+    validation_receipt_sha256: Optional[str] = None
+    pinned_gpu: Optional[int]
+    return_uri: str
+    source_receipt_id: str
+    state: Literal["issued", "reserved", "claimed", "consumed"]
+    canonical_job_id: Optional[str] = None
+    recovery_job_id: Optional[str] = None
+    binding_receipt: Optional[dict] = None
+    issued_at: datetime
+    expires_at: datetime
 
 
 class BoltzApiComplexComponent(BaseModel):

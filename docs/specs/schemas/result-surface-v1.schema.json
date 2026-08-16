@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.result-surface.v1",
+  "title": "BioModStack Presentation / Result Surface Descriptor",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "receipt_id",
+    "entity_kind",
+    "entity_id",
+    "contract_id",
+    "content_digest",
+    "surface_kind",
+    "route",
+    "readiness",
+    "native_summary",
+    "scientific_acceptance",
+    "provenance",
+    "available_actions"
+  ],
+  "properties": {
+    "schema": {"const": "bms.result-surface.v1"},
+    "receipt_id": {"type": "string", "minLength": 1},
+    "entity_kind": {"type": "string", "minLength": 1},
+    "entity_id": {"type": "string", "minLength": 1},
+    "contract_id": {"type": "string", "minLength": 1},
+    "content_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "surface_kind": {
+      "enum": ["protein_design", "molecular_dynamics", "conformational_mapping", "frustrampnn", "ngs", "molbio", "artifact", "unsupported"]
+    },
+    "route": {"type": ["string", "null"]},
+    "readiness": {"enum": ["running", "partial", "ready", "failed", "blocked", "unsupported"]},
+    "native_summary": {"type": "object"},
+    "scientific_acceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "reason"],
+      "properties": {
+        "state": {"enum": ["passed", "failed", "review", "unavailable", "not_applicable"]},
+        "reason": {"type": ["string", "null"]}
+      }
+    },
+    "provenance": {"type": "object"},
+    "available_actions": {
+      "type": "array",
+      "items": {"enum": ["open", "download", "compare", "attach_evidence"]}
+    }
+  }
+}

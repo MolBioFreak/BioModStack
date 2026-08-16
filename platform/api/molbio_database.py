@@ -15,8 +15,9 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from molbio_models import IMMUTABLE_TABLES, MolBioBase
+from molbio_models import IMMUTABLE_TABLES, MolBioBase, MolecularImportBatch
 from paths import get_data_root
+from services.ngs_molbio_quiescence import NgsMolBioQuiescedSession
 
 
 MOLBIO_BUSY_TIMEOUT_MS = 30_000
@@ -383,7 +384,12 @@ def create_molbio_engine(database_url: str | None = None) -> AsyncEngine:
 
 
 def make_molbio_session_factory(target_engine: AsyncEngine):
-    return sessionmaker(target_engine, class_=AsyncSession, expire_on_commit=False)
+    return sessionmaker(
+        target_engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+        sync_session_class=NgsMolBioQuiescedSession,
+    )
 
 
 async def _migration_initial(connection: AsyncConnection) -> None:
@@ -520,6 +526,21 @@ async def _migration_sequence_parent_foreign_key(connection: AsyncConnection) ->
         )
 
 
+async def _migration_authoritative_import_batches(connection: AsyncConnection) -> None:
+    """Add the immutable idempotency/result ledger for sequence imports."""
+
+    await connection.run_sync(
+        lambda sync_connection: MolecularImportBatch.__table__.create(
+            sync_connection,
+            checkfirst=True,
+        )
+    )
+    # Existing stores already passed 0002 before this table existed. Re-run the
+    # guarded trigger migration so the new result ledger receives the same
+    # append-only protection as the other scientific-history tables.
+    await _migration_append_only_guards(connection)
+
+
 MOLBIO_MIGRATIONS: tuple[Migration, ...] = (
     ("0001_initial", "create Mol Bio owned schema", _migration_initial),
     ("0002_append_only_guards", "enforce append-only scientific history", _migration_append_only_guards),
@@ -532,6 +553,11 @@ MOLBIO_MIGRATIONS: tuple[Migration, ...] = (
         "0004_sequence_parent_foreign_key",
         "enforce sequence parent lineage with a restricting self foreign key",
         _migration_sequence_parent_foreign_key,
+    ),
+    (
+        "0005_authoritative_import_batches",
+        "persist immutable authoritative sequence-import results and idempotency bindings",
+        _migration_authoritative_import_batches,
     ),
 )
 

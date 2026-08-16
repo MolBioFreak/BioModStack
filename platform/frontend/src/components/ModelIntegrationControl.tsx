@@ -1,6 +1,9 @@
+import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchModelIntegration, type ModelIntegrationConfig } from '../lib/api';
 import { getModelIntegrationDetails } from './modelIntegrationControlState';
+
+export type ModelIntegrationLoader = (signal?: AbortSignal) => Promise<ModelIntegrationConfig>;
 
 interface ModelIntegrationControlProps {
     modelId: string;
@@ -9,11 +12,18 @@ interface ModelIntegrationControlProps {
     onChange: (checked: boolean) => void;
     fallbackLabel: string;
     integration?: ModelIntegrationConfig;
+    settingsControl?: ReactNode;
 }
 
-export const useModelIntegrationConfig = (modelId: string) => useQuery({
+export const useModelIntegrationConfig = (
+    modelId: string,
+    loader?: ModelIntegrationLoader,
+) => useQuery({
     queryKey: ['model-integration', modelId],
-    queryFn: async () => (await fetchModelIntegration(modelId)).data,
+    queryFn: async ({ signal }) => {
+        if (loader) return loader(signal);
+        return (await fetchModelIntegration(modelId)).data;
+    },
     staleTime: 5 * 60 * 1000,
     retry: false,
 });
@@ -30,6 +40,7 @@ export function ModelIntegrationControl({
     onChange,
     fallbackLabel,
     integration,
+    settingsControl,
 }: ModelIntegrationControlProps) {
     const details = getModelIntegrationDetails(checked, integration, workflowId);
 
@@ -59,6 +70,11 @@ export function ModelIntegrationControl({
                     </div>
                     <p>{details.summary}</p>
                     <p className="mt-1 text-[11px] text-slate-500">Scheduler-managed; enabled analysis fails closed.</p>
+                </div>
+            )}
+            {checked && settingsControl && (
+                <div className="ml-6" data-model-integration-settings>
+                    {settingsControl}
                 </div>
             )}
         </div>

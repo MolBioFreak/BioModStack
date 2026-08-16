@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import logging
+import os
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,9 +13,18 @@ from routers import gpu, workflow_adapter
 from mobile_apk_auth import require_tailnet_environment_tailscale_identity
 
 
+logger = logging.getLogger(__name__)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await database.init_db()
+    # The adapter is lane-local.  The launcher script rejects an unqualified
+    # process before uvicorn starts, while direct test/import use may omit the
+    # identity; in that compatibility case there is no lane to reconcile.
+    if os.getenv("BMS_WORKFLOW_ADAPTER_LANE", "").strip():
+        report = await workflow_adapter.reconcile_workflow_adapter_startup()
+        logger.info("Workflow adapter startup reconciliation: %s", report)
     yield
 
 

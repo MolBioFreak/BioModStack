@@ -75,6 +75,13 @@ def test_barcode_unit_rejects_unknown_tampered_and_escaping_paths(tmp_path: Path
         load_barcode_unit(manifest, root, "barcode01")
 
 
+@pytest.mark.parametrize("invalid_unit", ["barcode00", "barcode1", "barcode97", "barcode123"])
+def test_barcode_unit_accepts_only_canonical_barcode_range(tmp_path: Path, invalid_unit: str) -> None:
+    root, manifest = _fixture(tmp_path)
+    with pytest.raises(ValueError, match="unknown or malformed"):
+        load_barcode_unit(manifest, root, invalid_unit)
+
+
 def test_barcode_unit_rejects_tampered_per_unit_manifest(tmp_path: Path) -> None:
     root, manifest = _fixture(tmp_path)
     unit_manifest = root / "demux" / "demux" / "manifests" / "barcode01.json"

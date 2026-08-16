@@ -21,7 +21,8 @@ from datetime import datetime
 from typing import Deque, Dict, Any, Iterable, Iterator, Optional, List, Tuple, Set
 import logging
 
-from services import stage_reporting
+from services import ont_submission_trust, stage_reporting
+from services.frustrampnn.contracts import canonical_json_bytes
 
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,59 @@ DEFAULT_NEXTFLOW_LOG_READ_BYTES = 256 * 1024
 NEXTFLOW_LOG_TAIL_MAX_LINES = 2_048
 NEXTFLOW_ATTEMPT_LOG_MAX_LINES = 1_024
 NEXTFLOW_LOG_MAX_LINE_CHARS = 16_384
+FRUSTRAMPNN_SETTINGS_MAX_BYTES = 64 * 1024
+GPU_REQUIRED_MODEL_IDS = {"protein_local_redesign"}
+
+
+def _parse_gpu_authority(raw_value: Any) -> int:
+    if isinstance(raw_value, int) and not isinstance(raw_value, bool):
+        value = raw_value
+    elif isinstance(raw_value, str):
+        token = raw_value.strip()
+        if not token or any(character not in "0123456789" for character in token):
+            raise ValueError("GPU authority must be a non-negative integer")
+        value = int(token)
+    else:
+        raise ValueError("GPU authority must be a non-negative integer")
+    if value < 0:
+        raise ValueError("GPU authority must be a non-negative integer")
+    return value
+
+
+def _resolve_launch_gpu_id(job: Any, launch_params: Dict[str, Any], model_id: str) -> Optional[int]:
+    """Resolve the physical GPU from durable scheduler authority."""
+    normalized_model_id = str(model_id or "").strip().lower()
+    gpu_required = normalized_model_id in GPU_REQUIRED_MODEL_IDS
+    raw_assigned = getattr(job, "assigned_gpu", None)
+    raw_pinned = getattr(job, "pinned_gpu", None)
+    raw_launch = launch_params.get("gpu_id")
+
+    if raw_assigned in (None, ""):
+        if gpu_required:
+            raise RuntimeError("GPU-required workflow has no authoritative scheduler GPU assignment")
+        return None
+
+    try:
+        assigned_gpu = _parse_gpu_authority(raw_assigned)
+    except ValueError as exc:
+        raise RuntimeError("Workflow has an invalid Job.assigned_gpu scheduler authority") from exc
+
+    if gpu_required and raw_pinned in (None, ""):
+        raise RuntimeError("GPU-required workflow has no authoritative pinned GPU")
+
+    for field, raw_expected in (("pinned_gpu", raw_pinned), ("launch gpu_id", raw_launch)):
+        if raw_expected in (None, ""):
+            continue
+        try:
+            expected_gpu = _parse_gpu_authority(raw_expected)
+        except ValueError as exc:
+            raise RuntimeError(f"Workflow has an invalid {field} GPU authority") from exc
+        if expected_gpu != assigned_gpu:
+            raise RuntimeError(
+                f"Assigned GPU {assigned_gpu} does not match authoritative {field}={expected_gpu}"
+            )
+
+    return assigned_gpu
 
 
 def _bounded_env_int(name: str, default: int, minimum: int) -> int:
@@ -251,7 +305,10 @@ def preflight_nextflow_java(env: Dict[str, str]) -> Tuple[bool, str]:
 
 # Track running processes
 _running_processes: Dict[str, asyncio.subprocess.Process] = {}
+_running_units: Dict[str, str] = {}
 _launching_jobs: Set[str] = set()
+_launching_job_counts: Dict[str, int] = {}
+_detached_launch_tasks: Set[asyncio.Task] = set()
 
 from paths import (
     get_code_root,
@@ -287,10 +344,36 @@ from .workflow_adapter import (
     launch_via_workflow_adapter,
     workflow_adapter_enabled,
 )
+from .execution_ownership import (
+    DuplicateUnitError,
+    ExecutionOwnershipError,
+    LaneIdentityError,
+    UnitNotFoundError,
+    adapter_identity_from_environment,
+    build_systemd_run_command,
+    cancel_systemd_workflow_unit,
+    configured_lane,
+    create_systemd_workflow_unit,
+    discover_active_workflow_units,
+    is_legacy_numeric_run_id,
+    owner_receipt,
+    release_scheduler_gpu_assignment,
+    show_unit_properties,
+    unit_has_empty_cgroup,
+    TRANSIENT_WORKFLOW_UNIT_ENV,
+    TRANSIENT_WORKFLOW_UNIT_NAME_ENV,
+    TRANSIENT_WORKFLOW_OWNER_NONCE_ENV,
+    assert_unit_lane,
+)
 from runtime_policy import assert_workflow_launch_allowed
 
 # Project root (parent of platform directory)
 PROJECT_ROOT = get_code_root()
+
+
+def transient_workflow_runner_mode() -> bool:
+    """Return true only inside the adapter-owned transient runner service."""
+    return os.getenv(TRANSIENT_WORKFLOW_UNIT_ENV) == "1"
 
 LEGACY_MAIN_ENTRYPOINT = "main.nf"
 DEFAULT_WORKFLOW_ENTRYPOINT = "workflows/protein_design.nf"
@@ -311,6 +394,7 @@ WORKFLOW_ENTRYPOINTS: Dict[str, str] = {
     "ont_construct_screening": "workflows/ngs/ont_construct_screening.nf",
     "ont_methylation_analysis": "workflows/ngs/ont_methylation_analysis.nf",
     "ont_fastq_qc": "workflows/ngs/ont_fastq_qc.nf",
+    "ont_pooled_reference_assignment": "workflows/ngs/ont_pooled_reference_assignment.nf",
     "wf_clone_validation": "workflows/ngs/wf_clone_validation.nf",
     "protein_local_redesign": "workflows/protein_local_redesign.nf",
     "protein_cad_experimental": "workflows/protein_cad_experimental.nf",
@@ -362,6 +446,7 @@ MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
     ("rfantibody_child", "antibody_backbone"): "workflows/rfantibody_backbone.nf",
     ("fampnn_child", "sequence_design"): "workflows/fampnn_child.nf",
     ("frustrampnn", "analyze"): "workflows/frustrampnn_analysis.nf",
+    ("protein_local_redesign", "local_redesign"): "workflows/protein_local_redesign.nf",
     ("protein_modification_experimental", "de_novo_design"): "workflows/protein_cad_experimental.nf",
     ("protein_modification_experimental", "shape_blueprint"): "workflows/shape_blueprint_design.nf",
     ("protein_modification_experimental", "region_redesign"): "workflows/protein_local_redesign.nf",
@@ -1564,6 +1649,10 @@ async def launch_msa_batch_job(
 
     This runs the batch MSA script and then unlocks child inference jobs.
     """
+    if not transient_workflow_runner_mode():
+        raise ExecutionOwnershipError(
+            "msa_batch execution is only permitted inside the transient workflow runner"
+        )
     from database import async_session, Job
     from sqlalchemy import select
     from schemas import JobStatus
@@ -1763,6 +1852,27 @@ async def launch_nextflow_job(
     This runs in a background task and updates the database with status.
     """
     assert_workflow_launch_allowed("launch workflow jobs")
+    transient_runner = transient_workflow_runner_mode()
+    # Adapter-routed callers prove their lane at the adapter boundary. A local
+    # launch must prove it here before it can construct a new unit.
+    launch_lane = configured_lane(required=False)
+    if transient_runner:
+        if launch_lane is None:
+            raise ExecutionOwnershipError("Transient workflow runner requires an explicit lane")
+        transient_unit = str(os.getenv(TRANSIENT_WORKFLOW_UNIT_NAME_ENV) or "").strip()
+        if not transient_unit:
+            raise ExecutionOwnershipError(
+                f"{TRANSIENT_WORKFLOW_UNIT_NAME_ENV} is required inside the transient runner"
+            )
+        transient_identity = assert_unit_lane(transient_unit, launch_lane)
+        if transient_identity.job_id != str(job_id):
+            raise ExecutionOwnershipError(
+                f"Transient unit {transient_unit!r} does not own job {job_id!r}"
+            )
+        if not str(os.getenv(TRANSIENT_WORKFLOW_OWNER_NONCE_ENV) or "").strip():
+            raise ExecutionOwnershipError(
+                f"{TRANSIENT_WORKFLOW_OWNER_NONCE_ENV} is required inside the transient runner"
+            )
     from database import async_session, Job
     from sqlalchemy import select, inspect, update
     from schemas import JobStatus
@@ -1774,16 +1884,20 @@ async def launch_nextflow_job(
         failed_job,
         *,
         stale_log_message: str,
+        exit_code: int | None = None,
     ) -> bool:
-        """Publish an active job failure and its CM receipt in one transaction."""
+        """Publish an active Job failure and typed receipts in one transaction."""
 
         changes = {
             attribute.key: attribute.value
             for attribute in inspect(failed_job).attrs
             if attribute.history.has_changes()
         }
-        if not changes:
-            return False
+        if "params" in changes:
+            changes["params"] = release_scheduler_gpu_assignment(changes["params"])
+        else:
+            changes["params"] = release_scheduler_gpu_assignment(getattr(failed_job, "params", {}))
+        changes["assigned_gpu"] = None
         failure_session.expunge(failed_job)
         published = await failure_session.execute(
             update(Job)
@@ -1799,22 +1913,29 @@ async def launch_nextflow_job(
             from services.conformational_mapping.persistence import (
                 terminalize_failed_request_for_job,
             )
+            from services.rfd3_local_redesign import (
+                terminalize_failed_request_for_job as terminalize_failed_rfd3_request_for_job,
+            )
 
             await terminalize_failed_request_for_job(failure_session, job_id=job_id)
+            await terminalize_failed_rfd3_request_for_job(
+                failure_session,
+                job_id=job_id,
+                exit_code=exit_code,
+            )
         await failure_session.commit()
         if not published.rowcount:
             logger.info(stale_log_message, job_id)
         return bool(published.rowcount)
 
-    existing_process = _running_processes.get(job_id)
-    if existing_process and existing_process.returncode is None:
-        logger.warning(f"Skipping duplicate launch request for active job {job_id}")
-        return
-    
     # ═══════════════════════════════════════════════════════════════════════════
     # MSA BATCH JOBS: Run batch_msa.py directly (not Nextflow)
     # ═══════════════════════════════════════════════════════════════════════════
     if model_id == 'msa_batch':
+        if not transient_runner:
+            raise ExecutionOwnershipError(
+                "msa_batch execution is only permitted inside the transient workflow runner"
+            )
         await launch_msa_batch_job(job_id, params, output_dir)
         return
 
@@ -1869,9 +1990,17 @@ async def launch_nextflow_job(
             logger.info(f"Job {job_id} was cancelled before starting, aborting launch")
             return
         
-        if job.status != JobStatus.RUNNING.value or job.started_at is None:
+        needs_running_transition = job.status != JobStatus.RUNNING.value or job.started_at is None
+        if needs_running_transition:
             job.status = JobStatus.RUNNING.value
             job.started_at = datetime.utcnow()
+        is_native_rfd3 = str(getattr(job, "model_id", model_id) or model_id).strip().lower() == "protein_local_redesign"
+        if is_native_rfd3:
+            from services.rfd3_local_redesign import start_request_for_job
+
+            if not await start_request_for_job(session, job_id=str(job.id)):
+                raise RuntimeError("RFD3 local-redesign request is not ready for launch")
+        if needs_running_transition or is_native_rfd3:
             await session.commit()
         
         # Re-check cancellation status right before spawning (minimize race window)
@@ -1898,8 +2027,13 @@ async def launch_nextflow_job(
             )
 
         try:
-            if workflow_adapter_enabled():
-                adapter_response = launch_via_workflow_adapter(
+            if workflow_adapter_enabled() and not transient_runner:
+                prior_run_id = str(job.nextflow_run_id or "").strip()
+                # Revalidate every immutable input at the literal adapter call
+                # boundary. A later retry re-enters this same launch path.
+                ont_submission_trust.verify_launch_input_snapshots(launch_params)
+                adapter_response = await asyncio.to_thread(
+                    launch_via_workflow_adapter,
                     job_id=job_id,
                     model_id=model_id,
                     mode=mode,
@@ -1913,10 +2047,20 @@ async def launch_nextflow_job(
                 adapter_run_id = (
                     adapter_response.get("nextflow_run_id")
                     or adapter_response.get("run_id")
-                    or adapter_response.get("job_id")
-                    or job_id
                 )
+                if not adapter_run_id:
+                    raise RuntimeError(
+                        f"Workflow adapter returned no execution unit for job {job_id}"
+                    )
                 job.nextflow_run_id = str(adapter_run_id)
+                if launch_lane is not None:
+                    if is_legacy_numeric_run_id(adapter_run_id):
+                        if not is_legacy_numeric_run_id(prior_run_id):
+                            raise ExecutionOwnershipError(
+                                "A new workflow launch cannot create a numeric run id"
+                            )
+                    else:
+                        assert_unit_lane(str(adapter_run_id), launch_lane)
                 await session.commit()
                 logger.info(
                     "[WORKFLOW-ADAPTER] Job %s delegated to host adapter with run id %s",
@@ -1925,11 +2069,21 @@ async def launch_nextflow_job(
                 )
                 return
 
+            if launch_lane is None:
+                # Do not permit a raw/native process path without an explicit
+                # lane. This is the fail-closed boundary for new jobs.
+                launch_lane = configured_lane(required=True)
+            adapter_identity_from_environment()
+
             # ═══════════════════════════════════════════════════════════════
             # GPU ASSIGNMENT: Set CUDA_VISIBLE_DEVICES from orchestrator
             # ═══════════════════════════════════════════════════════════════
-            # Extract gpu_id from params (set by orchestrator)
-            gpu_id = launch_params.get('gpu_id')
+            # The transient runner reloads the Job after adapter handoff. Resolve
+            # the physical GPU from the persisted assignment when the scheduler
+            # parameter is absent, and fail closed for GPU-required workflows.
+            gpu_id = _resolve_launch_gpu_id(job, launch_params, model_id)
+            if gpu_id is not None:
+                launch_params["gpu_id"] = gpu_id
 
             # Build environment with GPU pinning
             env = {**os.environ, "NXF_ANSI_LOG": "false"}
@@ -1976,7 +2130,8 @@ async def launch_nextflow_job(
                 env["CUDA_VISIBLE_DEVICES"] = gpu_id_str
                 logger.info(f"[GPU] Job {job_id} pinned to GPU {gpu_id_str} via CUDA_VISIBLE_DEVICES")
             else:
-                logger.warning(f"[GPU] Job {job_id} has no valid gpu_id - using default GPU selection")
+                env.pop("CUDA_VISIBLE_DEVICES", None)
+                logger.info(f"[GPU] Job {job_id} has no scheduler GPU assignment; CUDA visibility cleared")
             if is_protenix:
                 # Reduces allocator fragmentation spikes on large pair/MSA tensors.
                 env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
@@ -2247,39 +2402,114 @@ async def launch_nextflow_job(
                     for line_str in log_reader.read_available(final=final):
                         await handle_log_line(line_str)
 
-                with open(log_path, "ab", buffering=0) as log_sink:
-                    # Launch in a new session and write directly to a durable log file so
-                    # the workflow survives API reloads/restarts instead of depending on a pipe reader.
-                    process = await asyncio.create_subprocess_exec(
-                        *cmd,
-                        cwd=str(PROJECT_ROOT),
-                        stdout=log_sink,
-                        stderr=asyncio.subprocess.STDOUT,
-                        env=env,
-                        close_fds=True,
-                        start_new_session=True,
+                # Keep this inside the retry loop and adjacent to the two literal
+                # native spawn paths so every retry revalidates immutable inputs.
+                ont_submission_trust.verify_launch_input_snapshots(launch_params)
+                if transient_runner:
+                    # The adapter has already claimed the outer systemd unit.
+                    # Directly starting the workflow here keeps Nextflow and
+                    # msa_batch descendants in that same transient cgroup and
+                    # makes nested systemd ownership impossible.
+                    if not str(job.nextflow_run_id or "").strip():
+                        raise ExecutionOwnershipError(
+                            "Transient workflow runner requires the adapter-persisted unit identity"
+                        )
+                    with open(log_path, "ab", buffering=0) as log_sink:
+                        process = await asyncio.create_subprocess_exec(
+                            *cmd,
+                            cwd=str(PROJECT_ROOT),
+                            stdout=log_sink,
+                            stderr=asyncio.subprocess.STDOUT,
+                            env=env,
+                            close_fds=True,
+                            start_new_session=True,
+                        )
+                    _running_processes[job_id] = process
+                    await session.commit()
+                    try:
+                        while True:
+                            try:
+                                exit_code = await asyncio.wait_for(process.wait(), timeout=1.0)
+                                await consume_new_log(final=True)
+                                break
+                            except asyncio.TimeoutError:
+                                await consume_new_log()
+                    finally:
+                        _running_processes.pop(job_id, None)
+                elif os.getenv("BMS_REQUIRE_TRANSIENT_WORKFLOW_UNITS", "").strip() == "1":
+                    raise ExecutionOwnershipError(
+                        "lane-owned workflow launch requires the adapter-started transient runner"
                     )
-                # Store process reference for potential cancellation
-                _running_processes[job_id] = process
-                # Store the Nextflow run ID (PID for now)
-                job.nextflow_run_id = str(process.pid)
-                await session.commit()
+                else:
+                    systemd_command = build_systemd_run_command(
+                        lane=launch_lane,
+                        job_id=job_id,
+                        attempt=attempt,
+                        command=cmd,
+                        environment=env,
+                        working_directory=PROJECT_ROOT,
+                        log_path=log_path,
+                    )
+                    # systemd-run is the atomic claim. There is intentionally no
+                    # check-then-spawn probe: a duplicate deterministic unit is a
+                    # hard ownership conflict.
+                    unit_name = await asyncio.to_thread(
+                        create_systemd_workflow_unit,
+                        systemd_command,
+                    )
+                    _running_units[job_id] = unit_name
+                    job.nextflow_run_id = unit_name
+                    provenance = dict(job.provenance or {})
+                    provenance["execution_owner_receipt"] = owner_receipt(
+                        lane=launch_lane,
+                        job_id=job_id,
+                        attempt=attempt,
+                        unit_name=unit_name,
+                        command=cmd,
+                    )
+                    job.provenance = provenance
+                    await session.commit()
 
-                try:
-                    while True:
-                        try:
-                            exit_code = await asyncio.wait_for(process.wait(), timeout=1.0)
+                    try:
+                        inactive_cgroup_deadline: float | None = None
+                        while True:
+                            try:
+                                properties = await asyncio.to_thread(
+                                    show_unit_properties,
+                                    unit_name,
+                                    launch_lane,
+                                )
+                            except UnitNotFoundError as exc:
+                                raise ExecutionOwnershipError(
+                                    f"Owned workflow unit disappeared before terminal proof: {unit_name}"
+                                ) from exc
+                            if properties.active_state in {"active", "activating", "reloading"}:
+                                inactive_cgroup_deadline = None
+                                await consume_new_log()
+                                await asyncio.sleep(1.0)
+                                continue
+                            if not unit_has_empty_cgroup(properties):
+                                if inactive_cgroup_deadline is None:
+                                    inactive_cgroup_deadline = asyncio.get_running_loop().time() + 30.0
+                                if asyncio.get_running_loop().time() >= inactive_cgroup_deadline:
+                                    raise ExecutionOwnershipError(
+                                        f"Owned workflow unit reached {properties.active_state!r} with a non-empty cgroup: {unit_name}"
+                                    )
+                                await consume_new_log()
+                                await asyncio.sleep(0.25)
+                                continue
                             await consume_new_log(final=True)
+                            try:
+                                exit_code = int(properties.exec_main_status or "1")
+                            except ValueError:
+                                exit_code = 1
                             break
-                        except asyncio.TimeoutError:
-                            await consume_new_log()
-                finally:
-                    _running_processes.pop(job_id, None)
+                    finally:
+                        _running_units.pop(job_id, None)
 
                 lock_failed = exit_code != 0 and attempt_resume_lock_seen
                 if lock_failed and resume_lock_retries_used < max_resume_lock_retries:
                     resume_lock_retries_used += 1
-                    _running_processes.pop(job_id, None)
                     sleep_s = min(20, 5 * resume_lock_retries_used)
                     msg = (
                         f"[BMS] Resume lock retry {resume_lock_retries_used}/{max_resume_lock_retries}; "
@@ -2307,7 +2537,6 @@ async def launch_nextflow_job(
                             break
 
                     if selected_changes:
-                        _running_processes.pop(job_id, None)
                         msg = (
                             f"[PROTENIX-GUARDRAIL] OOM retry {protenix_oom_retries_used}/{max_protenix_oom_retries}: "
                             + " | ".join(selected_changes)
@@ -2393,12 +2622,21 @@ async def launch_nextflow_job(
                                     )
 
                             
-                    # Check for cancellation exit codes (SIGTERM=15/-15/143, SIGKILL=9/-9/137)
+                    # Exit codes never grant cancellation authority. The
+                    # operator cancellation path must first publish CANCELLED
+                    # after systemd proves an inactive, empty cgroup.
                     elif exit_code in (-15, -9, 143, 137):
-                        job.status = JobStatus.CANCELLED.value
-                        job.queue_status = 'cancelled'
-                        job.error_message = "Job cancelled by user"
-                        logger.info(f"Job {job_id} exit code {exit_code} interpreted as CANCELLED")
+                        job.status = JobStatus.FAILED.value
+                        job.queue_status = 'failed'
+                        job.error_message = (
+                            "TERMINATED_WITHOUT_CANCELLATION_RECEIPT: "
+                            f"owned unit exited with code {exit_code}"
+                        )
+                        logger.error(
+                            "Job %s terminated with exit code %s without an authoritative cancellation receipt",
+                            job_id,
+                            exit_code,
+                        )
                         
                     else:
                         if job.status == JobStatus.COMPLETED.value or (job.current_stage or "").lower() == "complete":
@@ -2455,8 +2693,20 @@ async def launch_nextflow_job(
                     if job.model_id == "molecular_dynamics" and job.mode == "analyze" and job.parent_job_id
                     else None
                 )
-                job.completed_at = datetime.utcnow()
                 terminalizing_cm_failure = job.status == JobStatus.FAILED.value
+                if str(getattr(job, "status", "") or "").lower() in {
+                    JobStatus.COMPLETED.value,
+                    JobStatus.FAILED.value,
+                    JobStatus.CANCELLED.value,
+                    JobStatus.AWAITING_INPUT.value,
+                } or str(getattr(job, "queue_status", "") or "").lower() in {
+                    "completed",
+                    "failed",
+                    "cancelled",
+                }:
+                    job.params = release_scheduler_gpu_assignment(job.params)
+                    job.assigned_gpu = None
+                job.completed_at = datetime.utcnow()
                 changes = {
                     attribute.key: attribute.value
                     for attribute in inspect(job).attrs
@@ -2482,8 +2732,16 @@ async def launch_nextflow_job(
                         from services.conformational_mapping.persistence import (
                             terminalize_failed_request_for_job,
                         )
+                        from services.rfd3_local_redesign import (
+                            terminalize_failed_request_for_job as terminalize_failed_rfd3_request_for_job,
+                        )
 
                         await terminalize_failed_request_for_job(session, job_id=job_id)
+                        await terminalize_failed_rfd3_request_for_job(
+                            session,
+                            job_id=job_id,
+                            exit_code=exit_code,
+                        )
                     await session.commit()
                     if not published.rowcount:
                         logger.info("Skipped stale Nextflow terminal publication for job %s", job_id)
@@ -2497,11 +2755,21 @@ async def launch_nextflow_job(
                         session.expire_all()
                         await reconcile_md_analysis_parent(md_analysis_parent_id, session)
                         await session.commit()
-                _running_processes.pop(job_id, None)
+                _running_units.pop(job_id, None)
                 
         except Exception as e:
+            if isinstance(e, DuplicateUnitError):
+                # The existing deterministic unit remains the sole owner. Do
+                # not let a losing launcher publish a failure over its state.
+                await session.rollback()
+                logger.error(
+                    "Rejected duplicate deterministic workflow unit for job %s: %s",
+                    job_id,
+                    e,
+                )
+                return
             logger.exception(f"Error running job {job_id}")
-            _running_processes.pop(job_id, None)
+            _running_units.pop(job_id, None)
             
             result = await session.execute(select(Job).where(Job.id == job_id))
             job = result.scalar_one_or_none()
@@ -2570,13 +2838,14 @@ def launch_nextflow_job_detached(
     """
     assert_workflow_launch_allowed("launch workflow jobs from the scheduler")
     if job_id in _launching_jobs:
-        logger.warning("Job %s is already queued for detached launch in this process; skipping duplicate scheduling", job_id)
+        # Keep both launch attempts visible to the atomic systemd unit claim.
+        # This set is diagnostic only and must never grant execution authority.
+        logger.warning(
+            "Job %s has another detached launcher; allowing systemd to reject any duplicate unit claim",
+            job_id,
+        )
 
-        async def _noop() -> None:
-            return None
-
-        return asyncio.create_task(_noop())
-
+    _launching_job_counts[job_id] = _launching_job_counts.get(job_id, 0) + 1
     _launching_jobs.add(job_id)
 
     async def _runner() -> None:
@@ -2590,9 +2859,17 @@ def launch_nextflow_job_detached(
                 allow_running_job=allow_running_job,
             )
         finally:
-            _launching_jobs.discard(job_id)
+            remaining = _launching_job_counts.get(job_id, 1) - 1
+            if remaining > 0:
+                _launching_job_counts[job_id] = remaining
+            else:
+                _launching_job_counts.pop(job_id, None)
+                _launching_jobs.discard(job_id)
 
-    return asyncio.create_task(_runner())
+    task = asyncio.create_task(_runner())
+    _detached_launch_tasks.add(task)
+    task.add_done_callback(_detached_launch_tasks.discard)
+    return task
 
 
 def resolve_nextflow_executable() -> str:
@@ -2679,7 +2956,7 @@ def build_nextflow_command(
         if (
             not isinstance(batch, dict)
             or batch.get("schema_name") != "bms_frustrampnn_scheduler_batch"
-            or batch.get("schema_version") != 1
+            or batch.get("schema_version") != 2
             or batch.get("execution_owner_job_id") != str(job_id)
             or not isinstance(records, list)
             or not records
@@ -2738,7 +3015,9 @@ def build_nextflow_command(
     if str(model_id or "").strip() == "conformational_mapping":
         if str(mode or "").strip() != "map":
             raise ValueError("conformational_mapping supports only mode=map")
-        unknown = sorted(set(params) - {"cm_request_path", "gpu_id", "resume_work_dir"})
+        unknown = sorted(set(params) - {
+            "cm_request_path", "gpu_id", "resume_work_dir", "run_frustrampnn",
+        })
         if unknown:
             raise ValueError(
                 "canonical conformational-mapping launch parameters fail closed: "
@@ -2747,6 +3026,8 @@ def build_nextflow_command(
         request_path = str(params.get("cm_request_path") or "").strip()
         if not request_path:
             raise ValueError("cm_request_path is required")
+        if params.get("run_frustrampnn") is not True:
+            raise ValueError("conformational_mapping requires canonical FrustraMPNN")
         canonical_work_dir = Path(get_work_dir()).resolve()
         resume_work_dir = params.get("resume_work_dir")
         if resume_work_dir not in (None, ""):
@@ -2756,15 +3037,13 @@ def build_nextflow_command(
                     "conformational_mapping resume_work_dir must equal the authoritative work directory"
                 )
         gpu_id = params.get("gpu_id")
-        if gpu_id is None:
-            normalized_gpu_id = None
-        elif isinstance(gpu_id, int) and not isinstance(gpu_id, bool):
+        if isinstance(gpu_id, int) and not isinstance(gpu_id, bool):
             normalized_gpu_id = gpu_id
         elif isinstance(gpu_id, str) and gpu_id.isascii() and gpu_id.isdecimal():
             normalized_gpu_id = int(gpu_id)
         else:
             raise ValueError("conformational_mapping gpu_id must be a non-negative integer")
-        if normalized_gpu_id is not None and normalized_gpu_id < 0:
+        if normalized_gpu_id < 0:
             raise ValueError("conformational_mapping gpu_id must be a non-negative integer")
         workflow_entrypoint = resolve_nextflow_entrypoint(
             effective_profile="conformational_mapping",
@@ -2790,8 +3069,11 @@ def build_nextflow_command(
         if job_id:
             command.extend(["--job_id", str(job_id)])
         command.extend(["--cm_request_path", request_path])
-        if normalized_gpu_id is not None:
-            command.extend(["--gpu_id", str(normalized_gpu_id)])
+        command.extend([
+            "--run_frustrampnn", "true",
+            "--gpu_id", str(normalized_gpu_id),
+            "--frustrampnn_physical_gpu_id", str(normalized_gpu_id),
+        ])
         return command
 
     normalized_model_id = str(model_id or "").strip().lower()
@@ -2956,6 +3238,7 @@ def build_nextflow_command(
     if model_id == 'nanopore' or str(effective_profile).startswith('ont_') or effective_profile == 'nanopore_methylation':
         effective_profile = resolve_ont_workflow_alias(effective_profile)
         params = normalize_ont_launch_params(effective_profile, params)
+        params['workflow_id'] = effective_profile
 
     if model_id == 'molecular_dynamics' and params.get('md_job_config'):
         params = dict(params)
@@ -3378,7 +3661,9 @@ def build_nextflow_command(
         model_id == 'protein_modification_experimental' and mode == 'region_redesign'
     ):
         protein_local_mappings = {
+            'input_structure': 'plr_input_pdb',
             'input_pdb': 'plr_input_pdb',
+            'input_cif': 'plr_input_pdb',
             'model_number': 'plr_model_number',
             'design_chains': 'plr_design_chains',
             'context_chains': 'plr_context_chains',
@@ -3390,6 +3675,26 @@ def build_nextflow_command(
             'seq_method': 'plr_seq_method',
             'fix_fixed_sidechains': 'plr_fix_fixed_sidechains',
             'run_boltz_validation': 'plr_run_boltz_validation',
+            'redesign_mode': 'plr_redesign_mode',
+            'select_fixed_atoms': 'plr_select_fixed_atoms',
+            'contig': 'plr_contig',
+            'select_unfixed_sequence': 'plr_select_unfixed_sequence',
+            'partial_t': 'plr_partial_t',
+            'ligand': 'plr_ligand',
+            'select_buried': 'plr_select_buried',
+            'select_exposed': 'plr_select_exposed',
+            'select_partially_buried': 'plr_select_partially_buried',
+            'select_hbond_donor': 'plr_select_hbond_donor',
+            'select_hbond_acceptor': 'plr_select_hbond_acceptor',
+            'select_hotspots': 'plr_select_hotspots',
+            'ori_token': 'plr_ori_token',
+            'unindex': 'plr_unindex',
+            'length': 'plr_length',
+            'seed': 'plr_seed',
+            'dump_trajectories': 'plr_dump_trajectories',
+            'write_full_json': 'plr_write_full_json',
+            'evaluation_states': 'plr_evaluation_states',
+            'profile_id': 'plr_profile_id',
             'interactive_gating': 'interactive_gating',
             'interactive_gate_stage': 'interactive_gate_stage',
             'interactive_gate_continue': 'interactive_gate_continue',
@@ -3409,6 +3714,28 @@ def build_nextflow_command(
 
         if 'plr_num_designs' in params and 'rfd_num_designs' not in params:
             params['rfd_num_designs'] = params['plr_num_designs']
+        if model_id == 'protein_local_redesign':
+            params['rfd3_batches_per_design'] = params.get('plr_num_designs', 1)
+            params['plr_write_full_json'] = True
+            params['plr_seq_method'] = 'skip'
+            params['seq_method'] = 'skip'
+            params['plr_run_boltz_validation'] = False
+            for disabled_key in (
+                'plr_fix_fixed_sidechains',
+                'seqs_per_design',
+                'boltz_sampling_steps',
+                'boltz_recycling_steps',
+                'interactive_gating',
+                'interactive_gate_stage',
+                'interactive_gate_continue',
+                'plr_backbone_input_pdbs',
+                'plr_sequence_input_pdbs',
+                'plr_validation_input_pdbs',
+                'plr_region_manifest',
+                'plr_final_candidate_dir',
+            ):
+                params.pop(disabled_key, None)
+            params['interactive_gating'] = False
         if 'plr_seq_method' in params and 'seq_method' not in params:
             params['seq_method'] = params['plr_seq_method']
         if not params.get('rfd_mode'):
@@ -3755,7 +4082,10 @@ def build_nextflow_command(
     for key, value in params.items():
         # Physical GPU assignment is exclusively scheduler-owned.  Never pass a
         # request-supplied component override through the generic parameter lane.
-        if key == "frustrampnn_physical_gpu_id":
+        if key in {
+            "frustrampnn_physical_gpu_id",
+            "frustrampnn_settings_value_origin",
+        }:
             continue
         if value is not None:
             # Skip empty strings - they would become valueless flags interpreted as boolean true
@@ -3775,8 +4105,50 @@ def build_nextflow_command(
                 # Convert list to comma-separated string for Nextflow
                 cmd.extend([f"--{nf_key}", ",".join(str(v) for v in value)])
             elif isinstance(value, dict):
-                # Skip dict parameters for now (handled specially like complex_components)
-                logger.warning(f"Skipping dict parameter {key} - not supported in command line")
+                if key == "frustrampnn_settings":
+                    transport_value = dict(value)
+                    settings_value_origin = transport_value.pop(
+                        "settings_value_origin", None
+                    )
+                    if settings_value_origin not in {
+                        "bms_default",
+                        "operator_request",
+                    }:
+                        raise ValueError(
+                            "frustrampnn_settings_value_origin must be "
+                            "bms_default or operator_request"
+                        )
+                    separate_origin = params.get(
+                        "frustrampnn_settings_value_origin"
+                    )
+                    if separate_origin is not None and separate_origin != settings_value_origin:
+                        raise ValueError(
+                            "frustrampnn_settings_value_origin disagrees with durable settings"
+                        )
+                    try:
+                        serialized = canonical_json_bytes(transport_value)
+                    except ValueError as exc:
+                        raise ValueError(
+                            "frustrampnn_settings contains invalid canonical JSON: "
+                            f"{exc}"
+                        ) from exc
+                    if len(serialized) > FRUSTRAMPNN_SETTINGS_MAX_BYTES:
+                        raise ValueError(
+                            "frustrampnn_settings exceeds "
+                            f"{FRUSTRAMPNN_SETTINGS_MAX_BYTES} byte limit"
+                        )
+                    cmd.extend(
+                        [
+                            "--frustrampnn_settings_value_origin",
+                            settings_value_origin,
+                            f"--{nf_key}",
+                            serialized.decode("utf-8"),
+                        ]
+                    )
+                else:
+                    # Unrelated nested parameters remain unsupported and are not
+                    # broadened into a generic JSON command-line transport.
+                    logger.warning(f"Skipping dict parameter {key} - not supported in command line")
             else:
                 cmd.extend([f"--{nf_key}", str(value)])
 
@@ -3884,6 +4256,22 @@ async def cancel_nextflow_job(nextflow_run_id: str, graceful_timeout_seconds: fl
             logger.warning("Workflow adapter cancellation failed for %r: %s", nextflow_run_id, exc)
             return False
 
+    # New native jobs are owned by their exact transient systemd unit. A
+    # numeric run id is retained only for already-running legacy processes;
+    # no new launch path creates one.
+    if not is_legacy_numeric_run_id(nextflow_run_id):
+        try:
+            lane = configured_lane(required=True)
+            return await asyncio.to_thread(
+                cancel_systemd_workflow_unit,
+                str(nextflow_run_id),
+                lane,
+                graceful_timeout_seconds=graceful_timeout_seconds,
+            )
+        except ExecutionOwnershipError as exc:
+            logger.warning("Could not cancel owned workflow unit %r: %s", nextflow_run_id, exc)
+            return False
+
     try:
         pid = int(nextflow_run_id)
     except (TypeError, ValueError) as exc:
@@ -3949,20 +4337,30 @@ async def cancel_nextflow_job(nextflow_run_id: str, graceful_timeout_seconds: fl
     return False
 
 
-def get_running_jobs() -> Dict[str, int]:
-    """Get currently running job IDs and their PIDs."""
+def get_running_jobs() -> Dict[str, int | str]:
+    """Get running jobs from the lane owner, with a legacy PID fallback only."""
     if workflow_adapter_enabled():
-        running = get_adapter_running_jobs()
+        # Adapter status is already required to come from the lane-local
+        # systemd owner. Diagnostic launcher state cannot create a running-job
+        # claim while the owner is absent.
+        return dict(get_adapter_running_jobs())
+
+    try:
+        lane = configured_lane(required=True)
+    except LaneIdentityError:
+        # Compatibility for adapters started before lane ownership existed.
+        # New jobs fail closed before launch when no explicit lane is present.
+        running: Dict[str, int | str] = {
+            job_id: proc.pid
+            for job_id, proc in _running_processes.items()
+            if proc.returncode is None
+        }
+        running.update(_discover_managed_nextflow_processes())
         for job_id in _launching_jobs:
             running.setdefault(job_id, 0)
         return running
 
-    running = _discover_managed_nextflow_processes()
-    running.update({
-        job_id: proc.pid 
-        for job_id, proc in _running_processes.items() 
-        if proc.returncode is None
-    })
-    for job_id in _launching_jobs:
-        running.setdefault(job_id, 0)
-    return running
+    # Explicitly lane-owned jobs are discovered only through exact systemd
+    # unit names and properties. In particular, do not supplement this result
+    # with /proc or PID liveness checks.
+    return discover_active_workflow_units(lane)

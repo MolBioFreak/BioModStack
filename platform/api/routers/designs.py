@@ -1146,7 +1146,7 @@ _CONFORNETS_PLOTLY_METADATA: Dict[str, Dict[str, Any]] = {
     },
     "confornets_min_reference_rmsd": {
         "label": "Nearest staged-reference Cα RMSD",
-        "description": "Minimum ordered Cα RMSD after Kabsch alignment between this generated sample and the staged reference structures. Only meaningful when references were supplied and evaluation was enabled.",
+        "description": "Minimum Cα RMSD after proper-rotation Kabsch alignment, using exact authoritative chain/residue/atom identity correspondence between this generated sample and each staged reference. Only meaningful when references were supplied and evaluation was enabled.",
         "unit": "Å",
         "source": "bms_wrapper",
         "semantics": "reference_conditioned_evaluation",
@@ -1182,13 +1182,13 @@ _CONFORNETS_PLOTLY_METADATA: Dict[str, Dict[str, Any]] = {
     },
     "confornets_landscape_x": {
         "label": "ConforNets landscape X",
-        "description": "Post-hoc 2D sample-landscape coordinate derived from pairwise RMSD/MDS in the BMS wrapper. This is not calibrated thermodynamics.",
+        "description": "Post-hoc 2D sample-landscape coordinate derived by classical metric MDS from exact-identity Cα Kabsch RMSD in the BMS wrapper. This is not calibrated thermodynamics.",
         "source": "bms_wrapper",
         "semantics": "post_hoc_sample_space_embedding",
     },
     "confornets_landscape_y": {
         "label": "ConforNets landscape Y",
-        "description": "Post-hoc 2D sample-landscape coordinate derived from pairwise RMSD/MDS in the BMS wrapper. This is not calibrated thermodynamics.",
+        "description": "Post-hoc 2D sample-landscape coordinate derived by classical metric MDS from exact-identity Cα Kabsch RMSD in the BMS wrapper. This is not calibrated thermodynamics.",
         "source": "bms_wrapper",
         "semantics": "post_hoc_sample_space_embedding",
     },

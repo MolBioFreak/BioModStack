@@ -15,7 +15,7 @@ test('catalog-driven control plane renders every action, critical groups, meta a
         'Meta Actions', 'Logs', 'role="tablist"', 'role="tab"', 'role="tabpanel"',
         'Run exactly this action', 'Search individual controls',
     ]) assert.match(source, new RegExp(label));
-    for (const token of ['isCriticalAction', 'action.subsystem === subsystemFilter', 'catalogQuery.data?.actions']) {
+    for (const token of ['isCriticalAction', 'action.subsystem === subsystemFilter', 'authoritativeCatalog?.actions']) {
         assert.ok(source.includes(token), `missing catalog grouping token: ${token}`);
     }
     assert.match(cockpit, /BioXpOperatorControlTabs/);
@@ -27,14 +27,25 @@ test('action forms and route provenance come only from the robot catalog and adm
         'selected.source_anchor', 'selected.stages', 'selected.enabled', 'selected.disabled_reason',
         'selected.dependencies', 'admission.data?.enabled', 'source_authority_verified',
     ]) assert.ok(source.includes(field), `missing source token: ${field}`);
-    assert.match(source, /catalogQuery\.data\?\.ownership_generation/);
+    assert.match(source, /authoritativeCatalog\?\.ownership_generation/);
     assert.match(client, /expected_connection_generation/);
     assert.match(client, /expected_ownership_generation/);
     assert.doesNotMatch(client, /\{ expected_generation: generation, inputs:/);
     assert.doesNotMatch(source, /api\.post\([^)]*selected\.informational_path/);
     assert.match(source, /selected\?\.safety_class === 'stop'/);
     assert.match(source, /selected\?\.safety_class === 'emergency'/);
-    assert.match(source, /catalogQuery\.error \? \[\]/);
+    assert.match(source, /const authoritativeCatalog = !connected \|\| catalogQuery\.error \? undefined : catalogQuery\.data/);
+    assert.match(source, /const authoritativeHistory = !connected \|\| historyQuery\.error \? undefined : historyQuery\.data/);
+    assert.match(source, /const latestReceipt = connected && authoritativeCatalog && authoritativeHistory/);
+    assert.match(source, /resetInvoke\(\)/);
+    assert.match(source, /selected\.requires_confirmation && !confirmationMatchesCurrentAction/);
+    assert.match(source, /confirmation\?\.fingerprint !== runFingerprint/);
+    assert.match(source, /I confirm this exact governed action and its published machine scope/);
+    assert.match(cockpit, /!configured \|\| !linkConnected \|\| updateFreshness\.isPending/);
+    assert.match(cockpit, /linkConnected && catalog && !historyQuery\.isError && invokeOperatorAction\.data/);
+    assert.match(cockpit, /linkConnected && catalog && !historyQuery\.isError && emergencyAction\.data/);
+    assert.match(cockpit, /linkConnected && catalog && !historyQuery\.isError && recoverMotion\.data/);
+    assert.match(client, /\[\.\.\.operatorHistoryKey, variables\.connectionGeneration, true\]/);
 });
 
 test('main tab has a compact live status dashboard for motion axes temperatures and pipettes', () => {
@@ -49,7 +60,9 @@ test('main tab has a compact live status dashboard for motion axes temperatures 
     assert.match(dashboard, /tip_loaded/);
     assert.match(dashboard, /sensor\.label/);
     assert.match(dashboard, /sensor\.unit/);
-    assert.match(dashboard, /dashboard\.error \? undefined/);
+    assert.match(dashboard, /error !== null && error !== undefined/);
+    assert.doesNotMatch(dashboard, /useBioXpOperatorDashboard\(/);
+    assert.match(cockpit, /useBioXpOperatorDashboard\(generation, linkConnected\)/);
     assert.doesNotMatch(`${dashboard}\n${cockpit}`, /type="password"|Login required|Authentication required/i);
 });
 
@@ -71,5 +84,32 @@ test('receipts expose machine assessment and require explicit human PASS or FAIL
         'remote_acknowledged', 'duration_ms', 'Stage receipts', 'Bounded response',
         'Your physical observation', 'Record PASS', 'Record FAIL',
     ]) assert.match(source, new RegExp(label));
-    assert.match(source, /A non-empty operator observation is required/);
+    assert.match(source, /Operator observation must remain attached to the robot-owned receipt/);
+});
+
+test('operator observation text is bound to one immutable receipt command id', () => {
+    assert.match(source, /type ReceiptBoundObservation = \{/);
+    assert.match(source, /receiptCommandId: string \| null/);
+    assert.match(source, /operatorObservation\.receiptCommandId === latestReceiptCommandId/);
+    assert.match(source, /operatorObservation\.receiptCommandId !== latestReceipt\.command_id/);
+    assert.match(source, /receiptCommandId: latestReceiptCommandId/);
+});
+
+test('generic governed action confirmation is bound to exact inputs and current authority', () => {
+    assert.match(source, /type ActionConfirmation = Readonly<\{/);
+    assert.match(source, /fingerprint: string/);
+    assert.match(source, /function buildActionConfirmationFingerprint\(/);
+    for (const token of [
+        'actionId: selected.action_id',
+        'inputs: normalized',
+        'connectionGeneration: generation',
+        'ownershipGeneration: authoritativeCatalog?.ownership_generation ?? 0',
+        "registrySha256: authoritativeCatalog?.registry_sha256 ?? ''",
+        "evidenceLockSha256: authoritativeCatalog?.evidence_lock_sha256 ?? ''",
+        'sourceAuthorityVerified: authoritativeCatalog?.source_authority_verified === true',
+    ]) assert.ok(source.includes(token), `missing confirmation authority token: ${token}`);
+    assert.match(source, /confirmation\?\.fingerprint !== runFingerprint/);
+    assert.match(source, /confirmationMatchesCurrentAction/);
+    assert.match(source, /selected\.requires_confirmation && !confirmationMatchesCurrentAction/);
+    assert.doesNotMatch(source, /confirmationAccepted/);
 });

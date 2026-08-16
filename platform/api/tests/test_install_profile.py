@@ -70,7 +70,8 @@ EXPECTED_CORS_ORIGINS = ",".join(
 def test_authoritative_port_registry_owns_the_approved_fixed_listener_neighborhood() -> None:
     assert runtime_profile.BMS_PORT_REGISTRY == {
         "production_api": 18000,
-        "workflow_adapter": 18001,
+        "development_workflow_adapter": 18001,
+        "production_workflow_adapter": 18101,
         "development_api": 18002,
         "production_web": 18080,
         "production_tailnet_proxy": 18081,
@@ -117,7 +118,8 @@ def test_save_install_profile_writes_compatibility_exports(tmp_path: Path, monke
     assert 'export BMS_API_HOST_PORT="${BMS_API_HOST_PORT:-18000}"' in env_text
     assert 'export BMS_WEB_HOST_PORT="${BMS_WEB_HOST_PORT:-18880}"' in env_text
     assert f'export CORS_ORIGINS="${{CORS_ORIGINS:-{EXPECTED_CORS_ORIGINS}}}"' in env_text
-    assert 'export BMS_WORKFLOW_ADAPTER_URL="${BMS_WORKFLOW_ADAPTER_URL:-http://127.0.0.1:18001}"' in env_text
+    assert 'export BMS_WORKFLOW_ADAPTER_LANE="${BMS_WORKFLOW_ADAPTER_LANE:-production}"' in env_text
+    assert 'export BMS_WORKFLOW_ADAPTER_URL="${BMS_WORKFLOW_ADAPTER_URL:-http://127.0.0.1:18101}"' in env_text
 
     core_runtime_env = runtime_profile.get_core_runtime_env_path()
     core_runtime_text = core_runtime_env.read_text(encoding="utf-8")
@@ -136,7 +138,8 @@ def test_save_install_profile_writes_compatibility_exports(tmp_path: Path, monke
     assert "BMS_DB_CONTAINER_PATH=/var/lib/biomodstack-custom/biomodstack.db" in core_runtime_text
     assert "BMS_DEV_WEB_HOST_PORT=18882" in core_runtime_text
     assert f"CORS_ORIGINS={EXPECTED_CORS_ORIGINS}" in core_runtime_text
-    assert "BMS_WORKFLOW_ADAPTER_URL=http://127.0.0.1:18001" in core_runtime_text
+    assert "BMS_WORKFLOW_ADAPTER_LANE=production" in core_runtime_text
+    assert "BMS_WORKFLOW_ADAPTER_URL=http://127.0.0.1:18101" in core_runtime_text
     assert "BMS_API_IMAGE=biomodstack/api:release-deadbee" in core_runtime_text
     assert "BMS_WEB_IMAGE=biomodstack/web:release-deadbee" in core_runtime_text
     assert "BMS_HOST_AGENT_IMAGE=biomodstack/host-agent:release-deadbee" in core_runtime_text
@@ -214,7 +217,7 @@ def test_resolve_runtime_paths_defaults_include_cordova_and_loopback_cors_origin
     assert resolved["dev_api_host_port"] == 18002
     assert resolved["dev_web_host_port"] == 18082
     assert resolved["web_host_port"] == 18080
-    assert resolved["workflow_adapter_url"] == "http://127.0.0.1:18001"
+    assert resolved["workflow_adapter_url"] == "http://127.0.0.1:18101"
     assert resolved["dev_data_root"] == str((home_dir / ".biomodstack-dev").resolve())
     assert resolved["dev_db_path"] == str((home_dir / ".biomodstack-dev" / "biomodstack.db").resolve())
 
@@ -272,7 +275,7 @@ def test_resolve_runtime_paths_migrates_only_exact_recognized_legacy_listener_de
     assert resolved["api_host_port"] == 18000
     assert resolved["dev_api_host_port"] == 18002
     assert resolved["dev_web_host_port"] == 18082
-    assert resolved["workflow_adapter_url"] == "http://127.0.0.1:18001"
+    assert resolved["workflow_adapter_url"] == "http://127.0.0.1:18101"
     assert resolved["cors_origins"] == ["http://127.0.0.1:18082", "https://localhost:18082"]
 
 

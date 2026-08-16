@@ -1,0 +1,1291 @@
+{
+  "$defs": {
+    "FrustraMPNNClassificationPolicy": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "canonical"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "properties": {
+              "high_max": {
+                "const": -1.0
+              },
+              "minimal_min": {
+                "const": 0.58
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "high_max": {
+          "title": "High Max",
+          "type": "number"
+        },
+        "minimal_min": {
+          "title": "Minimal Min",
+          "type": "number"
+        },
+        "mode": {
+          "enum": [
+            "canonical",
+            "custom"
+          ],
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode",
+        "high_max",
+        "minimal_min"
+      ],
+      "title": "FrustraMPNNClassificationPolicy",
+      "type": "object"
+    },
+    "FrustraMPNNClassificationPolicyValueSources": {
+      "additionalProperties": false,
+      "properties": {
+        "high_max": {
+          "enum": [
+            "bms_default",
+            "operator_request"
+          ],
+          "title": "High Max",
+          "type": "string"
+        },
+        "minimal_min": {
+          "enum": [
+            "bms_default",
+            "operator_request"
+          ],
+          "title": "Minimal Min",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "bms_default",
+            "operator_request"
+          ],
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode",
+        "high_max",
+        "minimal_min"
+      ],
+      "title": "FrustraMPNNClassificationPolicyValueSources",
+      "type": "object"
+    },
+    "FrustraMPNNEffectiveSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "capability_inventory_byte_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Capability Inventory Byte Sha256",
+          "type": "string"
+        },
+        "effective_settings_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Effective Settings Sha256",
+          "type": "string"
+        },
+        "normalization_policy_id": {
+          "const": "frustrampnn_structure_normalizer",
+          "title": "Normalization Policy Id",
+          "type": "string"
+        },
+        "normalization_policy_version": {
+          "const": 1,
+          "title": "Normalization Policy Version",
+          "type": "integer"
+        },
+        "requested_settings": {
+          "$ref": "#/$defs/FrustraMPNNRequestedSettings"
+        },
+        "resolution_identity": {
+          "$ref": "#/$defs/FrustraMPNNResolutionIdentity"
+        },
+        "resolved_chains": {
+          "items": {
+            "$ref": "#/$defs/FrustraMPNNResolvedChainSelection"
+          },
+          "minItems": 1,
+          "title": "Resolved Chains",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "schema_name": {
+          "const": "frustrampnn_effective_settings",
+          "title": "Schema Name",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "settings_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Settings Sha256",
+          "type": "string"
+        },
+        "threshold_policy_id": {
+          "const": "frustrampnn_class_v1",
+          "title": "Threshold Policy Id",
+          "type": "string"
+        },
+        "threshold_policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Threshold Policy Sha256",
+          "type": "string"
+        },
+        "value_sources": {
+          "$ref": "#/$defs/FrustraMPNNSettingsValueSources"
+        },
+        "settings_value_origin": {
+          "enum": [
+            "bms_default",
+            "operator_request"
+          ],
+          "title": "Settings Value Origin",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_name",
+        "schema_version",
+        "requested_settings",
+        "settings_value_origin",
+        "resolved_chains",
+        "normalization_policy_id",
+        "normalization_policy_version",
+        "threshold_policy_id",
+        "threshold_policy_sha256",
+        "settings_sha256",
+        "capability_inventory_byte_sha256",
+        "resolution_identity",
+        "value_sources",
+        "effective_settings_sha256"
+      ],
+      "title": "FrustraMPNNEffectiveSettings",
+      "type": "object"
+    },
+    "FrustraMPNNEntitySelector": {
+      "additionalProperties": false,
+      "description": "Stable source-backed identity for one protein entity/chain instance.",
+      "properties": {
+        "auth_asym_id": {
+          "minLength": 1,
+          "title": "Auth Asym Id",
+          "type": "string"
+        },
+        "entity_instance_id": {
+          "minLength": 1,
+          "title": "Entity Instance Id",
+          "type": "string"
+        },
+        "label_asym_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Label Asym Id"
+        },
+        "source_entity_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Source Entity Id"
+        }
+      },
+      "required": [
+        "entity_instance_id",
+        "source_entity_id",
+        "label_asym_id",
+        "auth_asym_id"
+      ],
+      "title": "FrustraMPNNEntitySelector",
+      "type": "object"
+    },
+    "FrustraMPNNExecutionConfigurationV2": {
+      "additionalProperties": false,
+      "description": "One immutable per-request execution configuration receipt.",
+      "properties": {
+        "capability_inventory_byte_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Capability Inventory Byte Sha256",
+          "type": "string"
+        },
+        "classification_policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Classification Policy Sha256",
+          "type": "string"
+        },
+        "configuration_id": {
+          "const": "frustrampnn_execution_configuration_v2",
+          "title": "Configuration Id",
+          "type": "string"
+        },
+        "configuration_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Configuration Sha256",
+          "type": "string"
+        },
+        "effective_settings": {
+          "$ref": "#/$defs/FrustraMPNNEffectiveSettings"
+        },
+        "effective_settings_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Effective Settings Sha256",
+          "type": "string"
+        },
+        "normalization_policy_id": {
+          "const": "frustrampnn_structure_normalizer",
+          "title": "Normalization Policy Id",
+          "type": "string"
+        },
+        "normalization_policy_version": {
+          "const": 1,
+          "title": "Normalization Policy Version",
+          "type": "integer"
+        },
+        "normalized_pdb_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Normalized Pdb Sha256",
+          "type": "string"
+        },
+        "requested_settings_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Requested Settings Sha256",
+          "type": "string"
+        },
+        "runtime": {
+          "$ref": "#/$defs/FrustraMPNNRuntimeIdentityV1"
+        },
+        "runtime_identity_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Runtime Identity Sha256",
+          "type": "string"
+        },
+        "schema_name": {
+          "const": "frustrampnn_execution_configuration",
+          "title": "Schema Name",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 2,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "source_artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Artifact Sha256",
+          "type": "string"
+        },
+        "structure_map_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Structure Map Sha256",
+          "type": "string"
+        },
+        "threshold_policy_id": {
+          "const": "frustrampnn_class_v1",
+          "title": "Threshold Policy Id",
+          "type": "string"
+        },
+        "tool_id": {
+          "const": "frustrampnn",
+          "title": "Tool Id",
+          "type": "string"
+        },
+        "tool_version": {
+          "const": "MegaScale",
+          "title": "Tool Version",
+          "type": "string"
+        },
+        "settings_value_origin": {
+          "enum": [
+            "bms_default",
+            "operator_request"
+          ],
+          "title": "Settings Value Origin",
+          "type": "string"
+        }
+      },
+      "required": [
+        "configuration_id",
+        "schema_name",
+        "schema_version",
+        "tool_id",
+        "tool_version",
+        "effective_settings",
+        "settings_value_origin",
+        "requested_settings_sha256",
+        "effective_settings_sha256",
+        "capability_inventory_byte_sha256",
+        "classification_policy_sha256",
+        "runtime",
+        "runtime_identity_sha256",
+        "normalization_policy_id",
+        "normalization_policy_version",
+        "threshold_policy_id",
+        "source_artifact_sha256",
+        "structure_map_sha256",
+        "normalized_pdb_sha256",
+        "configuration_sha256"
+      ],
+      "title": "execution_configuration_v2",
+      "type": "object"
+    },
+    "FrustraMPNNProteinSelection": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "all_protein_entities"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "entities": {
+                "maxItems": 0
+              },
+              "residues": {
+                "maxItems": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "selected_entities"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "entities": {
+                "minItems": 1
+              },
+              "residues": {
+                "maxItems": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "selected_residues"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "entities": {
+                "maxItems": 0
+              },
+              "residues": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "entities": {
+          "items": {
+            "$ref": "#/$defs/FrustraMPNNEntitySelector"
+          },
+          "title": "Entities",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "mode": {
+          "enum": [
+            "all_protein_entities",
+            "selected_entities",
+            "selected_residues"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "residues": {
+          "items": {
+            "$ref": "#/$defs/FrustraMPNNResidueSelector"
+          },
+          "title": "Residues",
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "mode",
+        "entities",
+        "residues"
+      ],
+      "title": "FrustraMPNNProteinSelection",
+      "type": "object"
+    },
+    "FrustraMPNNProteinSelectionValueSources": {
+      "additionalProperties": false,
+      "properties": {
+        "entities": {
+          "enum": [
+            "bms_default",
+            "operator_request"
+          ],
+          "title": "Entities",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "bms_default",
+            "operator_request"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "residues": {
+          "enum": [
+            "bms_default",
+            "operator_request"
+          ],
+          "title": "Residues",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode",
+        "entities",
+        "residues"
+      ],
+      "title": "FrustraMPNNProteinSelectionValueSources",
+      "type": "object"
+    },
+    "FrustraMPNNRequestedSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "classification_policy": {
+          "$ref": "#/$defs/FrustraMPNNClassificationPolicy"
+        },
+        "protein_selection": {
+          "$ref": "#/$defs/FrustraMPNNProteinSelection"
+        },
+        "schema_name": {
+          "const": "frustrampnn_settings",
+          "title": "Schema Name",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "source_structure": {
+          "$ref": "#/$defs/FrustraMPNNSourceStructureSettings"
+        },
+        "settings_value_origin": {
+          "enum": [
+            "bms_default",
+            "operator_request"
+          ],
+          "title": "Settings Value Origin",
+          "type": "string",
+          "readOnly": true
+        }
+      },
+      "required": [
+        "schema_name",
+        "schema_version",
+        "protein_selection",
+        "source_structure",
+        "classification_policy",
+        "settings_value_origin"
+      ],
+      "title": "FrustraMPNNRequestedSettings",
+      "type": "object"
+    },
+    "FrustraMPNNResidueSelector": {
+      "additionalProperties": false,
+      "description": "One unambiguous source residue locator resolvable through structure-map rows.",
+      "properties": {
+        "auth_asym_id": {
+          "minLength": 1,
+          "title": "Auth Asym Id",
+          "type": "string"
+        },
+        "auth_seq_id": {
+          "title": "Auth Seq Id",
+          "type": "integer"
+        },
+        "entity_instance_id": {
+          "minLength": 1,
+          "title": "Entity Instance Id",
+          "type": "string"
+        },
+        "insertion_code": {
+          "maxLength": 1,
+          "title": "Insertion Code",
+          "type": "string"
+        },
+        "label_asym_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Label Asym Id"
+        },
+        "sequence_index": {
+          "minimum": 1,
+          "title": "Sequence Index",
+          "type": "integer"
+        },
+        "source_entity_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Source Entity Id"
+        }
+      },
+      "required": [
+        "entity_instance_id",
+        "source_entity_id",
+        "label_asym_id",
+        "auth_asym_id",
+        "auth_seq_id",
+        "insertion_code",
+        "sequence_index"
+      ],
+      "title": "FrustraMPNNResidueSelector",
+      "type": "object"
+    },
+    "FrustraMPNNResolutionIdentity": {
+      "additionalProperties": false,
+      "description": "Exact source/map/normalized-PDB identities used for residue resolution.",
+      "properties": {
+        "normalized_pdb_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Normalized Pdb Sha256",
+          "type": "string"
+        },
+        "source_artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Artifact Sha256",
+          "type": "string"
+        },
+        "structure_map_schema_name": {
+          "const": "frustrampnn_structure_map",
+          "title": "Structure Map Schema Name",
+          "type": "string"
+        },
+        "structure_map_schema_version": {
+          "const": 1,
+          "title": "Structure Map Schema Version",
+          "type": "integer"
+        },
+        "structure_map_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Structure Map Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_artifact_sha256",
+        "structure_map_schema_name",
+        "structure_map_schema_version",
+        "structure_map_sha256",
+        "normalized_pdb_sha256"
+      ],
+      "title": "FrustraMPNNResolutionIdentity",
+      "type": "object"
+    },
+    "FrustraMPNNResolvedChainSelection": {
+      "additionalProperties": false,
+      "description": "One source entity resolved to normalized residues for execution.",
+      "properties": {
+        "entity": {
+          "$ref": "#/$defs/FrustraMPNNEntitySelector"
+        },
+        "pdb_chain_id": {
+          "maxLength": 1,
+          "minLength": 1,
+          "title": "Pdb Chain Id",
+          "type": "string"
+        },
+        "residues": {
+          "items": {
+            "$ref": "#/$defs/FrustraMPNNResolvedResidue"
+          },
+          "minItems": 1,
+          "title": "Residues",
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "entity",
+        "pdb_chain_id",
+        "residues"
+      ],
+      "title": "FrustraMPNNResolvedChainSelection",
+      "type": "object"
+    },
+    "FrustraMPNNResolvedResidue": {
+      "additionalProperties": false,
+      "description": "Source-author identity resolved to one normalized chain/model position.",
+      "properties": {
+        "auth_asym_id": {
+          "minLength": 1,
+          "title": "Auth Asym Id",
+          "type": "string"
+        },
+        "auth_seq_id": {
+          "title": "Auth Seq Id",
+          "type": "integer"
+        },
+        "entity_instance_id": {
+          "minLength": 1,
+          "title": "Entity Instance Id",
+          "type": "string"
+        },
+        "insertion_code": {
+          "maxLength": 1,
+          "title": "Insertion Code",
+          "type": "string"
+        },
+        "label_asym_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Label Asym Id"
+        },
+        "model_position": {
+          "minimum": 0,
+          "title": "Model Position",
+          "type": "integer"
+        },
+        "pdb_chain_id": {
+          "maxLength": 1,
+          "minLength": 1,
+          "title": "Pdb Chain Id",
+          "type": "string"
+        },
+        "sequence_index": {
+          "minimum": 1,
+          "title": "Sequence Index",
+          "type": "integer"
+        },
+        "source_entity_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Source Entity Id"
+        },
+        "wt": {
+          "pattern": "^[ACDEFGHIKLMNPQRSTVWY]$",
+          "title": "Wt",
+          "type": "string"
+        },
+        "label_seq_id": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Label Seq Id"
+        },
+        "pdb_residue_id": {
+          "maximum": 9999,
+          "minimum": -999,
+          "title": "Pdb Residue Id",
+          "type": "integer"
+        },
+        "pdb_insertion_code": {
+          "maxLength": 1,
+          "title": "Pdb Insertion Code",
+          "type": "string"
+        },
+        "residue_name": {
+          "maxLength": 3,
+          "minLength": 3,
+          "title": "Residue Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity_instance_id",
+        "source_entity_id",
+        "label_asym_id",
+        "auth_asym_id",
+        "auth_seq_id",
+        "insertion_code",
+        "sequence_index",
+        "wt",
+        "pdb_chain_id",
+        "model_position",
+        "label_seq_id",
+        "pdb_residue_id",
+        "pdb_insertion_code",
+        "residue_name"
+      ],
+      "title": "FrustraMPNNResolvedResidue",
+      "type": "object"
+    },
+    "FrustraMPNNRuntimeIdentityV1": {
+      "additionalProperties": false,
+      "properties": {
+        "checkpoint_id": {
+          "minLength": 1,
+          "title": "Checkpoint Id",
+          "type": "string"
+        },
+        "checkpoint_path": {
+          "minLength": 1,
+          "title": "Checkpoint Path",
+          "type": "string"
+        },
+        "checkpoint_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Checkpoint Sha256",
+          "type": "string"
+        },
+        "configured_sif_path": {
+          "minLength": 1,
+          "title": "Configured Sif Path",
+          "type": "string"
+        },
+        "executable_path": {
+          "minLength": 1,
+          "title": "Executable Path",
+          "type": "string"
+        },
+        "executable_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Executable Sha256",
+          "type": "string"
+        },
+        "image_version": {
+          "minLength": 1,
+          "title": "Image Version",
+          "type": "string"
+        },
+        "package_version": {
+          "minLength": 1,
+          "title": "Package Version",
+          "type": "string"
+        },
+        "python_version": {
+          "minLength": 1,
+          "title": "Python Version",
+          "type": "string"
+        },
+        "pytorch_version": {
+          "minLength": 1,
+          "title": "Pytorch Version",
+          "type": "string"
+        },
+        "sif_name": {
+          "minLength": 1,
+          "title": "Sif Name",
+          "type": "string"
+        },
+        "sif_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sif Sha256",
+          "type": "string"
+        },
+        "source_commit": {
+          "minLength": 1,
+          "title": "Source Commit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sif_name",
+        "configured_sif_path",
+        "sif_sha256",
+        "executable_path",
+        "executable_sha256",
+        "checkpoint_id",
+        "checkpoint_path",
+        "checkpoint_sha256",
+        "package_version",
+        "source_commit",
+        "python_version",
+        "pytorch_version",
+        "image_version"
+      ],
+      "title": "FrustraMPNNRuntimeIdentityV1",
+      "type": "object"
+    },
+    "FrustraMPNNSettingsValueSources": {
+      "additionalProperties": false,
+      "properties": {
+        "classification_policy": {
+          "$ref": "#/$defs/FrustraMPNNClassificationPolicyValueSources"
+        },
+        "protein_selection": {
+          "$ref": "#/$defs/FrustraMPNNProteinSelectionValueSources"
+        },
+        "source_structure": {
+          "$ref": "#/$defs/FrustraMPNNSourceStructureValueSources"
+        }
+      },
+      "required": [
+        "protein_selection",
+        "source_structure",
+        "classification_policy"
+      ],
+      "title": "FrustraMPNNSettingsValueSources",
+      "type": "object"
+    },
+    "FrustraMPNNSourceStructureSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "preferred_altloc": {
+          "pattern": "^(?:|[A-Za-z0-9])$",
+          "title": "Preferred Altloc",
+          "type": "string"
+        },
+        "selected_model_number": {
+          "minimum": 1,
+          "title": "Selected Model Number",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "selected_model_number",
+        "preferred_altloc"
+      ],
+      "title": "FrustraMPNNSourceStructureSettings",
+      "type": "object"
+    },
+    "FrustraMPNNSourceStructureValueSources": {
+      "additionalProperties": false,
+      "properties": {
+        "preferred_altloc": {
+          "enum": [
+            "bms_default",
+            "operator_request"
+          ],
+          "title": "Preferred Altloc",
+          "type": "string"
+        },
+        "selected_model_number": {
+          "enum": [
+            "bms_default",
+            "operator_request"
+          ],
+          "title": "Selected Model Number",
+          "type": "string"
+        }
+      },
+      "required": [
+        "selected_model_number",
+        "preferred_altloc"
+      ],
+      "title": "FrustraMPNNSourceStructureValueSources",
+      "type": "object"
+    },
+    "identityAuthorityArtifact": {
+      "additionalProperties": false,
+      "properties": {
+        "canonical_json_base64": {
+          "maxLength": 22369624,
+          "minLength": 4,
+          "pattern": "^[A-Za-z0-9+/]*={0,2}$",
+          "type": "string"
+        },
+        "cm_complex_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "media_type": {
+          "const": "application/json"
+        },
+        "relative_path": {
+          "const": "authority_artifact_v1.json"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "relative_path",
+        "media_type",
+        "sha256",
+        "canonical_json_base64"
+      ],
+      "type": "object"
+    },
+    "producerProvenance": {
+      "additionalProperties": false,
+      "properties": {
+        "original_source_format": {
+          "enum": [
+            "pdb",
+            "mmcif"
+          ]
+        },
+        "original_source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "producer_identity_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "producer_method": {
+          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+          "type": "string"
+        },
+        "producer_output_key": {
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*//)(?!\\./).+$",
+          "type": "string"
+        },
+        "producer_rank": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "producer_sample": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_to_normalized_binding": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "sha256_pair_v1"
+            },
+            "normalized_pdb_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "source_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "source_sha256",
+            "normalized_pdb_sha256"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "producer_method",
+        "producer_sample",
+        "producer_rank",
+        "producer_output_key",
+        "producer_identity_sha256",
+        "original_source_format",
+        "original_source_sha256",
+        "source_to_normalized_binding"
+      ],
+      "type": "object"
+    },
+    "sourceArtifact": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "media_type": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "producer_stage": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "relative_path": {
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*//)(?!\\./).+$",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "relative_path",
+        "sha256",
+        "media_type",
+        "producer_stage"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://biomodstack.local/schemas/frustrampnn/workflow_component_request_v2.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "else": {
+        "properties": {
+          "identity_authority_artifact": false
+        }
+      },
+      "if": {
+        "properties": {
+          "identity_authority": {
+            "enum": [
+              "producer_manifest",
+              "cm_complex_snapshot"
+            ]
+          }
+        },
+        "required": [
+          "identity_authority"
+        ]
+      },
+      "then": {
+        "required": [
+          "identity_authority_artifact"
+        ]
+      }
+    },
+    {
+      "else": {
+        "properties": {
+          "identity_authority_artifact": {
+            "not": {
+              "required": [
+                "cm_complex_snapshot_sha256"
+              ]
+            }
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "identity_authority": {
+            "const": "cm_complex_snapshot"
+          }
+        },
+        "required": [
+          "identity_authority"
+        ]
+      },
+      "then": {
+        "properties": {
+          "identity_authority_artifact": {
+            "required": [
+              "cm_complex_snapshot_sha256"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "properties": {
+    "candidate_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "capability_inventory_byte_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "classification_policy_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "component_contract_version": {
+      "const": "2.0"
+    },
+    "component_id": {
+      "const": "frustrampnn"
+    },
+    "effective_settings": {
+      "$ref": "#/$defs/FrustraMPNNEffectiveSettings"
+    },
+    "effective_settings_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "execution_configuration": {
+      "$ref": "#/$defs/FrustraMPNNExecutionConfigurationV2"
+    },
+    "execution_configuration_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "identity_authority": {
+      "enum": [
+        "producer_manifest",
+        "mmcif_atom_site",
+        "pdb_coordinates",
+        "cm_complex_snapshot"
+      ]
+    },
+    "identity_authority_artifact": {
+      "$ref": "#/$defs/identityAuthorityArtifact"
+    },
+    "invocation_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "normalized_pdb_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "parent_job_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "parent_workflow_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "producer_provenance": {
+      "$ref": "#/$defs/producerProvenance"
+    },
+    "requested_outputs": {
+      "items": {
+        "enum": [
+          "structure_map",
+          "raw_csv",
+          "landscape",
+          "summary",
+          "execution_receipt"
+        ]
+      },
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "requested_settings": {
+      "$ref": "#/$defs/FrustraMPNNRequestedSettings"
+    },
+    "requested_settings_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "requiredness": {
+      "const": "required"
+    },
+    "runtime_identity_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "schema_name": {
+      "const": "workflow_component_request"
+    },
+    "schema_version": {
+      "const": 2
+    },
+    "source_artifact": {
+      "$ref": "#/$defs/sourceArtifact"
+    },
+    "structure_map_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "settings_value_origin": {
+      "enum": [
+        "bms_default",
+        "operator_request"
+      ],
+      "title": "Settings Value Origin",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_name",
+    "schema_version",
+    "component_id",
+    "component_contract_version",
+    "invocation_id",
+    "parent_job_id",
+    "parent_workflow_id",
+    "candidate_id",
+    "source_artifact",
+    "requiredness",
+    "identity_authority",
+    "requested_settings",
+    "settings_value_origin",
+    "requested_settings_sha256",
+    "effective_settings",
+    "effective_settings_sha256",
+    "classification_policy_sha256",
+    "capability_inventory_byte_sha256",
+    "runtime_identity_sha256",
+    "structure_map_sha256",
+    "normalized_pdb_sha256",
+    "execution_configuration",
+    "execution_configuration_sha256",
+    "requested_outputs"
+  ],
+  "title": "workflow_component_request_v2",
+  "type": "object"
+}

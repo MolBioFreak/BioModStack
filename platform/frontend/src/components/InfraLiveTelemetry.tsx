@@ -1,11 +1,12 @@
-import { startTransition, useEffect, useState } from 'react';
-import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
     discoverHardware,
     fetchFanControl,
     fetchPowerControl,
     fetchSchedulerConfig,
     fetchSystemStatus,
+    fetchTelemetryHistory,
     setFanControl,
     setPowerControlManual,
     toggleGpuDisabled,
@@ -13,50 +14,29 @@ import {
 import type { GPUStatus, PerGpuFanStatus, SystemStatus } from '../lib/api';
 import { resolveCpuFrequencyScaleMhz, resolveCpuPowerScaleWatts } from './infraTelemetryScaling';
 import {
-    appendRetainedTelemetrySample,
-    INFRA_TELEMETRY_PREFERENCES_STORAGE_KEY,
-    INFRA_TELEMETRY_STORAGE_KEY,
     isValidPollPreset,
-    loadPersistedTelemetryState,
+    loadPersistedTelemetryPreferences,
     parseTelemetryTimestampMs,
     persistTelemetryPreferences,
-    persistTelemetryState,
-    reconcileTelemetryHistories,
-    shouldPersistTelemetryHistory,
+    resampleTelemetrySamples,
+    resolveTelemetryBucketIntervalMs,
+    resolveTelemetryDisplayIntervalMs,
+    resolveTelemetryGapBreakMs,
+    resolveTelemetryWindowBounds,
 } from './infraTelemetryHistory';
 import type {
     LiveSample,
     PollPreset,
-    RestoredInfraTelemetryState,
     WindowPreset,
 } from './infraTelemetryHistory';
 import { jobPollingInterval } from '../lib/queryPolling';
 
-const INFRA_STORAGE_WRITE_DEBOUNCE_MS = 1500;
 const SHARED_CONTROL_POLL_INTERVAL_MS = 10000;
-const MIN_GAP_BREAK_MS = 12000;
 const SHARED_SYSTEM_QUERY_KEY = ['system'];
 const SHARED_POWER_CONTROL_QUERY_KEY = ['powerControl'];
 const SHARED_FAN_CONTROL_QUERY_KEY = ['fanControl'];
 const SHARED_SCHEDULER_CONFIG_QUERY_KEY = ['schedulerConfig'];
 const INFRA_LIVE_SHARED_QUERY_KEY = ['infra-live-shared'];
-const INFRA_LIVE_SHARED_STATUS_QUERY_KEY = ['infra-live-shared-status'];
-let sharedTelemetryCollectorSubscribers = 0;
-let sharedTelemetryCollectorTimerId: number | undefined;
-let sharedTelemetryCollectorRunning = false;
-let sharedTelemetryCollectorFailureCount = 0;
-let sharedTelemetryCollectorGeneration = 0;
-let sharedTelemetryCollectorActiveGeneration: number | null = null;
-let sharedTelemetryCollectorWakeHandler: (() => void) | undefined;
-let sharedTelemetryCollectorStorageHandler: ((event: StorageEvent) => void) | undefined;
-let sharedTelemetryCollectorQueryClient: QueryClient | null = null;
-let sharedTelemetryCollectorDefaults: { pollIntervalMs: PollPreset; windowMinutes: WindowPreset } = {
-    pollIntervalMs: 1000,
-    windowMinutes: 3,
-};
-let sharedTelemetryCollectorState: RestoredInfraTelemetryState | null = null;
-let sharedTelemetryCollectorLastPersistedAtMs = 0;
-const sharedTelemetryCollectorStateListeners = new Set<(state: RestoredInfraTelemetryState) => void>();
 
 const POLL_PRESETS: ReadonlyArray<{ value: PollPreset; label: string }> = [
     { value: 1000, label: '1s' },
@@ -106,13 +86,9 @@ interface TimeSeriesPlotProps {
     traceType?: 'scatter' | 'scattergl';
     compact?: boolean;
     redrawKey?: string | number;
+    xDomain?: [number, number];
 }
 
-
-interface SharedTelemetryStatus {
-    lastUpdatedMs: number | null;
-    error: string | null;
-}
 
 export interface InfraLiveTelemetryProps {
     showXAxisLabels?: boolean;
@@ -204,240 +180,6 @@ const DASHBOARD_SIZING: Record<NonNullable<InfraLiveTelemetryProps['dashboardSiz
     },
 };
 
-
-function publishSharedTelemetryCollectorState() {
-    if (!sharedTelemetryCollectorState) return;
-    const snapshot: RestoredInfraTelemetryState = {
-        pollIntervalMs: sharedTelemetryCollectorState.pollIntervalMs,
-        windowMinutes: sharedTelemetryCollectorState.windowMinutes,
-        samples: sharedTelemetryCollectorState.samples,
-    };
-    for (const listener of sharedTelemetryCollectorStateListeners) listener(snapshot);
-}
-
-function readSharedTelemetryCollectorState(
-    defaultPollIntervalMs: PollPreset,
-    defaultWindowMinutes: WindowPreset,
-): RestoredInfraTelemetryState {
-    return sharedTelemetryCollectorState ?? loadPersistedTelemetryState(
-        defaultPollIntervalMs,
-        defaultWindowMinutes,
-    );
-}
-
-function subscribeSharedTelemetryCollectorState(
-    listener: (state: RestoredInfraTelemetryState) => void,
-): () => void {
-    sharedTelemetryCollectorStateListeners.add(listener);
-    if (sharedTelemetryCollectorState) listener(readSharedTelemetryCollectorState(
-        sharedTelemetryCollectorDefaults.pollIntervalMs,
-        sharedTelemetryCollectorDefaults.windowMinutes,
-    ));
-    return () => {
-        sharedTelemetryCollectorStateListeners.delete(listener);
-    };
-}
-
-function persistSharedTelemetryCollectorState(nowMs = Date.now()) {
-    if (!sharedTelemetryCollectorState) return;
-    const durableState = loadPersistedTelemetryState(
-        sharedTelemetryCollectorState.pollIntervalMs,
-        sharedTelemetryCollectorState.windowMinutes,
-        nowMs,
-    );
-    sharedTelemetryCollectorState.samples = reconcileTelemetryHistories(
-        sharedTelemetryCollectorState.samples,
-        durableState.samples,
-        nowMs,
-    );
-    persistTelemetryState({
-        version: 3,
-        pollIntervalMs: sharedTelemetryCollectorState.pollIntervalMs,
-        windowMinutes: sharedTelemetryCollectorState.windowMinutes,
-        samples: sharedTelemetryCollectorState.samples,
-    });
-    sharedTelemetryCollectorLastPersistedAtMs = nowMs;
-    publishSharedTelemetryCollectorState();
-}
-
-function stopSharedTelemetryCollector() {
-    persistSharedTelemetryCollectorState();
-    sharedTelemetryCollectorState = null;
-    sharedTelemetryCollectorLastPersistedAtMs = 0;
-    sharedTelemetryCollectorRunning = false;
-    sharedTelemetryCollectorGeneration += 1;
-    sharedTelemetryCollectorFailureCount = 0;
-    if (sharedTelemetryCollectorTimerId != null && typeof window !== 'undefined') {
-        window.clearTimeout(sharedTelemetryCollectorTimerId);
-    }
-    sharedTelemetryCollectorTimerId = undefined;
-    sharedTelemetryCollectorQueryClient = null;
-    if (sharedTelemetryCollectorWakeHandler && typeof window !== 'undefined') {
-        document.removeEventListener('visibilitychange', sharedTelemetryCollectorWakeHandler);
-        window.removeEventListener('online', sharedTelemetryCollectorWakeHandler);
-        window.removeEventListener('pageshow', sharedTelemetryCollectorWakeHandler);
-    }
-    if (sharedTelemetryCollectorStorageHandler && typeof window !== 'undefined') {
-        window.removeEventListener('storage', sharedTelemetryCollectorStorageHandler);
-    }
-    sharedTelemetryCollectorWakeHandler = undefined;
-    sharedTelemetryCollectorStorageHandler = undefined;
-}
-
-
-function startSharedTelemetryCollector(
-    queryClient: QueryClient,
-    defaultPollIntervalMs: PollPreset,
-    defaultWindowMinutes: WindowPreset,
-) {
-    sharedTelemetryCollectorSubscribers += 1;
-    sharedTelemetryCollectorQueryClient = queryClient;
-    sharedTelemetryCollectorDefaults = {
-        pollIntervalMs: defaultPollIntervalMs,
-        windowMinutes: defaultWindowMinutes,
-    };
-
-    if (sharedTelemetryCollectorRunning || typeof window === 'undefined') {
-        return;
-    }
-
-    sharedTelemetryCollectorRunning = true;
-    const collectorGeneration = ++sharedTelemetryCollectorGeneration;
-    sharedTelemetryCollectorState = loadPersistedTelemetryState(
-        defaultPollIntervalMs,
-        defaultWindowMinutes,
-    );
-    sharedTelemetryCollectorLastPersistedAtMs = Date.now();
-    publishSharedTelemetryCollectorState();
-
-    const scheduleNext = (delayMs: number) => {
-        if (!sharedTelemetryCollectorRunning || typeof window === 'undefined') return;
-        if (sharedTelemetryCollectorTimerId != null) {
-            window.clearTimeout(sharedTelemetryCollectorTimerId);
-        }
-        sharedTelemetryCollectorTimerId = window.setTimeout(run, delayMs);
-    };
-
-    const run = async () => {
-        if (!sharedTelemetryCollectorRunning || !sharedTelemetryCollectorQueryClient || collectorGeneration !== sharedTelemetryCollectorGeneration) {
-            return;
-        }
-        // Do not issue telemetry requests while the renderer is hidden or offline.
-        // Keep a lightweight wake-up timer so a restored foreground/connection resumes
-        // without requiring an unrelated React Query observer update.
-        if (document.hidden || navigator.onLine === false) {
-            scheduleNext(1_000);
-            return;
-        }
-        if (sharedTelemetryCollectorActiveGeneration === collectorGeneration) {
-            scheduleNext(250);
-            return;
-        }
-        sharedTelemetryCollectorActiveGeneration = collectorGeneration;
-
-        const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
-        const defaults = sharedTelemetryCollectorDefaults;
-        const collectorState = sharedTelemetryCollectorState ?? loadPersistedTelemetryState(
-            defaults.pollIntervalMs,
-            defaults.windowMinutes,
-        );
-        sharedTelemetryCollectorState = collectorState;
-
-        try {
-            const response = await fetchSystemStatus();
-            if (!sharedTelemetryCollectorRunning || !sharedTelemetryCollectorQueryClient || collectorGeneration !== sharedTelemetryCollectorGeneration) {
-                if (sharedTelemetryCollectorActiveGeneration === collectorGeneration) sharedTelemetryCollectorActiveGeneration = null;
-                return;
-            }
-
-            sharedTelemetryCollectorQueryClient.setQueryData(INFRA_LIVE_SHARED_QUERY_KEY, response);
-            sharedTelemetryCollectorQueryClient.setQueryData(SHARED_SYSTEM_QUERY_KEY, response);
-            sharedTelemetryCollectorQueryClient.setQueryData<SharedTelemetryStatus>(INFRA_LIVE_SHARED_STATUS_QUERY_KEY, {
-                lastUpdatedMs: Date.now(),
-                error: null,
-            });
-
-            sharedTelemetryCollectorFailureCount = 0;
-            const nextSample = buildSample(response.data, collectorState.pollIntervalMs);
-            collectorState.samples = appendRetainedTelemetrySample(
-                collectorState.samples,
-                nextSample,
-                nextSample.timestampMs,
-            );
-            const nowMs = Date.now();
-            if (shouldPersistTelemetryHistory(sharedTelemetryCollectorLastPersistedAtMs, nowMs)) {
-                persistSharedTelemetryCollectorState(nowMs);
-            } else {
-                publishSharedTelemetryCollectorState();
-            }
-        } catch (error) {
-            if (!sharedTelemetryCollectorRunning || !sharedTelemetryCollectorQueryClient || collectorGeneration !== sharedTelemetryCollectorGeneration) {
-                if (sharedTelemetryCollectorActiveGeneration === collectorGeneration) sharedTelemetryCollectorActiveGeneration = null;
-                return;
-            }
-            sharedTelemetryCollectorFailureCount = Math.min(sharedTelemetryCollectorFailureCount + 1, 4);
-            const message = error instanceof Error ? error.message : 'Unknown telemetry error';
-            const previousStatus = readSharedTelemetryStatus(sharedTelemetryCollectorQueryClient);
-            sharedTelemetryCollectorQueryClient.setQueryData<SharedTelemetryStatus>(INFRA_LIVE_SHARED_STATUS_QUERY_KEY, {
-                lastUpdatedMs: previousStatus.lastUpdatedMs,
-                error: message,
-            });
-        }
-
-        const endedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
-        const elapsedMs = Math.max(0, endedAt - startedAt);
-        if (sharedTelemetryCollectorActiveGeneration === collectorGeneration) sharedTelemetryCollectorActiveGeneration = null;
-        const nextDelayMs = Math.max(
-            0,
-            (collectorState.pollIntervalMs * 2 ** sharedTelemetryCollectorFailureCount) - elapsedMs,
-        );
-        scheduleNext(nextDelayMs);
-    };
-
-    // Start on the next macrotask so StrictMode's mount/unmount probe can cancel
-    // the first pass before it emits a duplicate request. Foreground/online
-    // transitions bypass any failure backoff so a recovered browser catches up now.
-    sharedTelemetryCollectorWakeHandler = () => {
-        if (document.hidden || navigator.onLine === false) return;
-        sharedTelemetryCollectorFailureCount = 0;
-        scheduleNext(0);
-    };
-    sharedTelemetryCollectorStorageHandler = (event: StorageEvent) => {
-        if (!sharedTelemetryCollectorState) return;
-        if (
-            event.key !== INFRA_TELEMETRY_STORAGE_KEY
-            && event.key !== INFRA_TELEMETRY_PREFERENCES_STORAGE_KEY
-        ) return;
-        const durableState = loadPersistedTelemetryState(
-            sharedTelemetryCollectorState.pollIntervalMs,
-            sharedTelemetryCollectorState.windowMinutes,
-        );
-        sharedTelemetryCollectorState.samples = reconcileTelemetryHistories(
-            sharedTelemetryCollectorState.samples,
-            durableState.samples,
-        );
-        sharedTelemetryCollectorState.pollIntervalMs = durableState.pollIntervalMs;
-        sharedTelemetryCollectorState.windowMinutes = durableState.windowMinutes;
-        sharedTelemetryCollectorDefaults = {
-            pollIntervalMs: durableState.pollIntervalMs,
-            windowMinutes: durableState.windowMinutes,
-        };
-        publishSharedTelemetryCollectorState();
-    };
-    document.addEventListener('visibilitychange', sharedTelemetryCollectorWakeHandler);
-    window.addEventListener('online', sharedTelemetryCollectorWakeHandler);
-    window.addEventListener('pageshow', sharedTelemetryCollectorWakeHandler);
-    window.addEventListener('storage', sharedTelemetryCollectorStorageHandler);
-    scheduleNext(0);
-}
-
-
-function releaseSharedTelemetryCollector() {
-    sharedTelemetryCollectorSubscribers = Math.max(0, sharedTelemetryCollectorSubscribers - 1);
-    if (sharedTelemetryCollectorSubscribers === 0) {
-        stopSharedTelemetryCollector();
-    }
-}
 
 function formatClock(timestamp: string): string {
     const date = new Date(timestamp);
@@ -629,15 +371,6 @@ function buildGapAwareTraceData<T = number>(
     }
 
     return customForSample ? { x, y, customdata } : { x, y };
-}
-
-function readSharedTelemetryStatus(queryClient: ReturnType<typeof useQueryClient>): SharedTelemetryStatus {
-    return (
-        queryClient.getQueryData<SharedTelemetryStatus>(INFRA_LIVE_SHARED_STATUS_QUERY_KEY) ?? {
-            lastUpdatedMs: null,
-            error: null,
-        }
-    );
 }
 
 function getTempBandColor(temp: number | null): string {
@@ -1147,11 +880,12 @@ function TimeSeriesPlot({
     series,
     showXAxisLabels = true,
     compact = false,
+    xDomain,
 }: TimeSeriesPlotProps) {
     const firstTimestampMs = samples[0]?.timestampMs ?? Date.now() - 1;
     const lastTimestampMs = samples[samples.length - 1]?.timestampMs ?? firstTimestampMs + 1;
-    const xMin = Math.min(firstTimestampMs, lastTimestampMs - 1);
-    const xMax = Math.max(lastTimestampMs, firstTimestampMs + 1);
+    const xMin = xDomain?.[0] ?? Math.min(firstTimestampMs, lastTimestampMs - 1);
+    const xMax = xDomain?.[1] ?? Math.max(lastTimestampMs, firstTimestampMs + 1);
     const finiteValues = series.flatMap((line) => (line.y ?? []).filter(
         (value): value is number => value != null && Number.isFinite(value),
     ));
@@ -1270,6 +1004,7 @@ function CpuPanel({
     traceType = 'scatter',
     gapBreakMs,
     redrawKey,
+    xDomain,
 }: {
     current: SystemStatus['cpu'];
     samples: LiveSample[];
@@ -1280,6 +1015,7 @@ function CpuPanel({
     traceType?: 'scatter' | 'scattergl';
     gapBreakMs: number;
     redrawKey: string | number;
+    xDomain: [number, number];
 }) {
     const powerScale = resolveCpuPowerScaleWatts(current, samples);
     const frequencyScale = resolveCpuFrequencyScaleMhz(current, samples);
@@ -1321,6 +1057,7 @@ function CpuPanel({
                     yAxis={{ title: 'Scale %', color: PLOT_TICK, range: [0, 100], suffix: '%' }}
                     compact={compact}
                     redrawKey={redrawKey}
+                    xDomain={xDomain}
                     series={[
                         {
                             x: cpuUtilTrace.x,
@@ -1376,6 +1113,7 @@ function RamPanel({
     traceType = 'scatter',
     gapBreakMs,
     redrawKey,
+    xDomain,
 }: {
     current: SystemStatus['ram'];
     samples: LiveSample[];
@@ -1386,6 +1124,7 @@ function RamPanel({
     traceType?: 'scatter' | 'scattergl';
     gapBreakMs: number;
     redrawKey: string | number;
+    xDomain: [number, number];
 }) {
     const ramUsedTrace = buildGapAwareTraceData(
         samples,
@@ -1411,6 +1150,7 @@ function RamPanel({
                     yAxis={{ title: 'Scale %', color: PLOT_TICK, range: [0, 100], suffix: '%' }}
                     compact={compact}
                     redrawKey={redrawKey}
+                    xDomain={xDomain}
                     series={[
                         {
                             x: ramUsedTrace.x,
@@ -1466,6 +1206,7 @@ function GpuPanel({
     powerControls,
     gapBreakMs,
     redrawKey,
+    xDomain,
 }: {
     gpu: GPUStatus;
     samples: LiveSample[];
@@ -1477,6 +1218,7 @@ function GpuPanel({
     powerControls?: GpuInlinePowerControlProps;
     gapBreakMs: number;
     redrawKey: string | number;
+    xDomain: [number, number];
 }) {
     const totalGb = gpu.memory_total_mb / 1024;
     const currentVramGb = (gpu.memory_used_mb + gpu.reserved_memory_mb) / 1024;
@@ -1515,6 +1257,7 @@ function GpuPanel({
                     yAxis={{ title: 'Scale %', color: PLOT_TICK, range: [0, 100], suffix: '%' }}
                     compact={compact}
                     redrawKey={redrawKey}
+                    xDomain={xDomain}
                     series={[
                         {
                             x: gpuUtilTrace.x,
@@ -1560,9 +1303,9 @@ function GpuPanel({
     );
 }
 
-function buildSample(payload: SystemStatus, pollIntervalMs: PollPreset): LiveSample {
+function buildSample(payload: SystemStatus, pollIntervalMs: PollPreset, authoritativeTimestampMs?: number): LiveSample {
     const gpu: LiveSample['gpu'] = {};
-    const timestampMs = parseTelemetryTimestampMs(payload.timestamp);
+    const timestampMs = authoritativeTimestampMs ?? parseTelemetryTimestampMs(payload.timestamp);
     payload.gpus.forEach((item) => {
         gpu[item.index] = {
             util: item.utilization,
@@ -1587,24 +1330,6 @@ function buildSample(payload: SystemStatus, pollIntervalMs: PollPreset): LiveSam
         ramSwap: payload.ram.swap_percent,
         gpu,
     };
-}
-
-export function InfraTelemetryCollector({
-    defaultPollIntervalMs = 1000,
-    defaultWindowMinutes = 3,
-}: Pick<InfraLiveTelemetryProps, 'defaultPollIntervalMs' | 'defaultWindowMinutes'> = {}) {
-    const queryClient = useQueryClient();
-
-    useEffect(() => {
-        if (typeof window === 'undefined') return undefined;
-        startSharedTelemetryCollector(queryClient, defaultPollIntervalMs, defaultWindowMinutes);
-
-        return () => {
-            releaseSharedTelemetryCollector();
-        };
-    }, [defaultPollIntervalMs, defaultWindowMinutes, queryClient]);
-
-    return null;
 }
 
 export function InfraControlStateCollector() {
@@ -1648,28 +1373,74 @@ export function InfraLiveTelemetry({
     // and avoiding Plotly's WebGL path is materially more stable under heavy browser load.
     const traceType: 'scatter' | 'scattergl' = 'scatter';
     const queryClient = useQueryClient();
-    const [restoredState] = useState<RestoredInfraTelemetryState>(() =>
-        readSharedTelemetryCollectorState(defaultPollIntervalMs, defaultWindowMinutes),
+    const [restoredState] = useState(() =>
+        loadPersistedTelemetryPreferences(defaultPollIntervalMs, defaultWindowMinutes),
     );
     const [pollIntervalMs, setPollIntervalMs] = useState<PollPreset>(restoredState.pollIntervalMs);
     const [windowMinutes, setWindowMinutes] = useState<WindowPreset>(restoredState.windowMinutes);
-    const [samples, setSamples] = useState<LiveSample[]>(restoredState.samples);
-
-    const { data } = useQuery({
-        queryKey: INFRA_LIVE_SHARED_QUERY_KEY,
-        queryFn: () => fetchSystemStatus(),
-        enabled: false,
+    const usesRangeAwareDisplay = windowMinutes >= 10;
+    const displayIntervalMs = resolveTelemetryDisplayIntervalMs(windowMinutes, pollIntervalMs);
+    const bucketIntervalMs = resolveTelemetryBucketIntervalMs(windowMinutes);
+    const historyQuery = useQuery({
+        queryKey: ['immutable-telemetry-history', windowMinutes, displayIntervalMs, bucketIntervalMs],
+        queryFn: async () => {
+            const nowMs = Date.now();
+            const requestEndMs = nowMs + 1_000;
+            const [stableStartMs, stableEndMs] = resolveTelemetryWindowBounds(
+                nowMs,
+                windowMinutes,
+                displayIntervalMs,
+            );
+            const rawHistory = await fetchTelemetryHistory(stableStartMs, requestEndMs, 'raw', 4000);
+            return {
+                ...rawHistory,
+                data: {
+                    ...rawHistory.data,
+                    start_ms: stableStartMs,
+                    end_ms: stableEndMs,
+                },
+            };
+        },
+        placeholderData: (previousData) => {
+            if (!previousData) return undefined;
+            const [stableStartMs, stableEndMs] = resolveTelemetryWindowBounds(
+                Date.now(),
+                windowMinutes,
+                displayIntervalMs,
+            );
+            return {
+                ...previousData,
+                data: {
+                    ...previousData.data,
+                    start_ms: stableStartMs,
+                    end_ms: stableEndMs,
+                },
+            };
+        },
+        refetchInterval: displayIntervalMs,
+        refetchIntervalInBackground: false,
         refetchOnWindowFocus: false,
-        staleTime: Infinity,
     });
-    const { data: sharedStatus } = useQuery({
-        queryKey: INFRA_LIVE_SHARED_STATUS_QUERY_KEY,
-        queryFn: async () => ({ lastUpdatedMs: null, error: null } as SharedTelemetryStatus),
-        enabled: false,
-        staleTime: Infinity,
+    const liveStatusQuery = useQuery({
+        queryKey: INFRA_LIVE_SHARED_QUERY_KEY,
+        queryFn: fetchSystemStatus,
+        refetchInterval: pollIntervalMs,
+        refetchIntervalInBackground: false,
+        refetchOnWindowFocus: false,
     });
-
-    const payload = data?.data;
+    const historyPoints = historyQuery.data?.data.points ?? [];
+    const rawSamples = historyPoints.map((point) => buildSample(point.payload, 1000, point.timestamp_ms));
+    const samples = resampleTelemetrySamples(rawSamples, bucketIntervalMs);
+    const latestPoint = historyPoints.at(-1);
+    const payload = liveStatusQuery.data?.data ?? latestPoint?.payload;
+    const staleAfterMs = Math.max(10_000, pollIntervalMs * 5);
+    const historyIsStale = Boolean(
+        latestPoint && (historyQuery.data?.data.generated_at_ms ?? Date.now()) - latestPoint.timestamp_ms > staleAfterMs,
+    );
+    const xDomain: [number, number] = [
+        historyQuery.data?.data.start_ms ?? Date.now() - windowMinutes * 60_000,
+        historyQuery.data?.data.end_ms ?? Date.now(),
+    ];
 
     const { data: powerControlData } = useQuery({
         queryKey: SHARED_POWER_CONTROL_QUERY_KEY,
@@ -1734,10 +1505,6 @@ export function InfraLiveTelemetry({
             queryClient.setQueryData(SHARED_SYSTEM_QUERY_KEY, system);
             queryClient.setQueryData(SHARED_POWER_CONTROL_QUERY_KEY, { data: discovery.data.power_control });
             queryClient.setQueryData(SHARED_FAN_CONTROL_QUERY_KEY, { data: discovery.data.fan_control });
-            queryClient.setQueryData<SharedTelemetryStatus>(INFRA_LIVE_SHARED_STATUS_QUERY_KEY, {
-                lastUpdatedMs: Date.now(),
-                error: null,
-            });
             queryClient.invalidateQueries({ queryKey: INFRA_LIVE_SHARED_QUERY_KEY });
             queryClient.invalidateQueries({ queryKey: SHARED_SYSTEM_QUERY_KEY });
             queryClient.invalidateQueries({ queryKey: SHARED_POWER_CONTROL_QUERY_KEY });
@@ -1745,37 +1512,10 @@ export function InfraLiveTelemetry({
         },
     });
 
-    useEffect(() => subscribeSharedTelemetryCollectorState((state) => {
-        startTransition(() => {
-            setPollIntervalMs(state.pollIntervalMs);
-            setWindowMinutes(state.windowMinutes);
-            setSamples(state.samples);
-        });
-    }), []);
-
     useEffect(() => {
-        sharedTelemetryCollectorDefaults = { pollIntervalMs, windowMinutes };
-        if (sharedTelemetryCollectorState) {
-            sharedTelemetryCollectorState.pollIntervalMs = pollIntervalMs;
-            sharedTelemetryCollectorState.windowMinutes = windowMinutes;
-            publishSharedTelemetryCollectorState();
-        }
         if (typeof window === 'undefined') return undefined;
-
-        let flushed = false;
-        const flushPreferences = () => {
-            if (flushed) return;
-            flushed = true;
-            persistTelemetryPreferences(pollIntervalMs, windowMinutes);
-        };
-        const timeoutId = window.setTimeout(() => {
-            flushPreferences();
-        }, INFRA_STORAGE_WRITE_DEBOUNCE_MS);
-
-        return () => {
-            window.clearTimeout(timeoutId);
-            flushPreferences();
-        };
+        persistTelemetryPreferences(pollIntervalMs, windowMinutes);
+        return undefined;
     }, [pollIntervalMs, windowMinutes]);
 
     const latestTimestampMs = samples.length > 0 ? samples[samples.length - 1].timestampMs : NaN;
@@ -1784,7 +1524,7 @@ export function InfraLiveTelemetry({
             ? samples
             : samples.filter((sample) => sample.timestampMs >= latestTimestampMs - windowMinutes * 60 * 1000);
     const plotRedrawKey = `${variant}:${traceType}:${showXAxisLabels ? 'x' : 'nx'}:${windowMinutes}`;
-    const gapBreakMs = Math.max(MIN_GAP_BREAK_MS, pollIntervalMs * 3);
+    const gapBreakMs = resolveTelemetryGapBreakMs(bucketIntervalMs, pollIntervalMs);
     const currentLimits = powerControlData?.data.limits ?? {};
     const currentFanControls = fanControlData?.data.gpus ?? {};
     const gpuOverrides = schedulerConfigData?.data?.overrides ?? {};
@@ -1809,7 +1549,7 @@ export function InfraLiveTelemetry({
 
                 <div className={`flex flex-wrap items-start justify-end ${dashboardSizing.controlsGapClass}`}>
                     <SegmentedControl
-                        label="Poll"
+                        label={usesRangeAwareDisplay ? 'Base poll' : 'Poll'}
                         value={pollIntervalMs}
                         options={POLL_PRESETS}
                         onChange={setPollIntervalMs}
@@ -1822,6 +1562,16 @@ export function InfraLiveTelemetry({
                         onChange={setWindowMinutes}
                         compact={compact}
                     />
+                    {usesRangeAwareDisplay ? (
+                        <div title="Long-window charts fetch and repaint at a range-aware cadence while host telemetry collection remains live.">
+                            <div className={`font-semibold uppercase text-[var(--text-muted)] ${compact ? 'mb-1 text-[9px]' : 'mb-2 text-xs'}`}>
+                                Display
+                            </div>
+                            <div className={`rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] font-semibold text-[var(--text-primary)] ${compact ? 'px-2.5 py-1.5 text-[10px]' : 'px-3 py-2 text-sm'}`}>
+                                {displayIntervalMs / 1000}s
+                            </div>
+                        </div>
+                    ) : null}
                     <div>
                         <div
                             className={`font-semibold uppercase text-[var(--text-muted)] ${compact ? 'mb-1 text-[9px]' : 'mb-2 text-xs'}`}
@@ -1848,15 +1598,27 @@ export function InfraLiveTelemetry({
                 </div>
             )}
 
-            {!payload && !sharedStatus?.error && (
+            {!payload && historyQuery.isPending && (
                 <div className="rounded-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)]/70 p-5 text-sm text-[var(--text-secondary)]">
                     Loading live telemetry...
                 </div>
             )}
 
-            {sharedStatus?.error && !payload && (
+            {historyQuery.isError && (
                 <div className="rounded-2xl border border-red-500/20 bg-red-500/10 p-5 text-sm text-red-200">
-                    Failed to fetch live telemetry from the BMS API.
+                    Failed to fetch live telemetry from the BMS API. Persisted chart data may be stale.
+                </div>
+            )}
+
+            {!historyQuery.isPending && !historyQuery.isError && !payload && (
+                <div className="rounded-2xl border border-amber-500/20 bg-amber-500/10 p-5 text-sm text-amber-100">
+                    No telemetry samples are available for this window.
+                </div>
+            )}
+
+            {historyIsStale && (
+                <div className="mb-3 rounded-2xl border border-amber-500/20 bg-amber-500/10 p-3 text-sm text-amber-100">
+                    Telemetry collection is stale. The charts show the last persisted samples and preserve the collection gap.
                 </div>
             )}
 
@@ -1880,6 +1642,7 @@ export function InfraLiveTelemetry({
                             traceType={traceType}
                             gapBreakMs={gapBreakMs}
                             redrawKey={`${plotRedrawKey}:cpu`}
+                            xDomain={xDomain}
                         />
                         <RamPanel
                             current={payload.ram}
@@ -1891,6 +1654,7 @@ export function InfraLiveTelemetry({
                             traceType={traceType}
                             gapBreakMs={gapBreakMs}
                             redrawKey={`${plotRedrawKey}:ram`}
+                            xDomain={xDomain}
                         />
                     </div>
 
@@ -1907,6 +1671,7 @@ export function InfraLiveTelemetry({
                                 traceType={traceType}
                                 gapBreakMs={gapBreakMs}
                                 redrawKey={`${plotRedrawKey}:gpu:${gpu.index}`}
+                                xDomain={xDomain}
                                 powerControls={compact ? {
                                     gpu,
                                     currentLimit: currentLimits[gpu.index] ?? gpu.power_limit_w,

@@ -97,7 +97,17 @@ def get_inputs_dir() -> Path:
     return Path(str(_runtime_paths()["inputs_dir"]))
 
 
+def get_molbio_ngs_reference_root() -> Path:
+    configured = os.getenv("BMS_MOLBIO_NGS_REFERENCE_ROOT")
+    if configured:
+        return _resolve_path(configured)
+    return (get_inputs_dir() / "molbio_ngs_references").resolve()
+
+
 def get_results_dir() -> Path:
+    configured = os.getenv("BMS_RESULTS_DIR") or os.getenv("BMS_RESULTS_ROOT")
+    if configured:
+        return _resolve_path(configured)
     return get_data_root() / "bms_results"
 
 
@@ -106,6 +116,9 @@ def get_analysis_cache_dir() -> Path:
 
 
 def get_work_dir() -> Path:
+    configured = os.getenv("BMS_WORK")
+    if configured:
+        return _resolve_path(configured)
     return get_data_root() / "work"
 
 
@@ -197,6 +210,21 @@ def get_experiment_db_path() -> Path:
 def get_experiment_db_url() -> str:
     """Return the future-portable global experiment-control database URL."""
     return os.getenv("BMS_EXPERIMENT_DATABASE_URL") or f"sqlite+aiosqlite:///{get_experiment_db_path()}"
+
+
+def get_molbio_ngs_db_path() -> Path:
+    """Return the dedicated MolBio/NGS domain scientific-state SQLite path."""
+    configured = os.getenv("BMS_MOLBIO_NGS_DB_PATH")
+    if configured:
+        return _resolve_path(configured)
+    return get_data_root() / "molbio_ngs.db"
+
+
+def get_molbio_ngs_db_url() -> str:
+    """Return the independently configurable MolBio/NGS database URL."""
+    return os.getenv("BMS_MOLBIO_NGS_DATABASE_URL") or (
+        f"sqlite+aiosqlite:///{get_molbio_ngs_db_path()}"
+    )
 
 
 def get_allowed_roots() -> dict[str, Path]:

@@ -5,13 +5,31 @@ import {
     type BioXpOperatorActionSpec,
     bioXpErrorText,
 
-    useBioXpOperatorActionAdmission,
     useBioXpOperatorActionHistory,
+    useAssessBioXpOperatorAction,
+    useBioXpOperatorActionAdmission,
     useBioXpOperatorControlCatalog,
     useInvokeBioXpOperatorAction,
 } from '../lib/bioxpClient';
 
 type Pane = 'primitive' | 'meta' | 'logs';
+type ReceiptBoundObservation = {
+    receiptCommandId: string | null;
+    authorityKey: string;
+    note: string;
+};
+type ActionConfirmation = Readonly<{
+    fingerprint: string;
+}>;
+type ActionConfirmationFingerprintInput = Readonly<{
+    actionId: string;
+    inputs: Record<string, unknown>;
+    connectionGeneration: number;
+    ownershipGeneration: number;
+    registrySha256: string;
+    evidenceLockSha256: string;
+    sourceAuthorityVerified: boolean;
+}>;
 
 const paneClass = (active: boolean) => `rounded px-4 py-2 text-sm font-semibold ${active ? 'bg-cyan-700 text-white' : 'bg-slate-800 text-slate-300'}`;
 const safetyTone: Record<BioXpOperatorActionSpec['safety_class'], string> = {
@@ -71,6 +89,10 @@ function normalizeInput(action: BioXpOperatorActionSpec, values: Record<string, 
     return result;
 }
 
+function buildActionConfirmationFingerprint(value: ActionConfirmationFingerprintInput): string {
+    return JSON.stringify(value);
+}
+
 function ReceiptCard({ receipt }: { receipt: BioXpOperatorActionReceipt }) {
     const terminalPass = receipt.machine_assessment === 'pass' || receipt.operator_assessment === 'pass';
     const terminalFail = receipt.machine_assessment === 'fail' || receipt.operator_assessment === 'fail';
@@ -95,11 +117,15 @@ function ReceiptCard({ receipt }: { receipt: BioXpOperatorActionReceipt }) {
 }
 
 export function BioXpOperatorControlTabs({ generation, connected }: { generation: number; connected: boolean }) {
-    const catalogQuery = useBioXpOperatorControlCatalog(connected);
-    const historyQuery = useBioXpOperatorActionHistory(connected);
+    const catalogQuery = useBioXpOperatorControlCatalog(generation, connected);
+    const historyQuery = useBioXpOperatorActionHistory(generation, connected);
     const invoke = useInvokeBioXpOperatorAction();
+    const assess = useAssessBioXpOperatorAction();
+    const resetInvoke = invoke.reset;
 
     const [pane, setPane] = useState<Pane>('primitive');
+    const [confirmation, setConfirmation] = useState<ActionConfirmation | null>(null);
+    const [operatorObservation, setOperatorObservation] = useState<ReceiptBoundObservation>({ receiptCommandId: null, authorityKey: '', note: '' });
     const [subsystemFilter, setSubsystemFilter] = useState<PrimitiveGroup>('all');
     const [actionSearch, setActionSearch] = useState('');
     const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -108,9 +134,11 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
     const [localError, setLocalError] = useState<string | null>(null);
 
 
+    const authoritativeCatalog = !connected || catalogQuery.error ? undefined : catalogQuery.data;
+    const authoritativeHistory = !connected || historyQuery.error ? undefined : historyQuery.data;
     const primitiveActions = useMemo(
-        () => (catalogQuery.error ? [] : (catalogQuery.data?.actions ?? [])).filter((action) => action.kind === 'primitive'),
-        [catalogQuery.data?.actions, catalogQuery.error],
+        () => (authoritativeCatalog?.actions ?? []).filter((action) => action.kind === 'primitive'),
+        [authoritativeCatalog?.actions],
     );
     const subsystemOptions = useMemo(
         () => [...new Set(primitiveActions.map((action) => action.subsystem))].sort(),
@@ -136,7 +164,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
         [browseActions],
     );
     const paneActions = pane === 'meta'
-        ? (catalogQuery.data?.actions ?? []).filter((action) => action.kind === pane)
+        ? (authoritativeCatalog?.actions ?? []).filter((action) => action.kind === pane)
         : pane === 'primitive' ? primitiveActions : [];
     const selected = paneActions.find((action) => action.action_id === selectedId) ?? paneActions[0];
     const normalizedForAdmission = useMemo(() => {
@@ -150,21 +178,56 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
     const admission = useBioXpOperatorActionAdmission(
         selected?.action_id ?? null,
         generation,
-        catalogQuery.data?.ownership_generation ?? 0,
+        authoritativeCatalog?.ownership_generation ?? 0,
         normalizedForAdmission,
         connected,
     );
     const actionEnabled = admission.error ? false : (admission.data?.enabled ?? (selected ? selected.enabled : false));
     const disabledReason = admission.data?.disabled_reason ?? (selected ? selected.disabled_reason : null) ?? 'Robot did not admit this action.';
     const dependencies = admission.data?.dependencies ?? (selected ? selected.dependencies : []);
-    const latestReceipt = invoke.data ?? historyQuery.data?.receipts[0];
+    const latestReceipt = connected && authoritativeCatalog && authoritativeHistory
+        ? invoke.data ?? authoritativeHistory.receipts[0]
+        : undefined;
+    const latestReceiptCommandId = latestReceipt?.command_id ?? null;
+    const xLifecycle = authoritativeCatalog?.dashboard.x_axis.provider.lifecycle;
+    const awaitingXObservationReceiptId = xLifecycle?.state === 'awaiting_operator_observation'
+        ? xLifecycle.awaiting_observation_receipt_id ?? null
+        : null;
+    const latestUsesProviderObservation = latestReceipt?.action_id.startsWith('oem.x.') === true
+        || latestReceipt?.action_id.startsWith('oem.xy.') === true;
+    const assessmentAuthorityKey = `${String(connected)}:${generation}:${authoritativeCatalog?.ownership_generation ?? 0}:${authoritativeCatalog?.registry_sha256 ?? ''}:${authoritativeCatalog?.evidence_lock_sha256 ?? ''}`;
     const isSafetyInterrupt = selected?.safety_class === 'stop' || selected?.safety_class === 'emergency';
-    const sourceAuthorityAllowsAction = catalogQuery.data?.source_authority_verified === true || isSafetyInterrupt;
+    const sourceAuthorityAllowsAction = authoritativeCatalog?.source_authority_verified === true || isSafetyInterrupt;
+    const currentConfirmationFingerprint = selected && normalizedForAdmission !== null
+        ? buildActionConfirmationFingerprint({
+            actionId: selected.action_id,
+            inputs: normalizedForAdmission,
+            connectionGeneration: generation,
+            ownershipGeneration: authoritativeCatalog?.ownership_generation ?? 0,
+            registrySha256: authoritativeCatalog?.registry_sha256 ?? '',
+            evidenceLockSha256: authoritativeCatalog?.evidence_lock_sha256 ?? '',
+            sourceAuthorityVerified: authoritativeCatalog?.source_authority_verified === true,
+        })
+        : null;
+    const confirmationMatchesCurrentAction = currentConfirmationFingerprint !== null
+        && confirmation?.fingerprint === currentConfirmationFingerprint;
 
+    useEffect(() => {
+        resetInvoke();
+        setOperatorObservation({ receiptCommandId: null, authorityKey: '', note: '' });
+    }, [connected, generation, resetInvoke]);
+    useEffect(() => {
+        setOperatorObservation((current) => current.receiptCommandId === latestReceiptCommandId && current.authorityKey === assessmentAuthorityKey
+            ? current
+            : { receiptCommandId: latestReceiptCommandId, authorityKey: assessmentAuthorityKey, note: '' });
+    }, [assessmentAuthorityKey, latestReceiptCommandId]);
     useEffect(() => {
         if (selected && selected.action_id !== selectedId) setSelectedId(selected.action_id);
     }, [selected, selectedId]);
-    useEffect(() => setInputs(initialInputs(selected)), [selected?.action_id]);
+    useEffect(() => {
+        setInputs(initialInputs(selected));
+        setConfirmation(null);
+    }, [selected?.action_id]);
     useEffect(() => {
         const selectedGroup = groupedBrowseActions.find((group) => group.actions.some((action) => action.action_id === selected?.action_id));
         const subsystem = groupedBrowseActions.length === 1 ? groupedBrowseActions[0]?.subsystem : selectedGroup?.subsystem;
@@ -177,10 +240,23 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
         setLocalError(null);
         try {
             const normalized = normalizeInput(selected, inputs);
+            const runFingerprint = buildActionConfirmationFingerprint({
+                actionId: selected.action_id,
+                inputs: normalized,
+                connectionGeneration: generation,
+                ownershipGeneration: authoritativeCatalog?.ownership_generation ?? 0,
+                registrySha256: authoritativeCatalog?.registry_sha256 ?? '',
+                evidenceLockSha256: authoritativeCatalog?.evidence_lock_sha256 ?? '',
+                sourceAuthorityVerified: authoritativeCatalog?.source_authority_verified === true,
+            });
+            if (selected.requires_confirmation && confirmation?.fingerprint !== runFingerprint) {
+                setLocalError('Explicit confirmation is required for this exact governed action and authority.');
+                return;
+            }
             invoke.mutate({
                 actionId: selected.action_id,
                 connectionGeneration: generation,
-                ownershipGeneration: catalogQuery.data?.ownership_generation ?? 0,
+                ownershipGeneration: authoritativeCatalog?.ownership_generation ?? 0,
                 inputs: normalized,
             });
         } catch (error) {
@@ -188,8 +264,52 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
         }
     };
 
+    const runAssessment = (verdict: 'pass' | 'fail') => {
+        if (!latestReceipt) return;
+        if (operatorObservation.receiptCommandId !== latestReceipt.command_id || operatorObservation.authorityKey !== assessmentAuthorityKey) {
+            setLocalError('The operator observation is not bound to the current receipt authority.');
+            return;
+        }
+        const note = operatorObservation.note.trim();
+        if (!note) {
+            setLocalError('A non-empty operator observation is required.');
+            return;
+        }
+        setLocalError(null);
+        assess.mutate({
+            commandId: latestReceipt.command_id,
+            connectionGeneration: generation,
+            ownershipGeneration: authoritativeCatalog?.ownership_generation ?? 0,
+            verdict,
+            note,
+        });
+    };
+
+    const openXObservation = () => {
+        if (!awaitingXObservationReceiptId) return;
+        const action = authoritativeCatalog?.actions.find((row) => row.action_id === 'oem.x.observe');
+        if (!action) {
+            setLocalError('The robot did not publish the provider-owned X observation action.');
+            return;
+        }
+        setPane('primitive');
+        setSelectedId(action.action_id);
+        setInputs({
+            ...initialInputs(action),
+            command_id: awaitingXObservationReceiptId,
+            verdict: 'pass',
+            physical_motion_observed: false,
+            expected_direction_observed: false,
+            home_endpoint_observed: false,
+            stopped_observed: false,
+            note: '',
+        });
+        setConfirmation(null);
+        setLocalError(null);
+    };
+
     const contractError = catalogQuery.error ? bioXpErrorText(catalogQuery.error) : null;
-    const actionError = invoke.error ? bioXpErrorText(invoke.error) : localError;
+    const actionError = invoke.error ? bioXpErrorText(invoke.error) : assess.error ? bioXpErrorText(assess.error) : localError;
 
     return (
         <section className="rounded-xl border border-cyan-800/60 bg-slate-950/70 p-4" data-bioxp-operator-control-tabs>
@@ -205,12 +325,12 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
                 </div>
             </div>
 
-            {catalogQuery.data && (
+            {authoritativeCatalog && (
                 <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2 xl:grid-cols-5">
-                    <div><dt className="text-slate-500">machine</dt><dd>{catalogQuery.data.machine_serial}</dd></div>
-                    <div><dt className="text-slate-500">actions</dt><dd>{catalogQuery.data.actions.length}</dd></div>
-                    <div><dt className="text-slate-500">source authority</dt><dd>{String(catalogQuery.data.source_authority_verified)}</dd></div>
-                    <div><dt className="text-slate-500">ownership generation</dt><dd>{catalogQuery.data.ownership_generation}</dd></div>
+                    <div><dt className="text-slate-500">machine</dt><dd>{authoritativeCatalog.machine_serial}</dd></div>
+                    <div><dt className="text-slate-500">actions</dt><dd>{authoritativeCatalog.actions.length}</dd></div>
+                    <div><dt className="text-slate-500">source authority</dt><dd>{String(authoritativeCatalog.source_authority_verified)}</dd></div>
+                    <div><dt className="text-slate-500">ownership generation</dt><dd>{authoritativeCatalog.ownership_generation}</dd></div>
                     <div><dt className="text-slate-500">BMS generation</dt><dd>{generation}</dd></div>
                 </dl>
             )}
@@ -218,8 +338,8 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
 
             {pane === 'logs' ? (
                 <div className="mt-4 space-y-2">
-                    {(historyQuery.data?.receipts ?? []).map((receipt) => <ReceiptCard key={receipt.command_id} receipt={receipt} />)}
-                    {historyQuery.data?.receipts.length === 0 && <p className="text-sm text-slate-400">No robot-owned action receipts yet.</p>}
+                    {(authoritativeHistory?.receipts ?? []).map((receipt) => <ReceiptCard key={receipt.command_id} receipt={receipt} />)}
+                    {authoritativeHistory?.receipts.length === 0 && <p className="text-sm text-slate-400">No robot-owned action receipts yet.</p>}
                 </div>
             ) : (
                 <>
@@ -340,7 +460,13 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
                                     ))}
                                 </div>
                             )}
-                            <button type="button" disabled={!connected || !actionEnabled || invoke.isPending || !sourceAuthorityAllowsAction} onClick={run} className={`mt-4 rounded px-4 py-2 font-semibold disabled:opacity-35 ${selected.safety_class === 'emergency' ? 'bg-red-700' : selected.safety_class === 'motion' ? 'bg-amber-700' : 'bg-cyan-700'}`}>Run exactly this action</button>
+                            {selected.requires_confirmation && (
+                                <label className="mt-4 flex items-center gap-2 rounded border border-amber-700/70 bg-amber-950/30 p-3 text-sm text-amber-100">
+                                    <input type="checkbox" checked={confirmationMatchesCurrentAction} onChange={(event) => setConfirmation(event.target.checked && currentConfirmationFingerprint !== null ? { fingerprint: currentConfirmationFingerprint } : null)} />
+                                    I confirm this exact governed action and its published machine scope.
+                                </label>
+                            )}
+                            <button type="button" disabled={!connected || !actionEnabled || invoke.isPending || !sourceAuthorityAllowsAction || (selected.requires_confirmation && !confirmationMatchesCurrentAction)} onClick={run} className={`mt-4 rounded px-4 py-2 font-semibold disabled:opacity-35 ${selected.safety_class === 'emergency' ? 'bg-red-700' : selected.safety_class === 'motion' ? 'bg-amber-700' : 'bg-cyan-700'}`}>Run exactly this action</button>
                             {!actionEnabled && <p className="mt-2 text-sm text-amber-200">Blocked: {disabledReason}</p>}
                         </article>
                     )}
@@ -348,9 +474,27 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
             )}
 
             {actionError && <p className="mt-3 text-sm text-red-300">{actionError}</p>}
-            {latestReceipt && pane !== 'logs' && (
+            {awaitingXObservationReceiptId && pane !== 'logs' && (
+                <section className="mt-4 rounded border border-amber-700/70 bg-amber-950/30 p-3 text-sm text-amber-100" data-x-provider-observation-required>
+                    <h3 className="font-semibold">Provider-owned X observation required</h3>
+                    <p className="mt-1">The X lifecycle is waiting for physical evidence bound to receipt <span className="font-mono">{awaitingXObservationReceiptId}</span>. Generic receipt assessment cannot publish X reference authority.</p>
+                    <button type="button" onClick={openXObservation} className="mt-3 rounded bg-amber-700 px-3 py-2 font-semibold">Open exact X observation</button>
+                </section>
+            )}
+            {latestReceipt && pane !== 'logs' && latestUsesProviderObservation && (
+                <div className="mt-4"><ReceiptCard receipt={latestReceipt} /></div>
+            )}
+            {latestReceipt && pane !== 'logs' && !latestUsesProviderObservation && (
                 <div className="mt-4 space-y-3">
                     <ReceiptCard receipt={latestReceipt} />
+                    <label className="block text-sm text-slate-300">
+                        Your physical observation
+                        <textarea value={operatorObservation.receiptCommandId === latestReceiptCommandId ? operatorObservation.note : ''} onChange={(event) => setOperatorObservation({ receiptCommandId: latestReceiptCommandId, authorityKey: assessmentAuthorityKey, note: event.target.value })} rows={3} className="mt-1 w-full rounded border border-slate-700 bg-slate-900 p-2" placeholder="Describe the observed machine state. Operator observation must remain attached to the robot-owned receipt." />
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                        <button type="button" disabled={assess.isPending || operatorObservation.receiptCommandId !== latestReceipt.command_id || operatorObservation.authorityKey !== assessmentAuthorityKey || !operatorObservation.note.trim()} onClick={() => runAssessment('pass')} className="rounded bg-emerald-700 px-3 py-2 text-sm font-semibold disabled:opacity-35">Record PASS</button>
+                        <button type="button" disabled={assess.isPending || operatorObservation.receiptCommandId !== latestReceipt.command_id || operatorObservation.authorityKey !== assessmentAuthorityKey || !operatorObservation.note.trim()} onClick={() => runAssessment('fail')} className="rounded bg-red-700 px-3 py-2 text-sm font-semibold disabled:opacity-35">Record FAIL</button>
+                    </div>
                 </div>
             )}
         </section>

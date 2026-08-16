@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import stat
 import subprocess
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import Any, Mapping
 
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
+_SAFE_CHAIN_RE = re.compile(r"[A-Za-z0-9]")
 
 
 class RuntimeValidationError(RuntimeError):
@@ -351,12 +353,211 @@ class FrustraMPNNInvocation:
     physical_gpu_id: int
     task_visible_gpu_id: int = 0
 
+    def __iter__(self):
+        return iter(self.argv)
+
+    def __len__(self) -> int:
+        return len(self.argv)
+
+    def __getitem__(self, index):
+        value = self.argv[index]
+        return list(value) if isinstance(index, slice) else value
+
+    def index(self, value: str, start: int = 0, stop: int | None = None) -> int:
+        return self.argv.index(value, start) if stop is None else self.argv.index(value, start, stop)
+
     @property
     def receipt_metadata(self) -> dict[str, int]:
         return {
             "physical_gpu_id": self.physical_gpu_id,
             "task_visible_gpu_id": self.task_visible_gpu_id,
         }
+
+    @property
+    def argv_sha256(self) -> str:
+        """Bind the exact argv array using the repository canonical JSON profile."""
+
+        return _canonical_sha256(list(self.argv))
+
+
+def _canonical_sha256(value: Any) -> str:
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _validated_chains(chains: tuple[str, ...] | None) -> tuple[str, ...] | None:
+    if chains is None:
+        return None
+    if not isinstance(chains, tuple) or not chains:
+        raise RuntimeValidationError("typed chain selection must be a non-empty tuple")
+    if any(
+        not isinstance(chain, str) or _SAFE_CHAIN_RE.fullmatch(chain) is None
+        for chain in chains
+    ):
+        raise RuntimeValidationError("typed chain selection contains an unsafe chain value")
+    if len(chains) != len(set(chains)):
+        raise RuntimeValidationError("typed chain selection contains a duplicate chain")
+    return tuple(sorted(chains))
+
+
+def _validated_positions(
+    positions: tuple[int, ...] | None,
+    *,
+    chains: tuple[str, ...] | None,
+) -> tuple[int, ...] | None:
+    if positions is None:
+        return None
+    if chains is None:
+        raise RuntimeValidationError("typed position selection requires typed chains")
+    if not isinstance(positions, tuple) or not positions:
+        raise RuntimeValidationError("typed position selection must be a non-empty tuple")
+    if any(
+        isinstance(position, bool)
+        or not isinstance(position, int)
+        or position < 0
+        for position in positions
+    ):
+        raise RuntimeValidationError(
+            "typed position selection requires non-negative integer positions"
+        )
+    if len(positions) != len(set(positions)):
+        raise RuntimeValidationError("typed position selection contains a duplicate position")
+    return tuple(sorted(positions))
+
+
+@dataclass(frozen=True)
+class FrustraMPNNCommandPlanEntry:
+    """One immutable typed vendor invocation selection and its output shard."""
+
+    ordinal: int
+    chains: tuple[str, ...] | None
+    positions: tuple[int, ...] | None
+    shard_relative_path: str
+
+    def __post_init__(self) -> None:
+        if isinstance(self.ordinal, bool) or not isinstance(self.ordinal, int) or self.ordinal < 0:
+            raise RuntimeValidationError("command-plan ordinal must be non-negative")
+        canonical_chains = _validated_chains(self.chains)
+        canonical_positions = _validated_positions(self.positions, chains=canonical_chains)
+        if canonical_chains != self.chains or canonical_positions != self.positions:
+            raise RuntimeValidationError("command-plan typed selection must be canonical")
+        expected_path = f"raw_frustrampnn_shard_{self.ordinal:04d}.csv"
+        if self.shard_relative_path != expected_path:
+            raise RuntimeValidationError("command-plan shard path does not match its ordinal")
+
+    def canonical_payload(self) -> dict[str, Any]:
+        return {
+            "ordinal": self.ordinal,
+            "chains": list(self.chains) if self.chains is not None else None,
+            "positions": list(self.positions) if self.positions is not None else None,
+            "shard_relative_path": self.shard_relative_path,
+        }
+
+
+@dataclass(frozen=True)
+class FrustraMPNNCommandPlan:
+    """A closed deterministic command plan compiled from effective settings only."""
+
+    entries: tuple[FrustraMPNNCommandPlanEntry, ...]
+    plan_sha256: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.entries, tuple) or not self.entries:
+            raise RuntimeValidationError("command plan must contain at least one entry")
+        if any(
+            not isinstance(entry, FrustraMPNNCommandPlanEntry)
+            for entry in self.entries
+        ):
+            raise RuntimeValidationError("command plan contains an untyped entry")
+        if tuple(entry.ordinal for entry in self.entries) != tuple(range(len(self.entries))):
+            raise RuntimeValidationError("command-plan ordinals must be contiguous and ordered")
+        selections = [(entry.chains, entry.positions) for entry in self.entries]
+        if len(selections) != len(set(selections)):
+            raise RuntimeValidationError("command plan contains duplicate typed selections")
+        object.__setattr__(
+            self,
+            "plan_sha256",
+            _canonical_sha256({
+                "entries": [entry.canonical_payload() for entry in self.entries]
+            }),
+        )
+
+
+def compile_frustrampnn_command_plan(effective_settings: Any) -> FrustraMPNNCommandPlan:
+    """Compile safe vendor shards solely from validated effective settings."""
+
+    from .settings import FrustraMPNNEffectiveSettings
+
+    if not isinstance(effective_settings, FrustraMPNNEffectiveSettings):
+        raise RuntimeValidationError(
+            "command planning requires validated FrustraMPNN effective settings"
+        )
+    selection = effective_settings.requested_settings.protein_selection
+    resolved = effective_settings.resolved_chains
+    chains = _validated_chains(tuple(chain.pdb_chain_id for chain in resolved))
+    if chains is None:
+        raise RuntimeValidationError("effective settings contain no resolved chains")
+
+    if selection.mode == "all_protein_entities":
+        selections: tuple[
+            tuple[tuple[str, ...] | None, tuple[int, ...] | None], ...
+        ] = ((None, None),)
+    elif selection.mode == "selected_entities":
+        selected_identities = {entity.canonical_key() for entity in selection.entities}
+        resolved_identities = {chain.entity.canonical_key() for chain in resolved}
+        if selected_identities != resolved_identities:
+            raise RuntimeValidationError(
+                "selected entity identities mismatch effective resolved identities"
+            )
+        selections = ((chains, None),)
+    else:
+        selected_identities = {residue.canonical_key() for residue in selection.residues}
+        resolved_residues = [
+            residue for chain in resolved for residue in chain.residues
+        ]
+        if selected_identities != {residue.source_key() for residue in resolved_residues}:
+            raise RuntimeValidationError(
+                "selected residue identities mismatch effective resolved identities"
+            )
+        positions_by_chain: dict[str, tuple[int, ...]] = {}
+        for chain in resolved:
+            positions = _validated_positions(
+                tuple(residue.model_position for residue in chain.residues),
+                chains=(chain.pdb_chain_id,),
+            )
+            if positions is None:
+                raise RuntimeValidationError("selected residue chain has no positions")
+            positions_by_chain[chain.pdb_chain_id] = positions
+        grouped: dict[tuple[int, ...], list[str]] = {}
+        for chain, positions in positions_by_chain.items():
+            grouped.setdefault(positions, []).append(chain)
+        selections = tuple(
+            (tuple(sorted(group_chains)), positions)
+            for positions, group_chains in sorted(
+                grouped.items(), key=lambda item: (item[0], tuple(sorted(item[1])))
+            )
+        )
+        for group_chains, positions in selections:
+            if any(positions_by_chain[chain] != positions for chain in group_chains):
+                raise RuntimeValidationError(
+                    "selected residue command plan has cross-product ambiguity"
+                )
+
+    return FrustraMPNNCommandPlan(entries=tuple(
+        FrustraMPNNCommandPlanEntry(
+            ordinal=ordinal,
+            chains=entry_chains,
+            positions=entry_positions,
+            shard_relative_path=f"raw_frustrampnn_shard_{ordinal:04d}.csv",
+        )
+        for ordinal, (entry_chains, entry_positions) in enumerate(selections)
+    ))
 
 
 def execute_frustrampnn(
@@ -416,9 +617,13 @@ def build_frustrampnn_command(
     physical_gpu_id: object,
     tool: Path | str = FRUSTRAMPNN_RUNTIME_IDENTITY.executable_path,
     checkpoint: Path | str = FRUSTRAMPNN_RUNTIME_IDENTITY.checkpoint_path,
+    chains: tuple[str, ...] | None = None,
+    positions: tuple[int, ...] | None = None,
 ) -> FrustraMPNNInvocation:
     """Build the exact scheduler-to-container GPU-safe FrustraMPNN invocation."""
 
+    canonical_chains = _validated_chains(chains)
+    canonical_positions = _validated_positions(positions, chains=canonical_chains)
     if (
         isinstance(physical_gpu_id, bool)
         or not isinstance(physical_gpu_id, int)
@@ -483,18 +688,25 @@ def build_frustrampnn_command(
         "--device",
         "cuda",
     )
+    if canonical_chains is not None:
+        argv += ("--chains", ",".join(canonical_chains))
+    if canonical_positions is not None:
+        argv += ("--positions", ",".join(str(item) for item in canonical_positions))
     return FrustraMPNNInvocation(argv=argv, physical_gpu_id=physical_gpu_id)
 
 
 __all__ = [
     "FRUSTRAMPNN_RUNTIME_IDENTITY",
     "FRUSTRAMPNN_RUNTIME_REGISTRY",
+    "FrustraMPNNCommandPlan",
+    "FrustraMPNNCommandPlanEntry",
     "FrustraMPNNInvocation",
     "FrustraMPNNRuntimeIdentity",
     "PinnedContainer",
     "RuntimeValidationError",
     "build_frustrampnn_command",
     "cm_analysis_runtime_registry_v1",
+    "compile_frustrampnn_command_plan",
     "container_sha256",
     "execute_frustrampnn",
     "open_verified_container",

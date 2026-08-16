@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -16,6 +17,7 @@ if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
 from database import Base, Job
+import services.job_control as job_control
 from services.job_control import _job_is_cancelable, _lineage_has_cancelable_jobs, _sort_jobs_for_cancellation, cancel_job_lineage
 
 
@@ -144,3 +146,88 @@ async def test_repeat_cancellation_is_idempotent_and_clears_stale_runtime_state(
         assert job.stage_progress is None
 
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_failed_stop_remains_cancelling_with_requested_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'cancel-pending.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(job_control, "cancel_nextflow_job", lambda _run_id: _async_bool(False))
+
+    async with factory() as session:
+        session.add(
+            Job(
+                id="pending-cancel",
+                name="pending-cancel",
+                model_id="nanopore",
+                mode="plasmid_qc",
+                params={},
+                status="running",
+                queue_status="running",
+                created_at=datetime.utcnow(),
+                nextflow_run_id="biomodstack-development-job-pending-cancel-attempt-1.service",
+                assigned_gpu=0,
+            )
+        )
+        await session.commit()
+
+        with pytest.raises(HTTPException) as raised:
+            await cancel_job_lineage("pending-cancel", session)
+        assert raised.value.status_code == 409
+        job = await session.get(Job, "pending-cancel")
+        assert job is not None
+        assert job.status == "running"
+        assert job.queue_status == "cancelling"
+        assert job.assigned_gpu == 0
+        assert job.completed_at is None
+        assert job.params["cancellation_receipt"]["state"] == "requested"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_terminal_cancel_requires_owned_unit_stop_and_empty_proof(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'cancel-complete.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(job_control, "cancel_nextflow_job", lambda _run_id: _async_bool(True))
+
+    async with factory() as session:
+        session.add(
+            Job(
+                id="completed-cancel",
+                name="completed-cancel",
+                model_id="nanopore",
+                mode="plasmid_qc",
+                params={},
+                status="running",
+                queue_status="running",
+                created_at=datetime.utcnow(),
+                nextflow_run_id="biomodstack-development-job-completed-cancel-attempt-1.service",
+                assigned_gpu=0,
+            )
+        )
+        await session.commit()
+        await cancel_job_lineage("completed-cancel", session)
+        job = await session.get(Job, "completed-cancel")
+        assert job is not None
+        assert job.status == "cancelled"
+        assert job.queue_status == "cancelled"
+        assert job.assigned_gpu is None
+        assert job.completed_at is not None
+        assert job.params["cancellation_receipt"]["state"] == "completed"
+
+    await engine.dispose()
+
+
+async def _async_bool(value: bool) -> bool:
+    return value

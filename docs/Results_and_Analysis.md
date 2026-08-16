@@ -77,6 +77,25 @@ Resolved via [platform/api/paths.py](../platform/api/paths.py):
 These are usually placed under `BMS_DATA`, which on the current workstation is
 typically `/mnt/BioModStack`.
 
+## Global model-result rule
+
+Every scientific model follows the mandatory
+[Model configuration, operator control, and agent parity policy](Model_Configuration_Operator_Control_and_Agent_Parity.md).
+Model-native outputs remain distinct. Shared BMS mechanisms handle typed data,
+lineage, persistence, descriptive statistics, visualization, synchronized
+selection, capture, comparison, export, and review wherever applicable.
+
+A model result should provide the same core experience regardless of the workflow
+that produced it. Workflow-specific pages may add biological context and actions.
+They shall route into the global model workbench rather than create a reduced
+parallel numerical authority.
+
+The first complete implementation of this rule is the active
+[FrustraMPNN global configuration and analysis workbench specification](specs/frustrampnn-global-configuration-analysis-workbench.md).
+A FrustraMPNN result from Structure Prediction, de novo design, conformational
+mapping, or an unrelated registered structure shall use the same authoritative
+rows, statistics, charts, selection behavior, capture, exports, and provenance.
+
 ## Review Semantics
 
 The structure pipelines persist enough metadata to support:
@@ -87,8 +106,9 @@ The structure pipelines persist enough metadata to support:
 - persisted analysis caching
 - review refresh when richer metadata becomes available
 
-That means downstream docs and tooling should refer to jobs/designs/analyses and
-stage outputs together, not just “check the PDB folder.”
+Downstream docs and tooling should refer to jobs, designs, analyses, effective
+model settings, configuration identities, and stage outputs together. A loose
+output folder is not an authoritative result.
 
 ## Practical Reading Order
 

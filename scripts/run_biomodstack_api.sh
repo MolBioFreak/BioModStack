@@ -6,7 +6,7 @@ PROJECT_DIR="${BMS_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+export PATH="$HOME/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 
 pin_nextflow_java() {
     local candidate="${BMS_NEXTFLOW_JAVA_HOME:-}"
@@ -42,8 +42,29 @@ done
 # boundary after sourcing compatibility configuration.
 if [ "${BMS_RUNTIME_MODE,,}" = "dev" ]; then
     export BMS_CORE_RUNTIME_MODE=0
-    unset BMS_WORKFLOW_ADAPTER_URL
+    export BMS_WORKFLOW_ADAPTER_LANE=development
+    export BMS_WORKFLOW_ADAPTER_URL=http://127.0.0.1:18001
 fi
+
+# Native Development shares the pinned pLannotate micromamba environment with
+# the container runtime, but it does not run inside the pLannotate-enabled API
+# image. Discover the user-owned micromamba installation without hard-coding a
+# host path into the API or requiring generated env.sh to carry this setting.
+if [ -z "${BMS_MICROMAMBA_BIN:-}" ]; then
+    if micromamba_bin="$(command -v micromamba 2>/dev/null)"; then
+        export BMS_MICROMAMBA_BIN="$micromamba_bin"
+    fi
+fi
+if [ -n "${BMS_MICROMAMBA_BIN:-}" ] && [ -z "${BMS_MICROMAMBA_ROOT_PREFIX:-}" ]; then
+    micromamba_root="$("$BMS_MICROMAMBA_BIN" info --base 2>/dev/null || true)"
+    micromamba_root="${micromamba_root#"${micromamba_root%%[![:space:]]*}"}"
+    micromamba_root="${micromamba_root#base environment : }"
+    micromamba_root="${micromamba_root%"${micromamba_root##*[![:space:]]}"}"
+    if [[ "$micromamba_root" == /* ]]; then
+        export BMS_MICROMAMBA_ROOT_PREFIX="$micromamba_root"
+    fi
+fi
+export BMS_PLANNOTATE_ENV="${BMS_PLANNOTATE_ENV:-plannotate}"
 
 pin_nextflow_java
 
@@ -100,6 +121,11 @@ fi
 cd "$PROJECT_DIR/platform/api"
 bms_api_port="${BMS_API_BIND_PORT:-${BMS_DEV_API_HOST_PORT:-18002}}"
 export API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:${bms_api_port}}"
+
+# Apply every registered forward migration before the API can accept traffic.
+# A migration failure aborts the managed start and preserves the previous owner.
+uv run --frozen python run_migrations.py
+
 cmd=(uv run uvicorn main:app --port "$bms_api_port" --host 127.0.0.1 --no-access-log)
 case "$(api_mode)" in
     dev)

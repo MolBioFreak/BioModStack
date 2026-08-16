@@ -82,6 +82,17 @@ export class StructureSceneController {
 
     diagnostics(): MolstarEngineDiagnostics { return this.adapter.diagnostics(); }
 
+    capturePresentation(): ViewerResult<StructureScenePresentation> {
+        if (this.disposed || !this.scene) return viewerCancelled('Structure viewer is unavailable');
+        if (!this.adapter.capturePresentation) return viewerUnsupported('Structure presentation capture is unavailable', 'presentation-capture');
+        const captured = this.adapter.capturePresentation();
+        if (captured.status !== 'ok') return captured;
+        return viewerOk({
+            ...captured.value,
+            layers: this.scene.presentation?.layers ?? [],
+        });
+    }
+
     subscribe(handler: (event: ViewerEvent) => void): () => void {
         if (this.disposed) return () => undefined;
         this.listeners.add(handler);

@@ -21,8 +21,7 @@ except Exception:
     to_allowed_relative = None  # type: ignore
 
 
-# Default API URL - construct from environment or localhost
-API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
+API_BASE_URL = os.environ.get("API_BASE_URL", "").strip()
 STAGE_REPORT_TOKEN = os.environ.get("BMS_STAGE_REPORT_TOKEN", "").strip()
 
 
@@ -74,6 +73,9 @@ def main() -> None:
         else normalize_output_path
     )
     cleaned_outputs = [normalizer(p) for p in args.outputs]
+    if not API_BASE_URL:
+        print("Failed to report stage: missing environment-owned API_BASE_URL", file=sys.stderr)
+        sys.exit(1)
     if not STAGE_REPORT_TOKEN:
         print("Failed to report stage: missing launch-scoped stage credential", file=sys.stderr)
         sys.exit(1)

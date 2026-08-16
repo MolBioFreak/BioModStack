@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import stat
 import re
 from pathlib import Path
 from typing import Any
@@ -12,6 +14,7 @@ from paths import get_results_dir
 
 MANIFEST_FILENAME = "qc_manifest.json"
 MANIFEST_SCHEMA_VERSION = 2
+CONSENSUS_METHOD = "samtools_1.24_bayesian_consensus"
 MAX_MANIFEST_BYTES = 10 * 1024 * 1024
 SAFE_JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]{0,255}$")
 
@@ -73,17 +76,19 @@ class SequenceQcManifestError(ValueError):
     """Raised when a sequence-QC manifest is malformed or unsafe."""
 
 
-def _read_json_object(path: Path) -> dict[str, Any]:
+def _read_json_object(path: Path, *, raw_bytes: bytes | None = None) -> dict[str, Any]:
     if not path.exists():
         raise SequenceQcManifestError(f"manifest not found: {path}")
     if not path.is_file():
         raise SequenceQcManifestError(f"manifest path is not a file: {path}")
-    if path.stat().st_size > MAX_MANIFEST_BYTES:
+    size_bytes = len(raw_bytes) if raw_bytes is not None else path.stat().st_size
+    if size_bytes > MAX_MANIFEST_BYTES:
         raise SequenceQcManifestError(f"manifest too large: {path}")
 
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+        text = raw_bytes.decode("utf-8") if raw_bytes is not None else path.read_text(encoding="utf-8")
+        payload = json.loads(text)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise SequenceQcManifestError(f"manifest is not valid JSON: {exc}") from exc
 
     if not isinstance(payload, dict):
@@ -128,12 +133,44 @@ def _normalize_artifact_state(artifact: dict[str, Any], *, exists: bool, require
     return state or "missing_optional"
 
 
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+def _descriptor_bound_digest(manifest_dir: Path, raw_path: str | Path) -> tuple[int, str]:
+    resolved = _resolve_manifest_relative_path(manifest_dir, raw_path)
+    root = manifest_dir.resolve()
+    relative = resolved.relative_to(root)
+    if not relative.parts:
+        raise SequenceQcManifestError("artifact path resolves to manifest directory")
+    directory_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    current_fd = directory_fd
+    file_fd: int | None = None
+    try:
+        for component in relative.parts[:-1]:
+            next_fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=current_fd)
+            if current_fd != directory_fd:
+                os.close(current_fd)
+            current_fd = next_fd
+        file_fd = os.open(relative.parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=current_fd)
+        details = os.fstat(file_fd)
+        if not stat.S_ISREG(details.st_mode):
+            raise SequenceQcManifestError("artifact is not a regular file")
+        digest = hashlib.sha256()
+        size = 0
+        while True:
+            chunk = os.read(file_fd, 1024 * 1024)
+            if not chunk:
+                break
+            size += len(chunk)
             digest.update(chunk)
-    return digest.hexdigest()
+        return size, digest.hexdigest()
+    except (FileNotFoundError, NotADirectoryError, OSError) as exc:
+        raise SequenceQcManifestError("artifact is unavailable or unsafe") from exc
+    finally:
+        if file_fd is not None:
+            os.close(file_fd)
+        try:
+            if current_fd != directory_fd:
+                os.close(current_fd)
+        finally:
+            os.close(directory_fd)
 
 
 def _normalize_artifacts(
@@ -161,12 +198,16 @@ def _normalize_artifacts(
         has_path = isinstance(raw_path, str) and bool(raw_path.strip())
         full_path: Path | None = None
         exists = False
+        actual_size_bytes: int | None = None
+        actual_sha256: str | None = None
         declared_path: str | None = None
 
         if has_path:
             declared_path = str(Path(str(raw_path)).as_posix())
             full_path = _resolve_manifest_relative_path(manifest_dir, raw_path)
-            exists = full_path.exists()
+            if full_path.exists():
+                actual_size_bytes, actual_sha256 = _descriptor_bound_digest(manifest_dir, str(raw_path))
+                exists = True
         elif required and strict_required:
             raise SequenceQcManifestError(f"required artifact missing path: {kind}")
 
@@ -181,8 +222,6 @@ def _normalize_artifacts(
         artifact["path"] = declared_path if exists else None
         artifact["exists"] = exists
         artifact["state"] = state
-        actual_size_bytes = full_path.stat().st_size if full_path is not None and exists and full_path.is_file() else None
-        actual_sha256 = _sha256_file(full_path) if full_path is not None and exists and full_path.is_file() else None
         artifact["declared_size_bytes"] = declared_size_bytes
         artifact["declared_sha256"] = declared_sha256
         artifact["size_bytes"] = actual_size_bytes
@@ -238,25 +277,12 @@ def _normalize_consensus_and_interpretation(manifest: dict[str, Any]) -> None:
 
     status = str(consensus.get("status") or "").strip().lower()
     method = str(consensus.get("method") or "").strip().lower()
-    fallback = bool(consensus.get("fallback", False)) or status == "reference_copy_fallback" or method == "reference_copy_fallback"
-    consensus["fallback"] = fallback
+    if bool(consensus.get("fallback", False)) or "fallback" in status or "fallback" in method:
+        raise SequenceQcManifestError("consensus fallback status labels are forbidden")
+    if method and method != CONSENSUS_METHOD:
+        raise SequenceQcManifestError(f"unsupported consensus method: {method}")
+    consensus["fallback"] = False
     manifest["consensus"] = consensus
-
-    if not fallback:
-        return
-
-    interpretation = manifest.get("interpretation")
-    if not isinstance(interpretation, dict):
-        interpretation = {}
-    interpretation["verified_construct_status"] = "fail"
-    notes = interpretation.get("notes")
-    if not isinstance(notes, list):
-        notes = []
-    note = "reference-copy fallback consensus is not verified"
-    if note not in notes:
-        notes.append(note)
-    interpretation["notes"] = notes
-    manifest["interpretation"] = interpretation
 
 
 VERIFICATION_SCHEMA = "biomodstack.construct_verification.v2"
@@ -363,11 +389,20 @@ def _verification_shape_errors(manifest: dict[str, Any]) -> list[str]:
     return errors
 
 
-def load_sequence_qc_manifest(manifest_path: str | Path) -> dict[str, Any]:
+def load_sequence_qc_manifest(
+    manifest_path: str | Path,
+    *,
+    raw_bytes: bytes | None = None,
+    expected_job_id: str | None = None,
+    expected_workflow_id: str | None = None,
+    expected_input_mode: str | None = None,
+    expected_analysis_status: str | None = None,
+    manifest_document: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Load and normalize a sequence-QC manifest without reading large artifacts."""
     path = Path(manifest_path).expanduser().resolve()
     try:
-        payload = _read_json_object(path)
+        payload = dict(manifest_document) if manifest_document is not None else _read_json_object(path, raw_bytes=raw_bytes)
     except SequenceQcManifestError:
         if path.parent.name != "verification":
             raise
@@ -387,6 +422,38 @@ def load_sequence_qc_manifest(manifest_path: str | Path) -> dict[str, Any]:
         )
 
     is_verification = payload.get("schema") == VERIFICATION_SCHEMA or path.parent.name == "verification"
+    if not is_verification:
+        from services.ont_ngs_contract import CANONICAL_ONT_WORKFLOWS, ONT_SEQUENCE_QC_MANIFEST_CONTRACT
+
+        required = ONT_SEQUENCE_QC_MANIFEST_CONTRACT["required_top_level_fields"]
+        missing = [field for field in required if field not in payload]
+        if missing:
+            raise SequenceQcManifestError(
+                f"sequence-QC manifest missing required fields: {', '.join(sorted(missing))}"
+            )
+        workflow_id = payload.get("workflow_id")
+        job_id = payload.get("job_id")
+        input_mode = payload.get("input_mode")
+        analysis_status = payload.get("analysis_status")
+        workflow = CANONICAL_ONT_WORKFLOWS.get(workflow_id) if isinstance(workflow_id, str) else None
+        if workflow is None:
+            raise SequenceQcManifestError(f"unknown canonical workflow_id: {workflow_id!r}")
+        if not isinstance(job_id, str) or not job_id.strip():
+            raise SequenceQcManifestError("sequence-QC manifest job_id is missing")
+        if input_mode not in workflow.input_modes:
+            raise SequenceQcManifestError(
+                f"input_mode {input_mode!r} is not valid for workflow {workflow_id!r}"
+            )
+        if not isinstance(analysis_status, str) or not analysis_status.strip():
+            raise SequenceQcManifestError("sequence-QC manifest analysis_status is missing")
+        if expected_job_id is not None and job_id != expected_job_id:
+            raise SequenceQcManifestError("sequence-QC manifest job_id does not match persisted Job")
+        if expected_workflow_id is not None and workflow_id != expected_workflow_id:
+            raise SequenceQcManifestError("sequence-QC manifest workflow_id does not match persisted Job")
+        if expected_input_mode is not None and input_mode != expected_input_mode:
+            raise SequenceQcManifestError("sequence-QC manifest input_mode does not match persisted Job")
+        if expected_analysis_status is not None and analysis_status != expected_analysis_status:
+            raise SequenceQcManifestError("sequence-QC manifest analysis_status does not match persisted Job")
     manifest = dict(payload)
     manifest.pop("manifest_path", None)
     manifest.pop("manifest_dir", None)
@@ -444,8 +511,50 @@ def _validate_job_id(job_id: str) -> str:
     return normalized
 
 
+def find_manifest_in_result_root(result_root: str | Path) -> Path:
+    """Find a sequence-QC manifest below one already-authorized job root."""
+
+    declared_root = Path(result_root).expanduser()
+    if declared_root.is_symlink():
+        raise SequenceQcManifestError("job result root is an unsafe symlink")
+    try:
+        root = declared_root.resolve(strict=True)
+    except OSError as exc:
+        raise SequenceQcManifestError("job result root is unavailable") from exc
+    if not root.is_dir():
+        raise SequenceQcManifestError("job result root is not a directory")
+
+    candidates = [
+        root / "verification" / MANIFEST_FILENAME,
+        root / "fastq_qc" / MANIFEST_FILENAME,
+        root / MANIFEST_FILENAME,
+    ]
+    candidates.extend(sorted(root.glob(f"**/{MANIFEST_FILENAME}")))
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError:
+            continue
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if not resolved.is_file():
+            continue
+        try:
+            resolved.relative_to(root)
+        except ValueError as exc:
+            raise SequenceQcManifestError(
+                f"manifest path escapes persisted job result root: {candidate}"
+            ) from exc
+        return resolved
+
+    raise SequenceQcManifestError("sequence-QC manifest not found in persisted job result root")
+
+
 def find_manifest_for_job(job_id: str, *, results_dir: str | Path | None = None) -> Path:
-    """Find the first sequence-QC manifest for a BMS result directory."""
+    """Legacy explicit-directory helper retained for existing non-route callers."""
     safe_job_id = _validate_job_id(job_id)
     root = Path(results_dir) if results_dir is not None else get_results_dir()
     job_dir = (root / safe_job_id).resolve()
@@ -454,27 +563,11 @@ def find_manifest_for_job(job_id: str, *, results_dir: str | Path | None = None)
         job_dir.relative_to(root_resolved)
     except ValueError as exc:
         raise SequenceQcManifestError(f"job directory escapes results root: {job_id!r}") from exc
-
-    candidates = [
-        job_dir / "verification" / MANIFEST_FILENAME,
-        job_dir / "fastq_qc" / MANIFEST_FILENAME,
-        job_dir / MANIFEST_FILENAME,
-    ]
-    candidates.extend(sorted(job_dir.glob(f"**/{MANIFEST_FILENAME}"))) if job_dir.exists() else None
-
-    seen: set[Path] = set()
-    for candidate in candidates:
-        resolved = candidate.resolve()
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        if not (resolved.exists() and resolved.is_file()):
-            continue
-        try:
-            resolved.relative_to(job_dir)
-            resolved.relative_to(root_resolved)
-        except ValueError as exc:
-            raise SequenceQcManifestError(f"manifest path escapes job/results root: {candidate}") from exc
-        return resolved
-
-    raise SequenceQcManifestError(f"sequence-QC manifest not found for job_id: {safe_job_id}")
+    try:
+        return find_manifest_in_result_root(job_dir)
+    except SequenceQcManifestError as exc:
+        if "not found" in str(exc):
+            raise SequenceQcManifestError(
+                f"sequence-QC manifest not found for job_id: {safe_job_id}"
+            ) from exc
+        raise

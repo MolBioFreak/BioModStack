@@ -102,11 +102,75 @@ def test_dev_api_launcher_does_not_inherit_container_adapter_routing(tmp_path: P
     assert captured == {
         "runtime_mode": "dev",
         "core_runtime_mode": "0",
-        "workflow_adapter_url": None,
+        "workflow_adapter_url": "http://127.0.0.1:18001",
         "data": str(tmp_path / "dev-state"),
         "db_path": str(tmp_path / "dev-state" / "biomodstack.db"),
         "uv_cache_dir": str(home / ".cache" / "biomodstack" / "uv"),
     }
+
+
+def test_dev_api_launcher_parses_labeled_micromamba_base_output(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    project = tmp_path / "repo"
+    api_dir = project / "platform" / "api"
+    fake_bin = tmp_path / "bin"
+    capture_path = tmp_path / "captured-root.txt"
+    api_dir.mkdir(parents=True)
+    fake_bin.mkdir()
+
+    fake_micromamba = fake_bin / "micromamba"
+    fake_micromamba.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = info ] && [ \"$2\" = --base ]; then\n"
+        "  printf '\\n base environment : /home/test/micromamba\\n'\n"
+        "  exit 0\n"
+        "fi\n"
+        "exit 2\n",
+        encoding="utf-8",
+    )
+    fake_micromamba.chmod(0o755)
+    fake_uv = fake_bin / "uv"
+    fake_uv.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, pathlib\n"
+        "pathlib.Path(os.environ['BMS_CAPTURE_PATH']).write_text(\n"
+        "    os.environ.get('BMS_MICROMAMBA_ROOT_PREFIX', ''), encoding='utf-8'\n"
+        ")\n",
+        encoding="utf-8",
+    )
+    fake_uv.chmod(0o755)
+
+    env = os.environ.copy()
+    for key in (
+        "BMS_MICROMAMBA_ROOT_PREFIX",
+        "MAMBA_ROOT_PREFIX",
+        "UV_CACHE_DIR",
+    ):
+        env.pop(key, None)
+    env.update(
+        {
+            "HOME": str(home),
+            "PATH": f"{fake_bin}:{env.get('PATH', '')}",
+            "BMS_HOME": str(project),
+            "BMS_RUNTIME_MODE": "dev",
+            "BMS_API_MODE": "dev",
+            "BMS_API_RELOAD": "0",
+            "BMS_CPU_POWER_STRICT": "0",
+            "BMS_MICROMAMBA_BIN": str(fake_micromamba),
+            "BMS_CAPTURE_PATH": str(capture_path),
+        }
+    )
+    completed = subprocess.run(
+        [str(API_LAUNCHER)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert capture_path.read_text(encoding="utf-8") == "/home/test/micromamba"
 
 
 def test_biomodstack_launchers_isolate_uv_cache_from_shared_user_cache() -> None:

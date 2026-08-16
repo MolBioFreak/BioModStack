@@ -124,10 +124,11 @@ async def test_state_analysis_summary_is_compact_personal_workflow_and_projectio
         assert summary["artifact"]["download_url"].endswith("/artifacts/artifact-state-a")
         assert "rows" not in summary and "exclusion_ledger" not in summary
 
-        public_summary = await cm_router.state_landscape_analysis_summary(
-            "request-a", _request(principal="bob"), session,
-        )
-        assert public_summary["analysis_id"] == "analysis-a"
+        with pytest.raises(HTTPException) as cross_principal:
+            await cm_router.state_landscape_analysis_summary(
+                "request-a", _request(principal="bob"), session,
+            )
+        assert cross_principal.value.status_code == 404
     finally:
         await session.close()
         await engine.dispose()

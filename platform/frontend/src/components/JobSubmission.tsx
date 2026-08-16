@@ -3,7 +3,8 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchModels, fetchFiles, submitJob, uploadFile, fetchTemplates, fetchTemplateById, fetchInputPresets } from '../lib/api';
+import { completeCurrentLaunchContext, fetchModels, fetchFiles, submitJob, uploadFile, fetchTemplates, fetchTemplateById, fetchInputPresets, type Job } from '../lib/api';
+import { getLaunchContext } from '../lib/projectManager';
 import { SequenceManagerModal } from './SequenceManagerModal';
 import { SequenceManager } from './SequenceManager';
 import { TemplateManagerModal } from './TemplateManagerModal';
@@ -27,6 +28,14 @@ import { ModelDocumentationLinks, getModelDocumentationLinks, type ModelDocument
 import { getDedicatedTemplateInitialValues, isDedicatedLauncherTemplate } from './jobSubmissionTemplateState.js';
 import { getWorkflowModelTopics } from './workflowModelInventory.js';
 import { isAntibodyPipelineMode } from '../lib/antibodyModes';
+import { ModelIntegrationControl, useModelIntegrationConfig } from './ModelIntegrationControl';
+import { FrustraMpnnSettingsPanel } from './frustrampnn/FrustraMpnnSettingsPanel.js';
+import {
+    hydrateFrustraMpnnSettings,
+    mergeFrustraMpnnLaunchParams,
+    resolveFrustraMpnnWorkflowId,
+    type FrustraMpnnRequestedSettings,
+} from './frustrampnn/frustraMpnnSettingsState.js';
 
 
 const LEGACY_PROTEIN_MODIFICATION_TEMPLATE_IDS = new Set([
@@ -651,7 +660,6 @@ const getCompactTemplateDescription = (template: UntypedApiValue): string => {
         case 'boltz_cp_experimental':
             return 'Experimental Fold-CP path for large Boltz-2 folds.';
         case 'confornets_experimental':
-            return 'Experimental conformational mapping; ConforNets backend first.';
         case 'conformational_mapping':
             return 'Complete-complex Protenix v2 ensembles, canonical ConforNets/import alternatives, residue mapping, FrustraMPNN landscapes, and support-ranked comparison.';
         case 'esmfold2':
@@ -673,7 +681,7 @@ const getCompactModelDescription = (model: UntypedApiValue): string => {
         case 'boltz_cp_experimental':
             return 'Experimental Fold-CP large-protein path.';
         case 'confornets_experimental':
-            return 'Experimental monomer conformational mapping.';
+            return 'Canonical conformational mapping workflow.';
         case 'esmfold2':
         case 'esmfold2_experimental':
             return 'Local all-atom protein and complex folding.';
@@ -691,25 +699,52 @@ export function JobSubmission() {
     const queryClient = useQueryClient();
     const navigate = useNavigate();
     const [searchParams, setSearchParams] = useSearchParams();
+    const launchContextId = searchParams.get('launch_context_id');
+    const launchContextQuery = useQuery({
+        queryKey: ['launch-context', launchContextId],
+        queryFn: ({ signal }) => getLaunchContext(launchContextId as string, signal),
+        enabled: Boolean(launchContextId),
+        retry: false,
+    });
+    const recoveredLaunchRef = useRef<string | null>(null);
+    useEffect(() => {
+        const recoveryJobId = launchContextQuery.data?.recovery_job_id;
+        if (!recoveryJobId || recoveredLaunchRef.current === recoveryJobId) return;
+        recoveredLaunchRef.current = recoveryJobId;
+        void completeCurrentLaunchContext({ id: recoveryJobId }).then((returnUri) => {
+            if (returnUri) navigate(returnUri);
+        });
+    }, [launchContextQuery.data?.recovery_job_id, navigate]);
     const [wizardMode, setWizardMode] = useState<'templates' | 'experimental' | 'manual'>('templates');
 
     // Read template from URL, allows page refresh and bookmarking
     const urlTemplate = searchParams.get('template');
-    const [selectedTemplateId, setSelectedTemplateIdInternal] = useState<string | null>(urlTemplate);
+    const initialTemplateId = urlTemplate === 'protein_local_redesign'
+        ? 'protein_modification_experimental'
+        : urlTemplate === 'confornets_experimental' ? 'conformational_mapping' : urlTemplate;
+    const [selectedTemplateId, setSelectedTemplateIdInternal] = useState<string | null>(initialTemplateId);
 
     // Wrapper to sync state with URL
     const setSelectedTemplateId = useCallback((id: string | null) => {
-        setSelectedTemplateIdInternal(id);
-        if (id) {
-            setSearchParams({ template: id }, { replace: true });
+        const canonicalId = id === 'confornets_experimental' ? 'conformational_mapping' : id;
+        setSelectedTemplateIdInternal(canonicalId);
+        const next = new URLSearchParams(searchParams);
+        if (canonicalId) {
+            next.set('template', canonicalId);
         } else {
-            setSearchParams({}, { replace: true });
+            next.delete('template');
         }
-    }, [setSearchParams]);
+        setSearchParams(next, { replace: true });
+    }, [searchParams, setSearchParams]);
     const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
     const [selectedModeId, setSelectedModeId] = useState<string | null>(null);
     const [jobName, setJobName] = useState('');
     const [params, setParams] = useState<Record<string, UntypedApiValue>>({});
+    const frustrampnnIntegrationQuery = useModelIntegrationConfig('frustrampnn');
+    const [explicitRunFrustrampnn, setExplicitRunFrustrampnn] = useState<boolean | undefined>(undefined);
+    const [frustrampnnSettings, setFrustrampnnSettings] = useState<FrustraMpnnRequestedSettings>(() => (
+        hydrateFrustraMpnnSettings(undefined)
+    ));
     const [showFileBrowser, setShowFileBrowser] = useState<string | null>(null);
     const [showSequenceManager, setShowSequenceManager] = useState(false);
     const [showTemplateManager, setShowTemplateManager] = useState(false);
@@ -805,10 +840,22 @@ export function JobSubmission() {
                     sessionStorage.removeItem('bms.conformational-mapping.launcher.v1');
                     setWizardMode('templates');
                     setSelectedTemplateId('conformational_mapping');
+                    const legacyDefaults = getDedicatedTemplateInitialValues('conformational_mapping') || {};
+                    const legacyConfornets = {
+                        ...(
+                            legacyDefaults.confornets
+                            && typeof legacyDefaults.confornets === 'object'
+                            && !Array.isArray(legacyDefaults.confornets)
+                                ? legacyDefaults.confornets as Record<string, unknown>
+                                : {}
+                        ),
+                    };
+                    delete legacyConfornets.output_count;
                     setClonedValues({
-                        ...(getDedicatedTemplateInitialValues('conformational_mapping') || {}),
+                        ...legacyDefaults,
                         name: data.name,
                         backend: 'confornets',
+                        confornets: legacyConfornets,
                     });
                     setJobName(data.name || data.params?.job_name || data.params?.sequence_name || '');
                 }
@@ -823,11 +870,23 @@ export function JobSubmission() {
                     });
                     setJobName(data.name || 'Conformational mapping');
                 }
+                else if (data.model_id === 'protein_local_redesign' || data.params?.template_model_id === 'protein_local_redesign') {
+                    setWizardMode('experimental');
+                    setSelectedTemplateId('protein_modification_experimental');
+                    setClonedValues({
+                        ...data.params,
+                        pinned_gpu: data.pinned_gpu,
+                        name: data.name,
+                        modification_mode: 'rfd3_local_redesign',
+                        template_model_id: 'protein_local_redesign',
+                    });
+                }
                 // 7. Manual Mode
                 else {
                     setWizardMode('manual');
                     setSelectedModelId(data.model_id);
                     setSelectedModeId(data.mode);
+                    setClonedValues(data.params);
                     setParams(data.params);
                 }
 
@@ -838,6 +897,13 @@ export function JobSubmission() {
             }
         }
     }, [setSelectedTemplateId]);
+
+    useEffect(() => {
+        setExplicitRunFrustrampnn(
+            typeof params.run_frustrampnn === 'boolean' ? params.run_frustrampnn : undefined,
+        );
+        setFrustrampnnSettings(hydrateFrustraMpnnSettings(params.frustrampnn_settings));
+    }, [params.run_frustrampnn, params.frustrampnn_settings]);
 
     const { data: modelsData } = useQuery({
         queryKey: ['models'],
@@ -859,6 +925,7 @@ export function JobSubmission() {
         protein_cad_experimental: 'protein_modification_experimental',
         boltz_cp_experimental: 'boltz_cp_experimental',
         conformational_mapping: 'conformational_mapping',
+        confornets_experimental: 'conformational_mapping',
         esmfold2: 'structure_prediction',
         esmfold2_experimental: 'structure_prediction',
     };
@@ -916,9 +983,10 @@ export function JobSubmission() {
                 { tool: 'DISCO / La-Proteina' },
                 { tool: 'RFdiffusion3' },
                 { tool: 'FAMPNN / ProteinMPNN' },
-                { tool: 'Boltz-2 (Opt.)' }
+                { tool: 'Boltz-2 (Opt.)' },
             ],
-        }
+        },
+
     ], []);
     const visibleApiTemplates = useMemo(() => {
         const templates = templatesData?.data ?? [];
@@ -940,7 +1008,8 @@ export function JobSubmission() {
     );
 
     const routeUserTemplate = (template: UntypedApiValue) => {
-        const apiTemplateId = typeof template.base_template_id === 'string' ? template.base_template_id : null;
+        const rawApiTemplateId = typeof template.base_template_id === 'string' ? template.base_template_id : null;
+        const apiTemplateId = rawApiTemplateId === 'confornets_experimental' ? 'conformational_mapping' : rawApiTemplateId;
         const matchedApiTemplate = apiTemplateId
             ? visibleApiTemplates.find((candidate: UntypedApiValue) => candidate.id === apiTemplateId)
             : null;
@@ -965,7 +1034,7 @@ export function JobSubmission() {
         }
 
         const dedicatedTemplateId =
-            (isDedicatedLauncherTemplate(template.base_template_id) && template.base_template_id) ||
+            (isDedicatedLauncherTemplate(apiTemplateId) && apiTemplateId) ||
             (template.model_id ? dedicatedTemplateByModelId[template.model_id] : null);
 
         if (dedicatedTemplateId) {
@@ -984,6 +1053,9 @@ export function JobSubmission() {
                 name: loadedJobName,
                 job_name: loadedJobName,
                 template_model_id: isLegacyEsmfold2 || isLegacyBoltzGen ? undefined : templateModelId,
+                modification_mode: templateModelId === 'protein_local_redesign'
+                    ? 'rfd3_local_redesign'
+                    : template.params?.modification_mode,
                 ...(isLegacyEsmfold2 ? { pred_method: 'esmfold2' } : {}),
                 ...(isLegacyBoltzGen ? { denovo_generator: 'boltzgen' } : {}),
                 structure_launch_variant: dedicatedTemplateId === 'boltz_cp_experimental'
@@ -1022,10 +1094,15 @@ export function JobSubmission() {
     const ligandPresets = ligandPresetsData?.data ?? [];
 
     const submitMutation = useMutation({
-        mutationFn: submitJob,
-        onSuccess: () => {
+        mutationFn: (jobData: Partial<Job>) => submitJob(jobData),
+        onSuccess: (response) => {
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
-            navigate('/');
+            const returnUri = response.data?.return_uri;
+            if (typeof returnUri === 'string' && returnUri.startsWith('/projects/') && !returnUri.startsWith('//')) {
+                navigate(returnUri);
+            } else {
+                navigate('/');
+            }
         },
         onError: (error: UntypedApiValue) => {
             console.error('Job submission failed:', error);
@@ -1040,6 +1117,41 @@ export function JobSubmission() {
     const models = (modelsData?.data ?? []).filter((model: UntypedApiValue) => !['protein_modification_experimental', 'protein_cad_experimental', 'protein_local_redesign', 'caliby_experimental', 'protein_hunter_experimental', 'boltz_cp_experimental', 'confornets_experimental', 'conformational_mapping', 'esmfold2', 'esmfold2_experimental'].includes(model.id));
     const selectedModel = models.find((m: UntypedApiValue) => m.id === selectedModelId);
     const selectedMode = selectedModel?.modes.find((m: UntypedApiValue) => m.id === selectedModeId);
+    const resolvedFrustrampnnWorkflowId = useMemo(() => {
+        if (wizardMode === 'manual') {
+            return resolveFrustraMpnnWorkflowId(selectedModelId, selectedModeId);
+        }
+        if (!selectedTemplateId || isDedicatedLauncherTemplate(selectedTemplateId) || !templateDetail) {
+            return null;
+        }
+
+        const launchParams = { ...templateDetail.preset_params, ...params };
+        let modelId = launchParams.template_model_id;
+        let modeId = launchParams.template_mode_id;
+        if (!(modelId && modeId) && launchParams.rfd_mode) {
+            modelId = 'rfdiffusion';
+            modeId = launchParams.rfd_mode;
+        } else if (
+            !(modelId && modeId)
+            && launchParams.diffusion_method === 'boltzgen'
+            && ligands.some((ligand) => ligand.type === 'dna' || ligand.type === 'rna')
+        ) {
+            modelId = 'boltz2';
+            modeId = 'complex';
+        }
+        return resolveFrustraMpnnWorkflowId(modelId, modeId);
+    }, [wizardMode, selectedModelId, selectedModeId, selectedTemplateId, templateDetail, params, ligands]);
+    const configuredFrustrampnnWorkflow = resolvedFrustrampnnWorkflowId
+        ? frustrampnnIntegrationQuery.data?.workflows?.[resolvedFrustrampnnWorkflowId]
+        : undefined;
+    const frustrampnnConfigurationReady = !resolvedFrustrampnnWorkflowId || (
+        !frustrampnnIntegrationQuery.isFetching
+        && !frustrampnnIntegrationQuery.isError
+        && configuredFrustrampnnWorkflow !== undefined
+    );
+    const runFrustrampnn = explicitRunFrustrampnn
+        ?? configuredFrustrampnnWorkflow?.default_enabled
+        ?? false;
 
     // Initialize params when model/mode changes (manual mode)
     useEffect(() => {
@@ -1048,9 +1160,10 @@ export function JobSubmission() {
             (selectedModel.params || []).forEach((p: UntypedApiValue) => {
                 if (p.default !== undefined) defaults[p.name] = p.default;
             });
-            setParams(defaults);
+            const nextParams = { ...defaults, ...(clonedValues || {}) };
+            setParams(nextParams);
         }
-    }, [selectedModel, selectedModelId]);
+    }, [selectedModel, selectedModelId, clonedValues]);
 
     // Initialize params when template changes (template mode)
     useEffect(() => {
@@ -1088,7 +1201,7 @@ export function JobSubmission() {
 
 
         if (template.id === 'boltz_cp_experimental') return 'CP';
-        if (template.id === 'confornets_experimental') return 'CN';
+        if (template.id === 'confornets_experimental') return 'CM';
         if (template.id === 'conformational_mapping') return 'CM';
 
         return template.icon === 'target' ? 'TG'
@@ -1272,15 +1385,25 @@ export function JobSubmission() {
     }, [visibleTemplateParams]);
 
     const templateManagerParams = useMemo(() => {
-        if (isTemplateMode && templateDetail) {
-            return {
+        const baseParams = isTemplateMode && templateDetail
+            ? {
                 ...(templateDetail.preset_params || {}),
                 ...params,
                 job_name: templateLaunchName,
-            };
-        }
-        return params;
-    }, [isTemplateMode, params, templateDetail, templateLaunchName]);
+            }
+            : params;
+        return configuredFrustrampnnWorkflow
+            ? mergeFrustraMpnnLaunchParams(baseParams, runFrustrampnn, frustrampnnSettings)
+            : baseParams;
+    }, [
+        isTemplateMode,
+        params,
+        templateDetail,
+        templateLaunchName,
+        configuredFrustrampnnWorkflow,
+        runFrustrampnn,
+        frustrampnnSettings,
+    ]);
 
     const missingRequiredTemplateParams = isTemplateMode && templateDetail?.user_params
         ? templateDetail.user_params
@@ -1292,11 +1415,13 @@ export function JobSubmission() {
             .map((param: UntypedApiValue) => param.label || param.name)
         : [];
     const allMissingRequiredTemplateParams = missingRequiredTemplateParams;
-    const isReady = Boolean(
+    const isReady = frustrampnnConfigurationReady && Boolean(
         (isTemplateMode && selectedTemplateId && templateLaunchName && templateDetail && allMissingRequiredTemplateParams.length === 0) ||
         (wizardMode === 'manual' && jobName && selectedModelId && selectedModeId)
     );
-    const launchBlockedReason = !isReady
+    const launchBlockedReason = !frustrampnnConfigurationReady
+        ? 'FrustraMPNN integration configuration is unavailable. Launch is blocked.'
+        : !isReady
         ? (isTemplateMode && selectedTemplateId && allMissingRequiredTemplateParams.length > 0
             ? `Required: ${allMissingRequiredTemplateParams.join(', ')}`
             : 'Select a workflow and complete required fields')
@@ -1365,20 +1490,24 @@ export function JobSubmission() {
                 nextflowProfile = selectedTemplateId || 'binder_denovo';
             }
 
+            const governedMergedParams = resolvedFrustrampnnWorkflowId
+                ? mergeFrustraMpnnLaunchParams(mergedParams, runFrustrampnn, frustrampnnSettings)
+                : mergedParams;
+
             console.log('DEBUG params state:', params);
             console.log('DEBUG num_parallel_jobs from params:', params.num_parallel_jobs);
-            console.log('DEBUG mergedParams:', mergedParams);
-            console.log('DEBUG num_parallel_jobs from mergedParams:', mergedParams.num_parallel_jobs);
-            console.log('Submitting job:', { name: templateLaunchName, model_id: effectiveModelId, mode: nextflowProfile, params: mergedParams });
+            console.log('DEBUG mergedParams:', governedMergedParams);
+            console.log('DEBUG num_parallel_jobs from mergedParams:', governedMergedParams.num_parallel_jobs);
+            console.log('Submitting job:', { name: templateLaunchName, model_id: effectiveModelId, mode: nextflowProfile, params: governedMergedParams });
 
             // Add complex_components if ligands are selected
             const finalParams = ligands.length > 0 ? {
-                ...mergedParams,
+                ...governedMergedParams,
                 complex_components: [
-                    { type: 'protein', id: 'A', sequence: mergedParams.sequence || params.sequence },
+                    { type: 'protein', id: 'A', sequence: governedMergedParams.sequence || params.sequence },
                     ...ligands.map(l => ({ type: l.type, id: l.id, ccd: l.ccd, smiles: l.smiles, sequence: l.sequence, name: l.name }))
                 ]
-            } : mergedParams;
+            } : governedMergedParams;
 
             submitMutation.mutate({
                 name: templateLaunchName,
@@ -1407,16 +1536,20 @@ export function JobSubmission() {
                 delete filteredParams['ntp_type'];
             }
 
+            const governedFilteredParams = resolvedFrustrampnnWorkflowId
+                ? mergeFrustraMpnnLaunchParams(filteredParams, runFrustrampnn, frustrampnnSettings)
+                : filteredParams;
+
             // Add complex_components if ligands are selected (e.g. for Complex Prediction)
-            const proteinSeq = filteredParams.sequence || filteredParams.protein_sequence;
+            const proteinSeq = governedFilteredParams.sequence || governedFilteredParams.protein_sequence;
 
             const finalParams = ligands.length > 0 ? {
-                ...filteredParams,
+                ...governedFilteredParams,
                 complex_components: [
                     { type: 'protein', id: 'A', sequence: proteinSeq },
                     ...ligands.map(l => ({ type: l.type, id: l.id, ccd: l.ccd, smiles: l.smiles, sequence: l.sequence, name: l.name }))
                 ]
-            } : filteredParams;
+            } : governedFilteredParams;
 
             submitMutation.mutate({
                 name: jobName,
@@ -1429,12 +1562,60 @@ export function JobSubmission() {
         }
     };
 
+    const genericFrustrampnnControl = resolvedFrustrampnnWorkflowId ? (
+        <div
+            className="rounded-xl border border-cyan-900/70 bg-cyan-950/15 p-4"
+            data-job-submission-frustrampnn
+        >
+            {configuredFrustrampnnWorkflow ? (
+                <ModelIntegrationControl
+                    modelId="frustrampnn"
+                    workflowId={resolvedFrustrampnnWorkflowId}
+                    checked={runFrustrampnn}
+                    onChange={(checked) => {
+                        setExplicitRunFrustrampnn(checked);
+                        setParams((previous) => ({ ...previous, run_frustrampnn: checked }));
+                    }}
+                    fallbackLabel="Frustration analysis"
+                    integration={frustrampnnIntegrationQuery.data}
+                    settingsControl={(
+                        <FrustraMpnnSettingsPanel
+                            value={frustrampnnSettings}
+                            onChange={(settings) => {
+                                setFrustrampnnSettings(settings);
+                                setParams((previous) => ({ ...previous, frustrampnn_settings: settings }));
+                            }}
+                        />
+                    )}
+                />
+            ) : (
+                <p role="alert" className="text-sm text-amber-300">
+                    FrustraMPNN integration configuration is unavailable. Launch is blocked.
+                </p>
+            )}
+        </div>
+    ) : null;
+
     // Dedicated templates that handle their own header/navigation
     const dedicatedTemplates = ['mutagenesis', 'antibody_denovo', 'structure_prediction', 'boltz_cp_experimental', 'oligo_design', 'protein_modification_experimental', 'molecular_dynamics', 'conformational_mapping'];
     const showMainHeader = !selectedTemplateId || !dedicatedTemplates.includes(selectedTemplateId);
 
     return (
         <div className="min-h-screen bg-slate-950 p-6">
+            {launchContextId && (
+                <aside className="mb-4 rounded-lg border border-blue-500/40 bg-blue-950/40 px-4 py-3 text-sm text-blue-100" aria-label="Project launch destination">
+                    {launchContextQuery.isLoading && 'Resolving Project launch destination…'}
+                    {launchContextQuery.isError && 'Project launch destination is invalid, expired, claimed, or unavailable.'}
+                    {launchContextQuery.data && (
+                        <>
+                            <div className="font-semibold">Verified Project launch destination</div>
+                            <div className="mt-1 font-mono text-xs">
+                                Project {launchContextQuery.data.project_id} · Global Experiment {launchContextQuery.data.global_experiment_id} · Domain Experiment {launchContextQuery.data.domain_experiment_id}
+                            </div>
+                        </>
+                    )}
+                </aside>
+            )}
             {/* Main header - hidden when dedicated templates are active */}
             {showMainHeader && (
                 <header className="mb-8 flex items-center gap-4">
@@ -1541,7 +1722,6 @@ export function JobSubmission() {
                                                 params: batchParams
                                             });
                                             queryClient.invalidateQueries({ queryKey: ['jobs'] });
-                                            navigate('/');
                                         } catch (error) {
                                             console.error("[MUTAGENESIS BATCH] Submission failed", error);
                                         }
@@ -1574,6 +1754,7 @@ export function JobSubmission() {
                                 <ProteinModificationTemplate
                                     onBack={handleDedicatedTemplateBack}
                                     initialValues={clonedValues}
+                                    requiredPinnedGpu={launchContextQuery.data?.pinned_gpu ?? null}
                                 />
 
                             ) : selectedTemplateId === 'molecular_dynamics' ? (
@@ -1581,10 +1762,6 @@ export function JobSubmission() {
                                     onBack={handleDedicatedTemplateBack}
                                     initialValues={clonedValues}
                                 />
-                            ) : selectedTemplateId === 'confornets_experimental' ? (
-                                <div className="rounded-xl border border-slate-700 bg-slate-900/40 px-4 py-3 text-sm text-slate-400">
-                                    Conformational Mapping selected. Configure the workflow below.
-                                </div>
                             ) : selectedTemplateId === 'conformational_mapping' ? (
                                 <ConformationalMappingLauncher
                                     key={`conformational_mapping:${dedicatedTemplateVersion}`}
@@ -1633,6 +1810,7 @@ export function JobSubmission() {
                                     <div
                                         key={model.id}
                                         onClick={() => {
+                                            setClonedValues(undefined);
                                             setSelectedModelId(model.id);
                                             setSelectedModeId(null); // Reset mode
                                         }}
@@ -1780,6 +1958,8 @@ export function JobSubmission() {
                                 ))}
                             </div>
 
+                            {genericFrustrampnnControl}
+
                             {(templateDetail?.preset_params?.pred_method ||
                                 selectedTemplateId?.includes('structure') ||
                                 selectedTemplateId?.includes('predict')) && (
@@ -1880,6 +2060,8 @@ export function JobSubmission() {
                                     </div>
                                 )
                                 }
+
+                                {genericFrustrampnnControl}
 
                                 {/* Ligand Selector for Complex Prediction mode in manual/advanced mode */}
                                 {selectedModeId === 'complex' && (

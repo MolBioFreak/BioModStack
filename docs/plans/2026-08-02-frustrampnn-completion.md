@@ -1,6 +1,12 @@
 # FrustraMPNN completion implementation plan
 
-> **For Hermes:** implement this plan completely in the listed vertical slices. It finishes FrustraMPNN only. Do not implement, repair, expose, or refactor ProteinMPNN, LigandMPNN, FA-MPNN, ThermoMPNN, or a generalized model plugin framework in this tranche.
+> **Superseded as the active completion contract on 2026-08-08.** Use
+> `docs/specs/frustrampnn-global-configuration-analysis-workbench.md`. This
+> document remains historical context for the earlier global rollout and its
+> accepted Structure Prediction owner path. Its minimal presentation-only
+> parameter scope does not satisfy the current all-settings policy.
+
+> **For Hermes:** do not use this historical plan as current implementation authority.
 
 **Status:** corrected implementation-ready specification for all remaining FrustraMPNN work  
 **Feature branch:** `feat/global-model-analysis-config-20260802`  

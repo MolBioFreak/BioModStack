@@ -94,6 +94,8 @@ EXPECTED_MODEL_MODE_ENTRYPOINTS = {
     ("molecular_dynamics", "replica"): "workflows/experimental/molecular_dynamics/replica.nf",
     ("molecular_dynamics", "analyze"): "workflows/experimental/molecular_dynamics/analyze.nf",
     ("conformational_mapping", "map"): "workflows/conformational_mapping.nf",
+    ("frustrampnn", "analyze"): "workflows/frustrampnn_analysis.nf",
+    ("protein_local_redesign", "local_redesign"): "workflows/protein_local_redesign.nf",
 }
 
 

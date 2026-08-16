@@ -9,9 +9,11 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { StructureWorkbench } from '../structureViewer/StructureWorkbench';
 import { BMS_CONTROL, BMS_CONTROL_GROUP, BMS_FULLSCREEN_FLUSH, BMS_PANEL_SURFACE, BMS_SMALL_CONTROL, BMS_VIEWER_WELL } from './ui/bmsStyle';
-import { fetchJobs } from '../lib/api';
+import { fetchFullJob, fetchJobs } from '../lib/api';
 import type { Job } from '../lib/api';
 import { jobPollingInterval } from '../lib/queryPolling';
+import { isNgsJob } from '../lib/ngsResultRouting';
+import { getJobOutputSummary } from '../lib/jobOutputSummary';
 
 const QUICK_VIEWER_COMPACT_KEY = 'bms_dashboard_quick_viewer_compact_v1';
 type QuickViewerSize = 'micro' | 'compact' | 'standard' | 'large' | 'xlarge';
@@ -145,25 +147,36 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
         queryFn: () => fetchJobs({ status: 'completed', limit: 100, summary: true }),
         refetchInterval: (query) => jobPollingInterval(3000, query),
     });
+    const { data: selectedJobData } = useQuery({
+        queryKey: ['quick-viewer-selected-job', selectedJobId],
+        queryFn: () => fetchFullJob(selectedJobId as string),
+        enabled: Boolean(selectedJobId),
+        retry: false,
+    });
 
     // Get completed jobs with structures
     const allJobs = jobsData?.data?.jobs || [];
     const completedJobs = allJobs.filter(
-        (job: Job) => job.status === 'completed' && !isMolecularDynamicsJob(job)
+        (job: Job) => job.status === 'completed' && !isMolecularDynamicsJob(job) && !isNgsJob(job)
     );
-    const selectedJobIsMolecularDynamics = allJobs.some(
-        (job: Job) => job.id === selectedJobId && isMolecularDynamicsJob(job)
+    const selectedJobIsExcluded = (Boolean(selectedJobId) && (
+        !selectedJobData
+        || isMolecularDynamicsJob(selectedJobData)
+        || isNgsJob(selectedJobData)
+    )) || allJobs.some(
+        (job: Job) => job.id === selectedJobId && (isMolecularDynamicsJob(job) || isNgsJob(job))
     );
+    const quickViewerJobId = selectedJobIsExcluded ? null : selectedJobId;
 
     // Fetch structure files for selected job
     const { data: structureData } = useQuery<{ structures: StructureFile[]; count: number }>({
-        queryKey: ['structure-files', selectedJobId],
+        queryKey: ['structure-files', quickViewerJobId],
         queryFn: async () => {
-            const res = await fetch(`/api/jobs/${selectedJobId}/structure-files`);
+            const res = await fetch(`/api/jobs/${quickViewerJobId}/structure-files`);
             if (!res.ok) throw new Error('Failed to fetch structure files');
             return res.json();
         },
-        enabled: !!selectedJobId && !selectedJobIsMolecularDynamics,
+        enabled: !!quickViewerJobId,
     });
 
     // Auto-select first structure when data loads
@@ -235,7 +248,7 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
     const showJobIndicator = isFullscreen || layout.showJobIndicator;
 
     // Find current job name for display
-    const currentJob = completedJobs.find((j: Job) => j.id === selectedJobId);
+    const currentJob = completedJobs.find((j: Job) => j.id === quickViewerJobId);
 
     return (
         <div
@@ -299,14 +312,14 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
             {/* Job Selector */}
             <div className="mb-3" style={{ position: 'relative', zIndex: 10 }}>
                 <select
-                    value={selectedJobId || ''}
+                    value={quickViewerJobId || ''}
                     onChange={(e) => setSelectedJobId(e.target.value || null)}
                     className={`w-full bg-slate-900/50 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-accent focus:border-transparent ${layout.selectorClass}`}
                 >
                     <option value="">Select a job...</option>
                     {completedJobs.map((job: Job) => (
                         <option key={job.id} value={job.id}>
-                            {job.name} ({job.design_count} designs)
+                            {job.name} ({getJobOutputSummary(job).label})
                         </option>
                     ))}
                 </select>
@@ -351,7 +364,7 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
                         format={selectedStructure?.type || 'pdb'}
                         alphafoldView={true}
                         hideControls={hideViewerControls}
-                        jobId={selectedJobId ?? undefined}
+                        jobId={quickViewerJobId ?? undefined}
                         height={viewerHeight}
                         backgroundColor="#0f172a"
                     />
@@ -360,7 +373,7 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
                         className="flex items-center justify-center text-slate-500 text-sm transition-all duration-300"
                         style={{ height: viewerHeight }}
                     >
-                        {selectedJobId ? 'No structures found' : 'Select a job to preview'}
+                        {quickViewerJobId ? 'No structures found' : 'Select a job to preview'}
                     </div>
                 )}
             </div>

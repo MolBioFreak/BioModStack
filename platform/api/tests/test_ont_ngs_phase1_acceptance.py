@@ -59,6 +59,16 @@ def test_explicit_canonical_model_mapping_is_complete_and_registered() -> None:
 
     registry = get_registry()
     for canonical_id, model_mode in ONT_WORKFLOW_MODEL_MODES.items():
+        nanopore = registry.get_model("nanopore")
+        assert nanopore is not None
+        assert model_mode in {mode.id for mode in nanopore.modes}
+        if canonical_id == "ont_pooled_reference_assignment":
+            with pytest.raises(ValueError, match="dedicated atomic submission endpoint"):
+                _job_create_for_ont_submit(
+                    canonical_id,
+                    _request({"fastq_path": "/tmp/reads.fastq"}),
+                )
+            continue
         params: dict[str, object]
         if canonical_id == "ont_basecall_dna":
             params = {"pod5_dir": "/tmp/run.pod5"}
@@ -193,6 +203,13 @@ def test_methylation_pod5_is_reference_aligned_before_modkit() -> None:
 def test_every_workflow_alias_crosses_the_real_registry_boundary() -> None:
     registry = get_registry()
     for alias, canonical_id in ONT_WORKFLOW_ALIASES.items():
+        if canonical_id == "ont_pooled_reference_assignment":
+            with pytest.raises(ValueError, match="dedicated atomic submission endpoint"):
+                _job_create_for_ont_submit(
+                    alias,
+                    _request({"fastq_path": "/tmp/reads.fastq"}),
+                )
+            continue
         params: dict[str, object]
         if canonical_id in {"ont_basecall_dna", "ont_basecall_rna"}:
             params = {"pod5_dir": "/tmp/run.pod5"}
@@ -379,6 +396,7 @@ def test_manifest_distinguishes_expected_and_observed_sequence_digests(tmp_path:
         job_id="job-1",
         sample_name="sample-1",
         reference_fasta=reference,
+        expected_sha256="b28b7e7e6b70661dfee15d5290c4bca097ca145f721c4fbc4de73ad1d1660b8b",
         consensus_fasta=consensus,
         consensus_status="ok",
         artifacts=[],
@@ -401,28 +419,17 @@ def test_manifest_rejects_reference_copy_fallback(tmp_path: Path) -> None:
     output = tmp_path / "qc_manifest.json"
     reference.write_text(">expected\nACGT\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="reference_copy_fallback is forbidden"):
+    with pytest.raises(ValueError, match="fallback status labels are forbidden"):
         module.build_manifest(
             out=output,
             job_id="job-1",
             sample_name="sample-1",
             reference_fasta=reference,
+            expected_sha256="1dff3e84fe7877e0673b69bbddcf40124e396e3f9943dd890c91b6a09adb9af0",
             consensus_fasta=reference,
             consensus_status="reference_copy_fallback",
             artifacts=[],
         )
-
-
-def test_mpileup_majority_never_substitutes_reference_at_zero_depth() -> None:
-    result = subprocess.run(
-        ["awk", "-f", str(ROOT / "scripts/mpileup_majority_consensus.awk")],
-        input="plasmid\t1\tA\t0\t*\t*\n",
-        text=True,
-        capture_output=True,
-        check=True,
-    )
-    assert result.stdout == ">plasmid\nN\n"
-
 
 def test_methylation_stage_reports_only_real_module_outputs() -> None:
     workflow = (ROOT / "workflows/ngs/ont_methylation_analysis.nf").read_text(encoding="utf-8")
@@ -444,7 +451,10 @@ def test_nextflow_contracts_forbid_reference_consensus_and_guard_bam_modkit() ->
     modkit = (ROOT / "modules" / "ngs" / "modkit_pileup.nf").read_text(encoding="utf-8")
 
     assert "cp reference_qc.fasta fastq_consensus.fasta" not in plasmid_qc
-    assert "refusing expected-reference substitution" in plasmid_qc
+    assert "consensus --mode bayesian -f fasta" in plasmid_qc
+    assert "CRITICAL_FAILURE: SAMTOOLS_CONSENSUS_EMPTY" in plasmid_qc
+    assert "mpileup" not in plasmid_qc
+    assert "create_report" in plasmid_qc
     assert 'samtools quickcheck -v "${bam}"' in bam_prepare
     assert "samtools index" in bam_prepare and "aligned.bam.bai" in bam_prepare
     assert "stageAs: 'source.bam'" in bam_prepare
@@ -724,7 +734,7 @@ def test_nextflow_runtime_rejects_wrong_reference_and_untagged_modkit_bam(tmp_pa
     assert not (tmp_path / "modkit-out/methylation/methylation.bed").exists()
 
 
-def test_fastq_runtime_emits_incomplete_manifest_without_fake_consensus(tmp_path: Path) -> None:
+def test_fastq_runtime_fails_closed_without_fake_consensus_or_manifest(tmp_path: Path) -> None:
     nextflow = Path(os.environ.get("BMS_NEXTFLOW_BIN", "/usr/local/bin/nextflow"))
     samtools = Path(os.environ.get("BMS_SAMTOOLS_BIN", "/home/dalab/micromamba/bin/samtools"))
     if not (nextflow.is_file() and os.access(nextflow, os.X_OK)):
@@ -775,6 +785,7 @@ def test_fastq_runtime_emits_incomplete_manifest_without_fake_consensus(tmp_path
         "process {\n"
         "  executor = 'local'\n"
         "  withLabel: local_cpu { container = null; cpus = 1; memory = '1 GB' }\n"
+        "  withLabel: fastq_qc_cpu { container = null; cpus = 1; memory = '1 GB' }\n"
         "}\n",
         encoding="utf-8",
     )
@@ -798,21 +809,15 @@ def test_fastq_runtime_emits_incomplete_manifest_without_fake_consensus(tmp_path
         timeout=180,
         check=False,
     )
-    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert completed.returncode != 0, completed.stdout + completed.stderr
     assert hashlib.sha256(reference.read_bytes()).hexdigest() == reference_digest_before
-
-    manifest_path = out_dir / "fastq_qc/qc_manifest.json"
-    assert manifest_path.exists()
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    assert manifest["workflow_status"] == "completed_with_unavailable_observation"
-    assert manifest["verification_status"] == "review_required"
-    assert manifest["verification_reason_codes"] == ["observed_consensus_unavailable"]
-    assert manifest["sequence_digests"]["observed_consensus_sha256"] is None
-    consensus_artifact = next(
-        artifact for artifact in manifest["artifacts"] if artifact["kind"] == "consensus"
+    command_output = completed.stdout + completed.stderr
+    command_output += "".join(
+        path.read_text(encoding="utf-8", errors="replace")
+        for path in (tmp_path / "work").rglob(".command.*")
     )
-    assert consensus_artifact["state"] == "missing_after_workflow"
-    assert "Unable to derive observed consensus" in consensus_artifact["unavailable_reason"]
+    assert "CRITICAL_FAILURE: SAMTOOLS_CONSENSUS_EMPTY" in command_output
+    assert not (out_dir / "fastq_qc/qc_manifest.json").exists()
     assert not (out_dir / "fastq_qc/fastq_consensus.fasta").exists()
 
 
@@ -826,6 +831,7 @@ def test_nanopore_registry_has_exactly_one_authoritative_definition_per_mode() -
         "plasmid_qc",
         "construct_screening",
         "fastq_qc",
+        "pooled_reference_assignment",
         "methylation_analysis",
         "clone_validation",
     ]

@@ -24,6 +24,12 @@ from .state_landscape_analysis import (
     MAX_STATE_LANDSCAPE_COMPARISONS,
     MAX_STATE_LANDSCAPE_RESIDUES_PER_CANDIDATE,
 )
+from services.frustrampnn.settings import (
+    FrustraMPNNRequestedSettings,
+    default_settings as default_frustrampnn_settings,
+    validate_complete_requested_settings,
+    validate_persisted_requested_settings,
+)
 
 
 BACKENDS = frozenset({"protenix_v2_ensemble", "confornets", "external_import"})
@@ -43,6 +49,8 @@ _TOP_LEVEL_FIELDS = frozenset(
         "protenix_snapshot_id",
         "import_receipt_id",
         "resolved_import_entries",
+        "run_record",
+        "frustrampnn_settings",
     }
 )
 _CONFORNETS_FIELDS = frozenset(
@@ -57,6 +65,7 @@ _CONFORNETS_FIELDS = frozenset(
         "saved_steps",
         "confornet_count",
         "samples",
+        "output_count",
         "max_steps",
         "num_recycles",
         "num_diffusion_steps",
@@ -89,7 +98,7 @@ class ValidatedRequest:
 class MaterializedRequest:
     request_path: Path
     coordinate_plan_path: Path
-    launch_params: dict[str, str]
+    launch_params: dict[str, Any]
     request_sha256: str
     coordinate_plan_sha256: str
 
@@ -142,6 +151,106 @@ def _sha256(value: object, *, field: str) -> str:
     return text
 
 
+def _bounded_text(
+    value: object,
+    *,
+    field: str,
+    maximum: int,
+    allow_empty: bool = False,
+) -> str:
+    if not isinstance(value, str):
+        raise ConformationalMappingRequestError(f"{field} must be text")
+    text = value.strip()
+    if not allow_empty and not text:
+        raise ConformationalMappingRequestError(f"{field} must be nonempty")
+    if len(text) > maximum:
+        raise ConformationalMappingRequestError(f"{field} exceeds {maximum} characters")
+    return text
+
+
+def _normalize_run_record(value: object) -> dict[str, Any]:
+    record = _strict_object(
+        value,
+        field="run_record",
+        allowed_fields=frozenset({"name", "notes", "selected_input"}),
+    )
+    selected = _strict_object(
+        record.get("selected_input"),
+        field="run_record.selected_input",
+        allowed_fields=frozenset({
+            "source_id", "source_kind", "source_label", "source_sha256",
+            "provider", "accession", "model_id", "sample_id", "chain_ids",
+        }),
+    )
+    normalized_input: dict[str, Any] = {
+        "source_id": _bounded_text(
+            selected.get("source_id"), field="run_record.selected_input.source_id", maximum=128,
+        ),
+        "source_kind": _bounded_text(
+            selected.get("source_kind"), field="run_record.selected_input.source_kind", maximum=64,
+        ),
+        "source_label": _bounded_text(
+            selected.get("source_label"), field="run_record.selected_input.source_label", maximum=255,
+        ),
+        "source_sha256": _sha256(
+            selected.get("source_sha256"), field="run_record.selected_input.source_sha256",
+        ),
+    }
+    for key in ("provider", "accession", "model_id", "sample_id"):
+        if key in selected:
+            normalized_input[key] = _bounded_text(
+                selected[key], field=f"run_record.selected_input.{key}", maximum=128,
+            )
+    if "chain_ids" in selected:
+        raw_chain_ids = selected["chain_ids"]
+        if not isinstance(raw_chain_ids, list) or len(raw_chain_ids) > 128:
+            raise ConformationalMappingRequestError(
+                "run_record.selected_input.chain_ids must be a bounded array"
+            )
+        chain_ids = [
+            _bounded_text(chain_id, field="run_record.selected_input.chain_ids", maximum=32)
+            for chain_id in raw_chain_ids
+        ]
+        if len(set(chain_ids)) != len(chain_ids):
+            raise ConformationalMappingRequestError(
+                "run_record.selected_input.chain_ids must be unique"
+            )
+        normalized_input["chain_ids"] = chain_ids
+    return {
+        "name": _bounded_text(record.get("name"), field="run_record.name", maximum=255),
+        "notes": _bounded_text(
+            record.get("notes", ""), field="run_record.notes", maximum=4000, allow_empty=True,
+        ),
+        "selected_input": normalized_input,
+    }
+
+
+def _normalize_frustrampnn_settings(value: object) -> dict[str, Any]:
+    """Validate one complete server-bound canonical settings object."""
+
+    try:
+        persisted = validate_persisted_requested_settings(value)
+        if isinstance(value, FrustraMPNNRequestedSettings):
+            normalized = persisted
+        else:
+            if not isinstance(value, Mapping):  # guarded by the canonical validator
+                raise ValueError("frustrampnn_settings must be an object")
+            editable = dict(value)
+            editable.pop("settings_value_origin", None)
+            complete = validate_complete_requested_settings(editable)
+            normalized = FrustraMPNNRequestedSettings.model_validate(
+                {
+                    **complete.model_dump(mode="json", exclude_none=False),
+                    "settings_value_origin": persisted.settings_value_origin,
+                }
+            )
+    except ValueError as exc:
+        raise ConformationalMappingRequestError(
+            f"frustrampnn_settings must be a complete server-bound canonical object: {exc}"
+        ) from exc
+    return normalized.model_dump(mode="json", exclude_none=False)
+
+
 def _validate_staged_record(value: object, *, field: str) -> dict[str, Any]:
     record = _strict_object(
         value,
@@ -160,7 +269,7 @@ def _normalize_confornets_settings(settings: Mapping[str, Any]) -> dict[str, Any
         field="confornets",
         allowed_fields=_CONFORNETS_FIELDS,
     )
-    missing = sorted(_CONFORNETS_FIELDS - set(config))
+    missing = sorted((_CONFORNETS_FIELDS - {"output_count"}) - set(config))
     if missing:
         raise ConformationalMappingRequestError(
             f"confornets settings are incomplete: missing {', '.join(missing)}"
@@ -239,6 +348,22 @@ def _normalize_confornets_settings(settings: Mapping[str, Any]) -> dict[str, Any
         raise ConformationalMappingRequestError(
             "ConforNets MSE requires a non-null staged reference"
         )
+    if task == "mse" and confornet_count != 1:
+        raise ConformationalMappingRequestError(
+            "ConforNets MSE requires exactly one ConforNet"
+        )
+    if task == "mse" and len(normalized_steps) != 1:
+        raise ConformationalMappingRequestError(
+            "ConforNets MSE requires exactly one saved step"
+        )
+    if task == "mse" and normalized_steps != [max_steps]:
+        raise ConformationalMappingRequestError(
+            "ConforNets MSE saved step must equal max_steps"
+        )
+    if task != "mse" and normalized_references:
+        raise ConformationalMappingRequestError(
+            "ConforNets references are valid only for MSE"
+        )
     transfer = config["transfer_source"]
     normalized_transfer: dict[str, Any] | None = None
     if transfer is not None:
@@ -269,6 +394,34 @@ def _normalize_confornets_settings(settings: Mapping[str, Any]) -> dict[str, Any
     if task != "transfer" and normalized_transfer is not None:
         raise ConformationalMappingRequestError(
             "ConforNets transfer source is invalid for this task"
+        )
+    if task == "transfer" and (
+        runs != 1 or normalized_steps != [0] or confornet_count != 1
+    ):
+        raise ConformationalMappingRequestError(
+            "ConforNets transfer requires one run, saved step 0, and one ConforNet"
+        )
+
+    reference_count = len(normalized_references) if task == "mse" else 1
+    full_output_count = (
+        reference_count * runs * len(normalized_steps) * confornet_count * samples
+    )
+    requested_output_count = config.get("output_count")
+    output_count = (
+        full_output_count
+        if requested_output_count is None
+        else _strict_positive_int(
+            requested_output_count,
+            field="confornets.output_count",
+        )
+    )
+    if output_count > full_output_count:
+        raise ConformationalMappingRequestError(
+            "confornets.output_count exceeds the configured candidate pool"
+        )
+    if task != "diversity" and output_count != full_output_count:
+        raise ConformationalMappingRequestError(
+            "confornets.output_count can select a subset only for diversity"
         )
 
     identity = _strict_object(
@@ -315,6 +468,7 @@ def _normalize_confornets_settings(settings: Mapping[str, Any]) -> dict[str, Any
         "saved_steps": normalized_steps,
         "confornet_count": confornet_count,
         "samples": samples,
+        "output_count": output_count,
         "max_steps": max_steps,
         "num_recycles": _strict_nonnegative_int(
             config["num_recycles"], field="confornets.num_recycles"
@@ -373,7 +527,7 @@ def build_confornets_coordinate_plan(
     *,
     target_id: str,
 ) -> list[dict[str, Any]]:
-    """Build the complete ordered ConforNets coordinate product."""
+    """Build the deterministic selected ConforNets coordinate set."""
 
     config = _normalize_confornets_settings(settings)
     task = config["task"]
@@ -388,13 +542,13 @@ def build_confornets_coordinate_plan(
     samples = config["samples"]
     saved_steps = config["saved_steps"]
 
-    coordinates: list[dict[str, Any]] = []
+    full_coordinates: list[dict[str, Any]] = []
     for reference_id in reference_ids:
         for run_index in range(runs):
             for saved_step in saved_steps:
                 for confornet_index in range(confornet_count):
                     for sample_index in range(samples):
-                        coordinates.append(
+                        full_coordinates.append(
                             {
                                 "backend": "confornets",
                                 "target_id": target_id,
@@ -408,11 +562,31 @@ def build_confornets_coordinate_plan(
                             }
                         )
 
-    expected_cardinality = (
+    full_cardinality = (
         len(reference_ids) * runs * len(saved_steps) * confornet_count * samples
     )
-    if len(coordinates) != expected_cardinality:
+    if len(full_coordinates) != full_cardinality:
         raise ConformationalMappingRequestError("ConforNets coordinate cardinality mismatch")
+    output_count = config["output_count"]
+    if task == "diversity" and output_count < full_cardinality:
+        descending_step_order = {
+            step: index for index, step in enumerate(sorted(saved_steps, reverse=True))
+        }
+        full_coordinates.sort(
+            key=lambda coordinate: (
+                coordinate["sample_index"],
+                descending_step_order[coordinate["saved_step"]],
+                coordinate["run_index"],
+                coordinate["confornet_index"],
+            )
+        )
+        coordinates = full_coordinates[:output_count]
+    else:
+        coordinates = full_coordinates
+    if len(coordinates) != output_count:
+        raise ConformationalMappingRequestError(
+            "ConforNets selected output cardinality mismatch"
+        )
     return coordinates
 
 
@@ -538,6 +712,18 @@ def validate_request_params(params: Mapping[str, Any]) -> ValidatedRequest:
         "runtime_policy": values["runtime_policy"],
         "analysis_policy": values["analysis_policy"],
     }
+    if "frustrampnn_settings" not in values:
+        frustrampnn_settings = default_frustrampnn_settings().model_dump(
+            mode="json", exclude_none=False
+        )
+    else:
+        frustrampnn_settings = _normalize_frustrampnn_settings(
+            values["frustrampnn_settings"]
+        )
+    request_fields["frustrampnn_settings"] = frustrampnn_settings
+    request_fields["frustrampnn_requiredness"] = "required"
+    if "run_record" in values:
+        request_fields["run_record"] = _normalize_run_record(values["run_record"])
     if "state_landscape_comparison" in values:
         request_fields["state_landscape_comparison"] = values["state_landscape_comparison"]
     analysis_policy = values["analysis_policy"]
@@ -560,6 +746,10 @@ def validate_request_params(params: Mapping[str, Any]) -> ValidatedRequest:
         if not isinstance(target, Mapping) or not isinstance(target.get("target_id"), str):
             raise ConformationalMappingRequestError("ConforNets target identity is invalid")
         settings = _normalize_confornets_settings(values["confornets"])
+        if settings["task"] == "mse" and len(settings["saved_steps"]) != 1:
+            raise ConformationalMappingRequestError(
+                "ConforNets MSE requires exactly one saved step"
+            )
         if (
             target.get("sequence") != settings["sequence"]
             or target.get("molecule_type") != "protein"
@@ -678,6 +868,66 @@ def validate_request_params(params: Mapping[str, Any]) -> ValidatedRequest:
         request_fields=request_fields,
         coordinate_plan=tuple(coordinate_plan),
     )
+
+
+def validate_materialized_coordinate_plan(
+    request_json: Mapping[str, Any],
+    coordinate_plan_json: Mapping[str, Any],
+) -> None:
+    """Validate and rederive a materialized coordinate plan from request authority."""
+
+    validate_schema("cm_request_v1", request_json)
+    validate_schema("cm_coordinate_plan_v1", coordinate_plan_json)
+    expected_fields = {
+        "schema_name", "schema_version", "request_id", "backend",
+        "request_sha256", "expected_cardinality", "coordinates",
+        "coordinate_plan_sha256",
+    }
+    if set(coordinate_plan_json) != expected_fields:
+        raise ContractValidationError("cm_coordinate_plan_v1 has unexpected fields")
+    recoverable_fields = {
+        "backend", "targets", "ordered_seeds", "samples_per_seed",
+        "feature_policy", "runtime_policy", "analysis_policy", "run_record",
+        "state_landscape_comparison", "confornets", "protenix_snapshot_id",
+        "import_receipt_id", "resolved_import_entries",
+    }
+    request_params = {
+        key: request_json[key]
+        for key in recoverable_fields
+        if key in request_json
+    }
+    if request_json.get("backend") == "external_import":
+        targets = request_json.get("targets")
+        coordinates_value = coordinate_plan_json.get("coordinates")
+        receipt_sha256 = request_json.get("import_receipt_id")
+        if not isinstance(targets, list) or not isinstance(coordinates_value, list):
+            raise ContractValidationError("external import coordinate authority is malformed")
+        if len(targets) != len(coordinates_value):
+            raise ContractValidationError("external import coordinate cardinality disagrees with targets")
+        for staged_index, (target, coordinate) in enumerate(zip(targets, coordinates_value, strict=True)):
+            if not isinstance(target, Mapping) or not isinstance(coordinate, Mapping):
+                raise ContractValidationError("external import coordinate authority is malformed")
+            if (
+                coordinate.get("backend") != "external_import"
+                or coordinate.get("target_id") != target.get("target_id")
+                or coordinate.get("staged_index") != staged_index
+                or coordinate.get("staged_receipt_sha256") != receipt_sha256
+            ):
+                raise ContractValidationError("external import coordinates do not match request authority")
+        coordinates = coordinates_value
+    else:
+        validated = validate_request_params(request_params)
+        coordinates = list(validated.coordinate_plan)
+    if (
+        coordinate_plan_json.get("schema_name") != "cm_coordinate_plan"
+        or coordinate_plan_json.get("schema_version") != 1
+        or coordinate_plan_json.get("request_id") != request_json.get("request_id")
+        or coordinate_plan_json.get("backend") != request_json.get("backend")
+        or coordinate_plan_json.get("request_sha256") != request_json.get("request_sha256")
+        or coordinate_plan_json.get("expected_cardinality") != len(coordinates)
+        or coordinate_plan_json.get("coordinates") != coordinates
+    ):
+        raise ContractValidationError("cm_coordinate_plan_v1 does not match request authority")
 
 
 def _stage_canonical_json(path: Path, payload: Mapping[str, Any]) -> Path:
@@ -854,7 +1104,7 @@ def materialize_trusted_internal_request(
     return MaterializedRequest(
         request_path=request_path,
         coordinate_plan_path=coordinate_plan_path,
-        launch_params={"cm_request_path": str(request_path)},
+        launch_params={"cm_request_path": str(request_path), "run_frustrampnn": True},
         request_sha256=request["request_sha256"],
         coordinate_plan_sha256=plan["coordinate_plan_sha256"],
     )
@@ -864,6 +1114,7 @@ def bind_materialized_source_snapshot(
     materialized: MaterializedRequest,
     *,
     source_snapshot_sha256: str,
+    selected_input: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Atomically bind a server-generated snapshot into request and plan hashes."""
 
@@ -927,6 +1178,11 @@ def bind_materialized_source_snapshot(
         raise ConformationalMappingRequestError("source snapshot binding is external-import only")
     if "source_snapshot_sha256" in request:
         raise ConformationalMappingRequestError("source snapshot identity is already bound")
+    if selected_input is not None:
+        run_record = request.get("run_record")
+        if not isinstance(run_record, Mapping):
+            raise ConformationalMappingRequestError("external import requires an authoritative run record")
+        request["run_record"] = {**dict(run_record), "selected_input": dict(selected_input)}
     request["source_snapshot_sha256"] = source_snapshot_sha256
     request["request_sha256"] = canonical_sha256({
         key: value for key, value in request.items() if key != "request_sha256"

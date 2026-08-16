@@ -599,45 +599,18 @@ def test_barcode_route_receives_job_scoped_httponly_cookie(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
-async def test_barcode_submit_forces_realign_and_authorizes_result_path(monkeypatch) -> None:
-    source = SimpleNamespace(id="source", name="source job")
-    unit = {
-        "unit_id": "barcode01",
-        "bam_path": "/results/source/demux/units/barcode01.bam",
-        "bam_sha256": "a" * 64,
-        "manifest_sha256": "b" * 64,
-    }
-    captured: dict[str, Any] = {"path_calls": []}
-
-    async def fake_authorized(*_args, **_kwargs):
-        return source, unit
-
-    async def fake_create(job, *_args, **_kwargs):
-        captured["job"] = job
-        return {"id": "child"}
-
-    def fake_confine(value, label, **kwargs):
-        captured["path_calls"].append((label, kwargs.get("allow_results")))
-        return str(value)
-
-    monkeypatch.setattr(ont_runs, "_authorized_barcode_unit", fake_authorized)
-    monkeypatch.setattr(ont_runs, "_create_pipeline_job", fake_create)
-    monkeypatch.setattr(ont_runs, "_confine_submitted_path", fake_confine)
-
-    await ont_runs.ont_submit_barcode_unit(
-        "source",
-        "barcode01",
-        ont_runs.OntBarcodeUnitSubmitRequest(
-            target_workflow="ont_plasmid_qc",
-            reference_fasta="/inputs/ref.fa",
-        ),
-        BackgroundTasks(),
-        _request("/api/jobs/source/barcode-units/barcode01/submit", "token"),
-        Response(),
-        object(),
-    )
-    job = captured["job"]
-    assert job.params["bam_force_realign"] is True
-    assert job.params["bam_source_sha256"] == "a" * 64
-    assert ("bam_path", True) in captured["path_calls"]
-    assert ("reference_fasta", False) in captured["path_calls"]
+async def test_barcode_submit_is_retired_and_cannot_authorize_browser_paths() -> None:
+    with pytest.raises(HTTPException) as raised:
+        await ont_runs.ont_submit_barcode_unit(
+            "source",
+            "barcode01",
+            ont_runs.OntBarcodeUnitSubmitRequest(
+                target_workflow="ont_plasmid_qc",
+                reference_fasta="/inputs/ref.fa",
+            ),
+            BackgroundTasks(),
+            _request("/api/jobs/source/barcode-units/barcode01/submit", "token"),
+            Response(),
+            object(),
+        )
+    assert raised.value.status_code == 410

@@ -185,6 +185,7 @@ def test_molbio_path_and_metadata_are_independently_owned(tmp_path: Path, monkey
         "molecular_operations",
         "molecular_operation_inputs",
         "molecular_operation_outputs",
+        "molecular_import_batches",
         "primer_revisions",
         "pcr_experiments",
         "pcr_experiment_revisions",
@@ -215,6 +216,7 @@ async def test_initialization_applies_ordered_migrations_and_sqlite_invariants(t
             "0002_append_only_guards",
             "0003_idempotency_and_soft_delete",
             "0004_sequence_parent_foreign_key",
+            "0005_authoritative_import_batches",
         ]
         async with engine.connect() as connection:
             foreign_keys = (await connection.execute(text("PRAGMA foreign_keys"))).scalar_one()
@@ -229,12 +231,12 @@ async def test_initialization_applies_ordered_migrations_and_sqlite_invariants(t
             "status": "healthy",
             "quick_check": "ok",
             "foreign_key_violations": 0,
-            "migration_count": 4,
-            "latest_migration": "0004_sequence_parent_foreign_key",
+            "migration_count": 5,
+            "latest_migration": "0005_authoritative_import_batches",
             "migrations_current": True,
             "database_schema_current": True,
             "database_schema_issue_count": 0,
-            "immutable_trigger_count": 20,
+            "immutable_trigger_count": 22,
             "immutable_triggers_current": True,
             "sequence_parent_foreign_key_current": True,
             "sequence_parent_cycle_count": 0,
@@ -293,10 +295,10 @@ async def test_api_health_aggregates_molbio_diagnostics(monkeypatch: pytest.Monk
             "status": "healthy",
             "quick_check": "ok",
             "foreign_key_violations": 0,
-            "migration_count": 4,
-            "latest_migration": "0004_sequence_parent_foreign_key",
+            "migration_count": 5,
+            "latest_migration": "0005_authoritative_import_batches",
             "migrations_current": True,
-            "immutable_trigger_count": 20,
+            "immutable_trigger_count": 22,
             "immutable_triggers_current": True,
             "sequence_parent_foreign_key_current": True,
             "sequence_parent_cycle_count": 0,
@@ -305,7 +307,7 @@ async def test_api_health_aggregates_molbio_diagnostics(monkeypatch: pytest.Monk
     monkeypatch.setattr(api_main, "molbio_health", healthy)
     payload = await api_main.health_check()
     assert payload["status"] == "healthy"
-    assert payload["molbio"]["latest_migration"] == "0004_sequence_parent_foreign_key"
+    assert payload["molbio"]["latest_migration"] == "0005_authoritative_import_batches"
 
     async def degraded():
         return {
@@ -315,7 +317,7 @@ async def test_api_health_aggregates_molbio_diagnostics(monkeypatch: pytest.Monk
             "migration_count": 3,
             "latest_migration": "0003_idempotency_and_soft_delete",
             "migrations_current": True,
-            "immutable_trigger_count": 20,
+            "immutable_trigger_count": 22,
             "immutable_triggers_current": True,
         }
 
@@ -563,7 +565,7 @@ async def test_existing_database_migration_adds_restricting_sequence_parent_fore
     try:
         await init_molbio_db(engine=engine)
         assert (await get_applied_molbio_migrations(engine=engine))[-1] == (
-            "0004_sequence_parent_foreign_key"
+            "0005_authoritative_import_batches"
         )
     finally:
         await engine.dispose()
@@ -608,7 +610,7 @@ async def test_health_rejects_counterfeit_immutable_trigger_with_matching_prefix
             )
 
         health = await molbio_health(engine=engine)
-        assert health["immutable_trigger_count"] == 20
+        assert health["immutable_trigger_count"] == 22
         assert health["immutable_triggers_current"] is False
         assert health["status"] == "degraded"
     finally:
@@ -637,7 +639,7 @@ async def test_health_rejects_same_name_noop_immutable_trigger(tmp_path: Path) -
             )
 
         health = await molbio_health(engine=engine)
-        assert health["immutable_trigger_count"] == 20
+        assert health["immutable_trigger_count"] == 22
         assert health["immutable_triggers_current"] is False
         assert health["status"] == "degraded"
     finally:

@@ -38,6 +38,9 @@ def test_migration_versions_are_unique_with_md_before_ont() -> None:
         (20, "add_ont_terminal_artifact_manifests"),
         (21, "enforce_ont_terminal_artifact_manifest_immutability"),
         (22, "relax_shape_geometry_hash_uniqueness"),
+        (23, "add_frustrampnn_persistence"),
+        (24, "add_ngs_reference_sets"),
+        (25, "add_pooled_ont_reference_assignment"),
     ]
     assert len({migration.version for migration in MIGRATIONS}) == len(MIGRATIONS)
 
@@ -64,19 +67,21 @@ def test_legacy_ont_17_to_20_ledger_is_transactionally_shifted_with_md_17() -> N
     ]
 
 
-def test_full_runner_upgrades_complete_legacy_ont_history_to_canonical_v21(tmp_path) -> None:
+def test_full_runner_upgrades_complete_legacy_ont_history_to_canonical_v21(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "legacy-ont.db"
     connection = sqlite3.connect(db_path)
     _ensure_migrations_table(connection)
     _insert_rows(connection, _canonical_prefix_through_16() + LEGACY_ONT_ROWS)
     connection.close()
 
+    migrations_through_v21 = [migration for migration in MIGRATIONS if migration.version <= 21]
+    monkeypatch.setattr(runner, "MIGRATIONS", migrations_through_v21)
     runner.run_all(str(db_path))
 
     connection = sqlite3.connect(db_path)
     assert connection.execute(
         "SELECT version, name FROM schema_migrations ORDER BY version"
-    ).fetchall() == [(migration.version, migration.name) for migration in MIGRATIONS]
+    ).fetchall() == [(migration.version, migration.name) for migration in migrations_through_v21]
     assert connection.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'md_runs'"
     ).fetchone() == (1,)
@@ -142,22 +147,32 @@ def test_runner_fails_closed_when_applied_version_has_wrong_name(tmp_path) -> No
 
 
 @pytest.mark.parametrize(
-    "applied",
+    ("applied", "message"),
     [
-        {23: "unrelated_migration"},
-        {21: "enforce_ont_terminal_artifact_manifest_immutability"},
+        ({24: "unrelated_migration"}, "expected 'add_ngs_reference_sets'"),
+        ({25: "unrelated_migration"}, "expected 'add_pooled_ont_reference_assignment'"),
+        ({21: "enforce_ont_terminal_artifact_manifest_immutability"}, "contiguous exact prefix"),
     ],
 )
-def test_migration_ledger_must_be_an_exact_contiguous_known_prefix(applied: dict[int, str]) -> None:
-    with pytest.raises(RuntimeError, match="contiguous exact prefix"):
+def test_migration_ledger_must_be_an_exact_contiguous_known_prefix(
+    applied: dict[int, str], message: str
+) -> None:
+    with pytest.raises(RuntimeError, match=message):
         runner._validate_applied_migration_identities(applied)
 
 
-def test_v21_shape_schema_is_rebuilt_for_provenance_distinct_canonical_geometry(tmp_path) -> None:
+def test_v21_shape_schema_is_rebuilt_for_provenance_distinct_canonical_geometry(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "shape-v21.db"
     connection = sqlite3.connect(db_path)
     _ensure_migrations_table(connection)
-    _insert_rows(connection, tuple((migration.version, migration.name) for migration in MIGRATIONS[:-1]))
+    _insert_rows(
+        connection,
+        tuple(
+            (migration.version, migration.name)
+            for migration in MIGRATIONS
+            if migration.version < 22
+        ),
+    )
     connection.executescript(
         """
         PRAGMA foreign_keys = ON;
@@ -205,6 +220,11 @@ def test_v21_shape_schema_is_rebuilt_for_provenance_distinct_canonical_geometry(
     connection.commit()
     connection.close()
 
+    monkeypatch.setattr(
+        runner,
+        "MIGRATIONS",
+        [migration for migration in MIGRATIONS if migration.version <= 22],
+    )
     runner.run_all(str(db_path))
 
     connection = sqlite3.connect(db_path)

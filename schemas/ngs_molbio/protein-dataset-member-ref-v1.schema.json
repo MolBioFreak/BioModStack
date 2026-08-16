@@ -1,0 +1,22 @@
+{
+  "$id": "bms.protein-dataset-member-ref.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "dataset_revision_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "member_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "dataset_revision_id",
+    "member_id"
+  ],
+  "type": "object"
+}

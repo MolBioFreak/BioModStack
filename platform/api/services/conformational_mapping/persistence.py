@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import mimetypes
+import os
 import secrets
+import stat
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
 from typing import Any, Mapping
 
 from sqlalchemy import delete, or_, select
@@ -21,7 +24,14 @@ from database import (
     ConformationalMappingStateLandscapeAnalysisHeader,
     ConformationalMappingStateLandscapeAnalysisPair,
     ConformationalMappingStateLandscapeAnalysisRow,
+    FrustraMPNNResult,
+    FrustraMPNNLandscapeRow,
     Job,
+)
+from services.frustrampnn.contracts import validate_schema as validate_frustrampnn_schema
+from services.frustrampnn.settings import (
+    requested_settings_sha256,
+    validate_persisted_requested_settings,
 )
 
 from .contracts import (
@@ -31,6 +41,7 @@ from .contracts import (
     validate_contract_bundle,
     validate_schema,
 )
+from .frustrampnn_adapter import bind_cm_candidate_snapshot_bytes
 from .state_landscape_analysis import (
     MAX_STATE_LANDSCAPE_COMPARISON_ROWS,
     StateLandscapeAnalysisError,
@@ -53,7 +64,7 @@ _RECORD_TYPES = frozenset(
     {
         "ensemble", "native_manifest", "structure_map", "landscape", "analysis",
         "state_landscape_analysis", "handoff", "resampling", "lineage", "support", "missingness",
-        "failure_receipt",
+        "frustrampnn_result_references", "failure_receipt",
     }
 )
 
@@ -247,15 +258,128 @@ async def terminalize_failed_request_for_job(
     return True
 
 
+async def terminalize_cancelled_request_for_job(
+    session: AsyncSession,
+    *,
+    job_id: str,
+) -> bool:
+    """Bind a cancelled CM job to its still-active request."""
+
+    job = await session.get(Job, job_id)
+    if (
+        job is None
+        or job.stage_family != "conformational_mapping"
+        or job.status != "cancelled"
+    ):
+        return False
+    record = (
+        await session.execute(
+            select(ConformationalMappingRequest).where(
+                ConformationalMappingRequest.job_id == job_id,
+                ConformationalMappingRequest.status.in_(("prepared", "queued", "running")),
+            )
+        )
+    ).scalar_one_or_none()
+    if record is None:
+        return False
+    await transition_request(
+        session,
+        record,
+        status="cancelled",
+        progress={"phase": "cancelled"},
+        flush=False,
+    )
+    return True
+
+
 def _contained_file(root: Path, relative_path: str) -> Path:
     pure = PurePosixPath(relative_path)
     if pure.is_absolute() or str(pure) != relative_path or any(part in {"", ".", ".."} for part in pure.parts) or "\\" in relative_path:
         raise ConformationalPersistenceError("manifest contains an unsafe relative path")
-    candidate = (root / relative_path).resolve(strict=True)
+    candidate = root / Path(*pure.parts)
     candidate.relative_to(root)
-    if not candidate.is_file() or candidate.is_symlink():
+    current = root
+    for part in pure.parts:
+        current = current / part
+        try:
+            info = os.lstat(current)
+        except OSError as exc:
+            raise ConformationalPersistenceError("manifest artifact is unavailable") from exc
+        if stat.S_ISLNK(info.st_mode):
+            raise ConformationalPersistenceError("manifest artifact path contains a symlink")
+    if not stat.S_ISREG(os.lstat(candidate).st_mode):
         raise ConformationalPersistenceError("manifest artifact is not a safe regular file")
     return candidate
+
+
+def _open_pinned_file(path: Path) -> tuple[int, int, str, os.stat_result, os.stat_result]:
+    absolute = Path(os.path.abspath(path))
+    parts = absolute.parts
+    if len(parts) < 2 or parts[0] != os.sep:
+        raise ConformationalPersistenceError("artifact path is not absolute")
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    parent_fd = os.open(os.sep, directory_flags)
+    file_fd: int | None = None
+    try:
+        for component in parts[1:-1]:
+            next_fd = os.open(component, directory_flags, dir_fd=parent_fd)
+            os.close(parent_fd)
+            parent_fd = next_fd
+        leaf = parts[-1]
+        file_fd = os.open(
+            leaf,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent_fd,
+        )
+        opened = os.fstat(file_fd)
+        path_before = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+        return file_fd, parent_fd, leaf, opened, path_before
+    except Exception:
+        if file_fd is not None:
+            os.close(file_fd)
+        os.close(parent_fd)
+        raise
+
+
+def _same_file_identity(left: os.stat_result, right: os.stat_result) -> bool:
+    return all(
+        getattr(left, field) == getattr(right, field)
+        for field in ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns", "st_ctime_ns")
+    )
+
+
+def _stable_file_measurement(
+    path: Path, *, capture_bytes: bool = False,
+) -> tuple[str, int, bytes | None]:
+    try:
+        file_fd, parent_fd, leaf, before, path_before = _open_pinned_file(path)
+    except OSError as exc:
+        raise ConformationalPersistenceError(f"artifact is unavailable: {path}") from exc
+    try:
+        if not stat.S_ISREG(before.st_mode):
+            raise ConformationalPersistenceError("artifact is not a regular file")
+        digest = hashlib.sha256()
+        size = 0
+        captured = bytearray() if capture_bytes else None
+        while True:
+            chunk = os.read(file_fd, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+            size += len(chunk)
+            if captured is not None:
+                captured.extend(chunk)
+        after = os.fstat(file_fd)
+        path_after = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+        visible_after = os.lstat(path)
+        if not _same_file_identity(before, after) or not _same_file_identity(path_before, path_after) or not _same_file_identity(before, visible_after):
+            raise ConformationalPersistenceError("artifact path or bytes changed during verification")
+        if size != before.st_size:
+            raise ConformationalPersistenceError("artifact size changed during verification")
+        return digest.hexdigest(), size, bytes(captured) if captured is not None else None
+    finally:
+        os.close(file_fd)
+        os.close(parent_fd)
 
 
 async def _replace_record(
@@ -489,18 +613,28 @@ async def ingest_result_bundle(
             if key in {"cm_request_v1", "cm_complex_snapshot_v1", "cm_native_artifacts_v1",
                        "cm_ensemble_v1", "cm_structure_map_v1",
                        "cm_frustration_landscape_v1", "cm_analysis_v1",
-                       "cm_mutagenesis_handoff_v1"}
+                       "cm_mutagenesis_handoff_v1", "cm_runtime_image_receipt_v1",
+                       "cm_protenix_execution_snapshot_v1", "cm_protenix_runtime_attestation_v1"}
         }
         allowed_extensions = {
             "cm_structure_maps", "cm_frustration_landscapes", "cm_mutagenesis_handoffs",
             "cm_resampling_v1", "cm_lineage", "cm_support", "cm_missingness",
             "cm_state_landscape_analyses", "cm_derived_files",
+            "cm_frustrampnn_result_references", "frustrampnn_structure_maps",
+            "frustrampnn_landscapes", "cm_complex_snapshots",
         }
         unknown = set(bundle) - set(core_bundle) - allowed_extensions
         if unknown:
             raise ConformationalPersistenceError(
                 f"unknown canonical result bundle members: {sorted(unknown)}"
             )
+        requested_state_analysis = "state_landscape_comparison" in record.request_json
+        state_analysis_value = bundle.get("cm_state_landscape_analyses")
+        if requested_state_analysis and (
+            state_analysis_value is None
+            or (isinstance(state_analysis_value, list) and not state_analysis_value)
+        ):
+            raise ConformationalPersistenceError("requested state landscape analysis is missing")
         validate_contract_bundle(core_bundle)
     except (ContractValidationError, KeyError, TypeError) as exc:
         raise ConformationalPersistenceError(str(exc)) from exc
@@ -523,6 +657,13 @@ async def ingest_result_bundle(
         raise ConformationalPersistenceError("result coordinates do not equal stored request authority")
     if ensemble["native_manifest_path"] != "cm_native_artifacts_v1.json":
         raise ConformationalPersistenceError("native manifest path is not canonical")
+    if record.backend == "protenix_v2_ensemble":
+        runtime_attestations = [
+            item for item in native["files"]
+            if item.get("candidate_id") is None and item.get("semantic_role") == "runtime_attestation"
+        ]
+        if len(runtime_attestations) != 1 or ensemble.get("runtime_attestation_sha256") != runtime_attestations[0]["sha256"]:
+            raise ConformationalPersistenceError("Protenix runtime attestation is not bound to the ensemble")
     descriptor = ensemble.get("resume_descriptor")
     if ensemble.get("resumable") is True and ensemble.get("resume_key") == "0" * 64:
         raise ConformationalPersistenceError("resumable canonical result has no immutable resume identity")
@@ -535,7 +676,59 @@ async def ingest_result_bundle(
         resume_key_to_persist = ensemble["resume_key"]
     elif ensemble["resume_key"] != record.resume_key:
         raise ConformationalPersistenceError("result bundle resume identity mismatch")
-    root = Path(result_root).resolve(strict=True)
+    global_references = bundle.get("cm_frustrampnn_result_references")
+    canonical_global_mode = global_references is not None
+    expected_settings_sha256: str | None = None
+    expected_snapshot_by_candidate: dict[str, str] = {}
+    candidate_snapshot_bindings_by_path: dict[
+        str, list[tuple[str, Mapping[str, Any]]]
+    ] = {}
+    if canonical_global_mode:
+        snapshots = bundle.get("cm_complex_snapshots")
+        if not isinstance(snapshots, list) or not snapshots:
+            raise ConformationalPersistenceError("canonical CM snapshot authority is missing")
+        snapshot_by_target: dict[str, Mapping[str, Any]] = {}
+        try:
+            for snapshot in snapshots:
+                if not isinstance(snapshot, Mapping):
+                    raise TypeError("CM snapshot is not an object")
+                validate_schema("cm_complex_snapshot_v1", snapshot)
+                target_id = str(snapshot["target_id"])
+                if target_id in snapshot_by_target:
+                    raise ValueError("duplicate CM snapshot target")
+                snapshot_by_target[target_id] = snapshot
+            expected_settings_sha256 = requested_settings_sha256(
+                validate_persisted_requested_settings(
+                    record.request_json.get("frustrampnn_settings")
+                )
+            )
+        except Exception as exc:
+            raise ConformationalPersistenceError(
+                "persisted CM FrustraMPNN settings or snapshot authority is invalid"
+            ) from exc
+        for candidate in ensemble["candidates"]:
+            coordinates = candidate.get("backend_coordinates")
+            target_id = (
+                str(coordinates.get("target_id") or "")
+                if isinstance(coordinates, Mapping) else ""
+            )
+            snapshot = snapshot_by_target.get(target_id)
+            if snapshot is None:
+                raise ConformationalPersistenceError(
+                    "CM candidate has no persisted snapshot authority"
+                )
+            relative_source = str(candidate.get("authoritative_structure_path") or "")
+            candidate_snapshot_bindings_by_path.setdefault(relative_source, []).append(
+                (str(candidate["candidate_id"]), snapshot)
+            )
+    root_input = Path(result_root)
+    try:
+        root_info = os.lstat(root_input)
+    except OSError as exc:
+        raise ConformationalPersistenceError("result root is unavailable") from exc
+    if stat.S_ISLNK(root_info.st_mode) or not stat.S_ISDIR(root_info.st_mode):
+        raise ConformationalPersistenceError("result root is not a real directory")
+    root = root_input.resolve(strict=True)
     verified_artifacts: list[tuple[Mapping[str, Any], Path]] = []
     seen_paths: set[str] = set()
     for item in native["files"]:
@@ -544,9 +737,32 @@ async def ingest_result_bundle(
             raise ConformationalPersistenceError("native manifest contains a duplicate path")
         seen_paths.add(relative_path)
         path = _contained_file(root, relative_path)
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        if digest != item["sha256"] or path.stat().st_size != item["bytes"]:
+        digest, byte_count, captured_bytes = _stable_file_measurement(
+            path, capture_bytes=relative_path in candidate_snapshot_bindings_by_path
+        )
+        if digest != item["sha256"] or byte_count != item["bytes"]:
             raise ConformationalPersistenceError("native artifact hash or size mismatch")
+        if relative_path in candidate_snapshot_bindings_by_path:
+            if captured_bytes is None:
+                raise ConformationalPersistenceError(
+                    "authoritative candidate bytes were not captured during verification"
+                )
+            for candidate_id, snapshot in candidate_snapshot_bindings_by_path[relative_path]:
+                try:
+                    bound_snapshot = bind_cm_candidate_snapshot_bytes(
+                        snapshot,
+                        candidate_id=candidate_id,
+                        source_bytes=captured_bytes,
+                        source_suffix=Path(relative_path).suffix,
+                        source_relative_path=relative_path,
+                    )
+                except Exception as exc:
+                    raise ConformationalPersistenceError(
+                        "CM candidate snapshot authority cannot be reconstructed"
+                    ) from exc
+                expected_snapshot_by_candidate[candidate_id] = canonical_sha256(
+                    bound_snapshot
+                )
         verified_artifacts.append((item, path))
     for item in bundle.get("cm_derived_files", []):
         if not isinstance(item, Mapping):
@@ -556,8 +772,8 @@ async def ingest_result_bundle(
             raise ConformationalPersistenceError("derived artifact duplicates a native path")
         seen_paths.add(relative_path)
         path = _contained_file(root, relative_path)
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        if digest != item.get("sha256") or path.stat().st_size != item.get("bytes"):
+        digest, byte_count, _captured_bytes = _stable_file_measurement(path)
+        if digest != item.get("sha256") or byte_count != item.get("bytes"):
             raise ConformationalPersistenceError("derived artifact hash or size mismatch")
         verified_artifacts.append((item, path))
 
@@ -566,6 +782,7 @@ async def ingest_result_bundle(
         "cm_analysis_v1": "analysis", "cm_state_landscape_analyses": "state_landscape_analysis",
         "cm_mutagenesis_handoffs": "handoff", "cm_resampling_v1": "resampling", "cm_lineage": "lineage",
         "cm_support": "support", "cm_missingness": "missingness",
+        "cm_frustrampnn_result_references": "frustrampnn_result_references",
     }
     optional_schema = {
         "structure_map": "cm_structure_map_v1",
@@ -575,18 +792,111 @@ async def ingest_result_bundle(
         "handoff": "cm_mutagenesis_handoff_v1",
     }
     ensemble_candidate_ids = {item["candidate_id"] for item in ensemble["candidates"]}
+    if canonical_global_mode:
+        if bundle.get("cm_structure_maps") is not None or bundle.get("cm_frustration_landscapes") is not None:
+            raise ConformationalPersistenceError(
+                "canonical global FrustraMPNN results cannot coexist with legacy CM landscapes"
+            )
+        structure_maps = bundle.get("frustrampnn_structure_maps") or []
+        landscapes = bundle.get("frustrampnn_landscapes") or []
+        try:
+            for value in structure_maps:
+                validate_frustrampnn_schema("frustrampnn_structure_map_v1", value)
+            for value in landscapes:
+                validate_frustrampnn_schema("frustrampnn_landscape_v2", value)
+        except Exception as exc:
+            raise ConformationalPersistenceError(
+                "canonical global FrustraMPNN result payload is invalid"
+            ) from exc
+    else:
+        if bundle.get("frustrampnn_structure_maps") is not None or bundle.get("frustrampnn_landscapes") is not None:
+            raise ConformationalPersistenceError(
+                "global FrustraMPNN payloads require canonical result references"
+            )
+        structure_maps = bundle.get("cm_structure_maps") or []
+        landscapes = bundle.get("cm_frustration_landscapes") or []
     structure_map_ids = {
-        str(value.get("candidate_id")) for value in bundle.get("cm_structure_maps", [])
+        str(value.get("candidate_id")) for value in structure_maps
         if isinstance(value, Mapping)
     }
     landscape_ids = {
-        str(value.get("candidate_id")) for value in bundle.get("cm_frustration_landscapes", [])
+        str(value.get("candidate_id")) for value in landscapes
         if isinstance(value, Mapping)
     }
     if structure_map_ids != ensemble_candidate_ids or landscape_ids != ensemble_candidate_ids:
         raise ConformationalPersistenceError(
             "derived structure-map and landscape candidate sets must exactly equal the ensemble"
         )
+    if canonical_global_mode:
+        if not isinstance(global_references, Mapping) or set(global_references) != {
+            "schema_name", "schema_version", "parent_job_id", "parent_workflow_id",
+            "expected_cardinality", "results",
+        }:
+            raise ConformationalPersistenceError("canonical FrustraMPNN result references are malformed")
+        reference_rows = global_references.get("results")
+        if (
+            global_references.get("schema_name") != "cm_frustrampnn_result_references"
+            or global_references.get("schema_version") != 1
+            or global_references.get("parent_job_id") != record.job_id
+            or global_references.get("parent_workflow_id") != "conformational_mapping"
+            or global_references.get("expected_cardinality") != len(ensemble_candidate_ids)
+            or not isinstance(reference_rows, list)
+            or len(reference_rows) != len(ensemble_candidate_ids)
+        ):
+            raise ConformationalPersistenceError("canonical FrustraMPNN result references are unbound")
+        expected_reference_keys = {
+            "candidate_id", "invocation_id", "source_sha256", "cm_complex_snapshot_sha256",
+            "requested_settings_sha256", "effective_settings_sha256", "bundle_relative_path",
+            "result_manifest_sha256", "landscape_sha256", "structure_map_sha256",
+        }
+        references_by_candidate: dict[str, Mapping[str, Any]] = {}
+        for reference in reference_rows:
+            if not isinstance(reference, Mapping) or set(reference) != expected_reference_keys:
+                raise ConformationalPersistenceError("canonical FrustraMPNN result reference is malformed")
+            candidate_id = str(reference["candidate_id"])
+            if candidate_id in references_by_candidate:
+                raise ConformationalPersistenceError("canonical FrustraMPNN result reference is duplicated")
+            if (
+                reference["requested_settings_sha256"] != expected_settings_sha256
+                or reference["cm_complex_snapshot_sha256"]
+                != expected_snapshot_by_candidate.get(candidate_id)
+            ):
+                raise ConformationalPersistenceError(
+                    "canonical FrustraMPNN result reference crosses CM settings or snapshot authority"
+                )
+            references_by_candidate[candidate_id] = reference
+        if set(references_by_candidate) != ensemble_candidate_ids:
+            raise ConformationalPersistenceError(
+                "canonical FrustraMPNN result references do not cover the ensemble"
+            )
+        persisted_results = list((await session.execute(
+            select(FrustraMPNNResult).where(
+                FrustraMPNNResult.parent_job_id == record.job_id
+            )
+        )).scalars().all())
+        persisted_by_candidate = {value.candidate_id: value for value in persisted_results}
+        if (
+            len(persisted_results) != len(ensemble_candidate_ids)
+            or len(persisted_by_candidate) != len(persisted_results)
+            or set(persisted_by_candidate) != ensemble_candidate_ids
+        ):
+            raise ConformationalPersistenceError(
+                "required canonical FrustraMPNN results are not persisted"
+            )
+        for candidate_id, reference in references_by_candidate.items():
+            persisted = persisted_by_candidate[candidate_id]
+            if (
+                persisted.parent_workflow_id != "conformational_mapping"
+                or persisted.requiredness != "required"
+                or persisted.invocation_id != reference["invocation_id"]
+                or persisted.source_artifact_sha256 != reference["source_sha256"]
+                or persisted.settings_sha256 != reference["requested_settings_sha256"]
+                or persisted.effective_settings_sha256 != reference["effective_settings_sha256"]
+                or persisted.manifest_sha256 != reference["result_manifest_sha256"]
+            ):
+                raise ConformationalPersistenceError(
+                    "persisted canonical FrustraMPNN result does not match CM reference"
+                )
     if not isinstance(bundle.get("cm_analysis_v1"), Mapping):
         raise ConformationalPersistenceError("canonical analysis authority is missing")
     state_analysis_value = bundle.get("cm_state_landscape_analyses")
@@ -615,8 +925,8 @@ async def ingest_result_bundle(
             validate_state_landscape_analysis_binding(
                 record.request_json,
                 ensemble,
-                bundle.get("cm_frustration_landscapes") or [],
-                bundle.get("cm_structure_maps") or [],
+                landscapes,
+                structure_maps,
                 proposed_state_analysis,
             )
         except (ContractValidationError, StateLandscapeAnalysisError, KeyError, TypeError) as exc:
@@ -919,9 +1229,94 @@ async def paged_landscape(
     sequence_end: int | None = None,
     offset: int = 0,
     limit: int = 200,
-) -> list[ConformationalMappingLandscapeRow]:
+) -> list[Any]:
     if offset < 0 or limit < 1 or limit > 1000:
         raise ConformationalPersistenceError("invalid landscape page")
+    if sequence_start is not None and sequence_start < 1:
+        raise ConformationalPersistenceError("invalid landscape sequence range")
+    if sequence_end is not None and (
+        sequence_end < 1 or (sequence_start is not None and sequence_end < sequence_start)
+    ):
+        raise ConformationalPersistenceError("invalid landscape sequence range")
+
+    request_record = await session.get(ConformationalMappingRequest, request_id)
+    canonical_reference = await session.scalar(
+        select(ConformationalMappingRecord).where(
+            ConformationalMappingRecord.request_id == request_id,
+            ConformationalMappingRecord.record_type == "frustrampnn_result_references",
+        )
+    )
+    if request_record is not None and canonical_reference is not None:
+        reference_payload = canonical_reference.payload_json
+        reference_rows = reference_payload.get("results") if isinstance(reference_payload, Mapping) else None
+        if not isinstance(reference_rows, list) or not reference_rows:
+            raise ConformationalPersistenceError(
+                "canonical FrustraMPNN landscape references are malformed"
+            )
+        invocation_ids = {
+            str(reference.get("invocation_id") or "")
+            for reference in reference_rows
+            if isinstance(reference, Mapping)
+        }
+        if "" in invocation_ids or len(invocation_ids) != len(reference_rows):
+            raise ConformationalPersistenceError(
+                "canonical FrustraMPNN landscape references are ambiguous"
+            )
+        global_statement = (
+            select(FrustraMPNNLandscapeRow, FrustraMPNNResult.candidate_id)
+            .join(
+                FrustraMPNNResult,
+                (FrustraMPNNResult.parent_job_id == FrustraMPNNLandscapeRow.parent_job_id)
+                & (FrustraMPNNResult.invocation_id == FrustraMPNNLandscapeRow.invocation_id),
+            )
+            .where(
+                FrustraMPNNLandscapeRow.parent_job_id == request_record.job_id,
+                FrustraMPNNLandscapeRow.invocation_id.in_(invocation_ids),
+            )
+        )
+        if candidate_id:
+            global_statement = global_statement.where(FrustraMPNNResult.candidate_id == candidate_id)
+        if entity_instance_id:
+            global_statement = global_statement.where(
+                FrustraMPNNLandscapeRow.entity_instance_id == entity_instance_id
+            )
+        if sequence_start is not None:
+            global_statement = global_statement.where(
+                FrustraMPNNLandscapeRow.sequence_index >= sequence_start
+            )
+        if sequence_end is not None:
+            global_statement = global_statement.where(
+                FrustraMPNNLandscapeRow.sequence_index <= sequence_end
+            )
+        result_rows = (await session.execute(
+            global_statement.order_by(
+                FrustraMPNNResult.candidate_id,
+                FrustraMPNNLandscapeRow.entity_instance_id,
+                FrustraMPNNLandscapeRow.sequence_index,
+                FrustraMPNNLandscapeRow.mutation_aa,
+            ).offset(offset).limit(limit)
+        )).all()
+        return [
+            SimpleNamespace(
+                id=row.id,
+                candidate_id=canonical_candidate_id,
+                entity_instance_id=row.entity_instance_id,
+                auth_asym_id=row.auth_asym_id,
+                auth_seq_id=row.auth_seq_id,
+                insertion_code=row.insertion_code,
+                sequence_index=row.sequence_index,
+                wt=row.wt,
+                mutation_aa=row.mutation_aa,
+                score=row.score,
+                score_class=row.score_class,
+                scoreable=row.scoreable,
+                status=row.status,
+                reason=row.reason,
+                provenance_json=row.provenance_json,
+            )
+            for row, canonical_candidate_id in result_rows
+        ]
+
     statement = select(ConformationalMappingLandscapeRow).where(
         ConformationalMappingLandscapeRow.request_id == request_id
     )
@@ -932,12 +1327,8 @@ async def paged_landscape(
             ConformationalMappingLandscapeRow.entity_instance_id == entity_instance_id
         )
     if sequence_start is not None:
-        if sequence_start < 1:
-            raise ConformationalPersistenceError("invalid landscape sequence range")
         statement = statement.where(ConformationalMappingLandscapeRow.sequence_index >= sequence_start)
     if sequence_end is not None:
-        if sequence_end < 1 or (sequence_start is not None and sequence_end < sequence_start):
-            raise ConformationalPersistenceError("invalid landscape sequence range")
         statement = statement.where(ConformationalMappingLandscapeRow.sequence_index <= sequence_end)
     statement = statement.order_by(
         ConformationalMappingLandscapeRow.candidate_id,

@@ -1,0 +1,292 @@
+id: protein_local_redesign
+name: RFD3 Local Redesign
+version: "1.0.0"
+category: generative_design
+description: >
+  First-class structure-conditioned local redesign using native RFdiffusion3
+  selections, explicit sequence-design omission, and typed result provenance.
+container: foundry.sif
+
+ui_icon: microscope
+ui_color: "#0EA5E9"
+
+inputs:
+  - pdb
+  - cif
+  - json
+outputs:
+  - cif
+  - pdb
+  - json
+
+modes:
+  - id: local_redesign
+    name: Local Redesign
+    description: Explore a selected local region while leaving sequence design unrequested.
+    params:
+      - input_structure
+      - redesign_mode
+      - design_chains
+      - context_chains
+      - redesign_ranges
+      - sequence_policy
+      - insertion_anchor
+      - insertion_min_length
+      - insertion_max_length
+      - partial_t
+      - ligand
+      - select_hbond_donor
+      - select_hbond_acceptor
+      - select_hotspots
+      - num_designs
+      - seed
+      - dump_trajectories
+      - profile_id
+
+params:
+  - name: input_structure
+    type: file
+    description: Source PDB or mmCIF containing the retained scaffold and molecular context.
+    required: true
+    file_type: pdb
+    preset_type: pdb
+    ui_group: Source structure
+    ui_order: 1
+  - name: redesign_mode
+    type: string
+    description: Native RFD3 local-redesign behavior.
+    required: true
+    default: partial_diffusion
+    enum: [partial_diffusion, minimal_insertion]
+    ui_group: RFD3 redesign
+    ui_order: 10
+  - name: select_fixed_atoms
+    type: object
+    description: Optional atom-level overrides within the partial-diffusion editable region. The backend derives the complete preserved-scaffold map from the bound source structure.
+    required: false
+    ui_group: RFD3 redesign
+    ui_order: 11
+  - name: contig
+    type: string
+    description: Dialect-2 contig for minimal insertion mode.
+    required: false
+    ui_group: RFD3 redesign
+    ui_order: 12
+  - name: design_chains
+    type: object
+    description: Source chain identifiers that contain the editable region.
+    required: false
+    ui_group: RFD3 redesign
+    ui_order: 17
+  - name: context_chains
+    type: object
+    description: Source chain identifiers retained as fixed molecular context.
+    required: false
+    ui_group: RFD3 redesign
+    ui_order: 18
+  - name: redesign_ranges
+    type: string
+    description: Explicit editable residue ranges for partial diffusion.
+    required: false
+    ui_group: RFD3 redesign
+    ui_order: 19
+  - name: sequence_policy
+    type: string
+    description: Sequence handling for native RFD3 local redesign.
+    required: false
+    default: skip
+    enum: [skip]
+    ui_group: Sequence policy
+    ui_order: 20
+  - name: insertion_anchor
+    type: string
+    description: Source residue immediately before the inserted segment.
+    required: false
+    ui_group: RFD3 redesign
+    ui_order: 21
+  - name: insertion_min_length
+    type: integer
+    description: Minimum inserted segment length.
+    required: false
+    minimum: 1
+    ui_group: RFD3 redesign
+    ui_order: 22
+  - name: insertion_max_length
+    type: integer
+    description: Maximum inserted segment length.
+    required: false
+    minimum: 1
+    ui_group: RFD3 redesign
+    ui_order: 23
+  - name: partial_t
+    type: float
+    description: Coordinate-noise magnitude for partial diffusion.
+    required: false
+    default: 2.0
+    minimum: 0.0
+    maximum: 1.0e6
+    ui_group: RFD3 redesign
+    ui_order: 13
+  - name: ligand
+    type: string
+    description: CCD or component identifiers retained as RFD3 ligand context.
+    required: false
+    ui_group: Molecular context
+    ui_order: 30
+  - name: select_buried
+    type: object
+    description: Atoms or residues that should be buried.
+    required: false
+    ui_group: Molecular context
+    ui_order: 31
+  - name: select_exposed
+    type: object
+    description: Atoms or residues that should remain exposed.
+    required: false
+    ui_group: Molecular context
+    ui_order: 32
+  - name: select_partially_buried
+    type: object
+    description: Atoms or residues that should be partially buried.
+    required: false
+    ui_group: Molecular context
+    ui_order: 33
+  - name: select_hbond_donor
+    type: object
+    description: Typed donor interaction targets.
+    required: false
+    ui_group: Molecular context
+    ui_order: 34
+  - name: select_hbond_acceptor
+    type: object
+    description: Typed acceptor interaction targets.
+    required: false
+    ui_group: Molecular context
+    ui_order: 35
+  - name: select_hotspots
+    type: object
+    description: Typed hotspot residue or atom targets.
+    required: false
+    ui_group: Molecular context
+    ui_order: 36
+  - name: ori_token
+    type: string
+    description: Optional approximate center for generated material.
+    required: false
+    ui_group: RFD3 redesign
+    ui_order: 14
+  - name: unindex
+    type: string
+    description: Optional motif geometry selections that may move in final indexing.
+    required: false
+    ui_group: RFD3 redesign
+    ui_order: 15
+  - name: length
+    type: object
+    description: Optional generated-system length or range.
+    required: false
+    ui_group: RFD3 redesign
+    ui_order: 16
+  - name: num_designs
+    type: integer
+    description: Number of RFD3 candidates.
+    required: false
+    default: 8
+    minimum: 1
+    maximum: 512
+    ui_group: Execution
+    ui_order: 40
+  - name: seed
+    type: integer
+    description: Optional effective RFD3 seed.
+    required: false
+    minimum: 0
+    ui_group: Execution
+    ui_order: 41
+  - name: dump_trajectories
+    type: boolean
+    description: Retain native noisy and denoised trajectory artifacts.
+    required: false
+    default: false
+    ui_group: Execution
+    ui_order: 42
+  - name: write_full_json
+    type: boolean
+    description: Retain the complete native RFD3 prediction metadata JSON.
+    required: false
+    default: true
+    ui_group: Execution
+    ui_order: 43
+  - name: evaluation_states
+    type: object
+    description: Positive and negative typed acceptance states for downstream evaluation.
+    required: false
+    ui_group: Acceptance
+    ui_order: 50
+  - name: profile_id
+    type: string
+    description: Profile governing protected context and acceptance semantics.
+    required: false
+    default: generic_local_redesign_v1
+    enum: [generic_local_redesign_v1, drt4_datp_gate_v1]
+    ui_group: Acceptance
+    ui_order: 51
+  - name: plr_design_chains
+    type: string
+    description: Compatibility field for resolved region manifests.
+    required: false
+    ui_group: Compatibility
+    ui_order: 60
+  - name: plr_context_chains
+    type: string
+    description: Compatibility field for retained context chains.
+    required: false
+    ui_group: Compatibility
+    ui_order: 61
+  - name: plr_region_mode
+    type: string
+    description: Compatibility region resolver mode.
+    required: false
+    default: manual_ranges
+    enum: [manual_ranges, interface_shell]
+    ui_group: Compatibility
+    ui_order: 62
+  - name: plr_redesign_ranges
+    type: string
+    description: Compatibility region ranges used to build an auditable manifest.
+    required: false
+    ui_group: Compatibility
+    ui_order: 63
+  - name: plr_interface_cutoff
+    type: float
+    description: Compatibility interface-shell distance cutoff.
+    required: false
+    default: 6.0
+    minimum: 1.0
+    maximum: 20.0
+    ui_group: Compatibility
+    ui_order: 64
+  - name: plr_region_padding
+    type: integer
+    description: Compatibility residue padding around interface selections.
+    required: false
+    default: 2
+    minimum: 0
+    maximum: 50
+    ui_group: Compatibility
+    ui_order: 65
+  - name: plr_seq_method
+    type: string
+    description: Downstream sequence engine after backbone generation.
+    required: false
+    default: skip
+    enum: [skip, fampnn, mpnn]
+    ui_group: Downstream stages
+    ui_order: 70
+  - name: plr_run_boltz_validation
+    type: boolean
+    description: Run downstream structure validation after sequence design.
+    required: false
+    default: false
+    ui_group: Downstream stages
+    ui_order: 71

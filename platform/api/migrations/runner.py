@@ -39,6 +39,20 @@ from migrations.relax_shape_geometry_hash_uniqueness import (
 )
 from migrations.sqlite_sha256 import register_sqlite_sha256
 from migrations.add_frustrampnn_persistence import migrate as migrate_frustrampnn_persistence
+from migrations.add_ngs_reference_sets import migrate as migrate_ngs_reference_sets
+from migrations.add_pooled_ont_reference_assignment import migrate as migrate_pooled_ont_reference_assignment
+from migrations.add_frustrampnn_statistics import migrate as migrate_frustrampnn_statistics
+from migrations.add_frustrampnn_reviews import migrate as migrate_frustrampnn_reviews
+from migrations.add_ont_raw_signal_ledger import migrate as migrate_ont_raw_signal_ledger
+from migrations.add_ont_external_registration_identity import (
+    migrate as migrate_ont_external_registration_identity,
+)
+from migrations.enforce_ont_external_registration_immutability import (
+    migrate as migrate_ont_external_registration_immutability,
+)
+from migrations.seal_ont_external_source_identity import (
+    migrate as seal_ont_external_source_identity,
+)
 from run_migration import migrate as migrate_stage_tracking
 
 
@@ -81,6 +95,14 @@ MIGRATIONS: List[Migration] = [
     Migration(21, "enforce_ont_terminal_artifact_manifest_immutability", enforce_ont_terminal_artifact_manifest_immutability),
     Migration(22, "relax_shape_geometry_hash_uniqueness", relax_shape_geometry_hash_uniqueness),
     Migration(23, "add_frustrampnn_persistence", migrate_frustrampnn_persistence),
+    Migration(24, "add_ngs_reference_sets", migrate_ngs_reference_sets),
+    Migration(25, "add_pooled_ont_reference_assignment", migrate_pooled_ont_reference_assignment),
+    Migration(26, "add_frustrampnn_statistics", migrate_frustrampnn_statistics),
+    Migration(27, "add_frustrampnn_reviews", migrate_frustrampnn_reviews),
+    Migration(28, "add_ont_raw_signal_ledger", migrate_ont_raw_signal_ledger),
+    Migration(29, "add_ont_external_registration_identity", migrate_ont_external_registration_identity),
+    Migration(30, "enforce_ont_external_registration_immutability", migrate_ont_external_registration_immutability),
+    Migration(31, "seal_ont_external_source_identity", seal_ont_external_source_identity),
 ]
 
 

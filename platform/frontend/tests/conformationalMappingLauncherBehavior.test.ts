@@ -6,6 +6,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
 import { ConformationalMappingLauncher } from '../src/components/conformationalMapping/ConformationalMappingLauncher.js';
+import { compileCmRuntimePolicy } from '../src/components/conformationalMapping/conformationalMappingApi.js';
+import type { ModelIntegrationConfig } from '../src/lib/api.js';
 import type {
     CmSource,
     CmSubmitReceipt,
@@ -32,9 +34,20 @@ const source = (id: string, format: string): CmSource => ({
     source_id: id,
     source_kind: 'structure_upload',
     format,
-    sha256: id.padEnd(64, 'a').slice(0, 64),
+    sha256: 'a'.repeat(64),
     bytes: 1024,
     metadata: { target_id: id },
+    created_at: '2026-08-09T12:00:00Z',
+    authority_receipt: {
+        schema_name: 'cm_source_authority_receipt',
+        schema_version: 1,
+        source_id: id,
+        source_kind: 'structure_upload',
+        content_sha256: 'a'.repeat(64),
+        authority_kind: 'complex_snapshot_normalization',
+        payload: { request_id: `request-${id}` },
+        receipt_sha256: 'b'.repeat(64),
+    },
 });
 
 const containsOption = (node: ReactTestInstance, text: string): boolean =>
@@ -42,6 +55,30 @@ const containsOption = (node: ReactTestInstance, text: string): boolean =>
 
 const hasText = (root: ReactTestInstance, text: string): boolean =>
     root.findAll((node) => node.props.children === text).length > 0;
+
+const loadFrustrampnnIntegration = async (): Promise<ModelIntegrationConfig> => ({
+    model_id: 'frustrampnn', model_name: 'FrustraMPNN', model_version: 'MegaScale',
+    stage_parameter: 'run_frustrampnn', operator_label: 'Frustration analysis',
+    checkpoint_label: 'MegaScale-trained checkpoint', model_summary: 'Canonical frustration analysis.',
+    semantic_roles: ['analysis_authority'],
+    workflows: {
+        conformational_mapping: {
+            default_enabled: true,
+            enabled_summary: 'Compare canonical frustration landscapes across conformers.',
+        },
+    },
+});
+
+test('runtime policy overrides are executable only for Protenix', () => {
+    assert.deepEqual(compileCmRuntimePolicy('protenix_v2_ensemble', false, 12, 240), {
+        use_default_params: false,
+        n_cycle: 12,
+        n_step: 240,
+    });
+    assert.deepEqual(compileCmRuntimePolicy('protenix_v2_ensemble', true, 12, 240), { use_default_params: true });
+    assert.deepEqual(compileCmRuntimePolicy('confornets', false, 12, 240), { use_default_params: true });
+    assert.deepEqual(compileCmRuntimePolicy('external_import', false, 12, 240), { use_default_params: true });
+});
 
 test('rendered external import refresh clears stale IDs, filters formats, becomes ready, and submits exact payload', async () => {
     memory.clear();
@@ -58,6 +95,7 @@ test('rendered external import refresh clears stale IDs, filters formats, become
     };
     const services = {
         listSources: async () => sources,
+        loadFrustrampnnIntegration,
         submitRequest: async (payload: CmSubmitRequest) => {
             submissions.push(payload);
             return receipt;
@@ -76,8 +114,20 @@ test('rendered external import refresh clears stale IDs, filters formats, become
                 React.createElement(ConformationalMappingLauncher, {
                     initialValues: {
                         name: 'Imported structure',
+                        notes: 'Preserve the imported state.',
                         backend: 'external_import',
                         registered_artifact_ids: ['stale-source'],
+                        analysis_policy: {
+                            sign_zero_epsilon: 0.002,
+                            clash_detector_id: 'bms_clash',
+                            clash_detector_version: '1',
+                            outer_support_minimum: 0.8,
+                            inner_support_minimum: 0.7,
+                            sign_consistency_minimum: 0.6,
+                            clash_free_minimum: 0.5,
+                            rank_stability_minimum: 0.4,
+                            minimum_common_ranked_universe_size: 11,
+                        },
                     },
                     services,
                 }),
@@ -90,27 +140,32 @@ test('rendered external import refresh clears stale IDs, filters formats, become
     });
 
     const root = renderer!.root;
-    const importSelect = root.findAllByType('select').find((node) =>
-        containsOption(node, 'Select one registered mmCIF…'));
-    assert.ok(importSelect, 'external-import selector was not rendered');
-    assert.equal(importSelect.props.value, '', 'stale persisted source ID was not cleared after refresh');
-    assert.equal(
-        importSelect.findAllByType('option').some((option) => option.props.value === 'valid-mmcif'),
-        true,
-    );
-    assert.equal(
-        importSelect.findAllByType('option').some((option) => String(option.props.children).includes('invalid-pdb')),
-        false,
-    );
+    const cachedTab = root.findAllByType('button').find((node) => node.props.children === 'Cached');
+    assert.ok(cachedTab, 'cached source tab was not rendered');
+    await act(async () => { cachedTab.props.onClick(); });
+    assert.equal(hasText(root, 'stale-source'), false, 'stale persisted source ID was not cleared after refresh');
+    assert.equal(hasText(root, 'valid-mmcif'), true);
+    assert.equal(hasText(root, 'invalid-pdb'), false);
     assert.equal(hasText(root, 'Ready for typed admission'), false);
 
+    const sourceButton = root.findAllByType('button').find((node) => hasText(node, 'valid-mmcif'));
+    assert.ok(sourceButton, 'compatible source control was not rendered');
     await act(async () => {
-        importSelect.props.onChange({ target: { value: 'valid-mmcif' } });
+        sourceButton.props.onClick();
     });
-    assert.equal(hasText(root, 'Ready for typed admission'), true);
+    assert.equal(
+        hasText(root, 'Ready for typed admission'),
+        true,
+        root.findAll(() => true).flatMap((node) => node.children.filter((child): child is string => typeof child === 'string')).join(' | '),
+    );
+    const renderedText = root.findAll(() => true)
+        .flatMap((node) => node.children.filter((child): child is string => typeof child === 'string'))
+        .join(' | ');
+    assert.match(renderedText, /analysis bms_clash\/1/);
+    assert.match(renderedText, /support 0\.8\/0\.6/);
 
     const submit = root.findAllByType('button').find((node) =>
-        node.props.children === 'Submit canonical request');
+        node.props.children === 'Launch conformational mapping');
     assert.ok(submit, 'submit control was not rendered');
     assert.equal(submit.props.disabled, false);
     await act(async () => {
@@ -120,8 +175,21 @@ test('rendered external import refresh clears stale IDs, filters formats, become
 
     assert.equal(submissions.length, 1);
     assert.deepEqual(submissions[0].registered_artifact_ids, ['valid-mmcif']);
+    assert.equal(submissions[0].notes, 'Preserve the imported state.');
     assert.deepEqual(submissions[0].ordered_seeds, [0]);
     assert.equal(submissions[0].samples_per_seed, 1);
+    assert.deepEqual(submissions[0].runtime_policy, { use_default_params: true });
+    assert.deepEqual(submissions[0].analysis_policy, {
+        sign_zero_epsilon: 0.000001,
+        clash_detector_id: 'bms_clash',
+        clash_detector_version: '1',
+        outer_support_minimum: 0.8,
+        inner_support_minimum: 0.6,
+        sign_consistency_minimum: 0.8,
+        clash_free_minimum: 0.9,
+        rank_stability_minimum: 0.6,
+        minimum_common_ranked_universe_size: 3,
+    });
     assert.equal('registered_snapshot_id' in submissions[0], false);
 
     await act(async () => { renderer!.unmount(); });
@@ -143,6 +211,7 @@ test('rendered pasted sequence canonicalizes bytes, rejects invalid residues, an
     };
     const services = {
         listSources: async () => [...available],
+        loadFrustrampnnIntegration,
         registerSource: async (kind: string, file: File, metadata: Record<string, unknown>) => {
             registered.push({ kind, bytes: await file.text(), name: file.name, metadata });
             available.splice(0, available.length, returned);
@@ -160,7 +229,7 @@ test('rendered pasted sequence canonicalizes bytes, rejects invalid residues, an
                 MemoryRouter,
                 null,
                 React.createElement(ConformationalMappingLauncher, {
-                    initialValues: { backend: 'confornets' },
+                    initialValues: { backend: 'confornets', ordered_seeds: [101, 202, 303] },
                     services,
                 }),
             ),
@@ -169,6 +238,10 @@ test('rendered pasted sequence canonicalizes bytes, rejects invalid residues, an
     });
 
     const root = renderer!.root;
+    assert.ok(
+        root.findAllByType('input').some((node) => node.props.type === 'number' && node.props.value === '101'),
+        'ConforNets did not normalize cloned seed state to one explicit seed',
+    );
     const sourceType = root.findAllByType('select').find((node) =>
         containsOption(node, 'Protein sequence'));
     assert.ok(sourceType, 'source-type selector was not rendered');
@@ -198,11 +271,41 @@ test('rendered pasted sequence canonicalizes bytes, rejects invalid residues, an
         name: 'protein-sequence.fasta',
         metadata: { name: 'protein-sequence.fasta' },
     }]);
-    const sequenceSelect = root.findAllByType('select').find((node) =>
-        node.findAllByType('option').some((option) => option.props.value === returned.source_id));
-    assert.ok(sequenceSelect, 'returned sequence was not added to the registered selector');
-    assert.equal(sequenceSelect.props.value, returned.source_id);
+    assert.equal(hasText(root, returned.source_id), true, 'returned sequence was not selected in the run record');
+    await act(async () => { renderer!.unmount(); });
+    client.clear();
+});
 
+
+test('rendered stale Protenix source handle remains blocked after registry refresh', async () => {
+    memory.clear();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+        renderer = create(React.createElement(
+            QueryClientProvider,
+            { client },
+            React.createElement(
+                MemoryRouter,
+                null,
+                React.createElement(ConformationalMappingLauncher, {
+                    initialValues: { backend: 'protenix_v2_ensemble', registered_snapshot_id: 'stale-snapshot' },
+                    services: {
+                        listSources: async () => [],
+                        loadFrustrampnnIntegration,
+                        submitRequest: async () => { throw new Error('blocked request must not submit'); },
+                    },
+                }),
+            ),
+        ));
+        await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    });
+    const root = renderer!.root;
+    const submit = root.findAllByType('button').find((node) =>
+        node.props.children === 'Launch conformational mapping');
+    assert.ok(submit);
+    assert.equal(submit.props.disabled, true);
+    assert.equal(hasText(root, 'Ready for typed admission'), false);
     await act(async () => { renderer!.unmount(); });
     client.clear();
 });

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { fetchDesigns, fetchJobById, submitJob, uploadFile, type Design, type Job } from '../lib/api';
+import { completeCurrentLaunchContext, fetchDesigns, fetchJobById, submitJob, uploadFile, type Design, type Job } from '../lib/api';
 import { jobPollingInterval } from '../lib/queryPolling';
 import { TargetAntigenSelector, type SelectedTarget } from './TargetAntigenSelector';
 import { EpitopeSelector } from './EpitopeSelector';
@@ -9,17 +9,21 @@ import EpitopeMolstarViewer from './EpitopeMolstarViewer';
 import { LigandSelector, type LigandEntry } from './LigandSelector';
 import { componentIdFromIndex } from './ligandSelectorData';
 import { ModelDocumentationLinks } from './ModelDocumentationLinks';
-import { getModelByNumber, parsePDBFile, type Chain, type ParsedPDB } from '../utils/pdbUtils';
+import { getModelByNumber, parseStructureFile, type Chain, type ParsedPDB } from '../utils/pdbUtils';
+import { getProteinLocalRedesignUiState } from './proteinLocalRedesignUiState';
+import { useLiveGpuCatalog } from './useLiveGpuCatalog';
 
 interface ProteinLocalRedesignTemplateProps {
     onBack: () => void;
     initialValues?: Record<string, unknown>;
     submissionModelId?: string;
     submissionMode?: string;
+    requiredPinnedGpu?: number | null;
 }
 
 type RegionMode = 'manual_ranges' | 'interface_shell';
-type SequenceMethod = 'fampnn' | 'mpnn';
+type SequenceMethod = 'skip' | 'fampnn' | 'mpnn';
+type NativeRedesignMode = 'partial_diffusion' | 'minimal_insertion';
 type SourcePredictor = 'boltz' | 'all';
 type ChainType = 'protein' | 'dna' | 'rna' | 'other';
 type ReviewPauseStage = 'post_rfantibody' | 'post_fampnn' | 'post_structure_validation';
@@ -226,6 +230,9 @@ const parseOptionalNumberInput = (value: string): number | undefined => {
     const parsed = Number(trimmed);
     return Number.isFinite(parsed) ? parsed : undefined;
 };
+const parseExplicitGpuPin = (value: unknown): number | null => (
+    typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null
+);
 
 const buildSourceComplexComponents = (
     sourcePrimaryChainId: string,
@@ -289,9 +296,16 @@ export function ProteinLocalRedesignTemplate({
     initialValues,
     submissionModelId = 'protein_local_redesign',
     submissionMode = 'local_redesign',
+    requiredPinnedGpu = null,
 }: ProteinLocalRedesignTemplateProps) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
+    const {
+        gpuOptions,
+        isLoading: gpuCatalogLoading,
+        isError: gpuCatalogError,
+    } = useLiveGpuCatalog({ requireFresh: true });
+    const isNativeLocalRedesign = submissionModelId === 'protein_local_redesign';
 
     const [jobName, setJobName] = useState('protein_local_redesign');
     const [selectedTarget, setSelectedTarget] = useState<SelectedTarget | null>(null);
@@ -300,7 +314,7 @@ export function ProteinLocalRedesignTemplate({
     const [selectedModelNumber, setSelectedModelNumber] = useState<number | null>(null);
     const [structureLoading, setStructureLoading] = useState(false);
     const [structureError, setStructureError] = useState<string | null>(null);
-    const [showSourceSimulation, setShowSourceSimulation] = useState(true);
+    const [showSourceSimulation, setShowSourceSimulation] = useState(!isNativeLocalRedesign);
     const [sourceSimulationJobName, setSourceSimulationJobName] = useState('protein_local_source');
     const [sourceSequence, setSourceSequence] = useState('');
     const [sourceSequenceName, setSourceSequenceName] = useState('source_complex');
@@ -317,6 +331,25 @@ export function ProteinLocalRedesignTemplate({
     const [sourceLaunchError, setSourceLaunchError] = useState<string | null>(null);
     const [rfd3BatchesPerDesign, setRfd3BatchesPerDesign] = useState(1);
     const [rfd3ExtraConfig, setRfd3ExtraConfig] = useState('');
+    const [nativeRedesignMode, setNativeRedesignMode] = useState<NativeRedesignMode>('partial_diffusion');
+    const [nativeProfileId, setNativeProfileId] = useState('generic_local_redesign_v1');
+    const [nativePartialT, setNativePartialT] = useState(2.0);
+
+    const [nativeInsertionAnchor, setNativeInsertionAnchor] = useState('');
+    const [nativeInsertionMinLength, setNativeInsertionMinLength] = useState('3');
+    const [nativeInsertionMaxLength, setNativeInsertionMaxLength] = useState('6');
+
+    const [nativeLigand, setNativeLigand] = useState('');
+    const [nativeHotspots, setNativeHotspots] = useState('');
+    const [nativeHbondDonors, setNativeHbondDonors] = useState('');
+    const [nativeHbondAcceptors, setNativeHbondAcceptors] = useState('');
+    const [nativeSeed, setNativeSeed] = useState('');
+    const [nativeDumpTrajectories, setNativeDumpTrajectories] = useState(false);
+    const [nativePinnedGpu, setNativePinnedGpu] = useState<number | null>(() => (
+        parseExplicitGpuPin(initialValues?.pinned_gpu)
+    ));
+    const effectiveNativePinnedGpu = requiredPinnedGpu ?? nativePinnedGpu;
+
     const [rfdMinHelices, setRfdMinHelices] = useState('');
     const [rfdMaxHelices, setRfdMaxHelices] = useState('');
     const [rfdMinStrands, setRfdMinStrands] = useState('');
@@ -334,7 +367,7 @@ export function ProteinLocalRedesignTemplate({
     const [interfaceCutoff, setInterfaceCutoff] = useState(6.0);
     const [regionPadding, setRegionPadding] = useState(2);
     const [numDesigns, setNumDesigns] = useState(8);
-    const [seqMethod, setSeqMethod] = useState<SequenceMethod>('fampnn');
+    const [seqMethod, setSeqMethod] = useState<SequenceMethod>(isNativeLocalRedesign ? 'skip' : 'fampnn');
     const [seqsPerDesign, setSeqsPerDesign] = useState(8);
     const [fixFixedSidechains, setFixFixedSidechains] = useState(true);
     const [runBoltzValidation, setRunBoltzValidation] = useState(true);
@@ -344,6 +377,10 @@ export function ProteinLocalRedesignTemplate({
     const [interactiveGateStage, setInteractiveGateStage] = useState<ReviewPauseStage>('post_structure_validation');
     const [showStructureViewer, setShowStructureViewer] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const proteinLocalRedesignUiState = getProteinLocalRedesignUiState(isNativeLocalRedesign, seqMethod);
+    const workflowSteps = isNativeLocalRedesign
+        ? ['Source Complex', 'Visual Region Pick', 'Native RFD3', 'Optional Sequence Design']
+        : ['Source Complex', 'Visual Region Pick', 'Sequence Redesign', 'Boltz Validation'];
 
     useEffect(() => {
         if (!initialValues) return;
@@ -381,6 +418,23 @@ export function ProteinLocalRedesignTemplate({
         }
         if (typeof initialValues.rfd3_batches_per_design === 'number') setRfd3BatchesPerDesign(initialValues.rfd3_batches_per_design);
         if (typeof initialValues.rfd3_extra_config === 'string') setRfd3ExtraConfig(initialValues.rfd3_extra_config);
+        if (initialValues.redesign_mode === 'partial_diffusion' || initialValues.redesign_mode === 'minimal_insertion') setNativeRedesignMode(initialValues.redesign_mode);
+        if (initialValues.profile_id === 'generic_local_redesign_v1' || initialValues.profile_id === 'drt4_datp_gate_v1') setNativeProfileId(initialValues.profile_id);
+        if (typeof initialValues.partial_t === 'number') setNativePartialT(initialValues.partial_t);
+
+        if (typeof initialValues.insertion_anchor === 'string') setNativeInsertionAnchor(initialValues.insertion_anchor);
+        if (typeof initialValues.insertion_min_length === 'number') setNativeInsertionMinLength(String(initialValues.insertion_min_length));
+        if (typeof initialValues.insertion_max_length === 'number') setNativeInsertionMaxLength(String(initialValues.insertion_max_length));
+
+        if (typeof initialValues.ligand === 'string') setNativeLigand(initialValues.ligand);
+        if (typeof initialValues.select_hotspots === 'string') setNativeHotspots(initialValues.select_hotspots);
+        if (typeof initialValues.select_hbond_donor === 'string') setNativeHbondDonors(initialValues.select_hbond_donor);
+        if (typeof initialValues.select_hbond_acceptor === 'string') setNativeHbondAcceptors(initialValues.select_hbond_acceptor);
+        if (typeof initialValues.seed === 'number') setNativeSeed(String(initialValues.seed));
+        if (typeof initialValues.dump_trajectories === 'boolean') setNativeDumpTrajectories(initialValues.dump_trajectories);
+        const initialPinnedGpu = parseExplicitGpuPin(initialValues.pinned_gpu);
+        if (initialPinnedGpu !== null) setNativePinnedGpu(initialPinnedGpu);
+
         if (typeof initialValues.rfd_min_helices === 'number') setRfdMinHelices(String(initialValues.rfd_min_helices));
         if (typeof initialValues.rfd_max_helices === 'number') setRfdMaxHelices(String(initialValues.rfd_max_helices));
         if (typeof initialValues.rfd_min_strands === 'number') setRfdMinStrands(String(initialValues.rfd_min_strands));
@@ -390,6 +444,7 @@ export function ProteinLocalRedesignTemplate({
         if (typeof initialValues.rfd_min_rog === 'number') setRfdMinRog(String(initialValues.rfd_min_rog));
         if (typeof initialValues.rfd_max_rog === 'number') setRfdMaxRog(String(initialValues.rfd_max_rog));
     }, [initialValues]);
+
 
     useEffect(() => {
         if (runBoltzValidation) return;
@@ -432,7 +487,7 @@ export function ProteinLocalRedesignTemplate({
                     throw new Error('No source structure file was available for preview.');
                 }
 
-                const parsed = await parsePDBFile(sourceFile);
+                const parsed = await parseStructureFile(sourceFile);
                 if (cancelled) return;
 
                 setParsedStructure(parsed);
@@ -504,6 +559,36 @@ export function ProteinLocalRedesignTemplate({
         () => activeProteinChains.find((chain) => chain.id === designChain) ?? null,
         [activeProteinChains, designChain],
     );
+
+    const generatedInsertionContig = useMemo(() => {
+        const anchorText = nativeInsertionAnchor.trim();
+        if (!anchorText || !activeDesignChain) return '';
+        const anchorIndex = activeDesignChain.residues.findIndex((residue) => {
+            const token = `${activeDesignChain.id}${residue.resNum}${residue.iCode || ''}`;
+            return token === anchorText || String(residue.resNum) === anchorText;
+        });
+        if (anchorIndex < 0) return '';
+        const minLength = Number.parseInt(nativeInsertionMinLength, 10);
+        const maxLength = Number.parseInt(nativeInsertionMaxLength, 10);
+        if (!Number.isFinite(minLength) || !Number.isFinite(maxLength) || minLength < 1 || maxLength < minLength) return '';
+        const chainRange = (chain: Chain, first: Chain['residues'][number], last: Chain['residues'][number]) => {
+            const start = `${chain.id}${first.resNum}${first.iCode || ''}`;
+            const end = `${chain.id}${last.resNum}${last.iCode || ''}`;
+            return start === end ? start : `${start}-${end.replace(chain.id, '')}`;
+        };
+        const parts: string[] = [];
+        if (anchorIndex >= 0) parts.push(chainRange(activeDesignChain, activeDesignChain.residues[0], activeDesignChain.residues[anchorIndex]));
+        parts.push(`${minLength}-${maxLength}`);
+        if (anchorIndex + 1 < activeDesignChain.residues.length) {
+            parts.push(chainRange(activeDesignChain, activeDesignChain.residues[anchorIndex + 1], activeDesignChain.residues[activeDesignChain.residues.length - 1]));
+        }
+        const contextRanges = contextChains
+            .map((chainId) => activeProteinChains.find((chain) => chain.id === chainId))
+            .filter((chain): chain is Chain => Boolean(chain && chain.residues.length))
+            .map((chain) => chainRange(chain, chain.residues[0], chain.residues[chain.residues.length - 1]));
+        if (contextRanges.length) parts.push('/0', ...contextRanges);
+        return parts.join(',');
+    }, [activeDesignChain, activeProteinChains, contextChains, nativeInsertionAnchor, nativeInsertionMaxLength, nativeInsertionMinLength]);
 
     const designResidueKeys = useMemo(() => {
         if (!activeDesignChain) return new Set<string>();
@@ -603,9 +688,9 @@ export function ProteinLocalRedesignTemplate({
 
     const submitMutation = useMutation({
         mutationFn: async (payload: Record<string, unknown>) => submitJob(payload as Partial<Job>),
-        onSuccess: () => {
+        onSuccess: async (response) => {
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
-            navigate('/');
+            navigate(await completeCurrentLaunchContext(response.data) ?? '/');
         },
         onError: (err: Error) => {
             setError(err.message || 'Failed to submit protein local redesign job');
@@ -613,7 +698,7 @@ export function ProteinLocalRedesignTemplate({
     });
 
     const sourceSimulationMutation = useMutation({
-        mutationFn: async (payload: Record<string, unknown>) => submitJob(payload as Partial<Job>),
+        mutationFn: async (payload: Record<string, unknown>) => submitJob(payload as Partial<Job>, { launchContext: false }),
         onSuccess: (response) => {
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
             const createdJob = response.data as Job | undefined;
@@ -724,7 +809,7 @@ export function ProteinLocalRedesignTemplate({
             setError('Job name is required');
             return;
         }
-        if (!designChain.trim()) {
+        if (!isNativeLocalRedesign && !designChain.trim()) {
             setError('Choose a design chain before submitting.');
             return;
         }
@@ -732,13 +817,23 @@ export function ProteinLocalRedesignTemplate({
             setError('Choose a source complex before submitting.');
             return;
         }
+        if (isNativeLocalRedesign) {
+            if (effectiveNativePinnedGpu === null) {
+                setError('Choose one physical GPU for native RFD3 before submitting.');
+                return;
+            }
+            if (!gpuOptions.some((gpu) => gpu.index === effectiveNativePinnedGpu)) {
+                setError('The selected native RFD3 GPU is absent from the live GPU inventory.');
+                return;
+            }
+        }
 
         const effectiveRanges = (manualRangesText || derivedManualRanges).trim();
-        if (regionMode === 'manual_ranges' && !effectiveRanges) {
+        if (!isNativeLocalRedesign && regionMode === 'manual_ranges' && !effectiveRanges) {
             setError('Select editable residues visually or provide a redesign range string.');
             return;
         }
-        if (regionMode === 'interface_shell' && contextChains.length === 0) {
+        if (!isNativeLocalRedesign && regionMode === 'interface_shell' && contextChains.length === 0) {
             setError('Choose at least one context chain or nucleic-acid partner for interface-shell mode.');
             return;
         }
@@ -753,6 +848,56 @@ export function ProteinLocalRedesignTemplate({
 
         if (!resolvedPath) {
             setError('Failed to determine the source structure path for the workflow.');
+            return;
+        }
+
+        if (isNativeLocalRedesign) {
+            if (nativeRedesignMode === 'partial_diffusion' && !effectiveRanges) {
+                setError('Partial diffusion requires at least one selected editable residue.');
+                return;
+            }
+            if (nativeRedesignMode === 'minimal_insertion' && !generatedInsertionContig) {
+                setError('Minimal insertion requires a valid source-bound anchor and insertion length range.');
+                return;
+            }
+
+            const nativeParams: Record<string, unknown> = {
+                input_structure: resolvedPath,
+                redesign_mode: nativeRedesignMode,
+                region_mode: 'manual_ranges',
+                design_chains: designChain.trim() || undefined,
+                context_chains: contextChains,
+                redesign_ranges: effectiveRanges || undefined,
+                source_residue_identities: activeProteinChains.map((chain) => ({
+                    chain_id: chain.id,
+                    residues: chain.residues.map((residue) => ({
+                        res_num: residue.resNum,
+                        insertion_code: residue.iCode || '',
+                        residue_name: residue.resName,
+                    })),
+                })),
+                profile_id: nativeProfileId,
+                sequence_policy: 'skip',
+                insertion_anchor: nativeRedesignMode === 'minimal_insertion' ? nativeInsertionAnchor.trim() || undefined : undefined,
+                insertion_min_length: nativeRedesignMode === 'minimal_insertion' ? Number.parseInt(nativeInsertionMinLength, 10) : undefined,
+                insertion_max_length: nativeRedesignMode === 'minimal_insertion' ? Number.parseInt(nativeInsertionMaxLength, 10) : undefined,
+                partial_t: nativeRedesignMode === 'partial_diffusion' ? nativePartialT : undefined,
+                ligand: nativeLigand.trim() || undefined,
+                select_hotspots: nativeHotspots.split(',').map((value) => value.trim()).filter(Boolean),
+                select_hbond_donor: nativeHbondDonors.split(',').map((value) => value.trim()).filter(Boolean),
+                select_hbond_acceptor: nativeHbondAcceptors.split(',').map((value) => value.trim()).filter(Boolean),
+                num_designs: numDesigns,
+                seed: parseOptionalIntegerInput(nativeSeed),
+                dump_trajectories: nativeDumpTrajectories,
+                write_full_json: true,
+            };
+            await submitMutation.mutateAsync({
+                name: jobName.trim(),
+                model_id: 'protein_local_redesign',
+                mode: 'local_redesign',
+                pinned_gpu: effectiveNativePinnedGpu,
+                params: nativeParams,
+            });
             return;
         }
 
@@ -812,7 +957,7 @@ export function ProteinLocalRedesignTemplate({
                         </span>
                     </div>
                     <div className="flex flex-wrap gap-2 text-xs">
-                        {['Source Complex', 'Visual Region Pick', 'Sequence Redesign', 'Boltz Validation'].map((step, index) => (
+                        {workflowSteps.map((step, index) => (
                             <span
                                 key={step}
                                 className="rounded-full border px-2.5 py-1"
@@ -825,9 +970,128 @@ export function ProteinLocalRedesignTemplate({
                 </div>
                 <div>
                     <h1 className="text-3xl font-semibold">Protein Local Redesign</h1>
-                    <p className="mt-2 max-w-4xl text-sm leading-6 text-[var(--text-secondary)]">
-                        Visual region pick → local remodeling → sequence redesign → optional validator.
-                    </p>
+                    {isNativeLocalRedesign && (
+                        <div className="mt-4 space-y-4 rounded-xl border p-4" style={themedInsetStyle}>
+                            <div>
+                                <div className="text-sm font-semibold">Native RFD3 redesign contract</div>
+                                <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
+                                    Sequence design is not requested in this lane. RFD3 receives a source-bound partial-diffusion or minimal-insertion contract.
+                                </p>
+                            </div>
+                            <div className="grid gap-3 md:grid-cols-3">
+                                <label className="space-y-1 text-xs font-medium">
+                                    Redesign mode
+                                    <select className="w-full rounded-lg border px-3 py-2 text-sm" style={themedInputStyle} value={nativeRedesignMode} onChange={(event) => setNativeRedesignMode(event.target.value as NativeRedesignMode)}>
+                                        <option value="partial_diffusion">Fixed-sequence partial diffusion</option>
+                                        <option value="minimal_insertion">Minimal insertion</option>
+                                    </select>
+                                </label>
+                                <label className="space-y-1 text-xs font-medium">
+                                    Acceptance profile
+                                    <select className="w-full rounded-lg border px-3 py-2 text-sm" style={themedInputStyle} value={nativeProfileId} onChange={(event) => setNativeProfileId(event.target.value)}>
+                                        <option value="generic_local_redesign_v1">Generic local redesign</option>
+                                        <option value="drt4_datp_gate_v1">DRT4 dATP gate</option>
+                                    </select>
+                                </label>
+                                <label className="space-y-1 text-xs font-medium">
+                                    Partial t
+                                    <input className="w-full rounded-lg border px-3 py-2 text-sm" style={themedInputStyle} type="number" min="0" step="0.1" value={nativePartialT} onChange={(event) => setNativePartialT(Number(event.target.value))} disabled={nativeRedesignMode !== 'partial_diffusion'} />
+                                </label>
+                            </div>
+
+                            {nativeRedesignMode === 'minimal_insertion' && (
+                                <>
+                                    <div className="grid gap-3 md:grid-cols-3">
+                                        <label className="space-y-1 text-xs font-medium">
+                                            Insert after residue
+                                            <input className="w-full rounded-lg border px-3 py-2 font-mono text-sm" style={themedInputStyle} value={nativeInsertionAnchor} onChange={(event) => setNativeInsertionAnchor(event.target.value)} placeholder="A310" />
+                                        </label>
+                                        <label className="space-y-1 text-xs font-medium">
+                                            Minimum inserted length
+                                            <input className="w-full rounded-lg border px-3 py-2 text-sm" style={themedInputStyle} type="number" min="1" value={nativeInsertionMinLength} onChange={(event) => setNativeInsertionMinLength(event.target.value)} />
+                                        </label>
+                                        <label className="space-y-1 text-xs font-medium">
+                                            Maximum inserted length
+                                            <input className="w-full rounded-lg border px-3 py-2 text-sm" style={themedInputStyle} type="number" min="1" value={nativeInsertionMaxLength} onChange={(event) => setNativeInsertionMaxLength(event.target.value)} />
+                                        </label>
+                                    </div>
+                                    <div className="rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 font-mono text-xs text-emerald-100">
+                                        {generatedInsertionContig || 'Select a valid source residue anchor.'}
+                                    </div>
+                                </>
+                            )}
+                            <div className="grid gap-3 md:grid-cols-2">
+                                <label className="space-y-1 text-xs font-medium">
+                                    Ligand or context IDs
+                                    <input className="w-full rounded-lg border px-3 py-2 text-sm" style={themedInputStyle} value={nativeLigand} onChange={(event) => setNativeLigand(event.target.value)} placeholder="DATP_ID,METAL_ID" />
+                                </label>
+                                <label className="space-y-1 text-xs font-medium">
+                                    Hotspots
+                                    <input className="w-full rounded-lg border px-3 py-2 text-sm" style={themedInputStyle} value={nativeHotspots} onChange={(event) => setNativeHotspots(event.target.value)} placeholder="A310,A315" />
+                                </label>
+                                <label className="space-y-1 text-xs font-medium">
+                                    Desired H-bond donors
+                                    <input className="w-full rounded-lg border px-3 py-2 text-sm" style={themedInputStyle} value={nativeHbondDonors} onChange={(event) => setNativeHbondDonors(event.target.value)} placeholder="DATP_ID:N1" />
+                                </label>
+                                <label className="space-y-1 text-xs font-medium">
+                                    Desired H-bond acceptors
+                                    <input className="w-full rounded-lg border px-3 py-2 text-sm" style={themedInputStyle} value={nativeHbondAcceptors} onChange={(event) => setNativeHbondAcceptors(event.target.value)} placeholder="DATP_ID:N6" />
+                                </label>
+                            </div>
+                            <div className="grid gap-3 md:grid-cols-3">
+                                <label className="space-y-1 text-xs font-medium">
+                                    Seed
+                                    <input className="w-full rounded-lg border px-3 py-2 text-sm" style={themedInputStyle} type="number" min="0" value={nativeSeed} onChange={(event) => setNativeSeed(event.target.value)} placeholder="RFD3 default" />
+                                </label>
+                                <label className="space-y-1 text-xs font-medium">
+                                    Physical GPU (required)
+                                    <select
+                                        className="w-full rounded-lg border px-3 py-2 text-sm"
+                                        style={themedInputStyle}
+                                        value={effectiveNativePinnedGpu ?? ''}
+                                        onChange={(event) => setNativePinnedGpu(
+                                            event.target.value === '' ? null : parseExplicitGpuPin(Number(event.target.value))
+                                        )}
+                                        disabled={
+                                            requiredPinnedGpu !== null
+                                            || gpuCatalogLoading
+                                            || gpuCatalogError
+                                            || gpuOptions.length === 0
+                                        }
+                                    >
+                                        <option value="">Select GPU</option>
+                                        {gpuOptions.map((gpu) => (
+                                            <option key={gpu.index} value={gpu.index}>
+                                                GPU {gpu.index} · {gpu.label}
+                                            </option>
+                                        ))}
+                                    </select>
+                                    <span className="block text-[11px] text-[var(--text-secondary)]">
+                                        {gpuCatalogLoading
+                                            ? 'Loading the live physical GPU inventory.'
+                                            : gpuCatalogError || gpuOptions.length === 0
+                                                ? 'Live physical GPU inventory unavailable. Submission is blocked.'
+                                                : 'Scheduler assignment must match this exact physical GPU.'}
+                                    </span>
+                                </label>
+                                <div className="space-y-2 rounded-lg border px-3 py-2" style={themedMutedInsetStyle}>
+                                    <label className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
+                                        <input type="checkbox" checked={nativeDumpTrajectories} onChange={(event) => setNativeDumpTrajectories(event.target.checked)} />
+                                        Retain noisy and denoised RFD3 trajectories
+                                    </label>
+                                    <div className="text-xs text-[var(--text-secondary)]">Native JSON metadata is required for typed result ingestion.</div>
+                                </div>
+                            </div>
+                            <div className="rounded-lg border px-3 py-2 text-xs text-[var(--text-secondary)]" style={themedMutedInsetStyle}>
+                                `select_unfixed_sequence` stays empty. Sequence design remains explicitly not requested in the native skip path.
+                            </div>
+                        </div>
+                    )}
+                    {!isNativeLocalRedesign && (
+                        <p className="mt-2 max-w-4xl text-sm leading-6 text-[var(--text-secondary)]">
+                            Visual region pick → local remodeling → sequence redesign → optional validator.
+                        </p>
+                    )}
                     <div className="mt-4 max-w-4xl space-y-3 rounded-xl border px-4 py-3" style={themedSelectedStyle('var(--warning)')}>
                         <div className="flex flex-wrap items-center gap-3 text-sm">
                             <span className="rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em]" style={themedTagStyle('var(--warning)')}>
@@ -1357,9 +1621,11 @@ export function ProteinLocalRedesignTemplate({
                 <div className="space-y-6">
                     <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
                         <div>
-                            <h2 className="text-lg font-semibold">Sequence Redesign</h2>
+                            <h2 className="text-lg font-semibold">{proteinLocalRedesignUiState.sequenceSectionLabel}</h2>
                             <p className="mt-1 text-sm text-[var(--text-secondary)]">
-                                Choose the redesign backend and sampling depth for the remodeled backbones.
+                                {isNativeLocalRedesign
+                                    ? 'Sequence design is not requested or run by the native RFD3 lane.'
+                                    : 'Choose the redesign backend and sampling depth for the remodeled backbones.'}
                             </p>
                         </div>
 
@@ -1369,15 +1635,22 @@ export function ProteinLocalRedesignTemplate({
                                 <select
                                     value={seqMethod}
                                     onChange={(event) => setSeqMethod(event.target.value as SequenceMethod)}
+                                    disabled={isNativeLocalRedesign}
                                     className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
                                     style={themedInputStyle}
                                 >
-                                    <option value="fampnn">FA-MPNN</option>
-                                    <option value="mpnn">ProteinMPNN</option>
+                                    {isNativeLocalRedesign ? (
+                                        <option value="skip">Skip sequence redesign</option>
+                                    ) : (
+                                        <>
+                                            <option value="fampnn">FA-MPNN</option>
+                                            <option value="mpnn">ProteinMPNN</option>
+                                        </>
+                                    )}
                                 </select>
                             </div>
 
-                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                            {proteinLocalRedesignUiState.showSequenceSampling && <div className="rounded-lg border p-3" style={themedInsetStyle}>
                                 <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Backbone Designs</label>
                                 <input
                                     type="number"
@@ -1388,9 +1661,9 @@ export function ProteinLocalRedesignTemplate({
                                     className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
                                     style={themedInputStyle}
                                 />
-                            </div>
+                            </div>}
 
-                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                            {proteinLocalRedesignUiState.showSequenceSampling && <div className="rounded-lg border p-3" style={themedInsetStyle}>
                                 <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Sequences Per Backbone</label>
                                 <input
                                     type="number"
@@ -1401,9 +1674,9 @@ export function ProteinLocalRedesignTemplate({
                                     className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
                                     style={themedInputStyle}
                                 />
-                            </div>
+                            </div>}
 
-                            <label className="flex items-start gap-3 rounded-lg border p-3 text-sm" style={themedInsetStyle}>
+                            {proteinLocalRedesignUiState.showSequenceSampling && <label className="flex items-start gap-3 rounded-lg border p-3 text-sm" style={themedInsetStyle}>
                                 <input
                                     type="checkbox"
                                     checked={fixFixedSidechains}
@@ -1411,10 +1684,17 @@ export function ProteinLocalRedesignTemplate({
                                     className="mt-0.5"
                                 />
                                 <span>Keep sidechains fixed outside the editable region during FA-MPNN redesign.</span>
-                            </label>
+                            </label>}
+
+                            {!proteinLocalRedesignUiState.showSequenceSampling && (
+                                <div className="rounded-lg border p-3 text-sm text-[var(--text-secondary)]" style={themedMutedInsetStyle}>
+                                    Sequence redesign is not requested. Native RFD3 candidates keep the source amino-acid identities.
+                                </div>
+                            )}
                         </div>
                     </section>
 
+                    {proteinLocalRedesignUiState.showLegacyOptionalStages && (
                     <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
                         <div>
                             <h2 className="text-lg font-semibold">Review Gates</h2>
@@ -1457,7 +1737,9 @@ export function ProteinLocalRedesignTemplate({
                             </div>
                         </div>
                     </section>
+                    )}
 
+                    {proteinLocalRedesignUiState.showLegacyOptionalStages && (
                     <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
                         <div>
                             <h2 className="text-lg font-semibold">RFD3 Controls</h2>
@@ -1493,7 +1775,9 @@ export function ProteinLocalRedesignTemplate({
                             </div>
                         </div>
                     </section>
+                    )}
 
+                    {proteinLocalRedesignUiState.showLegacyOptionalStages && (
                     <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
                         <div>
                             <h2 className="text-lg font-semibold">Backbone Filters</h2>
@@ -1537,7 +1821,9 @@ export function ProteinLocalRedesignTemplate({
                             </div>
                         </div>
                     </section>
+                    )}
 
+                    {proteinLocalRedesignUiState.showLegacyOptionalStages && (
                     <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
                         <div>
                             <h2 className="text-lg font-semibold">Validation</h2>
@@ -1586,6 +1872,7 @@ export function ProteinLocalRedesignTemplate({
                             </div>
                         </div>
                     </section>
+                    )}
 
                     <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
                         <h2 className="text-lg font-semibold">Execution Summary</h2>
@@ -1624,24 +1911,38 @@ export function ProteinLocalRedesignTemplate({
                             </div>
                             <div className="flex items-start justify-between gap-4">
                                 <dt className="text-[var(--text-secondary)]">Redesign</dt>
-                                <dd className="text-right">{numDesigns} backbones × {seqsPerDesign} seqs</dd>
+                                <dd className="text-right">
+                                    {proteinLocalRedesignUiState.sequenceDesignEnabled
+                                        ? `${numDesigns} backbones × ${seqsPerDesign} seqs`
+                                        : `${numDesigns} native RFD3 candidates`}
+                                </dd>
                             </div>
                             <div className="flex items-start justify-between gap-4">
                                 <dt className="text-[var(--text-secondary)]">Backend</dt>
-                                <dd className="text-right">{seqMethod === 'fampnn' ? 'FA-MPNN' : 'ProteinMPNN'}</dd>
+                                <dd className="text-right">
+                                    {seqMethod === 'skip' ? 'Sequence redesign skipped' : seqMethod === 'fampnn' ? 'FA-MPNN' : 'ProteinMPNN'}
+                                </dd>
                             </div>
                             <div className="flex items-start justify-between gap-4">
                                 <dt className="text-[var(--text-secondary)]">RFD3</dt>
-                                <dd className="text-right">{rfd3BatchesPerDesign} batch{rfd3BatchesPerDesign === 1 ? '' : 'es'} per design</dd>
+                                <dd className="text-right">
+                                    {isNativeLocalRedesign
+                                        ? `${numDesigns} exact samples`
+                                        : `${rfd3BatchesPerDesign} batch${rfd3BatchesPerDesign === 1 ? '' : 'es'} per design`}
+                                </dd>
                             </div>
                             <div className="flex items-start justify-between gap-4">
                                 <dt className="text-[var(--text-secondary)]">Validation</dt>
-                                <dd className="text-right">{runBoltzValidation ? 'Boltz-2 enabled' : 'Skipped'}</dd>
+                                <dd className="text-right">
+                                    {isNativeLocalRedesign ? 'Not in native contract' : runBoltzValidation ? 'Boltz-2 enabled' : 'Skipped'}
+                                </dd>
                             </div>
                             <div className="flex items-start justify-between gap-4">
                                 <dt className="text-[var(--text-secondary)]">Pause</dt>
                                 <dd className="text-right">
-                                    {!interactiveGating
+                                    {isNativeLocalRedesign
+                                        ? 'Not configured'
+                                        : !interactiveGating
                                         ? 'No pause'
                                         : interactiveGateStage === 'post_rfantibody'
                                             ? 'After remodel'
@@ -1665,7 +1966,14 @@ export function ProteinLocalRedesignTemplate({
                 </button>
                 <button
                     onClick={() => void handleSubmit()}
-                    disabled={submitMutation.isPending}
+                    disabled={submitMutation.isPending || (
+                        isNativeLocalRedesign && (
+                            gpuCatalogLoading
+                            || gpuCatalogError
+                            || effectiveNativePinnedGpu === null
+                            || !gpuOptions.some((gpu) => gpu.index === effectiveNativePinnedGpu)
+                        )
+                    )}
                     className="rounded-lg border px-5 py-3 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50"
                     style={themedSelectedStyle('var(--accent-primary)')}
                 >

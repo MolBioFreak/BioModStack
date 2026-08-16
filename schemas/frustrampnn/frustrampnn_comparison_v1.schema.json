@@ -1,43 +1,480 @@
 {
+  "$defs": {
+    "classificationDomain": {
+      "additionalProperties": false,
+      "properties": {
+        "differences": {
+          "items": {
+            "$ref": "#/$defs/difference"
+          },
+          "type": "array"
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "compatible",
+            "policy_different",
+            "unknown"
+          ]
+        }
+      },
+      "required": [
+        "status",
+        "reasons",
+        "differences"
+      ],
+      "type": "object"
+    },
+    "comparability": {
+      "additionalProperties": false,
+      "properties": {
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "reference_configuration_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reference_configuration_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "enum": [
+            "comparable",
+            "incompatible"
+          ]
+        },
+        "target_configuration_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target_configuration_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "status",
+        "reasons",
+        "reference_configuration_id",
+        "target_configuration_id",
+        "reference_configuration_sha256",
+        "target_configuration_sha256"
+      ],
+      "type": "object"
+    },
+    "compatibilityDomains": {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/classificationDomain"
+        },
+        "identity_alignment": {
+          "$ref": "#/$defs/identityAlignment"
+        },
+        "raw_score": {
+          "$ref": "#/$defs/rawDomain"
+        }
+      },
+      "required": [
+        "raw_score",
+        "classification",
+        "identity_alignment"
+      ],
+      "type": "object"
+    },
+    "difference": {
+      "additionalProperties": false,
+      "properties": {
+        "field_path": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "left": {},
+        "right": {}
+      },
+      "required": [
+        "field_path",
+        "left",
+        "right"
+      ],
+      "type": "object"
+    },
+    "identity": {
+      "additionalProperties": false,
+      "properties": {
+        "auth_asym_id": {
+          "type": "string"
+        },
+        "auth_seq_id": {
+          "type": "integer"
+        },
+        "entity_instance_id": {
+          "type": "string"
+        },
+        "insertion_code": {
+          "type": "string"
+        },
+        "label_asym_id": {
+          "type": "string"
+        },
+        "sequence_index": {
+          "type": "integer"
+        },
+        "source_entity_id": {
+          "type": "string"
+        },
+        "wt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity_instance_id",
+        "source_entity_id",
+        "label_asym_id",
+        "auth_asym_id",
+        "auth_seq_id",
+        "insertion_code",
+        "sequence_index",
+        "wt"
+      ],
+      "type": "object"
+    },
+    "identityAlignment": {
+      "additionalProperties": false,
+      "properties": {
+        "aligned_identity_count": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "differences": {
+          "items": {
+            "$ref": "#/$defs/identityDifference"
+          },
+          "type": "array"
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "reference_identity_count": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "status": {
+          "enum": [
+            "exact",
+            "partial",
+            "none"
+          ]
+        },
+        "target_identity_count": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "status",
+        "reasons",
+        "differences",
+        "reference_identity_count",
+        "target_identity_count",
+        "aligned_identity_count"
+      ],
+      "type": "object"
+    },
+    "identityDifference": {
+      "additionalProperties": false,
+      "properties": {
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "side": {
+          "enum": [
+            "reference_only",
+            "target_only"
+          ]
+        }
+      },
+      "required": [
+        "side",
+        "identity"
+      ],
+      "type": "object"
+    },
+    "rawDomain": {
+      "additionalProperties": false,
+      "properties": {
+        "differences": {
+          "items": {
+            "$ref": "#/$defs/difference"
+          },
+          "type": "array"
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "compatible",
+            "hard_incompatible",
+            "unknown"
+          ]
+        }
+      },
+      "required": [
+        "status",
+        "reasons",
+        "differences"
+      ],
+      "type": "object"
+    },
+    "residueKey": {
+      "additionalProperties": false,
+      "properties": {
+        "auth_asym_id": {
+          "type": "string"
+        },
+        "auth_seq_id": {
+          "type": "integer"
+        },
+        "entity_instance_id": {
+          "type": "string"
+        },
+        "insertion_code": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity_instance_id",
+        "auth_asym_id",
+        "auth_seq_id",
+        "insertion_code"
+      ],
+      "type": "object"
+    },
+    "row": {
+      "additionalProperties": false,
+      "properties": {
+        "biological_status": {
+          "enum": [
+            "biologically_scored",
+            "incompatible",
+            "unmapped",
+            "missing"
+          ]
+        },
+        "classification_transition": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mapping_state": {
+          "enum": [
+            "mapped",
+            "unmapped"
+          ]
+        },
+        "missingness_state": {
+          "enum": [
+            "none",
+            "reference_unmapped",
+            "target_unmapped",
+            "both_unmapped",
+            "reference_missing",
+            "target_missing",
+            "both_missing"
+          ]
+        },
+        "mutation_aa": {
+          "pattern": "^[ACDEFGHIKLMNPQRSTVWY]$",
+          "type": "string"
+        },
+        "raw_score_delta": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "reference": {
+          "$ref": "#/$defs/scoreProjection"
+        },
+        "residue_key": {
+          "$ref": "#/$defs/residueKey"
+        },
+        "sequence_index": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "target": {
+          "$ref": "#/$defs/scoreProjection"
+        },
+        "wt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "residue_key",
+        "sequence_index",
+        "mutation_aa",
+        "wt",
+        "mapping_state",
+        "missingness_state",
+        "biological_status",
+        "reference",
+        "target",
+        "raw_score_delta",
+        "classification_transition"
+      ],
+      "type": "object"
+    },
+    "scoreProjection": {
+      "additionalProperties": false,
+      "properties": {
+        "auth_seq_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "class": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "score": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "scoreable": {
+          "type": "boolean"
+        },
+        "sequence_index": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sequence_index",
+        "auth_seq_id",
+        "score",
+        "class",
+        "scoreable",
+        "status"
+      ],
+      "type": "object"
+    }
+  },
   "$id": "https://biomodstack.local/schemas/frustrampnn/frustrampnn_comparison_v1.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
-    "schema_name": {"const": "frustrampnn_comparison"},
-    "schema_version": {"const": 1},
-    "comparison_id": {"type": ["string", "null"]},
-    "comparison_sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
-    "configuration_id": {"type": ["string", "null"]},
-    "configuration_sha256": {"pattern": "^[0-9a-f]{64}$", "type": ["string", "null"]},
-    "reference_landscape_sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
-    "target_landscape_sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
     "comparability": {
-      "additionalProperties": false,
-      "properties": {
-        "status": {"enum": ["comparable", "incompatible"], "type": "string"},
-        "reasons": {"items": {"type": "string"}, "type": "array"},
-        "reference_configuration_id": {"type": ["string", "null"]},
-        "target_configuration_id": {"type": ["string", "null"]},
-        "reference_configuration_sha256": {"type": ["string", "null"]},
-        "target_configuration_sha256": {"type": ["string", "null"]}
-      },
-      "required": ["status", "reasons"],
-      "type": "object"
+      "$ref": "#/$defs/comparability"
     },
-    "summary": {"additionalProperties": {"type": "integer"}, "type": "object"},
+    "comparison_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "comparison_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "compatibility_domains": {
+      "$ref": "#/$defs/compatibilityDomains"
+    },
+    "configuration_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "configuration_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reference_configuration_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reference_landscape_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
     "rows": {
       "items": {
-        "additionalProperties": true,
-        "properties": {
-          "mapping_state": {"enum": ["mapped", "unmapped"], "type": "string"},
-          "missingness_state": {"type": "string"},
-          "biological_status": {"type": "string"},
-          "mutation_aa": {"pattern": "^[ACDEFGHIKLMNPQRSTVWY]$", "type": "string"}
-        },
-        "required": ["mapping_state", "missingness_state", "biological_status", "mutation_aa"],
-        "type": "object"
+        "$ref": "#/$defs/row"
       },
       "type": "array"
+    },
+    "schema_name": {
+      "const": "frustrampnn_comparison"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "summary": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "type": "object"
+    },
+    "target_configuration_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "target_landscape_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
     }
   },
   "required": [
@@ -45,9 +482,14 @@
     "schema_version",
     "comparison_id",
     "comparison_sha256",
+    "configuration_id",
+    "configuration_sha256",
+    "reference_configuration_sha256",
+    "target_configuration_sha256",
     "reference_landscape_sha256",
     "target_landscape_sha256",
     "comparability",
+    "compatibility_domains",
     "summary",
     "rows"
   ],

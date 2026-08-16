@@ -9,6 +9,7 @@
     "schema_name": {"const": "cm_request"},
     "schema_version": {"const": 1},
     "request_id": {"type": "string", "format": "uuid"},
+    "run_record": {"$ref": "#/$defs/run_record"},
     "backend": {"enum": ["protenix_v2_ensemble", "confornets", "external_import"]},
     "targets": {
       "type": "array",
@@ -36,6 +37,8 @@
     "feature_policy": {"$ref": "#/$defs/feature_policy"},
     "runtime_policy": {"$ref": "#/$defs/runtime_policy"},
     "analysis_policy": {"$ref": "#/$defs/analysis_policy"},
+    "frustrampnn_settings": {"type": "object"},
+    "frustrampnn_requiredness": {"const": "required"},
     "state_landscape_comparison": {"$ref": "#/$defs/state_landscape_comparison"},
     "confornets": {"$ref": "#/$defs/confornets"},
     "protenix_snapshot_id": {"type": "string", "minLength": 1},
@@ -59,6 +62,39 @@
     "request_sha256": {"$ref": "#/$defs/sha256"}
   },
   "$defs": {
+    "run_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "notes", "selected_input"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 255},
+        "notes": {"type": "string", "maxLength": 4000},
+        "selected_input": {"$ref": "#/$defs/selected_input"}
+      }
+    },
+    "selected_input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_id", "source_kind", "source_label", "source_sha256"],
+      "properties": {
+        "source_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "source_kind": {"type": "string", "minLength": 1, "maxLength": 64},
+        "source_label": {"type": "string", "minLength": 1, "maxLength": 255},
+        "source_sha256": {"$ref": "#/$defs/sha256"},
+        "provider": {"type": "string", "minLength": 1, "maxLength": 128},
+        "accession": {"type": "string", "minLength": 1, "maxLength": 128},
+        "model_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "sample_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "chain_ids": {
+          "type": "array", "maxItems": 128, "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 32}
+        },
+        "entity_ids": {
+          "type": "array", "maxItems": 128, "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 128}
+        }
+      }
+    },
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "feature_policy": {
       "type": "object",
@@ -110,6 +146,7 @@
         "saved_steps": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "integer", "minimum": 0}},
         "confornet_count": {"type": "integer", "minimum": 1},
         "samples": {"type": "integer", "minimum": 1},
+        "output_count": {"type": "integer", "minimum": 1},
         "max_steps": {"type": "integer", "minimum": 1},
         "num_recycles": {"type": "integer", "minimum": 0},
         "num_diffusion_steps": {"type": "integer", "minimum": 1},

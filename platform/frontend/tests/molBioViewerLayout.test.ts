@@ -137,6 +137,15 @@ test('mol bio toolkit source wires fullscreen and side-panel collapse controls',
     assert.match(source, /onToggleToolPanel/);
 });
 
+test('construct shelf scrolls inside a bounded normal-mode viewer frame', () => {
+    const source = readFileSync(TOOLKIT_PATH, 'utf8');
+
+    assert.match(source, /height: 'clamp\(32rem, calc\(100vh - 12rem\), 48rem\)'/);
+    assert.match(source, /data-molbio-scroll-region="construct-shelf"/);
+    assert.match(source, /flex-1 min-h-0 overflow-y-auto overscroll-contain/);
+    assert.match(source, /fixed inset-0 z-\[70\] h-full/);
+});
+
 test('all constructs default to both linear sequence and circular map projection', () => {
     const toolkitSource = readFileSync(TOOLKIT_PATH, 'utf8');
     const viewerSource = readFileSync(VIEWER_PATH, 'utf8');

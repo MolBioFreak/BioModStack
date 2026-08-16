@@ -1,6 +1,91 @@
 export type PollPreset = 1000 | 2000 | 5000;
 export type WindowPreset = 1 | 3 | 5 | 10 | 15 | 30 | 60;
 
+const RAW_MIN_GAP_BREAK_MS = 12_000;
+
+export function resolveTelemetryDisplayIntervalMs(
+    windowMinutes: WindowPreset,
+    pollIntervalMs: PollPreset,
+): number {
+    if (windowMinutes === 10) return 5_000;
+    if (windowMinutes === 15) return 10_000;
+    if (windowMinutes === 30) return 15_000;
+    if (windowMinutes === 60) return 30_000;
+    return pollIntervalMs;
+}
+
+export function resolveTelemetryBucketIntervalMs(windowMinutes: WindowPreset): number {
+    if (windowMinutes === 1) return 1_000;
+    if (windowMinutes === 3) return 2_000;
+    if (windowMinutes === 5) return 3_000;
+    if (windowMinutes === 10) return 5_000;
+    if (windowMinutes === 15) return 10_000;
+    if (windowMinutes === 30) return 15_000;
+    return 30_000;
+}
+
+export function resolveTelemetryWindowBounds(
+    nowMs: number,
+    windowMinutes: WindowPreset,
+    displayIntervalMs: number,
+): [number, number] {
+    const endMs = Math.ceil(nowMs / displayIntervalMs) * displayIntervalMs;
+    return [endMs - windowMinutes * 60_000, endMs];
+}
+
+function average(values: readonly number[]): number {
+    return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function averageNullable(values: readonly (number | null)[]): number | null {
+    const available = values.filter((value): value is number => value != null);
+    return available.length > 0 ? average(available) : null;
+}
+
+export function resampleTelemetrySamples(samples: readonly LiveSample[], bucketIntervalMs: number): LiveSample[] {
+    const buckets = new Map<number, LiveSample[]>();
+    for (const sample of samples) {
+        const bucketStartMs = Math.floor(sample.timestampMs / bucketIntervalMs) * bucketIntervalMs;
+        const bucket = buckets.get(bucketStartMs);
+        if (bucket) bucket.push(sample);
+        else buckets.set(bucketStartMs, [sample]);
+    }
+
+    return [...buckets.entries()].map(([bucketStartMs, bucket]) => {
+        const gpuIndices = new Set(bucket.flatMap((sample) => Object.keys(sample.gpu).map(Number)));
+        const gpu: LiveSample['gpu'] = {};
+        for (const index of gpuIndices) {
+            const readings = bucket.flatMap((sample) => sample.gpu[index] ? [sample.gpu[index]] : []);
+            gpu[index] = {
+                util: average(readings.map((reading) => reading.util)),
+                vram: average(readings.map((reading) => reading.vram)),
+                power: average(readings.map((reading) => reading.power)),
+                temp: average(readings.map((reading) => reading.temp)),
+            };
+        }
+        const timestamp = new Date(bucketStartMs).toISOString();
+        return {
+            timestamp,
+            timestampMs: bucketStartMs,
+            pollIntervalMs: bucket.at(-1)?.pollIntervalMs ?? 1000,
+            clock: timestamp.slice(11, 19),
+            cpuUtil: average(bucket.map((sample) => sample.cpuUtil)),
+            cpuFreqMhz: average(bucket.map((sample) => sample.cpuFreqMhz)),
+            cpuPower: averageNullable(bucket.map((sample) => sample.cpuPower)),
+            cpuTemp: averageNullable(bucket.map((sample) => sample.cpuTemp)),
+            ramUsed: average(bucket.map((sample) => sample.ramUsed)),
+            ramFree: average(bucket.map((sample) => sample.ramFree)),
+            ramUtil: average(bucket.map((sample) => sample.ramUtil)),
+            ramSwap: average(bucket.map((sample) => sample.ramSwap)),
+            gpu,
+        };
+    });
+}
+
+export function resolveTelemetryGapBreakMs(bucketIntervalMs: number, pollIntervalMs: PollPreset): number {
+    return Math.max(RAW_MIN_GAP_BREAK_MS, bucketIntervalMs * 1.5, pollIntervalMs * 3);
+}
+
 export interface LiveSample {
     timestamp: string;
     timestampMs: number;
@@ -17,40 +102,13 @@ export interface LiveSample {
     gpu: Record<number, { util: number; vram: number; power: number; temp: number }>;
 }
 
-export interface PersistedInfraTelemetryState {
-    version: 3;
-    pollIntervalMs: PollPreset;
-    windowMinutes: WindowPreset;
-    samples: LiveSample[];
-}
-
-export interface RestoredInfraTelemetryState {
-    pollIntervalMs: PollPreset;
-    windowMinutes: WindowPreset;
-    samples: LiveSample[];
-}
-
 interface PersistedInfraTelemetryPreferences {
     version: 1;
     pollIntervalMs: PollPreset;
     windowMinutes: WindowPreset;
 }
 
-export const INFRA_TELEMETRY_STORAGE_KEY = 'bms_infra_live_telemetry_v1';
 export const INFRA_TELEMETRY_PREFERENCES_STORAGE_KEY = 'bms_infra_live_telemetry_preferences_v1';
-const MAX_WINDOW_RETENTION_MS = 60 * 60 * 1000;
-const MAX_RETAINED_SAMPLES = 4_000;
-export const TELEMETRY_PERSIST_INTERVAL_MS = 15_000;
-
-/**
- * Retained telemetry history is intentionally route-scoped. Current control
- * state has its own lightweight collector, but history collection performs
- * repeated structured sample allocation and must not run on unrelated tools.
- */
-export function shouldCollectTelemetryHistory(pathname: string): boolean {
-    const normalizedPathname = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname;
-    return normalizedPathname === '/' || normalizedPathname === '/infra';
-}
 
 export function isValidPollPreset(value: unknown): value is PollPreset {
     return value === 1000 || value === 2000 || value === 5000;
@@ -60,21 +118,24 @@ function isValidWindowPreset(value: unknown): value is WindowPreset {
     return value === 1 || value === 3 || value === 5 || value === 10 || value === 15 || value === 30 || value === 60;
 }
 
-function loadPersistedTelemetryPreferences(
+export function loadPersistedTelemetryPreferences(
     defaultPollIntervalMs: PollPreset,
     defaultWindowMinutes: WindowPreset,
-): Pick<RestoredInfraTelemetryState, 'pollIntervalMs' | 'windowMinutes'> {
-    if (typeof window === 'undefined') {
-        return { pollIntervalMs: defaultPollIntervalMs, windowMinutes: defaultWindowMinutes };
-    }
+): PersistedInfraTelemetryPreferences {
+    const defaults: PersistedInfraTelemetryPreferences = {
+        version: 1,
+        pollIntervalMs: defaultPollIntervalMs,
+        windowMinutes: defaultWindowMinutes,
+    };
+    if (typeof window === 'undefined') return defaults;
+
     try {
         const raw = window.localStorage.getItem(INFRA_TELEMETRY_PREFERENCES_STORAGE_KEY);
-        if (!raw) return { pollIntervalMs: defaultPollIntervalMs, windowMinutes: defaultWindowMinutes };
+        if (!raw) return defaults;
         const parsed = JSON.parse(raw) as Partial<PersistedInfraTelemetryPreferences>;
-        if (parsed.version !== 1) {
-            return { pollIntervalMs: defaultPollIntervalMs, windowMinutes: defaultWindowMinutes };
-        }
+        if (parsed.version !== 1) return defaults;
         return {
+            version: 1,
             pollIntervalMs: isValidPollPreset(parsed.pollIntervalMs)
                 ? parsed.pollIntervalMs
                 : defaultPollIntervalMs,
@@ -83,142 +144,7 @@ function loadPersistedTelemetryPreferences(
                 : defaultWindowMinutes,
         };
     } catch {
-        return { pollIntervalMs: defaultPollIntervalMs, windowMinutes: defaultWindowMinutes };
-    }
-}
-
-export function trimRetainedSamples(samples: LiveSample[], nowMs = Date.now()): LiveSample[] {
-    const cutoffMs = nowMs - MAX_WINDOW_RETENTION_MS;
-    const futureToleranceMs = 60_000;
-    return samples
-        .filter((sample) => (
-            Number.isFinite(sample.timestampMs)
-            && sample.timestampMs >= cutoffMs
-            && sample.timestampMs <= nowMs + futureToleranceMs
-        ))
-        .slice(-MAX_RETAINED_SAMPLES);
-}
-
-function normalizeSamples(samples: LiveSample[]): LiveSample[] {
-    const deduped = new Map<number, LiveSample>();
-    for (const sample of samples) {
-        if (!Number.isFinite(sample.timestampMs)) continue;
-        deduped.set(sample.timestampMs, sample);
-    }
-    return Array.from(deduped.values()).sort((a, b) => a.timestampMs - b.timestampMs);
-}
-
-function formatClock(timestampMs: number): string {
-    const date = new Date(timestampMs);
-    return date.toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-    });
-}
-
-export function parseTelemetryTimestampMs(timestamp: string): number {
-    const normalized = /(?:z|[+-]\d{2}:?\d{2})$/i.test(timestamp) ? timestamp : `${timestamp}Z`;
-    return Date.parse(normalized);
-}
-
-function parseStoredSample(value: unknown): LiveSample | null {
-    if (!value || typeof value !== 'object') return null;
-    const sample = value as Partial<LiveSample>;
-    if (typeof sample.timestamp !== 'string') return null;
-    const timestampMs = parseTelemetryTimestampMs(sample.timestamp);
-    if (!Number.isFinite(timestampMs)) return null;
-    if (
-        !isValidPollPreset(sample.pollIntervalMs)
-        || typeof sample.cpuUtil !== 'number'
-        || typeof sample.cpuFreqMhz !== 'number'
-        || typeof sample.ramUsed !== 'number'
-        || typeof sample.ramFree !== 'number'
-        || typeof sample.ramUtil !== 'number'
-        || typeof sample.ramSwap !== 'number'
-    ) {
-        return null;
-    }
-    if (!sample.gpu || typeof sample.gpu !== 'object') return null;
-
-    return {
-        timestamp: new Date(timestampMs).toISOString(),
-        timestampMs,
-        pollIntervalMs: sample.pollIntervalMs,
-        clock: formatClock(timestampMs),
-        cpuUtil: sample.cpuUtil,
-        cpuFreqMhz: sample.cpuFreqMhz,
-        cpuPower: typeof sample.cpuPower === 'number' ? sample.cpuPower : null,
-        cpuTemp: typeof sample.cpuTemp === 'number' ? sample.cpuTemp : null,
-        ramUsed: sample.ramUsed,
-        ramFree: sample.ramFree,
-        ramUtil: sample.ramUtil,
-        ramSwap: sample.ramSwap,
-        gpu: sample.gpu as LiveSample['gpu'],
-    };
-}
-
-export function loadPersistedTelemetryState(
-    defaultPollIntervalMs: PollPreset,
-    defaultWindowMinutes: WindowPreset,
-    nowMs: number = Date.now(),
-): RestoredInfraTelemetryState {
-    if (typeof window === 'undefined') {
-        return {
-            pollIntervalMs: defaultPollIntervalMs,
-            windowMinutes: defaultWindowMinutes,
-            samples: [],
-        };
-    }
-
-    try {
-        const raw = window.localStorage.getItem(INFRA_TELEMETRY_STORAGE_KEY);
-        if (!raw) {
-            return {
-                ...loadPersistedTelemetryPreferences(defaultPollIntervalMs, defaultWindowMinutes),
-                samples: [],
-            };
-        }
-
-        const parsed = JSON.parse(raw) as Partial<PersistedInfraTelemetryState>;
-        if (parsed.version !== 3) {
-            return {
-                ...loadPersistedTelemetryPreferences(defaultPollIntervalMs, defaultWindowMinutes),
-                samples: [],
-            };
-        }
-        const legacyPollIntervalMs = isValidPollPreset(parsed.pollIntervalMs)
-            ? parsed.pollIntervalMs
-            : defaultPollIntervalMs;
-        const legacyWindowMinutes = isValidWindowPreset(parsed.windowMinutes)
-            ? parsed.windowMinutes
-            : defaultWindowMinutes;
-        const { pollIntervalMs, windowMinutes } = loadPersistedTelemetryPreferences(
-            legacyPollIntervalMs,
-            legacyWindowMinutes,
-        );
-        const samples = Array.isArray(parsed.samples)
-            ? trimRetainedSamples(
-                normalizeSamples(parsed.samples.map(parseStoredSample).filter(Boolean) as LiveSample[]),
-                nowMs,
-            )
-            : [];
-
-        return { pollIntervalMs, windowMinutes, samples };
-    } catch {
-        return {
-            ...loadPersistedTelemetryPreferences(defaultPollIntervalMs, defaultWindowMinutes),
-            samples: [],
-        };
-    }
-}
-
-export function persistTelemetryState(state: PersistedInfraTelemetryState): void {
-    if (typeof window === 'undefined') return;
-    try {
-        window.localStorage.setItem(INFRA_TELEMETRY_STORAGE_KEY, JSON.stringify(state));
-    } catch {
-        // Ignore storage quota / availability failures and keep live telemetry flowing.
+        return defaults;
     }
 }
 
@@ -235,74 +161,11 @@ export function persistTelemetryPreferences(pollIntervalMs: PollPreset, windowMi
             JSON.stringify(preferences),
         );
     } catch {
-        // Preferences are opportunistic; storage failures must not stop telemetry.
+        // Preferences are optional. Storage failures must not stop telemetry rendering.
     }
 }
 
-export function shouldPersistTelemetryHistory(lastPersistedAtMs: number, nowMs: number): boolean {
-    return nowMs - lastPersistedAtMs >= TELEMETRY_PERSIST_INTERVAL_MS;
-}
-
-/**
- * Fast path for the normal collector case: monotonically increasing samples.
- * This avoids rebuilding a Map and sorting the full retained hour every second.
- * Out-of-order values still fall back to the defensive reconciliation path.
- */
-export function appendRetainedTelemetrySample(
-    previousSamples: LiveSample[],
-    nextSample: LiveSample,
-    nowMs = Date.now(),
-): LiveSample[] {
-    const previousLast = previousSamples.at(-1);
-    if (previousLast && nextSample.timestampMs <= previousLast.timestampMs) {
-        return reconcileTelemetrySamples(previousSamples, [], nextSample);
-    }
-
-    const cutoffMs = nowMs - MAX_WINDOW_RETENTION_MS;
-    let firstRetainedIndex = 0;
-    while (
-        firstRetainedIndex < previousSamples.length
-        && previousSamples[firstRetainedIndex]!.timestampMs < cutoffMs
-    ) {
-        firstRetainedIndex += 1;
-    }
-
-    const retained = firstRetainedIndex === 0
-        ? previousSamples
-        : previousSamples.slice(firstRetainedIndex);
-    const next = [...retained, nextSample];
-    return next.length > MAX_RETAINED_SAMPLES
-        ? next.slice(next.length - MAX_RETAINED_SAMPLES)
-        : next;
-}
-
-export function mergeTelemetrySample(previousSamples: LiveSample[], nextSample: LiveSample): LiveSample[] {
-    const normalizedPrevious = normalizeSamples(previousSamples);
-    if (normalizedPrevious.length > 0 && normalizedPrevious[normalizedPrevious.length - 1]?.timestamp === nextSample.timestamp) {
-        return normalizedPrevious;
-    }
-    return trimRetainedSamples(normalizeSamples([...normalizedPrevious, nextSample]), nextSample.timestampMs);
-}
-
-export function reconcileTelemetryHistories(
-    previousSamples: LiveSample[],
-    persistedSamples: LiveSample[],
-    nowMs = Date.now(),
-): LiveSample[] {
-    return trimRetainedSamples(
-        normalizeSamples([...previousSamples, ...persistedSamples]),
-        nowMs,
-    );
-}
-
-export function reconcileTelemetrySamples(
-    previousSamples: LiveSample[],
-    persistedSamples: LiveSample[],
-    nextSample: LiveSample,
-): LiveSample[] {
-    return reconcileTelemetryHistories(
-        [...previousSamples, nextSample],
-        persistedSamples,
-        nextSample.timestampMs,
-    );
+export function parseTelemetryTimestampMs(timestamp: string): number {
+    const normalized = /(?:z|[+-]\d{2}:?\d{2})$/i.test(timestamp) ? timestamp : `${timestamp}Z`;
+    return Date.parse(normalized);
 }

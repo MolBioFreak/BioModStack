@@ -7,6 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from services.frustrampnn.contracts import canonical_json_bytes
+from services.frustrampnn.settings import default_settings
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 NEXTFLOW_IMAGE = "nextflow/nextflow:25.10.1"
@@ -96,6 +99,25 @@ def _preview_early_sequence_workflow(
             ]
         )
 
+    if enabled:
+        settings_json = canonical_json_bytes(
+            default_settings().model_dump(
+                mode="json",
+                exclude_none=False,
+                exclude={"settings_value_origin"},
+            )
+        ).decode("utf-8")
+        args.extend(
+            [
+                "--frustrampnn_settings",
+                settings_json,
+                "--frustrampnn_settings_value_origin",
+                "bms_default",
+                "--frustrampnn_physical_gpu_id",
+                "0",
+            ]
+        )
+
     completed = subprocess.run(args, text=True, capture_output=True, check=False)
     output = f"{completed.stdout}\n{completed.stderr}"
     dag_path = run_root / "dag.dot"
@@ -144,9 +166,9 @@ def test_early_sequence_branches_schedule_shared_terminal_publication(
     assert "PROTEIN_DESIGN:ProjectProteinDesignMetadata" in dag
     assert "PROTEIN_DESIGN:PublishResults" in dag
     if enabled:
-        assert "PROTEIN_DESIGN:CanonicalFrustraMPNN:CanonicalFrustraMPNNTask" in dag
+        assert "PROTEIN_DESIGN:CanonicalFrustraMPNNV2:CanonicalFrustraMPNNV2Task" in dag
         assert "PROTEIN_DESIGN:ReportProteinDesignFrustraMPNNNotRequested" not in dag
     else:
-        assert "PROTEIN_DESIGN:CanonicalFrustraMPNN:CanonicalFrustraMPNNTask" not in dag
+        assert "PROTEIN_DESIGN:CanonicalFrustraMPNNV2:CanonicalFrustraMPNNV2Task" not in dag
         assert "PROTEIN_DESIGN:ReportProteinDesignFrustraMPNNNotRequested" in dag
-    assert "Process 'CanonicalFrustraMPNNTask' has been already used" not in output
+    assert "Process 'CanonicalFrustraMPNNV2Task' has been already used" not in output

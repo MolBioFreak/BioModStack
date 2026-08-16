@@ -36,8 +36,15 @@ from database import (
     Job,
     ShapeDesignGeometry,
     ShapeDesignRequest,
+    RFD3LocalRedesignRequest,
+    RFD3LocalRedesignCandidate,
+    RFD3LocalRedesignArtifact,
 )
 from paths import get_data_root, resolve_runtime_data_path
+from scripts.rfd3_local_redesign.contract import (
+    canonical_json as rfd3_canonical_json,
+    request_sha256 as rfd3_request_sha256,
+)
 from services.rfantibody_metadata import load_rfantibody_trb_summary
 from services.cdr_annotator import extract_sequence_from_pdb, identify_binder_chains
 from .aligned_error_utils import detect_aligned_error_artifact, load_aligned_error_artifact
@@ -50,7 +57,7 @@ from .conformational_mapping.persistence import (
 )
 from .frustrampnn.contracts import canonical_json_bytes, canonical_json_loads
 from .frustrampnn.identity import deterministic_candidate_id
-from .frustrampnn.manifests import MANIFEST_PATH
+from .frustrampnn.manifests import MANIFEST_PATH, V2_MANIFEST_PATH
 from .frustrampnn.structure import StructureNormalizationError, read_structure_bytes
 from .frustrampnn.persistence import (
     FrustraMPNNPersistenceError,
@@ -1979,12 +1986,15 @@ _CONFORNETS_REPORTING_SEMANTICS: Dict[str, Any] = {
     "schema_version": 1,
     "sample_semantics": "independent_generated_conformer_sample",
     "sample_semantics_note": "Each row is an independent generated monomer conformer sample; frame/sample indices are stable selectors, not a time-resolved trajectory.",
-    "reference_evaluation_semantics": "ordered_ca_kabsch_rmsd_to_staged_references",
-    "reference_evaluation_note": "Reference RMSD metrics are BMS post-hoc ordered Cα RMSD after Kabsch alignment to explicitly staged references; they are only meaningful when evaluation was enabled and references were provided.",
-    "pairwise_diversity_semantics": "post_hoc_pairwise_ca_rmsd_between_generated_samples",
-    "pairwise_diversity_note": "Pairwise diversity is computed after generation from final samples; it is not an upstream training objective trace and not a thermodynamic ensemble probability.",
-    "landscape_semantics": "post_hoc_sample_space_embedding",
-    "landscape_note": "Landscape coordinates are BMS post-hoc RMSD/MDS embedding coordinates when computed; they are not calibrated free energy, thermodynamics, or trajectory time.",
+    "reference_evaluation_semantics": "exact_identity_matched_ca_proper_rotation_kabsch_rmsd_to_staged_references",
+    "reference_evaluation_note": "Reference RMSD metrics are BMS post-hoc Cα RMSD after proper-rotation Kabsch alignment. Correspondence is the exact set of (model, auth_asym_id, auth_seq_id, insertion_code, auth_comp_id, auth_atom_id) identities; row order, ambiguous atoms, missing identities, and imputation are not accepted.",
+    "pairwise_diversity_semantics": "exact_identity_matched_pairwise_ca_proper_rotation_kabsch_rmsd",
+    "pairwise_diversity_note": "Pairwise diversity is computed after generation from final samples with the same exact Cα identity and Kabsch method; it is not an upstream training objective trace or a thermodynamic ensemble probability.",
+    "landscape_semantics": "classical_metric_mds_on_exact_identity_matched_pairwise_ca_kabsch_rmsd",
+    "landscape_note": "Landscape coordinates use classical metric MDS on the complete pairwise exact-identity Cα Kabsch RMSD matrix. They are not calibrated free energy, thermodynamics, or trajectory time.",
+    "ca_identity": "(model, auth_asym_id, auth_seq_id, insertion_code, auth_comp_id, auth_atom_id)",
+    "ca_rmsd_method": "proper_rotation_kabsch_svd_in_angstroms",
+    "landscape_embedding_method": "classical_metric_mds_double_centered_squared_distances_with_nonpositive_eigencomponents_discarded",
     "confidence_semantics": "sample_scalar_confidence_with_optional_full_tensor",
     "confidence_note": "Scalar pLDDT/gPDE/pTM values come from the optional ConforNets/OpenFold3 confidence path. Per-residue confidence requires a saved full confidence tensor artifact.",
 }
@@ -2779,8 +2789,492 @@ async def _ingest_shape_result_manifest(
     return created
 
 
+def _local_redesign_canonical_sha(payload: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _local_redesign_validate_native_request_artifact(
+    path: Path,
+    *,
+    request_payload: Mapping[str, Any],
+    request_sha256: str,
+) -> None:
+    expected_text = rfd3_canonical_json(request_payload) + "\n"
+    try:
+        artifact_text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError("RFD3 local-redesign native request artifact is unavailable") from exc
+    if (
+        artifact_text != expected_text
+        or rfd3_request_sha256(request_payload) != request_sha256
+    ):
+        raise RuntimeError("RFD3 local-redesign native request artifact binding is invalid")
+
+
+def _local_redesign_safe_job_artifact(output_root: Path, relative_path: str) -> Path:
+    relative = Path(relative_path)
+    if (
+        relative.is_absolute()
+        or relative.as_posix() != relative_path
+        or any(part in {"", ".", ".."} for part in relative.parts)
+        or "\\" in relative_path
+    ):
+        raise RuntimeError("RFD3 local-redesign artifact path is unsafe")
+    current = output_root
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise RuntimeError("RFD3 local-redesign artifact path contains a symlink")
+    resolved = current.resolve()
+    if not resolved.is_relative_to(output_root.resolve()) or not resolved.is_file():
+        raise RuntimeError("RFD3 local-redesign artifact is missing or outside the job output root")
+    if resolved.stat().st_nlink != 1:
+        raise RuntimeError("RFD3 local-redesign artifact must not be hard-linked")
+    return resolved
+
+
+def _local_redesign_external_source(path_value: str) -> Path:
+    stored_source = Path(path_value).expanduser()
+    if stored_source.is_symlink():
+        raise RuntimeError("RFD3 local-redesign source structure is missing or unsafe")
+    source = resolve_runtime_data_path(stored_source)
+    data_root = get_data_root().resolve()
+    if (
+        not source.is_file()
+        or source.is_symlink()
+        or not source.is_relative_to(data_root)
+        or source != stored_source.resolve()
+    ):
+        raise RuntimeError("RFD3 local-redesign source structure is missing or unsafe")
+    return source
+
+
+def _local_redesign_validate_artifact(
+    descriptor: Mapping[str, Any],
+    *,
+    output_root: Path,
+    source_path: Path,
+) -> Path:
+    role = str(descriptor.get("role") or "").strip()
+    relative = descriptor.get("relative_path")
+    storage = descriptor.get("storage_path")
+    expected_sha = descriptor.get("sha256")
+    expected_bytes = descriptor.get("bytes")
+    if not role or not isinstance(relative, str) or not isinstance(storage, str):
+        raise RuntimeError("RFD3 local-redesign artifact descriptor is incomplete")
+    if not isinstance(expected_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_sha):
+        raise RuntimeError(f"RFD3 local-redesign artifact has an invalid SHA-256: {role}")
+    if not isinstance(expected_bytes, int) or expected_bytes < 0:
+        raise RuntimeError(f"RFD3 local-redesign artifact has an invalid byte count: {role}")
+    if role == "source_structure":
+        resolved = _local_redesign_external_source(storage)
+        if resolved != source_path:
+            raise RuntimeError("RFD3 local-redesign source artifact path does not match the request")
+    else:
+        resolved = _local_redesign_safe_job_artifact(output_root, relative)
+        if resolved != Path(storage).expanduser().resolve():
+            raise RuntimeError(f"RFD3 local-redesign artifact storage path mismatch: {role}")
+    actual_sha = hashlib.sha256(resolved.read_bytes()).hexdigest()
+    if actual_sha != expected_sha or resolved.stat().st_size != expected_bytes:
+        raise RuntimeError(f"RFD3 local-redesign artifact identity mismatch: {role}")
+    return resolved
+
+
+async def _ingest_rfd3_local_redesign_manifest(
+    job: Job,
+    output_root: Path,
+    session: AsyncSession,
+    *,
+    commit: bool,
+) -> int:
+    manifest_path = output_root / "collected" / "protein_local_redesign" / "rfd3_result_manifest.json"
+    manifest = None
+    if not manifest_path.is_file() or manifest_path.is_symlink():
+        raise RuntimeError("RFD3 local-redesign result manifest is absent or unsafe")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"RFD3 local-redesign result manifest is malformed: {exc}") from exc
+    if not isinstance(manifest, dict) or manifest.get("schema") != "bms.rfd3.local-redesign.result.v1":
+        raise RuntimeError("RFD3 local-redesign result manifest schema is invalid")
+    unsigned = dict(manifest)
+    claimed_manifest_sha = unsigned.pop("manifest_sha256", None)
+    if not isinstance(claimed_manifest_sha, str) or _local_redesign_canonical_sha(unsigned) != claimed_manifest_sha:
+        raise RuntimeError("RFD3 local-redesign result manifest SHA-256 is invalid")
+
+    request = (
+        await session.execute(select(RFD3LocalRedesignRequest).where(RFD3LocalRedesignRequest.job_id == str(job.id)))
+    ).scalar_one_or_none()
+    if request is None:
+        raise RuntimeError("RFD3 local-redesign job has no immutable request row")
+    request_payload = request.request_json
+    if not isinstance(request_payload, dict):
+        raise RuntimeError("RFD3 local-redesign request JSON is invalid")
+    if request.request_sha256 != _local_redesign_canonical_sha(request_payload):
+        raise RuntimeError("RFD3 local-redesign request SHA-256 is invalid")
+    if request.profile_registry_sha256 != request_payload.get("profile_registry_sha256"):
+        raise RuntimeError("RFD3 local-redesign profile registry hash is invalid")
+    if manifest.get("request_sha256") != request.request_sha256:
+        raise RuntimeError("RFD3 local-redesign result does not bind to the immutable request")
+    if manifest.get("result_contract_id") != "rfd3_local_redesign_v1":
+        raise RuntimeError("RFD3 local-redesign result contract is unsupported")
+    if (
+        manifest.get("profile_id") != request_payload.get("profile_id")
+        or manifest.get("profile_registry_sha256") != request_payload.get("profile_registry_sha256")
+        or manifest.get("profile") != request_payload.get("profile")
+    ):
+        raise RuntimeError("RFD3 local-redesign result profile binding is invalid")
+    semantic_bindings = {
+        "request_schema": "schema",
+        "redesign_mode": "redesign_mode",
+        "contig_dialect": "contig_dialect",
+        "sequence_policy": "sequence_policy",
+        "input": "input",
+        "rfd3": "rfd3",
+        "execution": "execution",
+        "evaluation": "evaluation",
+    }
+    for manifest_key, request_key in semantic_bindings.items():
+        if manifest.get(manifest_key) != request_payload.get(request_key):
+            raise RuntimeError(f"RFD3 local-redesign manifest {manifest_key} binding is invalid")
+    source_binding = request_payload.get("input")
+    if not isinstance(source_binding, dict) or not isinstance(source_binding.get("path"), str):
+        raise RuntimeError("RFD3 local-redesign request has no source input")
+    source_request = source_binding["path"]
+    source_path = _local_redesign_external_source(source_request)
+    if source_binding.get("sha256") != hashlib.sha256(source_path.read_bytes()).hexdigest():
+        raise RuntimeError("RFD3 local-redesign source hash is invalid")
+
+    manifest_artifacts = manifest.get("artifacts")
+    candidates = manifest.get("candidates")
+    if not isinstance(manifest_artifacts, list) or not isinstance(candidates, list) or not candidates:
+        raise RuntimeError("RFD3 local-redesign result lacks declared artifacts or candidates")
+    descriptor_by_path: dict[str, dict[str, Any]] = {}
+    for descriptor in manifest_artifacts:
+        if not isinstance(descriptor, dict):
+            raise RuntimeError("RFD3 local-redesign artifact entry is malformed")
+        relative_path = descriptor.get("relative_path")
+        if not isinstance(relative_path, str) or relative_path in descriptor_by_path:
+            raise RuntimeError("RFD3 local-redesign artifact paths must be unique")
+        _local_redesign_validate_artifact(descriptor, output_root=output_root, source_path=source_path)
+        descriptor_by_path[relative_path] = descriptor
+
+    role_counts: dict[str, int] = {}
+    for descriptor in descriptor_by_path.values():
+        role = str(descriptor.get("role") or "")
+        role_counts[role] = role_counts.get(role, 0) + 1
+    required_roles = {
+        "source_structure",
+        "native_request",
+        "preparation_receipt",
+        "native_producer_input",
+        "producer_log",
+        "producer_metadata_index",
+    }
+    if any(role_counts.get(role) != 1 for role in required_roles):
+        raise RuntimeError("RFD3 local-redesign result lacks required source or runtime evidence")
+    native_request_descriptor = next(
+        descriptor for descriptor in descriptor_by_path.values() if descriptor.get("role") == "native_request"
+    )
+    native_request_path = _local_redesign_safe_job_artifact(
+        output_root, str(native_request_descriptor["relative_path"])
+    )
+    _local_redesign_validate_native_request_artifact(
+        native_request_path,
+        request_payload=request_payload,
+        request_sha256=request.request_sha256,
+    )
+
+    execution = request_payload.get("execution")
+    execution_evidence = manifest.get("execution_evidence")
+    if not isinstance(execution, dict) or not isinstance(execution_evidence, dict):
+        raise RuntimeError("RFD3 local-redesign result lacks execution evidence")
+    requested_num_designs = execution.get("num_designs")
+    if (
+        not isinstance(requested_num_designs, int)
+        or execution_evidence.get("requested_num_designs") != requested_num_designs
+        or execution_evidence.get("observed_num_designs") != len(candidates)
+        or execution_evidence.get("candidate_count_integrity") != "exact"
+        or len(candidates) != requested_num_designs
+    ):
+        raise RuntimeError("RFD3 local-redesign candidate count integrity is invalid")
+    trajectories_requested = execution.get("dump_trajectories") is True
+    expected_trajectory_state = "produced" if trajectories_requested else "not_requested"
+    if execution_evidence.get("trajectories") != expected_trajectory_state:
+        raise RuntimeError("RFD3 local-redesign trajectory evidence is invalid")
+    if request_payload.get("sequence_policy") == "skip" and execution_evidence.get("sequence_design") != "not_requested":
+        raise RuntimeError("RFD3 local-redesign sequence skip evidence is invalid")
+    expected_role_counts = {role: 1 for role in required_roles}
+    expected_role_counts.update(
+        {
+            "structure": requested_num_designs,
+            "native_prediction_metadata": requested_num_designs,
+            "denoised_trajectory": requested_num_designs if trajectories_requested else 0,
+            "noisy_trajectory": requested_num_designs if trajectories_requested else 0,
+        }
+    )
+    if role_counts != {role: count for role, count in expected_role_counts.items() if count}:
+        raise RuntimeError("RFD3 local-redesign artifact role cardinality is invalid")
+
+    seen_candidates: set[str] = set()
+    seen_artifacts: set[str] = set()
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            raise RuntimeError("RFD3 local-redesign candidate entry is malformed")
+        candidate_id = candidate.get("candidate_id")
+        candidate_artifacts = candidate.get("artifacts")
+        if not isinstance(candidate_id, str) or not candidate_id or candidate_id in seen_candidates:
+            raise RuntimeError("RFD3 local-redesign candidate IDs must be unique")
+        if not isinstance(candidate_artifacts, list) or not candidate_artifacts:
+            raise RuntimeError(f"RFD3 local-redesign candidate lacks artifacts: {candidate_id}")
+        if candidate.get("status") != "generated" or candidate.get("result_set") != "rfd3_local_redesign_candidates":
+            raise RuntimeError(f"RFD3 local-redesign candidate semantics are invalid: {candidate_id}")
+        candidate_artifact_sha = _local_redesign_canonical_sha(candidate_artifacts)
+        if candidate.get("artifact_manifest_sha256") != candidate_artifact_sha:
+            raise RuntimeError(f"RFD3 local-redesign candidate artifact hash is invalid: {candidate_id}")
+        candidate_roles = {str(item.get("role") or "") for item in candidate_artifacts if isinstance(item, dict)}
+        trajectory_roles = {"denoised_trajectory", "noisy_trajectory"}
+        expected_candidate_roles = {"structure", "native_prediction_metadata"}
+        if trajectories_requested:
+            expected_candidate_roles.update(trajectory_roles)
+        if candidate_roles != expected_candidate_roles or len(candidate_artifacts) != len(expected_candidate_roles):
+            raise RuntimeError(f"RFD3 local-redesign candidate artifact roles are invalid: {candidate_id}")
+        for descriptor in candidate_artifacts:
+            if not isinstance(descriptor, dict):
+                raise RuntimeError(f"RFD3 local-redesign candidate artifact is malformed: {candidate_id}")
+            relative_path = descriptor.get("relative_path")
+            if relative_path not in descriptor_by_path or descriptor_by_path[relative_path] != descriptor:
+                raise RuntimeError(f"RFD3 local-redesign candidate artifact is undeclared: {candidate_id}")
+            if str(relative_path) in seen_artifacts:
+                raise RuntimeError(f"RFD3 local-redesign candidate artifact is reused: {candidate_id}")
+            seen_artifacts.add(str(relative_path))
+        native_metadata_descriptor = next(
+            item for item in candidate_artifacts if item.get("role") == "native_prediction_metadata"
+        )
+        native_metadata_path = _local_redesign_safe_job_artifact(
+            output_root, str(native_metadata_descriptor["relative_path"])
+        )
+        try:
+            native_metadata = json.loads(native_metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"RFD3 local-redesign native metadata is malformed: {candidate_id}") from exc
+        if not isinstance(native_metadata, dict):
+            raise RuntimeError(f"RFD3 local-redesign native metadata is not an object: {candidate_id}")
+        metric_keys = {
+            "summary_confidences",
+            "ca_rmsd_to_input",
+            "backbone_rmsd",
+            "insertion_rmsd",
+            "diffused_index_map",
+            "hbond_metrics",
+            "inference_metadata",
+        }
+        expected_metrics = {key: native_metadata[key] for key in metric_keys if key in native_metadata}
+        if candidate.get("metrics") != expected_metrics:
+            raise RuntimeError(f"RFD3 local-redesign candidate metrics do not match native metadata: {candidate_id}")
+        seen_candidates.add(candidate_id)
+
+    candidate_roles_all = {
+        "structure",
+        "native_prediction_metadata",
+        "denoised_trajectory",
+        "noisy_trajectory",
+    }
+    declared_candidate_artifacts = {
+        relative_path
+        for relative_path, descriptor in descriptor_by_path.items()
+        if descriptor.get("role") in candidate_roles_all
+    }
+    if seen_artifacts != declared_candidate_artifacts:
+        raise RuntimeError("RFD3 local-redesign candidate artifact assignment is incomplete")
+
+    runtime_records = [
+        candidate.get("metrics", {}).get("inference_metadata")
+        for candidate in candidates
+        if isinstance(candidate.get("metrics"), dict) and candidate.get("metrics", {}).get("inference_metadata") is not None
+    ]
+    if runtime_records:
+        request.runtime_identity_json = {
+            "source": "native_rfd3_prediction_metadata",
+            "records": runtime_records,
+        }
+
+    receipt_descriptors = [
+        descriptor for descriptor in descriptor_by_path.values() if descriptor.get("role") == "preparation_receipt"
+    ]
+    if len(receipt_descriptors) != 1:
+        raise RuntimeError("RFD3 local-redesign preparation receipt descriptor is invalid")
+    receipt_descriptor = receipt_descriptors[0]
+    receipt_relative_path = str(receipt_descriptor.get("relative_path") or "")
+    if receipt_relative_path != "collected/protein_local_redesign/rfd3_preparation_receipt.json":
+        raise RuntimeError("RFD3 local-redesign preparation receipt path is invalid")
+    receipt_path = _local_redesign_safe_job_artifact(output_root, receipt_relative_path)
+    if not receipt_path.is_file() or receipt_path.is_symlink():
+        raise RuntimeError("RFD3 local-redesign preparation receipt is unavailable")
+    else:
+        try:
+            preparation_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError("RFD3 local-redesign preparation receipt is malformed") from exc
+        if (
+            not isinstance(preparation_receipt, dict)
+            or preparation_receipt.get("schema") != "bms.rfd3.local-redesign.preparation-receipt.v1"
+            or preparation_receipt.get("request_sha256") != request.request_sha256
+        ):
+            raise RuntimeError("RFD3 local-redesign preparation receipt binding is invalid")
+        design_id = preparation_receipt.get("design_id")
+        native_input_descriptors = [
+            descriptor
+            for descriptor in descriptor_by_path.values()
+            if descriptor.get("role") == "native_producer_input"
+        ]
+        if len(native_input_descriptors) != 1:
+            raise RuntimeError("RFD3 local-redesign native producer input descriptor is invalid")
+        native_input_relative_path = str(native_input_descriptors[0].get("relative_path") or "")
+        if native_input_relative_path != "collected/protein_local_redesign/rfd3_input_protein_local_redesign_0.json":
+            raise RuntimeError("RFD3 local-redesign native producer input path is invalid")
+        native_input_path = _local_redesign_safe_job_artifact(output_root, native_input_relative_path)
+        try:
+            native_input_payload = json.loads(native_input_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError("RFD3 local-redesign native producer input is malformed") from exc
+        receipt_native = preparation_receipt.get("native_rfd3")
+        native_runtime_input = receipt_native.get("input") if isinstance(receipt_native, dict) else None
+        expected_native = dict(request_payload.get("rfd3") or {})
+        expected_native["input"] = native_runtime_input
+        runtime_input = preparation_receipt.get("runtime_input")
+        sequence_design = preparation_receipt.get("sequence_design")
+        if (
+            not isinstance(design_id, str)
+            or not design_id
+            or not isinstance(native_runtime_input, str)
+            or Path(native_runtime_input).name != source_path.name
+            or receipt_native != expected_native
+            or native_input_payload != {design_id: expected_native}
+            or preparation_receipt.get("native_input_sha256")
+            != _local_redesign_canonical_sha(native_input_payload)
+            or not isinstance(runtime_input, dict)
+            or runtime_input.get("path") != source_path.name
+            or runtime_input.get("sha256") != source_binding.get("sha256")
+            or preparation_receipt.get("redesign_mode") != request_payload.get("redesign_mode")
+            or preparation_receipt.get("sequence_policy") != request_payload.get("sequence_policy")
+            or not isinstance(sequence_design, dict)
+            or sequence_design.get("state")
+            != ("not_requested" if request_payload.get("sequence_policy") == "skip" else "requested")
+        ):
+            raise RuntimeError("RFD3 local-redesign preparation receipt semantics are invalid")
+        request.preparation_receipt_json = preparation_receipt
+
+    request.result_manifest_sha256 = claimed_manifest_sha
+    now = datetime.utcnow()
+    job_status = str(job.status or "").strip().lower()
+    if job_status == "completed":
+        request.status = "completed"
+        request.terminal_at = request.terminal_at or now
+    elif job_status in {"queued", "running", "awaiting_input"}:
+        request.status = "generated"
+        request.terminal_at = None
+    request.updated_at = now
+
+    manifest_descriptor = {
+        "role": "rfd3_result_manifest",
+        "relative_path": "collected/protein_local_redesign/rfd3_result_manifest.json",
+        "storage_path": str(manifest_path.resolve()),
+        "sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        "bytes": manifest_path.stat().st_size,
+        "media_type": "application/json",
+    }
+    all_descriptors = [*descriptor_by_path.values(), manifest_descriptor]
+    for descriptor in all_descriptors:
+        relative_path = str(descriptor["relative_path"])
+        artifact_id = hashlib.sha256(f"{request.request_id}:{relative_path}".encode("utf-8")).hexdigest()
+        candidate_id = None
+        for candidate in candidates:
+            if any(item.get("relative_path") == relative_path for item in candidate.get("artifacts", [])):
+                candidate_id = candidate.get("candidate_id")
+                break
+        existing = (
+            await session.execute(
+                select(RFD3LocalRedesignArtifact).where(
+                    RFD3LocalRedesignArtifact.request_id == request.request_id,
+                    RFD3LocalRedesignArtifact.relative_path == relative_path,
+                )
+            )
+        ).scalar_one_or_none()
+        values = {
+            "artifact_id": artifact_id,
+            "request_id": request.request_id,
+            "candidate_id": candidate_id,
+            "role": descriptor["role"],
+            "relative_path": relative_path,
+            "storage_path": descriptor["storage_path"],
+            "content_sha256": descriptor["sha256"],
+            "size_bytes": descriptor["bytes"],
+            "media_type": descriptor.get("media_type") or "application/octet-stream",
+            "metadata_json": {"request_sha256": request.request_sha256},
+        }
+        if existing is not None:
+            if any(getattr(existing, key) != value for key, value in values.items() if key not in {"artifact_id", "metadata_json"}):
+                raise RuntimeError(f"RFD3 local-redesign artifact replay conflicts: {relative_path}")
+        else:
+            session.add(RFD3LocalRedesignArtifact(**values))
+
+    for candidate in candidates:
+        candidate_id = str(candidate["candidate_id"])
+        row_id = hashlib.sha256(f"{request.request_id}:{candidate_id}".encode("utf-8")).hexdigest()
+        values = {
+            "id": row_id,
+            "request_id": request.request_id,
+            "candidate_id": candidate_id,
+            "result_set": candidate.get("result_set") or "rfd3_local_redesign_candidates",
+            "stage": "backbone",
+            "status": candidate.get("status") or "generated",
+            "artifact_manifest_sha256": candidate["artifact_manifest_sha256"],
+            "metrics_json": candidate.get("metrics") if isinstance(candidate.get("metrics"), dict) else {},
+            "metadata_json": {
+                "request_sha256": request.request_sha256,
+                "profile_id": manifest.get("profile_id"),
+                "redesign_mode": manifest.get("redesign_mode"),
+            },
+        }
+        existing = (
+            await session.execute(
+                select(RFD3LocalRedesignCandidate).where(
+                    RFD3LocalRedesignCandidate.request_id == request.request_id,
+                    RFD3LocalRedesignCandidate.candidate_id == candidate_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            if any(getattr(existing, key) != value for key, value in values.items() if key not in {"id", "created_at"}):
+                raise RuntimeError(f"RFD3 local-redesign candidate replay conflicts: {candidate_id}")
+        else:
+            session.add(RFD3LocalRedesignCandidate(**values))
+
+    await session.flush()
+    if commit:
+        await session.commit()
+    return len(candidates)
+
+
 _FRUSTRAMPNN_TERMINAL_STAGES = frozenset({"frustrampnn", "canonical_frustrampnn"})
 _FRUSTRAMPNN_TERMINAL_RESULT = "workflow_component_result_v1.json"
+_FRUSTRAMPNN_TERMINAL_RESULTS = frozenset(
+    {_FRUSTRAMPNN_TERMINAL_RESULT, "workflow_component_result_v2.json"}
+)
+_FRUSTRAMPNN_RESULT_MANIFESTS = frozenset({MANIFEST_PATH, V2_MANIFEST_PATH})
+_FRUSTRAMPNN_RESULT_PAIRS = {
+    MANIFEST_PATH: _FRUSTRAMPNN_TERMINAL_RESULT,
+    V2_MANIFEST_PATH: "workflow_component_result_v2.json",
+}
 
 
 def _explicit_stage_paths(value: Any) -> list[str]:
@@ -2855,15 +3349,22 @@ def _stage_path(path: str, output_path: Path) -> Path:
     return candidate
 
 
-def _read_explicit_terminal_envelope(bundle_root: Path) -> dict[str, Any]:
+def _read_explicit_terminal_envelope(
+    bundle_root: Path, terminal_result_name: str = _FRUSTRAMPNN_TERMINAL_RESULT
+) -> dict[str, Any]:
     """Read the exact terminal child without following root or leaf symlinks."""
+
+    if terminal_result_name not in _FRUSTRAMPNN_TERMINAL_RESULTS:
+        raise FrustraMPNNPersistenceError(
+            "FrustraMPNN explicit terminal result generation is unsupported"
+        )
 
     leaf_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     root_fd = -1
     terminal_fd = -1
     try:
         root_fd = _open_absolute_no_symlinks(bundle_root, directory=True)
-        terminal_fd = os.open(_FRUSTRAMPNN_TERMINAL_RESULT, leaf_flags, dir_fd=root_fd)
+        terminal_fd = os.open(terminal_result_name, leaf_flags, dir_fd=root_fd)
         metadata = os.fstat(terminal_fd)
         if not stat.S_ISREG(metadata.st_mode):
             raise FrustraMPNNPersistenceError(
@@ -3379,9 +3880,9 @@ async def _ingest_explicit_frustrampnn_results(
         return None
 
     paths = [_stage_path(path, output_path) for path in explicit]
-    manifests = [path for path in paths if path.name == MANIFEST_PATH]
+    manifests = [path for path in paths if path.name in _FRUSTRAMPNN_RESULT_MANIFESTS]
     terminal_paths = [
-        path for path in paths if path.name == _FRUSTRAMPNN_TERMINAL_RESULT
+        path for path in paths if path.name in _FRUSTRAMPNN_TERMINAL_RESULTS
     ]
     if not manifests:
         raise FrustraMPNNPersistenceError(
@@ -3421,8 +3922,17 @@ async def _ingest_explicit_frustrampnn_results(
     parent_designs: list[tuple[str, str, Path, Any]] = []
     invocation_roots: dict[str, Path] = {}
     candidate_roots: dict[str, Path] = {}
+    terminal_paths_by_root = {
+        os.fspath(path.parent.absolute()): path for path in terminal_paths
+    }
     for root in roots:
-        terminal = _read_explicit_terminal_envelope(root)
+        terminal_path = terminal_paths_by_root[os.fspath(root)]
+        manifest_path = next(path for path in manifests if path.parent.absolute() == root)
+        if _FRUSTRAMPNN_RESULT_PAIRS[manifest_path.name] != terminal_path.name:
+            raise FrustraMPNNPersistenceError(
+                "FrustraMPNN canonical manifest and terminal result generations are mixed"
+            )
+        terminal = _read_explicit_terminal_envelope(root, terminal_path.name)
         bundle = validate_frustrampnn_result_bundle(
             root,
             expected_parent_job_id=str(current_job.id),
@@ -3624,6 +4134,27 @@ def _canonical_protein_design_row_id(
     return expected
 
 
+async def _persist_cm_bundle_atomically(
+    session: AsyncSession,
+    cm_request: Any,
+    *,
+    bundle: Mapping[str, Any],
+    result_root: Path,
+    commit: bool,
+) -> None:
+    """Keep canonical FrustraMPNN rows and CM records in one transaction."""
+
+    try:
+        await ingest_cm_result_bundle(
+            session, cm_request, bundle=bundle, result_root=result_root
+        )
+        if commit:
+            await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+
+
 async def ingest_job_results(
     job_id: str, 
     output_dir: str, 
@@ -3654,13 +4185,16 @@ async def ingest_job_results(
 
     job_result = await session.execute(select(Job).where(Job.id == job_id))
     current_job = job_result.scalar_one_or_none()
+    is_conformational_mapping = bool(
+        current_job and str(current_job.model_id or "").strip().lower() == "conformational_mapping"
+    )
     canonical_count = await _ingest_explicit_frustrampnn_results(
         current_job,
         output_path,
         session,
-        commit=commit,
+        commit=commit and not is_conformational_mapping,
     )
-    if canonical_count is not None:
+    if canonical_count is not None and not is_conformational_mapping:
         return canonical_count
 
     if not output_path.exists():
@@ -3675,6 +4209,8 @@ async def ingest_job_results(
         and str(current_job.mode or "").strip().lower() == "shape_blueprint"
     ):
         return await _ingest_shape_result_manifest(current_job, output_path, session, commit=commit)
+    if current_job and str(current_job.model_id or "").strip().lower() == "protein_local_redesign":
+        return await _ingest_rfd3_local_redesign_manifest(current_job, output_path, session, commit=commit)
     if current_job and str(current_job.model_id or "") == "conformational_mapping":
         cm_request = await get_cm_request(session, job_id)
         if cm_request is None:
@@ -3722,11 +4258,22 @@ async def ingest_job_results(
                     raise ConformationalPersistenceError("canonical derived index request mismatch")
                 required_index_fields = {
                     "schema_name", "schema_version", "request_id", "source_ensemble_sha256",
-                    "records", "structure_maps", "landscapes", "analysis", "lineage",
-                    "support", "missingness", "resampling",
+                    "records", "analysis", "lineage", "support", "missingness", "resampling",
                 }
-                allowed_index_fields = required_index_fields | {"state_landscape_analyses"}
-                if not required_index_fields.issubset(derived) or set(derived) - allowed_index_fields:
+                legacy_result_fields = {"structure_maps", "landscapes"}
+                global_result_fields = {"frustrampnn_result_references"}
+                allowed_index_fields = (
+                    required_index_fields | legacy_result_fields | global_result_fields
+                    | {"state_landscape_analyses"}
+                )
+                has_legacy_results = legacy_result_fields.issubset(derived)
+                has_global_results = global_result_fields.issubset(derived)
+                if (
+                    not required_index_fields.issubset(derived)
+                    or set(derived) - allowed_index_fields
+                    or has_legacy_results == has_global_results
+                    or (set(derived) & legacy_result_fields and not has_legacy_results)
+                ):
                     raise ConformationalPersistenceError("canonical derived index fields are incomplete or unknown")
                 if derived["schema_name"] != "cm_derived_index" or derived["schema_version"] != 1:
                     raise ConformationalPersistenceError("canonical derived index schema is unsupported")
@@ -3758,8 +4305,98 @@ async def ingest_job_results(
                     digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
                     if digest != item["sha256"] or artifact.stat().st_size != item["bytes"]:
                         raise ConformationalPersistenceError("canonical derived artifact identity mismatch")
-                bundle["cm_structure_maps"] = derived.get("structure_maps", [])
-                bundle["cm_frustration_landscapes"] = derived.get("landscapes", [])
+                if has_global_results:
+                    snapshots_path = result_root / "cm_complex_snapshots_v1.json"
+                    if snapshots_path.is_symlink() or not snapshots_path.is_file():
+                        raise ConformationalPersistenceError(
+                            "canonical CM snapshot authority is absent or unsafe"
+                        )
+                    snapshots = json.loads(snapshots_path.read_text(encoding="utf-8"))
+                    if not isinstance(snapshots, list) or not snapshots:
+                        raise ConformationalPersistenceError(
+                            "canonical CM snapshot authority is malformed"
+                        )
+                    references = derived["frustrampnn_result_references"]
+                    if (
+                        not isinstance(references, dict)
+                        or references.get("schema_name") != "cm_frustrampnn_result_references"
+                        or references.get("schema_version") != 1
+                        or references.get("parent_job_id") != str(current_job.id)
+                        or references.get("parent_workflow_id") != "conformational_mapping"
+                        or references.get("expected_cardinality") != len(ensemble["candidates"])
+                        or not isinstance(references.get("results"), list)
+                        or len(references["results"]) != len(ensemble["candidates"])
+                    ):
+                        raise ConformationalPersistenceError(
+                            "canonical FrustraMPNN result references are incomplete or unbound"
+                        )
+                    global_maps: list[dict[str, Any]] = []
+                    global_landscapes: list[dict[str, Any]] = []
+                    for reference in references["results"]:
+                        if not isinstance(reference, dict):
+                            raise ConformationalPersistenceError(
+                                "canonical FrustraMPNN result reference is malformed"
+                            )
+                        relative = Path(str(reference.get("bundle_relative_path") or ""))
+                        relative_text = relative.as_posix()
+                        if (
+                            relative.is_absolute()
+                            or relative_text != str(reference.get("bundle_relative_path") or "")
+                            or any(part in {"", ".", ".."} for part in relative.parts)
+                            or "\\" in str(reference.get("bundle_relative_path") or "")
+                        ):
+                            raise ConformationalPersistenceError(
+                                "canonical FrustraMPNN result reference path is unsafe"
+                            )
+                        unresolved_bundle_root = result_root / relative
+                        if unresolved_bundle_root.is_symlink():
+                            raise ConformationalPersistenceError(
+                                "canonical FrustraMPNN result bundle is unsafe"
+                            )
+                        bundle_root = unresolved_bundle_root.resolve(strict=True)
+                        bundle_root.relative_to(result_root.resolve())
+                        if not bundle_root.is_dir():
+                            raise ConformationalPersistenceError(
+                                "canonical FrustraMPNN result bundle is unsafe"
+                            )
+                        manifest_path = bundle_root / "frustrampnn_result_manifest_v2.json"
+                        landscape_path = bundle_root / "frustrampnn_landscape_v2.json"
+                        structure_map_path = bundle_root / "frustrampnn_structure_map_v1.json"
+                        for artifact_path in (manifest_path, landscape_path, structure_map_path):
+                            if artifact_path.is_symlink() or not artifact_path.is_file():
+                                raise ConformationalPersistenceError(
+                                    "canonical FrustraMPNN result artifact is unsafe"
+                                )
+                        if (
+                            hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+                            != reference.get("result_manifest_sha256")
+                            or hashlib.sha256(landscape_path.read_bytes()).hexdigest()
+                            != reference.get("landscape_sha256")
+                            or hashlib.sha256(structure_map_path.read_bytes()).hexdigest()
+                            != reference.get("structure_map_sha256")
+                        ):
+                            raise ConformationalPersistenceError(
+                                "canonical FrustraMPNN result reference hash mismatch"
+                            )
+                        landscape = json.loads(landscape_path.read_text(encoding="utf-8"))
+                        structure_map = json.loads(structure_map_path.read_text(encoding="utf-8"))
+                        candidate_id = str(reference.get("candidate_id") or "")
+                        if (
+                            landscape.get("candidate_id") != candidate_id
+                            or structure_map.get("candidate_id") != candidate_id
+                        ):
+                            raise ConformationalPersistenceError(
+                                "canonical FrustraMPNN result candidate binding mismatch"
+                            )
+                        global_landscapes.append(landscape)
+                        global_maps.append(structure_map)
+                    bundle["cm_frustrampnn_result_references"] = references
+                    bundle["cm_complex_snapshots"] = snapshots
+                    bundle["frustrampnn_structure_maps"] = global_maps
+                    bundle["frustrampnn_landscapes"] = global_landscapes
+                else:
+                    bundle["cm_structure_maps"] = derived.get("structure_maps", [])
+                    bundle["cm_frustration_landscapes"] = derived.get("landscapes", [])
                 bundle["cm_analysis_v1"] = derived.get("analysis")
                 bundle["cm_state_landscape_analyses"] = derived.get("state_landscape_analyses")
                 bundle["cm_lineage"] = derived.get("lineage")
@@ -3771,9 +4408,13 @@ async def ingest_job_results(
                 raise ConformationalPersistenceError(
                     f"canonical derived index is malformed: {exc}"
                 ) from exc
-        await ingest_cm_result_bundle(session, cm_request, bundle=bundle, result_root=result_root)
-        if commit:
-            await session.commit()
+        await _persist_cm_bundle_atomically(
+            session,
+            cm_request,
+            bundle=bundle,
+            result_root=result_root,
+            commit=commit,
+        )
         return len(ensemble["candidates"])
     job_context = _job_stage_context(current_job)
     lineage_cache: Dict[str, Optional[Design]] = {}

@@ -4,55 +4,27 @@
         "frame_index": 0,
         "relative_path": "conformers/candidate_000.cif",
         "sample_id": "legacy-000",
-        "sha256": "e98e9c64c410103b102ebc0d0d19fda03f9e0f12189e3f0cafa878d037bad7cb"
+        "sha256": "add8f015aac59257a191780ae775717980000ea3e57fd1790cbabc2e01c179e3"
     },
     {
         "bytes": 1299,
         "frame_index": 1,
         "relative_path": "conformers/candidate_001.cif",
         "sample_id": "legacy-001",
-        "sha256": "d6582ca148ae853a81a0503b957a47f320b7396f9c3290d2bc59a9a698d90394"
+        "sha256": "8d922de649d048af330347be177f7c7a4aba0e365f43e9a6305c930c8fb1c188"
     },
     {
         "bytes": 1299,
         "frame_index": 2,
         "relative_path": "conformers/candidate_002.cif",
         "sample_id": "legacy-002",
-        "sha256": "fb2fe0d3155a8a5ba5c35497f37ee65a9315006dcb2754be504467e34d81fcaf"
+        "sha256": "a3ec8670f4faed42958e26e694b9db5b2b30b1470fa740a27267279da6f6e1cc"
     },
     {
         "bytes": 1299,
         "frame_index": 3,
         "relative_path": "conformers/candidate_003.cif",
         "sample_id": "legacy-003",
-        "sha256": "79e3f8e4979ae8a029adc0f8c5b4c071a69244300d0671c16af19a281f336195"
-    },
-    {
-        "bytes": 1299,
-        "frame_index": 4,
-        "relative_path": "conformers/candidate_004.cif",
-        "sample_id": "legacy-004",
-        "sha256": "64d29d185065c1bd40a38de2c81a40c2801809f9f36daa929f37f4c831460526"
-    },
-    {
-        "bytes": 1299,
-        "frame_index": 5,
-        "relative_path": "conformers/candidate_005.cif",
-        "sample_id": "legacy-005",
-        "sha256": "ad19e065a9704138f3ffdf464d805b355c6d9fbfd14335c3f2cdcf224a1ff9b8"
-    },
-    {
-        "bytes": 1299,
-        "frame_index": 6,
-        "relative_path": "conformers/candidate_006.cif",
-        "sample_id": "legacy-006",
-        "sha256": "629d5a60f07dbebfef3037cce28d0d6cf6e5f118892144cce635eef0314ea743"
-    },
-    {
-        "bytes": 1299,
-        "frame_index": 7,
-        "relative_path": "conformers/candidate_007.cif",
-        "sample_id": "legacy-007",
-        "sha256": "03327b61839d077ad1f1c835c1853b728552063af21307b40b97c246f7fab1a3"
+        "sha256": "f3e47b285113b1bbeceafaf07a18bbfd0ddba7faf90ab9165dabf37cf8d71655"
     }
 ]

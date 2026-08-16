@@ -1,0 +1,157 @@
+{
+  "$id": "bms.ngs-molbio.runtime-implementation.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "bms.ngs-molbio.runtime-implementation.v1"
+    },
+    "baseline_source_commit": {
+      "const": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517"
+    },
+    "baseline_source_tree": {
+      "const": "f89094ba373e3dd8fa181fd17d942e54a6f0f63e"
+    },
+    "successor_source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "successor_source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "n0_package_fingerprint": {
+      "const": "77673329001f48e610f13ed115fed62f56d7d10b93cc5ee30cea033c34bb3659"
+    },
+    "n0_receipt_content_sha256": {
+      "const": "37c3ff50004fcf33768c3368a01a8f862394bdfd4895149596ac1d745ce7efba"
+    },
+    "implementation_state": {
+      "const": "implemented_unverified"
+    },
+    "release_acceptance_state": {
+      "const": "open"
+    },
+    "verification_state": {
+      "const": "source_audit_only"
+    },
+    "tests_run": {
+      "const": 0
+    },
+    "capability_exposure_state": {
+      "const": "fail_closed"
+    },
+    "dataset_exposure_state": {
+      "const": "fail_closed"
+    },
+    "binding_runtime_state": {
+      "const": "implemented_unverified"
+    },
+    "adapter_runtime_count": {
+      "const": 27
+    },
+    "connector_event_runtime_count": {
+      "const": 12
+    },
+    "payload_scanner_runtime_state": {
+      "const": "implemented_unverified"
+    },
+    "source_denominator": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "const": "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
+        },
+        "content_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": ["path", "content_sha256"]
+    },
+    "phases": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "x-bms-unique-by": "phase_id",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "phase_id": {
+            "enum": ["N1", "N2", "N3", "N4", "N5", "N6"]
+          },
+          "source_state": {
+            "const": "implemented"
+          },
+          "acceptance_state": {
+            "const": "unverified"
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        },
+        "required": ["phase_id", "source_state", "acceptance_state", "evidence"]
+      }
+    },
+    "source_authorities": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "x-bms-unique-by": "path",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1073741824
+          }
+        },
+        "required": ["path", "sha256", "size_bytes"]
+      }
+    },
+    "content_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "required": [
+    "schema",
+    "baseline_source_commit",
+    "baseline_source_tree",
+    "successor_source_commit",
+    "successor_source_tree",
+    "n0_package_fingerprint",
+    "n0_receipt_content_sha256",
+    "implementation_state",
+    "release_acceptance_state",
+    "verification_state",
+    "tests_run",
+    "capability_exposure_state",
+    "dataset_exposure_state",
+    "binding_runtime_state",
+    "adapter_runtime_count",
+    "connector_event_runtime_count",
+    "payload_scanner_runtime_state",
+    "source_denominator",
+    "phases",
+    "source_authorities",
+    "content_sha256"
+  ],
+  "type": "object"
+}

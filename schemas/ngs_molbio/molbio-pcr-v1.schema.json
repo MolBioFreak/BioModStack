@@ -1,0 +1,269 @@
+{
+  "$id": "bms.operation-parameters.molbio.pcr.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "change_summary": {
+      "maxLength": 1024,
+      "minLength": 1,
+      "type": "string",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "change_summary",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "change summary",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "cycling_assumptions": {
+      "additionalProperties": false,
+      "properties": {
+        "cycles": {
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "extension_seconds": {
+          "maximum": 86400,
+          "minimum": 0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "cycles",
+        "extension_seconds"
+      ],
+      "type": "object",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "cycling_assumptions",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "cycling assumptions",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "forward_primer_revision_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "forward_primer_revision_id",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "forward primer revision id",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "notes": {
+      "anyOf": [
+        {
+          "maxLength": 4000,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "notes",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "union_exact",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "notes",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "polymerase_preset_revision_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "polymerase_preset_revision_id",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "union_exact",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "polymerase preset revision id",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "reaction_settings": {
+      "additionalProperties": false,
+      "properties": {
+        "reaction_volume_uL": {
+          "exclusiveMinimum": 0,
+          "maximum": 10000,
+          "type": "number"
+        }
+      },
+      "required": [
+        "reaction_volume_uL"
+      ],
+      "type": "object",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "reaction_settings",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "reaction settings",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "reverse_primer_revision_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "reverse_primer_revision_id",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "reverse primer revision id",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "template_revision_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "template_revision_id",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "template revision id",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "tm_settings": {
+      "additionalProperties": false,
+      "properties": {
+        "algorithm": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "dmso_percent": {
+          "maximum": 100,
+          "minimum": 0,
+          "type": "number"
+        },
+        "dntps_mM": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "formamide_percent": {
+          "maximum": 100,
+          "minimum": 0,
+          "type": "number"
+        },
+        "k_mM": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "mg_mM": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "na_mM": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "primer_concentration_nM": {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "salt_correction": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "self_complementary": {
+          "type": "boolean"
+        },
+        "template_concentration_nM": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "tris_mM": {
+          "minimum": 0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "algorithm",
+        "salt_correction",
+        "primer_concentration_nM",
+        "template_concentration_nM",
+        "na_mM",
+        "k_mM",
+        "tris_mM",
+        "mg_mM",
+        "dntps_mM",
+        "dmso_percent",
+        "formamide_percent",
+        "self_complementary"
+      ],
+      "type": "object",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "tm_settings",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "tm settings",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    }
+  },
+  "required": [
+    "template_revision_id",
+    "forward_primer_revision_id",
+    "reverse_primer_revision_id",
+    "tm_settings",
+    "polymerase_preset_revision_id",
+    "reaction_settings",
+    "cycling_assumptions",
+    "notes",
+    "change_summary"
+  ],
+  "title": "molbio.pcr operation v1",
+  "type": "object",
+  "x-bms-source-pin": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+  "x-bms-unknown-fields": "reject_before_preparation"
+}

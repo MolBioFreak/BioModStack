@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import copy
+import base64
 import hashlib
 import io
+import json
 import os
 import secrets
 import stat
@@ -12,7 +14,15 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from services.frustrampnn.analysis import THRESHOLD_POLICY
-from services.frustrampnn.contracts import canonical_json_bytes
+from services.frustrampnn.configuration import execution_configuration
+from services.frustrampnn.contracts import canonical_json_bytes, canonical_sha256 as frustrampnn_sha256
+from services.frustrampnn.contracts import validate_schema as validate_frustrampnn_schema
+from services.frustrampnn.settings import (
+    FrustraMPNNRequestedSettings,
+    requested_settings_sha256,
+    resolve_effective_settings,
+    validate_persisted_requested_settings,
+)
 from services.frustrampnn.structure import (
     StructureNormalizationError,
     normalize_structure_bytes,
@@ -514,12 +524,178 @@ def normalize_cm_structure(
         raise FrustraMPNNAdapterError(f"CM structure authority/identity rejected: {exc}") from exc
 
 
+def prepare_cm_candidate_v2(
+    *,
+    source: Path | str,
+    output_pdb_path: Path | str,
+    structure_map_path: Path | str,
+    request_path: Path | str,
+    authority_artifact_path: Path | str,
+    parent_job_id: str,
+    parent_workflow_id: str,
+    candidate: Mapping[str, Any],
+    complex_snapshot: Mapping[str, Any],
+    requested_settings: FrustraMPNNRequestedSettings | Mapping[str, Any],
+) -> dict[str, Any]:
+    """Prepare one CM candidate for the canonical FrustraMPNN v2 component."""
+
+    source_path = Path(source)
+    output_path = Path(output_pdb_path)
+    map_path = Path(structure_map_path)
+    component_request_path = Path(request_path)
+    authority_path = Path(authority_artifact_path)
+    candidate_id = str(candidate.get("candidate_id") or "")
+    coordinates = candidate.get("backend_coordinates")
+    source_relative_path = candidate.get("authoritative_structure_path")
+    if not candidate_id or not isinstance(coordinates, Mapping):
+        raise FrustraMPNNAdapterError("CM candidate identity/coordinates are missing")
+    if not isinstance(source_relative_path, str) or not source_relative_path:
+        raise FrustraMPNNAdapterError("CM candidate authoritative structure path is missing")
+    backend = str(coordinates.get("backend") or "")
+    target_id = str(coordinates.get("target_id") or "")
+    if not backend or not target_id:
+        raise FrustraMPNNAdapterError("CM candidate backend/target coordinates are missing")
+    requested = (
+        requested_settings
+        if isinstance(requested_settings, FrustraMPNNRequestedSettings)
+        else validate_persisted_requested_settings(requested_settings)
+    )
+    try:
+        source_bytes = read_structure_bytes(source_path)
+        source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+        bound_snapshot = bind_cm_candidate_snapshot_bytes(
+            complex_snapshot,
+            candidate_id=candidate_id,
+            source_bytes=source_bytes,
+            source_suffix=source_path.suffix,
+            source_relative_path=source_relative_path,
+        )
+        structure_map = normalize_cm_structure(
+            input_path=source_path,
+            output_pdb_path=output_path,
+            map_path=map_path,
+            authority_artifact_path=authority_path,
+            target_id=target_id,
+            parent_job_id=parent_job_id,
+            candidate_id=candidate_id,
+            complex_snapshot=bound_snapshot,
+            selected_model=requested.source_structure.selected_model_number,
+            altloc_policy=(
+                "blank_or_explicit:"
+                + (requested.source_structure.preferred_altloc or "<blank>")
+            ),
+            source_bytes=source_bytes,
+        )
+        effective = resolve_effective_settings(requested, structure_map)
+        configuration = execution_configuration(effective)
+        normalized_bytes = output_path.read_bytes()
+        normalized_sha256 = hashlib.sha256(normalized_bytes).hexdigest()
+        structure_map_payload = map_path.read_bytes()
+        if structure_map_payload != canonical_json_bytes(structure_map):
+            raise FrustraMPNNAdapterError("CM normalizer emitted noncanonical structure-map bytes")
+        structure_map_sha256 = hashlib.sha256(structure_map_payload).hexdigest()
+        authority_payload = authority_path.read_bytes()
+        authority = json.loads(authority_payload)
+        if authority_payload != canonical_json_bytes(authority):
+            raise FrustraMPNNAdapterError("CM producer authority is not canonical JSON")
+        snapshot_sha256 = canonical_sha256(bound_snapshot)
+        if authority.get("cm_complex_snapshot_sha256") != snapshot_sha256:
+            raise FrustraMPNNAdapterError("CM producer authority snapshot digest is stale")
+
+        producer_sample = canonical_json_bytes(dict(coordinates)).decode("utf-8")
+        rank_value = coordinates.get("sample_index", coordinates.get("staged_index"))
+        producer_rank = rank_value if isinstance(rank_value, int) and not isinstance(rank_value, bool) else None
+        producer_output_key = source_relative_path
+        neutral_output_key = str(Path(producer_output_key).with_suffix(""))
+        producer_identity = frustrampnn_sha256({
+            "producer_method": backend,
+            "producer_sample": producer_sample,
+            "producer_rank": producer_rank,
+            "producer_output_key": neutral_output_key,
+        })
+        requested_payload = requested.model_dump(mode="json", exclude_none=False)
+        effective_payload = effective.model_dump(mode="json", exclude_none=False)
+        configuration_payload = configuration.model_dump(mode="json", exclude_none=False)
+        request = {
+            "schema_name": "workflow_component_request",
+            "schema_version": 2,
+            "component_id": "frustrampnn",
+            "component_contract_version": "2.0",
+            "invocation_id": f"frustrampnn:{parent_job_id}:{candidate_id}",
+            "parent_job_id": parent_job_id,
+            "parent_workflow_id": parent_workflow_id,
+            "candidate_id": candidate_id,
+            "source_artifact": {
+                "relative_path": source_relative_path,
+                "sha256": source_sha256,
+                "media_type": (
+                    "chemical/x-mmcif"
+                    if source_path.suffix.lower() in {".cif", ".mmcif"}
+                    else "chemical/x-pdb"
+                ),
+                "producer_stage": f"conformational_mapping:{backend}",
+                "artifact_id": candidate_id,
+            },
+            "requiredness": "required",
+            "identity_authority": "cm_complex_snapshot",
+            "identity_authority_artifact": {
+                "relative_path": "authority_artifact_v1.json",
+                "media_type": "application/json",
+                "sha256": hashlib.sha256(authority_payload).hexdigest(),
+                "canonical_json_base64": base64.b64encode(authority_payload).decode("ascii"),
+                "cm_complex_snapshot_sha256": snapshot_sha256,
+            },
+            "producer_provenance": {
+                "producer_method": backend,
+                "producer_sample": producer_sample,
+                "producer_rank": producer_rank,
+                "producer_output_key": producer_output_key,
+                "producer_identity_sha256": producer_identity,
+                "original_source_format": (
+                    "mmcif" if source_path.suffix.lower() in {".cif", ".mmcif"} else "pdb"
+                ),
+                "original_source_sha256": source_sha256,
+                "source_to_normalized_binding": {
+                    "kind": "sha256_pair_v1",
+                    "source_sha256": source_sha256,
+                    "normalized_pdb_sha256": normalized_sha256,
+                },
+            },
+            "settings_value_origin": requested.settings_value_origin,
+            "requested_settings": requested_payload,
+            "requested_settings_sha256": requested_settings_sha256(requested),
+            "effective_settings": effective_payload,
+            "effective_settings_sha256": effective.effective_settings_sha256,
+            "classification_policy_sha256": effective.threshold_policy_sha256,
+            "capability_inventory_byte_sha256": effective.capability_inventory_byte_sha256,
+            "runtime_identity_sha256": configuration.runtime_identity_sha256,
+            "structure_map_sha256": structure_map_sha256,
+            "normalized_pdb_sha256": normalized_sha256,
+            "execution_configuration": configuration_payload,
+            "execution_configuration_sha256": configuration.configuration_sha256,
+            "requested_outputs": [
+                "structure_map", "raw_csv", "landscape", "summary", "execution_receipt",
+            ],
+        }
+        validate_frustrampnn_schema("workflow_component_request_v2", request)
+        component_request_path.write_bytes(canonical_json_bytes(request))
+        authority_path.unlink()
+        return request
+    except Exception:
+        component_request_path.unlink(missing_ok=True)
+        output_path.unlink(missing_ok=True)
+        map_path.unlink(missing_ok=True)
+        authority_path.unlink(missing_ok=True)
+        raise
+
+
 __all__ = [
     "CM_THRESHOLD_POLICY_ADAPTER_ID",
     "FrustraMPNNAdapterError",
     "bind_cm_candidate_snapshot_bytes",
     "derive_producer_authority",
     "normalize_cm_structure",
+    "prepare_cm_candidate_v2",
     "project_cm_landscape",
     "project_cm_structure_map",
 ]

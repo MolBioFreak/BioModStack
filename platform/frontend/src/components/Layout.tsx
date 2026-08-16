@@ -31,17 +31,14 @@ import {
     type TailnetEnvironmentStatus,
 } from '../runtime/tailnetEnvironment';
 import { ThemeSelector } from './ThemeSelector';
+import { ProjectReturnBanner } from './project-manager/ProjectReturnBanner';
 import { buildIdentity } from '../lib/buildIdentity';
 
-import {
-    InfraControlStateCollector,
-    InfraTelemetryCollector,
-} from './InfraLiveTelemetry';
+import { InfraControlStateCollector } from './InfraLiveTelemetry';
 import {
     SHARED_FAN_CONTROL_QUERY_KEY,
     SHARED_POWER_CONTROL_QUERY_KEY,
 } from './infraTelemetryQueryKeys';
-import { shouldCollectTelemetryHistory } from './infraTelemetryHistory';
 import {
     fetchFanControl,
     fetchPowerControl,
@@ -494,6 +491,7 @@ export function Layout({ children }: LayoutProps) {
     const showBioXpDevFeature = isBmsFeatureVisible(bmsFeatureState, 'bioxp', showDevFeatures);
 
     const isActive = (path: string) => location.pathname === path;
+    const isProjectManagerActive = location.pathname === '/projects' || location.pathname.startsWith('/projects/');
     const showSystemMenus = location.pathname !== '/ngs';
 
     useEffect(() => {
@@ -526,7 +524,6 @@ export function Layout({ children }: LayoutProps) {
                 background: `linear-gradient(to bottom right, var(--bg-gradient-from), var(--bg-gradient-via), var(--bg-gradient-to))`
             }}
         >
-            {shouldCollectTelemetryHistory(location.pathname) && <InfraTelemetryCollector />}
             <InfraControlStateCollector />
             {/* Top Navigation Bar */}
             <nav
@@ -591,6 +588,17 @@ export function Layout({ children }: LayoutProps) {
                                     Dashboard
                                 </Link>
                                 <Link
+                                    to="/projects"
+                                    data-bms-primary-nav-active={isProjectManagerActive ? 'true' : undefined}
+                                    className={TOPBAR_NAV_ITEM_CLASSNAME}
+                                    style={{
+                                        backgroundColor: isProjectManagerActive ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
+                                        color: isProjectManagerActive ? 'var(--accent-primary)' : 'var(--text-secondary)'
+                                    }}
+                                >
+                                    Project Manager
+                                </Link>
+                                <Link
                                     to="/submit"
                                     data-bms-primary-nav-active={isActive('/submit') ? 'true' : undefined}
                                     className={TOPBAR_NAV_ITEM_CLASSNAME}
@@ -613,7 +621,7 @@ export function Layout({ children }: LayoutProps) {
                                     Data Viewer
                                 </Link>
                                 <Link
-                                    to="/designer"
+                                    to={{ pathname: '/designer', search: location.search }}
                                     data-bms-primary-nav-active={isActive('/designer') ? 'true' : undefined}
                                     className={TOPBAR_NAV_ITEM_CLASSNAME}
                                     style={{
@@ -700,6 +708,7 @@ export function Layout({ children }: LayoutProps) {
 
             {/* Main Content - takes remaining height, scrollable */}
             <main className="flex-1 overflow-auto">
+                <ProjectReturnBanner />
                 {children}
             </main>
         </div>

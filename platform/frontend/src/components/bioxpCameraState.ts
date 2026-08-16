@@ -41,14 +41,14 @@ export function deriveBioXpCameraPresentation({
         : status.frame_age_seconds + Math.max(0, nowMs - statusReceivedAtMs) / 1_000;
     if (status.state === 'stale'
         || effectiveFrameAgeSeconds === null
-        || effectiveFrameAgeSeconds > status.freshness_budget_seconds) {
+        || effectiveFrameAgeSeconds >= status.freshness_budget_seconds) {
         return {
             label: 'STALE',
             detail: 'The latest validated camera frame is older than its freshness budget.',
             effectiveFrameAgeSeconds,
         };
     }
-    if (nowMs - lastSequenceAdvanceAtMs > status.freshness_budget_seconds * 1_000) {
+    if (nowMs - lastSequenceAdvanceAtMs >= status.freshness_budget_seconds * 1_000) {
         return {
             label: 'STALE',
             detail: 'The camera frame sequence has not advanced within its freshness budget.',

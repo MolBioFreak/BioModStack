@@ -227,6 +227,174 @@ def test_command_is_exact_gpu_safe_and_returns_receipt_metadata(tmp_path: Path) 
     }
 
 
+def _effective_settings(mode: str, chain_positions: dict[str, tuple[int, ...]]):
+    settings = importlib.import_module("services.frustrampnn.settings")
+    entities = []
+    selectors = []
+    resolved_chains = []
+    for chain_id, positions in chain_positions.items():
+        entity = {
+            "entity_instance_id": f"entity-{chain_id}",
+            "source_entity_id": chain_id,
+            "label_asym_id": chain_id,
+            "auth_asym_id": chain_id,
+        }
+        entities.append(entity)
+        residues = []
+        for position in positions:
+            residue = {
+                **entity,
+                "auth_seq_id": position + 10,
+                "insertion_code": "",
+                "sequence_index": position + 1,
+                "wt": "G",
+                "pdb_chain_id": chain_id,
+                "model_position": position,
+            }
+            residues.append(residue)
+            selectors.append({
+                key: residue[key]
+                for key in (
+                    "entity_instance_id", "source_entity_id", "label_asym_id",
+                    "auth_asym_id", "auth_seq_id", "insertion_code", "sequence_index",
+                )
+            })
+        resolved_chains.append(
+            settings.FrustraMPNNResolvedChainSelection.model_validate({
+                "entity": entity,
+                "pdb_chain_id": chain_id,
+                "residues": residues,
+            })
+        )
+    selection = {"mode": mode, "entities": [], "residues": []}
+    if mode == "selected_entities":
+        selection["entities"] = entities
+    elif mode == "selected_residues":
+        selection["residues"] = selectors
+    requested = settings.FrustraMPNNRequestedSettings.model_validate({
+        "protein_selection": selection,
+    })
+    return settings._build_effective_settings(
+        requested,
+        resolved_chains=tuple(resolved_chains),
+        resolution_identity=settings.FrustraMPNNResolutionIdentity(
+            source_artifact_sha256="a" * 64,
+            structure_map_sha256="b" * 64,
+            normalized_pdb_sha256="c" * 64,
+        ),
+    )
+
+
+def test_command_plan_compiles_all_and_selected_entities_without_positions() -> None:
+    runtime = _runtime()
+    canonical_sha256 = importlib.import_module(
+        "services.frustrampnn.contracts"
+    ).canonical_sha256
+
+    all_plan = runtime.compile_frustrampnn_command_plan(
+        _effective_settings("all_protein_entities", {"B": (0,), "A": (0,)})
+    )
+    assert all_plan.entries == (
+        runtime.FrustraMPNNCommandPlanEntry(
+            ordinal=0,
+            chains=None,
+            positions=None,
+            shard_relative_path="raw_frustrampnn_shard_0000.csv",
+        ),
+    )
+    assert all_plan.plan_sha256 == canonical_sha256({
+        "entries": [{
+            "ordinal": 0,
+            "chains": None,
+            "positions": None,
+            "shard_relative_path": "raw_frustrampnn_shard_0000.csv",
+        }]
+    })
+
+    entity_plan = runtime.compile_frustrampnn_command_plan(
+        _effective_settings("selected_entities", {"B": (0,), "A": (0,)})
+    )
+    assert [(entry.ordinal, entry.chains, entry.positions) for entry in entity_plan.entries] == [
+        (0, ("A", "B"), None),
+    ]
+
+
+def test_selected_residue_plan_groups_only_identical_position_tuples_stably() -> None:
+    runtime = _runtime()
+    effective = _effective_settings(
+        "selected_residues",
+        {"C": (2, 0), "B": (1,), "A": (0, 2)},
+    )
+
+    plan = runtime.compile_frustrampnn_command_plan(effective)
+
+    assert [
+        (entry.ordinal, entry.chains, entry.positions, entry.shard_relative_path)
+        for entry in plan.entries
+    ] == [
+        (0, ("A", "C"), (0, 2), "raw_frustrampnn_shard_0000.csv"),
+        (1, ("B",), (1,), "raw_frustrampnn_shard_0001.csv"),
+    ]
+    assert plan == runtime.compile_frustrampnn_command_plan(effective)
+
+
+def test_typed_selection_argv_preserves_base_and_binds_canonical_hash(tmp_path: Path) -> None:
+    runtime = _runtime()
+    canonical_sha256 = importlib.import_module(
+        "services.frustrampnn.contracts"
+    ).canonical_sha256
+    input_root = tmp_path / "input"
+    output_root = tmp_path / "output"
+    input_root.mkdir()
+    output_root.mkdir()
+    normalized = input_root / "normalized.pdb"
+    normalized.write_text("ATOM\n", encoding="utf-8")
+
+    base = runtime.build_frustrampnn_command(
+        apptainer="apptainer", container=Path("/proc/self/fd/4"),
+        normalized=normalized, raw=output_root / "base.csv", output_root=output_root,
+        physical_gpu_id=0,
+    )
+    selected = runtime.build_frustrampnn_command(
+        apptainer="apptainer", container=Path("/proc/self/fd/4"),
+        normalized=normalized, raw=output_root / "base.csv", output_root=output_root,
+        physical_gpu_id=0, chains=("B", "A"), positions=(2, 0),
+    )
+
+    assert selected.argv[:-4] == base.argv
+    assert selected.argv[-4:] == ("--chains", "A,B", "--positions", "0,2")
+    assert selected.argv_sha256 == canonical_sha256(list(selected.argv))
+
+
+@pytest.mark.parametrize(
+    ("chains", "positions"),
+    [
+        ((), None),
+        (("A", "A"), None),
+        (("A,B",), None),
+        (None, (0,)),
+        (("A",), ()),
+        (("A",), (1, 1)),
+        (("A",), (-1,)),
+        (("A",), (True,)),
+    ],
+)
+def test_command_rejects_invalid_typed_plan_grammar(
+    tmp_path: Path,
+    chains: tuple[str, ...] | None,
+    positions: tuple[int, ...] | None,
+) -> None:
+    runtime = _runtime()
+    normalized = tmp_path / "normalized.pdb"
+    normalized.write_text("ATOM\n", encoding="utf-8")
+    with pytest.raises(runtime.RuntimeValidationError, match="chain|position|selection"):
+        runtime.build_frustrampnn_command(
+            apptainer="apptainer", container=Path("/proc/self/fd/4"),
+            normalized=normalized, raw=tmp_path / "raw.csv", output_root=tmp_path,
+            physical_gpu_id=0, chains=chains, positions=positions,
+        )
+
+
 @pytest.mark.parametrize("gpu_id", [True, -1, 1.0, "1", None])
 def test_command_rejects_invalid_physical_gpu_ids(tmp_path: Path, gpu_id: object) -> None:
     runtime = _runtime()
@@ -312,7 +480,9 @@ def test_bms_api_python_is_provisioned_once_for_nextflow_and_cm_host_scripts() -
     assert "flock -x 9" in launcher
     assert "mv -Tf \"$next_link\" \"$CM_API_RUNTIME_DIR/current\"" in launcher
     assert "api_python = System.getenv('BMS_API_PYTHON')" in config
-    assert "${params.api_python} ${params.code_root}/scripts/run_conformational_mapping_analysis_plane.py" in cm_module
+    assert "prepare_conformational_mapping_frustrampnn_v2.py" in cm_module
+    assert "postprocess_conformational_mapping_frustrampnn_v2.py" in cm_module
+    assert "run_conformational_mapping_analysis_plane.py" not in cm_module
     subprocess.run(["bash", "-n", str(REPO_ROOT / "scripts/run_biomodstack_workflow_adapter.sh")], check=True)
 
 

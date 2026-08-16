@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import json
+import copy
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any, Mapping
 
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,11 +16,19 @@ from database import ConformationalMappingRequest, ConformationalMappingSource, 
 from paths import get_results_dir
 from routers.conformational_mapping import (
     _PERSONAL_WORKFLOW_PRINCIPAL,
+    _bind_analysis_policy,
+    _bind_confornets_submission_policy,
+    _bind_runtime_policy,
     _cm_job_admission,
+    _managed_checkpoint_for_submission,
     _runtime_registry,
     _server_confornets_identity,
 )
-from services.conformational_mapping.contracts import validate_schema
+from services.conformational_mapping.contracts import (
+    canonical_json_loads,
+    canonical_sha256,
+    validate_schema,
+)
 from services.conformational_mapping.import_stager import RegisteredArtifact, stage_registered_assets
 from services.conformational_mapping.persistence import (
     issue_request_capability,
@@ -26,14 +37,69 @@ from services.conformational_mapping.persistence import (
 )
 from services.conformational_mapping.request_builder import (
     materialize_trusted_internal_request,
+    validate_materialized_coordinate_plan,
     validate_request_params,
 )
-from experiment_services import DispatchFailure, canonical_json, sha256_text
+from experiment_services import (
+    DispatchFailure,
+    ValidationFailure,
+    WORKFLOW_ADAPTER_REGISTRY,
+    _cm_submission_source_ids,
+    canonical_json,
+    sha256_text,
+)
 
 _GENERATOR_ADAPTERS = {
     "bms.cm.protenix_v2.adapter.v1": "protenix_v2_ensemble",
     "bms.cm.confornets.adapter.v1": "confornets",
 }
+EXECUTABLE_CM_ADAPTERS = frozenset(_GENERATOR_ADAPTERS)
+if WORKFLOW_ADAPTER_REGISTRY["conformational_mapping"] != set(EXECUTABLE_CM_ADAPTERS):
+    raise RuntimeError("registered CM global adapters must have executable materializers")
+
+def _validate_recovered_coordinate_plan(
+    request_json: Mapping[str, Any],
+    coordinate_plan_json: Mapping[str, Any],
+) -> None:
+    """Apply the shared request-bound coordinate-plan authority contract."""
+
+    validate_materialized_coordinate_plan(request_json, coordinate_plan_json)
+
+
+def _seal_confornets_snapshot(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+    """Seal a generic normalized ConforNets snapshot without fixture identity."""
+
+    sealed = copy.deepcopy(dict(snapshot))
+    if not sealed.get("instance_mappings"):
+        entities = sealed.get("entities")
+        if not isinstance(entities, list) or not entities or not isinstance(entities[0], Mapping):
+            raise DispatchFailure("ConforNets snapshot has no entity mapping context")
+        entity = entities[0]
+        instances = entity.get("ordered_instance_ids")
+        if not isinstance(instances, list) or not instances:
+            raise DispatchFailure("ConforNets snapshot has no instance mapping context")
+        target_id = str(sealed.get("target_id") or "")
+        source_entity_id = str(entity.get("source_entity_id") or "")
+        instance_id = str(instances[0])
+        sealed["instance_mappings"] = [{
+            "source_entity_id": source_entity_id,
+            "source_instance_id": instance_id,
+            "runtime_target_id": target_id,
+            "runtime_entity_id": "1",
+            "runtime_instance_id": instance_id,
+            "runtime_order": 0,
+            "candidate_id": f"{target_id}:0",
+            "output_entity_id": "1",
+            "output_label_asym_id": instance_id,
+            "output_auth_asym_id": instance_id,
+            "output_entity_order": 0,
+        }]
+    sealed.pop("normalized_source_sha256", None)
+    sealed["normalized_source_sha256"] = canonical_sha256(
+        {key: value for key, value in sealed.items() if key != "normalized_source_sha256"}
+    )
+    validate_schema("cm_complex_snapshot_v1", sealed)
+    return sealed
 
 
 def _largest_gpu_with_memory(minimum_mb: int) -> int:
@@ -78,16 +144,129 @@ def _registered(source: ConformationalMappingSource) -> RegisteredArtifact:
     )
 
 
-async def _source(session: AsyncSession, source_id: str, expected_kind: str) -> ConformationalMappingSource:
+async def _source(
+    session: AsyncSession,
+    source_id: str,
+    expected_kind: str | frozenset[str],
+) -> ConformationalMappingSource:
     source = await session.get(ConformationalMappingSource, source_id)
-    if source is None or source.source_kind != expected_kind or not source.immutable:
+    expected_kinds = frozenset({expected_kind}) if isinstance(expected_kind, str) else expected_kind
+    if source is None or source.source_kind not in expected_kinds or not source.immutable:
         raise DispatchFailure(f"CM global adapter source is unavailable: {expected_kind}/{source_id}")
     if source.principal_id != _PERSONAL_WORKFLOW_PRINCIPAL:
         raise DispatchFailure("CM global adapter source belongs to an unexpected principal")
     return source
 
 
-async def materialize_preallocated_cm_job(
+def _verify_existing_attempt_authority(
+    *,
+    existing_job: Job,
+    existing_request: ConformationalMappingRequest,
+    expected_output_root: Path,
+    attempt_id: str,
+    scheduler: Mapping[str, Any],
+    scheduler_sha256: str,
+    adapter_id: str,
+    backend: str,
+    submission_sha256: str,
+    run_group_id: str,
+) -> None:
+    """Fail closed unless a recovered core attempt matches the incoming authority."""
+
+    expected_request_path = expected_output_root / "cm_request_v1.json"
+    expected_coordinate_plan_path = expected_output_root / "cm_coordinate_plan_v1.json"
+    expected_job_params = {"cm_request_path": str(expected_request_path)}
+    if (
+        not isinstance(existing_job.params, dict)
+        or existing_job.params != expected_job_params
+        or existing_job.output_dir != str(expected_output_root)
+        or expected_output_root.is_symlink()
+        or not expected_output_root.is_dir()
+        or expected_request_path.is_symlink()
+        or not expected_request_path.is_file()
+        or expected_coordinate_plan_path.is_symlink()
+        or not expected_coordinate_plan_path.is_file()
+    ):
+        raise DispatchFailure("CM existing-attempt executable authority is invalid")
+
+    provenance = existing_job.provenance
+    request_json = existing_request.request_json
+    coordinate_plan_json = existing_request.coordinate_plan_json
+    if not all(isinstance(value, Mapping) for value in (provenance, request_json, coordinate_plan_json)):
+        raise DispatchFailure("CM existing-attempt recovery authority is incomplete")
+    assert isinstance(provenance, Mapping)
+    assert isinstance(request_json, Mapping)
+    assert isinstance(coordinate_plan_json, Mapping)
+    try:
+        persisted_request = dict(request_json)
+        persisted_coordinate_plan = dict(coordinate_plan_json)
+        executable_request = canonical_json_loads(expected_request_path.read_bytes())
+        executable_coordinate_plan = canonical_json_loads(expected_coordinate_plan_path.read_bytes())
+        if (
+            not isinstance(executable_request, Mapping)
+            or not isinstance(executable_coordinate_plan, Mapping)
+            or dict(executable_request) != persisted_request
+            or dict(executable_coordinate_plan) != persisted_coordinate_plan
+        ):
+            raise DispatchFailure(
+                "CM existing-attempt executable authority conflicts with persisted documents"
+            )
+        validate_schema("cm_request_v1", persisted_request)
+        _validate_recovered_coordinate_plan(persisted_request, persisted_coordinate_plan)
+    except DispatchFailure:
+        raise
+    except (OSError, TypeError, ValueError, KeyError) as exc:
+        raise DispatchFailure(
+            "CM existing-attempt request and coordinate plan are not schema-valid"
+        ) from exc
+    try:
+        persisted_request_sha256 = canonical_sha256(
+            {key: value for key, value in request_json.items() if key != "request_sha256"}
+        )
+        persisted_coordinate_plan_sha256 = canonical_sha256(
+            {key: value for key, value in coordinate_plan_json.items() if key != "coordinate_plan_sha256"}
+        )
+    except (TypeError, ValueError) as exc:
+        raise DispatchFailure("CM existing-attempt recovery authority contains invalid canonical provenance") from exc
+
+    created_by = request_json.get("created_by")
+    expected_bindings = (
+        existing_job.id == attempt_id,
+        existing_job.model_id == scheduler.get("model_id") == "conformational_mapping",
+        existing_job.mode == scheduler.get("mode") == "map",
+        existing_job.batch_id == run_group_id,
+        existing_job.lineage_root_job_id == attempt_id,
+        existing_job.stage_family == "conformational_mapping",
+        existing_job.stage_mode == backend,
+        existing_request.request_id == attempt_id,
+        existing_request.job_id == attempt_id,
+        existing_request.principal_id == _PERSONAL_WORKFLOW_PRINCIPAL,
+        existing_request.backend == backend,
+        provenance.get("cm_principal_id") == _PERSONAL_WORKFLOW_PRINCIPAL,
+        provenance.get("cm_workflow_adapter") == adapter_id,
+        provenance.get("cm_scheduler_sha256") == scheduler_sha256,
+        provenance.get("cm_submission_sha256") == submission_sha256,
+        provenance.get("global_run_group_id") == run_group_id,
+        provenance.get("global_attempt_id") == attempt_id,
+        provenance.get("cm_request_sha256") == existing_request.request_sha256,
+        provenance.get("cm_coordinate_plan_sha256") == existing_request.coordinate_plan_sha256,
+        request_json.get("request_id") == existing_request.request_id,
+        request_json.get("backend") == backend,
+        request_json.get("request_sha256") == existing_request.request_sha256 == persisted_request_sha256,
+        isinstance(created_by, Mapping)
+        and created_by.get("principal_id") == _PERSONAL_WORKFLOW_PRINCIPAL,
+        coordinate_plan_json.get("request_id") == existing_request.request_id,
+        coordinate_plan_json.get("backend") == backend,
+        coordinate_plan_json.get("request_sha256") == existing_request.request_sha256,
+        coordinate_plan_json.get("coordinate_plan_sha256")
+        == existing_request.coordinate_plan_sha256
+        == persisted_coordinate_plan_sha256,
+    )
+    if not all(expected_bindings):
+        raise DispatchFailure("CM existing-attempt recovery authority conflicts with persisted provenance")
+
+
+async def _materialize_preallocated_cm_job(
     core_session: AsyncSession,
     *,
     attempt_id: str,
@@ -95,17 +274,35 @@ async def materialize_preallocated_cm_job(
     run_group_id: str,
 ) -> dict[str, Any]:
     """Materialize one global attempt through the canonical CM request contract."""
+    try:
+        scheduler = copy.deepcopy(dict(scheduler))
+    except (TypeError, ValueError) as exc:
+        raise DispatchFailure("CM scheduler payload cannot be defensively bound") from exc
     params = scheduler.get("params")
     if not isinstance(params, dict):
         raise DispatchFailure("CM scheduler payload params are incomplete")
-    adapter_id = params.get("workflow_adapter")
-    backend = _GENERATOR_ADAPTERS.get(str(adapter_id))
+    adapter_id = str(params.get("workflow_adapter") or "")
+    backend = _GENERATOR_ADAPTERS.get(adapter_id)
     submission = params.get("cm_submission")
     if backend is None or not isinstance(submission, dict):
         raise DispatchFailure("global CM adapter requires a typed generator submission")
     if str(submission.get("backend")) != backend:
         raise DispatchFailure("CM adapter/backend identity disagrees")
+    scheduler_sha256 = sha256_text(canonical_json(scheduler))
+    submission_sha256 = sha256_text(canonical_json(submission))
+    receipt_ids = params.get("cm_source_receipt_ids")
+    if not isinstance(receipt_ids, list) or any(
+        not isinstance(value, str) or not value for value in receipt_ids
+    ):
+        raise DispatchFailure("CM global adapter source receipt binding is unavailable")
+    try:
+        expected_source_ids = _cm_submission_source_ids(submission)
+    except ValidationFailure as exc:
+        raise DispatchFailure(str(exc)) from exc
+    if receipt_ids != expected_source_ids:
+        raise DispatchFailure("CM global adapter receipts do not bind the submitted source identities")
 
+    output_root = get_results_dir() / f"conformational_mapping_{attempt_id}"
     existing_job = await core_session.get(Job, attempt_id)
     if existing_job is not None:
         existing_request = (
@@ -115,6 +312,18 @@ async def materialize_preallocated_cm_job(
         ).scalar_one_or_none()
         if existing_request is None:
             raise DispatchFailure("preallocated CM job exists without its canonical request")
+        _verify_existing_attempt_authority(
+            existing_job=existing_job,
+            existing_request=existing_request,
+            expected_output_root=output_root,
+            attempt_id=attempt_id,
+            scheduler=scheduler,
+            scheduler_sha256=scheduler_sha256,
+            adapter_id=adapter_id,
+            backend=backend,
+            submission_sha256=submission_sha256,
+            run_group_id=run_group_id,
+        )
         return {
             "scheduler_job_id": attempt_id,
             "request_id": existing_request.request_id,
@@ -123,18 +332,22 @@ async def materialize_preallocated_cm_job(
             "recovered_existing": True,
         }
 
-    output_root = get_results_dir() / f"conformational_mapping_{attempt_id}"
     if output_root.exists() and any(output_root.iterdir()):
         raise DispatchFailure("preallocated CM output root already contains unowned files")
     output_root.mkdir(parents=True, exist_ok=True)
 
+    try:
+        runtime_policy = _bind_runtime_policy(backend, submission["runtime_policy"])
+        analysis_policy = _bind_analysis_policy(submission["analysis_policy"])
+    except HTTPException as exc:
+        raise DispatchFailure(str(exc.detail)) from exc
     request_params: dict[str, Any] = {
         "backend": backend,
         "ordered_seeds": list(submission["ordered_seeds"]),
         "samples_per_seed": int(submission["samples_per_seed"]),
         "feature_policy": dict(submission["feature_policy"]),
-        "runtime_policy": dict(submission["runtime_policy"]),
-        "analysis_policy": dict(submission["analysis_policy"]),
+        "runtime_policy": runtime_policy,
+        "analysis_policy": analysis_policy,
     }
     analysis_targets: list[dict[str, Any]]
     if backend == "protenix_v2_ensemble":
@@ -163,51 +376,99 @@ async def materialize_preallocated_cm_job(
         analysis_targets = snapshots
     else:
         sequence_source = await _source(core_session, str(submission["registered_sequence_id"]), "protein_sequence")
-        checkpoint_source = await _source(core_session, str(submission["registered_checkpoint_id"]), "confornets_checkpoint")
+        try:
+            checkpoint_source = await _managed_checkpoint_for_submission(
+                core_session, str(submission["registered_checkpoint_id"])
+            )
+        except HTTPException as exc:
+            raise DispatchFailure(str(exc.detail)) from exc
+        references = [
+            await _source(
+                core_session,
+                str(source_id),
+                frozenset({"structure_upload", "structure_artifact"}),
+            )
+            for source_id in submission.get("registered_reference_ids", [])
+        ]
+        config_source = (
+            await _source(core_session, str(submission["registered_config_id"]), "confornets_config")
+            if submission.get("registered_config_id") else None
+        )
+        transfer_source = (
+            await _source(core_session, str(submission["registered_transfer_id"]), "confornets_state")
+            if submission.get("registered_transfer_id") else None
+        )
+        confor_sources = [sequence_source, checkpoint_source, *references]
+        if config_source is not None:
+            confor_sources.append(config_source)
+        if transfer_source is not None:
+            confor_sources.append(transfer_source)
         staged_assets = stage_registered_assets(
-            [_registered(sequence_source), _registered(checkpoint_source)],
+            [_registered(source) for source in confor_sources],
             principal_id=_PERSONAL_WORKFLOW_PRINCIPAL,
             destination_root=output_root / "registered",
         )
         metadata = sequence_source.metadata_json if isinstance(sequence_source.metadata_json, dict) else {}
         sequence = str(metadata.get("sequence") or "").upper()
-        if len(sequence) != 540:
-            raise DispatchFailure(f"CM ConforNets DRT4 sequence length is not 540: {len(sequence)}")
-        settings = dict(submission["confornets"])
+        if not sequence or any(value not in "ACDEFGHIKLMNPQRSTVWYX" for value in sequence):
+            raise DispatchFailure("CM ConforNets sequence authority is invalid")
+        try:
+            settings = _bind_confornets_submission_policy(submission["confornets"])
+        except HTTPException as exc:
+            raise DispatchFailure(str(exc.detail)) from exc
         settings.update(
             {
                 "sequence": sequence,
-                "chain_id": "A",
                 "checkpoint": {
                     "path": staged_assets[checkpoint_source.source_id].relative_to(output_root).as_posix(),
                     "sha256": checkpoint_source.content_sha256,
                 },
-                "config": None,
-                "references": [],
-                "transfer_source": None,
+                "config": None if config_source is None else {
+                    "path": staged_assets[config_source.source_id].relative_to(output_root).as_posix(),
+                    "sha256": config_source.content_sha256,
+                },
+                "references": [
+                    {
+                        "reference_id": source.source_id,
+                        "staged_path": staged_assets[source.source_id].relative_to(output_root).as_posix(),
+                        "content_sha256": source.content_sha256,
+                        "state": str(source.metadata_json.get("state") or "reference"),
+                        "source": "registered_artifact",
+                    }
+                    for source in references
+                ],
+                "transfer_source": None if transfer_source is None else {
+                    "kind": str(transfer_source.metadata_json.get("kind") or "confornet_state"),
+                    "staged_path": staged_assets[transfer_source.source_id].relative_to(output_root).as_posix(),
+                    "content_sha256": transfer_source.content_sha256,
+                    "source_test_cases": str(transfer_source.metadata_json.get("source_test_cases") or ""),
+                },
                 "backend_identity": _server_confornets_identity(),
             }
         )
         request_params["confornets"] = settings
-        target_id = str(metadata.get("target_id") or "DRT4_WP_031606642_1")
+        target_id = str(metadata.get("target_id") or sequence_source.source_id)
+        source_entity_id = str(
+            metadata.get("source_entity_id") or metadata.get("entity_id") or target_id
+        )
+        chain_id = str(settings["chain_id"])
         request_params["targets"] = [
             {"target_id": target_id, "target_order": 0, "sequence": sequence, "molecule_type": "protein", "chain_count": 1}
         ]
-        analysis_targets = [{"target_id": target_id, "sequence": sequence}]
-        snapshot = {
+        snapshot = _seal_confornets_snapshot({
             "schema_name": "cm_complex_snapshot",
             "schema_version": 1,
             "target_id": target_id,
             "target_order": 0,
             "original_source_path": f"registered/{sequence_source.source_id}",
             "original_source_sha256": sequence_source.content_sha256,
-            "normalized_source_sha256": sequence_source.content_sha256,
-            "entities": [{"entity_type": "protein", "source_entity_id": "WP_031606642.1", "count": 1, "ordered_instance_ids": ["DRT4_A"], "sequence": sequence}],
+            "entities": [{"entity_type": "protein", "source_entity_id": source_entity_id, "count": 1, "ordered_instance_ids": [chain_id], "sequence": sequence}],
             "bonds": [],
-            "instance_mappings": [{"source_entity_id": "WP_031606642.1", "source_instance_id": "DRT4_A", "runtime_target_id": target_id, "runtime_entity_id": "1", "runtime_instance_id": "DRT4_A", "runtime_order": 0, "candidate_id": target_id, "output_entity_id": "1", "output_label_asym_id": "A", "output_auth_asym_id": "A", "output_entity_order": 0}],
+            "instance_mappings": [{"source_entity_id": source_entity_id, "source_instance_id": chain_id, "runtime_target_id": target_id, "runtime_entity_id": "1", "runtime_instance_id": chain_id, "runtime_order": 0, "candidate_id": f"{target_id}:0", "output_entity_id": "1", "output_label_asym_id": chain_id, "output_auth_asym_id": chain_id, "output_entity_order": 0}],
             "admission": {"token_count": len(sequence), "atom_count": 0, "token_limit": 10000, "conversion_omissions": []},
             "unsupported_fields": [],
-        }
+        })
+        analysis_targets = [snapshot]
         (output_root / "cm_complex_snapshots_v1.json").write_text(json.dumps([snapshot], sort_keys=True, separators=(",", ":")), encoding="utf-8")
 
     validate_request_params(request_params)
@@ -246,7 +507,9 @@ async def materialize_preallocated_cm_job(
             "cm_request_sha256": request_payload["request_sha256"],
             "cm_coordinate_plan_sha256": coordinate_plan["coordinate_plan_sha256"],
             "cm_principal_id": _PERSONAL_WORKFLOW_PRINCIPAL,
-            "cm_submission_sha256": sha256_text(canonical_json(submission)),
+            "cm_workflow_adapter": adapter_id,
+            "cm_scheduler_sha256": scheduler_sha256,
+            "cm_submission_sha256": submission_sha256,
             "global_run_group_id": run_group_id,
             "global_attempt_id": attempt_id,
         },
@@ -276,4 +539,35 @@ async def materialize_preallocated_cm_job(
     }
 
 
-__all__ = ["materialize_preallocated_cm_job"]
+async def materialize_preallocated_cm_job(
+    core_session: AsyncSession,
+    *,
+    attempt_id: str,
+    scheduler: Mapping[str, Any],
+    run_group_id: str,
+) -> dict[str, Any]:
+    """Run the canonical CM materializer and remove an unowned failed root.
+
+    The private materializer applies the server-owned _bind_runtime_policy,
+    _bind_confornets_submission_policy, _bind_analysis_policy, and
+    _managed_checkpoint_for_submission gates before persistence.
+    """
+
+    output_root = get_results_dir() / f"conformational_mapping_{attempt_id}"
+    existed = output_root.exists()
+    preexisting_empty_directory = existed and output_root.is_dir() and not any(output_root.iterdir())
+    try:
+        return await _materialize_preallocated_cm_job(
+            core_session,
+            attempt_id=attempt_id,
+            scheduler=scheduler,
+            run_group_id=run_group_id,
+        )
+    except Exception:
+        await core_session.rollback()
+        if (not existed or preexisting_empty_directory) and output_root.exists():
+            shutil.rmtree(output_root, ignore_errors=True)
+        raise
+
+
+__all__ = ["EXECUTABLE_CM_ADAPTERS", "_seal_confornets_snapshot", "materialize_preallocated_cm_job"]

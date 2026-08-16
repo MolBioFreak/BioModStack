@@ -41,6 +41,34 @@ DIRECT_ENTRYPOINTS = {
     "maturation_child": "workflows/maturation_child.nf",
 }
 
+
+def test_protein_local_fampnn_batches_process_output_without_collect_group_operator_collision() -> None:
+    source = (REPO_ROOT / "workflows" / "protein_local_redesign.nf").read_text(encoding="utf-8")
+
+    assert "PrepProteinLocalFAMPNN.out.pdbs\n            .map { pdbs -> [0, pdbs] }\n            .set { fampnnPdbs }" in source
+    assert "PrepProteinLocalFAMPNN.out.pdbs\n            .collect()" not in source
+
+
+def test_protein_local_redesign_shell_quotes_every_native_dynamic_argument() -> None:
+    source = (REPO_ROOT / "workflows" / "protein_local_redesign.nf").read_text(encoding="utf-8")
+
+    assert "def shellQuote(value)" in source
+    assert "--input-structure ${inputStructureArg}" in source
+    assert "--source-file ${sourceFileArg}" in source
+    assert "--source-storage-path ${sourceStorageArg}" in source
+    assert '--input-structure "${input_structure}"' not in source
+    assert '--source-file "${source_structure}"' not in source
+    assert '--source-storage-path "${params.plr_input_pdb}"' not in source
+    assert "def nativeRfd3Request = params.rfd3_request_path ? true : false" in source
+    assert "def nativeSequenceMethod = nativeRfd3Request ? 'skip'" in source
+    assert "def sequenceMethod = nativeRfd3Request ? 'skip'" in source
+    assert "Native RFD3 local redesign does not accept resume inputs" in source
+    assert "Native RFD3 local redesign does not accept interactive gating" in source
+
+    module_source = (REPO_ROOT / "modules" / "rfd3.nf").read_text(encoding="utf-8")
+    assert "def nativeRequest = params.rfd3_request_path ? true : false" in module_source
+    assert "params.rfd3_request_path && params.plr_redesign_mode" not in module_source
+
 MIGRATED_SYMBOLS = (
     "OLIGO_DESIGNER",
     "PROTEIN_LOCAL_REDESIGN",

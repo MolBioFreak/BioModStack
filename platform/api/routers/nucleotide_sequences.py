@@ -6,16 +6,17 @@ Provides CRUD operations for DNA/RNA sequences with feature annotations.
 
 from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Literal
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_
 from datetime import datetime, timezone
+import hashlib
 import re
 import uuid
 import math
 
 from molbio_database import get_molbio_session
-from molbio_models import NucleotideSequence, Primer
+from molbio_models import MolecularDocument, MolecularRevision, NucleotideSequence, Primer
 from services.molbio_persistence import (
     begin_immediate_molbio_write,
     record_primer_revision,
@@ -224,6 +225,44 @@ class SavedGibsonWorkupListItem(BaseModel):
     updated_at: Optional[datetime]
 
 
+class MolecularRevisionReopenParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sequence_id: str
+    revision_id: str
+
+
+class MolecularRevisionReopenDestination(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    surface: Literal["molbio-sequence-revision"]
+    params: MolecularRevisionReopenParams
+
+
+class MolecularRevisionResponse(BaseModel):
+    """Exact immutable molecular snapshot with a server-authored reopen identity."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    document_id: str
+    sequence_id: str
+    document_kind: str
+    document_name: str
+    revision_id: str
+    revision_number: int
+    parent_revision_id: Optional[str]
+    change_kind: str
+    relation: Literal["current", "historical"]
+    snapshot: dict[str, Any]
+    content_sha256: str
+    content_length: int
+    operation_id: Optional[str]
+    provenance: dict[str, Any]
+    created_at: datetime
+    created_by: Optional[str]
+    reopen_destination: MolecularRevisionReopenDestination
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # HELPER FUNCTIONS
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -339,6 +378,59 @@ def entity_kind_for(sequence_type: str, is_circular: bool, strandedness: str = "
 
 def topology_for(is_circular: bool) -> str:
     return "circular" if is_circular else "linear"
+
+
+def _molecular_revision_response(
+    document: MolecularDocument,
+    revision: MolecularRevision,
+    *,
+    parent_revision_id: Optional[str],
+) -> MolecularRevisionResponse:
+    snapshot = revision.snapshot
+    if not isinstance(snapshot, dict):
+        raise ValueError("immutable molecular revision snapshot is not an object")
+    raw_sequence = snapshot.get("sequence")
+    if not isinstance(raw_sequence, str):
+        raise ValueError("immutable molecular revision snapshot has no sequence")
+    sequence_type = str(snapshot.get("sequence_type") or document.document_kind or "dna")
+    canonical_sequence = canonicalize_nucleotide_sequence(
+        raw_sequence,
+        sequence_type,
+        allow_empty=False,
+    )
+    if canonical_sequence != raw_sequence:
+        raise ValueError("immutable molecular revision snapshot is not canonical")
+    content_sha256 = hashlib.sha256(raw_sequence.encode("utf-8")).hexdigest()
+    if (
+        content_sha256 != revision.content_sha256
+        or len(raw_sequence) != revision.content_length
+    ):
+        raise ValueError("immutable molecular revision content digest or length is invalid")
+    return MolecularRevisionResponse(
+        document_id=document.id,
+        sequence_id=document.id,
+        document_kind=document.document_kind,
+        document_name=document.name,
+        revision_id=revision.id,
+        revision_number=revision.revision_number,
+        parent_revision_id=parent_revision_id,
+        change_kind=revision.change_kind,
+        relation="current" if document.current_revision_id == revision.id else "historical",
+        snapshot=dict(snapshot),
+        content_sha256=revision.content_sha256,
+        content_length=revision.content_length,
+        operation_id=revision.operation_id,
+        provenance=dict(revision.provenance or {}),
+        created_at=revision.created_at,
+        created_by=revision.created_by,
+        reopen_destination=MolecularRevisionReopenDestination(
+            surface="molbio-sequence-revision",
+            params=MolecularRevisionReopenParams(
+                sequence_id=document.id,
+                revision_id=revision.id,
+            ),
+        ),
+    )
 
 
 def serialize_sequence(seq: NucleotideSequence) -> NucleotideSequenceResponse:
@@ -724,6 +816,95 @@ async def list_saved_gibson_workups(
             updated_at=seq.updated_at,
         ))
     return payload
+
+
+@router.get(
+    "/{sequence_id}/revisions",
+    response_model=List[MolecularRevisionResponse],
+)
+async def list_molecular_revisions(
+    sequence_id: str,
+    session: AsyncSession = Depends(get_molbio_session),
+    limit: int = Query(100, ge=1, le=500),
+) -> List[MolecularRevisionResponse]:
+    """List immutable revisions without consulting the mutable sequence projection."""
+    document = await session.get(MolecularDocument, sequence_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Molecular document not found")
+    revisions = list(
+        (
+            await session.execute(
+                select(MolecularRevision)
+                .where(MolecularRevision.document_id == document.id)
+                .order_by(MolecularRevision.revision_number.desc())
+                .limit(limit)
+            )
+        ).scalars()
+    )
+    revision_ids_by_number = {
+        revision.revision_number: revision.id for revision in revisions
+    }
+    # A bounded page can begin after its parent. Resolve that one immutable ID
+    # directly rather than consulting the mutable NucleotideSequence projection.
+    minimum_number = min((revision.revision_number for revision in revisions), default=1)
+    if minimum_number > 1 and minimum_number - 1 not in revision_ids_by_number:
+        previous_id = (
+            await session.execute(
+                select(MolecularRevision.id).where(
+                    MolecularRevision.document_id == document.id,
+                    MolecularRevision.revision_number == minimum_number - 1,
+                )
+            )
+        ).scalar_one_or_none()
+        if previous_id is not None:
+            revision_ids_by_number[minimum_number - 1] = previous_id
+    try:
+        return [
+            _molecular_revision_response(
+                document,
+                revision,
+                parent_revision_id=revision_ids_by_number.get(
+                    revision.revision_number - 1
+                ),
+            )
+            for revision in revisions
+        ]
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@router.get(
+    "/{sequence_id}/revisions/{revision_id}",
+    response_model=MolecularRevisionResponse,
+)
+async def get_molecular_revision(
+    sequence_id: str,
+    revision_id: str,
+    session: AsyncSession = Depends(get_molbio_session),
+) -> MolecularRevisionResponse:
+    """Read one exact immutable revision even when its mutable projection is absent."""
+    document = await session.get(MolecularDocument, sequence_id)
+    revision = await session.get(MolecularRevision, revision_id)
+    if document is None or revision is None or revision.document_id != document.id:
+        raise HTTPException(status_code=404, detail="Molecular revision not found")
+    parent_revision_id = None
+    if revision.revision_number > 1:
+        parent_revision_id = (
+            await session.execute(
+                select(MolecularRevision.id).where(
+                    MolecularRevision.document_id == document.id,
+                    MolecularRevision.revision_number == revision.revision_number - 1,
+                )
+            )
+        ).scalar_one_or_none()
+    try:
+        return _molecular_revision_response(
+            document,
+            revision,
+            parent_revision_id=parent_revision_id,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @router.post("/", response_model=NucleotideSequenceResponse)

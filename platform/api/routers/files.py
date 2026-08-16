@@ -2,14 +2,20 @@
 File serving and directory browsing API router.
 """
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request
 from fastapi.responses import FileResponse, StreamingResponse
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from pathlib import Path
 from datetime import datetime
 import mimetypes
+import json
+import os
 import shutil
+import stat
 from typing import Iterator
 
+from database import Job, get_session
 from schemas import DirectoryListing, DirectoryEntry
 from paths import (
     get_allowed_roots,
@@ -18,6 +24,93 @@ from paths import (
 )
 
 router = APIRouter()
+GOVERNED_NGS_MANIFEST_SCHEMAS = frozenset(
+    {"sequence_qc.manifest.v1", "biomodstack.construct_verification.v2"}
+)
+GOVERNED_NGS_MODEL_IDS = frozenset(
+    {"nanopore", "ont_fastq_qc", "ont_plasmid_qc", "ont_construct_screening", "wf_clone_validation"}
+)
+
+
+def _lexical_absolute(path: Path) -> Path:
+    return Path(os.path.abspath(path.expanduser()))
+
+
+def _contained_lexically(path: Path, root: Path) -> bool:
+    try:
+        _lexical_absolute(path).relative_to(_lexical_absolute(root))
+        return True
+    except ValueError:
+        return False
+
+
+def _allowed_lexical_path(value: str) -> Path:
+    normalized = value.strip().lstrip("/")
+    if not normalized:
+        raise ValueError("Empty path")
+    parts = Path(normalized).parts
+    root = get_allowed_roots().get(parts[0])
+    if root is None:
+        raise ValueError("Root not allowed")
+    candidate = _lexical_absolute(root / Path(*parts[1:]))
+    if not _contained_lexically(candidate, root):
+        raise ValueError("Path escapes allowed root")
+    return candidate
+
+
+async def get_governed_ngs_result_roots(
+    session: AsyncSession = Depends(get_session),
+) -> tuple[Path, ...]:
+    """Return stable lexical authority from persisted canonical NGS job rows."""
+    configured_root = _lexical_absolute(get_allowed_roots()["bms_results"])
+    result = await session.execute(
+        select(Job.output_dir, Job.child_output_dir).where(Job.model_id.in_(GOVERNED_NGS_MODEL_IDS))
+    )
+    roots: set[Path] = set()
+    for output_dir, child_output_dir in result.all():
+        for raw in (output_dir, child_output_dir):
+            if not isinstance(raw, str) or not raw.strip():
+                continue
+            declared = Path(raw.strip()).expanduser()
+            candidate = _lexical_absolute(declared if declared.is_absolute() else configured_root / declared)
+            if _contained_lexically(candidate, configured_root):
+                roots.add(candidate)
+    return tuple(sorted(roots, key=os.fspath))
+
+
+def _under_persisted_ngs_root(path: Path, governed_roots: tuple[Path, ...]) -> bool:
+    return any(_contained_lexically(path, root) for root in governed_roots)
+
+
+def _read_json_nofollow(path: Path, *, max_bytes: int = 10 * 1024 * 1024) -> dict:
+    descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        absolute = Path(os.path.abspath(path))
+        for index, component in enumerate(absolute.parts[1:]):
+            final = index == len(absolute.parts[1:]) - 1
+            flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+            if not final:
+                flags |= os.O_DIRECTORY
+            next_descriptor = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = next_descriptor
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > max_bytes:
+            raise ValueError("manifest is unsafe")
+        raw = b""
+        while len(raw) <= max_bytes:
+            chunk = os.read(descriptor, min(1024 * 1024, max_bytes + 1 - len(raw)))
+            if not chunk:
+                break
+            raw += chunk
+        if len(raw) > max_bytes:
+            raise ValueError("manifest is too large")
+        payload = json.loads(raw.decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("manifest root is invalid")
+        return payload
+    finally:
+        os.close(descriptor)
 
 
 def _parse_byte_range(range_header: str, file_size: int) -> tuple[int, int]:
@@ -136,8 +229,39 @@ def is_path_allowed(path: Path) -> bool:
         return False
 
 
+def _is_governed_ngs_artifact(path: Path) -> bool:
+    resolved = path.resolve()
+    for parent in resolved.parents:
+        manifest = parent / "qc_manifest.json"
+        if not manifest.is_file() or manifest.is_symlink():
+            continue
+        try:
+            payload = _read_json_nofollow(manifest)
+            if payload.get("schema") in GOVERNED_NGS_MANIFEST_SCHEMAS:
+                return True
+        except (OSError, ValueError, json.JSONDecodeError):
+            return True
+    return False
+
+
+def _is_governed_ngs_directory(path: Path) -> bool:
+    resolved = path.resolve()
+    return any(
+        (candidate / "qc_manifest.json").exists()
+        for candidate in (resolved, *resolved.parents)
+    )
+
+
+def _reject_governed_ngs_artifact(path: Path) -> None:
+    if _is_governed_ngs_artifact(path):
+        raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
+
+
 @router.get("/browse")
-async def browse_directory(path: str = "") -> DirectoryListing:
+async def browse_directory(
+    path: str = "",
+    governed_roots: tuple[Path, ...] = Depends(get_governed_ngs_result_roots),
+) -> DirectoryListing:
     """Browse a directory within allowed paths."""
     if not path or path == "/":
         # Return list of allowed root directories
@@ -154,7 +278,12 @@ async def browse_directory(path: str = "") -> DirectoryListing:
         return DirectoryListing(path="", entries=entries)
     
     try:
+        lexical_path = _allowed_lexical_path(path)
+        if _under_persisted_ngs_root(lexical_path, governed_roots):
+            raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
         full_path = resolve_allowed_path(path)
+        if _under_persisted_ngs_root(full_path, governed_roots):
+            raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
     except ValueError:
         raise HTTPException(status_code=403, detail="Access denied to this path")
     
@@ -163,9 +292,16 @@ async def browse_directory(path: str = "") -> DirectoryListing:
     
     if not full_path.is_dir():
         raise HTTPException(status_code=400, detail="Path is not a directory")
+    if _is_governed_ngs_directory(full_path):
+        raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
     
     entries = []
     for item in sorted(full_path.iterdir()):
+        if item.is_dir() and (
+            _under_persisted_ngs_root(item, governed_roots)
+            or _is_governed_ngs_directory(item)
+        ):
+            continue
         stat = item.stat()
         entries.append(DirectoryEntry(
             name=item.name,
@@ -181,12 +317,18 @@ async def browse_directory(path: str = "") -> DirectoryListing:
 @router.post("/upload")
 async def upload_file(
     path: str = Form(...),
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
+    governed_roots: tuple[Path, ...] = Depends(get_governed_ngs_result_roots),
 ):
     """Upload a file to a specific directory."""
     # Validate path is allowed
     try:
+        lexical_dir = _allowed_lexical_path(path)
+        if _under_persisted_ngs_root(lexical_dir, governed_roots):
+            raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
         target_dir = resolve_allowed_path(path)
+        if _under_persisted_ngs_root(target_dir, governed_roots):
+            raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
     except ValueError:
         raise HTTPException(status_code=403, detail="Access denied to this path")
     
@@ -198,23 +340,49 @@ async def upload_file(
             target_dir.mkdir(parents=True, exist_ok=True)
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to create directory: {e}")
+    if _is_governed_ngs_directory(target_dir):
+        raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
 
-    file_path = target_dir / file.filename
+    filename = str(file.filename or "")
+    if not filename or filename in {".", ".."} or Path(filename).name != filename:
+        raise HTTPException(status_code=400, detail="Upload filename must be one plain basename")
+    if filename.casefold() == "qc_manifest.json":
+        raise HTTPException(status_code=403, detail="Canonical manifests cannot be written through the generic upload route")
+    file_path = target_dir / filename
+    if (
+        _under_persisted_ngs_root(_lexical_absolute(lexical_dir / filename), governed_roots)
+        or _is_governed_ngs_directory(file_path.parent)
+        or _is_governed_ngs_artifact(file_path)
+    ):
+        raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
     
     try:
-        with open(file_path, "wb") as buffer:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(file_path, flags, 0o644)
+        with os.fdopen(descriptor, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to upload file: {e}")
         
-    return {"filename": file.filename, "path": to_allowed_relative(file_path), "size": file_path.stat().st_size}
+    return {"filename": filename, "path": to_allowed_relative(file_path), "size": file_path.stat().st_size}
 
 
 @router.get("/download/{file_path:path}")
-async def download_file(file_path: str, request: Request):
+async def download_file(
+    file_path: str,
+    request: Request,
+    governed_roots: tuple[Path, ...] = Depends(get_governed_ngs_result_roots),
+):
     """Download a file from allowed directories."""
     try:
+        lexical_path = _allowed_lexical_path(file_path)
+        if _under_persisted_ngs_root(lexical_path, governed_roots):
+            raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
         full_path = resolve_allowed_path(file_path)
+        if _under_persisted_ngs_root(full_path, governed_roots):
+            raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
     except ValueError:
         raise HTTPException(status_code=403, detail="Access denied to this file")
     
@@ -223,15 +391,25 @@ async def download_file(file_path: str, request: Request):
     
     if not full_path.is_file():
         raise HTTPException(status_code=400, detail="Path is not a file")
+    _reject_governed_ngs_artifact(full_path)
     
     return _serve_file_response(full_path, request, as_attachment=True)
 
 
 @router.get("/stream/{file_path:path}")
-async def stream_file(file_path: str, request: Request):
+async def stream_file(
+    file_path: str,
+    request: Request,
+    governed_roots: tuple[Path, ...] = Depends(get_governed_ngs_result_roots),
+):
     """Stream a file from allowed directories with range support and inline disposition."""
     try:
+        lexical_path = _allowed_lexical_path(file_path)
+        if _under_persisted_ngs_root(lexical_path, governed_roots):
+            raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
         full_path = resolve_allowed_path(file_path)
+        if _under_persisted_ngs_root(full_path, governed_roots):
+            raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
     except ValueError:
         raise HTTPException(status_code=403, detail="Access denied to this file")
 
@@ -240,15 +418,24 @@ async def stream_file(file_path: str, request: Request):
 
     if not full_path.is_file():
         raise HTTPException(status_code=400, detail="Path is not a file")
+    _reject_governed_ngs_artifact(full_path)
 
     return _serve_file_response(full_path, request, as_attachment=False)
 
 
 @router.get("/pdb/{file_path:path}")
-async def serve_pdb(file_path: str):
+async def serve_pdb(
+    file_path: str,
+    governed_roots: tuple[Path, ...] = Depends(get_governed_ngs_result_roots),
+):
     """Serve a PDB file with appropriate content type for Mol* viewer."""
     try:
+        lexical_path = _allowed_lexical_path(file_path)
+        if _under_persisted_ngs_root(lexical_path, governed_roots):
+            raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
         full_path = resolve_allowed_path(file_path)
+        if _under_persisted_ngs_root(full_path, governed_roots):
+            raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
     except ValueError:
         raise HTTPException(status_code=403, detail="Access denied to this file")
     
@@ -257,6 +444,7 @@ async def serve_pdb(file_path: str):
     
     if not full_path.suffix.lower() in ['.pdb', '.cif', '.mmcif']:
         raise HTTPException(status_code=400, detail="Not a structure file")
+    _reject_governed_ngs_artifact(full_path)
     
     return FileResponse(
         path=full_path,
@@ -270,6 +458,7 @@ async def extract_chain(
     chain_id: str = Form(...),
     rename_to: str = Form(None),
     model_number: int | None = Form(None),
+    governed_roots: tuple[Path, ...] = Depends(get_governed_ngs_result_roots),
 ):
     """
     Extract a single chain from a multi-chain PDB file.
@@ -292,16 +481,28 @@ async def extract_chain(
     from extract_chain import extract_chains
     
     try:
+        lexical_input = _allowed_lexical_path(input_path)
+        if _under_persisted_ngs_root(lexical_input, governed_roots):
+            raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
         full_input = resolve_allowed_path(input_path)
+        if _under_persisted_ngs_root(full_input, governed_roots):
+            raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
     except ValueError:
         raise HTTPException(status_code=403, detail="Access denied to input file")
     
     if not full_input.exists():
         raise HTTPException(status_code=404, detail="Input file not found")
+    _reject_governed_ngs_artifact(full_input)
     
     # Create output filename with chain suffix
     output_name = f"{full_input.stem}_chain{chain_id}{full_input.suffix}"
     output_path = full_input.parent / output_name
+    if (
+        _under_persisted_ngs_root(_lexical_absolute(lexical_input.parent / output_name), governed_roots)
+        or _is_governed_ngs_directory(output_path.parent)
+        or _is_governed_ngs_artifact(output_path)
+    ):
+        raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
     
     try:
         result = extract_chains(

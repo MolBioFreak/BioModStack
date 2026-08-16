@@ -40,13 +40,14 @@ def _pdb(serial: int = 1) -> bytes:
 def test_protein_design_has_one_canonical_component_and_no_legacy_owner() -> None:
     workflow = _workflow()
 
-    assert "include { CanonicalFrustraMPNN } from '../modules/frustrampnn.nf'" in workflow
-    assert workflow.count("CanonicalFrustraMPNN(") == 1
+    assert "include { CanonicalFrustraMPNNV2 } from '../modules/frustrampnn.nf'" in workflow
+    assert workflow.count("CanonicalFrustraMPNNV2(") == 1
+    assert "CanonicalFrustraMPNN(" not in workflow
     assert "FrustrampnnQC" not in workflow
     assert "AggregateFrustrationReports" not in workflow
     assert "terminal_designs" in workflow
     assert "parent_workflow_id: 'protein_design'" in workflow
-    assert "frustrampnn_results = CanonicalFrustraMPNN.out.result" in workflow
+    assert "frustrampnn_results = CanonicalFrustraMPNNV2.out.result" in workflow
     assert re.search(r"emit:\s+final_structures\s+terminal_designs\s+frustrampnn_results", workflow)
     assert ".subscribe" not in workflow
     assert "workflow.onError" not in workflow
@@ -99,6 +100,27 @@ def test_plain_pdb_projection_and_scheduler_owned_terminal_reporting() -> None:
     assert "publish_frustrampnn_bundle.py" in workflow
     assert "frustrampnn complete" in workflow
     assert "test \\\"\\${#outputs[@]}\\\" -gt 0" in workflow
+
+
+def test_protein_design_transports_complete_bounded_typed_v2_settings() -> None:
+    workflow = _workflow()
+    preparer = workflow.split("process PrepareProteinDesignFrustraMPNNCandidate", 1)[1].split(
+        "process ReportProteinDesignFrustraMPNNNotRequested", 1
+    )[0]
+    enabled = workflow.split("if (params.run_frustrampnn == true)", 1)[1].split("else {", 1)[0]
+
+    assert "FRUSTRAMPNN_SETTINGS_MAX_BYTES" in workflow
+    assert "requireCompleteFrustraMPNNSettings" in workflow
+    assert "frustrampnn_settings_value_origin" in enabled
+    assert "canonicalJsonBytes(rawSettings)" in enabled
+    assert "Arrays.equals(settingsBytes, canonicalSettingsBytes)" in enabled
+    assert "workflow_component_request_v2.json" in preparer
+    assert "frustrampnn_structure_map_v1.json" in preparer
+    assert "--request-version 2" in preparer
+    assert "--settings-base64" in preparer
+    assert "--settings-sha256" in preparer
+    assert "--settings-value-origin" in preparer
+    assert "workflow_component_request_v1.json" not in preparer
 
 
 def test_duplicate_bytes_basenames_and_reordering_keep_producer_identity(tmp_path: Path) -> None:

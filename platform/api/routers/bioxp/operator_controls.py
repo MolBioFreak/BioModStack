@@ -83,8 +83,8 @@ async def _resolve_action_quarantine(
     # Safety interrupts must not wait for a fresh full catalog while a motion
     # transaction is still holding the robot's provider-state lock. The robot
     # invocation still enforces the connection and ownership generations and
-    # dispatches only the finite oem.z.stop/oem.z.abort actions.
-    if action_id in {"oem.z.stop", "oem.z.abort"}:
+    # dispatches only the finite X/Z stop and aggregate-abort actions.
+    if action_id in {"oem.x.stop", "oem.abort_all", "oem.z.stop", "oem.z.abort"}:
         return None
     try:
         payload = await runtime.connection.request_active_query(
@@ -221,7 +221,7 @@ async def invoke_operator_action(
         "inputs": request.inputs,
     }
     try:
-        if action_id in {"oem.z.stop", "oem.z.abort"}:
+        if action_id in {"oem.x.stop", "oem.abort_all", "oem.z.stop", "oem.z.abort"}:
             payload = await runtime.connection.request_active_safety_interrupt(
                 "invoke_operator_action",
                 expected_generation=request.expected_connection_generation,

@@ -1,0 +1,42 @@
+{
+  "$id": "bms.molbio-ngs.member-receipt-published.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "native_entity_id": {
+      "maxLength": 255,
+      "minLength": 1,
+      "type": "string"
+    },
+    "native_generation": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "receipt_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "receipt_kind": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "receipt_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "schema": {
+      "const": "bms.molbio-ngs.member-receipt-published.v1"
+    }
+  },
+  "required": [
+    "schema",
+    "receipt_id",
+    "receipt_kind",
+    "native_entity_id",
+    "native_generation",
+    "receipt_sha256"
+  ],
+  "type": "object"
+}

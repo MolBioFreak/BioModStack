@@ -33,7 +33,7 @@ def run_builder(tmp_path: Path, *, consensus: str | None) -> tuple[subprocess.Co
         "--consensus-fasta",
         str(observed),
         "--consensus-method",
-        "bcftools_consensus",
+        "samtools_consensus",
         "--out-dir",
         str(out_dir),
     ]

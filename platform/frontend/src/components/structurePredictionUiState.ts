@@ -1,3 +1,8 @@
+import {
+    buildFrustraMpnnLaunchParams,
+    type FrustraMpnnRequestedSettings,
+} from './frustrampnn/frustraMpnnSettingsState.js';
+
 export type StructurePredictionMode = 'predict' | 'complex';
 export type StructurePredictorFamily = 'boltz' | 'rf3' | 'protenix' | 'esmfold2';
 export type StructurePredictorSelection = StructurePredictorFamily | 'boltz_api' | 'both' | 'all' | 'boltz_protenix';
@@ -412,10 +417,23 @@ export const buildBoltzCpSubmitParams = ({
     return params;
 };
 
+export type StructureFrustraMpnnSubmitParams =
+    | {
+        run_frustrampnn: true;
+        frustrampnn_requiredness: 'required';
+        frustrampnn_settings: FrustraMpnnRequestedSettings;
+    }
+    | {
+        run_frustrampnn: false;
+        frustrampnn_requiredness: 'required';
+    };
+
 export const buildStructureFrustraMpnnSubmitParams = (
     enabled: boolean | undefined,
-): { run_frustrampnn: boolean } => ({
-    run_frustrampnn: enabled !== false,
+    settings: FrustraMpnnRequestedSettings,
+): StructureFrustraMpnnSubmitParams => ({
+    ...buildFrustraMpnnLaunchParams(enabled !== false, settings),
+    frustrampnn_requiredness: 'required',
 });
 
 export const buildStructureMsaSubmitParams = ({

@@ -3,6 +3,7 @@ Jobs API router - Create, list, cancel pipeline jobs.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, Body, Request, Response
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, update
 from sqlalchemy.exc import OperationalError
@@ -20,7 +21,7 @@ import random
 import re
 from datetime import datetime
 from pathlib import Path
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from jsonschema.exceptions import SchemaError
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,18 @@ from antibody_pipeline_contract import (
     normalize_antibody_artifact_class,
     normalize_antibody_pipeline_contract_version,
 )
-from database import get_session, Job, Design
+from database import (
+    current_launch_context_id,
+    get_session,
+    Job,
+    Design,
+    FrustraMPNNResult,
+    RFD3LocalRedesignRequest,
+    RFD3LocalRedesignCandidate,
+    RFD3LocalRedesignArtifact,
+)
+from experiment_database import get_experiment_session
+from experiment_models import ExperimentRunAttempt
 from services.result_contracts import build_review_artifact_manifest, resolve_result_contract
 from paths import (
     get_code_root,
@@ -46,6 +58,7 @@ from paths import (
     get_results_dir,
     get_work_dir,
     resolve_allowed_path,
+    resolve_runtime_data_path,
     to_allowed_relative,
 )
 from runtime_policy import workflow_launch_block_detail, workflow_launches_allowed
@@ -59,6 +72,30 @@ from services.md.launch_contract import MDLaunchError, materialize_md_job_spec, 
 from services.md.results import expected_analysis_implementation_sha256
 from services.md.state import MdStateError, create_md_run, create_replica_attempt
 from services.proteinbase_importer import import_proteinbase_bundle
+from services.rfd3_local_redesign import (
+    normalize_local_redesign_params,
+    materialize_local_redesign_request,
+    prepare_local_redesign_scheduler_params,
+)
+from services.global_experiments.launch_contexts import (
+    LaunchContextError,
+    claim_launch_context,
+    consume_launch_context,
+    publish_launch_context_binding,
+    release_launch_context_claim,
+    resolve_launch_context,
+    resolve_launch_context_for_display,
+    validate_bound_job,
+    validate_bound_job_request,
+    workflow_pinned_gpu,
+)
+from scripts.rfd3_local_redesign.contract import ContractError, request_sha256
+from services.frustrampnn.settings import (
+    FrustraMPNNRequestedSettings,
+    RequestedSettingsPayloadError,
+    default_settings as default_frustrampnn_settings,
+    validate_complete_requested_settings,
+)
 
 from model_registry import get_registry
 from services.stage_review import (
@@ -791,6 +828,17 @@ class AntibodyIterationLaunchRequest(BaseModel):
     param_overrides: Dict[str, Any] = Field(default_factory=dict)
     cdr_indel_config: Optional[AntibodyCdrIndelConfig] = None
     manual_mutagenesis_config: Optional[ManualMutagenesisConfig] = None
+    frustrampnn_settings: Optional[FrustraMPNNRequestedSettings] = None
+
+    @field_validator("frustrampnn_settings", mode="before")
+    @classmethod
+    def _complete_frustrampnn_settings(
+        cls,
+        value: Any,
+    ) -> Optional[FrustraMPNNRequestedSettings]:
+        if value is None:
+            return None
+        return validate_complete_requested_settings(value)
 
 
 class AntibodyIterationLaunchResponse(BaseModel):
@@ -1543,6 +1591,101 @@ def _normalize_structure_prediction_pred_method(
         return normalized
 
     normalized["pred_method"] = requested_pred_method
+    return normalized
+
+
+def _frustrampnn_param_error(
+    field: str,
+    message: str,
+    *,
+    error_type: str,
+    suffix: tuple[str | int, ...] = (),
+) -> HTTPException:
+    return HTTPException(
+        status_code=422,
+        detail=[
+            {
+                "type": error_type,
+                "loc": ["body", "params", field, *suffix],
+                "msg": message,
+            }
+        ],
+    )
+
+
+def _normalize_frustrampnn_settings(
+    model_id: str,
+    mode: str,
+    params: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Normalize the global typed FrustraMPNN contract before Job persistence."""
+
+    normalized = {} if params is None else dict(params)
+    fields = {
+        "run_frustrampnn",
+        "frustrampnn_requiredness",
+        "frustrampnn_settings",
+        "frustrampnn_settings_value_origin",
+    }
+    if not fields.intersection(normalized):
+        return normalized
+    if "frustrampnn_settings_value_origin" in normalized:
+        raise _frustrampnn_param_error(
+            "frustrampnn_settings_value_origin",
+            "frustrampnn_settings_value_origin is server-authored",
+            error_type="value_error.frustrampnn_origin",
+        )
+
+    enabled = normalized.get("run_frustrampnn", False)
+    if type(enabled) is not bool:
+        raise _frustrampnn_param_error(
+            "run_frustrampnn",
+            "run_frustrampnn must be a boolean",
+            error_type="bool_type",
+        )
+    normalized["run_frustrampnn"] = enabled
+    requiredness = normalized.get("frustrampnn_requiredness", "required")
+    if requiredness != "required":
+        raise _frustrampnn_param_error(
+            "frustrampnn_requiredness",
+            "frustrampnn_requiredness must remain required",
+            error_type="literal_error",
+        )
+    normalized["frustrampnn_requiredness"] = "required"
+    supplied = "frustrampnn_settings" in normalized
+    if not enabled:
+        if supplied:
+            raise _frustrampnn_param_error(
+                "frustrampnn_settings",
+                "frustrampnn_settings requires run_frustrampnn=true",
+                error_type="value_error.frustrampnn_disabled",
+            )
+        return normalized
+    if not supplied:
+        settings = default_frustrampnn_settings()
+    else:
+        try:
+            settings = validate_complete_requested_settings(
+                normalized["frustrampnn_settings"]
+            )
+        except RequestedSettingsPayloadError as exc:
+            raise _frustrampnn_param_error(
+                "frustrampnn_settings",
+                str(exc),
+                error_type="value_error.frustrampnn_settings",
+                suffix=exc.location,
+            ) from exc
+        except ValidationError as exc:
+            error = exc.errors(include_url=False, include_context=False)[0]
+            raise _frustrampnn_param_error(
+                "frustrampnn_settings",
+                str(error["msg"]),
+                error_type=str(error["type"]),
+                suffix=tuple(error["loc"]),
+            ) from exc
+    normalized["frustrampnn_settings"] = settings.model_dump(
+        mode="json", exclude_none=False
+    )
     return normalized
 
 
@@ -4840,6 +4983,7 @@ async def list_jobs(
         Job.selection_source_type,
         Job.selection_source_job_id,
         Job.selection_dataset_name,
+        Job.pinned_gpu,
         Job.current_stage,
         Job.completed_stages,
         Job.awaiting_input,
@@ -4893,6 +5037,17 @@ async def list_jobs(
         rows = result.all()
 
     listed_job_ids = [job.id for job, _design_count in rows]
+    frustrampnn_count_by_job: dict[str, int] = {}
+    if listed_job_ids:
+        frustrampnn_counts = await session.execute(
+            select(FrustraMPNNResult.parent_job_id, func.count(FrustraMPNNResult.invocation_id))
+            .where(FrustraMPNNResult.parent_job_id.in_(listed_job_ids))
+            .group_by(FrustraMPNNResult.parent_job_id)
+        )
+        frustrampnn_count_by_job = {
+            str(parent_job_id): int(result_count)
+            for parent_job_id, result_count in frustrampnn_counts.all()
+        }
     child_design_count_by_parent: dict[str, int] = {}
     if listed_job_ids:
         child_count_result = await session.execute(
@@ -4924,6 +5079,7 @@ async def list_jobs(
     
     job_responses = []
     for job, design_count in rows:
+        frustrampnn_result_count = frustrampnn_count_by_job.get(job.id, 0)
         completed_stages = _dedupe_preserve_order(list(job.completed_stages or []))
         stage_outputs = {} if summary else dict(job.stage_outputs or {})
         if not summary and job.status in {JobStatus.COMPLETED.value, JobStatus.AWAITING_INPUT.value}:
@@ -4941,11 +5097,11 @@ async def list_jobs(
             status=job.status,
             model_id=job.model_id,
             mode=job.mode,
-            params={} if summary else job.params,
+            params={} if summary else _public_job_params(job),
             created_at=job.created_at,
             started_at=job.started_at,
             completed_at=job.completed_at,
-            output_dir=job.output_dir,
+            output_dir=_public_job_output_dir(job),
             error_message=job.error_message,
             design_count=design_count,  # Now joined from DB
             requested_design_count=None if summary else _resolve_requested_design_count(job),
@@ -4969,6 +5125,7 @@ async def list_jobs(
             selected_loop_scope=None if summary else job.selected_loop_scope,
             provenance=None if summary else job.provenance,
             saved_selection_sets=None if summary else _serialized_saved_review_filter_sets(job),
+            pinned_gpu=job.pinned_gpu,
             current_stage=job.current_stage,
             completed_stages=completed_stages,
             stage_outputs={} if summary else stage_outputs,
@@ -4976,6 +5133,11 @@ async def list_jobs(
             awaiting_stage=job.awaiting_stage,
             awaiting_payload={} if summary else job.awaiting_payload,
             decision_history=[] if summary else job.decision_history,
+            frustrampnn_result_count=frustrampnn_result_count,
+            frustrampnn_reopen_destination=(
+                {"surface": "frustrampnn-workbench", "params": {"job_id": job.id}}
+                if frustrampnn_result_count else None
+            ),
         ))
     
     return JobList(jobs=job_responses, total=total)
@@ -5028,11 +5190,11 @@ async def import_proteinbase_bundle_job(
         status=job.status,
         model_id=job.model_id,
         mode=job.mode,
-        params=job.params,
+        params=_public_job_params(job),
         created_at=job.created_at,
         started_at=job.started_at,
         completed_at=job.completed_at,
-        output_dir=job.output_dir,
+        output_dir=_public_job_output_dir(job),
         error_message=job.error_message,
         design_count=design_count or 0,
         requested_design_count=_resolve_requested_design_count(job),
@@ -5056,6 +5218,7 @@ async def import_proteinbase_bundle_job(
         selected_loop_scope=job.selected_loop_scope,
         provenance=job.provenance,
         saved_selection_sets=_serialized_saved_review_filter_sets(job),
+        pinned_gpu=job.pinned_gpu,
         current_stage=job.current_stage,
         completed_stages=job.completed_stages,
         stage_outputs=job.stage_outputs,
@@ -5114,8 +5277,7 @@ def _standard_job_output_dir(name: str, timestamp: str, preallocated_job_id: str
     return get_results_dir() / f"{name}_{timestamp}"
 
 
-@router.post("", response_model=JobResponse, status_code=201)
-async def create_job(
+async def _create_job(
     job_data: JobCreate,
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
@@ -5123,6 +5285,7 @@ async def create_job(
     _commit: Any = Depends(lambda: True),
     _md_output_creation: Any = Depends(lambda: None),
     _md_input_resolver: Any = Depends(lambda: None),
+    _trusted_workflow_adapter: Any = Depends(lambda: False),
 ):
     """Create and queue a new pipeline job."""
     require_molecular_dynamics_feature(job_data.model_id)
@@ -5142,6 +5305,38 @@ async def create_job(
     }
     normalized_model_id = str(job_data.model_id or "").strip().lower()
     normalized_mode = str(job_data.mode or "").strip().lower()
+    if normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign":
+        if "workflow_adapter" in (job_data.params or {}) and _trusted_workflow_adapter is not True:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "local_redesign_contract_error": "workflow_adapter is server-owned for native RFD3"
+                },
+            )
+        pinned_gpu = job_data.pinned_gpu
+        if isinstance(pinned_gpu, bool) or not isinstance(pinned_gpu, int) or pinned_gpu < 0:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "local_redesign_contract_error": (
+                        "native RFD3 local redesign requires one explicit non-negative pinned_gpu"
+                    )
+                },
+            )
+        from routers.gpu import get_gpu_stats_with_error
+
+        live_gpus, gpu_error = await asyncio.to_thread(get_gpu_stats_with_error, True)
+        valid_gpu_indices = sorted({int(gpu.index) for gpu in live_gpus})
+        if gpu_error or pinned_gpu not in valid_gpu_indices:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "local_redesign_contract_error": "native RFD3 pinned_gpu is absent from an error-free live physical GPU inventory",
+                    "pinned_gpu": pinned_gpu,
+                    "valid_gpu_indices": valid_gpu_indices,
+                    "gpu_error": gpu_error,
+                },
+            )
     if normalized_model_id == "frustrampnn":
         raise HTTPException(
             status_code=422,
@@ -5211,13 +5406,35 @@ async def create_job(
             job_data.mode,
             job_data.params,
         )
+        job_data.params = _normalize_frustrampnn_settings(
+            job_data.model_id,
+            job_data.mode,
+            job_data.params,
+        )
         # Convert browse-alias paths (e.g. downloads/...) to host absolute paths for runtime.
         job_data.params = _normalize_nanopore_runtime_paths(job_data.model_id, job_data.params)
         job_data.params = _normalize_antibody_runtime_paths(job_data.model_id, job_data.params)
         job_data.params = _normalize_structure_runtime_paths(job_data.model_id, job_data.params)
         job_data.params = _normalize_structure_geometry_params(job_data.params)
         job_data.params = _normalize_boltz_no_msa_quality_params(job_data.model_id, job_data.mode, job_data.params)
-        job_data.params = _normalize_antibody_job_params(job_data.params)
+        if not (normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign"):
+            job_data.params = _normalize_antibody_job_params(job_data.params)
+
+        if normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign":
+            try:
+                if "workflow_adapter" in job_data.params:
+                    normalized_local_params = prepare_local_redesign_scheduler_params(
+                        job_data.params,
+                        job_name=job_data.name,
+                    )
+                else:
+                    normalized_local_params, _local_request, _local_digest = normalize_local_redesign_params(
+                        job_data.params,
+                        job_name=job_data.name,
+                    )
+            except ContractError as exc:
+                raise HTTPException(status_code=422, detail={"local_redesign_contract_error": str(exc)}) from exc
+            job_data.params = normalized_local_params
 
         if job_data.model_id == "molecular_dynamics" and job_data.mode == "simulate":
             try:
@@ -5307,11 +5524,11 @@ async def create_job(
                 status=existing_child.status,
                 model_id=existing_child.model_id,
                 mode=existing_child.mode,
-                params=existing_child.params,
+                params=_public_job_params(existing_child),
                 created_at=existing_child.created_at,
                 started_at=existing_child.started_at,
                 completed_at=existing_child.completed_at,
-                output_dir=existing_child.output_dir,
+                output_dir=_public_job_output_dir(existing_child),
                 error_message=existing_child.error_message,
                 design_count=0,
                 batch_id=existing_child.batch_id,
@@ -5334,6 +5551,7 @@ async def create_job(
                 selected_loop_scope=existing_child.selected_loop_scope,
                 provenance=existing_child.provenance,
                 saved_selection_sets=_serialized_saved_review_filter_sets(existing_child),
+                pinned_gpu=existing_child.pinned_gpu,
                 awaiting_input=existing_child.awaiting_input,
                 awaiting_stage=existing_child.awaiting_stage,
                 awaiting_payload=existing_child.awaiting_payload,
@@ -5672,6 +5890,20 @@ async def create_job(
                 _raise_md_launch_http_error(exc)
             job_params["job_name"] = job_name
 
+        if normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign":
+            try:
+                job_params, _local_request, _local_digest, _local_request_path = materialize_local_redesign_request(
+                    job_params,
+                    output_dir=output_dir,
+                    job_id=job_id,
+                )
+            except ContractError as exc:
+                _cleanup_call_owned_md_output(
+                    Path(base_output_dir),
+                    created=md_output_dir_created,
+                )
+                raise HTTPException(status_code=422, detail={"local_redesign_contract_error": str(exc)}) from exc
+
         if isinstance(job_params, dict):
             job_params = _ensure_job_resume_identity(
                 job_name=job_name,
@@ -5841,6 +6073,25 @@ async def create_job(
             job_phase='inference',
         )
         session.add(job)
+        if normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign":
+            local_request = job_params.get("rfd3_request") if isinstance(job_params, dict) else None
+            local_request_id = job_params.get("rfd3_request_id") if isinstance(job_params, dict) else None
+            if not isinstance(local_request, dict) or not local_request_id:
+                raise HTTPException(status_code=500, detail="materialized local-redesign request is incomplete")
+            session.add(
+                RFD3LocalRedesignRequest(
+                    request_id=str(local_request_id),
+                    job_id=job.id,
+                    schema_version=int(local_request.get("schema_version", 1)),
+                    request_sha256=str(job_params.get("rfd3_request_sha256")),
+                    profile_id=str(local_request.get("profile_id")),
+                    profile_registry_sha256=str(local_request.get("profile_registry_sha256")),
+                    redesign_mode=str(local_request.get("redesign_mode")),
+                    sequence_policy=str(local_request.get("sequence_policy")),
+                    status="prepared",
+                    request_json=local_request,
+                )
+            )
         if is_md_launch and job_params.get("md_job_spec", {}).get("schema") == "bms.md.job.v2":
             await create_md_run(
                 session,
@@ -5892,11 +6143,11 @@ async def create_job(
         status=first_job.status,
         model_id=first_job.model_id,
         mode=first_job.mode,
-        params=first_job.params,
+        params=_public_job_params(first_job),
         created_at=first_job.created_at,
         started_at=first_job.started_at,
         completed_at=first_job.completed_at,
-        output_dir=first_job.output_dir,
+        output_dir=_public_job_output_dir(first_job),
         error_message=first_job.error_message,
         design_count=0,
         batch_id=first_job.batch_id,
@@ -5919,10 +6170,214 @@ async def create_job(
         selected_loop_scope=first_job.selected_loop_scope,
         provenance=first_job.provenance,
         saved_selection_sets=_serialized_saved_review_filter_sets(first_job),
+        pinned_gpu=first_job.pinned_gpu,
         awaiting_input=first_job.awaiting_input,
         awaiting_stage=first_job.awaiting_stage,
         awaiting_payload=first_job.awaiting_payload,
         decision_history=first_job.decision_history,
+    )
+
+
+def _launch_context_http_error(exc: LaunchContextError) -> HTTPException:
+    return HTTPException(
+        status_code=exc.status_code,
+        detail={"code": exc.code, "message": str(exc)},
+    )
+
+
+@router.post("", response_model=JobResponse, status_code=201)
+async def create_job(
+    job_data: JobCreate,
+    background_tasks: BackgroundTasks,
+    session: AsyncSession = Depends(get_session),
+    _preallocated_job_id: Any = Depends(lambda: None),
+    _commit: Any = Depends(lambda: True),
+    _skip_parent_lineage_update: Any = Depends(lambda: False),
+    experiment_session: AsyncSession = Depends(get_experiment_session),
+) -> JobResponse:
+    """Canonical Job submission, optionally bound by one opaque launch context."""
+    launch_context_id = str(job_data.launch_context_id or "").strip()
+    if not launch_context_id:
+        return await _create_job(
+            job_data,
+            background_tasks,
+            session,
+            _preallocated_job_id,
+            _commit,
+            _skip_parent_lineage_update,
+        )
+    if current_launch_context_id.get() != launch_context_id:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "launch_context_transport_mismatch", "message": "Launch context header and body must match."},
+        )
+    if _commit is False:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "launch_context_noncanonical_submission",
+                "message": "Launch contexts can bind only a committed canonical Job submission.",
+            },
+        )
+
+    try:
+        preview_context = await resolve_launch_context(experiment_session, launch_context_id)
+        if preview_context.contract_version == "2":
+            prepared_attempt = await experiment_session.get(ExperimentRunAttempt, preview_context.run_attempt_id)
+            if prepared_attempt is None:
+                raise LaunchContextError("launch_context_binding_invalid", "Reserved attempt is unavailable.", status_code=409)
+            _preallocated_job_id = prepared_attempt.scheduler_job_id
+        job_data.params = await validate_bound_job_request(
+            experiment_session,
+            preview_context,
+            job_name=job_data.name,
+            model_id=job_data.model_id,
+            mode=job_data.mode,
+            params=dict(job_data.params or {}),
+            pinned_gpu=job_data.pinned_gpu,
+        )
+        context, claim_token = await claim_launch_context(experiment_session, launch_context_id)
+        await experiment_session.commit()
+    except LaunchContextError as exc:
+        await experiment_session.rollback()
+        if exc.code == "launch_context_consumed":
+            context = await resolve_launch_context_for_display(experiment_session, launch_context_id)
+            if context.canonical_job_id:
+                existing_job = await session.get(Job, context.canonical_job_id)
+                if existing_job is not None:
+                    await validate_bound_job(experiment_session, context, existing_job)
+                    binding = json.loads(context.binding_receipt_json or "{}")
+                    from routers.project_manager import _project_bound_job
+                    await _project_bound_job(experiment_session, session, context, existing_job, binding)
+                    await experiment_session.commit()
+                    try:
+                        await publish_launch_context_binding(
+                            session,
+                            context=context,
+                            job=existing_job,
+                            binding=binding,
+                        )
+                    except LaunchContextError as publish_exc:
+                        raise _launch_context_http_error(publish_exc) from publish_exc
+                    return JobResponse.model_validate(existing_job).model_copy(update={
+                        "params": _public_job_params(existing_job),
+                        "output_dir": _public_job_output_dir(existing_job),
+                        "pinned_gpu": existing_job.pinned_gpu,
+                        "launch_context_id": context.launch_context_id,
+                        "launch_context_binding": binding,
+                        "return_uri": context.return_uri,
+                    })
+        if exc.code == "launch_context_claimed":
+            context = await resolve_launch_context_for_display(experiment_session, launch_context_id)
+            tagged_jobs = (await session.scalars(
+                select(Job).where(func.json_extract(Job.provenance, "$.launch_context_id") == launch_context_id).limit(2)
+            )).all()
+            if len(tagged_jobs) == 1 and context.claim_token:
+                existing_job = tagged_jobs[0]
+                await validate_bound_job(experiment_session, context, existing_job)
+                context, binding = await consume_launch_context(
+                    experiment_session,
+                    launch_context_id=launch_context_id,
+                    claim_token=context.claim_token,
+                    canonical_job_id=existing_job.id,
+                    canonical_batch_id=None,
+                )
+                from routers.project_manager import _project_bound_job
+                await _project_bound_job(experiment_session, session, context, existing_job, binding)
+                await experiment_session.commit()
+                try:
+                    await publish_launch_context_binding(
+                        session,
+                        context=context,
+                        job=existing_job,
+                        binding=binding,
+                    )
+                except LaunchContextError as publish_exc:
+                    raise _launch_context_http_error(publish_exc) from publish_exc
+                return JobResponse.model_validate(existing_job).model_copy(update={
+                    "params": _public_job_params(existing_job),
+                    "output_dir": _public_job_output_dir(existing_job),
+                    "pinned_gpu": existing_job.pinned_gpu,
+                    "launch_context_id": context.launch_context_id,
+                    "launch_context_binding": binding,
+                    "return_uri": context.return_uri,
+                })
+        raise _launch_context_http_error(exc) from exc
+
+    try:
+        response = await _create_job(
+            job_data,
+            background_tasks,
+            session,
+            _preallocated_job_id,
+            _commit,
+            _skip_parent_lineage_update,
+            None,
+            True,
+        )
+    except HTTPException:
+        await session.rollback()
+        try:
+            await release_launch_context_claim(
+                experiment_session,
+                launch_context_id=launch_context_id,
+                claim_token=claim_token,
+            )
+            await experiment_session.commit()
+        except Exception:
+            await experiment_session.rollback()
+            logger.exception("Failed to release launch-context claim after rejected Job submission")
+        raise
+    except Exception:
+        await session.rollback()
+        # Unknown post-commit failures keep the durable claim fail-closed.
+        raise
+
+    try:
+        created_job = await session.get(Job, str(response.id))
+        if created_job is None:
+            raise LaunchContextError("launch_context_job_unavailable", "Created Job cannot be resolved.", status_code=409)
+        await validate_bound_job(experiment_session, context, created_job)
+        consumed, binding = await consume_launch_context(
+            experiment_session,
+            launch_context_id=launch_context_id,
+            claim_token=claim_token,
+            canonical_job_id=str(response.id),
+            canonical_batch_id=response.batch_id,
+        )
+        from routers.project_manager import _project_bound_job
+        created_job = await session.get(Job, str(response.id))
+        if created_job is None:
+            raise LaunchContextError("launch_context_job_unavailable", "Created Job cannot be projected.", status_code=409)
+        await _project_bound_job(experiment_session, session, consumed, created_job, binding)
+        await experiment_session.commit()
+        await publish_launch_context_binding(
+            session,
+            context=consumed,
+            job=created_job,
+            binding=binding,
+        )
+    except LaunchContextError as exc:
+        await experiment_session.rollback()
+        try:
+            await release_launch_context_claim(
+                experiment_session,
+                launch_context_id=launch_context_id,
+                claim_token=claim_token,
+            )
+            await experiment_session.commit()
+        except Exception:
+            await experiment_session.rollback()
+        # The Job may already be durable. Never claim experiment membership without
+        # the verified binding receipt; the claimed context remains fail-closed.
+        raise _launch_context_http_error(exc) from exc
+
+    return response.model_copy(
+        update={
+            "launch_context_id": consumed.launch_context_id,
+            "launch_context_binding": binding,
+            "return_uri": context.return_uri,
+        }
     )
 
 
@@ -5985,6 +6440,9 @@ async def launch_antibody_iteration_from_designs(
                 selections=selections,
                 source_parent=source_job,
                 trigger="antibody_iteration",
+                requested_settings=(
+                    request.frustrampnn_settings or default_frustrampnn_settings()
+                ),
             )
         except FrustraMPNNChildError as exc:
             await session.rollback()
@@ -6151,6 +6609,254 @@ async def launch_manual_mutagenesis_from_designs(
     )
 
 
+def _rfd3_public_json(value: Any, *, field: str | None = None) -> Any:
+    """Project stored RFD3 provenance without exposing absolute host paths."""
+
+    if isinstance(value, dict):
+        return {key: _rfd3_public_json(item, field=str(key)) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_rfd3_public_json(item, field=field) for item in value]
+    field_name = str(field or "").lower()
+    is_path_field = field_name in {
+        "input",
+        "input_structure",
+        "input_pdb",
+        "input_cif",
+        "plr_input_pdb",
+        "rfd3_request_path",
+        "path",
+        "paths",
+        "file",
+        "files",
+        "dir",
+        "directory",
+        "directories",
+        "filepath",
+        "filepaths",
+        "dirname",
+        "dirnames",
+        "storage_path",
+    } or field_name.endswith(
+        (
+            "_path",
+            "_paths",
+            "_file",
+            "_files",
+            "_dir",
+            "_directory",
+            "_directories",
+            "_filepath",
+            "_filepaths",
+            "_dirname",
+            "_dirnames",
+        )
+    )
+    if isinstance(value, str) and is_path_field:
+        candidate = Path(value).expanduser()
+        if candidate.is_absolute():
+            return candidate.name
+    return value
+
+
+def _is_native_rfd3_job(job: Any) -> bool:
+    return str(job.model_id or "").strip().lower() == "protein_local_redesign"
+
+
+def _public_job_output_dir(job: Any) -> str | None:
+    if _is_native_rfd3_job(job):
+        return None
+    return job.output_dir
+
+
+def _public_job_params(job: Any) -> dict[str, Any]:
+    from services.execution_ownership import strip_execution_metadata
+    from services.resource_usage_evidence import strip_resource_execution_metadata
+
+    params = strip_execution_metadata(strip_resource_execution_metadata(job.params))
+    if _is_native_rfd3_job(job):
+        return _rfd3_public_json(params)
+    return params
+
+
+@router.get("/{job_id}/rfd3-local-redesign")
+async def get_rfd3_local_redesign_result(job_id: str, session: AsyncSession = Depends(get_session)):
+    """Return the typed local-redesign request and result projection."""
+    job = (await session.execute(select(Job).where(Job.id == job_id))).scalar_one_or_none()
+    if job is None or str(job.model_id or "").strip().lower() != "protein_local_redesign":
+        raise HTTPException(status_code=404, detail="RFD3 local-redesign job not found")
+    request = (
+        await session.execute(select(RFD3LocalRedesignRequest).where(RFD3LocalRedesignRequest.job_id == job_id))
+    ).scalar_one_or_none()
+    if request is None:
+        raise HTTPException(status_code=404, detail="RFD3 local-redesign request is not available")
+    candidates = (
+        await session.execute(
+            select(RFD3LocalRedesignCandidate)
+            .where(RFD3LocalRedesignCandidate.request_id == request.request_id)
+            .order_by(RFD3LocalRedesignCandidate.candidate_id)
+        )
+    ).scalars().all()
+    artifacts = (
+        await session.execute(
+            select(RFD3LocalRedesignArtifact)
+            .where(RFD3LocalRedesignArtifact.request_id == request.request_id)
+            .order_by(RFD3LocalRedesignArtifact.relative_path)
+        )
+    ).scalars().all()
+    artifact_roles = {row.role for row in artifacts}
+    candidate_ids = {row.candidate_id for row in candidates}
+    trajectory_roles_by_candidate = {
+        candidate_id: {
+            row.role
+            for row in artifacts
+            if row.candidate_id == candidate_id and row.role in {"denoised_trajectory", "noisy_trajectory"}
+        }
+        for candidate_id in candidate_ids
+    }
+    request_execution = request.request_json.get("execution", {}) if isinstance(request.request_json, dict) else {}
+    trajectories_requested = isinstance(request_execution, dict) and request_execution.get("dump_trajectories") is True
+    trajectories_available = bool(candidate_ids) and all(
+        roles == {"denoised_trajectory", "noisy_trajectory"}
+        for roles in trajectory_roles_by_candidate.values()
+    )
+    public_request = _rfd3_public_json(request.request_json)
+    return {
+        "schema": "bms.rfd3.local-redesign.read-model.v1",
+        "job_id": str(job.id),
+        "capabilities": {
+            "source_structure": "source_structure" in artifact_roles,
+            "candidate_structures": bool(candidate_ids) and all(
+                any(row.candidate_id == candidate_id and row.role == "structure" for row in artifacts)
+                for candidate_id in candidate_ids
+            ),
+            "native_metadata": bool(candidate_ids) and all(
+                any(row.candidate_id == candidate_id and row.role == "native_prediction_metadata" for row in artifacts)
+                for candidate_id in candidate_ids
+            ),
+            "trajectories": {
+                "requested": trajectories_requested,
+                "available": trajectories_available,
+                "reason": (
+                    "produced"
+                    if trajectories_available
+                    else "not_requested"
+                    if not trajectories_requested
+                    else "requested_artifacts_unavailable"
+                ),
+            },
+        },
+        "request": {
+            "request_id": request.request_id,
+            "schema_version": request.schema_version,
+            "request_sha256": request.request_sha256,
+            "profile_id": request.profile_id,
+            "profile_registry_sha256": request.profile_registry_sha256,
+            "redesign_mode": request.redesign_mode,
+            "sequence_policy": request.sequence_policy,
+            "status": request.status,
+            "request": public_request,
+            "request_path_scope": "basename",
+            "provenance_path_scope": "basename",
+            "preparation_receipt": _rfd3_public_json(request.preparation_receipt_json),
+            "runtime_identity": _rfd3_public_json(request.runtime_identity_json),
+            "result_manifest_sha256": request.result_manifest_sha256,
+            "failure_receipt": _rfd3_public_json(request.failure_receipt_json),
+            "created_at": request.created_at.isoformat() if request.created_at else None,
+            "updated_at": request.updated_at.isoformat() if request.updated_at else None,
+            "terminal_at": request.terminal_at.isoformat() if request.terminal_at else None,
+        },
+        "candidates": [
+            {
+                "candidate_id": row.candidate_id,
+                "result_set": row.result_set,
+                "stage": row.stage,
+                "status": row.status,
+                "artifact_manifest_sha256": row.artifact_manifest_sha256,
+                "metrics": _rfd3_public_json(row.metrics_json),
+                "metadata": _rfd3_public_json(row.metadata_json),
+            }
+            for row in candidates
+        ],
+        "artifacts": [
+            {
+                "artifact_id": row.artifact_id,
+                "candidate_id": row.candidate_id,
+                "role": row.role,
+                "relative_path": row.relative_path,
+                "sha256": row.content_sha256,
+                "bytes": row.size_bytes,
+                "media_type": row.media_type,
+                "metadata": _rfd3_public_json(row.metadata_json),
+            }
+            for row in artifacts
+        ],
+    }
+
+
+@router.get("/{job_id}/rfd3-local-redesign/artifacts/{artifact_id}")
+async def get_rfd3_local_redesign_artifact(
+    job_id: str,
+    artifact_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Stream one hash-checked local-redesign artifact."""
+    job = (await session.execute(select(Job).where(Job.id == job_id))).scalar_one_or_none()
+    if job is None or str(job.model_id or "").strip().lower() != "protein_local_redesign":
+        raise HTTPException(status_code=404, detail="RFD3 local-redesign job not found")
+    artifact = (
+        await session.execute(
+            select(RFD3LocalRedesignArtifact).where(
+                RFD3LocalRedesignArtifact.artifact_id == artifact_id,
+                RFD3LocalRedesignArtifact.request_id.in_(
+                    select(RFD3LocalRedesignRequest.request_id).where(RFD3LocalRedesignRequest.job_id == job_id)
+                ),
+            )
+        )
+    ).scalar_one_or_none()
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="RFD3 local-redesign artifact not found")
+
+    if artifact.role == "source_structure":
+        stored_source = Path(artifact.storage_path).expanduser()
+        if stored_source.is_symlink():
+            raise HTTPException(status_code=409, detail="RFD3 local-redesign source artifact path contains a symlink")
+        path = resolve_runtime_data_path(stored_source)
+        data_root = get_data_root().resolve()
+        if not path.is_relative_to(data_root) or path != stored_source.resolve():
+            raise HTTPException(status_code=409, detail="RFD3 local-redesign source artifact path binding is invalid")
+    else:
+        output_root = resolve_runtime_data_path(str(job.output_dir or ""))
+        relative = Path(artifact.relative_path)
+        if (
+            relative.is_absolute()
+            or relative.as_posix() != artifact.relative_path
+            or any(part in {"", ".", ".."} for part in relative.parts)
+            or "\\" in artifact.relative_path
+        ):
+            raise HTTPException(status_code=409, detail="RFD3 local-redesign artifact path is unsafe")
+        current = output_root
+        for part in relative.parts:
+            current = current / part
+            if current.is_symlink():
+                raise HTTPException(status_code=409, detail="RFD3 local-redesign artifact path contains a symlink")
+        path = current.resolve()
+        if not path.is_relative_to(output_root.resolve()) or path != Path(artifact.storage_path).resolve():
+            raise HTTPException(status_code=409, detail="RFD3 local-redesign artifact path binding is invalid")
+
+    if not path.is_file() or path.is_symlink() or path.stat().st_size != artifact.size_bytes:
+        raise HTTPException(status_code=410, detail="RFD3 local-redesign artifact is unavailable")
+    if hashlib.sha256(path.read_bytes()).hexdigest() != artifact.content_sha256:
+        raise HTTPException(status_code=409, detail="RFD3 local-redesign artifact hash mismatch")
+    response_media_type = "chemical/x-mmcif" if path.name.endswith(".cif.gz") else artifact.media_type
+    response_headers = {"Content-Encoding": "gzip"} if path.name.endswith(".cif.gz") else None
+    return FileResponse(
+        str(path),
+        media_type=response_media_type,
+        filename=path.name,
+        headers=response_headers,
+    )
+
+
 @router.get("/{job_id}", response_model=JobResponse)
 async def get_job(
     job_id: str,
@@ -6183,6 +6889,9 @@ async def get_job(
     if (design_count or 0) == 0 and job.status in [JobStatus.COMPLETED.value, JobStatus.AWAITING_INPUT.value] and result_output_dir:
         design_count = count_structure_files(result_output_dir)
     completed_stages, stage_outputs = _resolve_stage_state_for_response(job)
+    frustrampnn_result_count = int((await session.execute(
+        select(func.count(FrustraMPNNResult.invocation_id)).where(FrustraMPNNResult.parent_job_id == job.id)
+    )).scalar_one())
 
     return JobResponse(
         id=job.id,
@@ -6190,11 +6899,11 @@ async def get_job(
         status=job.status,
         model_id=job.model_id,
         mode=job.mode,
-        params=job.params,
+        params=_public_job_params(job),
         created_at=job.created_at,
         started_at=job.started_at,
         completed_at=job.completed_at,
-        output_dir=job.output_dir,
+        output_dir=_public_job_output_dir(job),
         error_message=job.error_message,
         design_count=design_count or 0,
         requested_design_count=_resolve_requested_design_count(job),
@@ -6218,6 +6927,7 @@ async def get_job(
         selected_loop_scope=job.selected_loop_scope,
         provenance=job.provenance,
         saved_selection_sets=_serialized_saved_review_filter_sets(job),
+        pinned_gpu=job.pinned_gpu,
         current_stage=job.current_stage,
         completed_stages=completed_stages,
         stage_outputs=stage_outputs,
@@ -6225,6 +6935,11 @@ async def get_job(
         awaiting_stage=job.awaiting_stage,
         awaiting_payload=job.awaiting_payload,
         decision_history=job.decision_history,
+        frustrampnn_result_count=frustrampnn_result_count,
+        frustrampnn_reopen_destination=(
+            {"surface": "frustrampnn-workbench", "params": {"job_id": job.id}}
+            if frustrampnn_result_count else None
+        ),
     )
 
 
@@ -6368,6 +7083,19 @@ async def resubmit_job(
     if original_job.model_id == "nanopore":
         if not alignment_access.request_is_authorized(request, original_job.id, original_job.provenance):
             raise HTTPException(status_code=403, detail="alignment access denied")
+    launch_context_id = (original_job.provenance or {}).get("launch_context_id")
+    if launch_context_id:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "PROJECT_BOUND_REORCHESTRATION_REQUIRED",
+                "message": (
+                    "Project-bound Jobs must be resubmitted through the owning Domain Run Group "
+                    "with a new preparation, attempt, and launch context."
+                ),
+                "launch_context_id": launch_context_id,
+            },
+        )
     
     # Only allow resubmit for failed or cancelled jobs
     if original_job.status not in [JobStatus.FAILED.value, JobStatus.CANCELLED.value]:

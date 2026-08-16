@@ -9,10 +9,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+from pathlib import Path
 from typing import Any, Callable, Iterable
 
 DEFAULT_MINKNOW_HOST = "localhost"
 DEFAULT_MINKNOW_MANAGER_PORT = 9502
+MAX_DISCOVERED_OUTPUT_FILES = 100000
 
 MINKNOW_STATUS_CONFIGURED = "configured"
 MINKNOW_STATUS_CLIENT_MISSING = "client_missing"
@@ -397,6 +399,54 @@ def stop_protocol(minknow_run_id: str, payload: dict[str, Any]) -> tuple[int, di
     }
 
 
+def _discover_run_outputs(output_directories: dict[str, Any], minknow_run_id: str) -> dict[str, list[str]]:
+    """Discover bounded regular outputs below MinKNOW-issued roots without links."""
+    result: dict[str, list[str]] = {"fastq": [], "pod5": [], "bam": []}
+    roots: list[Path] = []
+    for key in ("output", "reads"):
+        raw = str(output_directories.get(key) or "").strip()
+        if raw and os.path.isabs(raw):
+            root = Path(os.path.abspath(raw))
+            if root not in roots:
+                roots.append(root)
+    discovered = 0
+    for root in roots:
+        try:
+            for directory, directory_names, file_names, directory_fd in os.fwalk(root, topdown=True, follow_symlinks=False):
+                directory_names[:] = sorted(directory_names)
+                for name in sorted(file_names):
+                    if discovered >= MAX_DISCOVERED_OUTPUT_FILES:
+                        return result
+                    lowered = name.lower()
+                    kind = (
+                        "pod5" if lowered.endswith(".pod5") else
+                        "bam" if lowered.endswith(".bam") else
+                        "fastq" if lowered.endswith((".fastq", ".fastq.gz", ".fq", ".fq.gz")) else
+                        None
+                    )
+                    if kind is None:
+                        continue
+                    try:
+                        file_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=directory_fd)
+                        try:
+                            if not os.path.isfile(f"/proc/self/fd/{file_fd}"):
+                                continue
+                        finally:
+                            os.close(file_fd)
+                    except OSError:
+                        continue
+                    candidate = str(Path(directory) / name)
+                    relative_parts = Path(candidate).relative_to(root).parts[:-1]
+                    run_like_parts = [part for part in relative_parts if len(part) >= 20]
+                    if run_like_parts and minknow_run_id not in relative_parts:
+                        continue
+                    result[kind].append(candidate)
+                    discovered += 1
+        except OSError:
+            continue
+    return result
+
+
 def discover_status(
     *,
     config: MinknowHostConfig | None = None,
@@ -503,5 +553,12 @@ def observe_run(minknow_run_id: str) -> dict[str, Any]:
             observed = exact_states[raw_state]
         else:
             observed = "unknown"
-        return {"status": observed, "minknow_run_id": requested, "output_files": {"fastq": [], "pod5": [], "bam": []}, "fake_or_demo_devices": False}
+        output_files = _discover_run_outputs(device.get("output_directories") or {}, requested)
+        return {
+            "status": observed,
+            "minknow_run_id": requested,
+            "acquisition_id": str(matching.get("acquisition_id") or "").strip() or None,
+            "output_files": output_files,
+            "fake_or_demo_devices": False,
+        }
     return {"status": "unknown", "minknow_run_id": requested, "output_files": {"fastq": [], "pod5": [], "bam": []}, "fake_or_demo_devices": False}

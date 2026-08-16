@@ -10,6 +10,8 @@ import shutil
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from confornets_source_closure import validate_source_evidence
+
 
 class LedgerError(ValueError):
     pass
@@ -137,13 +139,13 @@ def bind(request_path: Path, plan_path: Path, native_root: Path, output: Path) -
         "schema_name", "schema_version", "status", "request_sha256",
         "coordinate_plan_sha256", "backend_commit", "runtime_identity",
         "container_digest", "feature_identity_sha256", "checkpoint_sha256",
-        "executed_sources", "command",
+        "executed_sources", "commands",
     }
     if not isinstance(attestation, dict) or set(attestation) != expected_attestation_fields:
         raise LedgerError("runtime attestation is malformed")
     if (
         attestation["schema_name"] != "cm_confornets_runtime_attestation"
-        or attestation["schema_version"] != 1
+        or attestation["schema_version"] != 2
         or attestation["status"] != "container_executed"
         or attestation["request_sha256"] != request["request_sha256"]
         or attestation["coordinate_plan_sha256"] != plan["coordinate_plan_sha256"]
@@ -155,7 +157,7 @@ def bind(request_path: Path, plan_path: Path, native_root: Path, output: Path) -
     ):
         raise LedgerError("runtime attestation identity is not authoritative")
     sources = attestation["executed_sources"]
-    if not isinstance(sources, list) or not sources or not isinstance(attestation["command"], list):
+    if not isinstance(sources, list) or not sources or not isinstance(attestation["commands"], list):
         raise LedgerError("runtime attestation source or command evidence is missing")
     source_paths: set[str] = set()
     for source in sources:
@@ -167,6 +169,14 @@ def bind(request_path: Path, plan_path: Path, native_root: Path, output: Path) -
         source_paths.add(relative)
         if not isinstance(source["sha256"], str) or len(source["sha256"]) != 64:
             raise LedgerError("runtime attestation source hash is invalid")
+    try:
+        validate_source_evidence(
+            request["confornets"]["task"],
+            sources,
+            attestation["commands"],
+        )
+    except ValueError as exc:
+        raise LedgerError(str(exc)) from exc
 
     plan_coordinates = plan["coordinates"]
     by_source: dict[str, dict[str, Any]] = {}
@@ -193,7 +203,7 @@ def bind(request_path: Path, plan_path: Path, native_root: Path, output: Path) -
     if len(observed_coordinates) != len(set(observed_coordinates)) or set(observed_coordinates) != expected_coordinates:
         raise LedgerError("upstream ledger coordinates do not equal canonical plan")
 
-    normalized_entries: list[dict[str, Any]] = []
+    normalized_by_coordinate: dict[bytes, dict[str, Any]] = {}
     normalized_paths: set[str] = set()
     for sample in samples:
         source_path = _relative(sample.get("source_relative_path"))
@@ -214,8 +224,10 @@ def bind(request_path: Path, plan_path: Path, native_root: Path, output: Path) -
         upstream = by_source[source_path]
         if upstream["sha256"] != _sha256(source_artifact) or upstream["bytes"] != source_artifact.stat().st_size:
             raise LedgerError("write-time upstream coordinate byte identity changed")
-        normalized_entries.append(
-            {
+        coordinate_key = _canonical_bytes(by_source[source_path]["coordinates"])
+        if coordinate_key in normalized_by_coordinate:
+            raise LedgerError("duplicate normalized coordinate")
+        normalized_by_coordinate[coordinate_key] = {
                 "coordinates": by_source[source_path]["coordinates"],
                 "relative_path": relative_path,
                 "bytes": artifact.stat().st_size,
@@ -224,7 +236,10 @@ def bind(request_path: Path, plan_path: Path, native_root: Path, output: Path) -
                 "source_bytes": source_artifact.stat().st_size,
                 "source_sha256": _sha256(source_artifact),
             }
-        )
+    normalized_entries = [
+        normalized_by_coordinate[_canonical_bytes(coordinate)]
+        for coordinate in plan_coordinates
+    ]
     if len(normalized_entries) != len(plan["coordinates"]):
         raise LedgerError("output ledger cardinality mismatch")
 

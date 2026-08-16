@@ -1,0 +1,216 @@
+{
+  "$id": "bms.workflow-parameters.ngs.ont.basecall_dna.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "else": {
+        "properties": {
+          "batch_size": {
+            "default": 64
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "basecalling_mode": {
+            "const": "duplex"
+          }
+        },
+        "required": [
+          "basecalling_mode"
+        ]
+      },
+      "then": {
+        "properties": {
+          "barcode_kit": {
+            "type": "null"
+          },
+          "batch_size": {
+            "default": 32
+          },
+          "modified_bases": {
+            "const": "none"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "modified_bases": {
+            "enum": [
+              "5mC_5hmC",
+              "6mA"
+            ]
+          }
+        },
+        "required": [
+          "modified_bases"
+        ]
+      },
+      "then": {
+        "properties": {
+          "barcode_kit": {
+            "type": "null"
+          },
+          "basecalling_mode": {
+            "const": "simplex"
+          },
+          "quality_mode": {
+            "const": "hac"
+          }
+        }
+      }
+    }
+  ],
+  "properties": {
+    "barcode_kit": {
+      "anyOf": [
+        {
+          "enum": [
+            "SQK-RBK114-96"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "x-bms-applicability": "simplex DNA without modified bases",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [
+        "basecalling_mode=duplex",
+        "modified_bases!=none"
+      ],
+      "x-bms-native-key": "barcode_kit",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "union_exact",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Barcode kit",
+      "x-bms-supported-runtime-range": "dorado=1.3.1; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "select",
+      "x-bms-units": "not_applicable"
+    },
+    "basecalling_mode": {
+      "default": "simplex",
+      "enum": [
+        "simplex",
+        "duplex"
+      ],
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "dorado_basecall_mode",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Basecalling mode",
+      "x-bms-supported-runtime-range": "dorado=1.3.1; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "select",
+      "x-bms-units": "not_applicable"
+    },
+    "batch_size": {
+      "maximum": 256,
+      "minimum": 1,
+      "type": "integer",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "simplex=64;duplex=32",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "dorado_batch_size",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "integer",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Inference batch size",
+      "x-bms-supported-runtime-range": "dorado=1.3.1; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "bounded_integer",
+      "x-bms-units": "not_applicable"
+    },
+    "min_qscore": {
+      "default": 10,
+      "maximum": 30,
+      "minimum": 0,
+      "type": "integer",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "min_qscore",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "integer",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Minimum basecall Q score",
+      "x-bms-supported-runtime-range": "dorado=1.3.1; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "bounded_integer",
+      "x-bms-units": "not_applicable"
+    },
+    "modified_bases": {
+      "default": "none",
+      "enum": [
+        "none",
+        "5mC_5hmC",
+        "6mA"
+      ],
+      "x-bms-applicability": "basecalling_mode=simplex and quality_mode=hac and barcode_kit=null",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [
+        "basecalling_mode=duplex",
+        "quality_mode!=hac",
+        "barcode_kit!=null"
+      ],
+      "x-bms-native-key": "modified_bases",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Modified-base model",
+      "x-bms-supported-runtime-range": "dorado=1.3.1; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "select",
+      "x-bms-units": "not_applicable"
+    },
+    "quality_mode": {
+      "default": "sup",
+      "enum": [
+        "fast",
+        "hac",
+        "sup"
+      ],
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "dorado_quality_mode",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Dorado model quality family",
+      "x-bms-supported-runtime-range": "dorado=1.3.1; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "select",
+      "x-bms-units": "not_applicable"
+    },
+    "trim_adapters": {
+      "default": true,
+      "type": "boolean",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "trim_adapters",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "boolean",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Adapter trimming",
+      "x-bms-supported-runtime-range": "dorado=1.3.1; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "checkbox",
+      "x-bms-units": "not_applicable"
+    }
+  },
+  "required": [
+    "quality_mode",
+    "basecalling_mode",
+    "batch_size",
+    "min_qscore",
+    "trim_adapters",
+    "modified_bases",
+    "barcode_kit"
+  ],
+  "title": "ngs.ont.basecall_dna parameters v1",
+  "type": "object",
+  "x-bms-source-pin": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+  "x-bms-unknown-fields": "reject_before_preparation"
+}

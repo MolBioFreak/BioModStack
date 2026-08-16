@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 
-import { api, submitJob, uploadFile } from '../lib/api';
+import { api, completeCurrentLaunchContext, submitJob, uploadFile } from '../lib/api';
 import {
     buildMolecularDynamicsJobSpec,
     estimateMolecularDynamicsScope,
@@ -188,14 +188,14 @@ export function MolecularDynamicsTemplate({ onBack, initialValues }: MolecularDy
                 selectedChemistryProfile,
                 chemistryCatalogQuery.data?.catalog_digest,
             );
-            await submitJob({
+            const response = await submitJob({
                 name: launchForm.jobName.trim(),
                 model_id: 'molecular_dynamics',
                 mode: 'simulate',
                 params: { md_job_spec: mdJobSpec },
             });
             await queryClient.invalidateQueries({ queryKey: ['jobs'] });
-            navigate('/');
+            navigate(await completeCurrentLaunchContext(response.data) ?? '/');
         } catch (error) {
             setSubmitError(error instanceof Error ? error.message : 'Molecular Dynamics launch failed.');
         } finally {

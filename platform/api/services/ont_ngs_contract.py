@@ -280,6 +280,26 @@ CANONICAL_ONT_WORKFLOWS: dict[str, OntWorkflowSpec] = {
         ),
         lifecycle="seed",
     ),
+    "ont_pooled_reference_assignment": OntWorkflowSpec(
+        workflow_id="ont_pooled_reference_assignment",
+        display_name="ONT Pooled Reference Assignment",
+        description=(
+            "Competitive assignment of existing FASTQ record occurrences against "
+            "an immutable pooled MolBio reference set; execution ends at operator review."
+        ),
+        input_modes=("fastq",),
+        artifact_kinds=(
+            "assignment_summary",
+            "per_read_assignment",
+            "occurrence_map",
+            "reference",
+            "reference_index",
+            "alignment_bam",
+            "alignment_bai",
+            "igv_track_config",
+        ),
+        lifecycle="seed",
+    ),
 }
 
 CANONICAL_ONT_WORKFLOW_IDS = tuple(CANONICAL_ONT_WORKFLOWS)
@@ -291,6 +311,8 @@ ONT_WORKFLOW_ALIASES = {
     "construct_screening": "ont_construct_screening",
     "methylation_analysis": "ont_methylation_analysis",
     "fastq_qc": "ont_fastq_qc",
+    "pooled_reference_assignment": "ont_pooled_reference_assignment",
+    "pooled-reference-assignment": "ont_pooled_reference_assignment",
     "wf_clone": "wf_clone_validation",
     "clone_validation": "wf_clone_validation",
 }

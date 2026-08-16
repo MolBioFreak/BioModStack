@@ -19,13 +19,15 @@ test('Nanopore FASTQ launch defaults stay compatible with bundled minimap2', () 
     assert.match(cloneState, /fastqMinimap2Preset: p\.fastq_minimap2_preset \?\? 'map-ont'/u);
 });
 
-test('Nanopore FASTQ launch is gated on reference input, finite numeric bounds, and a selected QC or clone workflow', () => {
+test('Nanopore reference workflows are gated on an exact saved MolBio revision', () => {
     const template = readSource('src/components/NanoporeTemplate.tsx');
 
-    assert.match(template, /const hasFastqReferenceInput = useMemo/u);
+    assert.match(template, /const requiresReference = selectedWorkflow === 'clone'/u);
+    assert.match(template, /selectedMolbioSequenceId/u);
+    assert.match(template, /selectedMolbioRevisionId/u);
     assert.match(template, /selectedWorkflow === 'clone' \|\| selectedWorkflow === 'plasmidQc' \|\| selectedWorkflow === 'constructScreening' \|\| selectedWorkflow === 'fastqQc'/u);
-    assert.match(template, /&& \(hasFastqReferenceInput \|\| Boolean\(molbioSequenceId\)\)\s+&& hasValidFastqNumericControls/u);
-    assert.match(template, /This workflow requires a reference FASTA path or a pasted\/created FASTA sequence/u);
+    assert.match(template, /This workflow requires a saved MolBio sequence and exact immutable revision/u);
+    assert.doesNotMatch(template, /localStorage|uploadFile|referencePath|reference_fasta/u);
     assert.match(template, /function coerceIntegerInput/u);
     assert.match(template, /FASTQ_MAX_IGV_REPORT_MAX_SITES/u);
     assert.match(template, /max=\{FASTQ_MAX_IGV_REPORT_MAX_SITES\}/u);
@@ -76,12 +78,11 @@ test('Nanopore control surface does not expose raw Nextflow arguments', () => {
     assert.doesNotMatch(template, /nextflow run workflows\/ngs\/ont_fastq_qc\.nf/u);
 });
 
-test('Nanopore submit success navigates to the live job-detail route', () => {
+test('Nanopore submit success navigates to the context-preserving NGS inspector', () => {
     const template = readSource('src/components/NanoporeTemplate.tsx');
-    const app = readSource('src/App.tsx');
 
-    assert.match(app, /<Route path="\/jobs\/:jobId" element=\{<JobDetailPage \/>\}/u);
-    assert.match(template, /navigate\(`\/jobs\/\$\{[^}`]+\}`\)/u);
+    assert.match(template, /navigate\(contextHref\('\/ngs', \{ section: 'analyses', job_id: submittedJobId \}\)\)/u);
+    assert.doesNotMatch(template, /navigate\(`\/jobs\/\$\{[^}`]+\}`\)/u);
     assert.doesNotMatch(template, /navigate\(`\/results\/\$\{response\.data\.job_id\}`\)/u);
 });
 
@@ -128,12 +129,15 @@ test('Nanopore selected workflows keep source controls contextual and require re
     assert.match(template, /const requiresReference = selectedWorkflow === 'clone'/u);
 });
 
-test('NGS runs polling is scoped to Nanopore jobs instead of pulling the whole job table', () => {
+test('NGS runs polling covers every exact canonical NGS model with bounded pagination', () => {
     const ngsToolkit = readSource('src/components/NGSToolkit.tsx');
     const api = readSource('src/lib/api.ts');
 
     assert.match(api, /model_id\?: string/u);
-    assert.match(ngsToolkit, /fetchJobs\(\{ include_children: true, model_id: 'nanopore', limit: 100, summary: true \}\)/u);
+    assert.match(ngsToolkit, /\['nanopore', 'ont_fastq_qc', 'ont_plasmid_qc', 'ont_construct_screening', 'wf_clone_validation'\]/u);
+    assert.match(ngsToolkit, /model_id,/u);
+    assert.match(ngsToolkit, /limit: 500/u);
+    assert.match(ngsToolkit, /offset/u);
     assert.doesNotMatch(ngsToolkit, /fetchJobs\(\{ include_children: true \}\)/u);
     assert.doesNotMatch(ngsToolkit, /refetchInterval: 5000/u);
     assert.match(ngsToolkit, /function ontWorkflowDisplayName/u);
@@ -189,7 +193,7 @@ test('NGS instrument control uses only opaque intent handles and has no browser 
     const panel = readSource('src/components/ngs/OntInstrumentPanel.tsx');
     const ontApi = api.slice(api.indexOf('// ONT INSTRUMENT CONTROL API'));
 
-    assert.match(ngsToolkit, /type ToolkitView = 'launch' \| 'instrument' \| 'runs'/u);
+    assert.match(ngsToolkit, /type ToolkitView = NgsToolkitView/u);
     assert.match(ngsToolkit, /Instrument intent/u);
     assert.doesNotMatch(ngsToolkit, /Start instrument run/u);
     assert.match(ngsToolkit, /<OntInstrumentPanel/u);
@@ -228,4 +232,31 @@ test('NGS instrument panel renders only safe device truth and an intent status',
     assert.match(ontApi, /interface OntFlowCellInfo \{\s+present: boolean;/u);
     assert.match(ontApi, /output_summary: Record<'fastq' \| 'pod5' \| 'bam', number>/u);
     assert.doesNotMatch(ontApi, /fake_or_demo_device\?: boolean|is_ctc\?: boolean|channel_count\?: number|output_director(?:y|ies)|rpc_ports|connection_error/u);
+});
+
+test('NGS instrument panel registers one governed existing POD5 candidate before BLOW5 preparation', () => {
+    const panel = readSource('src/components/ngs/OntInstrumentPanel.tsx');
+    const api = readSource('src/lib/api.ts');
+
+    assert.match(panel, /Register existing POD5/u);
+    assert.match(panel, /fetchOntExternalPod5Candidates/u);
+    assert.match(panel, /registerOntExternalPod5Candidate/u);
+    assert.match(panel, /exactDomainExperimentId/u);
+    assert.doesNotMatch(panel, /BMS_ONT_EXTERNAL_POD5_ROOT|\/mnt\/BioModStack/u);
+    assert.match(api, /\/api\/ont\/raw-signal\/external-pod5-candidates/u);
+    assert.match(api, /candidate_id: candidateId/u);
+    assert.match(api, /experiment_group: experimentGroup/u);
+});
+
+test('NGS instrument panel exposes indexed-BLOW5 waveform inspection', () => {
+    const panel = readSource('src/components/ngs/OntInstrumentPanel.tsx');
+
+    assert.match(panel, /Indexed BLOW5 waveform inspection/u);
+    assert.match(panel, /requestOntRawSignalWaveform/u);
+    assert.match(panel, /fetchOntRawSignalWaveform/u);
+    assert.match(panel, /aria-label="Raw electrical signal waveform"/u);
+    assert.match(panel, /aria-label="Raw-signal publication receipt"/u);
+    assert.match(panel, /Published artifacts/u);
+    assert.match(panel, /Adjacent indexes/u);
+    assert.match(panel, /Parent manifest/u);
 });

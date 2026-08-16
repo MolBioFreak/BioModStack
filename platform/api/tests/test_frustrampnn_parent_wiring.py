@@ -49,12 +49,12 @@ def test_parent_candidate_identity_is_deterministic_and_domain_separated() -> No
     )
 
 
-def test_structure_prediction_has_one_canonical_manifest_first_cutover() -> None:
+def test_structure_prediction_has_one_canonical_v2_manifest_cutover() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     prediction_module = (REPO_ROOT / "modules" / "structure_prediction.nf").read_text(encoding="utf-8")
 
-    assert "include { CanonicalFrustraMPNN } from '../modules/frustrampnn.nf'" in workflow
-    assert "CanonicalFrustraMPNN(" in workflow
+    assert "include { CanonicalFrustraMPNNV2 } from '../modules/frustrampnn.nf'" in workflow
+    assert "CanonicalFrustraMPNNV2(" in workflow
     assert "FrustrampnnQC" not in workflow
     assert "placeholder.pdb" not in workflow
     assert "structure_prediction_wf.out.canonical_structures" in workflow
@@ -63,7 +63,11 @@ def test_structure_prediction_has_one_canonical_manifest_first_cutover() -> None
     assert "PrepareStructurePredictionFrustraMPNNCandidate" in workflow
     assert "frustrampnn_requiredness ?: 'required'" in workflow
     assert "frustrampnn_requiredness must be required" in workflow
-    assert "CanonicalFrustraMPNN.out.result" in workflow
+    assert "CanonicalFrustraMPNNV2.out.result" in workflow
+    assert "workflow_component_request_v2.json" in workflow
+    assert "frustrampnn_structure_map_v1.json" in workflow
+    assert "workflow_component_request_v1.json" not in workflow
+    assert "checkpoint_id" not in workflow
     assert ".subscribe" not in workflow
     assert "frustrampnn" in workflow
     assert "frustrampnn not_requested" in workflow
@@ -287,6 +291,7 @@ def test_stage_reporter_main_sends_job_root_relative_output_unchanged(
         calls.append({"url": url, **kwargs})
         return Response()
 
+    setattr(reporter, "API_BASE_URL", "http://localhost:8000")
     setattr(reporter, "STAGE_REPORT_TOKEN", "launch-scoped-test-token")
     monkeypatch.setattr(reporter.requests, "post", fake_post)
     monkeypatch.setattr(
@@ -336,6 +341,27 @@ def test_enabled_frustrampnn_reporters_request_job_root_relative_outputs() -> No
         assert "stage_reporter.py' --job-root-relative" in source, path
 
 
+def test_every_active_workflow_consumer_is_v2_only_for_new_writes() -> None:
+    consumers = {
+        "structure_prediction": REPO_ROOT / "workflows" / "structure_prediction.nf",
+        "protein_design": REPO_ROOT / "workflows" / "protein_design.nf",
+        "complex_prediction": REPO_ROOT / "workflows" / "complex_prediction.nf",
+        "antibody_denovo": REPO_ROOT / "workflows" / "antibody_denovo.nf",
+        "frustrampnn_analysis": REPO_ROOT / "workflows" / "frustrampnn_analysis.nf",
+    }
+    for consumer, path in consumers.items():
+        source = path.read_text(encoding="utf-8")
+        assert "CanonicalFrustraMPNNV2" in source, consumer
+        assert "CanonicalFrustraMPNN(" not in source, consumer
+        assert "workflow_component_request_v1.json" not in source, consumer
+
+    antibody_parent = (
+        REPO_ROOT / "modules" / "antibody_frustrampnn_parent.nf"
+    ).read_text(encoding="utf-8")
+    assert "workflow_component_request_v2.json" in antibody_parent
+    assert "workflow_component_request_v1.json" not in antibody_parent
+
+
 @pytest.mark.parametrize("status", ["failed", "not_requested"])
 def test_stage_reporter_routes_non_success_terminal_states(
     status: str, monkeypatch: pytest.MonkeyPatch
@@ -355,6 +381,7 @@ def test_stage_reporter_routes_non_success_terminal_states(
         calls.append((url, params))
         return Response()
 
+    setattr(reporter, "API_BASE_URL", "http://localhost:8000")
     setattr(reporter, "STAGE_REPORT_TOKEN", "launch-scoped-test-token")
     monkeypatch.setattr(reporter.requests, "post", fake_post)
     monkeypatch.setattr(sys, "argv", [str(reporter_path), "job-1", "frustrampnn", status])

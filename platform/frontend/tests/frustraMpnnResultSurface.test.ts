@@ -29,6 +29,12 @@ test('only scheduler-owned FrustraMPNN children may use receipt and reanalysis A
     });
 });
 
+test('persisted FrustraMPNN results own the surface when historical job params omit the feature flag', () => {
+    const historical = { model_id: 'boltz2', params: {}, frustrampnn_result_count: 1 };
+    assert.equal(hasFrustraMpnnResultSurface(historical), true);
+    assert.equal(getFrustraMpnnResultContext(historical)?.kind, 'integrated-parent');
+});
+
 test('absent, false, and string values do not fabricate FrustraMPNN applicability', () => {
     assert.equal(hasFrustraMpnnResultSurface({ model_id: 'boltz2', params: {} }), false);
     assert.equal(hasFrustraMpnnResultSurface({ model_id: 'boltz2', params: { run_frustrampnn: false } }), false);

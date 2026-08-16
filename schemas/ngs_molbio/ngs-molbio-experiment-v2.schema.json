@@ -1,0 +1,76 @@
+{
+  "$id": "bms.ngs-molbio-experiment.v2",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "acceptance_criteria": {
+      "items": {
+        "$ref": "bms.scientific-criterion.v1"
+      },
+      "maxItems": 128,
+      "type": "array",
+      "x-bms-unique-by": [
+        "criterion_id"
+      ]
+    },
+    "evidence_plan": {
+      "items": {
+        "$ref": "bms.evidence-requirement.v1"
+      },
+      "maxItems": 128,
+      "type": "array",
+      "x-bms-unique-by": [
+        "requirement_id"
+      ]
+    },
+    "experiment_mode": {
+      "enum": [
+        "molecular_design",
+        "assembly_validation",
+        "pcr_validation",
+        "sequencing",
+        "quality_control",
+        "alignment",
+        "comparison",
+        "analysis"
+      ]
+    },
+    "grouping_intent": {
+      "items": {
+        "$ref": "bms.ngs-molbio.group.v1"
+      },
+      "maxItems": 128,
+      "type": "array",
+      "x-bms-unique-by": [
+        "group_id"
+      ]
+    },
+    "planned_capability_ids": {
+      "items": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 64,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "schema": {
+      "const": "bms.ngs-molbio-experiment.v2"
+    },
+    "scientific_objective": {
+      "maxLength": 8192,
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "experiment_mode",
+    "scientific_objective",
+    "planned_capability_ids",
+    "grouping_intent",
+    "acceptance_criteria",
+    "evidence_plan"
+  ],
+  "type": "object"
+}

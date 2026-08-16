@@ -5,7 +5,7 @@
 **Authority:** BioModStack policy unless a requirement is explicitly tagged `[UG]` or `[LO]`.
 **Runtime status:** All runtime-dependent statements are **unmeasured** until authenticated Phase 0 evidence exists.
 
-This document freezes human-readable definitions corresponding to Sections 3.1–3.13 of the conformational-mapping orchestrator plan. It does not claim that Protenix, ConforNets, FrustraMPNN, USAlign, a container, a checkpoint, or any baseline command has succeeded. `[UG]` means pinned upstream guidance, `[LO]` means a plan-anchored local source observation, and `[BP]` means planned BioModStack policy.
+This document freezes human-readable definitions corresponding to Sections 3.1–3.14 of the conformational-mapping orchestrator plan. It does not claim that Protenix, ConforNets, FrustraMPNN, USAlign, a container, a checkpoint, or any baseline command has succeeded. `[UG]` means pinned upstream guidance, `[LO]` means a plan-anchored local source observation, and `[BP]` means planned BioModStack policy.
 
 ## Canonical bytes and hash binding `[BP]`
 
@@ -51,7 +51,7 @@ Resume is admitted only when the descriptor matches and complete native and ense
 
 ## 3.6 Native artifacts — `cm_native_artifacts_v1`
 
-Each file record has contained collision-safe relative path, SHA-256, byte count, media type, semantic role, backend coordinate where applicable, provenance/settings digest, and input/preprocessing/MSA/template/log/runtime relationships. Protenix requires runtime input, every authoritative CIF, confidence/ranking JSON, full-data JSON, feature-policy records, logs, runtime config, and composition audit. ConforNets requires request/preprocess records, native state/loss files, every conformer, explicit computed/not-computed optional analytics, command logs, and runtime provenance. Import requires receipt and every staged structure. `[BP]`
+Each file record has contained collision-safe relative path, SHA-256, byte count, media type, semantic role, backend coordinate where applicable, provenance/settings digest, and input/preprocessing/MSA/template/log/runtime relationships. Protenix requires runtime input, every authoritative CIF, confidence/ranking JSON, full-data JSON, feature-policy records, logs, runtime config, composition audit, the host image receipt, the execution snapshot receipt, and the observed in-container runtime attestation. ConforNets requires request/preprocess records, native state/loss files, every conformer, explicit computed/not-computed optional analytics, command logs, and runtime provenance. Import requires receipt and every staged structure. `[BP]`
 
 ## 3.7 Ensemble — `cm_ensemble_v1`
 
@@ -73,6 +73,8 @@ Only finite `status=ok` rows enter arithmetic. Protenix strata are seeds with sa
 
 The contract defines substitution difference, matched context difference, realized self difference, whole-chain signed/absolute/class-transition redistribution, equal-weight hierarchical stratum means/fractions, outer and coordinate support, sign consistency, provenance-valid clash-free fraction, same-universe Spearman rank stability, and total status order `insufficient_support`, then `robust`, else `conditional`. Approved Protenix 5×5 robustness requires at least 4/5 seed strata, 3 samples per valid seed, sign consistency `>=0.80`, clash-free `>=0.90`, and rank stability `>=0.60`; non-5×5 layouts require a separately versioned policy. Results say “FrustraMPNN score difference”; thermodynamic language is forbidden.
 
+ConforNets reference and pairwise structural evaluation uses only Cα atoms with exact identity tuple `(model, auth_asym_id, auth_seq_id, insertion_code, auth_comp_id, auth_atom_id)`. The two structures must have equal identity sets, with no duplicate, ambiguous alternate location, unknown insertion/model identity, nonfinite coordinate, row-order, or imputation fallback. RMSD is the Angstrom-valued proper-rotation Kabsch SVD solution. The pairwise RMSD matrix is complete and is embedded with classical metric MDS by double-centering squared distances; missing/nonfinite distances abort, nonpositive eigencomponents are discarded, and only the deterministic orientation of the resulting rigid frame is canonicalized. These coordinates describe generated sample space, not time, probability, free energy, or thermodynamics. `[BP]`
+
 ## 3.11 Changed-sequence feature policy
 
 Exactly one mode is selected: `[BP]`
@@ -92,6 +94,12 @@ Phase 9 only prepares identity; Phase 10 separately launches. Same-key retry is 
 ## 3.13 Result contracts and legacy alias
 
 Canonical IDs are `conformational_mapping_protenix_v1`, `conformational_mapping_confornets_v1`, `conformational_mapping_import_v1`, `conformational_mapping_analysis_v1`, and `conformational_mapping_resampling_v1`. New writes use `monomer_conformation`. Reads accept exactly `monomer_conformation` and historical `conformer`, normalize in memory, and never bulk-rewrite historical spelling. Near misses and unknown classes fail closed. `confornets_experimental` behavior remains unchanged. Persistence/API acceptance does not depend on Mol*. `[LO][BP]`
+
+## 3.14 Runtime image and execution attestation — `cm_runtime_image_receipt_v1`, `cm_protenix_execution_snapshot_v1`, `cm_protenix_runtime_attestation_v1`
+
+The host preflight opens the registered image through no-follow directory descriptors, records the observed source device/inode/size/timestamps and SHA-256, copies the opened descriptor to a new immutable snapshot, and rechecks the descriptor and visible path before publishing the image receipt. It snapshots the registry-selected checkpoint and the exact wrapper bytes with the same pinned-descriptor and before/after identity checks. Receipt paths are portable names or relative paths; host absolute paths are never runtime authority.
+
+The Protenix task executes the staged wrapper and then measures the image actually supplied to the executing container, the checkpoint actually supplied to the wrapper, every regular file in the imported Protenix source roots, the installed distribution commit, and the staged wrapper bytes. It must bind each measurement to the registry and to the pre-execution receipts. A registry-shaped copy of expected values is not an observation. The attestation is a required native global artifact, and `ensemble.runtime_attestation_sha256` must equal the measured native artifact hash before finalization or persistence. Any path, inode, byte, source-commit, wrapper, checkpoint, image, receipt, or manifest mismatch rejects. `[BP]`
 
 ## Phase 0 vector and evidence contract
 

@@ -3,6 +3,11 @@
  * Process names are preserved to avoid behavior-changing call-site churn.
  */
 
+def shellQuote(value) {
+    String text = value == null ? '' : value.toString()
+    return "'${text.replace("'", "'\"'\"'")}'"
+}
+
 process FastqMultimerQC {
     label 'local_cpu'
     publishDir "${params.out_dir}/multimer_qc", mode: 'copy'
@@ -170,6 +175,26 @@ process FastqDimerAnalysis {
     def minimapPreset = ((params.fastq_minimap2_preset ?: 'map-ont') as String).trim()
     def minimapAllowSecondary = (params.fastq_minimap2_allow_secondary == true) ? 'true' : 'false'
     def codeRoot = params.code_root ?: projectDir
+    def manifestJobId = ((params.job_id ?: '') as String).trim()
+    if (!(manifestJobId ==~ /[A-Za-z0-9][A-Za-z0-9._ -]{0,255}/) || manifestJobId.contains('..')) {
+        error('FASTQ dimer analysis requires an exact safe job_id')
+    }
+    def declaredReferenceSha256 = params.reference_sequence_sha256?.toString()?.trim()?.toLowerCase() ?: ''
+    if (!(declaredReferenceSha256 ==~ /[0-9a-f]{64}/)) {
+        throw new IllegalArgumentException('reference_sequence_sha256 must be exactly 64 hexadecimal characters')
+    }
+    def manifestJobIdArg = shellQuote(manifestJobId)
+    def referenceSequenceSha256Arg = shellQuote(declaredReferenceSha256)
+    def workflowId = ((params.workflow_id ?: params.ont_workflow_id ?: 'ont_fastq_qc') as String).trim()
+    if (!(workflowId in ['ont_fastq_qc', 'ont_plasmid_qc', 'ont_construct_screening', 'wf_clone_validation'])) {
+        error('FASTQ dimer analysis requires a canonical workflow_id')
+    }
+    def workflowIdArg = shellQuote(workflowId)
+    def inputMode = ((params.input_mode ?: params.ont_input_mode ?: 'fastq') as String).trim()
+    if (!(inputMode in ['fastq', 'bam', 'pod5'])) {
+        error('FASTQ dimer analysis requires a canonical input_mode')
+    }
+    def inputModeArg = shellQuote(inputMode)
     """
     set -euo pipefail
 
@@ -178,27 +203,11 @@ process FastqDimerAnalysis {
         MM2_ARGS+=(--secondary=no)
     fi
 
-    : > dimer_candidates.fastq
-    : > dimer_candidates.fasta
-    : > dimer_read_lengths.tsv
-    : > dimer_read_junctions.tsv
-    : > dimer_alignment.log
-    : > dimer_single_ref_alignment.log
-    : > dimer_consensus.log
-    : > dominant_dimer_consensus.log
-    printf "position_mod_ref\\tread_count\\tjunction_spanning_reads\\n" > dimer_junction_profile.tsv
-    printf "read_id\\tstart\\tend\\tposition_mod_ref\\tcrosses_junction\\tevent_type\\tmethod\\tsegment_count\\tleft_ref\\tright_ref\\tleft_mod_ref\\tright_mod_ref\\tmissing_bp\\tmissing_left_bp\\tmissing_right_bp\\tsupport_bp\\torientation\\tcopy_transition\\n" > dimer_junction_events.tsv
-    printf "position_mod_ref\\tread_count\\tcrossing_reads\\tsupport_percent\\tsupport_reads\\tsplit_reads\\tseam_reads\\tsingle_reads\\tmissing_bp_sum\\tmissing_bp_mean\\tmissing_bp_max\\tsupport_bp_sum\\tsupport_bp_mean\\n" > dimer_junction_clusters.tsv
-    printf "position_mod_ref\\tsupport_reads\\tsupport_pct\\tin_boundary_window\\n" > dimer_junction_hotspots.tsv
-    printf "position_rotated\\tposition_mod_ref\\tsupport_reads\\tsupport_pct\\tin_boundary_window\\n" > dimer_junction_rotated_profile.tsv
-    printf "position_mod_ref\\ttotal_support_reads\\tseam_support_reads\\tsplit_support_reads\\tsupport_pct_all\\tsplit_pct_of_position\\tsplit_pct_of_all_split\\tin_boundary_window\\tboundary_start_reads\\tboundary_start_fraction\\tseam_fraction\\tsplit_to_seam_ratio\\tartifact_flag\\tconfidence\\n" > dimer_breakpoint_screen.tsv
-    printf "position_mod_ref\\tboundary_start_reads\\tposition_event_reads\\tboundary_seam_or_single_start_reads\\n" > dimer_breakpoint_start_counts.tsv
-    printf "read_id\\tlen_bp\\taligned\\tevent_type\\tmethod\\tcrosses\\tpos_mod\\tstart\\tend\\tleft_mod\\tright_mod\\tmissing_bp\\tmissing_left_bp\\tmissing_right_bp\\tsupport_bp\\torientation\\tcopy_transition\\n" > dimer_read_ledger.tsv
-    printf "read_id\\tlen_bp\\tevent_type\\tmethod\\tpos_mod\\tleft_mod\\tright_mod\\tmissing_bp\\tsupport_bp\\tstart\\tend\\torientation\\tcopy_transition\\n" > dimer_breakpoint_reads.tsv
-    printf "offset_bp\\tmode\\taligned_reads\\ttotal_support\\tboundary_support\\tboundary_pct\\tsplit_support\\tseam_support\\tsingle_support\\tdom_rot\\tdom_mod\\tdom_reads\\tdom_pct\\tseam_only\\n" > dimer_rotated_remap_summary.tsv
-    printf "offset_bp\\tpos_mod\\tsupport\\tsplit\\tseam\\tpos_rot\\tin_boundary\\n" > dimer_rotated_remap_breakpoints.tsv
-    printf "read_id\\tsegment_count\\tleft_ref\\tright_ref\\tposition_mod_ref\\tquery_gap_bp\\tsupport_bp\\torientation_pair\\tmethod\\n" > dimer_single_ref_split_events.tsv
-    printf "position_mod_ref\\tsplit_support_reads\\tsupport_bp_sum\\tsupport_bp_mean\\tsupport_pct\\n" > dimer_single_ref_split_profile.tsv
+    if [[ ! -f "${codeRoot}/scripts/init_fastq_dimer_outputs.sh" ]]; then
+        echo "Missing initializer script: ${codeRoot}/scripts/init_fastq_dimer_outputs.sh" >&2
+        exit 1
+    fi
+    bash "${codeRoot}/scripts/init_fastq_dimer_outputs.sh"
 
     dimer_cutoff=\$(awk -v expected=${expectedSize} 'BEGIN { printf "%d\\n", int(expected * 1.5 + 0.5) }')
     trimer_cutoff=\$(awk -v expected=${expectedSize} 'BEGIN { printf "%d\\n", int(expected * 2.5 + 0.5) }')
@@ -210,7 +219,12 @@ process FastqDimerAnalysis {
     ref_name=\$(head -n1 reference_input.fasta.fai | cut -f1)
     ref_len=\$(head -n1 reference_input.fasta.fai | cut -f2)
     samtools faidx reference_input.fasta "\${ref_name}" > ref_single.fasta
-    ref_seq=\$(tail -n +2 ref_single.fasta | tr -d '\\n')
+    ref_seq=\$(tail -n +2 ref_single.fasta | tr -d '\\n' | tr '[:lower:]' '[:upper:]')
+    source_reference_sha256="\$(printf '%s' "\${ref_seq}" | sha256sum | awk '{print \$1}')"
+    if [[ "\${source_reference_sha256}" != "${declaredReferenceSha256}" ]]; then
+        echo "CRITICAL_FAILURE: REFERENCE_DIGEST_MISMATCH" >&2
+        exit 95
+    fi
     printf ">%s_dimer\\n%s%s\\n" "\${ref_name}" "\${ref_seq}" "\${ref_seq}" > dimer_reference.fasta
     samtools faidx dimer_reference.fasta
     if [[ ! -f "${codeRoot}/scripts/dimer_single_ref_split_events.awk" ]]; then
@@ -1219,28 +1233,39 @@ process FastqDimerAnalysis {
             ' dimer_junction_clusters.tsv > dimer_junction_rotated_profile.tsv
         fi
 
-        if samtools consensus -f fasta dimer_candidates.aligned.bam > dimer_consensus.fasta 2> dimer_consensus.log; then
-            consensus_status="ok"
-        else
-            echo "samtools consensus unavailable or failed; attempting mpileup-majority fallback" >> dimer_consensus.log
-            if samtools mpileup -aa -A -d 1000000 -f dimer_reference.fasta dimer_candidates.aligned.bam 2>> dimer_consensus.log \
-                | awk -f "${codeRoot}/scripts/mpileup_majority_consensus.awk" \
-                > dimer_consensus.fasta.tmp && [[ -s dimer_consensus.fasta.tmp ]]; then
-                mv dimer_consensus.fasta.tmp dimer_consensus.fasta
-                consensus_status="pileup_majority_fallback"
-            else
-                rm -f dimer_consensus.fasta.tmp
-                cp dimer_reference.fasta dimer_consensus.fasta
-                consensus_status="fallback_reference_copy"
-            fi
+        has_called_consensus_base() {
+            awk '
+                BEGIN { headers = 0; called = 0 }
+                /^>/ { headers++; next }
+                {
+                    line = toupper(\$0)
+                    if (line ~ /[ACGT]/) called = 1
+                }
+                END { exit(headers == 1 && called ? 0 : 1) }
+            ' "\$1"
+        }
+
+        rm -f dimer_consensus.fasta dimer_consensus.fasta.fai dimer_consensus.fasta.tmp
+        if ! samtools consensus --mode bayesian -f fasta dimer_candidates.aligned.bam > dimer_consensus.fasta 2> dimer_consensus.log; then
+            echo "CRITICAL_FAILURE: SAMTOOLS_CONSENSUS_FAILED" | tee -a dimer_consensus.log >&2
+            rm -f dimer_consensus.fasta dimer_consensus.fasta.fai
+            exit 86
         fi
+        if ! has_called_consensus_base dimer_consensus.fasta; then
+            echo "CRITICAL_FAILURE: SAMTOOLS_CONSENSUS_EMPTY" | tee -a dimer_consensus.log >&2
+            rm -f dimer_consensus.fasta dimer_consensus.fasta.fai
+            exit 86
+        fi
+        if ! samtools faidx dimer_consensus.fasta >> dimer_consensus.log 2>&1; then
+            echo "CRITICAL_FAILURE: SAMTOOLS_CONSENSUS_INDEX_FAILED" | tee -a dimer_consensus.log >&2
+            rm -f dimer_consensus.fasta dimer_consensus.fasta.fai
+            exit 86
+        fi
+        consensus_status="ok"
 
         bash "${codeRoot}/scripts/dominant_dimer_consensus.sh" \\
             --events dimer_junction_events.tsv \\
             --bam dimer_candidates.aligned.bam \\
-            --fastq dimer_candidates.fastq \\
-            --dimer-consensus dimer_consensus.fasta \\
-            --dimer-reference dimer_reference.fasta \\
             --dimer-count "\${dimer_count}" \\
             --screened-pos "\${screened_primary_breakpoint_position_mod_ref}" \\
             --screened-support "\${screened_primary_breakpoint_support_reads}" \\
@@ -1369,7 +1394,11 @@ process FastqDimerAnalysis {
         echo "Consensus: \${consensus_status}; dominant: \${dominant_consensus_status}"
     } > dimer_analysis.log
 
-    bash "${codeRoot}/scripts/build_alignment_session_manifest.sh"
+    bash "${codeRoot}/scripts/build_alignment_session_manifest.sh" \
+        ${manifestJobIdArg} \
+        ${referenceSequenceSha256Arg} \
+        ${workflowIdArg} \
+        ${inputModeArg}
         """
     }
 process BuildDimerCanonicalOutputs {

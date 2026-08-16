@@ -3,6 +3,97 @@ nextflow.enable.dsl = 2
 
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
+import java.util.Arrays
+
+params.frustrampnn_settings_value_origin = params.frustrampnn_settings_value_origin ?: null
+
+def FRUSTRAMPNN_SETTINGS_MAX_BYTES = 64 * 1024
+
+def requireExactSettingsObject(value, Set<String> expectedKeys, String location) {
+    if (!(value instanceof Map)) {
+        throw new IllegalArgumentException("${location} must be an object")
+    }
+    def keys = value.keySet().collect { key ->
+        if (!(key instanceof CharSequence)) {
+            throw new IllegalArgumentException("${location} keys must be strings")
+        }
+        key.toString()
+    } as Set
+    if (keys != expectedKeys) {
+        def missing = (expectedKeys - keys).sort()
+        def unknown = (keys - expectedKeys).sort()
+        throw new IllegalArgumentException(
+            "${location} fields are not exact; missing=${missing}, unknown=${unknown}"
+        )
+    }
+}
+
+def requireCompleteFrustraMPNNSettings(value) {
+    requireExactSettingsObject(value, [
+        'schema_name', 'schema_version', 'protein_selection',
+        'source_structure', 'classification_policy',
+    ] as Set, 'frustrampnn_settings')
+    requireExactSettingsObject(value.protein_selection, [
+        'mode', 'entities', 'residues',
+    ] as Set, 'frustrampnn_settings.protein_selection')
+    requireExactSettingsObject(value.source_structure, [
+        'selected_model_number', 'preferred_altloc',
+    ] as Set, 'frustrampnn_settings.source_structure')
+    requireExactSettingsObject(value.classification_policy, [
+        'mode', 'high_max', 'minimal_min',
+    ] as Set, 'frustrampnn_settings.classification_policy')
+    if (!(value.protein_selection.entities instanceof Collection) ||
+        !(value.protein_selection.residues instanceof Collection)) {
+        throw new IllegalArgumentException('frustrampnn_settings protein selectors must be arrays')
+    }
+    value.protein_selection.entities.eachWithIndex { selector, index ->
+        requireExactSettingsObject(selector, [
+            'entity_instance_id', 'source_entity_id', 'label_asym_id', 'auth_asym_id',
+        ] as Set, "frustrampnn_settings.protein_selection.entities[${index}]")
+    }
+    value.protein_selection.residues.eachWithIndex { selector, index ->
+        requireExactSettingsObject(selector, [
+            'entity_instance_id', 'source_entity_id', 'label_asym_id', 'auth_asym_id',
+            'auth_seq_id', 'insertion_code', 'sequence_index',
+        ] as Set, "frustrampnn_settings.protein_selection.residues[${index}]")
+    }
+    return value
+}
+
+def canonicalJsonValue(value) {
+    if (value instanceof Map) {
+        def ordered = new TreeMap<String, Object>()
+        value.each { key, item ->
+            if (!(key instanceof CharSequence)) {
+                throw new IllegalArgumentException('FrustraMPNN settings keys must be strings')
+            }
+            ordered[key.toString()] = canonicalJsonValue(item)
+        }
+        return ordered
+    }
+    if (value instanceof Collection) return value.collect { item -> canonicalJsonValue(item) }
+    if (value == null || value instanceof CharSequence || value instanceof Boolean) return value
+    if (value instanceof Number) {
+        if ((value instanceof Double || value instanceof Float) &&
+            !Double.isFinite(value.doubleValue())) {
+            throw new IllegalArgumentException('FrustraMPNN settings numbers must be finite')
+        }
+        return value
+    }
+    throw new IllegalArgumentException(
+        "FrustraMPNN settings contain unsupported value type ${value.getClass().getName()}"
+    )
+}
+
+def canonicalJsonBytes(value) {
+    JsonOutput.toJson(canonicalJsonValue(value)).getBytes('UTF-8')
+}
+
+def sha256Hex(byte[] payload) {
+    def digest = java.security.MessageDigest.getInstance('SHA-256')
+    digest.update(payload)
+    digest.digest().encodeHex().toString()
+}
 
 params.sequence_batch_json_path = params.sequence_batch_json_path ?: null
 params.complex_batch_dir = params.complex_batch_dir ?: null
@@ -34,14 +125,14 @@ include { BoltzFromSequence } from '../modules/structure_prediction.nf'
 include { RF3FromSequence } from '../modules/structure_prediction.nf'
 include { structure_prediction_wf } from '../modules/structure_prediction.nf'
 include { OpenMMRelaxation ; OpenMMScore } from '../modules/openmm.nf'
-include { CanonicalFrustraMPNN } from '../modules/frustrampnn.nf'
+include { CanonicalFrustraMPNNV2 } from '../modules/frustrampnn.nf'
 
 def proteinDesignSha256(rawPath) {
     def digest = java.security.MessageDigest.getInstance('SHA-256')
     rawPath.toFile().withInputStream { stream ->
-        byte[] buffer = new byte[1024 * 1024]
-        int count
-        while ((count = stream.read(buffer)) != -1) digest.update(buffer, 0, count)
+        stream.eachByte(1024 * 1024) { buffer, count ->
+            digest.update(buffer, 0, count as int)
+        }
     }
     return digest.digest().encodeHex().toString()
 }
@@ -280,15 +371,17 @@ process PrepareProteinDesignFrustraMPNNCandidate {
         mode: 'copy', pattern: 'canonical_source.pdb', saveAs: { new File(candidate_meta.producer_candidate_key.toString()).name }
 
     input:
-    tuple val(candidate_meta), path(terminal_structure)
+    tuple val(candidate_meta), path(terminal_structure), val(settings_base64), \
+        val(settings_sha256), val(settings_value_origin)
 
     output:
-    tuple path('workflow_component_request_v1.json'), path('canonical_source.pdb'), emit: prepared
+    tuple path('workflow_component_request_v2.json'), path('canonical_source.pdb'), \
+        path('frustrampnn_structure_map_v1.json'), emit: prepared
 
     script:
     def requestMetadata = candidate_meta.subMap([
         'parent_job_id', 'parent_workflow_id', 'producer_stage', 'producer_candidate_key',
-        'requiredness', 'checkpoint_id', 'producer_method', 'producer_sample',
+        'requiredness', 'producer_method', 'producer_sample',
         'producer_rank', 'producer_output_key', 'producer_identity_sha256',
         'producer_artifact_sha256', 'source_format', 'candidate_id'
     ])
@@ -297,7 +390,10 @@ process PrepareProteinDesignFrustraMPNNCandidate {
     set -euo pipefail
     '${params.api_python}' '${params.code_root}/scripts/prepare_frustrampnn_candidate.py' \
       --source '${terminal_structure}' --output-pdb canonical_source.pdb \
-      --request workflow_component_request_v1.json --metadata-base64 '${metadataBase64}'
+      --request workflow_component_request_v2.json --metadata-base64 '${metadataBase64}' \
+      --request-version 2 --structure-map frustrampnn_structure_map_v1.json \
+      --settings-base64 '${settings_base64}' --settings-sha256 '${settings_sha256}' \
+      --settings-value-origin '${settings_value_origin}'
     """
 }
 
@@ -1058,9 +1154,40 @@ workflow PROTEIN_DESIGN {
         error('frustrampnn_requiredness must be required')
     }
     if (params.run_frustrampnn == true) {
-        PrepareProteinDesignFrustraMPNNCandidate(terminal_designs)
-        CanonicalFrustraMPNN(PrepareProteinDesignFrustraMPNNCandidate.out.prepared)
-        frustrampnn_results = CanonicalFrustraMPNN.out.result
+        if (!(params.frustrampnn_settings instanceof CharSequence)) {
+            error('Enabled FrustraMPNN requires complete typed --frustrampnn_settings')
+        }
+        if (!(params.frustrampnn_settings_value_origin instanceof CharSequence) ||
+            !(params.frustrampnn_settings_value_origin.toString() in ['bms_default', 'operator_request'])) {
+            error('Enabled FrustraMPNN requires canonical --frustrampnn_settings_value_origin')
+        }
+        def settingsValueOrigin = params.frustrampnn_settings_value_origin.toString()
+        def settingsBytes = params.frustrampnn_settings.toString().getBytes('UTF-8')
+        if (settingsBytes.length > FRUSTRAMPNN_SETTINGS_MAX_BYTES) {
+            error("frustrampnn_settings exceeds ${FRUSTRAMPNN_SETTINGS_MAX_BYTES} byte limit")
+        }
+        def rawSettings
+        try {
+            rawSettings = new JsonSlurper().parseText(params.frustrampnn_settings.toString())
+            requireCompleteFrustraMPNNSettings(rawSettings)
+        } catch (Exception exc) {
+            error("Enabled FrustraMPNN requires complete typed --frustrampnn_settings: ${exc.message}")
+        }
+        def canonicalSettingsBytes = canonicalJsonBytes(rawSettings)
+        if (!Arrays.equals(settingsBytes, canonicalSettingsBytes)) {
+            error('frustrampnn_settings must be exact compact canonical JSON')
+        }
+        def settingsBase64 = settingsBytes.encodeBase64().toString()
+        def settingsWithOrigin = new TreeMap<String, Object>()
+        settingsWithOrigin.putAll(rawSettings)
+        settingsWithOrigin['settings_value_origin'] = settingsValueOrigin
+        def settingsSha256 = sha256Hex(canonicalJsonBytes(settingsWithOrigin))
+        def typedFrustraMPNNCandidates = terminal_designs.map { candidate_meta, terminal_structure ->
+            tuple(candidate_meta, terminal_structure, settingsBase64, settingsSha256, settingsValueOrigin)
+        }
+        PrepareProteinDesignFrustraMPNNCandidate(typedFrustraMPNNCandidates)
+        CanonicalFrustraMPNNV2(PrepareProteinDesignFrustraMPNNCandidate.out.prepared)
+        frustrampnn_results = CanonicalFrustraMPNNV2.out.result
         PublishProteinDesignFrustraMPNNCandidate(frustrampnn_results)
         def published_frustrampnn_markers = PublishProteinDesignFrustraMPNNCandidate.out.marker.collect()
         ReportProteinDesignFrustraMPNNComplete(published_frustrampnn_markers)

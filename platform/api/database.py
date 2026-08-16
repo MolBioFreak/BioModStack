@@ -4,21 +4,51 @@ Database models and initialization for BioModStack Control Platform.
 Uses SQLAlchemy with async SQLite.
 """
 
-from sqlalchemy import CheckConstraint, Column, String, Text, Integer, Float, Boolean, DateTime, Index, JSON, ForeignKey, ForeignKeyConstraint, UniqueConstraint, text, event
+from sqlalchemy import CheckConstraint, Column, String, Text, Integer, Float, Boolean, DateTime, Index, JSON, LargeBinary, ForeignKey, ForeignKeyConstraint, UniqueConstraint, text, event, func, inspect, select
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker, declarative_base, relationship
+from sqlalchemy.orm import Session, sessionmaker, declarative_base, relationship
 from sqlalchemy.types import TypeDecorator
 from datetime import datetime
+from contextvars import ContextVar
 import json
 from types import SimpleNamespace
 from paths import get_db_path, get_db_url
 from migrations.sqlite_sha256 import register_sqlite_sha256
+from services.ngs_molbio_quiescence import NgsMolBioQuiescedSession
 
 
 # Database path - resolved via paths helper (supports env overrides)
 DEFAULT_DB_PATH = get_db_path()
 DATABASE_URL = get_db_url()
+current_launch_context_id: ContextVar[str | None] = ContextVar("bms_launch_context_id", default=None)
+LAUNCH_CONTEXT_BINDING_PROVENANCE_KEY = "launch_context_binding"
+LAUNCH_CONTEXT_BINDING_PROVENANCE_SCHEMA = "bms.launch-context-core-binding.v1"
 
+
+def launch_context_binding_ready(job: object) -> bool:
+    provenance_value = getattr(job, "provenance", None)
+    provenance = provenance_value if isinstance(provenance_value, dict) else {}
+    launch_context_id = provenance.get("launch_context_id")
+    if not isinstance(launch_context_id, str) or not launch_context_id:
+        return True
+    marker = provenance.get(LAUNCH_CONTEXT_BINDING_PROVENANCE_KEY)
+    if not isinstance(marker, dict) or set(marker) != {
+        "schema", "launch_context_id", "run_attempt_id", "canonical_job_id",
+        "binding_receipt_sha256",
+    }:
+        return False
+    digest = marker.get("binding_receipt_sha256")
+    return bool(
+        marker.get("schema") == LAUNCH_CONTEXT_BINDING_PROVENANCE_SCHEMA
+        and marker.get("launch_context_id") == launch_context_id
+        and isinstance(marker.get("run_attempt_id"), str)
+        and marker.get("run_attempt_id")
+        and marker.get("canonical_job_id") == str(getattr(job, "id", ""))
+        and isinstance(digest, str)
+        and len(digest) == 64
+        and digest == digest.lower()
+        and all(character in "0123456789abcdef" for character in digest)
+    )
 
 def _canonical_sqlite_json(value: object) -> str:
     """Serialize JSON evidence exactly as the SHA-256 persistence contract requires."""
@@ -43,7 +73,12 @@ if engine.dialect.name == "sqlite":
             cursor.close()
 
 
-async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+async_session = sessionmaker(
+    engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+    sync_session_class=NgsMolBioQuiescedSession,
+)
 
 Base = declarative_base()
 
@@ -178,6 +213,7 @@ class OntInstrumentRun(Base):
             "(terminal_artifact_manifest IS NULL) = (terminal_artifact_manifest_sha256 IS NULL)",
             name="ck_ont_run_terminal_manifest_pair",
         ),
+        UniqueConstraint("external_registration_key", name="uq_ont_run_external_registration_key"),
     )
 
     id = Column(String(80), primary_key=True)
@@ -188,6 +224,15 @@ class OntInstrumentRun(Base):
     observed_generation = Column(Integer, nullable=False)
     sample_id = Column(String(255), nullable=True)
     experiment_group = Column(String(255), nullable=True)
+    external_registration_key = Column(String(64), nullable=True)
+    external_source_device = Column(Integer, nullable=True)
+    external_source_inode = Column(Integer, nullable=True)
+    external_source_bytes = Column(Integer, nullable=True)
+    external_source_mtime_ns = Column(Integer, nullable=True)
+    external_source_ctime_ns = Column(Integer, nullable=True)
+    external_source_root_device = Column(Integer, nullable=True)
+    external_source_root_inode = Column(Integer, nullable=True)
+    external_source_relative_path = Column(String(1024), nullable=True)
     kit = Column(String(255), nullable=True)
     output_directories = Column(JSON, nullable=False, default=dict)
     output_files = Column(JSON, nullable=False, default=dict)
@@ -215,6 +260,110 @@ class OntInstrumentRunEvent(Base):
     observed_generation = Column(Integer, nullable=False)
     minknow_payload = Column(JSON, nullable=True)
     output_files = Column(JSON, nullable=False, default=dict)
+
+
+class OntRawSignalRepresentation(Base):
+    """Immutable-format representation bound to one exact ONT run generation."""
+
+    __tablename__ = "ont_raw_signal_representations"
+    __table_args__ = (
+        UniqueConstraint("run_id", "observed_generation", "manifest_sha256", name="uq_ont_raw_signal_rep_manifest"),
+        CheckConstraint("format IN ('pod5','slow5','blow5')", name="ck_ont_raw_signal_rep_format"),
+        CheckConstraint("role IN ('source','derived')", name="ck_ont_raw_signal_rep_role"),
+    )
+
+    id = Column(String(96), primary_key=True)
+    run_id = Column(String(80), ForeignKey("ont_instrument_runs.id", ondelete="RESTRICT"), nullable=False, index=True)
+    observed_generation = Column(Integer, nullable=False, index=True)
+    role = Column(String(16), nullable=False)
+    source_kind = Column(String(32), nullable=False)
+    format = Column(String(16), nullable=False, index=True)
+    source_fidelity = Column(String(64), nullable=False, default="unknown")
+    state = Column(String(32), nullable=False, index=True)
+    reason_code = Column(String(96), nullable=False)
+    artifact_manifest = Column(JSON, nullable=False)
+    manifest_sha256 = Column(String(64), nullable=False, index=True)
+    parent_representation_ids = Column(JSON, nullable=False, default=list)
+    parent_manifest_sha256s = Column(JSON, nullable=False, default=list)
+    compression = Column(JSON, nullable=False, default=dict)
+    runtime_identity = Column(JSON, nullable=False, default=dict)
+    validation_receipts = Column(JSON, nullable=False, default=dict)
+    profile_id = Column(String(128), nullable=True)
+    acquisition_id = Column(String(255), nullable=True)
+    read_count = Column(Integer, nullable=True)
+    published_at = Column(LenientSQLiteDateTime, nullable=True)
+    retention_pinned_at = Column(LenientSQLiteDateTime, nullable=True)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
+class OntRawSignalDerivationJob(Base):
+    """Durable leased request for one governed raw-signal derivation."""
+
+    __tablename__ = "ont_raw_signal_derivation_jobs"
+    __table_args__ = (
+        UniqueConstraint("run_id", "observed_generation", "source_representation_id", "profile_id", name="uq_ont_raw_signal_derivation"),
+    )
+
+    id = Column(String(96), primary_key=True)
+    run_id = Column(String(80), ForeignKey("ont_instrument_runs.id", ondelete="RESTRICT"), nullable=False, index=True)
+    observed_generation = Column(Integer, nullable=False, index=True)
+    source_representation_id = Column(String(96), ForeignKey("ont_raw_signal_representations.id", ondelete="RESTRICT"), nullable=False)
+    output_representation_id = Column(String(96), ForeignKey("ont_raw_signal_representations.id", ondelete="RESTRICT"), nullable=True)
+    requested_preference = Column(String(16), nullable=False)
+    consumer_id = Column(String(128), nullable=False)
+    profile_id = Column(String(128), nullable=False)
+    state = Column(String(32), nullable=False, default="requested", index=True)
+    reason_code = Column(String(96), nullable=False, default="conversion_requested")
+    resource_snapshot = Column(JSON, nullable=False, default=dict)
+    attempt = Column(Integer, nullable=False, default=0)
+    claim_token = Column(String(96), nullable=True, unique=True)
+    lease_expires_at = Column(LenientSQLiteDateTime, nullable=True, index=True)
+    cancel_requested_at = Column(LenientSQLiteDateTime, nullable=True)
+    stage_receipts = Column(JSON, nullable=False, default=dict)
+    failure_code = Column(String(96), nullable=True)
+    failure_message = Column(Text, nullable=True)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    completed_at = Column(LenientSQLiteDateTime, nullable=True)
+
+
+class OntRawSignalDerivationEvent(Base):
+    """Append-only transition receipt for one raw-signal derivation request."""
+
+    __tablename__ = "ont_raw_signal_derivation_events"
+
+    id = Column(String(96), primary_key=True)
+    job_id = Column(String(96), ForeignKey("ont_raw_signal_derivation_jobs.id", ondelete="RESTRICT"), nullable=False, index=True)
+    state = Column(String(32), nullable=False)
+    reason_code = Column(String(96), nullable=False)
+    receipt = Column(JSON, nullable=False, default=dict)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
+class OntRawSignalLookup(Base):
+    """Bounded selected-read waveform lookup outside HTTP execution."""
+
+    __tablename__ = "ont_raw_signal_lookups"
+    __table_args__ = (
+        UniqueConstraint("representation_id", "read_id", name="uq_ont_raw_signal_lookup_read"),
+        Index("ix_ont_raw_signal_lookups_state", "state"),
+    )
+
+    id = Column(String(96), primary_key=True)
+    run_id = Column(String(80), ForeignKey("ont_instrument_runs.id", ondelete="RESTRICT"), nullable=False, index=True)
+    observed_generation = Column(Integer, nullable=False, index=True)
+    representation_id = Column(String(96), ForeignKey("ont_raw_signal_representations.id", ondelete="RESTRICT"), nullable=False)
+    read_id = Column(String(128), nullable=False)
+    state = Column(String(32), nullable=False, default="requested")
+    reason_code = Column(String(96), nullable=False, default="requested")
+    claim_token = Column(String(96), unique=True, nullable=True)
+    lease_expires_at = Column(LenientSQLiteDateTime, nullable=True)
+    sample_count = Column(Integer, nullable=True)
+    samples = Column(JSON, nullable=True)
+    receipt = Column(JSON, nullable=False, default=dict)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+    completed_at = Column(LenientSQLiteDateTime, nullable=True)
 
 
 class OntProtocolOptionReceipt(Base):
@@ -351,6 +500,183 @@ class NgsComparisonPanelReceipt(Base):
     created_at = Column(LenientSQLiteDateTime, default=datetime.utcnow, nullable=False)
 
 
+class NgsReferenceSetManifest(Base):
+    """Immutable server-owned reference-set launch authority for one barcode batch."""
+
+    __tablename__ = "ngs_reference_set_manifests"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_ngs_reference_set_idempotency"),
+        Index("ix_ngs_reference_set_manifests_source_job_id", "source_job_id"),
+        Index("ix_ngs_reference_set_manifests_manifest_sha256", "manifest_sha256"),
+    )
+
+    id = Column(String(36), primary_key=True)
+    manifest_schema = Column(String(80), nullable=False)
+    mode = Column(String(32), nullable=False)
+    source_job_id = Column(
+        String(36), ForeignKey("jobs.id", ondelete="RESTRICT"), nullable=False
+    )
+    target_workflow = Column(String(64), nullable=False)
+    idempotency_key = Column(String(255), nullable=False)
+    request_fingerprint = Column(String(64), nullable=False)
+    manifest_path = Column(String(1000), nullable=False)
+    manifest_sha256 = Column(String(64), nullable=False)
+    manifest_json = Column(JSON, nullable=False)
+    created_at = Column(LenientSQLiteDateTime, default=datetime.utcnow, nullable=False)
+
+
+class NgsReferenceSetMapping(Base):
+    """Immutable barcode-to-revision binding within one NGS reference set."""
+
+    __tablename__ = "ngs_reference_set_mappings"
+    __table_args__ = (
+        UniqueConstraint(
+            "reference_set_id",
+            "unit_id",
+            name="uq_ngs_reference_set_mapping_unit",
+        ),
+        UniqueConstraint("receipt_id", name="uq_ngs_reference_set_mapping_receipt"),
+        UniqueConstraint("child_job_id", name="uq_ngs_reference_set_mapping_child_job"),
+        Index("ix_ngs_reference_set_mappings_reference_set_id", "reference_set_id"),
+        Index("ix_ngs_reference_set_mappings_unit_id", "unit_id"),
+    )
+
+    id = Column(String(36), primary_key=True)
+    reference_set_id = Column(
+        String(36),
+        ForeignKey("ngs_reference_set_manifests.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    child_job_id = Column(
+        String(36), ForeignKey("jobs.id", ondelete="RESTRICT"), nullable=False
+    )
+    unit_id = Column(String(32), nullable=False)
+    sample_alias = Column(String(255), nullable=True)
+    sequence_id = Column(String(36), nullable=False)
+    revision_id = Column(String(36), nullable=False)
+    revision_sha256 = Column(String(64), nullable=False)
+    receipt_id = Column(
+        String(36), ForeignKey("molbio_ngs_receipts.id", ondelete="RESTRICT"), nullable=False
+    )
+    fasta_snapshot_sha256 = Column(String(64), nullable=False)
+    source_bam_path = Column(String(1000), nullable=False)
+    source_bam_sha256 = Column(String(64), nullable=False)
+    source_calls_sha256 = Column(String(64), nullable=False)
+    preflight_sha256 = Column(String(64), nullable=False)
+    demux_manifest_sha256 = Column(String(64), nullable=False)
+    unit_manifest_sha256 = Column(String(64), nullable=False)
+    created_at = Column(LenientSQLiteDateTime, default=datetime.utcnow, nullable=False)
+
+
+class NgsPooledReferenceTarget(Base):
+    """Immutable target identity within a pooled reference-set manifest."""
+
+    __tablename__ = "ngs_pooled_reference_targets"
+    __table_args__ = (
+        UniqueConstraint(
+            "reference_set_id",
+            "target_id",
+            name="uq_ngs_pooled_reference_target_id",
+        ),
+        UniqueConstraint("receipt_id", name="uq_ngs_pooled_reference_target_receipt"),
+        Index("ix_ngs_pooled_reference_targets_reference_set_id", "reference_set_id"),
+        Index("ix_ngs_pooled_reference_targets_target_id", "target_id"),
+    )
+
+    id = Column(String(36), primary_key=True)
+    reference_set_id = Column(
+        String(36),
+        ForeignKey("ngs_reference_set_manifests.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    target_id = Column(String(128), nullable=False)
+    label = Column(String(255), nullable=False)
+    indistinguishable_group = Column(String(128), nullable=True)
+    sequence_id = Column(String(128), nullable=False)
+    revision_id = Column(String(128), nullable=False)
+    revision_sha256 = Column(String(64), nullable=False)
+    receipt_id = Column(
+        String(36), ForeignKey("molbio_ngs_receipts.id", ondelete="RESTRICT"), nullable=False
+    )
+    fasta_path = Column(String(512), nullable=False)
+    fasta_sha256 = Column(String(64), nullable=False)
+    created_at = Column(LenientSQLiteDateTime, default=datetime.utcnow, nullable=False)
+
+
+class NgsPooledAssignmentRelease(Base):
+    """Append-only operator release of reviewed pooled-assignment evidence."""
+
+    __tablename__ = "ngs_pooled_assignment_releases"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_ngs_pooled_assignment_release_idempotency"),
+        Index("ix_ngs_pooled_assignment_releases_assignment_job_id", "assignment_job_id"),
+        Index("ix_ngs_pooled_assignment_releases_reference_set_id", "reference_set_id"),
+    )
+
+    id = Column(String(36), primary_key=True)
+    assignment_job_id = Column(
+        String(36), ForeignKey("jobs.id", ondelete="RESTRICT"), nullable=False
+    )
+    reference_set_id = Column(
+        String(36),
+        ForeignKey("ngs_reference_set_manifests.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    idempotency_key = Column(String(255), nullable=False)
+    request_fingerprint = Column(String(64), nullable=False)
+    target_workflow = Column(String(64), nullable=False)
+    assignment_summary_path = Column(String(1000), nullable=False)
+    assignment_summary_sha256 = Column(String(64), nullable=False)
+    created_at = Column(LenientSQLiteDateTime, default=datetime.utcnow, nullable=False)
+
+
+class NgsPooledAssignmentReleaseTarget(Base):
+    """Immutable target-to-child binding within one pooled assignment release."""
+
+    __tablename__ = "ngs_pooled_assignment_release_targets"
+    __table_args__ = (
+        UniqueConstraint(
+            "release_id",
+            "target_id",
+            name="uq_ngs_pooled_assignment_release_target",
+        ),
+        UniqueConstraint("child_job_id", name="uq_ngs_pooled_assignment_release_child"),
+        Index("ix_ngs_pooled_assignment_release_targets_release_id", "release_id"),
+        Index("ix_ngs_pooled_assignment_release_targets_assignment_job_id", "assignment_job_id"),
+    )
+
+    id = Column(String(36), primary_key=True)
+    release_id = Column(
+        String(36),
+        ForeignKey("ngs_pooled_assignment_releases.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    assignment_job_id = Column(
+        String(36), ForeignKey("jobs.id", ondelete="RESTRICT"), nullable=False
+    )
+    reference_set_id = Column(
+        String(36),
+        ForeignKey("ngs_reference_set_manifests.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    target_id = Column(String(128), nullable=False)
+    child_job_id = Column(
+        String(36), ForeignKey("jobs.id", ondelete="RESTRICT"), nullable=False
+    )
+    sequence_id = Column(String(128), nullable=False)
+    revision_id = Column(String(128), nullable=False)
+    revision_sha256 = Column(String(64), nullable=False)
+    receipt_id = Column(
+        String(36), ForeignKey("molbio_ngs_receipts.id", ondelete="RESTRICT"), nullable=False
+    )
+    fasta_path = Column(String(1000), nullable=False)
+    fasta_sha256 = Column(String(64), nullable=False)
+    assigned_fastq_path = Column(String(1000), nullable=False)
+    assigned_fastq_sha256 = Column(String(64), nullable=False)
+    assigned_read_count = Column(Integer, nullable=False)
+    created_at = Column(LenientSQLiteDateTime, default=datetime.utcnow, nullable=False)
+
+
 class ViewerSnapshotRecord(Base):
     """Immutable, job-owned M6A viewer snapshot metadata and canonical JSON."""
 
@@ -399,6 +725,46 @@ class ExternalResultImport(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
     imported_at = Column(DateTime, nullable=True)
+
+
+@event.listens_for(Session, "before_flush")
+def _bind_new_jobs_to_launch_context(session: Session, _flush_context, _instances) -> None:
+    for record in session.dirty:
+        if not isinstance(record, Job):
+            continue
+        history = inspect(record).attrs.provenance.history
+        if not history.has_changes() or not history.deleted:
+            continue
+        previous = dict(history.deleted[0] or {})
+        current = dict(record.provenance or {})
+        previous_context = previous.get("launch_context_id")
+        if previous_context is not None and current.get("launch_context_id") != previous_context:
+            raise ValueError("Job launch-context provenance cannot change")
+        previous_binding = previous.get(LAUNCH_CONTEXT_BINDING_PROVENANCE_KEY)
+        if (
+            previous_binding is not None
+            and current.get(LAUNCH_CONTEXT_BINDING_PROVENANCE_KEY) != previous_binding
+        ):
+            raise ValueError("Job launch-context binding cannot change")
+
+    launch_context_id = current_launch_context_id.get()
+    if launch_context_id is None:
+        return
+    for record in session.new:
+        if isinstance(record, Job):
+            provenance = dict(record.provenance or {})
+            existing = provenance.get("launch_context_id")
+            if existing is not None and existing != launch_context_id:
+                raise ValueError("Job launch-context provenance cannot change")
+            existing_job_id = session.execute(
+                select(Job.id)
+                .where(func.json_extract(Job.provenance, "$.launch_context_id") == launch_context_id)
+                .limit(1)
+            ).scalar_one_or_none()
+            if existing_job_id is not None and existing_job_id != record.id:
+                raise ValueError("launch context is already bound to a canonical Job")
+            provenance["launch_context_id"] = launch_context_id
+            record.provenance = provenance
 
 
 class Design(Base):
@@ -729,6 +1095,90 @@ class FrustraMPNNResult(Base):
     assigned_gpu_json = Column(JSON, nullable=False)
     terminal_result_json = Column(JSON, nullable=False)
     parent_metadata_json = Column(JSON, nullable=True)
+    settings_sha256 = Column(String(64), nullable=True)
+    effective_settings_sha256 = Column(String(64), nullable=True)
+    effective_settings_json = Column(JSON, nullable=True)
+    capability_inventory_sha256 = Column(String(64), nullable=True)
+    statistics_sha256 = Column(String(64), nullable=True)
+    statistics_json = Column(JSON, nullable=True)
+    comparison_compatibility_id = Column(String(64), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class FrustraMPNNReview(Base):
+    """Durable operator interpretation bound to persisted FrustraMPNN results."""
+
+    __tablename__ = "frustrampnn_reviews"
+    __table_args__ = (
+        Index("ix_frustrampnn_reviews_parent_job_id", "parent_job_id"),
+        Index("ix_frustrampnn_reviews_owner_job", "created_by", "parent_job_id"),
+        Index("ix_frustrampnn_reviews_created_at", "created_at"),
+    )
+
+    review_id = Column(String(36), primary_key=True)
+    parent_job_id = Column(String(36), ForeignKey("jobs.id"), nullable=False)
+    invocation_id = Column(String(128), nullable=False)
+    landscape_sha256 = Column(String(64), nullable=False)
+    effective_settings_sha256 = Column(String(64), nullable=False)
+    review_sha256 = Column(String(64), nullable=False, unique=True)
+    supersedes_review_id = Column(String(36), ForeignKey("frustrampnn_reviews.review_id"), nullable=True)
+    created_by = Column(String(128), nullable=False)
+    title = Column(String(160), nullable=False)
+    notes = Column(Text, nullable=False, default="")
+    result_references_json = Column(JSON, nullable=False)
+    selected_residues_json = Column(JSON, nullable=False, default=list)
+    filters_json = Column(JSON, nullable=False, default=dict)
+    viewer_state_json = Column(JSON, nullable=False, default=dict)
+    tags_json = Column(JSON, nullable=False, default=list)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+
+class FrustraMPNNExport(Base):
+    """Persisted bounded export over authoritative FrustraMPNN rows."""
+
+    __tablename__ = "frustrampnn_exports"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["parent_job_id", "invocation_id"],
+            ["frustrampnn_results.parent_job_id", "frustrampnn_results.invocation_id"],
+            name="fk_frustrampnn_exports_result",
+        ),
+        Index("ix_frustrampnn_exports_owner_job", "created_by", "parent_job_id"),
+    )
+
+    export_id = Column(String(36), primary_key=True)
+    review_id = Column(String(36), ForeignKey("frustrampnn_reviews.review_id"), nullable=False)
+    parent_job_id = Column(String(36), nullable=False)
+    invocation_id = Column(String(128), nullable=False)
+    created_by = Column(String(128), nullable=False)
+    format = Column(String(8), nullable=False)
+    content_sha256 = Column(String(64), nullable=False)
+    row_count = Column(Integer, nullable=False)
+    total_matching_rows = Column(Integer, nullable=False)
+    complete = Column(Boolean, nullable=False)
+    payload_json = Column(JSON, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class FrustraMPNNReviewArtifact(Base):
+    """Verified capture bytes bound to one saved FrustraMPNN review."""
+
+    __tablename__ = "frustrampnn_review_artifacts"
+    __table_args__ = (
+        Index("ix_frustrampnn_review_artifacts_owner_review", "created_by", "review_id"),
+    )
+
+    artifact_id = Column(String(36), primary_key=True)
+    review_id = Column(String(36), ForeignKey("frustrampnn_reviews.review_id"), nullable=False)
+    parent_job_id = Column(String(36), ForeignKey("jobs.id"), nullable=False)
+    created_by = Column(String(128), nullable=False)
+    role = Column(String(32), nullable=False)
+    media_type = Column(String(64), nullable=False)
+    content_sha256 = Column(String(64), nullable=False)
+    size_bytes = Column(Integer, nullable=False)
+    payload_blob = Column(LargeBinary, nullable=False)
+    generation_json = Column(JSON, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
@@ -1358,6 +1808,79 @@ class JobArtifact(Base):
     created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
 
 
+class RFD3LocalRedesignRequest(Base):
+    """Immutable canonical request and lifecycle projection for local redesign."""
+
+    __tablename__ = "rfd3_local_redesign_requests"
+
+    request_id = Column(String(36), primary_key=True)
+    job_id = Column(String(36), ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    schema_version = Column(Integer, nullable=False, default=1)
+    request_sha256 = Column(String(64), nullable=False, index=True)
+    profile_id = Column(String(128), nullable=False, index=True)
+    profile_registry_sha256 = Column(String(64), nullable=False, index=True)
+    redesign_mode = Column(String(64), nullable=False, index=True)
+    sequence_policy = Column(String(64), nullable=False)
+    status = Column(String(32), nullable=False, default="prepared", index=True)
+    request_json = Column(JSON, nullable=False)
+    preparation_receipt_json = Column(JSON, nullable=True)
+    runtime_identity_json = Column(JSON, nullable=True)
+    result_manifest_sha256 = Column(String(64), nullable=True, index=True)
+    failure_receipt_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    terminal_at = Column(DateTime, nullable=True)
+
+
+class RFD3LocalRedesignCandidate(Base):
+    """Typed candidate projection backed by one native RFD3 result manifest."""
+
+    __tablename__ = "rfd3_local_redesign_candidates"
+    __table_args__ = (
+        UniqueConstraint("request_id", "candidate_id", name="uq_rfd3_local_redesign_candidate"),
+        Index("ix_rfd3_local_redesign_candidate_status", "request_id", "status"),
+    )
+
+    id = Column(String(96), primary_key=True)
+    request_id = Column(
+        String(36), ForeignKey("rfd3_local_redesign_requests.request_id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    candidate_id = Column(String(128), nullable=False)
+    result_set = Column(String(128), nullable=False, default="rfd3_local_redesign_candidates")
+    stage = Column(String(64), nullable=False, default="backbone")
+    status = Column(String(32), nullable=False, index=True)
+    artifact_manifest_sha256 = Column(String(64), nullable=False, index=True)
+    metrics_json = Column(JSON, nullable=False, default=dict)
+    metadata_json = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class RFD3LocalRedesignArtifact(Base):
+    """One exact native or derived artifact for a local-redesign candidate."""
+
+    __tablename__ = "rfd3_local_redesign_artifacts"
+    __table_args__ = (
+        UniqueConstraint("request_id", "relative_path", name="uq_rfd3_local_redesign_artifact_path"),
+        Index("ix_rfd3_local_redesign_artifact_role", "request_id", "role"),
+    )
+
+    artifact_id = Column(String(96), primary_key=True)
+    request_id = Column(
+        String(36), ForeignKey("rfd3_local_redesign_requests.request_id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    candidate_id = Column(String(128), nullable=True, index=True)
+    role = Column(String(96), nullable=False, index=True)
+    relative_path = Column(String(1000), nullable=False)
+    storage_path = Column(String(2000), nullable=False)
+    content_sha256 = Column(String(64), nullable=False, index=True)
+    size_bytes = Column(Integer, nullable=False)
+    media_type = Column(String(128), nullable=False)
+    metadata_json = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class MdEvent(Base):
     __tablename__ = "md_events"
     __table_args__ = (UniqueConstraint("idempotency_key", name="uq_md_event_idempotency"),)
@@ -1408,16 +1931,20 @@ async def _ensure_schema(conn):
     await _ensure_table_columns(conn, "conformational_mapping_state_landscape_analysis_headers", ConformationalMappingStateLandscapeAnalysisHeader.__table__.columns)
     await _ensure_table_columns(conn, "conformational_mapping_state_landscape_analysis_pairs", ConformationalMappingStateLandscapeAnalysisPair.__table__.columns)
     await _ensure_table_columns(conn, "conformational_mapping_state_landscape_analysis_rows", ConformationalMappingStateLandscapeAnalysisRow.__table__.columns)
+    await _ensure_table_columns(conn, "rfd3_local_redesign_requests", RFD3LocalRedesignRequest.__table__.columns)
+    await _ensure_table_columns(conn, "rfd3_local_redesign_candidates", RFD3LocalRedesignCandidate.__table__.columns)
+    await _ensure_table_columns(conn, "rfd3_local_redesign_artifacts", RFD3LocalRedesignArtifact.__table__.columns)
     await _ensure_table_columns(conn, "nucleotide_sequences", NucleotideSequence.__table__.columns)
     await _ensure_table_columns(conn, "primers", Primer.__table__.columns)
     await _backfill_frustrampnn_summary_projections(conn)
     await _backfill_design_review_contracts(conn)
     await _ensure_sqlite_indexes(conn)
+    await _ensure_ngs_reference_set_immutability(conn)
 
 
 async def _backfill_frustrampnn_summary_projections(conn):
     """Repair shared Design analytics from validated immutable summaries."""
-    from services.frustrampnn.contracts import validate_schema
+    from services.frustrampnn.contracts import project_summary_artifact
 
     result = await conn.execute(text(
         "SELECT d.id AS design_id, r.invocation_id, r.summary_json "
@@ -1435,7 +1962,7 @@ async def _backfill_frustrampnn_summary_projections(conn):
         summary = row["summary_json"]
         if isinstance(summary, str):
             summary = json.loads(summary)
-        validate_schema("frustrampnn_summary_v1", summary)
+        summary = project_summary_artifact(summary)
         await conn.execute(
             text(
                 "UPDATE designs SET frustration_high_count = :high_count, "
@@ -1529,6 +2056,99 @@ async def _backfill_design_review_contracts(conn):
 async def _ensure_sqlite_indexes(conn):
     """Install indexes required by high-volume list/count paths on legacy DBs."""
     await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_designs_job_id ON designs (job_id)"))
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_ngs_reference_set_manifests_source_job_id "
+            "ON ngs_reference_set_manifests (source_job_id)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_ngs_reference_set_manifests_manifest_sha256 "
+            "ON ngs_reference_set_manifests (manifest_sha256)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_ngs_reference_set_mappings_reference_set_id "
+            "ON ngs_reference_set_mappings (reference_set_id)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_ngs_reference_set_mappings_unit_id "
+            "ON ngs_reference_set_mappings (unit_id)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_ngs_pooled_reference_targets_reference_set_id "
+            "ON ngs_pooled_reference_targets (reference_set_id)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_ngs_pooled_reference_targets_target_id "
+            "ON ngs_pooled_reference_targets (target_id)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_ngs_pooled_assignment_releases_assignment_job_id "
+            "ON ngs_pooled_assignment_releases (assignment_job_id)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_ngs_pooled_assignment_releases_reference_set_id "
+            "ON ngs_pooled_assignment_releases (reference_set_id)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_ngs_pooled_assignment_release_targets_release_id "
+            "ON ngs_pooled_assignment_release_targets (release_id)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_ngs_pooled_assignment_release_targets_assignment_job_id "
+            "ON ngs_pooled_assignment_release_targets (assignment_job_id)"
+        )
+    )
+
+
+async def _ensure_ngs_reference_set_immutability(conn):
+    """Install append-only guards for the server-owned NGS reference-set rows."""
+    for table_name, label in (
+        ("ngs_reference_set_manifests", "NGS reference-set manifests"),
+        ("ngs_reference_set_mappings", "NGS reference-set mappings"),
+        ("ngs_pooled_reference_targets", "NGS pooled reference targets"),
+        ("ngs_pooled_assignment_releases", "NGS pooled assignment releases"),
+        ("ngs_pooled_assignment_release_targets", "NGS pooled assignment release targets"),
+    ):
+        await conn.execute(
+            text(
+                f"""
+                CREATE TRIGGER IF NOT EXISTS "trg_{table_name}_no_update"
+                BEFORE UPDATE ON "{table_name}"
+                BEGIN
+                    SELECT RAISE(ABORT, '{label} are immutable');
+                END
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                f"""
+                CREATE TRIGGER IF NOT EXISTS "trg_{table_name}_no_delete"
+                BEFORE DELETE ON "{table_name}"
+                BEGIN
+                    SELECT RAISE(ABORT, '{label} are immutable');
+                END
+                """
+            )
+        )
 
 
 async def _ensure_table_columns(conn, table_name: str, columns):

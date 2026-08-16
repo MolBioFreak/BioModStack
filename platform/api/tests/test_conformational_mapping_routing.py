@@ -272,6 +272,75 @@ def _request_params(backend: str = "protenix_v2_ensemble") -> dict[str, object]:
     return params
 
 
+def test_materialized_request_persists_bounded_run_record(tmp_path: Path) -> None:
+    params = _request_params("external_import")
+    params["run_record"] = {
+        "name": "Open and closed comparison",
+        "notes": "Preserve the complete structure context.",
+        "selected_input": {
+            "source_id": "cm-source-1",
+            "source_kind": "structure_upload",
+            "source_label": "open-state.cif",
+            "source_sha256": "a" * 64,
+            "model_id": "1",
+            "chain_ids": ["A", "B"],
+        },
+    }
+
+    materialized = materialize_trusted_internal_request(
+        params,
+        output_dir=tmp_path,
+        request_id="00000000-0000-4000-8000-000000000799",
+    )
+    request = json.loads(materialized.request_path.read_text(encoding="utf-8"))
+
+    assert request["run_record"] == params["run_record"]
+    validate_schema("cm_request_v1", request)
+
+
+def test_snapshot_chain_context_uses_schema_mapping_fields() -> None:
+    fixture = json.loads(
+        (API_ROOT / "tests" / "fixtures" / "conformational_mapping" / "schemas" / "positive" / "all_schemas.json").read_text()
+    )
+    assert cm_router._snapshot_chain_ids([fixture["cm_complex_snapshot_v1"]]) == ["A", "B"]
+
+
+def test_external_import_binding_reseals_authoritative_input_context(tmp_path: Path) -> None:
+    params = _request_params("external_import")
+    params["run_record"] = {
+        "name": "Normalized import",
+        "notes": "",
+        "selected_input": {
+            "source_id": "source-before-normalization",
+            "source_kind": "structure_upload",
+            "source_label": "Input",
+            "source_sha256": "1" * 64,
+        },
+    }
+    materialized = materialize_trusted_internal_request(
+        params,
+        output_dir=tmp_path,
+        request_id="00000000-0000-4000-8000-000000000601",
+    )
+    selected_input = {
+        "source_id": "source-before-normalization",
+        "source_kind": "structure_upload",
+        "source_label": "Input",
+        "source_sha256": "1" * 64,
+        "model_id": "2",
+        "chain_ids": ["B"],
+    }
+    request, plan = bind_materialized_source_snapshot(
+        materialized,
+        source_snapshot_sha256="a" * 64,
+        selected_input=selected_input,
+    )
+    assert request["run_record"]["selected_input"] == selected_input
+    assert request["source_snapshot_sha256"] == "a" * 64
+    assert plan["request_sha256"] == request["request_sha256"]
+    validate_schema("cm_request_v1", request)
+
+
 def _flag_value(command: list[str], flag: str) -> str:
     return command[command.index(flag) + 1]
 
@@ -337,8 +406,8 @@ def test_cm3_002_launcher_exposes_only_typed_contract_controls() -> None:
         "ordered_seeds",
         "samples_per_seed",
         "runtime_policy",
-        "analysis_policy",
     }
+    assert "analysis_policy" not in launcher_controls
     assert launcher_controls.isdisjoint(
         {"source", "created_by", "path", "staged_path", "runtime_identity"}
     )
@@ -373,7 +442,7 @@ def test_cm3_003_matrix_routes_canonical_entrypoint(
         command = nextflow.build_nextflow_command(
             "conformational_mapping",
             "map",
-            materialized.launch_params,
+            {**materialized.launch_params, "gpu_id": 3},
             str(tmp_path / backend),
             job_id=f"cm-{backend}",
         )
@@ -434,12 +503,15 @@ def test_cm3_004_cm_namespace_normalization(
     command = nextflow.build_nextflow_command(
         "conformational_mapping",
         "map",
-        materialized.launch_params,
+        {**materialized.launch_params, "gpu_id": 3},
         str(tmp_path),
         job_id="cm-normalized",
     )
     forwarded_flags = {token for token in command if token.startswith("--")}
-    assert forwarded_flags == {"--out_dir", "--job_id", "--cm_request_path"}
+    assert forwarded_flags == {
+        "--out_dir", "--job_id", "--cm_request_path", "--run_frustrampnn",
+        "--gpu_id", "--frustrampnn_physical_gpu_id",
+    }
     assert not any(flag.startswith("--cn_") for flag in forwarded_flags)
     assert "--ordered_seeds" not in forwarded_flags
     assert "--generated_json_ordered_seeds" not in forwarded_flags
@@ -536,6 +608,70 @@ def test_cm3_004c_task_invariants_fail_before_schedule(
     settings.update(mutation)
     params["confornets"] = settings
     with pytest.raises(ConformationalMappingRequestError, match=message):
+        validate_request_params(params)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ({"saved_steps": [5, 10]}, "exactly one saved step"),
+        ({"saved_steps": [5]}, "must equal max_steps"),
+        ({"confornet_count": 2}, "exactly one ConforNet"),
+    ],
+)
+def test_cm_mse_cardinality_axes_are_canonical(
+    mutation: dict[str, object], message: str
+) -> None:
+    params = _request_params("confornets")
+    settings: dict[str, object] = dict(params["confornets"])  # type: ignore[arg-type]
+    settings.update({
+        "task": "mse",
+        "references": [{
+            "reference_id": "reference-a",
+            "staged_path": "registered/reference-a/content.cif",
+            "content_sha256": "e" * 64,
+            "state": "reference",
+            "source": "registered_artifact",
+        }],
+        "saved_steps": [10],
+        "confornet_count": 1,
+    })
+    settings.update(mutation)
+    params["confornets"] = settings
+    with pytest.raises(ConformationalMappingRequestError, match=message):
+        validate_request_params(params)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"runs": 2},
+        {"saved_steps": [1]},
+        {"confornet_count": 2},
+    ],
+)
+def test_cm_transfer_coordinate_axes_match_runtime_emission(mutation: dict[str, object]) -> None:
+    params = _request_params("confornets")
+    settings: dict[str, object] = dict(params["confornets"])  # type: ignore[arg-type]
+    settings.update({
+        "task": "transfer",
+        "runs": 1,
+        "saved_steps": [0],
+        "confornet_count": 1,
+        "references": [],
+        "transfer_source": {
+            "kind": "confornet_state",
+            "staged_path": "registered/transfer/state.pt",
+            "content_sha256": "f" * 64,
+            "source_test_cases": "",
+        },
+    })
+    settings.update(mutation)
+    params["confornets"] = settings
+    with pytest.raises(
+        ConformationalMappingRequestError,
+        match="one run, saved step 0, and one ConforNet",
+    ):
         validate_request_params(params)
 
 
@@ -1036,8 +1172,10 @@ def test_cm3_007_unknown_backend_fails() -> None:
     workflow_text = (REPO_ROOT / "workflows" / "conformational_mapping.nf").read_text(
         encoding="utf-8"
     )
-    assert "switch (request.backend)" in workflow_text
-    assert "default:" in workflow_text
+    assert "request.backend == 'protenix_v2_ensemble'" in workflow_text
+    assert "request.backend == 'confornets'" in workflow_text
+    assert "request.backend == 'external_import'" in workflow_text
+    assert "else {" in workflow_text
     assert "Unknown conformational-mapping backend" in workflow_text
     assert "dynamic include" not in workflow_text.lower()
     assert "fallback" not in workflow_text.lower()

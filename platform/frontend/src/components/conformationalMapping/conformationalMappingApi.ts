@@ -1,6 +1,7 @@
 import axios from 'axios';
 
 import { api, type JobLogs } from '../../lib/api';
+import type { FrustraMpnnRequestedSettings } from '../frustrampnn/frustraMpnnSettingsState';
 
 export type CmBackend = 'protenix_v2_ensemble' | 'confornets' | 'external_import';
 export type CmSourceKind =
@@ -20,6 +21,22 @@ export interface CmSource {
     sha256: string;
     bytes: number;
     metadata: Record<string, unknown>;
+    managed_checkpoint?: boolean;
+    authority_receipt?: {
+        schema_name: 'cm_source_authority_receipt';
+        schema_version: 1;
+        source_id: string;
+        source_kind: CmSourceKind;
+        content_sha256: string;
+        authority_kind: 'complex_snapshot_normalization' | 'rcsb_download' | 'run_artifact' | 'completed_run_artifact';
+        payload: Record<string, unknown>;
+        receipt_sha256: string;
+    } | null;
+    submission_policy?: {
+        chain_id: string;
+        test_case_id: string;
+        benchmark_name: string;
+    } | null;
     created_at?: string;
 }
 
@@ -34,6 +51,15 @@ export type CmRuntimePolicy =
     | { use_default_params: true }
     | { use_default_params: false; n_cycle: number; n_step: number };
 
+export const compileCmRuntimePolicy = (
+    backend: CmBackend,
+    useDefaults: boolean,
+    nCycle: number,
+    nStep: number,
+): CmRuntimePolicy => backend !== 'protenix_v2_ensemble' || useDefaults
+    ? { use_default_params: true }
+    : { use_default_params: false, n_cycle: nCycle, n_step: nStep };
+
 export interface CmAnalysisPolicy {
     sign_zero_epsilon: number;
     clash_detector_id: 'bms_clash';
@@ -47,14 +73,12 @@ export interface CmAnalysisPolicy {
 }
 
 export interface CmConfornetsControls {
-    chain_id: string;
     task: CmTask;
-    test_case_id: string;
-    benchmark_name: string;
     runs: number;
     saved_steps: number[];
     confornet_count: number;
     samples: number;
+    output_count?: number;
     max_steps: number;
     num_recycles: number;
     num_diffusion_steps: number;
@@ -66,8 +90,18 @@ export interface CmConfornetsControls {
     compute_evaluation: boolean;
 }
 
+export type CmBackendCoordinates =
+    | { backend: 'protenix_v2_ensemble'; target_id: string; ordered_seed: number; sample_index: number }
+    | { backend: 'confornets'; target_id: string; task: string; test_case_id: string; reference_id: string | null; run_index: number; saved_step: number; confornet_index: number; sample_index: number }
+    | { backend: 'external_import'; target_id: string; staged_index: number; source_content_sha256: string; staged_receipt_sha256: string };
+
+export type CmStateLandscapeComparison =
+    | { mode: 'pairwise'; target_id: string; scope: 'all_within_target' }
+    | { mode: 'reference'; target_id: string; scope: 'all_other_within_target'; reference_backend_coordinates: CmBackendCoordinates };
+
 export interface CmSubmitRequest {
     name: string;
+    notes: string;
     idempotency_key: string;
     backend: CmBackend;
     ordered_seeds: number[];
@@ -75,13 +109,11 @@ export interface CmSubmitRequest {
     feature_policy: CmFeaturePolicy;
     runtime_policy: CmRuntimePolicy;
     analysis_policy: CmAnalysisPolicy;
-    state_landscape_comparison?: {
-        mode: 'pairwise';
-        target_id: string;
-        scope: 'all_within_target';
-    };
+    frustrampnn_settings: FrustraMpnnRequestedSettings;
+    state_landscape_comparison?: CmStateLandscapeComparison;
     registered_snapshot_id?: string;
-    registered_artifact_ids?: string[];
+    /** Bounded wire collection containing exactly one completed-run or uploaded mmCIF source. */
+    registered_artifact_ids?: [string];
     registered_sequence_id?: string;
     registered_reference_ids?: string[];
     registered_checkpoint_id?: string;
@@ -101,6 +133,60 @@ export interface CmSubmitReceipt {
     idempotent_retry?: boolean;
 }
 
+export interface CmReusableArtifact {
+    artifact_id: string; name?: string; role?: string; artifact_type?: string; format: string;
+    media_type?: string; candidate_id?: string | null;
+    sha256: string; bytes: number; available?: boolean;
+    model_id?: string | null; sample_id?: string | null; chain_ids?: string[]; entity_ids?: string[];
+    backend_coordinates?: CmBackendCoordinates | null;
+}
+export interface CmReusableRun {
+    run_id?: string; request_id?: string; job_id: string; run_name?: string; name?: string;
+    workflow: string; status: string; backend?: CmBackend; completed_at?: string | null;
+    artifacts: CmReusableArtifact[];
+}
+export interface CmRcsbEntry {
+    accession: string; title: string; resolution?: number | null; organism?: string | null;
+    method?: string | null; release_date?: string | null;
+    models: Array<{ model_id: string; label: string }>;
+    samples: Array<{ sample_id: string; label: string }>;
+    chains: Array<{ chain_id: string; label: string; entity_id: string; entity_type: string; residue_count: number }>;
+    entities: Array<{ entity_id: string; label: string; entity_type: string; residue_count: number }>;
+    required_selection: Array<'model_id' | 'sample_id' | 'chain_ids' | 'entity_ids'>;
+}
+export interface CmRcsbSearchResponse { query: string; total_count: number; results: CmRcsbEntry[] }
+export interface CmRcsbSelection { accession: string; model_id?: string; sample_id?: string; chain_ids?: string[]; entity_ids?: string[] }
+
+export const CANONICAL_CM_ANALYSIS_POLICY: CmAnalysisPolicy = Object.freeze({
+    sign_zero_epsilon: 0.000001,
+    clash_detector_id: 'bms_clash',
+    clash_detector_version: '1',
+    outer_support_minimum: 0.8,
+    inner_support_minimum: 0.6,
+    sign_consistency_minimum: 0.8,
+    clash_free_minimum: 0.9,
+    rank_stability_minimum: 0.6,
+    minimum_common_ranked_universe_size: 3,
+});
+
+export interface CmSelectedInputRecord {
+    source_id: string;
+    source_kind: string;
+    source_label: string;
+    source_sha256: string;
+    provider?: string;
+    accession?: string;
+    model_id?: string;
+    sample_id?: string;
+    chain_ids?: string[];
+}
+
+export interface CmRunRecord {
+    name: string;
+    notes: string;
+    selected_input: CmSelectedInputRecord;
+}
+
 export interface CmStatus {
     request_id: string;
     job_id: string;
@@ -111,6 +197,7 @@ export interface CmStatus {
     failure_receipt: Record<string, unknown> | null;
     retry_eligible: boolean;
     result_contract_id: string;
+    run_record: CmRunRecord | null;
 }
 
 export interface CmProgress {
@@ -272,11 +359,19 @@ export interface CmStateLandscapeAnalysisRowsPage {
 export interface CmLandscapeRow {
     candidate_id: string;
     entity_instance_id: string;
+    source_entity_id: string | null;
+    label_asym_id: string | null;
+    label_seq_id: number | null;
     auth_asym_id: string;
     auth_seq_id: string;
     insertion_code: string;
     sequence_index: number;
     wt: string;
+    pdb_chain_id: string;
+    pdb_residue_id: number | null;
+    pdb_insertion_code: string | null;
+    model_position: number;
+    residue_name: string | null;
     mutation_aa: string;
     score: number | null;
     class: string | null;
@@ -310,6 +405,9 @@ export const cmApiError = (value: unknown, fallback: string): string => {
 export const listCmSources = async (): Promise<CmSource[]> =>
     (await api.get<{ sources: CmSource[] }>('/api/conformational-mapping/sources')).data.sources;
 
+export const cmSourceContentUrl = (sourceId: string): string =>
+    `/api/conformational-mapping/sources/${encodeURIComponent(sourceId)}/content`;
+
 export const registerCmSource = async (
     sourceKind: CmSourceKind,
     file: File,
@@ -322,8 +420,165 @@ export const registerCmSource = async (
     return (await api.post<CmSource>('/api/conformational-mapping/sources', body)).data;
 };
 
+export const registerCmRcsbSelection = async (selection: CmRcsbSelection): Promise<CmSource> => {
+    const accession = selection.accession.trim().toUpperCase();
+    const response = await api.post<CmSource>(
+        `/api/conformational-mapping/sources/rcsb/${encodeURIComponent(accession)}`,
+        { ...selection, accession },
+    );
+    return response.data;
+};
+
+/** Compatibility entry point for callers that only have an accession. */
 export const registerCmRcsbMmcif = async (pdbId: string): Promise<CmSource> =>
-    (await api.post<CmSource>(`/api/conformational-mapping/sources/rcsb/${encodeURIComponent(pdbId.trim().toUpperCase())}`)).data;
+    registerCmRcsbSelection({ accession: pdbId });
+
+export const listCmReusableRuns = async (): Promise<CmReusableRun[]> =>
+    (await api.get<{ runs: CmReusableRun[] }>('/api/conformational-mapping/runs')).data.runs;
+export const registerCmRunArtifact = async (runId: string, artifactId: string): Promise<CmSource> => {
+    const response = await api.post<CmSource>(
+        `/api/conformational-mapping/runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifactId)}/sources`,
+    );
+    return response.data;
+};
+
+const RCSB_REQUIRED_SELECTION = ['model_id', 'sample_id', 'chain_ids', 'entity_ids'] as const;
+
+const rcsbContractError = (detail: string): Error =>
+    new Error(`RCSB search contract error: ${detail}`);
+
+const rcsbObject = (value: unknown, detail: string): Record<string, unknown> => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw rcsbContractError(detail);
+    return value as Record<string, unknown>;
+};
+
+const rcsbString = (value: unknown, detail: string): string => {
+    if (typeof value !== 'string' || !value.trim()) throw rcsbContractError(detail);
+    return value;
+};
+
+const rcsbCollection = <T>(
+    value: unknown,
+    name: string,
+    parse: (item: Record<string, unknown>, index: number) => T,
+): T[] => {
+    if (!Array.isArray(value) || value.length === 0) {
+        throw rcsbContractError(`${name} must be a non-empty server-defined collection`);
+    }
+    return value.map((item, index) => parse(rcsbObject(item, `${name}[${index}] must be an object`), index));
+};
+
+const uniqueRcsbIds = (values: string[], name: string): void => {
+    if (new Set(values).size !== values.length) throw rcsbContractError(`${name} identities must be unique`);
+};
+
+const parseCmRcsbEntry = (value: unknown): CmRcsbEntry => {
+    const entry = rcsbObject(value, 'each entry must be an object');
+    const accession = rcsbString(entry.accession, 'entry accession is required').toUpperCase();
+    if (!/^[A-Z0-9]{4}$/.test(accession)) throw rcsbContractError('entry accession must be four letters or digits');
+    const title = rcsbString(entry.title, `entry ${accession} title is required`);
+    const models = rcsbCollection(entry.models, `entry ${accession} models`, (item, index) => ({
+        model_id: rcsbString(item.model_id, `entry ${accession} models[${index}].model_id is required`),
+        label: rcsbString(item.label, `entry ${accession} models[${index}].label is required`),
+    }));
+    const samples = rcsbCollection(entry.samples, `entry ${accession} samples`, (item, index) => ({
+        sample_id: rcsbString(item.sample_id, `entry ${accession} samples[${index}].sample_id is required`),
+        label: rcsbString(item.label, `entry ${accession} samples[${index}].label is required`),
+    }));
+    const entities = rcsbCollection(entry.entities, `entry ${accession} entities`, (item, index) => {
+        const residueCount = item.residue_count;
+        if (!Number.isInteger(residueCount) || Number(residueCount) < 1) {
+            throw rcsbContractError(`entry ${accession} entities[${index}].residue_count must be a positive integer`);
+        }
+        return {
+            entity_id: rcsbString(item.entity_id, `entry ${accession} entities[${index}].entity_id is required`),
+            label: rcsbString(item.label, `entry ${accession} entities[${index}].label is required`),
+            entity_type: rcsbString(item.entity_type, `entry ${accession} entities[${index}].entity_type is required`),
+            residue_count: Number(residueCount),
+        };
+    });
+    const chains = rcsbCollection(entry.chains, `entry ${accession} chains`, (item, index) => {
+        const residueCount = item.residue_count;
+        if (!Number.isInteger(residueCount) || Number(residueCount) < 1) {
+            throw rcsbContractError(`entry ${accession} chains[${index}].residue_count must be a positive integer`);
+        }
+        return {
+            chain_id: rcsbString(item.chain_id, `entry ${accession} chains[${index}].chain_id is required`),
+            label: rcsbString(item.label, `entry ${accession} chains[${index}].label is required`),
+            entity_id: rcsbString(item.entity_id, `entry ${accession} chains[${index}].entity_id is required`),
+            entity_type: rcsbString(item.entity_type, `entry ${accession} chains[${index}].entity_type is required`),
+            residue_count: Number(residueCount),
+        };
+    });
+    uniqueRcsbIds(models.map((item) => item.model_id), `entry ${accession} model`);
+    uniqueRcsbIds(samples.map((item) => item.sample_id), `entry ${accession} sample`);
+    uniqueRcsbIds(chains.map((item) => item.chain_id), `entry ${accession} chain`);
+    uniqueRcsbIds(entities.map((item) => item.entity_id), `entry ${accession} entity`);
+    const entityById = new Map(entities.map((item) => [item.entity_id, item]));
+    const entityIds = new Set(entityById.keys());
+    const chainEntityIds = new Set(chains.map((item) => item.entity_id));
+    if (chains.some((chain) => {
+        const entity = entityById.get(chain.entity_id);
+        return !entity
+            || entity.entity_type !== chain.entity_type
+            || entity.residue_count !== chain.residue_count;
+    })
+        || entityIds.size !== chainEntityIds.size
+        || [...entityIds].some((entityId) => !chainEntityIds.has(entityId))) {
+        throw rcsbContractError(`entry ${accession} chain/entity collections are inconsistent`);
+    }
+    const requiredSelection = entry.required_selection;
+    if (!Array.isArray(requiredSelection)
+        || requiredSelection.some((requirement) => typeof requirement !== 'string')
+        || requiredSelection.length !== RCSB_REQUIRED_SELECTION.length
+        || new Set(requiredSelection).size !== RCSB_REQUIRED_SELECTION.length
+        || RCSB_REQUIRED_SELECTION.some((requirement) => !requiredSelection.includes(requirement))) {
+        throw rcsbContractError(`entry ${accession} required_selection must explicitly require model, sample, chain, and entity`);
+    }
+    const resolution = entry.resolution;
+    if (resolution != null && (typeof resolution !== 'number' || !Number.isFinite(resolution) || resolution <= 0)) {
+        throw rcsbContractError(`entry ${accession} resolution must be a positive finite number or null`);
+    }
+    const optionalString = (field: string, raw: unknown): string | null => {
+        if (raw == null) return null;
+        if (typeof raw !== 'string') throw rcsbContractError(`entry ${accession} ${field} must be a string or null`);
+        return raw;
+    };
+    const methods = entry.experimental_methods;
+    if (methods != null && (!Array.isArray(methods) || methods.some((method) => typeof method !== 'string' || !method))) {
+        throw rcsbContractError(`entry ${accession} experimental_methods must contain source-defined strings`);
+    }
+    return {
+        accession,
+        title,
+        method: optionalString('method', entry.method ?? (Array.isArray(methods) ? methods[0] : null)),
+        resolution: resolution == null ? null : resolution,
+        organism: optionalString('organism', entry.organism),
+        release_date: optionalString('release_date', entry.release_date ?? entry.deposition_date),
+        models,
+        samples,
+        chains,
+        entities,
+        required_selection: [...RCSB_REQUIRED_SELECTION],
+    };
+};
+
+export const searchCmRcsb = async (query: string): Promise<CmRcsbSearchResponse> => {
+    const normalized = query.trim();
+    const params = /^[A-Za-z0-9]{4}$/.test(normalized)
+        ? { accession: normalized.toUpperCase() }
+        : { keyword: normalized };
+    const response = await api.get<unknown>('/api/conformational-mapping/sources/rcsb/search', { params });
+    const body = rcsbObject(response.data, 'response must be an object');
+    const responseQuery = rcsbString(body.query, 'response query is required');
+    if (!Array.isArray(body.entries)) throw rcsbContractError('response entries must be an array');
+    const entries = body.entries.map(parseCmRcsbEntry);
+    return {
+        query: responseQuery,
+        total_count: entries.length,
+        results: entries,
+    };
+};
 
 export const submitCmRequest = async (payload: CmSubmitRequest): Promise<CmSubmitReceipt> =>
     (await api.post<CmSubmitReceipt>('/api/conformational-mapping/requests', payload)).data;

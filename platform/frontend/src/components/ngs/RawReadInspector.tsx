@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { fetchOntRawSignalWaveform, requestOntRawSignalWaveform, type OntRawSignalWaveform } from '../../lib/api';
+
 import {
     buildFastqDownload,
     createLatestRequestGuard,
@@ -20,6 +22,7 @@ interface RawReadInspectorProps {
     jobId: string;
     sessionId: string;
     currentLocus?: ReadLocus | null;
+    rawSignalBinding?: { runId: string; observedGeneration: number; representationId: string } | null;
 }
 
 function requestWasAborted(reason: unknown): boolean {
@@ -27,7 +30,7 @@ function requestWasAborted(reason: unknown): boolean {
     return name === 'AbortError' || name === 'CanceledError';
 }
 
-export function RawReadInspector({ jobId, sessionId, currentLocus = null }: RawReadInspectorProps) {
+export function RawReadInspector({ jobId, sessionId, currentLocus = null, rawSignalBinding = null }: RawReadInspectorProps) {
     const [query, setQuery] = useState('');
     const [debouncedQuery, setDebouncedQuery] = useState('');
     const [contig, setContig] = useState('');
@@ -39,6 +42,8 @@ export function RawReadInspector({ jobId, sessionId, currentLocus = null }: RawR
     const [error, setError] = useState<string | null>(null);
     const [scanTruncated, setScanTruncated] = useState(false);
     const [selected, setSelected] = useState<AlignmentRead | null>(null);
+    const [waveform, setWaveform] = useState<OntRawSignalWaveform | null>(null);
+    const [waveformError, setWaveformError] = useState<string | null>(null);
     const listGuardRef = useRef(createLatestRequestGuard());
     const detailGuardRef = useRef(createLatestRequestGuard());
     const listAbortRef = useRef<AbortController | null>(null);
@@ -77,6 +82,18 @@ export function RawReadInspector({ jobId, sessionId, currentLocus = null }: RawR
         }
         return { contig: contig.trim(), start: parsedStart, end: parsedEnd };
     }, [contig, end, start]);
+
+    const waveformPoints = useMemo(() => {
+        const samples = waveform?.state === 'ready' ? waveform.samples : null;
+        if (!samples?.length) return '';
+        const min = Math.min(...samples);
+        const max = Math.max(...samples);
+        return samples.map((value, index) => {
+            const x = samples.length > 1 ? (index * 400) / (samples.length - 1) : 0;
+            const y = max > min ? 98 - ((value - min) * 96) / (max - min) : 50;
+            return `${x},${y}`;
+        }).join(' ');
+    }, [waveform]);
 
     const loadPage = useCallback(async (nextCursor?: string) => {
         listAbortRef.current?.abort();
@@ -122,12 +139,31 @@ export function RawReadInspector({ jobId, sessionId, currentLocus = null }: RawR
         setLoading(true);
         setError(null);
         setSelected(null);
+        setWaveform(null);
+        setWaveformError(null);
         try {
             const detail = await fetchAlignmentRead(jobId, sessionId, readId, {
                 ...parsedLocus,
                 signal: controller.signal,
             });
             if (detailGuardRef.current.isCurrent(requestToken)) setSelected(detail);
+            if (rawSignalBinding && detailGuardRef.current.isCurrent(requestToken)) {
+                let current = await requestOntRawSignalWaveform(
+                    rawSignalBinding.runId,
+                    rawSignalBinding.observedGeneration,
+                    rawSignalBinding.representationId,
+                    readId,
+                );
+                for (let attempt = 0; attempt < 30 && (current.state === 'requested' || current.state === 'running'); attempt += 1) {
+                    await new Promise((resolve) => window.setTimeout(resolve, 1000));
+                    if (!detailGuardRef.current.isCurrent(requestToken)) return;
+                    current = await fetchOntRawSignalWaveform(current.lookup_id);
+                }
+                if (detailGuardRef.current.isCurrent(requestToken)) {
+                    setWaveform(current);
+                    if (current.state !== 'ready') setWaveformError(current.reason_code);
+                }
+            }
         } catch (reason) {
             if (!requestWasAborted(reason) && detailGuardRef.current.isCurrent(requestToken)) {
                 if (isAlignmentReadScanTruncatedError(reason)) setScanTruncated(true);
@@ -166,7 +202,9 @@ export function RawReadInspector({ jobId, sessionId, currentLocus = null }: RawR
         <aside className="absolute right-2 top-2 bottom-2 z-20 w-[410px] overflow-hidden rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)]/95 shadow-xl flex flex-col">
             <div className="px-3 py-2 border-b border-[var(--border-primary)]">
                 <div className="text-xs font-semibold text-[var(--text-primary)]">Basecalled read inspector</div>
-                <div className="text-[10px] text-amber-300">Raw electrical signal is unavailable in this BAM-backed session.</div>
+                <div className={`text-[10px] ${rawSignalBinding ? 'text-emerald-300' : 'text-amber-300'}`}>
+                    {rawSignalBinding ? 'Indexed BLOW5 waveform lookup is available for this exact run generation.' : 'Raw electrical signal needs an exact indexed-BLOW5 run binding.'}
+                </div>
                 <div className="flex gap-1 mt-1">
                     <input
                         value={query}
@@ -214,6 +252,21 @@ export function RawReadInspector({ jobId, sessionId, currentLocus = null }: RawR
                     <div className="text-[var(--text-secondary)] mt-1">
                         {selected.contig || 'unmapped'} · {selected.start_1based ?? 'n/a'} · {selected.strand} · MAPQ {selected.mapq ?? 'n/a'} · {selected.cigar || 'no CIGAR'} · flags {selected.flags}
                     </div>
+                    {waveform?.state === 'ready' && waveform.samples && (
+                        <div className="mt-2">
+                            <div className="text-[10px] text-[var(--text-secondary)]">Raw signal · {waveform.sample_count ?? waveform.samples.length} source samples · {waveform.samples.length} displayed · pA</div>
+                            <svg viewBox="0 0 400 100" className="mt-1 h-24 w-full rounded bg-[var(--bg-primary)]" role="img" aria-label="Raw electrical signal waveform">
+                                <polyline
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth="1"
+                                    className="text-cyan-300"
+                                    points={waveformPoints}
+                                />
+                            </svg>
+                        </div>
+                    )}
+                    {waveformError && <div className="mt-2 text-[10px] text-amber-300">Raw signal: {waveformError}</div>}
                     {selected.sequence && (
                         <>
                             <div className="mt-2 text-[10px] text-[var(--text-secondary)]">Basecalled sequence</div>

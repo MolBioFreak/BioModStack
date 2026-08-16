@@ -2,6 +2,8 @@ import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
+import { sanitizeMolstarCss } from './build/molstarCssHygiene'
+
 import crypto from 'node:crypto'
 import os from 'node:os'
 import path from 'path'
@@ -89,6 +91,21 @@ function manualChunks(id: string): string | undefined {
   return undefined
 }
 
+function molstarCssHygienePlugin(): Plugin {
+  return {
+    name: 'bms-molstar-css-hygiene',
+    enforce: 'pre' as const,
+    transform(source, id) {
+      const normalized = normalizeChunkId(id.split('?', 1)[0])
+      if (!normalized.endsWith('/node_modules/molstar/build/viewer/molstar.css')) return null
+      return {
+        code: sanitizeMolstarCss(source),
+        map: null,
+      }
+    },
+  }
+}
+
 function molstarCommonJsBuildResolver(): Plugin {
   return {
     name: 'bms-molstar-commonjs-build-resolver',
@@ -126,7 +143,7 @@ export default defineConfig(({ mode }) => ({
   // Use /bms/ for production (Tailscale Serve proxy), but / for dev mode
   base: mode === 'production' ? '/bms/' : '/',
   cacheDir: resolveViteCacheDir(),
-  plugins: [molstarCommonJsBuildResolver(), react(), tailwindcss()],
+  plugins: [molstarCssHygienePlugin(), molstarCommonJsBuildResolver(), react(), tailwindcss()],
   define: {
     __BMS_BUILD_METADATA__: JSON.stringify(buildMetadata),
   },

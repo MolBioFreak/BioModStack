@@ -1,3 +1,5 @@
+import { useState } from 'react';
+import { ProjectAttachmentDialog } from '../project-manager/ProjectAttachmentDialog';
 import type {
     ConstructVerificationInputEvidence,
     SequenceQcArtifact,
@@ -30,7 +32,7 @@ function countArtifacts(artifacts: SequenceQcArtifact[]) {
 function statusBadgeClass(status: SequenceQcManifestStatus): string {
     if (status === 'available') return 'bg-emerald-500/20 text-emerald-400';
     if (status === 'loading') return 'bg-blue-500/20 text-blue-300';
-    if (status === 'malformed' || status === 'forbidden' || status === 'error') return 'bg-rose-500/20 text-rose-300';
+    if (status === 'malformed' || status === 'access-denied' || status === 'forbidden' || status === 'error') return 'bg-rose-500/20 text-rose-300';
     return 'bg-amber-500/20 text-amber-300';
 }
 
@@ -88,6 +90,7 @@ function EvidenceCard({ label, evidence }: { label: string; evidence: ConstructV
 }
 
 export function SequenceQcManifestPanel({ status, manifest, message, onNavigateLocus }: SequenceQcManifestPanelProps) {
+    const [addToProjectOpen, setAddToProjectOpen] = useState(false);
     const artifacts = manifest?.artifacts || [];
     const artifactCounts = countArtifacts(artifacts);
     const isConstructVerification = manifest?.schema === 'biomodstack.construct_verification.v2';
@@ -102,9 +105,14 @@ export function SequenceQcManifestPanel({ status, manifest, message, onNavigateL
         <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
                 <h4 className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Sequence-QC Manifest</h4>
-                <span className={`text-[10px] px-2 py-0.5 rounded ${statusBadgeClass(status)}`}>
-                    {status === 'available' ? 'available' : sequenceQcManifestUnavailableLabel(status)}
-                </span>
+                <div className="flex items-center gap-2">
+                    {status === 'available' && manifest?.job_id && (
+                        <button type="button" onClick={() => setAddToProjectOpen(true)} className="rounded border border-[var(--accent-primary)]/50 px-2 py-1 text-[10px] font-semibold text-[var(--accent-primary)]">Add to Project / Experiment</button>
+                    )}
+                    <span className={`text-[10px] px-2 py-0.5 rounded ${statusBadgeClass(status)}`}>
+                        {status === 'available' ? 'available' : sequenceQcManifestUnavailableLabel(status)}
+                    </span>
+                </div>
             </div>
             <div className="bg-[var(--bg-tertiary)] rounded border border-[var(--border-primary)] p-3 text-sm">
                 {status === 'idle' && (
@@ -272,6 +280,11 @@ export function SequenceQcManifestPanel({ status, manifest, message, onNavigateL
                     </div>
                 )}
             </div>
+            <ProjectAttachmentDialog
+                open={addToProjectOpen && Boolean(manifest?.job_id)}
+                source={{ adapterId: 'bms.ngs.sequence-qc-reference.adapter.v1', entityId: manifest?.job_id ?? '', label: manifest?.sample_name || manifest?.job_id || 'Sequence-QC manifest', availability: 'available' }}
+                onClose={() => setAddToProjectOpen(false)}
+            />
         </div>
     );
 }

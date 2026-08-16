@@ -1,55 +1,79 @@
 nextflow.enable.dsl = 2
 
-process CanonicalConformationalAnalysisPlane {
-    tag "cm-analysis:${request_id}"
-    // Contract processing runs in the API environment; only FrustraMPNN itself
-    // is isolated in the registered scientific container.
-    label 'cm_gpu'
+process PrepareConformationalMappingFrustraMPNNV2 {
+    tag "cm-frustrampnn-prepare:${request_id}"
+    label 'CPU'
+    errorStrategy 'terminate'
+    maxRetries 0
     stageInMode 'copy'
 
-    publishDir "${params.out_dir}/final/conformational_mapping/${backend_dir}", mode: 'copy'
-
     input:
-    tuple val(request_id), val(backend_dir), path(request_root), path(canonical_dir), val(checkpoint)
+    tuple val(request_id), val(backend_dir), path(request_root), path(canonical_dir)
 
     output:
-    tuple val(request_id), path('canonical_result'), emit: canonical
-    path 'canonical_result/cm_native_artifacts_v1.json', emit: native_manifest
-    path 'canonical_result/cm_ensemble_v1.json', emit: ensemble_manifest
-    path 'canonical_result/cm_derived_index_v1.json', emit: derived_index
-
-    def assigned_gpu = params.gpu_id?.toString() ?: System.getenv('NXF_DEFAULT_GPU') ?: '0'
-    if (!(assigned_gpu ==~ /(?:0|[1-9][0-9]*)/)) {
-        throw new IllegalArgumentException('conformational-mapping GPU must be a canonical non-negative integer')
-    }
+    tuple val(request_id), val(backend_dir), path('frustrampnn_prepared'), \
+        path('cm_frustrampnn_preparation_manifest_v1.json'), emit: prepared
 
     script:
     """
     set -euo pipefail
-    export CUDA_VISIBLE_DEVICES='${assigned_gpu}'
-    ${params.api_python} ${params.code_root}/scripts/run_conformational_mapping_analysis_plane.py \
-      --request ${request_root}/cm_request_v1.json \
-      --runtime-registry ${request_root}/cm_runtime_registry_v1.json \
-      --snapshots ${request_root}/cm_complex_snapshots_v1.json \
-      --canonical ${canonical_dir} \
-      --checkpoint ${checkpoint} \
-      --checkpoint-id megascale.ckpt \
-      --frustrampnn-container ${params.container_dir}/frustrampnn.sif \
-      --gpu-id '${assigned_gpu}' \
+    '${params.api_python}' '${params.code_root}/scripts/prepare_conformational_mapping_frustrampnn_v2.py' \
+      --parent-job-id '${params.job_id}' \
+      --request '${request_root}/cm_request_v1.json' \
+      --snapshots '${canonical_dir}/cm_complex_snapshots_v1.json' \
+      --canonical '${canonical_dir}' \
+      --output-dir frustrampnn_prepared \
+      --manifest cm_frustrampnn_preparation_manifest_v1.json
+    """
+}
+
+process CanonicalConformationalAnalysisPlaneV2 {
+    tag "cm-analysis-v2:${request_id}"
+    label 'CPU'
+    errorStrategy 'terminate'
+    maxRetries 0
+    stageInMode 'copy'
+
+    publishDir "${params.out_dir}/final/conformational_mapping/${backend_dir}", \
+        mode: 'copy', overwrite: true
+
+    input:
+    tuple val(request_id), val(backend_dir), path(request_root), path(canonical_dir)
+    path(preparation_manifest)
+    path(result_bundles)
+
+    output:
+    tuple val(request_id), path('canonical_result'), emit: canonical
+
+    script:
+    def bundleArgs = result_bundles.collect { bundle -> "--bundle '${bundle}'" }.join(' \\\n      ')
+    """
+    set -euo pipefail
+    '${params.api_python}' '${params.code_root}/scripts/postprocess_conformational_mapping_frustrampnn_v2.py' \
+      --request '${request_root}/cm_request_v1.json' \
+      --canonical '${canonical_dir}' \
+      --preparation-manifest '${preparation_manifest}' \
+      ${bundleArgs} \
       --out canonical_result
     """
 }
 
-workflow CONFORMATIONAL_MAPPING_ANALYSIS_PLANE {
-    take:
-    analysis_tuples
+process StageConformationalMappingFrustraMPNNResult {
+    tag "cm-frustrampnn-stage:${component_result.candidate_id}"
+    label 'CPU'
+    errorStrategy 'terminate'
+    maxRetries 0
+    stageInMode 'copy'
 
-    main:
-    CanonicalConformationalAnalysisPlane(analysis_tuples)
+    input:
+    tuple val(component_result), path(candidate_bundle), path(result_manifest)
 
-    emit:
-    canonical = CanonicalConformationalAnalysisPlane.out.canonical
-    native_manifest = CanonicalConformationalAnalysisPlane.out.native_manifest
-    ensemble_manifest = CanonicalConformationalAnalysisPlane.out.ensemble_manifest
-    derived_index = CanonicalConformationalAnalysisPlane.out.derived_index
+    output:
+    tuple val(component_result), path("${component_result.candidate_id}"), emit: staged
+
+    script:
+    """
+    set -euo pipefail
+    cp -a '${candidate_bundle}' '${component_result.candidate_id}'
+    """
 }

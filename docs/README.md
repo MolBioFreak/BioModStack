@@ -15,6 +15,7 @@ under `docs/plans/` and should not be mistaken for the product truth.
 - [Protein Hunter Experimental Workflow](Protein_Hunter_Experimental_Workflow.md)
 - [Lab Automation, Mol Bio, and Sequencing](Lab_Automation_MolBio_and_Sequencing.md)
 - [Results and Analysis](Results_and_Analysis.md)
+- [Model Configuration, Operator Control, and Agent Parity](Model_Configuration_Operator_Control_and_Agent_Parity.md)
 - [Documentation Harmonization Strategy](Documentation_Harmonization_Strategy.md)
 
 ## Platform and subsystem references
@@ -23,8 +24,11 @@ under `docs/plans/` and should not be mistaken for the product truth.
 - [Frontend README](../platform/frontend/README.md)
 - [Electron shell README](../platform/desktop-electron/README.md)
 - [Model Integrations](ai_guidance/Model_Integrations.md)
+- [FrustraMPNN global configuration and analysis workbench specification](specs/frustrampnn-global-configuration-analysis-workbench.md)
 
 ## Active plans
+
+- [Global FrustraMPNN 100% implementation plan](plans/2026-08-08-frustrampnn-global-100-implementation.md)
 
 - [Plans README](plans/README.md)
 - [MSA control-plane guardrails and regression checklist](plans/2026-04-22-msa-control-plane-guardrails-and-regression-checklist.md)
@@ -63,6 +67,8 @@ The canonical docs set now covers:
 - nanopore/NGS launch and review surfaces
 - the bounded BioXP compact control plane and its robot-local authority boundary
 - results, lineage, analytics, and persisted runtime-path management
+- complete operator and AI-agent control of every relevant model setting through one typed schema
+- reusable model data, statistics, visualization, capture, export, and result workbenches
 
 For BioXP, the canonical contract is
 [BioXP Compact Control Plane](BioXP_Compact_Control_Plane.md). BMS does not expose
