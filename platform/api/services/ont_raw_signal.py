@@ -128,6 +128,106 @@ def stable_live_pod5_paths(
     return [Path(path) for path in sorted(current) if previous.get(path) == current[path]]
 
 
+def _live_output_roots(run: OntInstrumentRun) -> tuple[Path, ...]:
+    configured = run.output_directories if isinstance(run.output_directories, dict) else {}
+    roots: list[Path] = []
+    for key in ("output", "reads"):
+        raw = str(configured.get(key) or "").strip()
+        if not raw or len(raw) > 2048 or not os.path.isabs(raw):
+            continue
+        if any(component in {".", ".."} for component in raw.split(os.sep)):
+            continue
+        root = Path(os.path.abspath(raw))
+        if root not in roots:
+            roots.append(root)
+    return tuple(roots)
+
+
+def _open_absolute_directory_nofollow(path: Path) -> int:
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    current_fd = os.open(os.sep, flags)
+    try:
+        for component in path.parts[1:]:
+            next_fd = os.open(component, flags, dir_fd=current_fd)
+            os.close(current_fd)
+            current_fd = next_fd
+        return current_fd
+    except BaseException:
+        os.close(current_fd)
+        raise
+
+
+def _open_live_pod5_candidate(
+    path: Path,
+    approved_roots: tuple[Path, ...],
+    expected: dict[str, int],
+    artifact_id: str,
+) -> tuple[dict[str, Any], int]:
+    """Open and read-lease one live chunk beneath an approved root descriptor."""
+    candidate = Path(os.path.abspath(str(path)))
+    for root in approved_roots:
+        try:
+            relative = candidate.relative_to(root)
+        except ValueError:
+            continue
+        if not relative.parts or candidate.suffix.lower() != ".pod5":
+            continue
+        root_fd = -1
+        current_fd = -1
+        file_fd = -1
+        try:
+            root_fd = _open_absolute_directory_nofollow(root)
+            current_fd = os.dup(root_fd)
+            for component in relative.parts[:-1]:
+                next_fd = os.open(
+                    component,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                    dir_fd=current_fd,
+                )
+                os.close(current_fd)
+                current_fd = next_fd
+            file_fd = os.open(
+                relative.parts[-1],
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=current_fd,
+            )
+            info = os.fstat(file_fd)
+            observed = tuple(
+                getattr(info, attribute)
+                for attribute in ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+            )
+            required = tuple(
+                int(expected[field])
+                for field in ("device", "inode", "bytes", "mtime_ns", "ctime_ns")
+            )
+            if not stat.S_ISREG(info.st_mode) or observed != required:
+                raise ValueError("live POD5 identity changed before registration")
+            try:
+                fcntl.fcntl(file_fd, fcntl.F_SETLEASE, fcntl.F_RDLCK)
+            except OSError as exc:
+                raise RuntimeError("live POD5 is still open for writing") from exc
+            artifact = _file_artifact(
+                candidate,
+                artifact_id,
+                kind="pod5",
+                opened_fd=file_fd,
+                governed_root_path=root,
+                governed_root_fd=root_fd,
+                governed_relative_path=relative.as_posix(),
+            )
+            return artifact, file_fd
+        except BaseException:
+            if file_fd >= 0:
+                os.close(file_fd)
+            raise
+        finally:
+            if current_fd >= 0:
+                os.close(current_fd)
+            if root_fd >= 0:
+                os.close(root_fd)
+    raise ValueError("live POD5 is outside configured MinKNOW output roots")
+
+
 def _external_pod5_root() -> Path:
     configured = os.getenv(EXTERNAL_POD5_ROOT_ENV, "").strip()
     if not configured:
@@ -489,24 +589,48 @@ async def register_live_pod5_chunks(
             )
         )
     ).scalars().all()
-    seen_identities = {
-        tuple(item.get(field) for field in ("device", "inode", "bytes", "mtime_ns", "ctime_ns"))
+    prior_by_identity = {
+        tuple(item.get(field) for field in ("device", "inode", "bytes", "mtime_ns", "ctime_ns")): representation
         for representation in prior
         for item in (representation.artifact_manifest or {}).get("artifacts", [])
         if isinstance(item, dict)
     }
     registered: list[dict[str, Any]] = []
     policy = raw_signal_retention_policy()
+    approved_roots = _live_output_roots(run)
     for position, path in enumerate(stable_paths):
         expected = identity_snapshot.get(str(path))
         if not isinstance(expected, dict):
             continue
-        artifact = _file_artifact(path, f"live-pod5-{observed_generation}-{position}", kind="pod5")
+        try:
+            artifact, file_fd = _open_live_pod5_candidate(
+                path,
+                approved_roots,
+                expected,
+                f"live-pod5-{observed_generation}-{position}",
+            )
+        except (OSError, RuntimeError, ValueError):
+            continue
         if any(artifact.get(field) != expected.get(field) for field in ("device", "inode", "bytes", "mtime_ns", "ctime_ns")):
+            os.close(file_fd)
             continue
         identity = tuple(artifact.get(field) for field in ("device", "inode", "bytes", "mtime_ns", "ctime_ns"))
-        if identity in seen_identities:
+        existing_representation = prior_by_identity.get(identity)
+        if existing_representation is not None:
+            try:
+                await request_blow5_derivation(
+                    session,
+                    run_id=run_id,
+                    observed_generation=existing_representation.observed_generation,
+                    source_representation_id=existing_representation.id,
+                    consumer_id="ont-live-minknow-conversion",
+                    preference="auto",
+                    automatic=True,
+                )
+            finally:
+                os.close(file_fd)
             continue
+        _hold_source_descriptors_through_transaction(session, [file_fd])
         manifest = {
             "schema": "bms.ont.raw-signal-live-chunk.v1",
             "run_id": run_id,
@@ -552,7 +676,7 @@ async def register_live_pod5_chunks(
             preference="auto",
             automatic=True,
         )
-        seen_identities.add(identity)
+        prior_by_identity[identity] = representation
         registered.append(_public_representation(representation))
     return registered
 
@@ -565,7 +689,16 @@ def _resolve_input_file(record: InputFile, expected_format: str) -> Path:
     return candidate
 
 
-def _file_artifact(path: Path, artifact_id: str, *, kind: str, opened_fd: int | None = None) -> dict[str, Any]:
+def _file_artifact(
+    path: Path,
+    artifact_id: str,
+    *,
+    kind: str,
+    opened_fd: int | None = None,
+    governed_root_path: Path | None = None,
+    governed_root_fd: int | None = None,
+    governed_relative_path: str | None = None,
+) -> dict[str, Any]:
     flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
     fd = os.open(path, flags) if opened_fd is None else opened_fd
     close_fd = opened_fd is None
@@ -582,15 +715,22 @@ def _file_artifact(path: Path, artifact_id: str, *, kind: str, opened_fd: int | 
         after_identity = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
         if before_identity != after_identity:
             raise ValueError("raw-signal source changed while it was being registered")
-        visible = path.lstat()
-        visible_identity = (visible.st_dev, visible.st_ino, visible.st_size, visible.st_mtime_ns, visible.st_ctime_ns)
-        if visible_identity != after_identity:
-            raise ValueError("raw-signal source path changed while it was being registered")
-        parent_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        try:
-            parent_info = os.fstat(parent_fd)
-        finally:
-            os.close(parent_fd)
+        if governed_root_path is not None and governed_root_fd is not None and governed_relative_path is not None:
+            parent_info = os.fstat(governed_root_fd)
+            root_path = governed_root_path
+            relative_path = governed_relative_path
+        else:
+            visible = path.lstat()
+            visible_identity = (visible.st_dev, visible.st_ino, visible.st_size, visible.st_mtime_ns, visible.st_ctime_ns)
+            if visible_identity != after_identity:
+                raise ValueError("raw-signal source path changed while it was being registered")
+            parent_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                parent_info = os.fstat(parent_fd)
+            finally:
+                os.close(parent_fd)
+            root_path = path.parent
+            relative_path = path.name
         return {
             "artifact_id": artifact_id,
             "kind": kind,
@@ -601,10 +741,10 @@ def _file_artifact(path: Path, artifact_id: str, *, kind: str, opened_fd: int | 
             "inode": info.st_ino,
             "mtime_ns": info.st_mtime_ns,
             "ctime_ns": info.st_ctime_ns,
-            "governed_root_path": str(path.parent),
+            "governed_root_path": str(root_path),
             "governed_root_device": parent_info.st_dev,
             "governed_root_inode": parent_info.st_ino,
-            "governed_relative_path": path.name,
+            "governed_relative_path": relative_path,
         }
     finally:
         if close_fd:
