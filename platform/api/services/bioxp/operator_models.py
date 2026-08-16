@@ -3332,7 +3332,14 @@ class OperatorActionReceipt(BaseModel):
             and self.authority_receipt_status is None
             and self.authority_fingerprint is not None
             and isinstance(legacy_response_body, dict)
-            and isinstance(legacy_response_body.get("intent"), str)
+            and (
+                isinstance(legacy_response_body.get("intent"), str)
+                or (
+                    self.action_id == "oem.x.manual_panel_home"
+                    and legacy_response_body.get("ok") is True
+                    and legacy_response_body.get("state") == "awaiting_operator_observation"
+                )
+            )
         ):
             self.authority_receipt_id = self.command_id
             self.authority_receipt_status = "completed"
@@ -3382,7 +3389,22 @@ class OperatorActionReceipt(BaseModel):
             response_payload = response_body
         if expected_x_intent is not None:
             response_intent = response_payload.get("intent") if response_payload is not None else None
-            if self.status == "completed" and response_intent != expected_x_intent:
+            legacy_completed_x_home_summary = (
+                self.action_id == "oem.x.manual_panel_home"
+                and self.status == "completed"
+                and response_intent is None
+                and isinstance(response_payload, dict)
+                and response_payload.get("ok") is True
+                and response_payload.get("state") == "awaiting_operator_observation"
+                and self.authority_fingerprint is not None
+                and self.authority_receipt_id == self.command_id
+                and self.authority_receipt_status == "completed"
+            )
+            if (
+                self.status == "completed"
+                and response_intent != expected_x_intent
+                and not legacy_completed_x_home_summary
+            ):
                 raise ValueError("completed serial-206 X response intent does not match the action identity")
             if self.status == "failed" and response_intent is not None and response_intent != expected_x_intent:
                 raise ValueError("failed serial-206 X response carries a contradictory action intent")
