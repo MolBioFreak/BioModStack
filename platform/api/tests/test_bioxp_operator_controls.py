@@ -11,7 +11,7 @@ import pytest
 from routers import bioxp
 from routers.bioxp.operator_controls import _translate_robot_error
 from services.bioxp.errors import ConnectionStateError, RobotResponseError
-from services.bioxp.operator_models import OperatorActionHistory, OperatorDashboardXReference
+from services.bioxp.operator_models import OperatorActionHistory, OperatorActionReceipt, OperatorDashboardXReference
 from services.bioxp.operator_semantic_quarantine import OPERATOR_SEMANTIC_QUARANTINE_BY_PATH
 from services.bioxp.robot_client import DEFAULT_ROBOT_ROUTES
 
@@ -190,6 +190,33 @@ def receipt(*, action_id="motion.home_xy", key="invoke-12345678", command_id="cm
         "error": None,
         "stage_receipts": [],
     }
+
+
+def test_completed_x_receipt_accepts_robot_http_response_envelope():
+    completed = receipt(action_id="oem.x.manual_panel_home", command_id="operator-x-home-1")
+    completed.update({
+        "status": "completed",
+        "response": {
+            "http_status": 200,
+            "body": {
+                "ok": True,
+                "axis": "x",
+                "intent": "manual_panel_home",
+                "state": "awaiting_operator_observation",
+                "authority_receipt": {
+                    "command_id": "operator-x-home-1",
+                    "status": "completed",
+                },
+            },
+        },
+        "authority_receipt_id": "operator-x-home-1",
+        "authority_receipt_status": "completed",
+    })
+
+    parsed = OperatorActionReceipt.model_validate(completed)
+
+    assert parsed.command_id == "operator-x-home-1"
+    assert parsed.status == "completed"
 
 
 def test_history_accepts_explicit_legacy_authority_status_omission_marker():

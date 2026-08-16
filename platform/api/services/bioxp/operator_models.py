@@ -3351,14 +3351,18 @@ class OperatorActionReceipt(BaseModel):
             "oem.xy.enable": "enable_xy_current",
             "oem.xyz.enable": "enable_xyz_current",
         }.get(self.action_id)
+        response_payload: dict[str, JsonValue] | None = self.response
+        response_body = self.response.get("body") if self.response is not None else None
+        if isinstance(response_body, dict):
+            response_payload = response_body
         if expected_x_intent is not None:
-            response_intent = self.response.get("intent") if self.response is not None else None
+            response_intent = response_payload.get("intent") if response_payload is not None else None
             if self.status == "completed" and response_intent != expected_x_intent:
                 raise ValueError("completed serial-206 X response intent does not match the action identity")
             if self.status == "failed" and response_intent is not None and response_intent != expected_x_intent:
                 raise ValueError("failed serial-206 X response carries a contradictory action intent")
         if self.action_id == "oem.x.observe":
-            observation = self.response.get("observation") if self.response is not None else None
+            observation = response_payload.get("observation") if response_payload is not None else None
             if self.status == "completed" and (
                 not isinstance(observation, dict) or observation.get("intent") != "observation"
             ):
