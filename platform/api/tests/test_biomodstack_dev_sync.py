@@ -4,6 +4,7 @@ import importlib.util
 import hashlib
 import json
 import sqlite3
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -226,6 +227,31 @@ def test_candidate_runtime_authority_accepts_exact_final_tree(monkeypatch) -> No
         "runtime_source_count": 1,
         "source_pin_overlay_count": 1,
     }
+
+
+def test_candidate_tree_forces_index_only_runtime_record_removal(monkeypatch, tmp_path: Path) -> None:
+    sync = load_module()
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(tuple(command))
+        stdout = "f" * 40 + "\n" if tuple(command) == ("git", "write-tree") else ""
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(sync.subprocess, "run", fake_run)
+
+    result = sync._candidate_tree_without_record(tmp_path, "a" * 40)
+
+    assert result == "f" * 40
+    assert (
+        "git",
+        "rm",
+        "--cached",
+        "--quiet",
+        "-f",
+        "--",
+        sync.RUNTIME_IMPLEMENTATION_PATH,
+    ) in calls
 
 
 def test_candidate_runtime_authority_rejects_stale_runtime_digest(monkeypatch) -> None:

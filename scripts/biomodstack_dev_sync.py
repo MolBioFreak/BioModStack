@@ -160,7 +160,7 @@ def _candidate_tree_without_record(root: Path, revision: str) -> str:
     try:
         for command in (
             ("git", "read-tree", revision),
-            ("git", "rm", "--cached", "--quiet", "--", RUNTIME_IMPLEMENTATION_PATH),
+            ("git", "rm", "--cached", "--quiet", "-f", "--", RUNTIME_IMPLEMENTATION_PATH),
         ):
             result = subprocess.run(
                 command,
