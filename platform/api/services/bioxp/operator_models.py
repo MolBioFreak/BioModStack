@@ -3007,12 +3007,17 @@ class OperatorDashboardXLifecycle(BaseModel):
     latest_receipt: OperatorDashboardXReceiptSummary | None
 
     @model_validator(mode="after")
-    def bind_generic_evidence_to_failed_latch(self):
-        generic_evidence = isinstance(
-            self.prepared_receipt, OperatorDashboardXFailedLifecycleEvidence
-        ) or isinstance(self.last_failure, OperatorDashboardXFailedLifecycleEvidence)
-        if generic_evidence and self.state != "failed_latched":
-            raise ValueError("generic X lifecycle evidence requires failed_latched state")
+    def bind_generic_evidence_to_lifecycle_state(self):
+        if isinstance(self.prepared_receipt, OperatorDashboardXFailedLifecycleEvidence) and self.state not in {
+            "prepared_unreferenced",
+            "executing",
+            "awaiting_operator_observation",
+            "referenced_ready",
+            "failed_latched",
+        }:
+            raise ValueError("generic X preparation evidence requires a prepared lifecycle state")
+        if isinstance(self.last_failure, OperatorDashboardXFailedLifecycleEvidence) and self.state != "failed_latched":
+            raise ValueError("generic X failure evidence requires failed_latched state")
         return self
 
 
