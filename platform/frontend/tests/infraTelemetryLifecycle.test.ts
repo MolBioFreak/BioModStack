@@ -26,6 +26,9 @@ test('viewer reads bounded server-owned telemetry history without browser histor
     assert.match(telemetrySource, /placeholderData: \(previousData\)/);
     assert.doesNotMatch(telemetrySource, /'minute'|mergeMinuteHistoryWithRawTail|downsampleTelemetryTail|MINUTE_LIVE_TAIL_MS/);
     assert.match(telemetrySource, /refetchInterval: displayIntervalMs/);
+    assert.match(telemetrySource, /const liveStatusQuery = useQuery\(\{[\s\S]*?queryKey: INFRA_LIVE_SHARED_QUERY_KEY/);
+    assert.match(telemetrySource, /queryFn: fetchSystemStatus,[\s\S]*?refetchInterval: pollIntervalMs/);
+    assert.match(telemetrySource, /const payload = liveStatusQuery\.data\?\.data \?\? latestPoint\?\.payload/);
     assert.match(telemetrySource, /refetchOnWindowFocus: false/);
     assert.match(telemetrySource, /buildSample\(point\.payload, 1000, point\.timestamp_ms\)/);
     assert.match(telemetrySource, /Telemetry collection is stale/);

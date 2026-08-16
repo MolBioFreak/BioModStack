@@ -1421,11 +1421,18 @@ export function InfraLiveTelemetry({
         refetchIntervalInBackground: false,
         refetchOnWindowFocus: false,
     });
+    const liveStatusQuery = useQuery({
+        queryKey: INFRA_LIVE_SHARED_QUERY_KEY,
+        queryFn: fetchSystemStatus,
+        refetchInterval: pollIntervalMs,
+        refetchIntervalInBackground: false,
+        refetchOnWindowFocus: false,
+    });
     const historyPoints = historyQuery.data?.data.points ?? [];
     const rawSamples = historyPoints.map((point) => buildSample(point.payload, 1000, point.timestamp_ms));
     const samples = resampleTelemetrySamples(rawSamples, bucketIntervalMs);
     const latestPoint = historyPoints.at(-1);
-    const payload = latestPoint?.payload;
+    const payload = liveStatusQuery.data?.data ?? latestPoint?.payload;
     const staleAfterMs = Math.max(10_000, pollIntervalMs * 5);
     const historyIsStale = Boolean(
         latestPoint && (historyQuery.data?.data.generated_at_ms ?? Date.now()) - latestPoint.timestamp_ms > staleAfterMs,
