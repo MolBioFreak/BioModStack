@@ -1,0 +1,25 @@
+{
+  "domain": {
+    "id": "domain-phase2",
+    "global_revision_id": "global-domain-rev-phase2"
+  },
+  "molecular_document": {
+    "id": "sequence-phase2",
+    "historical_revision_id": "molecular-revision-1",
+    "current_revision_id": "molecular-revision-2",
+    "historical_sequence": "ACGTACGTACGT",
+    "current_sequence": "ACGTACGTACGA"
+  },
+  "job": {
+    "id": "ngs-job-phase2",
+    "name": "Phase 2 lineage fixture",
+    "output_dir": "non-default/phase2-lineage-job",
+    "manifest_relative_path": "verification/qc_manifest.json"
+  },
+  "manifest": {
+    "artifact_schema_version": 2,
+    "schema": "biomodstack.construct_verification.v2",
+    "verdict": "REVIEW",
+    "fixture": "phase2-lineage"
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "$id": "https://biomodstack.local/schemas/frustrampnn/frustrampnn_guidance_v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "schema_name": {"const": "frustrampnn_guidance"},
+    "schema_version": {"const": 1},
+    "guidance_id": {"type": ["string", "null"]},
+    "guidance_sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+    "source_landscape_sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+    "configuration_id": {"type": ["string", "null"]},
+    "configuration_sha256": {"pattern": "^[0-9a-f]{64}$", "type": ["string", "null"]},
+    "region": {"type": "object"},
+    "objective": {"type": "object"},
+    "constraints": {"type": "object"},
+    "ranking": {"type": "object"},
+    "ranked_slots": {"items": {"type": "object"}, "type": "array"},
+    "rationale": {"minLength": 1, "type": "string"},
+    "decision_support_only": {"const": true},
+    "instrument_control": {"const": false},
+    "observed_outcome": {"type": ["object", "null"]}
+  },
+  "required": [
+    "schema_name",
+    "schema_version",
+    "guidance_id",
+    "guidance_sha256",
+    "source_landscape_sha256",
+    "region",
+    "objective",
+    "constraints",
+    "ranking",
+    "ranked_slots",
+    "rationale",
+    "decision_support_only",
+    "instrument_control",
+    "observed_outcome"
+  ],
+  "title": "frustrampnn_guidance_v1",
+  "type": "object"
+}

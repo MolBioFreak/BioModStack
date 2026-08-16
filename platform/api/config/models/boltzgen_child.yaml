@@ -1,0 +1,85 @@
+# BoltzGen Child Job (GPU Orchestrator Spawned)
+# Internal workflow for parallelized BoltzGen binder design
+
+id: boltzgen_child
+name: BoltzGen Design (Child)
+version: 1.0.0
+category: binder_design
+description: >
+  GPU-spawned child job for BoltzGen binder design.
+  Internal workflow spawned by the orchestrator for parallel processing.
+  Supports nanobody, peptide, and protein binder campaigns.
+
+workflow_type: pipeline
+container: apptainer/boltzgen.sif
+
+ui_icon: molecule
+ui_color: "#8b5cf6"
+hidden: true  # Hide from main menu, only spawned via API
+
+modes:
+  - id: nanobody_binder
+    name: VHH/Nanobody Design
+    description: Design VHH nanobody binders
+    params: []
+  - id: peptide_binder
+    name: Peptide Binder Design
+    description: Design peptide binders
+    params: []
+  - id: protein_binder
+    name: Miniprotein Design
+    description: Design miniprotein binders
+    params: []
+
+params:
+  - name: gpu_index
+    type: integer
+    description: GPU index for this job
+    required: false
+    default: 0
+  - name: num_designs
+    type: integer
+    description: Number of designs to generate in this child job
+    required: true
+    default: 100
+  - name: parent_job_id
+    type: string
+    description: ID of parent job for result aggregation
+    required: true
+  - name: job_index
+    type: integer
+    description: Index of this child job (0-based)
+    required: true
+  - name: total_jobs
+    type: integer
+    description: Total number of child jobs in this campaign
+    required: false
+    default: 1
+  - name: boltzgen_yaml_config
+    type: string
+    description: Path to pre-generated BoltzGen YAML config
+    required: true
+  - name: boltzgen_protocol
+    type: string
+    description: BoltzGen protocol to use
+    required: false
+    default: auto
+  - name: boltzgen_scaffold_length
+    type: string
+    description: Scaffold length range (e.g., "80-120")
+    required: false
+    default: "80-120"
+  - name: boltzgen_inverse_fold_avoid
+    type: string
+    description: Residues to avoid in inverse folding
+    required: false
+    default: ""
+
+inputs:
+  - boltzgen_yaml_config
+  - target_pdb
+
+outputs:
+  - pdb
+  - json
+  - csv

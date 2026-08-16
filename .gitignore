@@ -1,0 +1,62 @@
+# Local editor / assistant state
+.vscode/
+.hermes/
+
+# Local GPU/runtime state
+.gpu_*.json
+.gpu_*.lock
+
+# Local scratch/search artifacts
+.protenix_cache
+.protenix_anchor_root/
+text_*.json
+tmp_bioxp_*.py
+tmp_bioxp_*.sh
+platform/api/tmp_*.py
+platform/api/*.log
+
+# Python/runtime caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Node/build caches
+node_modules/
+node_modules/.tmp/
+dist/
+platform/frontend/.test-dist/
+platform/frontend/.artifacts/
+.artifacts/
+
+# Databases, backups, and local runtime outputs
+*.db
+*.db-shm
+*.db-wal
+backups/
+bms_results
+molbio_toolkit.db*
+biomodstack_runtime.db*
+output/
+rcsb/
+
+lib/NO_*
+
+# Nextflow/local run artifacts
+.nextflow/
+.nextflow.log*
+.nextflow-test-artifacts/
+.pytest-nextflow-*/
+work/
+tmp/
+nxf-tmp.*
+wf_test*/
+
+# Local tool/runtime and exploratory browser-output surfaces
+.ngs-tools/
+dogfood-output/
+/alignment_protenix.log
+
+# Large local container images
+apptainer/*.sif
+apptainer/*.sif.*
+ngs_runtime_fixtures/

@@ -1,0 +1,25 @@
+data_missing_backbone
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_alt_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.label_entity_id
+_atom_site.label_seq_id
+_atom_site.pdbx_PDB_ins_code
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.occupancy
+_atom_site.B_iso_or_equiv
+_atom_site.auth_seq_id
+_atom_site.auth_comp_id
+_atom_site.auth_asym_id
+_atom_site.auth_atom_id
+_atom_site.pdbx_PDB_model_num
+ATOM 401 N N . GLY MISSING_CHAIN 6 1 ? 0 0 0 1.00 2.00 1 GLY G N 1
+ATOM 402 C CA . GLY MISSING_CHAIN 6 1 ? 1 0 0 1.00 2.00 1 GLY G CA 1
+ATOM 403 C C . GLY MISSING_CHAIN 6 1 ? 2 0 0 1.00 2.00 1 GLY G C 1

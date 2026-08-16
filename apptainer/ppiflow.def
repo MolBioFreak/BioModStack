@@ -1,0 +1,138 @@
+Bootstrap: docker
+From: nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04
+
+%labels
+    Author BioModStack
+    Version 1.1
+    Description PPIFlow - Flow matching for protein binder design
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update && apt-get install -y \
+        git wget curl \
+        python3.10 python3.10-venv python3-pip \
+        build-essential cmake \
+        libhdf5-dev libnetcdf-dev \
+        && rm -rf /var/lib/apt/lists/*
+    
+    # Install UV (10-100x faster than pip)
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="/root/.local/bin:$PATH"
+    
+    # Create virtualenv with UV
+    uv venv /opt/venv
+    export VIRTUAL_ENV=/opt/venv
+    export PATH="/opt/venv/bin:$PATH"
+    
+    # Install a Blackwell-capable PyTorch stack.
+    uv pip install --compile torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 \
+        --index-url https://download.pytorch.org/whl/cu128
+    
+    # Install PyG dependencies
+    uv pip install --compile pyg-lib torch-cluster torch-scatter torch-sparse torch-spline-conv \
+        -f https://data.pyg.org/whl/torch-2.7.1+cu128.html
+    uv pip install --compile torch-geometric==2.7.0
+    
+    # Install core scientific dependencies
+    uv pip install --compile numpy==1.26.3 scipy==1.15.2 pandas==2.2.3
+    uv pip install --compile biopython==1.83 biotite==1.0.1
+    uv pip install --compile einops==0.8.1 e3nn==0.5.6
+    uv pip install --compile hydra-core==1.3.2 omegaconf==2.3.0
+    uv pip install --compile pytorch-lightning==2.5.0.post0 lightning==2.5.0.post0
+    uv pip install --compile wandb==0.19.8
+    uv pip install --compile mdtraj==1.10.3
+    uv pip install --compile fair-esm==2.0.0
+    uv pip install --compile rdkit==2023.3.1
+    uv pip install --compile scikit-learn==1.2.2
+    # Match the upstream antibody partial-flow runtime imports.
+    uv pip install --compile deepspeed==0.16.4 dm-tree==0.1.6 optree==0.14.1 GPUtil==1.4.0 gpustat==1.1.1
+    
+    # Clone PPIFlow
+    mkdir -p /app
+    cd /app
+    git clone https://github.com/Mingchenchen/PPIFlow.git ppiflow
+    cd ppiflow
+    
+    # Install PPIFlow (if setup.py exists)
+    if [ -f "setup.py" ]; then
+        uv pip install --compile -e .
+    fi
+
+    # The upstream fused layer-norm extension hardcodes pre-Blackwell CUDA arch
+    # flags. Patch it before any import compiles the extension.
+    python - <<'PY'
+from pathlib import Path
+
+path = Path("/app/ppiflow/models/layer_norm/torch_ext_compile.py")
+text = path.read_text()
+text = text.replace(
+    'os.environ["TORCH_CUDA_ARCH_LIST"] = "7.0;8.0"',
+    'os.environ["TORCH_CUDA_ARCH_LIST"] = "7.0;8.0;8.6;9.0;10.0;12.0+PTX"',
+)
+text = text.replace(
+    '''            "-gencode",
+            "arch=compute_90,code=sm_90",''',
+    '''            "-gencode",
+            "arch=compute_90,code=sm_90",
+            "-gencode",
+            "arch=compute_100,code=sm_100",
+            "-gencode",
+            "arch=compute_120,code=sm_120",
+            "-gencode",
+            "arch=compute_120,code=compute_120",''',
+)
+path.write_text(text)
+PY
+
+    rm -f /app/ppiflow/models/layer_norm/fastfold_layer_norm_cuda.so \
+          /app/ppiflow/models/layer_norm/layer_norm_cuda.o \
+          /app/ppiflow/models/layer_norm/layer_norm_cuda_kernel.cuda.o \
+          /app/ppiflow/models/layer_norm/build.ninja \
+          /app/ppiflow/models/layer_norm/.ninja_log
+
+    # Upstream scripts refer to configs/test_antibody.yaml, but some snapshots only
+    # carry the hydrated test config under test/4dn4_ccl2/.
+    if [ ! -f "/app/ppiflow/configs/test_antibody.yaml" ] && [ -f "/app/ppiflow/test/4dn4_ccl2/config.yaml" ]; then
+        cp /app/ppiflow/test/4dn4_ccl2/config.yaml /app/ppiflow/configs/test_antibody.yaml
+    fi
+
+    # Fail the build if the packaged partial-flow runtime cannot import.
+    export PYTHONPATH="/app/ppiflow:$PYTHONPATH"
+    python - <<'PY'
+from pathlib import Path
+import tree
+import optree
+import deepspeed
+from experiments.inference_antibody_partial import Experiment
+from models.layer_norm.layer_norm import FusedLayerNorm
+
+assert Path("/app/ppiflow/configs/test_antibody.yaml").exists()
+assert Path("/app/ppiflow/models/layer_norm/fastfold_layer_norm_cuda.so").exists()
+print("PPIFlow partial-flow runtime imports OK")
+PY
+    
+    # Generate lockfile for reproducibility
+    uv pip freeze > /opt/venv/requirements.lock
+    
+    # Create checkpoint directory
+    mkdir -p /opt/ppiflow/ckpt
+    
+    # Activate venv in environment
+    echo 'export PATH="/opt/venv/bin:$PATH"' >> $APPTAINER_ENVIRONMENT
+    echo 'export PYTHONPATH=/app/ppiflow:$PYTHONPATH' >> $APPTAINER_ENVIRONMENT
+
+%environment
+    export PATH="/opt/venv/bin:$PATH"
+    export PYTHONPATH="/app/ppiflow:$PYTHONPATH"
+    export VIRTUAL_ENV=/opt/venv
+
+%runscript
+    exec python "$@"
+
+%help
+    PPIFlow container for protein-protein interaction-aware binder design.
+    
+    Usage:
+        apptainer run --nv --bind /path/to/ckpt:/opt/ppiflow/ckpt ppiflow.sif script.py [args]
+    
+    Lockfile: /opt/venv/requirements.lock

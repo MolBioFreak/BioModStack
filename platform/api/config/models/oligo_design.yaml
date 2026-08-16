@@ -1,0 +1,209 @@
+# Oligo Designer Model Configuration
+# Multi-polymer design using RFDpoly diffusion + Boltz-2 validation
+
+id: oligo_design
+name: Oligo Designer
+version: "1.0.0"
+category: generative_design
+description: >
+  De novo design of DNA, RNA, proteins, and mixed nucleoprotein assemblies
+  using RFDpoly diffusion. Fully validated for RNA up to 240 nucleotides.
+  Supports aptamer design, protein-DNA complexes, and RNP assemblies.
+container: rfdpoly.sif
+
+ui_icon: rna
+ui_color: "#8B5CF6"
+
+inputs:
+  - pdb
+  - sequence
+outputs:
+  - pdb
+  - json
+
+modes:
+  - id: oligo_design
+    name: Oligo Design
+    description: De novo multi-polymer design
+    params:
+      - rfdpoly_contigs
+      - rfdpoly_polymer_chains
+      - rfdpoly_num_designs
+      - rfdpoly_diffusion_steps
+      - rfdpoly_checkpoint
+
+params:
+  # ============================================================================
+  # Core RFDpoly Configuration
+  # ============================================================================
+  - name: rfdpoly_enabled
+    type: boolean
+    description: Enable RFDpoly workflow
+    default: true
+    hidden: true
+
+  - name: rfdpoly_contigs
+    type: string
+    description: "Chain lengths (space-separated, e.g., '40' or '30 80' for multi-chain)"
+    required: true
+    ui_placeholder: "40"
+
+  - name: rfdpoly_polymer_chains
+    type: string
+    description: "Polymer types per chain (comma-separated: dna, rna, protein)"
+    required: true
+    ui_placeholder: "rna"
+
+  - name: rfdpoly_num_designs
+    type: integer
+    description: Number of designs to generate
+    default: 4
+    minimum: 1
+    maximum: 64
+
+  - name: rfdpoly_diffusion_steps
+    type: integer
+    description: "Diffusion timesteps (25=fast, 50=standard, 100=high quality)"
+    default: 50
+    minimum: 10
+    maximum: 200
+
+  - name: rfdpoly_checkpoint
+    type: string
+    description: "Model checkpoint: generalized (all types) or rna_optimized"
+    enum:
+      - generalized
+      - rna_optimized
+    default: generalized
+
+  - name: rfdpoly_noise_schedule
+    type: string
+    description: Diffusion noise schedule
+    enum:
+      - linear
+      - cosine
+    default: linear
+
+  - name: rfdpoly_temperature
+    type: number
+    description: Sampling temperature (higher = more diversity)
+    default: 1.0
+    minimum: 0.1
+    maximum: 2.0
+
+  - name: rfdpoly_seed
+    type: integer
+    description: Random seed for reproducibility (null=random)
+    required: false
+
+  # ============================================================================
+  # Target Protein (for protein-binding aptamer mode)
+  # ============================================================================
+  - name: target_pdb
+    type: file
+    file_type: pdb
+    description: Path to target protein PDB for binding design
+    required: false
+
+  - name: target_chains
+    type: string
+    description: Target protein chain IDs to bind
+    default: "A"
+
+  - name: hotspot_residues
+    type: string
+    description: "Binding site residue specification (e.g., A25,A30-35)"
+    required: false
+    ui_placeholder: "A25,A30-35"
+
+  - name: binding_guidance
+    type: boolean
+    description: Enable guided diffusion toward target binding
+    default: false
+
+  # ============================================================================
+  # Scaffold Redesign
+  # ============================================================================
+  - name: scaffold_pdb
+    type: file
+    file_type: pdb
+    description: Scaffold structure for constrained redesign
+    required: false
+
+  # ============================================================================
+  # Custom Sequences
+  # ============================================================================
+  - name: chain_sequences
+    type: object
+    description: "Fixed sequences for chains (JSON object: {chain_1: 'AUGC...'})"
+    required: false
+
+  # ============================================================================
+  # Validation and Filtering
+  # ============================================================================
+  - name: oligo_validate_boltz
+    type: boolean
+    description: Enable Boltz-2 structural validation
+    default: true
+
+  - name: oligo_min_plddt
+    type: number
+    description: Minimum pLDDT confidence threshold
+    default: 70.0
+    minimum: 0
+    maximum: 100
+
+  - name: oligo_min_ptm
+    type: number
+    description: Minimum pTM fold quality threshold
+    default: 0.5
+    minimum: 0
+    maximum: 1
+
+  - name: boltz_min_plddt
+    type: number
+    description: Boltz pLDDT threshold (mapped from oligo_min_plddt)
+    default: 70.0
+
+  # ============================================================================
+  # Physics Refinement (OpenMM)
+  # ============================================================================
+  - name: openmm_enabled
+    type: boolean
+    description: Enable OpenMM energy minimization
+    default: false
+
+  - name: openmm_compute_tier
+    type: string
+    description: "Physics compute tier: fast (1000 steps), standard (5000), full (20000)"
+    enum:
+      - fast
+      - standard
+      - full
+    default: fast
+
+# Filter presets
+filter_presets:
+  - id: default
+    name: Default
+    description: Balanced thresholds for general use
+    values:
+      oligo_min_plddt: 70.0
+      oligo_min_ptm: 0.5
+      
+  - id: permissive
+    name: Permissive
+    description: Lower thresholds for experimental designs
+    values:
+      oligo_min_plddt: 60.0
+      oligo_min_ptm: 0.4
+      
+  - id: strict
+    name: Publication-Grade
+    description: Higher thresholds for publication-ready designs
+    values:
+      oligo_min_plddt: 80.0
+      oligo_min_ptm: 0.7
+
+enabled: true
+experimental: false

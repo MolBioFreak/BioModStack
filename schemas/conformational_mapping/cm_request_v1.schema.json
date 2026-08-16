@@ -1,0 +1,269 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://biomodstack.org/schemas/conformational_mapping/cm_request_v1.schema.json",
+  "title": "BioModStack conformational mapping request v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_name", "schema_version", "request_id", "backend", "targets", "ordered_seeds", "samples_per_seed", "feature_policy", "runtime_policy", "analysis_policy", "source", "created_by", "request_sha256"],
+  "properties": {
+    "schema_name": {"const": "cm_request"},
+    "schema_version": {"const": 1},
+    "request_id": {"type": "string", "format": "uuid"},
+    "run_record": {"$ref": "#/$defs/run_record"},
+    "backend": {"enum": ["protenix_v2_ensemble", "confornets", "external_import"]},
+    "targets": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["target_id", "target_order"],
+        "properties": {
+          "target_id": {"type": "string", "minLength": 1},
+          "target_order": {"type": "integer", "minimum": 0},
+          "sequence": {"type": "string", "minLength": 1, "pattern": "^[ACDEFGHIKLMNPQRSTVWYX]+$"},
+          "molecule_type": {"const": "protein"},
+          "chain_count": {"const": 1}
+        }
+      }
+    },
+    "ordered_seeds": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "integer", "minimum": -2147483648, "maximum": 2147483647}
+    },
+    "samples_per_seed": {"type": "integer", "minimum": 1},
+    "feature_policy": {"$ref": "#/$defs/feature_policy"},
+    "runtime_policy": {"$ref": "#/$defs/runtime_policy"},
+    "analysis_policy": {"$ref": "#/$defs/analysis_policy"},
+    "frustrampnn_settings": {"type": "object"},
+    "frustrampnn_requiredness": {"const": "required"},
+    "state_landscape_comparison": {"$ref": "#/$defs/state_landscape_comparison"},
+    "confornets": {"$ref": "#/$defs/confornets"},
+    "protenix_snapshot_id": {"type": "string", "minLength": 1},
+    "import_receipt_id": {"type": "string", "minLength": 1},
+    "source_snapshot_sha256": {"$ref": "#/$defs/sha256"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "sha256"],
+      "properties": {
+        "kind": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "created_by": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["principal_id"],
+      "properties": {"principal_id": {"type": "string", "minLength": 1}}
+    },
+    "request_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "run_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "notes", "selected_input"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 255},
+        "notes": {"type": "string", "maxLength": 4000},
+        "selected_input": {"$ref": "#/$defs/selected_input"}
+      }
+    },
+    "selected_input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_id", "source_kind", "source_label", "source_sha256"],
+      "properties": {
+        "source_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "source_kind": {"type": "string", "minLength": 1, "maxLength": 64},
+        "source_label": {"type": "string", "minLength": 1, "maxLength": 255},
+        "source_sha256": {"$ref": "#/$defs/sha256"},
+        "provider": {"type": "string", "minLength": 1, "maxLength": 128},
+        "accession": {"type": "string", "minLength": 1, "maxLength": 128},
+        "model_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "sample_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "chain_ids": {
+          "type": "array", "maxItems": 128, "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 32}
+        },
+        "entity_ids": {
+          "type": "array", "maxItems": 128, "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 128}
+        }
+      }
+    },
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "feature_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": {"enum": ["regenerate_mutated_protein_v1", "paired_regenerate_changed_protein_v1", "features_disabled_control_v1"]},
+        "per_entity_hashes": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/sha256"}
+        },
+        "protein_msa_enabled": {"type": "boolean"},
+        "templates_enabled": {"type": "boolean"},
+        "rna_msa_enabled": {"type": "boolean"}
+      }
+    },
+    "runtime_policy": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["use_default_params"],
+          "properties": {"use_default_params": {"const": true}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["use_default_params", "n_cycle", "n_step"],
+          "properties": {
+            "use_default_params": {"const": false},
+            "n_cycle": {"type": "integer", "minimum": 1},
+            "n_step": {"type": "integer", "minimum": 1}
+          }
+        }
+      ]
+    },
+    "confornets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sequence", "chain_id", "task", "test_case_id", "benchmark_name", "references", "runs", "saved_steps", "confornet_count", "samples", "max_steps", "num_recycles", "num_diffusion_steps", "learning_rate", "gradient_clip", "skip_msa", "compute_confidence", "save_full_confidence", "compute_evaluation", "checkpoint", "config", "transfer_source", "backend_identity"],
+      "properties": {
+        "sequence": {"type": "string", "minLength": 1, "pattern": "^[ACDEFGHIKLMNPQRSTVWYX]+$"},
+        "chain_id": {"type": "string", "minLength": 1, "maxLength": 8},
+        "task": {"enum": ["diversity", "mse", "transfer"]},
+        "test_case_id": {"type": "string", "minLength": 1},
+        "benchmark_name": {"type": "string", "minLength": 1},
+        "references": {"type": "array", "maxItems": 2, "items": {"$ref": "#/$defs/confornets_reference"}},
+        "runs": {"type": "integer", "minimum": 1},
+        "saved_steps": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "integer", "minimum": 0}},
+        "confornet_count": {"type": "integer", "minimum": 1},
+        "samples": {"type": "integer", "minimum": 1},
+        "output_count": {"type": "integer", "minimum": 1},
+        "max_steps": {"type": "integer", "minimum": 1},
+        "num_recycles": {"type": "integer", "minimum": 0},
+        "num_diffusion_steps": {"type": "integer", "minimum": 1},
+        "learning_rate": {"type": "number", "exclusiveMinimum": 0},
+        "gradient_clip": {"type": "number", "exclusiveMinimum": 0},
+        "skip_msa": {"type": "boolean"},
+        "compute_confidence": {"type": "boolean"},
+        "save_full_confidence": {"type": "boolean"},
+        "compute_evaluation": {"type": "boolean"},
+        "checkpoint": {"$ref": "#/$defs/staged_identity"},
+        "config": {"oneOf": [{"$ref": "#/$defs/staged_identity"}, {"type": "null"}]},
+        "transfer_source": {"oneOf": [{"$ref": "#/$defs/transfer_source"}, {"type": "null"}]},
+        "backend_identity": {"$ref": "#/$defs/backend_identity"}
+      }
+    },
+    "staged_identity": {
+      "type": "object", "additionalProperties": false, "required": ["path", "sha256"],
+      "properties": {"path": {"type": "string", "minLength": 1}, "sha256": {"$ref": "#/$defs/sha256"}}
+    },
+    "confornets_reference": {
+      "type": "object", "additionalProperties": false,
+      "required": ["reference_id", "staged_path", "content_sha256", "state", "source"],
+      "properties": {
+        "reference_id": {"type": "string", "minLength": 1}, "staged_path": {"type": "string", "minLength": 1},
+        "content_sha256": {"$ref": "#/$defs/sha256"}, "state": {"type": "string", "minLength": 1}, "source": {"type": "string", "minLength": 1}
+      }
+    },
+    "transfer_source": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "staged_path", "content_sha256", "source_test_cases"],
+      "properties": {
+        "kind": {"enum": ["confornet_state", "mse_state"]}, "staged_path": {"type": "string", "minLength": 1},
+        "content_sha256": {"$ref": "#/$defs/sha256"}, "source_test_cases": {"type": "string"}
+      }
+    },
+    "backend_identity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["backend_version", "backend_commit", "runtime_identity", "container_digest", "model_id", "feature_identity_sha256", "repo_path"],
+      "properties": {
+        "backend_version": {"type": "string", "minLength": 1}, "backend_commit": {"type": "string", "minLength": 1},
+        "runtime_identity": {"type": "string", "minLength": 1}, "container_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "model_id": {"type": "string", "minLength": 1}, "feature_identity_sha256": {"$ref": "#/$defs/sha256"}, "repo_path": {"type": "string", "minLength": 1}
+      }
+    },
+    "analysis_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sign_zero_epsilon", "clash_detector_id", "clash_detector_version", "outer_support_minimum", "inner_support_minimum", "sign_consistency_minimum", "clash_free_minimum", "rank_stability_minimum", "minimum_common_ranked_universe_size"],
+      "properties": {
+        "sign_zero_epsilon": {"type": "number", "exclusiveMinimum": 0},
+        "clash_detector_id": {"type": "string", "minLength": 1},
+        "clash_detector_version": {"type": "string", "minLength": 1},
+        "outer_support_minimum": {"type": "number", "minimum": 0, "maximum": 1},
+        "inner_support_minimum": {"type": "number", "minimum": 0, "maximum": 1},
+        "sign_consistency_minimum": {"type": "number", "minimum": 0, "maximum": 1},
+        "clash_free_minimum": {"type": "number", "minimum": 0, "maximum": 1},
+        "rank_stability_minimum": {"type": "number", "minimum": -1, "maximum": 1},
+        "minimum_common_ranked_universe_size": {"type": "integer", "minimum": 3}
+      }
+    },
+    "state_landscape_comparison": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["mode", "target_id", "scope"],
+          "properties": {
+            "mode": {"const": "pairwise"},
+            "target_id": {"type": "string", "minLength": 1},
+            "scope": {"const": "all_within_target"}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["mode", "target_id", "scope", "reference_backend_coordinates"],
+          "properties": {
+            "mode": {"const": "reference"},
+            "target_id": {"type": "string", "minLength": 1},
+            "scope": {"const": "all_other_within_target"},
+            "reference_backend_coordinates": {"$ref": "#/$defs/backend_coordinates"}
+          }
+        }
+      ]
+    },
+    "protenix_coordinates": {
+      "type": "object", "additionalProperties": false,
+      "required": ["backend", "target_id", "ordered_seed", "sample_index"],
+      "properties": {
+        "backend": {"const": "protenix_v2_ensemble"}, "target_id": {"type": "string", "minLength": 1},
+        "ordered_seed": {"type": "integer", "minimum": -2147483648, "maximum": 2147483647},
+        "sample_index": {"type": "integer", "minimum": 0}
+      }
+    },
+    "confornets_coordinates": {
+      "type": "object", "additionalProperties": false,
+      "required": ["backend", "target_id", "task", "test_case_id", "reference_id", "run_index", "saved_step", "confornet_index", "sample_index"],
+      "properties": {
+        "backend": {"const": "confornets"}, "target_id": {"type": "string", "minLength": 1},
+        "task": {"type": "string", "minLength": 1}, "test_case_id": {"type": "string", "minLength": 1},
+        "reference_id": {"type": ["string", "null"]}, "run_index": {"type": "integer", "minimum": 0},
+        "saved_step": {"type": "integer", "minimum": 0}, "confornet_index": {"type": "integer", "minimum": 0},
+        "sample_index": {"type": "integer", "minimum": 0}
+      }
+    },
+    "import_coordinates": {
+      "type": "object", "additionalProperties": false,
+      "required": ["backend", "target_id", "staged_index", "source_content_sha256", "staged_receipt_sha256"],
+      "properties": {
+        "backend": {"const": "external_import"}, "target_id": {"type": "string", "minLength": 1},
+        "staged_index": {"type": "integer", "minimum": 0}, "source_content_sha256": {"$ref": "#/$defs/sha256"},
+        "staged_receipt_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "backend_coordinates": {
+      "oneOf": [
+        {"$ref": "#/$defs/protenix_coordinates"}, {"$ref": "#/$defs/confornets_coordinates"},
+        {"$ref": "#/$defs/import_coordinates"}
+      ]
+    }
+  }
+}

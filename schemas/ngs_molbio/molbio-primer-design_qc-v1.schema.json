@@ -1,0 +1,388 @@
+{
+  "$id": "bms.operation-parameters.molbio.primer.design_qc.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "flank_search_span": {
+      "maximum": 100000,
+      "minimum": 0,
+      "type": "integer",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "flank_search_span",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "integer",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "flank search span",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "gc_clamp_min": {
+      "maximum": 20,
+      "minimum": 0,
+      "type": "integer",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "gc_clamp_min",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "integer",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "gc clamp min",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "gc_max_percent": {
+      "maximum": 100,
+      "minimum": 0,
+      "type": "number",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "gc_max_percent",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "float64",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "gc max percent",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "gc_min_percent": {
+      "maximum": 100,
+      "minimum": 0,
+      "type": "number",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "gc_min_percent",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "float64",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "gc min percent",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "max_pairs": {
+      "maximum": 1000,
+      "minimum": 1,
+      "type": "integer",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "max_pairs",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "integer",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "max pairs",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "max_poly_x": {
+      "maximum": 100,
+      "minimum": 1,
+      "type": "integer",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "max_poly_x",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "integer",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "max poly x",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "overhang_forward": {
+      "maxLength": 10000,
+      "type": "string",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "overhang_forward",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "overhang forward",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "overhang_reverse": {
+      "maxLength": 10000,
+      "type": "string",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "overhang_reverse",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "overhang reverse",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "primer_max_length": {
+      "maximum": 200,
+      "minimum": 1,
+      "type": "integer",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "primer_max_length",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "integer",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "primer max length",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "primer_min_length": {
+      "maximum": 200,
+      "minimum": 1,
+      "type": "integer",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "primer_min_length",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "integer",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "primer min length",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "product_max_length": {
+      "maximum": 2000000,
+      "minimum": 1,
+      "type": "integer",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "product_max_length",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "integer",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "product max length",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "product_min_length": {
+      "maximum": 2000000,
+      "minimum": 1,
+      "type": "integer",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "product_min_length",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "integer",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "product min length",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "target_end": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "target_end",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "union_exact",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "target end",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "target_start": {
+      "minimum": 0,
+      "type": "integer",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "target_start",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "integer",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "target start",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "template_revision_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "template_revision_id",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "template revision id",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "tm_max_delta_c": {
+      "maximum": 100,
+      "minimum": 0,
+      "type": "number",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "tm_max_delta_c",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "float64",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "tm max delta c",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "tm_settings": {
+      "additionalProperties": false,
+      "properties": {
+        "algorithm": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "dmso_percent": {
+          "maximum": 100,
+          "minimum": 0,
+          "type": "number"
+        },
+        "dntps_mM": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "formamide_percent": {
+          "maximum": 100,
+          "minimum": 0,
+          "type": "number"
+        },
+        "k_mM": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "mg_mM": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "na_mM": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "primer_concentration_nM": {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "salt_correction": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "self_complementary": {
+          "type": "boolean"
+        },
+        "template_concentration_nM": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "tris_mM": {
+          "minimum": 0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "algorithm",
+        "salt_correction",
+        "primer_concentration_nM",
+        "template_concentration_nM",
+        "na_mM",
+        "k_mM",
+        "tris_mM",
+        "mg_mM",
+        "dntps_mM",
+        "dmso_percent",
+        "formamide_percent",
+        "self_complementary"
+      ],
+      "type": "object",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "tm_settings",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "tm settings",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "tm_target_c": {
+      "maximum": 100,
+      "minimum": 0,
+      "type": "number",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "tm_target_c",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "float64",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "tm target c",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    }
+  },
+  "required": [
+    "template_revision_id",
+    "target_start",
+    "target_end",
+    "primer_min_length",
+    "primer_max_length",
+    "product_min_length",
+    "product_max_length",
+    "flank_search_span",
+    "gc_min_percent",
+    "gc_max_percent",
+    "tm_target_c",
+    "tm_max_delta_c",
+    "gc_clamp_min",
+    "max_poly_x",
+    "max_pairs",
+    "overhang_forward",
+    "overhang_reverse",
+    "tm_settings"
+  ],
+  "title": "molbio.primer.design_qc operation v1",
+  "type": "object",
+  "x-bms-source-pin": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+  "x-bms-unknown-fields": "reject_before_preparation"
+}

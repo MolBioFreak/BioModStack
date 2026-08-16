@@ -1,0 +1,310 @@
+{
+  "$id": "https://biomodstack.local/schemas/frustrampnn/capability_inventory_v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FrustraMPNN pinned capability inventory v1",
+  "description": "Closed Phase 0 inventory of the exact predict surface in the pinned FrustraMPNN image.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_name",
+    "schema_version",
+    "content_hash_semantics",
+    "content_sha256",
+    "runtime_identity",
+    "evidence",
+    "predict_options"
+  ],
+  "properties": {
+    "schema_name": {
+      "const": "frustrampnn_capability_inventory"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "content_hash_semantics": {
+      "const": "sha256(rfc8785(document_without_top_level_content_sha256))",
+      "description": "The digest preimage is the RFC 8785 canonical JSON byte sequence of this complete document after removing only the top-level content_sha256 member."
+    },
+    "content_sha256": {
+      "$ref": "#/$defs/sha256",
+      "description": "SHA-256 calculated according to content_hash_semantics; the digest field is not part of its own preimage."
+    },
+    "runtime_identity": {
+      "$ref": "#/$defs/runtime_identity"
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "$ref": "#/$defs/evidence"
+      }
+    },
+    "predict_options": {
+      "type": "array",
+      "minItems": 9,
+      "maxItems": 9,
+      "items": {
+        "$ref": "#/$defs/predict_option"
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "runtime_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "image_path",
+        "image_sha256",
+        "executable_path",
+        "executable_sha256",
+        "checkpoint_id",
+        "checkpoint_path",
+        "checkpoint_sha256",
+        "package_version",
+        "source_commit"
+      ],
+      "properties": {
+        "image_path": {
+          "const": "/mnt/BioModStack/apptainer/frustrampnn.sif"
+        },
+        "image_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "executable_path": {
+          "const": "/opt/venv/bin/frustrampnn"
+        },
+        "executable_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "checkpoint_id": {
+          "const": "megascale.ckpt"
+        },
+        "checkpoint_path": {
+          "const": "/opt/frustrampnn_weights/megascale.ckpt"
+        },
+        "checkpoint_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "package_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence_id",
+        "evidence_kind",
+        "source",
+        "image_sha256",
+        "observation"
+      ],
+      "properties": {
+        "evidence_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence_kind": {
+          "enum": [
+            "pinned_sif_cli_help",
+            "pinned_sif_cli_version",
+            "authoritative_runtime_registry"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "image_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "command": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "observed_option_keys": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "pdb",
+              "checkpoint",
+              "output",
+              "chains",
+              "positions",
+              "device",
+              "config",
+              "quiet",
+              "help"
+            ]
+          }
+        },
+        "observation": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "typed_product_control": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "control_kind",
+        "api_type"
+      ],
+      "properties": {
+        "status": {
+          "const": "typed_product_control"
+        },
+        "control_kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "api_type": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "no_product_control": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "control_kind",
+        "api_type"
+      ],
+      "properties": {
+        "status": {
+          "const": "no_product_control"
+        },
+        "control_kind": {
+          "type": "null"
+        },
+        "api_type": {
+          "type": "null"
+        }
+      }
+    },
+    "predict_option": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "option_key",
+        "cli_forms",
+        "value_contract",
+        "ownership_class",
+        "scientific_or_inference_setting",
+        "product_control",
+        "model_native_default",
+        "default_source",
+        "validation_evidence",
+        "disposition",
+        "disposition_reason"
+      ],
+      "properties": {
+        "option_key": {
+          "enum": [
+            "pdb",
+            "checkpoint",
+            "output",
+            "chains",
+            "positions",
+            "device",
+            "config",
+            "quiet",
+            "help"
+          ]
+        },
+        "cli_forms": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^-"
+          }
+        },
+        "value_contract": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ownership_class": {
+          "enum": [
+            "workflow_source",
+            "system_runtime",
+            "system_storage",
+            "scientific_operator",
+            "scheduler_runtime",
+            "system_compatibility",
+            "system_diagnostics",
+            "cli_diagnostics"
+          ]
+        },
+        "scientific_or_inference_setting": {
+          "type": "boolean"
+        },
+        "product_control": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/typed_product_control"
+            },
+            {
+              "$ref": "#/$defs/no_product_control"
+            }
+          ]
+        },
+        "model_native_default": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "default_source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "validation_evidence": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "disposition": {
+          "enum": [
+            "governed_input",
+            "system_pinned",
+            "scheduler_allocated",
+            "operator_exposed",
+            "scheduler_assigned",
+            "not_applicable_to_pinned_checkpoint",
+            "system_fixed",
+            "documentation_only"
+          ]
+        },
+        "disposition_reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

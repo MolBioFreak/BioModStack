@@ -1,0 +1,273 @@
+# Structure Prediction Template
+# Predict 3D protein structure from amino acid sequence using Boltz-2 or RF3
+
+id: structure_prediction
+name: Structure Prediction
+icon: bolt
+color: "#F59E0B"
+description: >
+  Predict 3D protein structure from amino acid sequence using
+  Boltz-2 or RosettaFold3 (RF3).
+
+stages:
+  - name: Structure Prediction
+    tool: Boltz-2/RF3
+    description: Predict 3D structure from amino acid sequence using deep learning.
+
+preset_params:
+  skip_rfd: true
+  skip_rfd_seq: true
+  rfd_mode: null
+
+user_params:
+  # === Core Inputs ===
+  - name: pred_method
+    label: Structure Predictor
+    type: enum
+    enum: [boltz, rf3, both]
+    enum_labels:
+      boltz: Boltz-2 (Fast, SOTA accuracy)
+      rf3: RosettaFold3 (Open-source AF3 alternative)
+      both: Both (Run Boltz-2 and RF3 together)
+    default: boltz
+    required: true
+    description: Deep learning model for structure prediction
+
+  - name: sequence
+    label: Amino Acid Sequence
+    type: text
+    required: true
+    description: Single-letter amino acid sequence (A-Z), or paste FASTA format
+    
+  - name: sequence_name
+    label: Sequence Name
+    type: string
+    default: predicted
+    description: Name for output structure files
+
+  - name: run_frustrampnn
+    label: Run FrustraMPNN Analysis
+    type: boolean
+    default: true
+    description: Run FrustraMPNN analysis after structure prediction.
+
+  - name: frustrampnn_requiredness
+    label: FrustraMPNN Requiredness
+    type: enum
+    enum: [required]
+    default: required
+    description: FrustraMPNN is fail-closed when enabled and must remain required.
+    condition:
+      param: run_frustrampnn
+      values: [true]
+
+  - name: frustrampnn_settings
+    label: FrustraMPNN Settings
+    type: object
+    ui_control: frustrampnn_settings
+    default_source: frustrampnn.canonical_defaults
+    description: Complete nested FrustraMPNNRequestedSettings contract, schema version 1.
+    condition:
+      param: run_frustrampnn
+      values: [true]
+    
+  # === Boltz-2 Parameters ===
+  - name: boltz_use_msa
+    label: "[Boltz-2] Use MSA"
+    type: boolean
+    default: true
+    description: Use local MSA database for accuracy (885GB UniRef30)
+    condition:
+      param: pred_method
+      values: [boltz, both]
+
+  - name: boltz_recycling_steps
+    label: "[Boltz-2] Recycling Steps"
+    type: integer
+    default: 3
+    minimum: 1
+    maximum: 10
+    description: "Iterative refinement (Default: 3). Use 10 for difficult targets."
+    condition:
+      param: pred_method
+      values: [boltz, both]
+    
+  - name: boltz_sampling_steps
+    label: "[Boltz-2] Sampling Steps"
+    type: integer
+    default: 50
+    minimum: 10
+    maximum: 1000
+    description: "Diffusion steps (Default: 50). Higher = potential side-chain precision."
+    condition:
+      param: pred_method
+      values: [boltz, both]
+    
+  - name: boltz_num_samples
+    label: "[Boltz-2] Number of Candidate Structures"
+    type: integer
+    default: 1
+    minimum: 1
+    maximum: 32
+    description: "Final ranked candidate structures generated from the same input; model_0 is shown as the top-ranked result."
+    condition:
+      param: pred_method
+      values: [boltz, both]
+
+  - name: boltz_max_parallel_samples
+    label: "[Boltz-2] Denoiser Chunk Limit"
+    type: integer
+    default: 1
+    minimum: 1
+    maximum: 32
+    description: "Caps denoiser-forward chunk size for already-requested Boltz diffusion/FK particles; not a full one-at-a-time job guarantee."
+    condition:
+      param: pred_method
+      values: [boltz, both]
+
+  - name: boltz_method
+    label: "[Boltz-2] Conditioning Method"
+    type: enum
+    enum: 
+      - ""
+      - md
+      - x-ray diffraction
+      - electron microscopy
+      - solution nmr
+      - solid-state nmr
+      - neutron diffraction
+      - electron crystallography
+      - fiber diffraction
+      - powder diffraction
+      - infrared spectroscopy
+      - fluorescence transfer
+      - epr
+      - theoretical model
+      - solution scattering
+      - other
+      - afdb
+      - boltz-1
+    enum_labels:
+      "": "None (Standard Folding)"
+    default: ""
+    description: Hint experimental context
+    condition:
+      param: pred_method
+      values: [boltz, both]
+    
+  # === RF3 Parameters ===
+  - name: rf3_use_msa
+    label: "[RF3] Use MSA"
+    type: boolean
+    default: true
+    description: Use local MSA database for accuracy (885GB UniRef30)
+    condition:
+      param: pred_method
+      values: [rf3, both]
+    
+  - name: rf3_num_recycles
+    label: "[RF3] Recycle Iterations"
+    type: integer
+    default: 10
+    minimum: 1
+    maximum: 20
+    description: "Structure refinement (Default: 10). Critical for accuracy."
+    condition:
+      param: pred_method
+      values: [rf3, both]
+    
+  - name: rf3_num_samples
+    label: "[RF3] Number of Samples"
+    type: integer
+    default: 1
+    minimum: 1
+    maximum: 32
+    description: Independent predictions (Seeds)
+    condition:
+      param: pred_method
+      values: [rf3, both]
+    
+  - name: rf3_early_stopping_plddt
+    label: "[RF3] Early Stop pLDDT"
+    type: number
+    default: 0.5
+    minimum: 0.0
+    maximum: 1.0
+    description: "Abort if quality < threshold (Default: 0.5)"
+    condition:
+      param: pred_method
+      values: [rf3, both]
+
+  # === RF3 Filter Thresholds ===
+  - name: rf3_min_plddt
+    label: "[RF3] Min pLDDT Filter"
+    type: number
+    default: null
+    minimum: 0.0
+    maximum: 100.0
+    description: "Filter results below this pLDDT threshold (0-100)"
+    condition:
+      param: pred_method
+      values: [rf3, both]
+
+  - name: rf3_min_ptm
+    label: "[RF3] Min pTM Filter"
+    type: number
+    default: null
+    minimum: 0.0
+    maximum: 1.0
+    description: "Filter results below this pTM threshold (0-1)"
+    condition:
+      param: pred_method
+      values: [rf3, both]
+
+  - name: rf3_max_pae
+    label: "[RF3] Max PAE Filter"
+    type: number
+    default: null
+    minimum: 0.0
+    maximum: 50.0
+    description: "Filter results above this PAE threshold (Ångströms)"
+    condition:
+      param: pred_method
+      values: [rf3, both]
+
+  - name: rf3_max_rmsd_overall
+    label: "[RF3] Max RMSD Filter"
+    type: number
+    default: null
+    minimum: 0.0
+    maximum: 20.0
+    description: "Filter results above this overall RMSD (Ångströms)"
+    condition:
+      param: pred_method
+      values: [rf3, both]
+
+  - name: rf3_max_rmsd_binder
+    label: "[RF3] Max Binder RMSD"
+    type: number
+    default: null
+    minimum: 0.0
+    maximum: 20.0
+    description: "Filter results above this binder RMSD (for complexes)"
+    condition:
+      param: pred_method
+      values: [rf3, both]
+
+  - name: rf3_extra_config
+    label: "[RF3] Advanced Config"
+    type: string
+    default: ""
+    description: "Hydra overrides for power users (e.g., num_recycles=20)"
+    condition:
+      param: pred_method
+      values: [rf3, both]
+    
+  # === Parallelization / Stress Test ===
+  - name: num_parallel_jobs
+    label: Parallel Jobs
+    type: integer
+    default: 1
+    minimum: 1
+    maximum: 500
+    description: Concurrent GPU tasks (Limited by VRAM)

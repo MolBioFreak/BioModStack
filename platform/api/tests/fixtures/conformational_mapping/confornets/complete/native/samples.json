@@ -1,0 +1,30 @@
+[
+    {
+        "bytes": 1299,
+        "frame_index": 0,
+        "relative_path": "conformers/candidate_000.cif",
+        "sample_id": "legacy-000",
+        "sha256": "add8f015aac59257a191780ae775717980000ea3e57fd1790cbabc2e01c179e3"
+    },
+    {
+        "bytes": 1299,
+        "frame_index": 1,
+        "relative_path": "conformers/candidate_001.cif",
+        "sample_id": "legacy-001",
+        "sha256": "8d922de649d048af330347be177f7c7a4aba0e365f43e9a6305c930c8fb1c188"
+    },
+    {
+        "bytes": 1299,
+        "frame_index": 2,
+        "relative_path": "conformers/candidate_002.cif",
+        "sample_id": "legacy-002",
+        "sha256": "a3ec8670f4faed42958e26e694b9db5b2b30b1470fa740a27267279da6f6e1cc"
+    },
+    {
+        "bytes": 1299,
+        "frame_index": 3,
+        "relative_path": "conformers/candidate_003.cif",
+        "sample_id": "legacy-003",
+        "sha256": "f3e47b285113b1bbeceafaf07a18bbfd0ddba7faf90ab9165dabf37cf8d71655"
+    }
+]

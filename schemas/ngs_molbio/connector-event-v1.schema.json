@@ -1,0 +1,95 @@
+{
+  "$id": "bms.ngs-molbio.connector-event.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "binding_revision_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "event_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "event_stream": {
+      "pattern": "^(binding|state|sample:[^:]{1,128}|reference:[^:]{1,128}|member:[^:]{1,64}:[^:]{1,255}|evidence:[^:]{1,128})$",
+      "type": "string"
+    },
+    "event_type": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "global_domain_experiment_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "payload": {
+      "maxProperties": 128,
+      "type": "object"
+    },
+    "payload_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "schema": {
+      "const": "bms.ngs-molbio.connector-event.v1"
+    },
+    "source_generation": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "source_store_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "state_revision_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "stream_generation": {
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schema",
+    "source_store_id",
+    "event_id",
+    "event_type",
+    "global_domain_experiment_id",
+    "binding_revision_id",
+    "state_revision_id",
+    "event_stream",
+    "stream_generation",
+    "source_generation",
+    "payload",
+    "payload_sha256",
+    "occurred_at"
+  ],
+  "title": "Ordered connector event v1",
+  "type": "object"
+}

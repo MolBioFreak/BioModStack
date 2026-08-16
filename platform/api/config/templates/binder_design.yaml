@@ -1,0 +1,68 @@
+# Protein Binder Design Template
+# Full pipeline: RFdiffusion → ProteinMPNN → AlphaFold2
+
+id: binder_design
+name: Protein Binder Design
+icon: target
+color: "#8B5CF6"
+description: >
+  Design a small protein (~50-100 residues) that binds to your target protein.
+  The pipeline generates backbone structures, designs sequences, then validates
+  with structure prediction.
+
+stages:
+  - name: Backbone Generation
+    tool: RFdiffusion
+    description: Generate diverse backbone conformations that complement your target's binding surface.
+  - name: Sequence Design
+    tool: ProteinMPNN
+    description: Design amino acid sequences optimized for the generated backbones.
+  - name: Structure Validation
+    tool: AlphaFold2
+    description: Predict structures to verify designs fold correctly and maintain binding pose.
+
+preset_params:
+  rfd_mode: binder_denovo
+  diffusion_method: rfd3
+  seq_method: mpnn
+  pred_method: af2
+
+user_params:
+  - name: rfd_input_pdb
+    label: Target Protein PDB
+    type: file
+    required: true
+    description: Upload or select the PDB file of your target protein.
+    
+  - name: rfd_contigs
+    label: Contig Specification
+    type: string
+    required: true
+    default: "[A17-145/0 50-100]"
+    description: >
+      Define chain lengths and fixed regions. Example: '[A17-145/0 50-100]' keeps
+      residues 17-145 of chain A, then generates a 50-100 residue binder.
+      
+  - name: rfd_hotspots
+    label: Hotspot Residues
+    type: string
+    required: false
+    description: "Optional residues to bias binding toward. Format: [A56,A115,A123]"
+    
+  - name: rfd_num_designs
+    label: Number of Designs
+    type: integer
+    required: true
+    default: 8
+    minimum: 1
+    maximum: 100
+    
+  - name: seqs_per_design
+    label: Sequences per Design
+    type: integer
+    required: true
+    default: 8
+    minimum: 1
+    maximum: 100
+
+enabled: false

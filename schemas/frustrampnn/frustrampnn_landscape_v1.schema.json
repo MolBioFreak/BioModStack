@@ -1,0 +1,245 @@
+{
+  "$id": "https://biomodstack.local/schemas/frustrampnn/frustrampnn_landscape_v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "candidate_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "configuration_id": {
+      "const": "frustrampnn_global_v1"
+    },
+    "configuration_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "model_ready_sequence_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "normalized_pdb_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "parent_job_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "raw_csv_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "residues": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "auth_asym_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "auth_seq_id": {
+            "maximum": 9999,
+            "minimum": -999,
+            "type": "integer"
+          },
+          "entity_instance_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "insertion_code": {
+            "maxLength": 1,
+            "type": "string"
+          },
+          "label_asym_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label_seq_id": {
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "model_position": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pdb_chain_id": {
+            "maxLength": 1,
+            "minLength": 1,
+            "type": "string"
+          },
+          "pdb_insertion_code": {
+            "maxLength": 1,
+            "type": "string"
+          },
+          "pdb_residue_id": {
+            "maximum": 9999,
+            "minimum": -999,
+            "type": "integer"
+          },
+          "residue_name": {
+            "maxLength": 3,
+            "minLength": 3,
+            "type": "string"
+          },
+          "sequence_index": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "slots": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "class": {
+                  "enum": [
+                    null,
+                    "high",
+                    "neutral",
+                    "minimal"
+                  ],
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "mutation_aa": {
+                  "pattern": "^[ACDEFGHIKLMNPQRSTVWY]$",
+                  "type": "string"
+                },
+                "native": {
+                  "type": "boolean"
+                },
+                "reason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "score": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "scoreable": {
+                  "type": "boolean"
+                },
+                "status": {
+                  "enum": [
+                    "ok",
+                    "missing"
+                  ]
+                }
+              },
+              "required": [
+                "mutation_aa",
+                "score",
+                "class",
+                "scoreable",
+                "status",
+                "reason",
+                "native"
+              ],
+              "type": "object"
+            },
+            "maxItems": 20,
+            "minItems": 20,
+            "type": "array"
+          },
+          "source_entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "wt": {
+            "pattern": "^[ACDEFGHIKLMNPQRSTVWY]$",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "entity_instance_id",
+          "source_entity_id",
+          "label_asym_id",
+          "auth_asym_id",
+          "label_seq_id",
+          "auth_seq_id",
+          "insertion_code",
+          "sequence_index",
+          "pdb_chain_id",
+          "pdb_residue_id",
+          "pdb_insertion_code",
+          "model_position",
+          "residue_name",
+          "wt",
+          "slots"
+        ],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "schema_name": {
+      "const": "frustrampnn_landscape"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "structure_map_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "target_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "threshold_policy": {
+      "additionalProperties": false,
+      "properties": {
+        "high_max": {
+          "const": -1.0
+        },
+        "id": {
+          "const": "frustrampnn_class_v1"
+        },
+        "minimal_min": {
+          "const": 0.58
+        }
+      },
+      "required": [
+        "id",
+        "high_max",
+        "minimal_min"
+      ],
+      "type": "object"
+    },
+    "threshold_policy_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_name",
+    "schema_version",
+    "target_id",
+    "parent_job_id",
+    "candidate_id",
+    "structure_map_sha256",
+    "normalized_pdb_sha256",
+    "model_ready_sequence_sha256",
+    "raw_csv_sha256",
+    "threshold_policy",
+    "threshold_policy_sha256",
+    "residues"
+  ],
+  "title": "frustrampnn_landscape_v1",
+  "type": "object"
+}

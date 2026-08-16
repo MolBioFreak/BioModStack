@@ -1,0 +1,145 @@
+{
+  "$id": "bms.domain-experiment.v2",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "domain_kind": {
+            "const": "ngs_molbio"
+          }
+        },
+        "required": [
+          "domain_kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "domain_payload": {
+            "$ref": "bms.ngs-molbio-experiment.v2"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "domain_kind": {
+            "const": "protein_in_silico"
+          }
+        },
+        "required": [
+          "domain_kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "domain_payload": {
+            "$ref": "bms.protein-in-silico-experiment.v2"
+          }
+        }
+      }
+    }
+  ],
+  "properties": {
+    "change_summary": {
+      "maxLength": 1024,
+      "minLength": 1,
+      "type": "string"
+    },
+    "created_by": {
+      "maxLength": 255,
+      "minLength": 1,
+      "type": "string"
+    },
+    "dataset_revision_ids": {
+      "items": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 128,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "domain_contract_version": {
+      "const": "2"
+    },
+    "domain_kind": {
+      "enum": [
+        "protein_in_silico",
+        "ngs_molbio"
+      ]
+    },
+    "domain_payload": {
+      "oneOf": [
+        {
+          "$ref": "bms.ngs-molbio-experiment.v2"
+        },
+        {
+          "$ref": "bms.protein-in-silico-experiment.v2"
+        }
+      ]
+    },
+    "name": {
+      "maxLength": 255,
+      "minLength": 1,
+      "type": "string"
+    },
+    "objective": {
+      "maxLength": 8192,
+      "type": "string"
+    },
+    "schema": {
+      "const": "bms.domain-experiment.v2"
+    },
+    "source_receipt_ids": {
+      "items": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 256,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "status": {
+      "enum": [
+        "draft",
+        "planned",
+        "active",
+        "analysis",
+        "review",
+        "completed",
+        "blocked",
+        "archived"
+      ]
+    },
+    "tags": {
+      "items": {
+        "maxLength": 64,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 64,
+      "type": "array",
+      "uniqueItems": true
+    }
+  },
+  "required": [
+    "schema",
+    "domain_kind",
+    "domain_contract_version",
+    "name",
+    "objective",
+    "status",
+    "tags",
+    "source_receipt_ids",
+    "dataset_revision_ids",
+    "created_by",
+    "change_summary",
+    "domain_payload"
+  ],
+  "type": "object"
+}

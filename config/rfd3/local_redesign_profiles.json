@@ -1,0 +1,42 @@
+{
+  "schema": "bms.rfd3.local-redesign.profile-registry.v1",
+  "schema_version": 1,
+  "profiles": {
+    "generic_local_redesign_v1": {
+      "id": "generic_local_redesign_v1",
+      "label": "Generic local redesign",
+      "default_mode": "partial_diffusion",
+      "sequence_policy": "skip",
+      "protected_layers": [
+        "unselected_input_sequence",
+        "unselected_input_coordinates",
+        "unselected_context_components"
+      ],
+      "generation_context": "supplied_input_structure",
+      "acceptance_context": "supplied_input_structure"
+    },
+    "drt4_datp_gate_v1": {
+      "id": "drt4_datp_gate_v1",
+      "label": "DRT4 dATP gate",
+      "default_mode": "partial_diffusion",
+      "sequence_policy": "skip",
+      "protected_layers": [
+        "native_drt4_sequence",
+        "catalytic_and_priming_residues",
+        "substrate_positioning",
+        "mapped_hexamer_interfaces",
+        "conserved_and_coevolving_networks"
+      ],
+      "generation_context": "editable_protomer_with_catalytic_and_nearby_assembly_context",
+      "acceptance_context": "complete_d3_hexamer_with_all_bound_context",
+      "positive_state": "dATP_productive_incorporation_geometry",
+      "negative_states": [
+        "dGTP_productive_incorporation_geometry",
+        "dCTP_productive_incorporation_geometry",
+        "dTTP_productive_incorporation_geometry"
+      ],
+      "negative_design_policy": "retain_dATP_productive_geometry_and_reject_nonproductive_equivalents",
+      "symmetry_policy": "replicate_validated_protomer_edit_then_validate_complete_hexamer"
+    }
+  }
+}

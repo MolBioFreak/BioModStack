@@ -1,0 +1,91 @@
+# Build stage - install dependencies and compile
+Bootstrap: docker
+Stage: build
+From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
+
+%post
+    # install build deps
+    apt-get -q update
+    DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y \
+        git \
+        wget \
+        curl \
+        python3.10 \
+        python3.10-dev \
+        python3-venv \
+        python3-pip \
+        build-essential
+
+    # Install UV package manager (10-100x faster than pip)
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="/root/.local/bin:$PATH"
+
+    # create and activate virtual environment
+    python3.10 -m venv /opt/venv
+    . /opt/venv/bin/activate
+
+    # install PyTorch nightly with CUDA 12.8 for RTX 5090 (sm_120) support
+    # CUDA 12.8 nightly builds include sm_120 support for Blackwell architecture
+    uv pip install --compile --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+
+    # install boltz-community pinned to a reviewed community fork commit
+    # while keeping the BioModStack external contract stable. The fork still
+    # exposes the `boltz` CLI, but the Python distribution name is
+    # `boltz-community`.
+    #
+    # CUDA kernels live in the optional [cuda] extra; without it, runtime
+    # inference crashes on triangle kernels with ModuleNotFoundError for
+    # cuequivariance_torch / cuequivariance_ops_torch.
+    git clone https://github.com/Novel-Therapeutics/boltz-community.git /boltz && cd /boltz && git checkout 7ebf1be087d4d61a02234c878402838bf3712d8b
+    uv pip install --compile --no-cache-dir '.[cuda]'
+
+    # cleanup build dependencies but KEEP python3.10-dev (needed for Triton JIT on RTX 5090)
+    apt-mark manual python3.10-dev
+    apt-get autoremove -y
+    apt-get clean
+    
+    # link venv
+    echo '. /opt/venv/bin/activate' >> $APPTAINER_ENVIRONMENT
+    
+%runscript
+    cd /boltz
+    if [ $# -eq 0 ]; then
+        exec /bin/bash --norc
+    else
+        exec "$@"
+    fi
+
+%test
+    . /opt/venv/bin/activate
+    cd /boltz
+    export NUMBA_CACHE_DIR=/tmp
+    export XDG_CONFIG_HOME=/tmp
+    export TRITON_CACHE_DIR=/tmp
+    boltz --help
+    boltz predict --help | grep -q -- '--max_parallel_samples'
+    python - <<'PY'
+import importlib.util
+import subprocess
+from importlib import metadata
+
+required = [
+    'boltz',
+    'cuequivariance_torch',
+    'cuequivariance_ops_torch',
+    'cuequivariance_ops',
+]
+for name in required:
+    assert importlib.util.find_spec(name) is not None, f'missing required module: {name}'
+
+predict_help = subprocess.run(['boltz', 'predict', '--help'], check=True, capture_output=True, text=True)
+assert '--max_parallel_samples' in predict_help.stdout + predict_help.stderr
+
+print('boltz-community', metadata.version('boltz-community'))
+print('cuequivariance_torch', metadata.version('cuequivariance_torch'))
+print('cuequivariance-ops-torch-cu12', metadata.version('cuequivariance-ops-torch-cu12'))
+print('cuequivariance-ops-cu12', metadata.version('cuequivariance-ops-cu12'))
+PY
+    echo "Build tests completed sucessfully"
+
+%help
+    Boltz-community v2.9.5 container with CUDA 12.8 runtime

@@ -1,0 +1,66 @@
+# FrustraMPNN shared model and workflow-integration configuration
+
+id: frustrampnn
+name: FrustraMPNN
+version: "MegaScale"
+configuration_id: frustrampnn_global_v1
+configuration_schema: frustrampnn_global_configuration_v1
+category: scientific_analysis
+description: >
+  Structure-conditioned residue-frustration and substitution-landscape analysis
+  for interpreting structures and guiding scientifically informed mutagenesis.
+container: frustrampnn.sif
+
+ui_icon: activity
+ui_color: "#22D3EE"
+
+inputs:
+  - pdb
+outputs:
+  - csv
+  - json
+
+# FrustraMPNN is a scheduler-owned component embedded in parent workflows. It is
+# intentionally absent from generic direct-launch model pickers.
+public_launch: false
+enabled: true
+experimental: false
+
+integration:
+  stage_parameter: run_frustrampnn
+  operator_label: Frustration analysis
+  checkpoint_label: MegaScale-trained checkpoint
+  model_summary: >
+    Maps residue-level energetic frustration and scores amino-acid substitutions
+    to support structure interpretation and scientifically guided mutagenesis.
+  semantic_roles:
+    - structure_interpretation
+    - mutagenesis_guidance
+    - analysis_authority
+    - experimental_decision_support
+  workflows:
+    structure_prediction:
+      default_enabled: true
+      enabled_summary: >
+        Analyze each predicted structure with FrustraMPNN, then show its
+        frustration map and substitution landscape for interpretation and
+        mutation planning.
+    complex_prediction:
+      default_enabled: true
+      enabled_summary: >
+        Map frustration across the predicted complex to support interface and
+        mutation analysis.
+    protein_design:
+      default_enabled: true
+      enabled_summary: >
+        Score designed structures for residue-level frustration and practical
+        substitution guidance.
+    antibody_design:
+      default_enabled: true
+      enabled_summary: >
+        Map frustration across designed antibody structures to support focused
+        mutation planning and workflow-specific review.
+    conformational_mapping:
+      default_enabled: true
+      enabled_summary: >
+        Compare frustration landscapes across mapped conformational states.

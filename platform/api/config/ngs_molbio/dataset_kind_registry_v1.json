@@ -1,0 +1,574 @@
+{
+  "baseline_source_commit": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+  "content_sha256": "1b2c6bfc93425bdbf1c24c747a9ed432ce3f55b335c122a6c8ebfd8c0851a1a4",
+  "entries": [
+    {
+      "allowed_domain_kinds": [
+        "ngs_molbio"
+      ],
+      "allowed_members": [
+        {
+          "adapter_id": "bms.molbio.member-molecular-revision.adapter.v1",
+          "allowed_roles": [
+            "molecular_expected_construct",
+            "molecular_input_fragment",
+            "molecular_assembly_product",
+            "molecular_pcr_template",
+            "molecular_pcr_product"
+          ],
+          "compatibility_rule": "exact_molecular_revision_bytes_and_domain_authority",
+          "receipt_kind": "molecular_revision"
+        },
+        {
+          "adapter_id": "bms.molbio.primer-revision.adapter.v1",
+          "allowed_roles": [
+            "molecular_primer_forward",
+            "molecular_primer_reverse"
+          ],
+          "compatibility_rule": "exact_primer_revision_sequence_bytes",
+          "receipt_kind": "primer_revision"
+        },
+        {
+          "adapter_id": "bms.molbio.pcr-experiment-revision.adapter.v1",
+          "allowed_roles": [
+            "molecular_pcr_experiment"
+          ],
+          "compatibility_rule": "exact_complete_pcr_revision_json",
+          "receipt_kind": "pcr_experiment_revision"
+        },
+        {
+          "adapter_id": "bms.molbio.member-operation.adapter.v1",
+          "allowed_roles": [
+            "molecular_operation"
+          ],
+          "compatibility_rule": "exact_operation_plus_ordered_inputs_outputs",
+          "receipt_kind": "molecular_operation"
+        }
+      ],
+      "compatibility_rules": [
+        "same_project_domain_authority",
+        "exact_immutable_revision_only",
+        "adapter_role_intersection",
+        "exact_molecular_revision_bytes_and_domain_authority",
+        "exact_primer_revision_sequence_bytes",
+        "exact_complete_pcr_revision_json",
+        "exact_operation_plus_ordered_inputs_outputs"
+      ],
+      "dataset_kind": "ngs_molbio.molecular_construct_cohort.v1",
+      "enabled": false,
+      "label": "Molecular construct cohort",
+      "maximum_members": 10000,
+      "minimum_members": 0,
+      "owner_contract_state": "closed"
+    },
+    {
+      "allowed_domain_kinds": [
+        "ngs_molbio"
+      ],
+      "allowed_members": [
+        {
+          "adapter_id": "bms.ngs-molbio.sample-revision.adapter.v1",
+          "allowed_roles": [
+            "sample"
+          ],
+          "compatibility_rule": "same_domain_exact_sample_revision_payload",
+          "receipt_kind": "sample_revision"
+        }
+      ],
+      "compatibility_rules": [
+        "same_project_domain_authority",
+        "exact_immutable_revision_only",
+        "same_domain_exact_sample_revision_payload"
+      ],
+      "dataset_kind": "ngs_molbio.sample_cohort.v1",
+      "enabled": false,
+      "label": "Sample cohort",
+      "maximum_members": 10000,
+      "minimum_members": 0,
+      "owner_contract_state": "closed"
+    },
+    {
+      "allowed_domain_kinds": [
+        "ngs_molbio"
+      ],
+      "allowed_members": [
+        {
+          "adapter_id": "bms.ngs.reference-revision.adapter.v1",
+          "allowed_roles": [
+            "ngs_reference"
+          ],
+          "compatibility_rule": "exact_reference_revision_fasta_authority",
+          "receipt_kind": "ngs_reference_revision"
+        },
+        {
+          "adapter_id": "bms.ngs.comparison-panel.adapter.v1",
+          "allowed_roles": [
+            "ngs_comparison_panel"
+          ],
+          "compatibility_rule": "exact_panel_id_version_snapshot_digest",
+          "receipt_kind": "ngs_comparison_panel"
+        },
+        {
+          "adapter_id": "bms.ngs.expected-reference-receipt.adapter.v1",
+          "allowed_roles": [
+            "ngs_expected_reference"
+          ],
+          "compatibility_rule": "one_time_expected_reference_receipt_identity",
+          "receipt_kind": "ngs_expected_reference_receipt"
+        },
+        {
+          "adapter_id": "bms.ngs.reference-set-reference.adapter.v1",
+          "allowed_roles": [
+            "ngs_reference_set"
+          ],
+          "compatibility_rule": "complete_reference_set_manifest_authority",
+          "receipt_kind": "ngs_reference_set"
+        }
+      ],
+      "compatibility_rules": [
+        "same_project_domain_authority",
+        "comparison_contract_required_for_mixed_panels",
+        "exact_immutable_revision_only",
+        "exact_reference_revision_fasta_authority",
+        "exact_panel_id_version_snapshot_digest",
+        "one_time_expected_reference_receipt_identity",
+        "complete_reference_set_manifest_authority"
+      ],
+      "dataset_kind": "ngs_molbio.reference_comparison_panel_cohort.v1",
+      "enabled": false,
+      "label": "Reference and comparison panel cohort",
+      "maximum_members": 10000,
+      "minimum_members": 0,
+      "owner_contract_state": "closed"
+    },
+    {
+      "allowed_domain_kinds": [
+        "ngs_molbio"
+      ],
+      "allowed_members": [
+        {
+          "adapter_id": "bms.ngs.ont-observation.adapter.v1",
+          "allowed_roles": [
+            "ngs_instrument_run"
+          ],
+          "compatibility_rule": "exact_observed_generation_and_observation_digest",
+          "receipt_kind": "ont_instrument_run"
+        },
+        {
+          "adapter_id": "bms.ngs.job-reference.adapter.v1",
+          "allowed_roles": [
+            "ngs_analysis_job"
+          ],
+          "compatibility_rule": "exact_launch_identity_not_terminal_analysis_projection",
+          "receipt_kind": "ngs_job"
+        },
+        {
+          "adapter_id": "bms.ngs.pooled-assignment-release.adapter.v1",
+          "allowed_roles": [
+            "ngs_pooled_assignment_release"
+          ],
+          "compatibility_rule": "exact_release_child_reference_set_lineage",
+          "receipt_kind": "ngs_pooled_assignment_release"
+        }
+      ],
+      "compatibility_rules": [
+        "same_project_domain_authority",
+        "no_current_head_resolution_during_preparation",
+        "exact_generation_required_for_planned_inputs",
+        "exact_observed_generation_and_observation_digest",
+        "exact_launch_identity_not_terminal_analysis_projection",
+        "exact_release_child_reference_set_lineage"
+      ],
+      "dataset_kind": "ngs_molbio.acquisition_run_input_cohort.v1",
+      "enabled": false,
+      "label": "Acquisition and run input cohort",
+      "maximum_members": 10000,
+      "minimum_members": 0,
+      "owner_contract_state": "closed"
+    },
+    {
+      "allowed_domain_kinds": [
+        "ngs_molbio"
+      ],
+      "allowed_members": [
+        {
+          "adapter_id": "bms.ngs.result-manifest.adapter.v1",
+          "allowed_roles": [
+            "ngs_analysis_result_manifest"
+          ],
+          "compatibility_rule": "exact_manifest_file_bytes_and_owner_job",
+          "receipt_kind": "ngs_result_manifest"
+        },
+        {
+          "adapter_id": "bms.ngs.sequence-qc-reference.adapter.v1",
+          "allowed_roles": [
+            "ngs_sequence_qc_result"
+          ],
+          "compatibility_rule": "strict_sequence_qc_manifest_owner",
+          "receipt_kind": "sequence_qc_job"
+        },
+        {
+          "adapter_id": "bms.ngs.analysis-reference.adapter.v1",
+          "allowed_roles": [
+            "ngs_analysis_result"
+          ],
+          "compatibility_rule": "workflow_aware_terminal_analysis_projection",
+          "receipt_kind": "ngs_analysis_job"
+        },
+        {
+          "adapter_id": "bms.ngs.alignment-viewer-reference.adapter.v1",
+          "allowed_roles": [
+            "ngs_alignment_result"
+          ],
+          "compatibility_rule": "exact_alignment_session_source_identity",
+          "receipt_kind": "ngs_alignment_job"
+        },
+        {
+          "adapter_id": "bms.ngs-molbio.evidence-assessment.adapter.v1",
+          "allowed_roles": [
+            "ngs_verification_assessment"
+          ],
+          "compatibility_rule": "exact_immutable_assessment_wrapper",
+          "receipt_kind": "ngs_evidence_assessment"
+        }
+      ],
+      "compatibility_rules": [
+        "same_project_domain_authority",
+        "terminal_manifest_required_for_result_rows",
+        "exact_historical_reopen",
+        "exact_manifest_file_bytes_and_owner_job",
+        "strict_sequence_qc_manifest_owner",
+        "workflow_aware_terminal_analysis_projection",
+        "exact_alignment_session_source_identity",
+        "exact_immutable_assessment_wrapper"
+      ],
+      "dataset_kind": "ngs_molbio.qc_analysis_result_cohort.v1",
+      "enabled": false,
+      "label": "QC and analysis result cohort",
+      "maximum_members": 10000,
+      "minimum_members": 0,
+      "owner_contract_state": "closed"
+    },
+    {
+      "allowed_domain_kinds": [
+        "ngs_molbio"
+      ],
+      "allowed_members": [
+        {
+          "adapter_id": "bms.ngs.result-manifest.adapter.v1",
+          "allowed_roles": [
+            "ngs_analysis_result_manifest"
+          ],
+          "compatibility_rule": "exact_manifest_file_bytes_and_owner_job",
+          "receipt_kind": "ngs_result_manifest"
+        },
+        {
+          "adapter_id": "bms.ngs.comparison-panel.adapter.v1",
+          "allowed_roles": [
+            "ngs_comparison_panel"
+          ],
+          "compatibility_rule": "exact_panel_snapshot",
+          "receipt_kind": "ngs_comparison_panel"
+        },
+        {
+          "adapter_id": "bms.ngs-molbio.evidence-assessment.adapter.v1",
+          "allowed_roles": [
+            "ngs_verification_assessment"
+          ],
+          "compatibility_rule": "exact_immutable_assessment_wrapper",
+          "receipt_kind": "ngs_evidence_assessment"
+        },
+        {
+          "adapter_id": "bms.ngs.alignment-viewer-reference.adapter.v1",
+          "allowed_roles": [
+            "ngs_alignment_result"
+          ],
+          "compatibility_rule": "exact_alignment_session_source_identity",
+          "receipt_kind": "ngs_alignment_job"
+        }
+      ],
+      "compatibility_rules": [
+        "same_project_domain_authority",
+        "comparison_compatibility_contract_required",
+        "exact_historical_reopen",
+        "exact_manifest_file_bytes_and_owner_job",
+        "exact_panel_snapshot",
+        "exact_immutable_assessment_wrapper",
+        "exact_alignment_session_source_identity"
+      ],
+      "dataset_kind": "ngs_molbio.saved_review_comparison_cohort.v1",
+      "enabled": false,
+      "label": "Saved review and comparison cohort",
+      "maximum_members": 10000,
+      "minimum_members": 0,
+      "owner_contract_state": "closed"
+    },
+    {
+      "allowed_domain_kinds": [
+        "protein_in_silico"
+      ],
+      "allowed_members": [],
+      "compatibility_rules": [
+        "no_immutable_producer_native_member_contract"
+      ],
+      "dataset_kind": "protein.target_set.v1",
+      "enabled": false,
+      "label": "Target sequence, structure, or complex set",
+      "maximum_members": 10000,
+      "minimum_members": 0,
+      "owner_contract_state": "unavailable"
+    },
+    {
+      "allowed_domain_kinds": [
+        "protein_in_silico"
+      ],
+      "allowed_members": [],
+      "compatibility_rules": [
+        "no_immutable_producer_native_member_contract"
+      ],
+      "dataset_kind": "protein.template_motif_partner_control_set.v1",
+      "enabled": false,
+      "label": "Template, motif, partner, and control set",
+      "maximum_members": 10000,
+      "minimum_members": 0,
+      "owner_contract_state": "unavailable"
+    },
+    {
+      "allowed_domain_kinds": [
+        "protein_in_silico"
+      ],
+      "allowed_members": [
+        {
+          "adapter_id": "bms.core.protein-result-reference.adapter.v1",
+          "allowed_roles": [
+            "protein_generated_candidate"
+          ],
+          "compatibility_rule": "exact_immutable_revision_only",
+          "receipt_kind": "design"
+        },
+        {
+          "adapter_id": "bms.core-job.protein_local_redesign.adapter.v1",
+          "allowed_roles": [
+            "protein_generated_candidate_cohort"
+          ],
+          "compatibility_rule": "exact_immutable_revision_only",
+          "receipt_kind": "rfd3_local_redesign_request"
+        }
+      ],
+      "compatibility_rules": [
+        "same_project_domain_authority",
+        "exact_immutable_revision_only",
+        "adapter_role_intersection",
+        "no_current_head_resolution_during_preparation",
+        "exact_historical_reopen"
+      ],
+      "dataset_kind": "protein.generated_candidate_cohort.v1",
+      "enabled": false,
+      "label": "Generated candidate cohort",
+      "maximum_members": 10000,
+      "minimum_members": 0,
+      "owner_contract_state": "closed"
+    },
+    {
+      "allowed_domain_kinds": [
+        "protein_in_silico"
+      ],
+      "allowed_members": [
+        {
+          "adapter_id": "bms.core.protein-result-reference.adapter.v1",
+          "allowed_roles": [
+            "protein_selected_finalist"
+          ],
+          "compatibility_rule": "exact_immutable_revision_only",
+          "receipt_kind": "design"
+        }
+      ],
+      "compatibility_rules": [
+        "same_project_domain_authority",
+        "exact_immutable_revision_only",
+        "adapter_role_intersection",
+        "no_current_head_resolution_during_preparation",
+        "exact_historical_reopen"
+      ],
+      "dataset_kind": "protein.selected_finalist_cohort.v1",
+      "enabled": false,
+      "label": "Selected finalist cohort",
+      "maximum_members": 10000,
+      "minimum_members": 0,
+      "owner_contract_state": "closed"
+    },
+    {
+      "allowed_domain_kinds": [
+        "protein_in_silico"
+      ],
+      "allowed_members": [
+        {
+          "adapter_id": "bms.core.protein-result-reference.adapter.v1",
+          "allowed_roles": [
+            "protein_structure_prediction_result",
+            "protein_structure_validation_result"
+          ],
+          "compatibility_rule": "exact_immutable_revision_only",
+          "receipt_kind": "design"
+        }
+      ],
+      "compatibility_rules": [
+        "same_project_domain_authority",
+        "exact_immutable_revision_only",
+        "adapter_role_intersection",
+        "no_current_head_resolution_during_preparation",
+        "exact_historical_reopen"
+      ],
+      "dataset_kind": "protein.structure_prediction_validation_result_cohort.v1",
+      "enabled": false,
+      "label": "Structure-prediction or validation result cohort",
+      "maximum_members": 10000,
+      "minimum_members": 0,
+      "owner_contract_state": "closed"
+    },
+    {
+      "allowed_domain_kinds": [
+        "protein_in_silico"
+      ],
+      "allowed_members": [
+        {
+          "adapter_id": "bms.cm.protenix_v2.adapter.v1",
+          "allowed_roles": [
+            "protein_cm_ensemble"
+          ],
+          "compatibility_rule": "exact_immutable_revision_only",
+          "receipt_kind": "conformational_mapping_request"
+        },
+        {
+          "adapter_id": "bms.cm.confornets.adapter.v1",
+          "allowed_roles": [
+            "protein_cm_ensemble"
+          ],
+          "compatibility_rule": "exact_immutable_revision_only",
+          "receipt_kind": "conformational_mapping_request"
+        }
+      ],
+      "compatibility_rules": [
+        "same_project_domain_authority",
+        "exact_immutable_revision_only",
+        "adapter_role_intersection",
+        "no_current_head_resolution_during_preparation",
+        "exact_historical_reopen"
+      ],
+      "dataset_kind": "protein.cm_ensemble_conformer_cohort.v1",
+      "enabled": false,
+      "label": "CM ensemble or conformer cohort",
+      "maximum_members": 10000,
+      "minimum_members": 0,
+      "owner_contract_state": "closed"
+    },
+    {
+      "allowed_domain_kinds": [
+        "protein_in_silico"
+      ],
+      "allowed_members": [
+        {
+          "adapter_id": "bms.md.result-reference.adapter.v1",
+          "allowed_roles": [
+            "protein_md_run_result"
+          ],
+          "compatibility_rule": "exact_immutable_revision_only",
+          "receipt_kind": "md_result"
+        }
+      ],
+      "compatibility_rules": [
+        "same_project_domain_authority",
+        "exact_immutable_revision_only",
+        "adapter_role_intersection",
+        "no_current_head_resolution_during_preparation",
+        "exact_historical_reopen"
+      ],
+      "dataset_kind": "protein.md_replica_analysis_cohort.v1",
+      "enabled": false,
+      "label": "MD replica or analysis cohort",
+      "maximum_members": 10000,
+      "minimum_members": 0,
+      "owner_contract_state": "closed"
+    },
+    {
+      "allowed_domain_kinds": [
+        "protein_in_silico"
+      ],
+      "allowed_members": [
+        {
+          "adapter_id": "bms.frustrampnn.result-reference.adapter.v1",
+          "allowed_roles": [
+            "protein_frustrampnn_landscape"
+          ],
+          "compatibility_rule": "exact_immutable_revision_only",
+          "receipt_kind": "frustrampnn_result"
+        },
+        {
+          "adapter_id": "bms.frustrampnn.guidance-reference.adapter.v1",
+          "allowed_roles": [
+            "protein_frustrampnn_guidance"
+          ],
+          "compatibility_rule": "exact_immutable_revision_only",
+          "receipt_kind": "frustrampnn_guidance"
+        }
+      ],
+      "compatibility_rules": [
+        "same_project_domain_authority",
+        "exact_immutable_revision_only",
+        "adapter_role_intersection",
+        "no_current_head_resolution_during_preparation",
+        "exact_historical_reopen"
+      ],
+      "dataset_kind": "protein.frustrampnn_landscape_guidance_cohort.v1",
+      "enabled": false,
+      "label": "FrustraMPNN landscape or guidance cohort",
+      "maximum_members": 10000,
+      "minimum_members": 0,
+      "owner_contract_state": "closed"
+    },
+    {
+      "allowed_domain_kinds": [
+        "protein_in_silico"
+      ],
+      "allowed_members": [
+        {
+          "adapter_id": "bms.frustrampnn.comparison-reference.adapter.v1",
+          "allowed_roles": [
+            "protein_compatible_comparison"
+          ],
+          "compatibility_rule": "exact_immutable_revision_only",
+          "receipt_kind": "frustrampnn_comparison"
+        }
+      ],
+      "compatibility_rules": [
+        "same_project_domain_authority",
+        "exact_immutable_revision_only",
+        "adapter_role_intersection",
+        "no_current_head_resolution_during_preparation",
+        "exact_historical_reopen"
+      ],
+      "dataset_kind": "protein.compatible_comparison_cohort.v1",
+      "enabled": false,
+      "label": "Compatible comparison cohort",
+      "maximum_members": 10000,
+      "minimum_members": 0,
+      "owner_contract_state": "closed"
+    },
+    {
+      "allowed_domain_kinds": [
+        "protein_in_silico"
+      ],
+      "allowed_members": [],
+      "compatibility_rules": [
+        "no_immutable_producer_native_member_contract"
+      ],
+      "dataset_kind": "protein.saved_review_filter_selection.v1",
+      "enabled": false,
+      "label": "Saved review or filter selection",
+      "maximum_members": 10000,
+      "minimum_members": 0,
+      "owner_contract_state": "unavailable"
+    }
+  ],
+  "schema": "bms.ngs-molbio.dataset-kind-registry.v1"
+}

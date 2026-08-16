@@ -1,0 +1,9 @@
+{
+  "$id": "bms.protein-constraint.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "not": {},
+  "type": "object",
+  "x-bms-nonempty-payload-policy": "reject_all",
+  "x-bms-payload-registry-id": "bms.protein.constraint-payload-registry.v1",
+  "x-bms-payload-registry-state": "closed_empty"
+}

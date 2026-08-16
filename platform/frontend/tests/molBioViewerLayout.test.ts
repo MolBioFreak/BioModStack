@@ -1,0 +1,251 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import test from 'node:test';
+
+import {
+    clampMolBioPanelWidth,
+    getDefaultMolBioToolPanelWidth,
+    getMolBioPanelBounds,
+    MOLBIO_MIN_VIEWPORT_FOR_OPEN_SIDE_PANELS,
+    MOLBIO_VIEWER_MIN_WIDTH,
+    resolveMolBioViewerLayout,
+    shouldCollapseMolBioPanelsForViewport,
+} from '../src/components/MolBioToolkit/utils/viewerLayout.js';
+
+const TOOLKIT_PATH = resolve(process.cwd(), 'src/components/MolBioToolkit/MolBioToolkitV2.tsx');
+const HEADER_PATH = resolve(process.cwd(), 'src/components/MolBioToolkit/SequenceHeader.tsx');
+const VIEWER_PATH = resolve(process.cwd(), 'src/components/MolBioToolkit/SequenceViewer.tsx');
+
+test('tool panel defaults stay tuned per workflow', () => {
+    assert.equal(getDefaultMolBioToolPanelWidth('view'), 288);
+    assert.equal(getDefaultMolBioToolPanelWidth('align'), 416);
+    assert.equal(getDefaultMolBioToolPanelWidth('history'), 416);
+    assert.equal(getDefaultMolBioToolPanelWidth('assembly'), 544);
+    assert.equal(getDefaultMolBioToolPanelWidth('primers'), 480);
+});
+
+test('side panel widths clamp to safe bounds', () => {
+    assert.equal(clampMolBioPanelWidth(180, { min: 224, max: 480 }), 224);
+    assert.equal(clampMolBioPanelWidth(320, { min: 224, max: 480 }), 320);
+    assert.equal(clampMolBioPanelWidth(640, { min: 224, max: 480 }), 480);
+});
+
+test('fullscreen viewer layout collapses side menus while preserving tuned widths', () => {
+    const focused = resolveMolBioViewerLayout({
+        activePanel: 'align',
+        viewportWidth: 1440,
+        leftPanelWidth: 260,
+        rightPanelWidth: 999,
+        isViewerFullscreen: true,
+        isLibraryPanelCollapsed: false,
+        isToolPanelCollapsed: false,
+    });
+    const normal = resolveMolBioViewerLayout({
+        activePanel: 'assembly',
+        viewportWidth: 1440,
+        leftPanelWidth: 999,
+        rightPanelWidth: 999,
+        isViewerFullscreen: false,
+        isLibraryPanelCollapsed: false,
+        isToolPanelCollapsed: false,
+    });
+
+    assert.equal(focused.showLibraryPanel, false);
+    assert.equal(focused.showToolPanel, false);
+    assert.equal(focused.showLibraryResizeHandle, false);
+    assert.equal(focused.showToolResizeHandle, false);
+    assert.equal(focused.rightPanelWidth, 416);
+
+    assert.equal(normal.showLibraryPanel, true);
+    assert.equal(normal.showToolPanel, true);
+    assert.equal(normal.showLibraryResizeHandle, true);
+    assert.equal(normal.showToolResizeHandle, true);
+    assert.equal(normal.leftPanelWidth, 480);
+    assert.equal(normal.rightPanelWidth, 640);
+});
+
+test('manual panel collapse can hide either side while keeping the central viewer open', () => {
+    const libraryHidden = resolveMolBioViewerLayout({
+        activePanel: 'view',
+        viewportWidth: 1440,
+        leftPanelWidth: 280,
+        rightPanelWidth: 320,
+        isViewerFullscreen: false,
+        isLibraryPanelCollapsed: true,
+        isToolPanelCollapsed: false,
+    });
+    const bothHidden = resolveMolBioViewerLayout({
+        activePanel: 'view',
+        viewportWidth: 1440,
+        leftPanelWidth: 280,
+        rightPanelWidth: 320,
+        isViewerFullscreen: false,
+        isLibraryPanelCollapsed: true,
+        isToolPanelCollapsed: true,
+    });
+
+    assert.equal(libraryHidden.showLibraryPanel, false);
+    assert.equal(libraryHidden.showToolPanel, true);
+    assert.equal(libraryHidden.showLibraryResizeHandle, false);
+    assert.equal(libraryHidden.showToolResizeHandle, true);
+
+    assert.equal(bothHidden.showLibraryPanel, false);
+    assert.equal(bothHidden.showToolPanel, false);
+    assert.equal(bothHidden.showLibraryResizeHandle, false);
+    assert.equal(bothHidden.showToolResizeHandle, false);
+});
+
+test('narrow viewports keep a minimum center viewer width when both side panels are visible', () => {
+    const layout = resolveMolBioViewerLayout({
+        activePanel: 'assembly',
+        viewportWidth: 960,
+        leftPanelWidth: 480,
+        rightPanelWidth: 640,
+        isViewerFullscreen: false,
+        isLibraryPanelCollapsed: false,
+        isToolPanelCollapsed: false,
+    });
+
+    assert.equal(layout.leftPanelWidth, 384);
+    assert.equal(layout.rightPanelWidth, 256);
+    assert.equal(960 - layout.leftPanelWidth - layout.rightPanelWidth, MOLBIO_VIEWER_MIN_WIDTH);
+});
+
+test('phone-sized viewports start with both side panels collapsed', () => {
+    assert.equal(shouldCollapseMolBioPanelsForViewport(MOLBIO_MIN_VIEWPORT_FOR_OPEN_SIDE_PANELS - 1), true);
+    assert.equal(shouldCollapseMolBioPanelsForViewport(MOLBIO_MIN_VIEWPORT_FOR_OPEN_SIDE_PANELS), false);
+    assert.equal(shouldCollapseMolBioPanelsForViewport(390), true);
+    assert.equal(shouldCollapseMolBioPanelsForViewport(1280), false);
+});
+
+test('phone-sized panel bounds allow narrower side menus without consuming the entire viewer', () => {
+    assert.deepEqual(getMolBioPanelBounds('left', 390), { min: 176, max: 294 });
+    assert.deepEqual(getMolBioPanelBounds('right', 390), { min: 208, max: 294 });
+});
+
+test('mol bio toolkit source wires fullscreen and side-panel collapse controls', () => {
+    const source = readFileSync(TOOLKIT_PATH, 'utf8');
+
+    assert.match(source, /isViewerFullscreen/);
+    assert.match(source, /shouldCollapseMolBioPanelsForViewport/);
+    assert.match(source, /data-molbio-viewer-fullscreen/);
+    assert.match(source, /data-molbio-panel-resize-handle="left"/);
+    assert.match(source, /data-molbio-panel-resize-handle="right"/);
+    assert.match(source, /onToggleFullscreen/);
+    assert.match(source, /onToggleLibraryPanel/);
+    assert.match(source, /onToggleToolPanel/);
+});
+
+test('construct shelf scrolls inside a bounded normal-mode viewer frame', () => {
+    const source = readFileSync(TOOLKIT_PATH, 'utf8');
+
+    assert.match(source, /height: 'clamp\(32rem, calc\(100vh - 12rem\), 48rem\)'/);
+    assert.match(source, /data-molbio-scroll-region="construct-shelf"/);
+    assert.match(source, /flex-1 min-h-0 overflow-y-auto overscroll-contain/);
+    assert.match(source, /fixed inset-0 z-\[70\] h-full/);
+});
+
+test('all constructs default to both linear sequence and circular map projection', () => {
+    const toolkitSource = readFileSync(TOOLKIT_PATH, 'utf8');
+    const viewerSource = readFileSync(VIEWER_PATH, 'utf8');
+    const headerSource = readFileSync(HEADER_PATH, 'utf8');
+
+    assert.match(toolkitSource, /workspaceViewModes\[activeWorkspaceId\] \?\? 'both'/);
+    assert.match(toolkitSource, /\[activeWorkspaceId\]: mode/);
+    assert.match(toolkitSource, /const effectiveViewMode: ViewMode = viewMode;/);
+    assert.equal((toolkitSource.match(/viewMode=\{effectiveViewMode\}/g) || []).length, 3);
+    assert.match(viewerSource, /const resolvedViewerMode = viewMode \|\| 'both';/);
+    assert.match(viewerSource, /data-linear-circular-projection/);
+    assert.match(viewerSource, /data-linear-break-marker/);
+    assert.match(viewerSource, /LINEAR BREAK/);
+    assert.match(viewerSource, /sequenceData\.sequence\.length\.toLocaleString\(\)/);
+    assert.match(viewerSource, /Linear projection/);
+    assert.match(viewerSource, /break:.*end.*1/i);
+    assert.doesNotMatch(headerSource, /sequenceData\.circular && onViewModeChange/);
+});
+
+test('both-view default remains unclipped and analytics remain opt-in', () => {
+    const toolkitSource = readFileSync(TOOLKIT_PATH, 'utf8');
+    const viewerSource = readFileSync(VIEWER_PATH, 'utf8');
+
+    assert.match(toolkitSource, /workspaceViewModes\[activeWorkspaceId\] \?\? 'both'/);
+    assert.match(toolkitSource, /GC track visibility state[\s\S]*useState\(false\)/);
+    assert.match(viewerSource, /overflowY: resolvedViewerMode === 'both' \? 'auto' : 'hidden'/);
+});
+
+test('SeqViz pointer drags publish one committed selection after pointer-up', () => {
+    const source = readFileSync(VIEWER_PATH, 'utf8');
+
+    assert.match(source, /pendingPointerSelectionRef/);
+    assert.match(source, /flushPendingPointerSelection/);
+    assert.match(source, /window\.requestAnimationFrame\(flushPendingPointerSelection\)/);
+    assert.doesNotMatch(source, /if \(sourceSelection\) \{\s*onSelection\(sourceSelection\);\s*\}/);
+});
+
+test('sequence viewer does not add a separate linear drag overlay over SeqViz', () => {
+    const source = readFileSync(VIEWER_PATH, 'utf8');
+
+    assert.doesNotMatch(source, /data-linear-range-navigator/);
+    assert.doesNotMatch(source, /Linear range drag/);
+    assert.match(source, /onSelection=\{\(sel\) => \{/);
+});
+
+test('sequence viewer remount key changes when RNA/DNA identity changes at same length', () => {
+    const source = readFileSync(VIEWER_PATH, 'utf8');
+
+    assert.match(source, /viewerSequenceKey/);
+    assert.match(source, /seqVizSeqType = normalizedSequenceType === 'protein' \? 'aa' : nucleotideSequenceType/);
+    assert.match(source, /seqType=\{seqVizSeqType\}/);
+    assert.match(source, /sequenceData\.sequenceType/);
+    assert.match(source, /displaySequence\.slice\(0, 24\)/);
+    assert.match(source, /key=\{`\$\{viewerSequenceKey\}:selection-reset-\$\{selectionResetVersion\}`\}/);
+});
+
+test('sequence header exposes focus and panel collapse actions', () => {
+    const source = readFileSync(HEADER_PATH, 'utf8');
+
+    assert.match(source, /onToggleFullscreen/);
+    assert.match(source, /onToggleLibraryPanel/);
+    assert.match(source, /onToggleToolPanel/);
+    assert.match(source, /Focus Viewer/);
+    assert.match(source, /Hide Shelf|Show Shelf/);
+    assert.match(source, /Hide Tools|Show Tools/);
+});
+
+test('sequence header source keeps the plasmid toolbar horizontally scrollable on narrow screens', () => {
+    const source = readFileSync(HEADER_PATH, 'utf8');
+
+    assert.match(source, /data-sequence-header-scroll/);
+    assert.match(source, /overflow-x-auto/);
+    assert.match(source, /min-w-max/);
+});
+
+test('sequence header drag scrolling never captures pointers that begin on interactive controls', () => {
+    const source = readFileSync(HEADER_PATH, 'utf8');
+
+    assert.match(source, /event\.target as HTMLElement/);
+    assert.match(source, /closest\(['"]button, a, input, select, textarea, \[role="button"\], \[data-sequence-header-drag-ignore="true"\]['"]\)/);
+    assert.match(source, /if \(interactiveTarget\) \{\s*return;\s*\}/);
+    assert.ok(
+        source.indexOf('if (interactiveTarget)') < source.indexOf('setPointerCapture(event.pointerId)'),
+        'interactive controls must be rejected before the scroll rail captures the pointer',
+    );
+});
+
+test('mol bio toolkit source gives mobile resize handles touch-safe hit targets', () => {
+    const source = readFileSync(TOOLKIT_PATH, 'utf8');
+
+    assert.match(source, /touch-none/);
+    assert.match(source, /w-4/);
+    assert.match(source, /md:w-1\.5/);
+});
+
+test('construct acquisition has one canonical button instead of duplicate shelf and header actions', () => {
+    const toolkitSource = readFileSync(TOOLKIT_PATH, 'utf8');
+    const headerSource = readFileSync(HEADER_PATH, 'utf8');
+
+    assert.doesNotMatch(toolkitSource, /Open Molecular Input/);
+    assert.doesNotMatch(toolkitSource, /onOpenModal/);
+    assert.match(headerSource, />\s*Acquire\s*</);
+});

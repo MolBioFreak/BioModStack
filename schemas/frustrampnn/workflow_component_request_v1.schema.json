@@ -1,0 +1,393 @@
+{
+  "$id": "https://biomodstack.local/schemas/frustrampnn/workflow_component_request_v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "identity_authority": {
+            "enum": [
+              "producer_manifest",
+              "cm_complex_snapshot"
+            ]
+          }
+        },
+        "required": [
+          "identity_authority"
+        ]
+      },
+      "then": {
+        "properties": {
+          "identity_authority_artifact": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "identity_authority_artifact"
+        ]
+      },
+      "else": {
+        "properties": {
+          "identity_authority_artifact": false
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "identity_authority": {
+            "const": "cm_complex_snapshot"
+          }
+        },
+        "required": [
+          "identity_authority"
+        ]
+      },
+      "then": {
+        "properties": {
+          "identity_authority_artifact": {
+            "required": [
+              "cm_complex_snapshot_sha256"
+            ]
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "identity_authority_artifact": {
+            "not": {
+              "required": [
+                "cm_complex_snapshot_sha256"
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "properties": {
+    "candidate_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "component_contract_version": {
+      "const": "1.0"
+    },
+    "component_id": {
+      "const": "frustrampnn"
+    },
+    "identity_authority": {
+      "enum": [
+        "producer_manifest",
+        "mmcif_atom_site",
+        "pdb_coordinates",
+        "cm_complex_snapshot"
+      ]
+    },
+    "identity_authority_artifact": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "cm_complex_snapshot_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "canonical_json_base64": {
+              "maxLength": 22369624,
+              "minLength": 4,
+              "pattern": "^[A-Za-z0-9+/]*={0,2}$",
+              "type": "string"
+            },
+            "media_type": {
+              "const": "application/json"
+            },
+            "relative_path": {
+              "const": "authority_artifact_v1.json"
+            },
+            "sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "relative_path",
+            "media_type",
+            "sha256",
+            "canonical_json_base64"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "invocation_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "altloc_policy": {
+          "pattern": "^blank_or_explicit:(?:<blank>|[A-Za-z0-9])$",
+          "type": "string"
+        },
+        "configuration_id": {
+          "const": "frustrampnn_global_v1"
+        },
+        "configuration_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "checkpoint_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "selected_model_number": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "threshold_policy_id": {
+          "const": "frustrampnn_class_v1"
+        }
+      },
+      "required": [
+        "checkpoint_id",
+        "threshold_policy_id",
+        "selected_model_number",
+        "altloc_policy"
+      ],
+      "type": "object"
+    },
+    "parent_job_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "parent_workflow_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "protein_selection": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "all_protein_entities"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "entities": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "auth_asym_id": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "entity_instance_id": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "label_asym_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "sequence": {
+                    "minLength": 1,
+                    "pattern": "^[ACDEFGHIKLMNPQRSTVWY]+$",
+                    "type": "string"
+                  },
+                  "source_entity_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "entity_instance_id",
+                  "source_entity_id",
+                  "label_asym_id",
+                  "auth_asym_id",
+                  "sequence"
+                ],
+                "type": "object"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "mode": {
+              "const": "explicit"
+            }
+          },
+          "required": [
+            "mode",
+            "entities"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "producer_provenance": {
+      "additionalProperties": false,
+      "properties": {
+        "original_source_format": {
+          "enum": [
+            "pdb",
+            "mmcif"
+          ]
+        },
+        "original_source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "producer_identity_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "producer_method": {
+          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+          "type": "string"
+        },
+        "producer_output_key": {
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*//)(?!\\./).+$",
+          "type": "string"
+        },
+        "producer_rank": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "producer_sample": {
+          "minLength": 1,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_to_normalized_binding": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "sha256_pair_v1"
+            },
+            "normalized_pdb_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "source_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "source_sha256",
+            "normalized_pdb_sha256"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "producer_method",
+        "producer_sample",
+        "producer_rank",
+        "producer_output_key",
+        "producer_identity_sha256",
+        "original_source_format",
+        "original_source_sha256",
+        "source_to_normalized_binding"
+      ],
+      "type": "object"
+    },
+    "requested_outputs": {
+      "items": {
+        "enum": [
+          "structure_map",
+          "raw_csv",
+          "landscape",
+          "summary",
+          "execution_receipt"
+        ]
+      },
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "requiredness": {
+      "const": "required"
+    },
+    "schema_name": {
+      "const": "workflow_component_request"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "source_artifact": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "media_type": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "producer_stage": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "relative_path": {
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*//)(?!\\./).+$",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "relative_path",
+        "sha256",
+        "media_type",
+        "producer_stage"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema_name",
+    "schema_version",
+    "component_id",
+    "component_contract_version",
+    "invocation_id",
+    "parent_job_id",
+    "parent_workflow_id",
+    "candidate_id",
+    "source_artifact",
+    "requiredness",
+    "identity_authority",
+    "protein_selection",
+    "parameters",
+    "requested_outputs"
+  ],
+  "title": "workflow_component_request_v1",
+  "type": "object"
+}

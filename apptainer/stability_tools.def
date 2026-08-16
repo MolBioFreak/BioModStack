@@ -1,0 +1,49 @@
+Bootstrap: docker
+From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
+
+%labels
+    Author BioModStack
+    Description ThermoMPNN stability prediction
+    Version 1.0.0
+
+%post
+    apt-get update && apt-get install -y \
+        wget \
+        git \
+        curl \
+        python3 \
+        python3-pip \
+        python3-venv \
+        && apt-get clean \
+        && rm -rf /var/lib/apt/lists/*
+
+    # Install UV package manager (10-100x faster than pip)
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="/root/.local/bin:$PATH"
+
+    # Create virtual environment
+    uv venv /opt/venv
+    export VIRTUAL_ENV=/opt/venv
+    export PATH="/opt/venv/bin:$PATH"
+
+    # Install PyTorch (stable version for compatibility)
+    uv pip install --compile torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124
+
+    # Install ThermoMPNN
+    git clone https://github.com/Kuhlman-Lab/ThermoMPNN.git /opt/ThermoMPNN
+    cd /opt/ThermoMPNN
+
+    # Install dependencies (including wandb and pytorch-lightning for ThermoMPNN)
+    uv pip install --compile joblib omegaconf pandas numpy tqdm biopython wandb pytorch-lightning
+    uv pip install --compile mmseqs2 || true  # May not be on PyPI
+
+    # Cleanup
+    rm -rf /root/.cache/uv
+
+    # Generate lockfile for reproducibility
+    uv pip freeze > /opt/venv/requirements.lock 2>/dev/null || true
+
+%environment
+    export PYTHONPATH="/opt/ThermoMPNN:$PYTHONPATH"
+    export PATH="/opt/venv/bin:/opt/ThermoMPNN:$PATH"
+    export VIRTUAL_ENV=/opt/venv

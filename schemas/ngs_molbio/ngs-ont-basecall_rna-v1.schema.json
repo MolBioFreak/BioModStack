@@ -1,0 +1,69 @@
+{
+  "$id": "bms.workflow-parameters.ngs.ont.basecall_rna.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "batch_size": {
+      "default": 64,
+      "maximum": 256,
+      "minimum": 1,
+      "type": "integer",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "dorado_batch_size",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "integer",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Inference batch size",
+      "x-bms-supported-runtime-range": "dorado=1.3.1; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "bounded_integer",
+      "x-bms-units": "not_applicable"
+    },
+    "min_qscore": {
+      "default": 10,
+      "maximum": 30,
+      "minimum": 0,
+      "type": "integer",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "min_qscore",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "integer",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Minimum basecall Q score",
+      "x-bms-supported-runtime-range": "dorado=1.3.1; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "bounded_integer",
+      "x-bms-units": "not_applicable"
+    },
+    "quality_mode": {
+      "default": "sup",
+      "enum": [
+        "fast",
+        "hac",
+        "sup"
+      ],
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "dorado_quality_mode",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Dorado model quality family",
+      "x-bms-supported-runtime-range": "dorado=1.3.1; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "select",
+      "x-bms-units": "not_applicable"
+    }
+  },
+  "required": [
+    "quality_mode",
+    "batch_size",
+    "min_qscore"
+  ],
+  "title": "ngs.ont.basecall_rna parameters v1",
+  "type": "object",
+  "x-bms-source-pin": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+  "x-bms-unknown-fields": "reject_before_preparation"
+}

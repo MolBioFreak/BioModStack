@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://biomodstack.org/schemas/conformational_mapping/cm_ensemble_v1.schema.json",
+  "title": "BioModStack conformational mapping ensemble manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_name", "schema_version", "request_id", "request_sha256", "source_snapshot_sha256", "backend", "runtime_identity", "container_digest", "checkpoint_sha256", "feature_policy_sha256", "expected_cardinality", "expected_coordinates", "candidates", "native_manifest_path", "native_manifest_sha256", "warnings", "omissions", "terminal_status", "started_at", "completed_at", "command", "resume_key", "resumable", "resume_descriptor"],
+  "properties": {
+    "schema_name": {"const": "cm_ensemble"}, "schema_version": {"const": 1},
+    "request_id": {"type": "string", "format": "uuid"}, "request_sha256": {"$ref": "#/$defs/sha256"}, "source_snapshot_sha256": {"$ref": "#/$defs/sha256"},
+    "backend": {"enum": ["protenix_v2_ensemble", "confornets", "external_import"]}, "runtime_identity": {"type": "string", "minLength": 1},
+    "container_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, "checkpoint_sha256": {"$ref": "#/$defs/sha256"}, "runtime_attestation_sha256": {"$ref": "#/$defs/sha256"}, "feature_policy_sha256": {"$ref": "#/$defs/sha256"},
+    "expected_cardinality": {"type": "integer", "minimum": 1}, "expected_coordinates": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/coordinates"}},
+    "candidates": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/candidate"}},
+    "native_manifest_path": {"$ref": "#/$defs/relative_path"}, "native_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "warnings": {"type": "array", "items": {"type": "string"}}, "omissions": {"type": "array", "items": {"type": "string"}},
+    "terminal_status": {"enum": ["complete", "failed", "quarantined"]}, "started_at": {"type": "string", "format": "date-time"}, "completed_at": {"type": "string", "format": "date-time"},
+    "command": {"type": "array", "minItems": 1, "items": {"type": "string"}}, "resume_key": {"$ref": "#/$defs/sha256"},
+    "resumable": {"type": "boolean"}, "resume_descriptor": {"type": ["object", "null"]}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "relative_path": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*\\\\)(?!.*\\/$).+$"},
+    "protenix_coordinates": {
+      "type": "object", "additionalProperties": false, "required": ["backend", "target_id", "ordered_seed", "sample_index"],
+      "properties": {"backend": {"const": "protenix_v2_ensemble"}, "target_id": {"type": "string", "minLength": 1}, "ordered_seed": {"type": "integer", "minimum": -2147483648, "maximum": 2147483647}, "sample_index": {"type": "integer", "minimum": 0}}
+    },
+    "confornets_coordinates": {
+      "type": "object", "additionalProperties": false, "required": ["backend", "target_id", "task", "test_case_id", "reference_id", "run_index", "saved_step", "confornet_index", "sample_index"],
+      "properties": {"backend": {"const": "confornets"}, "target_id": {"type": "string", "minLength": 1}, "task": {"type": "string", "minLength": 1}, "test_case_id": {"type": "string", "minLength": 1}, "reference_id": {"type": ["string", "null"]}, "run_index": {"type": "integer", "minimum": 0}, "saved_step": {"type": "integer", "minimum": 0}, "confornet_index": {"type": "integer", "minimum": 0}, "sample_index": {"type": "integer", "minimum": 0}}
+    },
+    "import_coordinates": {
+      "type": "object", "additionalProperties": false, "required": ["backend", "target_id", "staged_index", "source_content_sha256", "staged_receipt_sha256"],
+      "properties": {"backend": {"const": "external_import"}, "target_id": {"type": "string", "minLength": 1}, "staged_index": {"type": "integer", "minimum": 0}, "source_content_sha256": {"$ref": "#/$defs/sha256"}, "staged_receipt_sha256": {"$ref": "#/$defs/sha256"}}
+    },
+    "coordinates": {"oneOf": [{"$ref": "#/$defs/protenix_coordinates"}, {"$ref": "#/$defs/confornets_coordinates"}, {"$ref": "#/$defs/import_coordinates"}]},
+    "candidate": {
+      "type": "object", "additionalProperties": false,
+      "required": ["candidate_id", "backend_coordinates", "authoritative_structure_path", "authoritative_structure_sha256", "sidecar_paths"],
+      "properties": {
+        "candidate_id": {"type": "string", "minLength": 1}, "backend_coordinates": {"$ref": "#/$defs/coordinates"},
+        "authoritative_structure_path": {"$ref": "#/$defs/relative_path"}, "authoritative_structure_sha256": {"$ref": "#/$defs/sha256"},
+        "sidecar_paths": {"type": "array", "minItems": 0, "uniqueItems": true, "items": {"$ref": "#/$defs/relative_path"}}
+      }
+    }
+  }
+}
