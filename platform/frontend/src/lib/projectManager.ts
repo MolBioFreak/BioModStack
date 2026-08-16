@@ -335,6 +335,7 @@ export interface ProjectSearchOptions {
     archive?: 'active' | 'archived' | 'all';
     cursor?: string;
     limit?: number;
+    projectScope?: 'global' | 'ngs_molbio_local' | 'all';
     signal?: AbortSignal;
 }
 
@@ -659,6 +660,30 @@ export interface ProjectCreateRequest {
     target_end_date?: string | null;
     created_by?: string | null;
     change_summary?: string;
+    project_scope?: 'global' | 'ngs_molbio_local';
+}
+
+export interface NgsMolBioProjectLink {
+    schema: 'bms.ngs-molbio-project-link.v1';
+    link_id: string;
+    local_project_id: string;
+    global_project_id: string;
+    experiment_ids: string[];
+    result_ids: string[];
+    change_summary: string;
+    created_at: string;
+}
+
+export interface NgsMolBioShareableResult {
+    result_receipt_id: string;
+    experiment_id: string;
+    store_id: string;
+    entity_kind: string;
+    entity_id: string;
+    generation_or_revision: string;
+    content_digest: string;
+    availability: string;
+    created_at: string;
 }
 
 export interface GlobalExperimentCreateRequest {
@@ -1201,6 +1226,7 @@ export async function searchProjects(options: ProjectSearchOptions = {}): Promis
             archive: options.archive ?? 'active',
             cursor: options.cursor,
             limit: options.limit ?? 50,
+            project_scope: options.projectScope ?? 'all',
         },
         signal: options.signal,
     });
@@ -1212,11 +1238,19 @@ export async function getProject(projectId: string, signal?: AbortSignal): Promi
 }
 
 export async function listGlobalExperiments(projectId: string, signal?: AbortSignal): Promise<HierarchyMutationResult[]> {
-    return (await api.get<HierarchyMutationResult[]>(`/api/projects/${segment(projectId)}/experiments`, { signal })).data;
+    const response = await api.get<{ items: HierarchyMutationResult[] }>(
+        `/api/projects/${segment(projectId)}/experiments`,
+        { signal },
+    );
+    return response.data.items;
 }
 
 export async function listDomainExperiments(projectId: string, experimentId: string, signal?: AbortSignal): Promise<HierarchyMutationResult[]> {
-    return (await api.get<HierarchyMutationResult[]>(`/api/projects/${segment(projectId)}/experiments/${segment(experimentId)}/domains`, { signal })).data;
+    const response = await api.get<{ items: HierarchyMutationResult[] }>(
+        `/api/projects/${segment(projectId)}/experiments/${segment(experimentId)}/domains`,
+        { signal },
+    );
+    return response.data.items;
 }
 
 export async function getGlobalExperiment(projectId: string, experimentId: string, signal?: AbortSignal): Promise<HierarchyMutationResult> {
@@ -1311,6 +1345,32 @@ export async function getLaunchContext(launchContextId: string, signal?: AbortSi
 
 export async function createProject(request: ProjectCreateRequest): Promise<HierarchyMutationResult> {
     return (await api.post<HierarchyMutationResult>('/api/projects', request)).data;
+}
+
+export async function listNgsMolBioProjectLinks(projectId: string, signal?: AbortSignal): Promise<NgsMolBioProjectLink[]> {
+    const response = await api.get<{ items: NgsMolBioProjectLink[] }>(
+        `/api/projects/${segment(projectId)}/ngs-molbio-links`,
+        { signal },
+    );
+    return response.data.items;
+}
+
+export async function listNgsMolBioShareableResults(projectId: string, signal?: AbortSignal): Promise<NgsMolBioShareableResult[]> {
+    const response = await api.get<{ items: NgsMolBioShareableResult[] }>(
+        `/api/projects/${segment(projectId)}/ngs-molbio-shareable-results`,
+        { signal },
+    );
+    return response.data.items;
+}
+
+export async function linkNgsMolBioProject(
+    globalProjectId: string,
+    request: { local_project_id: string; experiment_ids: string[]; result_ids: string[]; change_summary: string },
+): Promise<NgsMolBioProjectLink> {
+    return (await api.post<NgsMolBioProjectLink>(
+        `/api/projects/${segment(globalProjectId)}/ngs-molbio-links`,
+        request,
+    )).data;
 }
 
 export async function updateProject(projectId: string, request: HierarchyPatch): Promise<HierarchyMutationResult> {

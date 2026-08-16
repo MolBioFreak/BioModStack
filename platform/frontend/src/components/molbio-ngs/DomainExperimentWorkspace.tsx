@@ -16,6 +16,7 @@ import {
     fetchPcrExperimentRevision,
     type DomainStateMember,
 } from '../../lib/api';
+import { getProject } from '../../lib/projectManager';
 import { useGlobalExperimentContext } from '../experiments/GlobalExperimentContext';
 import DomainDatasetOperator from './DomainDatasetOperator';
 import DomainWorkflowOperator from './DomainWorkflowOperator';
@@ -182,7 +183,14 @@ export default function DomainExperimentWorkspace() {
         updateQueryParams({ dataset_revision_ids: exactRevisionIds.length ? exactRevisionIds.join(',') : null });
     }, [updateQueryParams]);
 
+    const projectAuthorityQuery = useQuery({
+        queryKey: ['ngs-molbio-project-authority', workspaceId],
+        enabled: Boolean(workspaceId),
+        queryFn: ({ signal }) => getProject(workspaceId, signal),
+        retry: false,
+    });
     const requestedSection = new URLSearchParams(window.location.search).get('section');
+    const isLocalProject = projectAuthorityQuery.data?.payload?.project_scope === 'ngs_molbio_local';
     const activeSection: SectionKey = SECTIONS.some(([key]) => key === requestedSection)
         ? requestedSection as SectionKey
         : 'overview';
@@ -780,11 +788,13 @@ export default function DomainExperimentWorkspace() {
             <div className="mx-0 w-full max-w-none space-y-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent">Project-owned MolBio / NGS context</p>
+                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent">{isLocalProject ? 'Local NGS/MolBio-owned context' : 'Broader Project-owned NGS/MolBio context'}</p>
                         <h2 className="text-xl font-bold text-content">Domain Experiment workspace</h2>
                         <p className="mt-1 max-w-4xl text-sm text-content-secondary">
-                            Inspect immutable scientific state, prepare and launch governed Workflow Plans, and reopen exact results.
-                            Project Manager owns the Project hierarchy. This workspace retains the exact selected hierarchy while the domain store owns local scientific state.
+                            Inspect immutable scientific state, prepare and launch governed Workflow Plans, reopen Workflow Receipts, and inspect data-bearing Results.
+                            {isLocalProject
+                                ? ' The NGS/MolBio layer owns this complete standalone Project and its contained Experiments. Optional governed links can expose selected Experiments and Results to several broader Projects.'
+                                : ' The broader Project Manager owns this Project and contains this NGS/MolBio Experiment. The domain store owns native scientific Data and Results.'}
                         </p>
                     </div>
                     <div className="flex flex-wrap items-center justify-end gap-2">
@@ -802,12 +812,14 @@ export default function DomainExperimentWorkspace() {
                                 >
                                     NGS Toolkit
                                 </Link>
-                                <Link
-                                    className="rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-xs font-semibold text-content-secondary hover:text-content"
-                                    to={projectReturnUri}
-                                >
-                                    Return to Project
-                                </Link>
+                                {!isLocalProject && (
+                                    <Link
+                                        className="rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-xs font-semibold text-content-secondary hover:text-content"
+                                        to={projectReturnUri}
+                                    >
+                                        Return to broader Project
+                                    </Link>
+                                )}
                             </>
                         )}
                         <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
@@ -824,7 +836,7 @@ export default function DomainExperimentWorkspace() {
 
                 {hasProjectOwnedContext ? (
                     <div className="grid gap-3 lg:grid-cols-4">
-                        <Identifier label="Project-owned context" value={workspaceId} />
+                        <Identifier label={isLocalProject ? 'Local NGS/MolBio Project' : 'Broader BMS Project'} value={workspaceId} />
                         <Identifier label="Global Experiment" value={globalExperimentId} />
                         <Identifier label="NGS/MolBio Domain Experiment" value={domainExperimentId} />
                         <label className="text-xs font-semibold text-content-secondary">
@@ -846,9 +858,9 @@ export default function DomainExperimentWorkspace() {
                     </div>
                 ) : (
                     <div className="rounded-xl border border-warning/40 bg-warning/10 p-4" role="status">
-                        <p className="text-sm font-semibold text-content">Project-owned Domain context required</p>
+                        <p className="text-sm font-semibold text-content">Choose an NGS/MolBio Project and Experiment</p>
                         <p className="mt-1 text-sm text-content-secondary">
-                            Open an NGS/MolBio Domain Experiment from Project Manager. The toolkit no longer owns a separate Project hierarchy selection.
+                            Create or open a local NGS/MolBio Project above. For cross-domain work, create an NGS/MolBio Experiment inside a broader Project or open one from Project Manager.
                         </p>
                         <Link
                             to="/projects"

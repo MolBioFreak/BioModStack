@@ -4,6 +4,7 @@ import { HotkeysProvider } from '@blueprintjs/core';
 import { Layout } from './components/Layout';
 import { GlobalExperimentProvider } from './components/experiments/GlobalExperimentContext';
 import DomainExperimentWorkspace from './components/molbio-ngs/DomainExperimentWorkspace';
+import NgsMolBioProjectHub from './components/molbio-ngs/NgsMolBioProjectHub';
 import { useResolvedBmsFeatures } from './runtime/installFeatures';
 
 const Dashboard = lazy(() => import('./components/Dashboard').then((module) => ({ default: module.Dashboard })));
@@ -88,6 +89,7 @@ function App() {
               path="/designer"
               element={(
                 <div className="w-full max-w-none">
+                  <NgsMolBioProjectHub />
                   <DomainExperimentWorkspace />
                   <MolBioToolkitV2 />
                 </div>
@@ -98,6 +100,7 @@ function App() {
               path="/ngs"
               element={(
                 <div className="w-full max-w-none">
+                  <NgsMolBioProjectHub />
                   <DomainExperimentWorkspace />
                   <NGSToolkit />
                 </div>

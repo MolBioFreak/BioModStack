@@ -54,6 +54,8 @@ The global layer organizes and verifies the work. Native domain stores keep scie
 - Cross-store lineage and exact native reopening.
 - ELN-like notes, observations, decisions, conclusions, and evidence links.
 - Bounded Project read models, health, backup, export, restart recovery, and Development browser acceptance.
+- Two-tier NGS/MolBio Project ownership: module-local Projects and broader BMS Projects use the same Project and Experiment authority while retaining distinct owning UI surfaces.
+- Explicit many-to-many links from one module-local NGS/MolBio Project to multiple broader BMS Projects. Each link selects the local Experiments and Results exposed to that broader Project and never copies native scientific payloads.
 
 ### 2.2 Authority boundaries
 
@@ -68,6 +70,27 @@ The global layer organizes and verifies the work. Native domain stores keep scie
 | Hardware and MinKNOW control | Existing NGS/instrument control plane |
 
 The domain connector uses separate sessions for each store. It never writes another store's tables through an ORM model owned by the wrong service.
+
+### 2.2.1 Canonical research containment and result language
+
+- A **Project** is a research container. A Project contains Experiments.
+- An **Experiment** is a planned or executed unit of scientific work. It owns references to its real or in-silico input Data, its workflow execution history, and its Results.
+- A **Workflow Receipt** records summary and log facts about execution: what ran, when it ran, how it ran, exact settings, software/runtime authority, status, and governed lineage. A Workflow Receipt is execution evidence. It is not the canonical scientific Result payload.
+- A **Result** is the data-bearing scientific output that an operator inspects, compares, visualizes, exports, or cites. Canonical Result Data stays in its native store or governed artifact root.
+- A **Dataset** is a governed selection of immutable Data or Result references for an Experiment or comparison. Dataset membership never transfers or duplicates canonical payload ownership.
+
+The global Project store holds containment, membership, identifiers, receipts, digests, bounded summaries, and lineage. Native stores retain scientific Data and Result payloads.
+
+### 2.2.2 Two-tier NGS/MolBio Project ownership
+
+Both tiers use the canonical Project → Experiment → Domain Experiment hierarchy:
+
+1. `global` Projects are owned and authored from the main Project Manager. They may contain protein, NGS/MolBio, or other Domain Experiments.
+2. `ngs_molbio_local` Projects are owned and authored from the NGS/MolBio layer. They contain NGS/MolBio Experiments and can operate without a broader BMS Project.
+
+A module-local Project is complete and valid without any broader Project association. It **can**, but does not need to, link to several global Projects. Each optional immutable link identifies the local Project, target global Project, selected contained Experiment identities, and selected Result identities. The target Project receives governed membership and lineage to those identities. It does not receive copied Data or Result bytes. One local Experiment or Result can therefore support several global Projects while retaining one canonical identity and one native payload authority.
+
+Project scope controls the owning authoring surface. It does not create a second Project schema or a second execution model. Historical revisions remain attached to the original Project and Experiment identities.
 
 The integration preserves current molecular and sequencing policy:
 

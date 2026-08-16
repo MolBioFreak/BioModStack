@@ -19,6 +19,8 @@ from molbio_ngs_models import MolBioNGSDomainState, MolBioNGSGlobalBinding
 from experiment_models import (
     ExperimentAggregateHead,
     ExperimentAuditEvent,
+    ExperimentExternalEntityReceipt,
+    ExperimentLineageEdge,
     ExperimentResource,
     ExperimentResearchRecord,
     ExperimentRevision,
@@ -32,13 +34,15 @@ from experiment_services import (
     ValidationFailure,
     add_audit_event,
     append_research_record,
+    archive_aggregate,
+    canonical_json,
     create_domain_experiment,
     create_global_experiment,
     create_project,
+    new_id,
     public_workflow_payload,
     restore_aggregate,
     save_hierarchy_revision,
-    archive_aggregate,
 )
 from routers.experiment_workspaces import _mutation_principal, _require_mutation_owner
 from services.global_experiments.worker import global_experiment_worker
@@ -79,6 +83,7 @@ class ProjectCreateRequest(StrictRequestModel):
     external_references: list[ExternalReference] = Field(default_factory=list)
     created_by: str | None = None
     change_summary: str = "created"
+    project_scope: Literal["global", "ngs_molbio_local"] = "global"
 
 
 class ProjectPatchRequest(StrictRequestModel):
@@ -96,6 +101,17 @@ class ProjectPatchRequest(StrictRequestModel):
     external_references: list[ExternalReference] | None = None
     created_by: str | None = None
     change_summary: str | None = None
+
+
+class NgsMolBioProjectLinkRequest(StrictRequestModel):
+    local_project_id: str = Field(min_length=1, max_length=128)
+    experiment_ids: list[str] = Field(min_length=1, max_length=128)
+    result_ids: list[str] = Field(default_factory=list, max_length=256)
+    change_summary: str = Field(
+        default="Linked local NGS/MolBio Project",
+        min_length=1,
+        max_length=1000,
+    )
 
 
 class GlobalExperimentCreateRequest(StrictRequestModel):
@@ -640,6 +656,7 @@ async def _merge_patch(
 async def list_projects(
     cursor: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=100),
+    project_scope: Literal["global", "ngs_molbio_local", "all"] = Query(default="all"),
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict[str, Any]:
     return await search_projects(
@@ -648,6 +665,7 @@ async def list_projects(
         archive="all",
         cursor=cursor,
         limit=limit,
+        project_scope=project_scope,
         session=session,
     )
 
@@ -688,9 +706,21 @@ async def search_projects(
     archive: Literal["active", "archived", "all"] = Query(default="active"),
     cursor: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=100),
+    project_scope: Literal["global", "ngs_molbio_local", "all"] = Query(default="all"),
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict[str, Any]:
     filters = [ExperimentAggregateHead.aggregate_kind == "workspace"]
+    if project_scope == "global":
+        filters.append(
+            or_(
+                func.json_extract(ExperimentRevision.canonical_payload, "$.project_scope").is_(None),
+                func.json_extract(ExperimentRevision.canonical_payload, "$.project_scope") == "global",
+            )
+        )
+    elif project_scope == "ngs_molbio_local":
+        filters.append(
+            func.json_extract(ExperimentRevision.canonical_payload, "$.project_scope") == "ngs_molbio_local"
+        )
     if archive == "active":
         filters.append(ExperimentAggregateHead.lifecycle_state != "archived")
     elif archive == "archived":
@@ -702,7 +732,7 @@ async def search_projects(
         filters.append(ExperimentAggregateHead.lifecycle_state == status_filter)
     normalized = q.strip()
     cursor_scope = json.dumps(
-        [normalized, status_filter or "", archive],
+        [normalized, status_filter or "", archive, project_scope],
         separators=(",", ":"),
         ensure_ascii=True,
     )
@@ -860,6 +890,200 @@ async def restore_project(
         restored = await restore_aggregate(session, head.aggregate_id, expected_head_generation=payload.expected_head_generation)
         await session.commit()
         return await _head_json(session, restored, exposed_kind="project", storage_kind="workspace")
+    except ExperimentServiceError as exc:
+        await session.rollback()
+        raise _error(exc) from exc
+
+
+def _project_link_json(edge: ExperimentLineageEdge) -> dict[str, Any]:
+    metadata = json.loads(edge.metadata_json)
+    return {
+        "schema": "bms.ngs-molbio-project-link.v1",
+        "link_id": edge.id,
+        "local_project_id": edge.target_resource_id,
+        "global_project_id": edge.source_resource_id,
+        "experiment_ids": metadata.get("experiment_ids", []),
+        "result_ids": metadata.get("result_ids", []),
+        "change_summary": metadata.get("change_summary", ""),
+        "created_at": edge.created_at,
+    }
+
+
+@router.get("/{project_id}/ngs-molbio-links")
+async def list_ngs_molbio_project_links(
+    project_id: str,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    project = await _project(session, project_id)
+    project_payload = await _payload(session, project)
+    selector = (
+        ExperimentLineageEdge.target_resource_id == project_id
+        if project_payload.get("project_scope") == "ngs_molbio_local"
+        else ExperimentLineageEdge.source_resource_id == project_id
+    )
+    rows = (
+        await session.execute(
+            select(ExperimentLineageEdge)
+            .where(
+                selector,
+                ExperimentLineageEdge.edge_mode == "references",
+                ExperimentLineageEdge.edge_key.like("ngs-molbio-project-link:%"),
+            )
+            .order_by(ExperimentLineageEdge.created_at.desc(), ExperimentLineageEdge.id.desc())
+        )
+    ).scalars().all()
+    return {
+        "schema": "bms.ngs-molbio-project-link-list.v1",
+        "items": [_project_link_json(row) for row in rows],
+    }
+
+
+@router.get("/{project_id}/ngs-molbio-shareable-results")
+async def list_ngs_molbio_shareable_results(
+    project_id: str,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    project = await _project(session, project_id)
+    project_payload = await _payload(session, project)
+    if project_payload.get("project_scope") != "ngs_molbio_local":
+        raise _error(ValidationFailure("Result sharing source must be an NGS/MolBio-local Project"))
+    rows = (
+        await session.execute(
+            select(ExperimentExternalEntityReceipt, ExperimentLineageEdge)
+            .join(
+                ExperimentLineageEdge,
+                ExperimentLineageEdge.target_resource_id == ExperimentExternalEntityReceipt.id,
+            )
+            .where(
+                ExperimentExternalEntityReceipt.workspace_id == project_id,
+                ExperimentLineageEdge.workspace_id == project_id,
+                ExperimentLineageEdge.edge_mode == "produced",
+            )
+            .order_by(
+                ExperimentExternalEntityReceipt.created_at.desc(),
+                ExperimentExternalEntityReceipt.id.desc(),
+            )
+            .limit(256)
+        )
+    ).all()
+    return {
+        "schema": "bms.ngs-molbio-shareable-result-list.v1",
+        "items": [
+            {
+                "result_receipt_id": receipt.id,
+                "experiment_id": edge.source_resource_id,
+                "store_id": receipt.store_id,
+                "entity_kind": receipt.entity_kind,
+                "entity_id": receipt.entity_id,
+                "generation_or_revision": receipt.generation_or_revision,
+                "content_digest": receipt.content_digest,
+                "availability": receipt.availability,
+                "created_at": receipt.created_at,
+            }
+            for receipt, edge in rows
+        ],
+    }
+
+
+@router.post("/{project_id}/ngs-molbio-links", status_code=status.HTTP_201_CREATED)
+async def create_ngs_molbio_project_link(
+    project_id: str,
+    payload: NgsMolBioProjectLinkRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    try:
+        if project_id == payload.local_project_id:
+            raise ValidationFailure("local and global Project identities must differ")
+        await _require_mutation_owner(request, session, resource_id=project_id)
+        await _require_mutation_owner(request, session, resource_id=payload.local_project_id)
+        global_project = await _project(session, project_id)
+        local_project = await _project(session, payload.local_project_id)
+        global_payload = await _payload(session, global_project)
+        local_payload = await _payload(session, local_project)
+        if local_payload.get("project_scope") != "ngs_molbio_local":
+            raise ValidationFailure("linked source must be an NGS/MolBio-local Project")
+        if global_payload.get("project_scope") == "ngs_molbio_local":
+            raise ValidationFailure("linked target must be a broader global Project")
+
+        experiment_ids = list(dict.fromkeys(payload.experiment_ids))
+        if len(experiment_ids) != len(payload.experiment_ids):
+            raise ValidationFailure("experiment_ids must be unique")
+        experiment_heads = (
+            await session.execute(
+                select(ExperimentAggregateHead).where(
+                    ExperimentAggregateHead.aggregate_id.in_(experiment_ids)
+                )
+            )
+        ).scalars().all()
+        if len(experiment_heads) != len(experiment_ids) or any(
+            head.workspace_id != payload.local_project_id
+            or head.aggregate_kind not in {"experiment", "domain_experiment"}
+            for head in experiment_heads
+        ):
+            raise ValidationFailure(
+                "every selected Experiment must be contained by the local NGS/MolBio Project"
+            )
+
+        result_ids = list(dict.fromkeys(payload.result_ids))
+        if len(result_ids) != len(payload.result_ids):
+            raise ValidationFailure("result_ids must be unique")
+        if result_ids:
+            produced_result_ids = set(
+                (
+                    await session.execute(
+                        select(ExperimentExternalEntityReceipt.id)
+                        .join(
+                            ExperimentLineageEdge,
+                            ExperimentLineageEdge.target_resource_id == ExperimentExternalEntityReceipt.id,
+                        )
+                        .where(
+                            ExperimentExternalEntityReceipt.id.in_(result_ids),
+                            ExperimentExternalEntityReceipt.workspace_id == payload.local_project_id,
+                            ExperimentLineageEdge.workspace_id == payload.local_project_id,
+                            ExperimentLineageEdge.edge_mode == "produced",
+                        )
+                    )
+                ).scalars().all()
+            )
+            if produced_result_ids != set(result_ids):
+                raise ValidationFailure(
+                    "every selected Result must be a governed produced native-Result receipt in the local NGS/MolBio Project"
+                )
+
+        link_id = new_id("ngs-molbio-project-link")
+        edge = ExperimentLineageEdge(
+            id=link_id,
+            workspace_id=project_id,
+            source_resource_id=project_id,
+            target_resource_id=payload.local_project_id,
+            edge_mode="references",
+            edge_key=f"ngs-molbio-project-link:{link_id}",
+            metadata_json=canonical_json(
+                {
+                    "schema": "bms.ngs-molbio-project-link.v1",
+                    "experiment_ids": experiment_ids,
+                    "result_ids": result_ids,
+                    "change_summary": payload.change_summary,
+                    "payload_ownership": "native-references-only",
+                }
+            ),
+        )
+        session.add(edge)
+        add_audit_event(
+            session,
+            workspace_id=project_id,
+            resource_id=project_id,
+            event_type="ngs_molbio_local_project_linked",
+            generation=0,
+            payload={
+                "local_project_id": payload.local_project_id,
+                "experiment_ids": experiment_ids,
+                "result_ids": result_ids,
+            },
+        )
+        await session.commit()
+        return _project_link_json(edge)
     except ExperimentServiceError as exc:
         await session.rollback()
         raise _error(exc) from exc

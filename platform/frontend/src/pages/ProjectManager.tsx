@@ -113,6 +113,7 @@ function ProjectsIndex() {
             archive: archiveFilter as 'active' | 'archived' | 'all',
             cursor: pageParam,
             limit: 50,
+            projectScope: 'global',
             signal,
         }),
         getNextPageParam: (page) => page.next_cursor ?? undefined,
@@ -455,6 +456,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
             global_experiment_id: selectedGlobalExperimentId,
             domain_experiment_id: selectedDomainExperimentId,
             section: 'workflow-plans',
+            ownership_scope: 'global',
         });
         navigate(`/ngs?${query.toString()}`);
     };
@@ -478,6 +480,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                     domain_experiment_id: domainExperimentId,
                     section: 'workflow-plans',
                     run_group_id: run.batch_or_run_group_id,
+                    ownership_scope: 'global',
                     run_group_action: action,
                 });
                 return { kind: 'route' as const, route: `/ngs?${query.toString()}` };
