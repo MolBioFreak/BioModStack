@@ -114,6 +114,11 @@ export default function NgsMolBioProjectHub() {
 
     const createMutation = useMutation({
         mutationFn: async () => {
+            if (!experimentName.trim()) throw new Error('Enter the required contained Experiment name.');
+            if (!objective.trim()) throw new Error('Enter the required scientific objective.');
+            if (mode === 'local-new' && !projectName.trim()) throw new Error('Enter the required local Project name.');
+            if (mode === 'local-existing' && !selectedLocalProjectId) throw new Error('Select the owning local Project.');
+            if (mode === 'global' && !targetGlobalProjectId) throw new Error('Select the owning broader Project.');
             let projectId = mode === 'local-existing' ? selectedLocalProjectId : targetGlobalProjectId;
             if (mode === 'local-new') {
                 const project = await createProject({
@@ -212,18 +217,19 @@ export default function NgsMolBioProjectHub() {
                     </div>
                     <div className="mt-3 grid gap-3 sm:grid-cols-2">
                         {mode === 'local-new' && (
-                            <label className="text-xs text-content-secondary">Project name<input className={`${INPUT} mt-1`} value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="Focused sequencing Project" /></label>
+                            <label className="text-xs text-content-secondary">Project name <span className="text-error">(required)</span><input required className={`${INPUT} mt-1`} value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="Focused sequencing Project" /></label>
                         )}
                         {mode === 'local-existing' && (
-                            <label className="text-xs text-content-secondary">Owning local Project<input className={`${INPUT} mt-1`} value={selectedLocalProject?.name ?? ''} readOnly /></label>
+                            <label className="text-xs text-content-secondary">Owning local Project <span className="text-error">(required)</span><input className={`${INPUT} mt-1`} value={selectedLocalProject?.name ?? ''} readOnly /></label>
                         )}
                         {mode === 'global' && (
-                            <label className="text-xs text-content-secondary">Owning broader Project<select className={`${INPUT} mt-1`} value={targetGlobalProjectId} onChange={(event) => setTargetGlobalProjectId(event.target.value)}><option value="">Select Project</option>{globalProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
+                            <label className="text-xs text-content-secondary">Owning broader Project <span className="text-error">(required)</span><select required className={`${INPUT} mt-1`} value={targetGlobalProjectId} onChange={(event) => setTargetGlobalProjectId(event.target.value)}><option value="">Select Project</option>{globalProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
                         )}
-                        <label className="text-xs text-content-secondary">Contained Experiment name<input className={`${INPUT} mt-1`} value={experimentName} onChange={(event) => setExperimentName(event.target.value)} placeholder="Experiment" /></label>
-                        <label className="text-xs text-content-secondary sm:col-span-2">Scientific objective<textarea className={`${INPUT} mt-1 min-h-20`} value={objective} onChange={(event) => setObjective(event.target.value)} /></label>
+                        <label className="text-xs text-content-secondary">Contained Experiment name <span className="text-error">(required)</span><input required className={`${INPUT} mt-1`} value={experimentName} onChange={(event) => setExperimentName(event.target.value)} placeholder="Experiment" /></label>
+                        <label className="text-xs text-content-secondary sm:col-span-2">Scientific objective <span className="text-error">(required)</span><textarea required className={`${INPUT} mt-1 min-h-20`} value={objective} onChange={(event) => setObjective(event.target.value)} /></label>
                     </div>
-                    <button type="button" className={`${BUTTON} mt-3`} disabled={createMutation.isPending || !experimentName.trim() || !objective.trim() || (mode === 'local-new' ? !projectName.trim() : mode === 'local-existing' ? !selectedLocalProjectId : !targetGlobalProjectId)} onClick={() => createMutation.mutate()}>
+                    <p className="mt-2 text-xs text-content-muted">Create the Project and its first contained Experiment. Add several shared reference sequences from the Experiment workspace after creation.</p>
+                    <button type="button" className={`${BUTTON} mt-3`} disabled={createMutation.isPending} onClick={() => createMutation.mutate()}>
                         {createMutation.isPending ? 'Creating…' : mode === 'local-new' ? 'Create local Project and first Experiment' : mode === 'local-existing' ? 'Add contained Experiment' : 'Create global NGS/MolBio Experiment'}
                     </button>
                 </div>

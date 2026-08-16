@@ -29,7 +29,7 @@ The accepted operator path is:
 create NGS/MolBio Domain Experiment
 → initialize a verified local binding
 → create or import immutable molecular material
-→ select samples and managed reference revisions
+→ select samples and several exact revisions from the shared MolBio and NGS reference library
 → save an exact local scientific-state revision
 → launch ONT/NGS work in that exact context
 → attach terminal evidence
@@ -91,6 +91,14 @@ Both tiers use the canonical Project → Experiment → Domain Experiment hierar
 A module-local Project is complete and valid without any broader Project association. It **can**, but does not need to, link to several global Projects. Each optional immutable link identifies the local Project, target global Project, selected contained Experiment identities, and selected Result identities. The target Project receives governed membership and lineage to those identities. It does not receive copied Data or Result bytes. One local Experiment or Result can therefore support several global Projects while retaining one canonical identity and one native payload authority.
 
 Project scope controls the owning authoring surface. It does not create a second Project schema or a second execution model. Historical revisions remain attached to the original Project and Experiment identities.
+
+### 2.2.3 Shared MolBio and NGS reference library
+
+The molecular sequence viewer and Mol Bio store own one shared catalogue for DNA and RNA reference sequences from operator imports, molecular design outputs, external accessions, and other governed sources. Each saved sequence has immutable revisions. An NGS/MolBio Experiment can attach `0..N` exact sequence revisions to its local scientific-state revision through server-issued molecular revision receipts.
+
+An attachment records Experiment membership and the intended molecular role. It does not copy sequence authority into the Project store or the NGS domain store. MolBio reopens and edits the native sequence through a successor revision. NGS selects only an exact revision attached to the active Experiment state, then receives transient runtime FASTA through a receipt-bound handoff. Several references can remain attached for construct verification, controls, comparisons, and alternative expected sequences. A single NGS launch still identifies its exact expected reference and any separately approved comparison panel.
+
+The former Domain-managed FASTA catalogue remains available only to reopen historical jobs that already reference it. New authoring uses the shared molecular catalogue. Importing or designing a new reference returns the operator to the molecular viewer, where the sequence becomes available for explicit Experiment attachment.
 
 The integration preserves current molecular and sequencing policy:
 

@@ -65,6 +65,7 @@
     "platform/frontend/src/components/experiments/GlobalExperimentContext.tsx",
     "platform/frontend/src/components/molbio-ngs/DomainDatasetOperator.tsx",
     "platform/frontend/src/components/molbio-ngs/DomainExperimentWorkspace.tsx",
+    "platform/frontend/src/components/molbio-ngs/ExperimentReferenceLibrary.tsx",
     "platform/frontend/src/components/molbio-ngs/NgsMolBioProjectHub.tsx",
     "platform/frontend/src/components/molbio-ngs/DomainWorkflowOperator.tsx",
     "platform/frontend/src/components/NanoporeTemplate.tsx",
@@ -83,5 +84,5 @@
     "scripts/build_ngs_molbio_runtime_implementation_record.py",
     "scripts/run_ngs_molbio_payload_ownership_audit.py"
   ],
-  "content_sha256": "7cb4782c7ef25c9c469451303a3cc10256de546b510397c43482608e240046c1"
+  "content_sha256": "47735e33d4d89738c717e25bfaefc2de08d3a204d0d532c4d9535577b515f81e"
 }

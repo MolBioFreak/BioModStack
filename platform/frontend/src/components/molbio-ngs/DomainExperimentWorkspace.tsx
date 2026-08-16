@@ -20,6 +20,7 @@ import { getProject } from '../../lib/projectManager';
 import { useGlobalExperimentContext } from '../experiments/GlobalExperimentContext';
 import DomainDatasetOperator from './DomainDatasetOperator';
 import DomainWorkflowOperator from './DomainWorkflowOperator';
+import ExperimentReferenceLibrary from './ExperimentReferenceLibrary';
 
 const SECTIONS = [
     ['overview', 'Overview'],
@@ -430,44 +431,56 @@ export default function DomainExperimentWorkspace() {
     );
 
     const renderMolecularInputs = () => (
-        <Panel title="Exact molecular revision inputs">
-            {molecularMembers.length === 0 ? <Empty>No molecular revision receipts are members of the selected state revision.</Empty> : (
-                <div className="grid gap-3 xl:grid-cols-2">
-                    {molecularMembers.map((member, index) => {
-                        const destination = molecularDestinations[index];
-                        const revisionQuery = molecularQueries[index];
-                        const revision = revisionQuery?.data;
-                        return (
-                            <div key={member.receipt_id} className="space-y-3 rounded-lg border border-border-primary bg-surface p-3">
-                                <ErrorNotice error={destination.error} />
-                                <ErrorNotice error={revisionQuery?.error} />
-                                <MemberAuthority member={member} />
-                                {revision && destination.error === null && (
-                                    <>
-                                        <div className="grid gap-2 sm:grid-cols-3">
-                                            <Identifier label="Document" value={revision.document_name} />
-                                            <Identifier label="Revision ID" value={revision.revision_id} />
-                                            <Identifier label="Relation" value={revision.relation} />
-                                        </div>
-                                        <Digest label="Molecular content digest" value={revision.content_sha256} />
-                                        <Link
-                                            className="inline-flex text-xs font-semibold text-info hover:underline"
-                                            to={contextHref('/designer', {
-                                                section: 'molecular-inputs',
-                                                molbio_sequence_id: destination.aggregateId,
-                                                molbio_revision_id: destination.revisionId,
-                                            })}
-                                        >
-                                            Reopen exact molecular revision in MolBio
-                                        </Link>
-                                    </>
-                                )}
-                            </div>
-                        );
-                    })}
-                </div>
+        <>
+            {exactDomainId && selectedDomainExperiment && (
+                <ExperimentReferenceLibrary
+                    domainExperimentId={exactDomainId}
+                    globalDomainExperimentRevisionId={selectedDomainExperiment.global_domain_experiment_revision_id}
+                    currentStateRevisionId={stateQuery.data?.current_state_revision_id ?? null}
+                    stateHeadGeneration={stateQuery.data?.head_generation ?? 0}
+                    canMutate={availability.canMutateDomain}
+                    mutationBlocker={availability.canMutateDomain ? null : availability.reason}
+                />
             )}
-        </Panel>
+            <Panel title="Experiment reference sequences">
+                {molecularMembers.length === 0 ? <Empty>No shared reference revision is attached to the selected scientific-state revision.</Empty> : (
+                    <div className="grid gap-3 xl:grid-cols-2">
+                        {molecularMembers.map((member, index) => {
+                            const destination = molecularDestinations[index];
+                            const revisionQuery = molecularQueries[index];
+                            const revision = revisionQuery?.data;
+                            return (
+                                <div key={member.receipt_id} className="space-y-3 rounded-lg border border-border-primary bg-surface p-3">
+                                    <ErrorNotice error={destination.error} />
+                                    <ErrorNotice error={revisionQuery?.error} />
+                                    <MemberAuthority member={member} />
+                                    {revision && destination.error === null && (
+                                        <>
+                                            <div className="grid gap-2 sm:grid-cols-3">
+                                                <Identifier label="Reference sequence" value={revision.document_name} />
+                                                <Identifier label="Exact revision ID" value={revision.revision_id} />
+                                                <Identifier label="Experiment role" value={member.role} />
+                                            </div>
+                                            <Digest label="Molecular content digest" value={revision.content_sha256} />
+                                            <Link
+                                                className="inline-flex text-xs font-semibold text-info hover:underline"
+                                                to={contextHref('/designer', {
+                                                    section: 'molecular-inputs',
+                                                    molbio_sequence_id: destination.aggregateId,
+                                                    molbio_revision_id: destination.revisionId,
+                                                })}
+                                            >
+                                                Reopen exact reference in molecular viewer
+                                            </Link>
+                                        </>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
+            </Panel>
+        </>
     );
 
     const renderReferences = () => (

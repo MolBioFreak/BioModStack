@@ -805,7 +805,6 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         queryKey: ['molbio-ngs-sequences'],
         queryFn: async () => (await fetchNucleotideSequences({
             limit: 100,
-            sequence_type: 'dna',
             sort_by: 'name',
             sort_desc: false,
         })).data,
@@ -1062,8 +1061,31 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     ), [expectedPlasmidSize, igvReportFlankingBp, igvReportMaxSites, igvTrackWindowBp, minFastqReadLength]);
 
     const requiresReference = selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc' || selectedWorkflow === 'bamQc' || selectedWorkflow === 'modified';
-    const molbioSequences = molbioSequencesQuery.data || [];
-    const molbioRevisions = molbioRevisionsQuery.data || [];
+    const exactStateMolecularRevisionKeys = useMemo(() => new Set(
+        (exactStateRevisionQuery.data?.members ?? [])
+            .filter((member) => member.entity_kind === 'molecular_revision')
+            .map((member) => {
+                const destination = member.reopen_destination;
+                const params = destination && typeof destination === 'object' && !Array.isArray(destination)
+                    ? (destination as { params?: unknown }).params
+                    : null;
+                if (!params || typeof params !== 'object' || Array.isArray(params)) return null;
+                const sequenceId = (params as Record<string, unknown>).sequence_id;
+                const revisionId = (params as Record<string, unknown>).revision_id;
+                return typeof sequenceId === 'string' && typeof revisionId === 'string'
+                    ? `${sequenceId}:${revisionId}`
+                    : null;
+            })
+            .filter((value): value is string => Boolean(value)),
+    ), [exactStateRevisionQuery.data?.members]);
+    const allMolbioSequences = molbioSequencesQuery.data || [];
+    const allMolbioRevisions = molbioRevisionsQuery.data || [];
+    const molbioSequences = exactDomainExperimentId
+        ? allMolbioSequences.filter((sequence) => [...exactStateMolecularRevisionKeys].some((key) => key.startsWith(`${sequence.id}:`)))
+        : allMolbioSequences;
+    const molbioRevisions = exactDomainExperimentId
+        ? allMolbioRevisions.filter((revision) => exactStateMolecularRevisionKeys.has(`${selectedMolbioSequenceId}:${revision.id}`))
+        : allMolbioRevisions;
     const selectedMolbioSequence = molbioSequences.find((sequence) => sequence.id === selectedMolbioSequenceId) || null;
     const selectedMolbioRevision = molbioRevisions.find((revision) => revision.id === selectedMolbioRevisionId) || null;
     const usesMolBioReceiptLane = Boolean(selectedMolbioSequenceId);
@@ -1777,15 +1799,18 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                 )}
             </div>
 
-            {/* Immutable MolBio reference plane */}
+            {/* Shared MolBio and NGS reference library */}
             {selectedWorkflow !== 'pooledAssignment' && (
                 <div className="bg-[var(--bg-secondary)] rounded-lg p-4 xl:col-span-8" data-testid="immutable-molbio-reference-panel">
                     <div className="mb-3">
-                        <h2 className="text-sm font-semibold text-[var(--text-primary)]">Immutable MolBio reference</h2>
-                        <p className="mt-1 text-xs text-[var(--text-secondary)]">Reference-requiring workflows use a saved sequence and one exact immutable revision. References are issued to the job only through a server receipt.</p>
+                        <h2 className="text-sm font-semibold text-[var(--text-primary)]">Shared Experiment reference</h2>
+                        <p className="mt-1 text-xs text-[var(--text-secondary)]">Choose one exact revision from the references attached to this Experiment. MolBio and NGS use the same molecular sequence library; NGS receives runtime FASTA only through a server receipt.</p>
+                        {exactDomainExperimentId && molbioSequences.length === 0 && !molbioSequencesQuery.isLoading && !exactStateRevisionQuery.isLoading && (
+                            <p role="alert" className="mt-2 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-100">No shared reference is attached to this scientific-state revision. Return to the Experiment’s Molecular Inputs section to add one or more references.</p>
+                        )}
                     </div>
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                        <label className="text-xs text-[var(--text-secondary)]">Saved MolBio sequence
+                        <label className="text-xs text-[var(--text-secondary)]">Experiment reference sequence
                             <select
                                 value={selectedMolbioSequenceId}
                                 onChange={(event) => {
@@ -1796,7 +1821,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                 className="mt-1 w-full rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-2 text-sm text-[var(--text-primary)]"
                                 data-testid="molbio-sequence-selector"
                             >
-                                <option value="">Select saved sequence…</option>
+                                <option value="">Select attached reference…</option>
                                 {molbioSequences.map((sequence) => <option key={sequence.id} value={sequence.id}>{sequence.name}</option>)}
                             </select>
                         </label>
@@ -1842,12 +1867,12 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     </div>
                 </div>
             )}
-            {/* Server-managed immutable reference authority */}
-            {selectedWorkflow !== 'pooledAssignment' && (
+            {/* Historical Domain-managed references remain visible only when reopening an older job. */}
+            {Boolean(initialValues?.ngsReferenceRevisionId) && selectedWorkflow !== 'pooledAssignment' && (
             <div className="bg-[var(--bg-secondary)] rounded-lg p-4 xl:col-span-4 space-y-3">
                 <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div><label className="block text-sm font-medium text-[var(--text-secondary)]">Managed Reference FASTA</label><p className="mt-1 text-xs text-[var(--text-secondary)]">Only immutable server-managed revisions can enter managed-reference submission.</p></div>
-                    <div className="flex flex-wrap gap-1">{(['managed', 'paste', 'create', 'legacy'] as ReferenceTab[]).map((tab) => <button key={tab} type="button" onClick={() => setReferenceTab(tab)} className={`px-3 py-1.5 rounded text-xs font-medium ${referenceTab === tab ? 'text-[var(--text-primary)] bg-[var(--bg-tertiary)]' : 'text-[var(--text-secondary)]'}`}>{tab === 'managed' ? 'Managed' : tab === 'paste' ? 'Paste + Import' : tab === 'create' ? 'Create Managed' : 'Legacy Import'}</button>)}</div>
+                    <div><label className="block text-sm font-medium text-[var(--text-secondary)]">Historical Domain-managed reference</label><p className="mt-1 text-xs text-[var(--text-secondary)]">Read-only compatibility for a job created before the shared MolBio and NGS reference library.</p></div>
+                    <span className="rounded border border-border-primary px-2 py-1 text-xs text-[var(--text-secondary)]">Historical compatibility</span>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2 rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/40 p-3 text-xs">
                     <div>Project ID: <span className="font-mono break-all">{workspaceId || 'not selected'}</span></div><div>Global Experiment ID: <span className="font-mono break-all">{globalExperimentId || 'not selected'}</span></div>
