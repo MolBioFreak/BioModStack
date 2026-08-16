@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "c5860d0bc3ec22ea5a54e6349ac5330f82861c54c2b334bb8416e63bce46d150",
+  "content_sha256": "e6596ac3e07f0de787b0bb65d4a02b0e70a1f45675e32891a0cc6e275b04d6c9",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "77673329001f48e610f13ed115fed62f56d7d10b93cc5ee30cea033c34bb3659",
@@ -79,8 +79,8 @@
     },
     {
       "path": "platform/api/database.py",
-      "sha256": "2809bd4e83a52b9806bb61d7695736572baf13710fb2567d56bd7f36dca09ba1",
-      "size_bytes": 108868
+      "sha256": "3439d1a56f29df06a4f7c80a411c74704c599b4bec05c3b17b46dc4aa33061d6",
+      "size_bytes": 109537
     },
     {
       "path": "platform/api/experiment_database.py",
@@ -194,8 +194,8 @@
     },
     {
       "path": "platform/api/routers/ont_runs.py",
-      "sha256": "1797e7ba712f000752ce46afe8044e3eb44684ebfa766d999050bd9c0a58a9bf",
-      "size_bytes": 60293
+      "sha256": "c5fdad1fd91d60fdff66b533e0818c9e7137406861448dad4261f2c3254326e6",
+      "size_bytes": 62374
     },
     {
       "path": "platform/api/routers/payload_ownership_audit.py",
@@ -399,8 +399,8 @@
     },
     {
       "path": "platform/frontend/src/lib/api.ts",
-      "sha256": "c6aa49f3be9e9a1dfbfb4404d7246fe72a5d9985123419c271c62a920aaba81b",
-      "size_bytes": 154912
+      "sha256": "d2dc53800001c83483995d927e3edf81a4397a2a63ecc87aa6f94e1321e96fb4",
+      "size_bytes": 156764
     },
     {
       "path": "platform/frontend/src/lib/projectManager.ts",
@@ -457,8 +457,8 @@
     "content_sha256": "93ac9157b314abdc063c3dafb84595ec26ec1e795d1d94762dbc567cb3d8d307",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
   },
-  "successor_source_commit": "8f3bd3c3244b78689f18a8e9794c4200aa9267e4",
-  "successor_source_tree": "c9df2984ce2574240108fa0a53cff76100382771",
+  "successor_source_commit": "b3dc094b24bf76137a1fae96fcbcc04316d2bbda",
+  "successor_source_tree": "44cd935a89403b20701abcf5f2c13419ab0eb585",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
