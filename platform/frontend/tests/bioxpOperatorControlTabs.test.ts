@@ -7,6 +7,7 @@ const source = readFileSync(resolve('src/components/BioXpOperatorControlTabs.tsx
 const client = readFileSync(resolve('src/lib/bioxpClient.ts'), 'utf8');
 const cockpit = readFileSync(resolve('src/components/BioXpCockpit.tsx'), 'utf8');
 const dashboard = readFileSync(resolve('src/components/BioXpQuickDashboard.tsx'), 'utf8');
+const pipettePanel = readFileSync(resolve('src/components/BioXpPipetteControlPanel.tsx'), 'utf8');
 
 test('catalog-driven control plane renders every action, critical groups, meta actions, and logs as separate panes', () => {
     for (const label of [
@@ -70,12 +71,28 @@ test('browser uses fixed BMS routes and action ids, never arbitrary robot paths'
     for (const routeToken of [
         '/api/bioxp/operator-controls/catalog',
         '/api/bioxp/operator-controls/dashboard',
+        '/api/bioxp/operator-controls/pipettes/application/status',
+        '/api/bioxp/operator-controls/pipettes/application/plan',
         '/api/bioxp/operator-controls/actions/',
         '/admission',
         '/api/bioxp/operator-controls/receipts/',
         '/assessment',
     ]) assert.ok(client.includes(routeToken), `missing fixed BMS route token: ${routeToken}`);
     assert.doesNotMatch(client, /informationalPath|robotPath|targetPath/);
+});
+
+test('dedicated four-channel pipette surface stays plan-only and renders evidence phases', () => {
+    assert.match(source, /BioXpPipetteControlPanel/);
+    for (const label of [
+        'Four-Channel Pipette Control', 'Channel', 'tip loaded', 'tip location',
+        'Load tip workflow', 'Move to waste', 'Detect fluid', 'Plunger up', 'Plunger down',
+        'Build no-motion plan', 'Safety gate', 'OEM plan evidence',
+    ]) assert.match(pipettePanel, new RegExp(label, 'i'));
+    for (const token of [
+        'controller_acknowledged', 'completion_verified', 'physical_effect_verified',
+        'motion_commanded', 'truth_source', 'live_query_performed',
+    ]) assert.ok(pipettePanel.includes(token), `missing pipette evidence token: ${token}`);
+    assert.doesNotMatch(pipettePanel, /execute pipette|run physical/i);
 });
 
 test('receipts expose machine assessment and require explicit human PASS or FAIL observations', () => {

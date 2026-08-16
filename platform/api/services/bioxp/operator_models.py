@@ -3220,6 +3220,75 @@ class OperatorDashboardTemperature(BaseModel):
     available: StrictBool
 
 
+class OperatorDashboardPipetteChannel(BaseModel):
+    model_config = ConfigDict(extra="allow", strict=True)
+    channel: StrictInt = Field(ge=0, le=3)
+    available: StrictBool
+    initialized: StrictBool | None = None
+    tip_loaded: StrictBool | None = None
+    tip_location: StrictInt | None = Field(default=None, ge=-1, le=3)
+    liquid_level_ul: StrictFloat | StrictInt | None = None
+    front_air_level_ul: StrictFloat | StrictInt | None = None
+    rear_air_level_ul: StrictFloat | StrictInt | None = None
+    pressure: StrictFloat | StrictInt | None = None
+    last_error: str | None = Field(default=None, max_length=1000)
+
+
+class OperatorDashboardPipettes(BaseModel):
+    model_config = ConfigDict(extra="allow", strict=True)
+    ok: StrictBool
+    channels: list[OperatorDashboardPipetteChannel] = Field(max_length=4)
+    live_query_performed: StrictBool | None = None
+    truth_source: str | None = Field(default=None, max_length=160)
+    controller_acknowledged: StrictBool | None = None
+    completion_verified: StrictBool | None = None
+    physical_effect_verified: StrictBool | None = None
+    latest_receipt: dict[str, Any] | None = None
+    application: dict[str, Any] | None = None
+
+
+class PipetteApplicationPlanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    operation: Literal["load_tip", "move_to_waste", "detect_fluid", "plunger_up", "plunger_down"]
+    tip_tray: str | None = Field(default=None, max_length=120)
+    tip_well: str | None = Field(default=None, max_length=32)
+    tip_type: StrictInt | None = None
+    tip_location: StrictInt | None = Field(default=None, ge=0, le=3)
+    home_z_after: StrictBool = True
+    fluid_class: Literal["TC", "MS", "OC", "RC", "STRIP"] | None = None
+
+
+class PipetteApplicationStatus(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    ok: Literal[True]
+    mode: Literal["plan_only"]
+    execution_admitted: Literal[False]
+    physical_effect_verified: Literal[False]
+    operations: list[Literal["load_tip", "move_to_waste", "detect_fluid", "plunger_up", "plunger_down"]] = Field(min_length=5, max_length=5)
+    blocker: Literal["physical_pipette_execution_not_authorized"]
+
+
+class PipetteApplicationPlanResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    ok: Literal[True]
+    operation: str = Field(min_length=1, max_length=80)
+    mode: Literal["plan_only"]
+    execution_admitted: Literal[False]
+    motion_commanded: Literal[False]
+    liquid_mutation_commanded: Literal[False]
+    controller_acknowledged: Literal[False]
+    completion_verified: Literal[False]
+    physical_effect_verified: Literal[False]
+    state_reconciled: Literal[False]
+    requested_inputs: dict[str, Any]
+    effective_inputs: None = None
+    steps: list[dict[str, Any]] = Field(min_length=1, max_length=32)
+    required_completion_evidence: list[str] = Field(max_length=32)
+    constants: dict[str, Any]
+    oem_source_anchor: str = Field(min_length=1, max_length=1000)
+    blocker: Literal["physical_pipette_execution_not_authorized"]
+
+
 class OperatorDashboard(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     schema_version: Literal["bioxp.operator_dashboard.v1"]
@@ -3232,7 +3301,7 @@ class OperatorDashboard(BaseModel):
     x_axis: OperatorDashboardXAxis
     z_axis: dict[str, Any]
     temperatures: list[OperatorDashboardTemperature] = Field(max_length=32)
-    pipettes: dict[str, Any]
+    pipettes: OperatorDashboardPipettes
     snapshot: dict[str, Any]
 
 

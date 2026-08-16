@@ -391,6 +391,33 @@ class FakeRobotClient:
         self.responses = {
             "operator_control_catalog": catalog(),
             "operator_dashboard": catalog()["dashboard"],
+            "pipette_application_status": {
+                "ok": True,
+                "mode": "plan_only",
+                "execution_admitted": False,
+                "physical_effect_verified": False,
+                "operations": ["load_tip", "move_to_waste", "detect_fluid", "plunger_up", "plunger_down"],
+                "blocker": "physical_pipette_execution_not_authorized",
+            },
+            "pipette_application_plan": {
+                "ok": True,
+                "operation": "detect_fluid",
+                "mode": "plan_only",
+                "execution_admitted": False,
+                "motion_commanded": False,
+                "liquid_mutation_commanded": False,
+                "controller_acknowledged": False,
+                "completion_verified": False,
+                "physical_effect_verified": False,
+                "state_reconciled": False,
+                "requested_inputs": {"fluid_class": "RC"},
+                "effective_inputs": None,
+                "steps": [{"action": "resolve_fluid_target", "mutates": False}],
+                "required_completion_evidence": ["controller_fluid_completion"],
+                "constants": {"supported_offset_classes": ["TC", "MS", "OC", "RC", "STRIP"]},
+                "oem_source_anchor": "ControlLib fluid detection",
+                "blocker": "physical_pipette_execution_not_authorized",
+            },
             "operator_action_admission": {"action_id": "motion.home_xy", "ownership_generation": 7, "enabled": False, "disabled_reason": "Motion is inactive. Activate motion before moving this motor.", "dependencies": [{"key": "motion_enabled", "label": "Motion enabled", "met": False, "reason": "Motion is inactive. Activate motion before moving this motor."}]},
             "invoke_operator_action": receipt(),
             "operator_action_history": {
@@ -477,11 +504,33 @@ def test_robot_409_translation_preserves_structured_detail():
 def test_robot_client_uses_fixed_operator_routes_only():
     assert DEFAULT_ROBOT_ROUTES["operator_control_catalog"][:2] == ("GET", "/operator/control-catalog")
     assert DEFAULT_ROBOT_ROUTES["operator_dashboard"][:2] == ("GET", "/operator/dashboard")
+    assert DEFAULT_ROBOT_ROUTES["pipette_application_status"][:2] == ("GET", "/liquid/application/status")
+    assert DEFAULT_ROBOT_ROUTES["pipette_application_plan"][:2] == ("POST", "/liquid/application/plan")
     assert DEFAULT_ROBOT_ROUTES["operator_action_admission"][:2] == ("POST", "/operator/actions/{action_id}/admission")
     assert DEFAULT_ROBOT_ROUTES["invoke_operator_action"][:2] == ("POST", "/operator/actions/{action_id}")
     assert DEFAULT_ROBOT_ROUTES["operator_action_history"][:2] == ("GET", "/operator/actions/history")
     assert DEFAULT_ROBOT_ROUTES["operator_action_receipt"][:2] == ("GET", "/operator/actions/receipts/{command_id}")
     assert DEFAULT_ROBOT_ROUTES["assess_operator_action"][:2] == ("POST", "/operator/actions/receipts/{command_id}/assessment")
+
+
+def test_typed_pipette_application_proxy_is_plan_only(monkeypatch):
+    client, runtime = make_client(monkeypatch, mutations=False)
+
+    status = client.get("/api/bioxp/operator-controls/pipettes/application/status")
+    plan = client.post(
+        "/api/bioxp/operator-controls/pipettes/application/plan",
+        json={"operation": "detect_fluid", "fluid_class": "RC"},
+    )
+
+    assert status.status_code == 200
+    assert status.json()["execution_admitted"] is False
+    assert plan.status_code == 200
+    assert plan.json()["motion_commanded"] is False
+    assert plan.json()["controller_acknowledged"] is False
+    assert [call[0] for call in runtime.connection.client.calls[-2:]] == [
+        "pipette_application_status",
+        "pipette_application_plan",
+    ]
 
 
 def test_strict_x_dashboard_rejects_unknown_nested_authority_keys():

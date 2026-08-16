@@ -220,8 +220,72 @@ export interface BioXpOperatorDashboard {
         motor: number;
     };
     temperatures: Array<{ sensor: string; label: string; unit: '°C'; temperature_c: number | null; available: boolean }>;
-    pipettes: { ok?: boolean; channels?: Array<Record<string, unknown>>; error?: string };
+    pipettes: {
+        ok: boolean;
+        channels: BioXpPipetteChannel[];
+        live_query_performed?: boolean | null;
+        truth_source?: string | null;
+        controller_acknowledged?: boolean | null;
+        completion_verified?: boolean | null;
+        physical_effect_verified?: boolean | null;
+        error?: string;
+    };
     snapshot: { snapshot_id: string | null; freshness: { state?: string; age_s?: number | null; fresh_for_s?: number | null }; collection_triggered: false };
+}
+
+export interface BioXpPipetteChannel {
+    channel: number;
+    available: boolean;
+    initialized?: boolean | null;
+    tip_loaded?: boolean | null;
+    tip_location?: number | null;
+    position_steps?: number | null;
+    liquid_level_ul?: number | null;
+    front_air_level_ul?: number | null;
+    rear_air_level_ul?: number | null;
+    pressure?: number | null;
+    last_error?: string | null;
+}
+
+export type BioXpPipetteApplicationOperation = 'load_tip' | 'move_to_waste' | 'detect_fluid' | 'plunger_up' | 'plunger_down';
+
+export interface BioXpPipetteApplicationStatus {
+    ok: true;
+    mode: 'plan_only';
+    execution_admitted: false;
+    physical_effect_verified: false;
+    operations: BioXpPipetteApplicationOperation[];
+    blocker: 'physical_pipette_execution_not_authorized';
+}
+
+export interface BioXpPipetteApplicationPlanRequest {
+    operation: BioXpPipetteApplicationOperation;
+    tip_tray?: string;
+    tip_well?: string;
+    tip_type?: number;
+    tip_location?: number;
+    home_z_after?: boolean;
+    fluid_class?: 'TC' | 'MS' | 'OC' | 'RC' | 'STRIP';
+}
+
+export interface BioXpPipetteApplicationPlan {
+    ok: true;
+    operation: string;
+    mode: 'plan_only';
+    execution_admitted: false;
+    motion_commanded: false;
+    liquid_mutation_commanded: false;
+    controller_acknowledged: false;
+    completion_verified: false;
+    physical_effect_verified: false;
+    state_reconciled: false;
+    requested_inputs: Record<string, unknown>;
+    effective_inputs: null;
+    steps: Array<Record<string, unknown>>;
+    required_completion_evidence: string[];
+    constants: Record<string, unknown>;
+    oem_source_anchor: string;
+    blocker: 'physical_pipette_execution_not_authorized';
 }
 
 export interface BioXpOperatorAdmission {
@@ -590,6 +654,25 @@ export const useBioXpOperatorDashboard = (connectionGeneration: number, enabled 
     refetchInterval: enabled && connectionGeneration > 0 ? 15_000 : false,
     refetchIntervalInBackground: false,
     retry: false,
+});
+
+export const useBioXpPipetteApplicationStatus = (connectionGeneration: number, enabled = true) => useQuery({
+    queryKey: ['bioxp', 'operator-controls', 'pipettes', 'application-status', connectionGeneration, enabled],
+    queryFn: async () => (
+        await api.get<BioXpPipetteApplicationStatus>('/api/bioxp/operator-controls/pipettes/application/status')
+    ).data,
+    enabled: enabled && connectionGeneration > 0,
+    gcTime: 0,
+    retry: false,
+});
+
+export const usePlanBioXpPipetteApplication = () => useMutation({
+    mutationFn: async (request: BioXpPipetteApplicationPlanRequest) => (
+        await api.post<BioXpPipetteApplicationPlan>(
+            '/api/bioxp/operator-controls/pipettes/application/plan',
+            request,
+        )
+    ).data,
 });
 
 export const useBioXpOperatorActionAdmission = (

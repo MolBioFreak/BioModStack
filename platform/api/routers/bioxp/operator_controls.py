@@ -15,6 +15,9 @@ from services.bioxp.operator_models import (
     OperatorAssessmentRequest,
     OperatorControlCatalog,
     OperatorDashboard,
+    PipetteApplicationPlanRequest,
+    PipetteApplicationPlanResponse,
+    PipetteApplicationStatus,
 )
 from services.bioxp.operator_semantic_quarantine import (
     OPERATOR_SEMANTIC_QUARANTINE_BY_ACTION_ID,
@@ -162,6 +165,40 @@ async def operator_dashboard(
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
     return _validate(OperatorDashboard, payload)
+
+
+@router.get("/operator-controls/pipettes/application/status", response_model=PipetteApplicationStatus)
+async def pipette_application_status(
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+) -> PipetteApplicationStatus:
+    snapshot = runtime.connection.snapshot()
+    try:
+        payload = await runtime.connection.request_active_query(
+            "pipette_application_status",
+            expected_generation=snapshot.generation,
+            require_fresh=True,
+        )
+    except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
+        raise _translate_robot_error(exc) from exc
+    return _validate(PipetteApplicationStatus, payload)
+
+
+@router.post("/operator-controls/pipettes/application/plan", response_model=PipetteApplicationPlanResponse)
+async def pipette_application_plan(
+    request: PipetteApplicationPlanRequest,
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+) -> PipetteApplicationPlanResponse:
+    snapshot = runtime.connection.snapshot()
+    try:
+        payload = await runtime.connection.request_active(
+            "pipette_application_plan",
+            expected_generation=snapshot.generation,
+            require_fresh=True,
+            json_data=request.model_dump(exclude_none=True),
+        )
+    except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
+        raise _translate_robot_error(exc) from exc
+    return _validate(PipetteApplicationPlanResponse, payload)
 
 
 @router.post(

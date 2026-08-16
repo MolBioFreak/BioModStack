@@ -48,6 +48,8 @@ DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
     "camera_snapshot": ("POST", "/camera/snapshot", 15.0),
     "operator_control_catalog": ("GET", "/operator/control-catalog", 10.0),
     "operator_dashboard": ("GET", "/operator/dashboard", 10.0),
+    "pipette_application_status": ("GET", "/liquid/application/status", 10.0),
+    "pipette_application_plan": ("POST", "/liquid/application/plan", 10.0),
     "operator_action_admission": ("POST", "/operator/actions/{action_id}/admission", 10.0),
     "invoke_operator_action": ("POST", "/operator/actions/{action_id}", 900.0),
     "operator_action_history": ("GET", "/operator/actions/history", 10.0),
