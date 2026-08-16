@@ -3423,8 +3423,38 @@ class OperatorActionReceipt(BaseModel):
                 raise ValueError("failed serial-206 X response carries a contradictory action intent")
         if self.action_id == "oem.x.observe":
             observation = response_payload.get("observation") if response_payload is not None else None
+            observation_reference = (
+                observation.get("reference_persistence")
+                if isinstance(observation, dict)
+                else None
+            )
+            bounded_completed_observation = (
+                self.status == "completed"
+                and isinstance(response_payload, dict)
+                and response_payload.get("ok") is True
+                and response_payload.get("state") == "referenced_ready"
+                and isinstance(observation, dict)
+                and observation.get("command_id") == self.command_id
+                and observation.get("status") == "completed"
+                and isinstance(observation_reference, dict)
+                and observation_reference.get("ok") is True
+                and observation_reference.get("state") == "referenced"
+                and self.observation_receipt_id == self.command_id
+                and isinstance(self.observes_command_id, str)
+                and self.inputs.get("command_id") == self.observes_command_id
+                and self.inputs.get("verdict") == "pass"
+                and self.inputs.get("physical_motion_observed") is True
+                and self.inputs.get("expected_direction_observed") is True
+                and self.inputs.get("home_endpoint_observed") is True
+                and self.inputs.get("stopped_observed") is True
+                and self.authority_fingerprint is not None
+            )
             if self.status == "completed" and (
-                not isinstance(observation, dict) or observation.get("intent") != "observation"
+                not isinstance(observation, dict)
+                or (
+                    observation.get("intent") != "observation"
+                    and not bounded_completed_observation
+                )
             ):
                 raise ValueError("completed serial-206 X observation response lacks its bound observation intent")
             if self.status == "failed" and isinstance(observation, dict) and observation.get("intent") != "observation":

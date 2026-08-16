@@ -308,6 +308,46 @@ def test_bounded_x_home_history_summary_derives_completed_self_authority():
     assert parsed.authority_receipt_status == "completed"
 
 
+def test_bounded_completed_x_observation_summary_keeps_exact_receipt_binding():
+    observed = receipt(action_id="oem.x.observe", command_id="operator-x-observe-summary")
+    observed.update({
+        "status": "completed",
+        "controller_acknowledged": False,
+        "controller_terminal_state_verified": False,
+        "authority_receipt_id": None,
+        "authority_receipt_status": None,
+        "authority_fingerprint": "c" * 64,
+        "observation_receipt_id": "operator-x-observe-summary",
+        "observes_command_id": "operator-x-home-summary",
+        "inputs": {
+            "command_id": "operator-x-home-summary",
+            "verdict": "pass",
+            "physical_motion_observed": True,
+            "expected_direction_observed": True,
+            "home_endpoint_observed": True,
+            "stopped_observed": True,
+            "note": "Christian confirmed the X Home was kosher.",
+        },
+        "response": {
+            "http_status": 200,
+            "body": {
+                "ok": True,
+                "state": "referenced_ready",
+                "observation": {
+                    "command_id": "operator-x-observe-summary",
+                    "status": "completed",
+                    "reference_persistence": {"ok": True, "state": "referenced"},
+                },
+            },
+        },
+    })
+
+    parsed = OperatorActionReceipt.model_validate(observed)
+
+    assert parsed.observation_receipt_id == "operator-x-observe-summary"
+    assert parsed.observes_command_id == "operator-x-home-summary"
+
+
 def test_history_accepts_explicit_legacy_authority_status_omission_marker():
     legacy = receipt()
     legacy["authority_receipt_status"] = {"omitted": "item_limit"}
