@@ -533,6 +533,9 @@ function validateDeclaredUiControl(field: ParameterField): void {
 
 function validateDeclaredPrecision(field: ParameterField): void {
     if (!field.precision) return;
+    // A read-only schema const has no operator-entered numeric or text
+    // representation to coerce. The const value itself is the exact authority.
+    if (field.fixedValue !== undefined && field.uiControl === 'read_only') return;
     const expected = field.nullable
         ? 'union_exact'
         : field.kind === 'boolean'
