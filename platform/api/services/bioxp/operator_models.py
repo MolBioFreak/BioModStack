@@ -3318,6 +3318,19 @@ class OperatorActionReceipt(BaseModel):
     @model_validator(mode="after")
     def bind_serial206_x_authority(self):
         legacy_response_body = self.response.get("body") if self.response is not None else None
+        bounded_completed_x_home_summary = (
+            self.action_id == "oem.x.manual_panel_home"
+            and self.status == "completed"
+            and self.controller_acknowledged
+            and self.authority_receipt_id == self.command_id
+            and isinstance(self.authority_receipt_status, OperatorDashboardXOmissionMarker)
+            and self.authority_fingerprint is not None
+            and isinstance(legacy_response_body, dict)
+            and legacy_response_body.get("ok") is True
+            and legacy_response_body.get("state") == "awaiting_operator_observation"
+        )
+        if bounded_completed_x_home_summary:
+            self.authority_receipt_status = "completed"
         legacy_serial206_x_action = (
             self.action_id.startswith("oem.x.")
             or self.action_id.startswith("oem.xy.")

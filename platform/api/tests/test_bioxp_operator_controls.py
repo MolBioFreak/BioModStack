@@ -285,6 +285,29 @@ def test_legacy_x_home_history_summary_derives_bound_self_authority():
     assert parsed.authority_receipt_status == "completed"
 
 
+def test_bounded_x_home_history_summary_derives_completed_self_authority():
+    completed = receipt(action_id="oem.x.manual_panel_home", command_id="operator-x-home-bounded-summary")
+    completed.update({
+        "status": "completed",
+        "response": {
+            "http_status": 200,
+            "body": {
+                "ok": True,
+                "result": {"ok": {}, "physical_effect_verified": {}},
+                "state": "awaiting_operator_observation",
+            },
+        },
+        "authority_receipt_id": "operator-x-home-bounded-summary",
+        "authority_receipt_status": {"omitted": "item_limit"},
+        "authority_fingerprint": "b" * 64,
+    })
+
+    parsed = OperatorActionReceipt.model_validate(completed)
+
+    assert parsed.authority_receipt_id == "operator-x-home-bounded-summary"
+    assert parsed.authority_receipt_status == "completed"
+
+
 def test_history_accepts_explicit_legacy_authority_status_omission_marker():
     legacy = receipt()
     legacy["authority_receipt_status"] = {"omitted": "item_limit"}
