@@ -691,17 +691,20 @@ function parseParameterField(
             field.pattern = schema.pattern;
         }
     } else if (kind === 'number' || kind === 'integer') {
+        const minimum = schema.minimum;
+        const maximum = schema.maximum;
+        const hasMinimum = typeof minimum === 'number' && Number.isFinite(minimum);
+        const hasMaximum = typeof maximum === 'number' && Number.isFinite(maximum);
         if (
-            typeof schema.minimum !== 'number'
-            || !Number.isFinite(schema.minimum)
-            || typeof schema.maximum !== 'number'
-            || !Number.isFinite(schema.maximum)
-            || schema.minimum > schema.maximum
+            (!hasMinimum && !hasMaximum)
+            || (minimum !== undefined && !hasMinimum)
+            || (maximum !== undefined && !hasMaximum)
+            || (hasMinimum && hasMaximum && minimum > maximum)
         ) {
-            throw new Error(`${name} must declare finite minimum and maximum bounds`);
+            throw new Error(`${name} must declare at least one valid finite numeric bound`);
         }
-        field.minimum = schema.minimum;
-        field.maximum = schema.maximum;
+        if (hasMinimum) field.minimum = minimum;
+        if (hasMaximum) field.maximum = maximum;
     } else if (kind === 'array') {
         if (schema.items === undefined) throw new Error(`${name} does not declare array items`);
         const item = parseParameterField(`${name}[]`, schema.items, true, false);
