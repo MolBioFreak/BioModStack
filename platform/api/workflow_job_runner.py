@@ -267,11 +267,16 @@ async def run_workflow_job(job_id: str, lane: str) -> int:
             raise ExecutionOwnershipError(
                 f"Authoritative Job.output_dir is required for workflow {job_id}"
             )
+        execution_params = strip_resource_execution_metadata(strip_execution_metadata(params))
+        if authoritative_model_id == "nanopore":
+            ngs_runtime_sif = str(os.getenv("BMS_NGS_RUNTIME_SIF") or "").strip()
+            if ngs_runtime_sif:
+                execution_params["dorado_runtime_sif"] = ngs_runtime_sif
         await nextflow.launch_nextflow_job(
             job_id=job_id,
             model_id=authoritative_model_id,
             mode=authoritative_mode,
-            params=strip_resource_execution_metadata(strip_execution_metadata(params)),
+            params=execution_params,
             output_dir=authoritative_output_dir,
             allow_running_job=True,
         )
