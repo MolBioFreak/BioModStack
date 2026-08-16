@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "8c108df9a179648ed2334aa679768c2279d1bebd3ff03d135d2a571e99f7e5ed",
+  "content_sha256": "a4952ce1df11f61850000a18b79358dbb45ce081e61a68b7aea7a13cd953022e",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "77673329001f48e610f13ed115fed62f56d7d10b93cc5ee30cea033c34bb3659",
@@ -61,6 +61,11 @@
       "path": "docs/reports/ngs-molbio-phase-n0-verification-v1.json",
       "sha256": "66726233ddbf94d9b8642ca72e70e460a3155975fe520f47dd13b4e310a554a1",
       "size_bytes": 17499
+    },
+    {
+      "path": "docs/specs/2026-08-12-ngs-molbio-global-project-integration-sow.md",
+      "sha256": "091aa6ecdacb9cc3b72bcd2334e55817000ab1956258d965d6f4d8a85d515b14",
+      "size_bytes": 102000
     },
     {
       "path": "platform/api/config/ngs_molbio/adapter_registry_v1.json",
@@ -434,8 +439,8 @@
     },
     {
       "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json",
-      "sha256": "da256ea60a0949e851d26845d76203adac657698ed7f410a2e45af2182b3a24f",
-      "size_bytes": 4575
+      "sha256": "6692c9101a5cf251cceb088bf983888e1762dd094bf8285553c705d02ca7fb4d",
+      "size_bytes": 4649
     },
     {
       "path": "schemas/ngs_molbio_runtime/runtime-implementation-v1.schema.json",
@@ -464,11 +469,11 @@
     }
   ],
   "source_denominator": {
-    "content_sha256": "47735e33d4d89738c717e25bfaefc2de08d3a204d0d532c4d9535577b515f81e",
+    "content_sha256": "83af9726831a20da4357147ce8d9d97e2e3acb238dffd264901c0b2b5017e70a",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
   },
-  "successor_source_commit": "0653078a6d2714e3f66bd017291b8d8678aa3bcc",
-  "successor_source_tree": "75f261d84fbfec41aa2b8f5a1791722aae18f84c",
+  "successor_source_commit": "5f95a939f9814cf59a538f08dd713624f0e253b2",
+  "successor_source_tree": "dc3b107b63663eb7765edb4129312ebd04b091f6",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }

@@ -1,7 +1,0 @@
-{
-  "baseline_source_commit": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
-  "baseline_source_tree": "f89094ba373e3dd8fa181fd17d942e54a6f0f63e",
-  "content_sha256": "0f07c70ff10fc772b0aad3c512652c3647316ec9e80206e8325c6c9782d71f16",
-  "entries": [],
-  "schema": "bms.protein.constraint-payload-registry.v1"
-}
