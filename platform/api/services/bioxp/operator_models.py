@@ -2825,8 +2825,8 @@ class OperatorDashboardXHomeXYWrapperFailure(BaseModel):
 
 class OperatorDashboardXBoardLifecycleInvalidation(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    reason: Literal["board5_lifecycle_change"]
-    transition: Literal["activated", "deactivated"]
+    reason: Literal["board5_lifecycle_change"] | OperatorDashboardXOmissionMarker
+    transition: Literal["activated", "deactivated"] | OperatorDashboardXOmissionMarker
     command64_value: Literal[0, 1] | None
     previous_state: str = Field(min_length=1, max_length=80)
     ack: OperatorDashboardXTmclAck | OperatorDashboardXOmissionMarker | None
@@ -2835,6 +2835,10 @@ class OperatorDashboardXBoardLifecycleInvalidation(BaseModel):
 
     @model_validator(mode="after")
     def bind_transition_to_command64(self):
+        if isinstance(self.transition, OperatorDashboardXOmissionMarker):
+            if self.command64_value not in {0, 1}:
+                raise ValueError("omitted board-5 transition requires a typed command-64 value")
+            return self
         allowed = {
             ("activated", 1),
             ("activated", None),
@@ -3130,7 +3134,7 @@ class OperatorDashboardXAxis(BaseModel):
     status: OperatorDashboardAxis | None = None
     provider: OperatorDashboardXProvider
     snapshot_freshness: OperatorDashboardSnapshotFreshness
-    last_failure: OperatorDashboardXFailure | None = None
+    last_failure: OperatorDashboardXLifecycleLastFailure | None = None
     latest_receipt: OperatorDashboardXReceiptSummary | None = None
     authority: str = Field(min_length=1, max_length=120)
     physical_position_verified: Literal[False]
