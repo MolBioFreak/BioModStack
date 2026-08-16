@@ -145,7 +145,13 @@ class OperatorDashboardXFailure(BaseModel):
         runtime_present = any(value is not None for value in runtime_pair)
         board_present = any(value is not None for value in board_pair)
         if text_keys:
-            if len(text_keys) != 1 or runtime_present or board_present:
+            if len(text_keys) != 1:
+                raise ValueError("X dashboard failure text branch is contradictory")
+            if self.failure in {"x_generation_changed", "x_board_lifecycle_generation_changed"}:
+                if runtime_present and any(value is None for value in runtime_pair):
+                    raise ValueError("X dashboard drift failure runtime generation context is incomplete")
+                return self
+            if runtime_present or board_present:
                 raise ValueError("X dashboard failure text branch is contradictory")
             return self
         if runtime_present:

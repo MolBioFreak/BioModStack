@@ -11,12 +11,31 @@ import pytest
 from routers import bioxp
 from routers.bioxp.operator_controls import _translate_robot_error
 from services.bioxp.errors import ConnectionStateError, RobotResponseError
-from services.bioxp.operator_models import OperatorActionHistory, OperatorActionReceipt, OperatorDashboardXReference
+from services.bioxp.operator_models import (
+    OperatorActionHistory,
+    OperatorActionReceipt,
+    OperatorDashboardXFailure,
+    OperatorDashboardXReference,
+)
 from services.bioxp.operator_semantic_quarantine import OPERATOR_SEMANTIC_QUARANTINE_BY_PATH
 from services.bioxp.robot_client import DEFAULT_ROBOT_ROUTES
 
 REGISTRY = "1" * 64
 LOCK = "2" * 64
+
+
+def test_x_dashboard_accepts_generation_drift_failure_context() -> None:
+    failure = OperatorDashboardXFailure.model_validate(
+        {
+            "failure": "x_board_lifecycle_generation_changed",
+            "recorded_generation": 1,
+            "current_generation": 1,
+            "recorded_board_lifecycle_generation": 1,
+            "current_board_lifecycle_generation": None,
+        }
+    )
+
+    assert failure.failure == "x_board_lifecycle_generation_changed"
 
 
 def catalog():
