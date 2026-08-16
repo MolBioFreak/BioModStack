@@ -71,6 +71,7 @@ process FastqAlign {
         echo "ERROR: task-local reference snapshot changed during alignment." >&2
         exit 94
     fi
+    rm -f -- "${reference}"
     cp --reflink=auto -- reference.snapshot.fasta reference.fasta
     samtools faidx reference.fasta
     """
