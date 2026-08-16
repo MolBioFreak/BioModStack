@@ -14,12 +14,12 @@ import {
 import type { GPUStatus, PerGpuFanStatus, SystemStatus } from '../lib/api';
 import { resolveCpuFrequencyScaleMhz, resolveCpuPowerScaleWatts } from './infraTelemetryScaling';
 import {
-    downsampleTelemetryTail,
     isValidPollPreset,
     loadPersistedTelemetryPreferences,
-    mergeMinuteHistoryWithRawTail,
     parseTelemetryTimestampMs,
     persistTelemetryPreferences,
+    resampleTelemetrySamples,
+    resolveTelemetryBucketIntervalMs,
     resolveTelemetryDisplayIntervalMs,
     resolveTelemetryGapBreakMs,
     resolveTelemetryWindowBounds,
@@ -32,7 +32,6 @@ import type {
 import { jobPollingInterval } from '../lib/queryPolling';
 
 const SHARED_CONTROL_POLL_INTERVAL_MS = 10000;
-const MINUTE_LIVE_TAIL_MS = 120_000;
 const SHARED_SYSTEM_QUERY_KEY = ['system'];
 const SHARED_POWER_CONTROL_QUERY_KEY = ['powerControl'];
 const SHARED_FAN_CONTROL_QUERY_KEY = ['fanControl'];
@@ -1379,11 +1378,11 @@ export function InfraLiveTelemetry({
     );
     const [pollIntervalMs, setPollIntervalMs] = useState<PollPreset>(restoredState.pollIntervalMs);
     const [windowMinutes, setWindowMinutes] = useState<WindowPreset>(restoredState.windowMinutes);
-    const resolution = windowMinutes >= 10 ? 'minute' : 'raw';
-    const usesRangeAwareDisplay = windowMinutes >= 15;
+    const usesRangeAwareDisplay = windowMinutes >= 10;
     const displayIntervalMs = resolveTelemetryDisplayIntervalMs(windowMinutes, pollIntervalMs);
+    const bucketIntervalMs = resolveTelemetryBucketIntervalMs(windowMinutes);
     const historyQuery = useQuery({
-        queryKey: ['immutable-telemetry-history', windowMinutes],
+        queryKey: ['immutable-telemetry-history', windowMinutes, displayIntervalMs, bucketIntervalMs],
         queryFn: async () => {
             const nowMs = Date.now();
             const requestEndMs = nowMs + 1_000;
@@ -1392,40 +1391,42 @@ export function InfraLiveTelemetry({
                 windowMinutes,
                 displayIntervalMs,
             );
-            const startMs = usesRangeAwareDisplay
-                ? stableStartMs
-                : requestEndMs - windowMinutes * 60_000;
-            if (resolution === 'raw') {
-                return fetchTelemetryHistory(startMs, requestEndMs, 'raw', 4000);
-            }
-            const rawTailStartMs = Math.max(startMs, requestEndMs - MINUTE_LIVE_TAIL_MS);
-            const [minuteHistory, rawTail] = await Promise.all([
-                fetchTelemetryHistory(startMs, requestEndMs, 'minute', 4000),
-                fetchTelemetryHistory(rawTailStartMs, requestEndMs, 'raw', 4000),
-            ]);
-            const rawTailPoints = usesRangeAwareDisplay
-                ? downsampleTelemetryTail(rawTail.data.points, displayIntervalMs)
-                : rawTail.data.points;
+            const rawHistory = await fetchTelemetryHistory(stableStartMs, requestEndMs, 'raw', 4000);
             return {
-                ...minuteHistory,
+                ...rawHistory,
                 data: {
-                    ...minuteHistory.data,
-                    start_ms: usesRangeAwareDisplay ? stableStartMs : minuteHistory.data.start_ms,
-                    end_ms: usesRangeAwareDisplay ? stableEndMs : minuteHistory.data.end_ms,
-                    generated_at_ms: rawTail.data.generated_at_ms,
-                    points: mergeMinuteHistoryWithRawTail(minuteHistory.data.points, rawTailPoints),
+                    ...rawHistory.data,
+                    start_ms: stableStartMs,
+                    end_ms: stableEndMs,
+                },
+            };
+        },
+        placeholderData: (previousData) => {
+            if (!previousData) return undefined;
+            const [stableStartMs, stableEndMs] = resolveTelemetryWindowBounds(
+                Date.now(),
+                windowMinutes,
+                displayIntervalMs,
+            );
+            return {
+                ...previousData,
+                data: {
+                    ...previousData.data,
+                    start_ms: stableStartMs,
+                    end_ms: stableEndMs,
                 },
             };
         },
         refetchInterval: displayIntervalMs,
         refetchIntervalInBackground: false,
-        refetchOnWindowFocus: !usesRangeAwareDisplay,
+        refetchOnWindowFocus: false,
     });
     const historyPoints = historyQuery.data?.data.points ?? [];
-    const samples = historyPoints.map((point) => buildSample(point.payload, 1000, point.timestamp_ms));
+    const rawSamples = historyPoints.map((point) => buildSample(point.payload, 1000, point.timestamp_ms));
+    const samples = resampleTelemetrySamples(rawSamples, bucketIntervalMs);
     const latestPoint = historyPoints.at(-1);
     const payload = latestPoint?.payload;
-    const staleAfterMs = windowMinutes >= 10 ? 120_000 : Math.max(10_000, pollIntervalMs * 5);
+    const staleAfterMs = Math.max(10_000, pollIntervalMs * 5);
     const historyIsStale = Boolean(
         latestPoint && (historyQuery.data?.data.generated_at_ms ?? Date.now()) - latestPoint.timestamp_ms > staleAfterMs,
     );
@@ -1516,7 +1517,7 @@ export function InfraLiveTelemetry({
             ? samples
             : samples.filter((sample) => sample.timestampMs >= latestTimestampMs - windowMinutes * 60 * 1000);
     const plotRedrawKey = `${variant}:${traceType}:${showXAxisLabels ? 'x' : 'nx'}:${windowMinutes}`;
-    const gapBreakMs = resolveTelemetryGapBreakMs(resolution, pollIntervalMs);
+    const gapBreakMs = resolveTelemetryGapBreakMs(bucketIntervalMs, pollIntervalMs);
     const currentLimits = powerControlData?.data.limits ?? {};
     const currentFanControls = fanControlData?.data.gpus ?? {};
     const gpuOverrides = schedulerConfigData?.data?.overrides ?? {};

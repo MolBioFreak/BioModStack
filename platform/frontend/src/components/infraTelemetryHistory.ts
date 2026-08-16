@@ -1,18 +1,27 @@
 export type PollPreset = 1000 | 2000 | 5000;
 export type WindowPreset = 1 | 3 | 5 | 10 | 15 | 30 | 60;
-export type TelemetryResolution = 'raw' | 'minute';
 
 const RAW_MIN_GAP_BREAK_MS = 12_000;
-const MINUTE_GAP_BREAK_MS = 90_000;
 
 export function resolveTelemetryDisplayIntervalMs(
     windowMinutes: WindowPreset,
     pollIntervalMs: PollPreset,
 ): number {
-    if (windowMinutes === 15) return 15_000;
-    if (windowMinutes === 30) return 30_000;
-    if (windowMinutes === 60) return 60_000;
+    if (windowMinutes === 10) return 5_000;
+    if (windowMinutes === 15) return 10_000;
+    if (windowMinutes === 30) return 15_000;
+    if (windowMinutes === 60) return 30_000;
     return pollIntervalMs;
+}
+
+export function resolveTelemetryBucketIntervalMs(windowMinutes: WindowPreset): number {
+    if (windowMinutes === 1) return 1_000;
+    if (windowMinutes === 3) return 2_000;
+    if (windowMinutes === 5) return 3_000;
+    if (windowMinutes === 10) return 5_000;
+    if (windowMinutes === 15) return 10_000;
+    if (windowMinutes === 30) return 15_000;
+    return 30_000;
 }
 
 export function resolveTelemetryWindowBounds(
@@ -24,54 +33,57 @@ export function resolveTelemetryWindowBounds(
     return [endMs - windowMinutes * 60_000, endMs];
 }
 
-export function downsampleTelemetryTail<T extends { timestamp_ms: number }>(
-    points: readonly T[],
-    displayIntervalMs: number,
-): T[] {
-    const sampled: T[] = [];
-    let bucket = Number.NaN;
-    let first: T | undefined;
-    let latest: T | undefined;
+function average(values: readonly number[]): number {
+    return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
 
-    const flushBucket = () => {
-        if (!first || !latest) return;
-        sampled.push(first);
-        if (latest.timestamp_ms !== first.timestamp_ms) sampled.push(latest);
-    };
+function averageNullable(values: readonly (number | null)[]): number | null {
+    const available = values.filter((value): value is number => value != null);
+    return available.length > 0 ? average(available) : null;
+}
 
-    for (const point of points) {
-        const pointBucket = Math.floor(point.timestamp_ms / displayIntervalMs);
-        if (pointBucket !== bucket) {
-            flushBucket();
-            bucket = pointBucket;
-            first = point;
-        }
-        latest = point;
+export function resampleTelemetrySamples(samples: readonly LiveSample[], bucketIntervalMs: number): LiveSample[] {
+    const buckets = new Map<number, LiveSample[]>();
+    for (const sample of samples) {
+        const bucketStartMs = Math.floor(sample.timestampMs / bucketIntervalMs) * bucketIntervalMs;
+        const bucket = buckets.get(bucketStartMs);
+        if (bucket) bucket.push(sample);
+        else buckets.set(bucketStartMs, [sample]);
     }
-    flushBucket();
-    return sampled;
+
+    return [...buckets.entries()].map(([bucketStartMs, bucket]) => {
+        const gpuIndices = new Set(bucket.flatMap((sample) => Object.keys(sample.gpu).map(Number)));
+        const gpu: LiveSample['gpu'] = {};
+        for (const index of gpuIndices) {
+            const readings = bucket.flatMap((sample) => sample.gpu[index] ? [sample.gpu[index]] : []);
+            gpu[index] = {
+                util: average(readings.map((reading) => reading.util)),
+                vram: average(readings.map((reading) => reading.vram)),
+                power: average(readings.map((reading) => reading.power)),
+                temp: average(readings.map((reading) => reading.temp)),
+            };
+        }
+        const timestamp = new Date(bucketStartMs).toISOString();
+        return {
+            timestamp,
+            timestampMs: bucketStartMs,
+            pollIntervalMs: bucket.at(-1)?.pollIntervalMs ?? 1000,
+            clock: timestamp.slice(11, 19),
+            cpuUtil: average(bucket.map((sample) => sample.cpuUtil)),
+            cpuFreqMhz: average(bucket.map((sample) => sample.cpuFreqMhz)),
+            cpuPower: averageNullable(bucket.map((sample) => sample.cpuPower)),
+            cpuTemp: averageNullable(bucket.map((sample) => sample.cpuTemp)),
+            ramUsed: average(bucket.map((sample) => sample.ramUsed)),
+            ramFree: average(bucket.map((sample) => sample.ramFree)),
+            ramUtil: average(bucket.map((sample) => sample.ramUtil)),
+            ramSwap: average(bucket.map((sample) => sample.ramSwap)),
+            gpu,
+        };
+    });
 }
 
-export function resolveTelemetryGapBreakMs(
-    resolution: TelemetryResolution,
-    pollIntervalMs: PollPreset,
-): number {
-    return resolution === 'minute'
-        ? MINUTE_GAP_BREAK_MS
-        : Math.max(RAW_MIN_GAP_BREAK_MS, pollIntervalMs * 3);
-}
-
-export function mergeMinuteHistoryWithRawTail<T extends { timestamp_ms: number }>(
-    minutePoints: readonly T[],
-    rawPoints: readonly T[],
-): T[] {
-    const latestMinuteTimestampMs = minutePoints.at(-1)?.timestamp_ms;
-    if (latestMinuteTimestampMs == null) return [...rawPoints];
-    const rawTailStartMs = latestMinuteTimestampMs + 60_000;
-    return [
-        ...minutePoints,
-        ...rawPoints.filter((point) => point.timestamp_ms >= rawTailStartMs),
-    ];
+export function resolveTelemetryGapBreakMs(bucketIntervalMs: number, pollIntervalMs: PollPreset): number {
+    return Math.max(RAW_MIN_GAP_BREAK_MS, bucketIntervalMs * 1.5, pollIntervalMs * 3);
 }
 
 export interface LiveSample {
