@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import sqlite3
@@ -26,6 +27,9 @@ SYNC_TIMER = "biomodstack-dev-sync.timer"
 SYNC_INTERVAL_SECONDS = 60
 DEFAULT_CANONICAL_ROOT = Path("/home/dalab/biomodstack/dev-test-canonical")
 DEFAULT_STATE_DIR = Path.home() / ".local" / "state" / "biomodstack"
+RUNTIME_DENOMINATOR_PATH = "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
+RUNTIME_IMPLEMENTATION_PATH = "platform/api/config/ngs_molbio_runtime/runtime_implementation_v1.json"
+SOURCE_PIN_PATH = "platform/api/config/ngs_molbio/source_pin_v1.json"
 
 SyncDecision = Literal[
     "blocked-dirty",
@@ -119,6 +123,137 @@ def _run(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProc
 def _git(root: Path, *args: str, check: bool = True) -> str:
     result = _run(root, "git", *args, check=check)
     return result.stdout.strip()
+
+
+def _git_blob(root: Path, revision: str, path: str) -> bytes:
+    result = subprocess.run(
+        ["git", "show", f"{revision}:{path}"],
+        cwd=root,
+        env={**os.environ, "HOME": str(Path.home())},
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"candidate source is unavailable: {path}: {detail}")
+    return result.stdout
+
+
+def _json_blob(root: Path, revision: str, path: str) -> dict[str, object]:
+    try:
+        payload = json.loads(_git_blob(root, revision, path))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise RuntimeError(f"candidate authority JSON is invalid: {path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"candidate authority JSON must be an object: {path}")
+    return payload
+
+
+def _candidate_tree_without_record(root: Path, revision: str) -> str:
+    descriptor, index_name = tempfile.mkstemp(prefix="bms-dev-sync-index-")
+    os.close(descriptor)
+    os.unlink(index_name)
+    env = os.environ.copy()
+    env["HOME"] = str(Path.home())
+    env["GIT_INDEX_FILE"] = index_name
+    try:
+        for command in (
+            ("git", "read-tree", revision),
+            ("git", "rm", "--cached", "--quiet", "--", RUNTIME_IMPLEMENTATION_PATH),
+        ):
+            result = subprocess.run(
+                command,
+                cwd=root,
+                env=env,
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"candidate source-tree authority failed: {' '.join(command)}: {result.stderr.strip()}"
+                )
+        result = subprocess.run(
+            ("git", "write-tree"),
+            cwd=root,
+            env=env,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"candidate source-tree authority failed: {result.stderr.strip()}")
+        return result.stdout.strip()
+    finally:
+        if os.path.exists(index_name):
+            os.unlink(index_name)
+
+
+def validate_candidate_runtime_authority(root: Path, revision: str) -> dict[str, object]:
+    denominator = _json_blob(root, revision, RUNTIME_DENOMINATOR_PATH)
+    runtime = _json_blob(root, revision, RUNTIME_IMPLEMENTATION_PATH)
+    source_pin = _json_blob(root, revision, SOURCE_PIN_PATH)
+
+    paths = denominator.get("paths")
+    rows = runtime.get("source_authorities")
+    pins = source_pin.get("authorities")
+    source_denominator = runtime.get("source_denominator")
+    if not isinstance(paths, list) or not all(isinstance(path, str) and path for path in paths):
+        raise RuntimeError("candidate runtime denominator paths are invalid")
+    if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+        raise RuntimeError("candidate runtime source authorities are invalid")
+    if not isinstance(pins, list) or not all(isinstance(pin, dict) for pin in pins):
+        raise RuntimeError("candidate source-pin authorities are invalid")
+    if not isinstance(source_denominator, dict):
+        raise RuntimeError("candidate runtime denominator authority is unavailable")
+    if source_denominator.get("path") != RUNTIME_DENOMINATOR_PATH:
+        raise RuntimeError("candidate runtime denominator path mismatch")
+    if source_denominator.get("content_sha256") != denominator.get("content_sha256"):
+        raise RuntimeError("candidate runtime denominator content digest mismatch")
+
+    runtime_by_path: dict[str, dict[str, object]] = {}
+    for row in rows:
+        path = row.get("path")
+        if not isinstance(path, str) or not path or path in runtime_by_path:
+            raise RuntimeError("candidate runtime source authority paths are invalid or duplicated")
+        runtime_by_path[path] = row
+    if set(runtime_by_path) != set(paths) or len(runtime_by_path) != len(paths):
+        raise RuntimeError("candidate runtime source set does not match the denominator")
+
+    for path, row in runtime_by_path.items():
+        blob = _git_blob(root, revision, path)
+        if row.get("size_bytes") != len(blob):
+            raise RuntimeError(f"runtime size mismatch: {path}")
+        if row.get("sha256") != hashlib.sha256(blob).hexdigest():
+            raise RuntimeError(f"runtime digest mismatch: {path}")
+
+    overlay_count = 0
+    for pin in pins:
+        path = pin.get("path")
+        expected_sha = pin.get("sha256")
+        if not isinstance(path, str) or not path or not isinstance(expected_sha, str):
+            raise RuntimeError("candidate source-pin authority row is invalid")
+        actual_sha = hashlib.sha256(_git_blob(root, revision, path)).hexdigest()
+        if actual_sha == expected_sha:
+            continue
+        if path not in runtime_by_path:
+            raise RuntimeError(f"source pin drift lacks runtime coverage: {path}")
+        overlay_count += 1
+
+    expected_tree = runtime.get("successor_source_tree")
+    actual_tree = _candidate_tree_without_record(root, revision)
+    if expected_tree != actual_tree:
+        raise RuntimeError(
+            f"runtime successor tree mismatch: expected {expected_tree or 'unavailable'}, got {actual_tree}"
+        )
+    return {
+        "candidate_revision": revision,
+        "runtime_source_count": len(runtime_by_path),
+        "source_pin_overlay_count": overlay_count,
+    }
 
 
 def _deployed_revision(root: Path) -> str | None:
@@ -227,10 +362,21 @@ def sync_once(root: Path, state_dir: Path) -> SyncDecision:
         if decision.startswith("blocked-"):
             _write_receipt(state_dir, receipt)
             raise RuntimeError(f"Development sync {decision}: canonical={local} origin/test={remote}")
-        if decision == "idle":
+        if decision == "deferred-active-work":
             _write_receipt(state_dir, receipt)
             return decision
-        if decision == "deferred-active-work":
+
+        try:
+            receipt["runtime_authority"] = validate_candidate_runtime_authority(root, remote)
+        except RuntimeError as exc:
+            receipt["decision"] = "blocked-runtime-authority"
+            receipt["runtime_authority_error"] = str(exc)
+            _write_receipt(state_dir, receipt)
+            raise RuntimeError(
+                f"Development sync blocked-runtime-authority: origin/test={remote}: {exc}"
+            ) from exc
+
+        if decision == "idle":
             _write_receipt(state_dir, receipt)
             return decision
 

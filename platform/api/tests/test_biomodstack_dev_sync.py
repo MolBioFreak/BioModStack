@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
+import json
 import sqlite3
 from pathlib import Path
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -163,3 +167,86 @@ def test_active_development_work_reads_jobs_fail_closed(tmp_path: Path, monkeypa
     monkeypatch.setattr(sync, "_development_database", lambda _root: database)
 
     assert sync._active_development_work(tmp_path) == (True, 1)
+
+
+def _authority_blobs(*, runtime_bytes: bytes, include_uncovered_pin: bool = False) -> dict[str, bytes]:
+    source_bytes = b"current source\n"
+    source_sha = hashlib.sha256(source_bytes).hexdigest()
+    denominator = {
+        "content_sha256": "denominator-content",
+        "paths": ["source.py"],
+        "schema": "bms.ngs-molbio.runtime-source-denominator.v1",
+    }
+    source_pin_authorities = [
+        {"path": "source.py", "sha256": "0" * 64},
+    ]
+    blobs = {
+        "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json": json.dumps(denominator).encode(),
+        "platform/api/config/ngs_molbio_runtime/runtime_implementation_v1.json": runtime_bytes,
+        "platform/api/config/ngs_molbio/source_pin_v1.json": json.dumps(
+            {"authorities": source_pin_authorities}
+        ).encode(),
+        "source.py": source_bytes,
+    }
+    if include_uncovered_pin:
+        blobs["uncovered.py"] = b"changed uncovered source\n"
+        source_pin_authorities.append({"path": "uncovered.py", "sha256": "1" * 64})
+        blobs["platform/api/config/ngs_molbio/source_pin_v1.json"] = json.dumps(
+            {"authorities": source_pin_authorities}
+        ).encode()
+    return blobs
+
+
+def _runtime_record(*, source_sha: str) -> bytes:
+    return json.dumps(
+        {
+            "source_authorities": [
+                {"path": "source.py", "sha256": source_sha, "size_bytes": len(b"current source\n")}
+            ],
+            "source_denominator": {
+                "content_sha256": "denominator-content",
+                "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json",
+            },
+            "successor_source_tree": "3" * 40,
+        }
+    ).encode()
+
+
+def test_candidate_runtime_authority_accepts_exact_final_tree(monkeypatch) -> None:
+    sync = load_module()
+    source_sha = hashlib.sha256(b"current source\n").hexdigest()
+    blobs = _authority_blobs(runtime_bytes=_runtime_record(source_sha=source_sha))
+    monkeypatch.setattr(sync, "_git_blob", lambda _root, _revision, path: blobs[path])
+    monkeypatch.setattr(sync, "_candidate_tree_without_record", lambda _root, _revision: "3" * 40)
+
+    result = sync.validate_candidate_runtime_authority(Path("/repo"), "a" * 40)
+
+    assert result == {
+        "candidate_revision": "a" * 40,
+        "runtime_source_count": 1,
+        "source_pin_overlay_count": 1,
+    }
+
+
+def test_candidate_runtime_authority_rejects_stale_runtime_digest(monkeypatch) -> None:
+    sync = load_module()
+    blobs = _authority_blobs(runtime_bytes=_runtime_record(source_sha="2" * 64))
+    monkeypatch.setattr(sync, "_git_blob", lambda _root, _revision, path: blobs[path])
+    monkeypatch.setattr(sync, "_candidate_tree_without_record", lambda _root, _revision: "3" * 40)
+
+    with pytest.raises(RuntimeError, match="runtime digest mismatch: source.py"):
+        sync.validate_candidate_runtime_authority(Path("/repo"), "b" * 40)
+
+
+def test_candidate_runtime_authority_rejects_uncovered_source_pin_drift(monkeypatch) -> None:
+    sync = load_module()
+    source_sha = hashlib.sha256(b"current source\n").hexdigest()
+    blobs = _authority_blobs(
+        runtime_bytes=_runtime_record(source_sha=source_sha),
+        include_uncovered_pin=True,
+    )
+    monkeypatch.setattr(sync, "_git_blob", lambda _root, _revision, path: blobs[path])
+    monkeypatch.setattr(sync, "_candidate_tree_without_record", lambda _root, _revision: "3" * 40)
+
+    with pytest.raises(RuntimeError, match="source pin drift lacks runtime coverage: uncovered.py"):
+        sync.validate_candidate_runtime_authority(Path("/repo"), "c" * 40)
