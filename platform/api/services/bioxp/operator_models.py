@@ -3436,10 +3436,27 @@ class OperatorActionReceipt(BaseModel):
             or self.action_id.startswith("oem.xyz.")
             or self.action_id == "oem.abort_all"
         )
+        failed_response_detail = (
+            legacy_response_body.get("detail")
+            if isinstance(legacy_response_body, dict)
+            else None
+        )
+        failed_automatic_prerequisite = bool(
+            self.status == "failed"
+            and self.action_id in {"oem.x.move_steps", "oem.x.move_absolute"}
+            and self.authority_receipt_id is None
+            and self.authority_receipt_status is None
+            and isinstance(failed_response_detail, dict)
+            and failed_response_detail.get("ok") is False
+            and failed_response_detail.get("failure") == "x_automatic_prerequisite_failed"
+            and failed_response_detail.get("failed_stage") in {"auto_prepare", "auto_home"}
+            and failed_response_detail.get("requested_motion_dispatched") is False
+        )
         if (
             serial206_x_action
             and (self.controller_acknowledged or self.controller_terminal_state_verified)
             and self.authority_receipt_id is None
+            and not failed_automatic_prerequisite
         ):
             raise ValueError("serial-206 X controller evidence requires an authority receipt identity")
 
