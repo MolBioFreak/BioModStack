@@ -870,6 +870,23 @@ def test_validator_fixture_02_rejects_wrong_run_info_partition(tmp_path: Path, m
         validator.semantic_validate(args)
 
 
+def test_conversion_pin_rejects_intermediate_root_symlink_replacement(tmp_path: Path) -> None:
+    approved_parent = tmp_path / "approved"
+    source_root = approved_parent / "run"
+    source_root.mkdir(parents=True)
+    source_path = source_root / "chunk.pod5"
+    source_path.write_bytes(b"closed-pod5")
+    job, snapshot = _job(tmp_path / "staging")
+    source = _source(source_path, "acquisition-live")
+    commands = ont_raw_signal._conversion_commands(job, source, snapshot)
+    moved_parent = tmp_path / "moved-approved"
+    approved_parent.rename(moved_parent)
+    approved_parent.symlink_to(moved_parent, target_is_directory=True)
+
+    with pytest.raises(OSError):
+        ont_raw_signal.pin_conversion_source_descriptors(commands)
+
+
 # Mixed-run end-to-end conversion: 1
 
 @pytest.mark.runtime_integration

@@ -1658,10 +1658,7 @@ def pin_conversion_source_descriptors(commands: dict[str, Any]) -> list[int]:
     pinned: list[int] = []
     try:
         for authority in commands.get("source_authorities", []):
-            root_fd = os.open(
-                str(authority["root_path"]),
-                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
-            )
+            root_fd = _open_absolute_directory_nofollow(Path(str(authority["root_path"])))
             pinned.append(root_fd)
             root_info = os.fstat(root_fd)
             if (root_info.st_dev, root_info.st_ino) != (
