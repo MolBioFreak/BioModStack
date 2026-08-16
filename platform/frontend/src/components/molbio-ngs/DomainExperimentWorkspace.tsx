@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import {
@@ -33,6 +33,11 @@ const SECTIONS = [
     ['evidence', 'Evidence'],
     ['history', 'History'],
 ] as const;
+
+function selectedDatasetRevisionIdsFromQuery(): string[] {
+    const encoded = new URLSearchParams(window.location.search).get('dataset_revision_ids') ?? '';
+    return [...new Set(encoded.split(',').map((value) => value.trim()).filter(Boolean))].slice(0, 100);
+}
 
 type SectionKey = (typeof SECTIONS)[number][0];
 
@@ -169,11 +174,19 @@ export default function DomainExperimentWorkspace() {
         updateQueryParams,
         contextHref,
     } = context;
-    const [selectedDatasetRevisionIds, setSelectedDatasetRevisionIds] = useState<string[]>([]);
+    const [selectedDatasetRevisionIds, setSelectedDatasetRevisionIds] = useState<string[]>(
+        selectedDatasetRevisionIdsFromQuery,
+    );
 
     useEffect(() => {
-        setSelectedDatasetRevisionIds([]);
+        setSelectedDatasetRevisionIds(selectedDatasetRevisionIdsFromQuery());
     }, [workspaceId, globalExperimentId, domainExperimentId]);
+
+    const updateSelectedDatasetRevisionIds = useCallback((revisionIds: string[]) => {
+        const exactRevisionIds = [...new Set(revisionIds.map((value) => value.trim()).filter(Boolean))].slice(0, 100);
+        setSelectedDatasetRevisionIds(exactRevisionIds);
+        updateQueryParams({ dataset_revision_ids: exactRevisionIds.length ? exactRevisionIds.join(',') : null });
+    }, [updateQueryParams]);
 
     const requestedSection = new URLSearchParams(window.location.search).get('section');
     const activeSection: SectionKey = SECTIONS.some(([key]) => key === requestedSection)
@@ -720,7 +733,7 @@ export default function DomainExperimentWorkspace() {
                 canMutate={datasetMutationBlocker === null}
                 mutationBlocker={datasetMutationBlocker}
                 selectedRevisionIds={selectedDatasetRevisionIds}
-                onSelectedRevisionIdsChange={setSelectedDatasetRevisionIds}
+                onSelectedRevisionIdsChange={updateSelectedDatasetRevisionIds}
             />
         );
     };
