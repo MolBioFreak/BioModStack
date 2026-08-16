@@ -3311,6 +3311,25 @@ class OperatorActionReceipt(BaseModel):
 
     @model_validator(mode="after")
     def bind_serial206_x_authority(self):
+        legacy_response_body = self.response.get("body") if self.response is not None else None
+        legacy_serial206_x_action = (
+            self.action_id.startswith("oem.x.")
+            or self.action_id.startswith("oem.xy.")
+            or self.action_id.startswith("oem.xyz.")
+            or self.action_id == "oem.abort_all"
+        )
+        if (
+            legacy_serial206_x_action
+            and self.status == "completed"
+            and self.controller_acknowledged
+            and self.authority_receipt_id is None
+            and self.authority_receipt_status is None
+            and self.authority_fingerprint is not None
+            and isinstance(legacy_response_body, dict)
+            and isinstance(legacy_response_body.get("intent"), str)
+        ):
+            self.authority_receipt_id = self.command_id
+            self.authority_receipt_status = "completed"
         if (self.authority_receipt_id is None) != (self.authority_receipt_status is None):
             raise ValueError("authority receipt identity and status must be present together")
         if self.controller_terminal_state_verified and not self.controller_acknowledged:
