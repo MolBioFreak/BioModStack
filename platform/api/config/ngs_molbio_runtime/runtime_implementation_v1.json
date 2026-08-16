@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "4a987710ccada2c85e24721fb62dd819e89c611edf28456a3d84391bb80b48b8",
+  "content_sha256": "a7b6ac132a66cadf43e6b8d2ecac2ec8d1de9e8fed3edb79a4ab3d4ec33b9c34",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "77673329001f48e610f13ed115fed62f56d7d10b93cc5ee30cea033c34bb3659",
@@ -369,8 +369,8 @@
     },
     {
       "path": "platform/frontend/src/components/molbio-ngs/DomainExperimentWorkspace.tsx",
-      "sha256": "603af9c27bc1fb8642a611dd8ba7d546c88db36a1e51edd39c4b0d24d99e968b",
-      "size_bytes": 50195
+      "sha256": "eaa7256f9b8cb9c4c09842ace048dae8a4bd00811e0ccaffc278209539566fcf",
+      "size_bytes": 48838
     },
     {
       "path": "platform/frontend/src/components/molbio-ngs/DomainWorkflowOperator.tsx",
@@ -389,8 +389,8 @@
     },
     {
       "path": "platform/frontend/src/components/project-manager/ProjectInspector.tsx",
-      "sha256": "72487b9c01b09161f5c9ec982903f8851fd65fad26a1c40e0b10731f8c25a688",
-      "size_bytes": 11765
+      "sha256": "c9c2ab589fc25c83c3ac86fcd60a84d775ffc99d2582b5a0869fcf319bfa0957",
+      "size_bytes": 11762
     },
     {
       "path": "platform/frontend/src/components/project-manager/ProjectReturnBanner.tsx",
@@ -457,8 +457,8 @@
     "content_sha256": "93ac9157b314abdc063c3dafb84595ec26ec1e795d1d94762dbc567cb3d8d307",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
   },
-  "successor_source_commit": "746e38cb80c48ec64919294185c37660312fdb74",
-  "successor_source_tree": "6c0b45cf2355fe5920f0c34cd3e9d9a0c0f7bc68",
+  "successor_source_commit": "f2802bcb4af63251da8ee5f55fcf93734a4070df",
+  "successor_source_tree": "b15cc5a111326970b3b28b61e5cc18500544a937",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
