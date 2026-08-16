@@ -162,14 +162,8 @@ export default function DomainExperimentWorkspace() {
         globalExperimentId,
         domainExperimentId,
         stateRevisionId,
-        workspaces,
-        globalExperiments,
-        domainExperiments,
         selectedDomainExperiment,
         availability,
-        setWorkspaceId,
-        setGlobalExperimentId,
-        setDomainExperimentId,
         setStateRevisionId,
         updateQueryParams,
         contextHref,
@@ -229,6 +223,13 @@ export default function DomainExperimentWorkspace() {
         ?? selectedDomainExperiment?.local_state_revision_id
         ?? stateQuery.data?.current_state_revision_id
         ?? null;
+
+    useEffect(() => {
+        if (stateRevisionId === null && selectedStateRevisionId !== null) {
+            updateQueryParams({ state_revision_id: selectedStateRevisionId }, { replace: true });
+        }
+    }, [selectedStateRevisionId, stateRevisionId, updateQueryParams]);
+
     const selectedRevisionQuery = useQuery({
         queryKey: ['molbio-ngs-state-revision', exactDomainId, selectedStateRevisionId],
         queryFn: () => fetchMolBioNgsStateRevision(exactDomainId as string, selectedStateRevisionId as string),
@@ -713,6 +714,8 @@ export default function DomainExperimentWorkspace() {
         }).toString()}`
         : '/projects';
 
+    const hasProjectOwnedContext = Boolean(workspaceId && globalExperimentId && domainExperimentId);
+
     const renderDatasets = () => {
         if (!workspaceId || !globalExperimentId || !domainExperimentId) {
             return <Empty>Select an exact Project, Global Experiment, and NGS/MolBio Domain Experiment.</Empty>;
@@ -777,11 +780,11 @@ export default function DomainExperimentWorkspace() {
             <div className="mx-0 w-full max-w-none space-y-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent">Shared MolBio / NGS context</p>
+                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent">Project-owned MolBio / NGS context</p>
                         <h2 className="text-xl font-bold text-content">Domain Experiment workspace</h2>
                         <p className="mt-1 max-w-4xl text-sm text-content-secondary">
                             Inspect immutable scientific state, prepare and launch governed Workflow Plans, and reopen exact results.
-                            Project, Global Experiment, Domain Experiment, global domain revision, and local state revision identities remain separate.
+                            Project Manager owns the Project hierarchy. This workspace retains the exact selected hierarchy while the domain store owns local scientific state.
                         </p>
                     </div>
                     <div className="flex flex-wrap items-center justify-end gap-2">
@@ -819,69 +822,44 @@ export default function DomainExperimentWorkspace() {
                     </div>
                 </div>
 
-                <div className="grid gap-3 lg:grid-cols-4">
-                    <label className="text-xs font-semibold text-content-secondary">
-                        Project (workspace)
-                        <select
-                            value={workspaceId ?? ''}
-                            onChange={(event) => setWorkspaceId(event.target.value || null)}
-                            className="mt-1 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-sm text-content"
+                {hasProjectOwnedContext ? (
+                    <div className="grid gap-3 lg:grid-cols-4">
+                        <Identifier label="Project-owned context" value={workspaceId} />
+                        <Identifier label="Global Experiment" value={globalExperimentId} />
+                        <Identifier label="NGS/MolBio Domain Experiment" value={domainExperimentId} />
+                        <label className="text-xs font-semibold text-content-secondary">
+                            Immutable local state revision
+                            <select
+                                value={selectedStateRevisionId ?? ''}
+                                disabled={!selectedDomainExperiment || historyQuery.isLoading}
+                                onChange={(event) => setStateRevisionId(event.target.value || null)}
+                                className="mt-1 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-sm text-content disabled:opacity-50"
+                            >
+                                <option value="">Select immutable state revision</option>
+                                {(historyQuery.data ?? []).map((revision) => (
+                                    <option key={revision.id} value={revision.id}>
+                                        Revision {revision.revision_number} — {revision.id}
+                                    </option>
+                                ))}
+                            </select>
+                        </label>
+                    </div>
+                ) : (
+                    <div className="rounded-xl border border-warning/40 bg-warning/10 p-4" role="status">
+                        <p className="text-sm font-semibold text-content">Project-owned Domain context required</p>
+                        <p className="mt-1 text-sm text-content-secondary">
+                            Open an NGS/MolBio Domain Experiment from Project Manager. The toolkit no longer owns a separate Project hierarchy selection.
+                        </p>
+                        <Link
+                            to="/projects"
+                            className="mt-3 inline-flex rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white focus:ring-2 focus:ring-accent"
                         >
-                            <option value="">Select Project (workspace)</option>
-                            {workspaces.map((workspace) => (
-                                <option key={workspace.id} value={workspace.id}>{workspace.name} — {workspace.id}</option>
-                            ))}
-                        </select>
-                    </label>
-                    <label className="text-xs font-semibold text-content-secondary">
-                        Global Experiment
-                        <select
-                            value={globalExperimentId ?? ''}
-                            disabled={!workspaceId}
-                            onChange={(event) => setGlobalExperimentId(event.target.value || null)}
-                            className="mt-1 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-sm text-content disabled:opacity-50"
-                        >
-                            <option value="">Select Global Experiment</option>
-                            {globalExperiments.map((experiment) => (
-                                <option key={experiment.id} value={experiment.id}>{experiment.name} — {experiment.id}</option>
-                            ))}
-                        </select>
-                    </label>
-                    <label className="text-xs font-semibold text-content-secondary">
-                        NGS/MolBio Domain Experiment
-                        <select
-                            value={domainExperimentId ?? ''}
-                            disabled={!workspaceId || !globalExperimentId || availability.status === 'unavailable'}
-                            onChange={(event) => setDomainExperimentId(event.target.value || null)}
-                            className="mt-1 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-sm text-content disabled:opacity-50"
-                        >
-                            <option value="">Select acknowledged Domain Experiment</option>
-                            {domainExperiments.map((domainExperiment) => (
-                                <option key={domainExperiment.domain_experiment_id} value={domainExperiment.domain_experiment_id}>
-                                    {domainExperiment.domain_experiment_id}
-                                </option>
-                            ))}
-                        </select>
-                    </label>
-                    <label className="text-xs font-semibold text-content-secondary">
-                        Immutable local state revision
-                        <select
-                            value={selectedStateRevisionId ?? ''}
-                            disabled={!domainExperimentId || historyQuery.isLoading}
-                            onChange={(event) => setStateRevisionId(event.target.value || null)}
-                            className="mt-1 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-sm text-content disabled:opacity-50"
-                        >
-                            <option value="">Select immutable state revision</option>
-                            {(historyQuery.data ?? []).map((revision) => (
-                                <option key={revision.id} value={revision.id}>
-                                    Revision {revision.revision_number} — {revision.id}
-                                </option>
-                            ))}
-                        </select>
-                    </label>
-                </div>
+                            Open Project Manager
+                        </Link>
+                    </div>
+                )}
 
-                {availability.status !== 'available' && availability.status !== 'read-only' && (
+                {hasProjectOwnedContext && availability.status !== 'available' && availability.status !== 'read-only' && (
                     <div className="rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-content" role="status">
                         <p className="font-semibold">Domain context is not ready</p>
                         <p className="mt-1 text-content-secondary">{availability.reason}</p>

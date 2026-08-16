@@ -79,7 +79,7 @@ export function ProjectInspector({
                         <button type="button" onClick={onOpenCanonical} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white outline-none focus:ring-2 focus:ring-accent">Open canonical source</button>
                     )}
                     {isNgsMolBioDomain && onOpenNgsMolBio && (
-                        <button type="button" onClick={onOpenNgsMolBio} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white outline-none focus:ring-2 focus:ring-accent">Select NGS/MolBio capability</button>
+                        <button type="button" onClick={onOpenNgsMolBio} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white outline-none focus:ring-2 focus:ring-accent">Open NGS/MolBio workspace</button>
                     )}
                     {actions.has('edit') && <button type="button" onClick={onEdit} className="rounded-lg border border-border-primary px-3 py-2 text-xs font-semibold text-content-secondary hover:text-content focus:ring-2 focus:ring-accent">Edit revision</button>}
                     {(actions.has('add_note') || ['project', 'global_experiment', 'domain_experiment'].includes(selection.node_type)) && <button type="button" onClick={onRecord} className="rounded-lg border border-border-primary px-3 py-2 text-xs font-semibold text-content-secondary hover:text-content focus:ring-2 focus:ring-accent">Add record</button>}
