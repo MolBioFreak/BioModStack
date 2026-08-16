@@ -32,9 +32,15 @@ ROOT = Path(__file__).resolve().parents[3]
 if str(ROOT / "platform" / "api") not in sys.path:
     sys.path.insert(0, str(ROOT / "platform" / "api"))
 
-from database import OntRawSignalDerivationJob, OntRawSignalRepresentation
+from database import (
+    Base,
+    OntInstrumentRun,
+    OntInstrumentRunEvent,
+    OntRawSignalDerivationJob,
+    OntRawSignalRepresentation,
+)
 from migrations.seal_ont_external_source_identity import migrate as seal_external_source_identity
-from services import ont_raw_signal
+from services import ont_raw_signal, ont_run_control
 from services.ont_raw_signal_worker import OntRawSignalWorker
 
 QUALIFICATION_ROOT = Path("/mnt/BioModStack/ont-raw-signal-qualification/BFX6NB_1_JAN26-EL-Q2-01/subset-pod5")
@@ -273,6 +279,186 @@ def test_contract_08_terminal_registration_requests_automatic_conversion() -> No
     assert 'consumer_id="ont-terminal-reconciliation"' in source
     assert 'preference="auto"' in source
     assert "automatic=True" in source
+
+
+def test_live_conversion_defaults_to_dual_retention_and_is_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("BMS_ONT_LIVE_CONVERSION_ENABLED", raising=False)
+    monkeypatch.delenv("BMS_ONT_RAW_SIGNAL_RETENTION_POLICY", raising=False)
+
+    assert ont_raw_signal.live_conversion_enabled() is True
+    assert ont_raw_signal.raw_signal_retention_policy() == "pod5_and_blow5"
+
+
+def test_blow5_only_retention_is_a_dormant_standalone_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BMS_ONT_RAW_SIGNAL_RETENTION_POLICY", "blow5_only")
+
+    assert ont_raw_signal.raw_signal_retention_policy() == "blow5_only"
+    assert ont_raw_signal.retention_disposition() == "future_delete_after_verified_blow5_not_active_in_integrated_bms"
+    assert ont_raw_signal.retention_deletion_enabled() is False
+
+
+def test_live_pod5_chunk_requires_two_identical_running_observations(tmp_path: Path) -> None:
+    pod5 = tmp_path / "chunk.pod5"
+    pod5.write_bytes(b"closed-pod5")
+    first = ont_raw_signal.live_pod5_identity_snapshot([str(pod5)])
+    second = ont_raw_signal.live_pod5_identity_snapshot([str(pod5)])
+
+    assert ont_raw_signal.stable_live_pod5_paths(first, second) == [pod5]
+    pod5.write_bytes(b"still-growing")
+    changed = ont_raw_signal.live_pod5_identity_snapshot([str(pod5)])
+    assert ont_raw_signal.stable_live_pod5_paths(second, changed) == []
+
+
+def test_live_conversion_gate_allows_one_managed_job_during_active_acquisition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = {
+        "qualified_conversion_enabled": True,
+        "container_image": "biomodstack/ont-raw-signal",
+        "container_digest": "a" * 64,
+        "container_runtime": "docker",
+        "disk_free_bytes": 10,
+        "required_free_bytes": 10,
+        "active_acquisition_pressure": "active",
+        "conversion_mode": "live_minknow_pod5_chunk",
+    }
+    monkeypatch.setattr(ont_raw_signal.shutil, "which", lambda _runtime: "/usr/bin/docker")
+    monkeypatch.setenv("BMS_ONT_LIVE_CONVERSION_ENABLED", "1")
+
+    assert ont_raw_signal._qualification_gate(snapshot) is None
+    monkeypatch.setenv("BMS_ONT_LIVE_CONVERSION_ENABLED", "0")
+    assert ont_raw_signal._qualification_gate(snapshot) == "acquisition_pressure_not_proven_clear"
+
+
+@pytest.mark.asyncio
+async def test_live_chunk_registration_is_idempotent_and_queues_one_conversion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'live.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    pod5 = tmp_path / "chunk.pod5"
+    pod5.write_bytes(b"closed-pod5")
+    identities = ont_raw_signal.live_pod5_identity_snapshot([str(pod5)])
+    observed_at = datetime.utcnow()
+    monkeypatch.setattr(ont_raw_signal, "_qualification_gate", lambda _snapshot: None)
+    monkeypatch.setattr(
+        ont_raw_signal,
+        "_derivation_resource_snapshot",
+        lambda _run, _source: {"conversion_mode": "live_minknow_pod5_chunk"},
+    )
+
+    async with session_factory() as session:
+        session.add(
+            OntInstrumentRun(
+                id="ont-run-live",
+                position_id="position-1",
+                minknow_run_id="minknow-live",
+                state="running",
+                observed_at=observed_at,
+                observed_generation=2,
+                output_directories={"reads": str(tmp_path)},
+                output_files={"fastq": [], "pod5": [str(pod5)], "bam": []},
+                handoff_ready=False,
+                last_minknow_payload={"acquisition_id": "acquisition-live"},
+            )
+        )
+        session.add(
+            OntInstrumentRunEvent(
+                id="ont-event-live",
+                run_id="ont-run-live",
+                event_type="active_observed",
+                state="running",
+                observed_at=observed_at,
+                observed_generation=2,
+                minknow_payload={"acquisition_id": "acquisition-live"},
+                output_files={"fastq": [], "pod5": [str(pod5)], "bam": []},
+            )
+        )
+        await session.commit()
+        first = await ont_raw_signal.register_live_pod5_chunks(
+            session,
+            run_id="ont-run-live",
+            observed_generation=2,
+            stable_paths=[pod5],
+            identity_snapshot=identities,
+        )
+        await session.commit()
+        second = await ont_raw_signal.register_live_pod5_chunks(
+            session,
+            run_id="ont-run-live",
+            observed_generation=2,
+            stable_paths=[pod5],
+            identity_snapshot=identities,
+        )
+
+        representations = (
+            await session.execute(
+                ont_raw_signal.select(OntRawSignalRepresentation).where(
+                    OntRawSignalRepresentation.source_kind == "minknow_live"
+                )
+            )
+        ).scalars().all()
+        jobs = (await session.execute(ont_raw_signal.select(OntRawSignalDerivationJob))).scalars().all()
+
+    await engine.dispose()
+    assert len(first) == 1
+    assert second == []
+    assert len(representations) == 1
+    assert len(jobs) == 1
+    assert jobs[0].consumer_id == "ont-live-minknow-conversion"
+
+
+@pytest.mark.asyncio
+async def test_worker_monitors_active_minknow_runs_without_browser_polling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'monitor.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    observed_at = datetime.utcnow()
+    async with session_factory() as session:
+        session.add_all(
+            [
+                OntInstrumentRun(
+                    id="ont-run-active",
+                    position_id="position-1",
+                    minknow_run_id="minknow-active",
+                    state="running",
+                    observed_at=observed_at,
+                    observed_generation=1,
+                    output_directories={},
+                    output_files={},
+                    handoff_ready=False,
+                ),
+                OntInstrumentRun(
+                    id="ont-run-complete",
+                    position_id="position-2",
+                    minknow_run_id="minknow-complete",
+                    state="completed",
+                    observed_at=observed_at,
+                    observed_generation=1,
+                    output_directories={},
+                    output_files={},
+                    handoff_ready=True,
+                ),
+            ]
+        )
+        await session.commit()
+    reconciled: list[str] = []
+
+    async def fake_reconcile(run_id: str) -> dict[str, Any]:
+        reconciled.append(run_id)
+        return {"id": run_id}
+
+    monkeypatch.setattr(ont_run_control, "reconcile_instrument_run", fake_reconcile)
+    worker = OntRawSignalWorker(session_factory, poll_interval=5.0)
+
+    assert await worker._reconcile_live_runs_once() == 1
+    assert reconciled == ["ont-run-active"]
+    await engine.dispose()
 
 
 def test_native_terminal_artifact_is_sealed_for_descriptor_conversion(tmp_path: Path) -> None:

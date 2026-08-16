@@ -27,7 +27,13 @@ from database import OntInstrumentRun, OntInstrumentRunEvent, OntInstrumentRunPr
 from paths import get_inputs_dir
 from services.host_agent_client import get_ont_position, get_ont_status, request_host_agent
 from services.ont_device_control import _public_mk1d_device
-from services.ont_raw_signal import register_native_pod5_generation
+from services.ont_raw_signal import (
+    live_conversion_enabled,
+    live_pod5_identity_snapshot,
+    register_live_pod5_chunks,
+    register_native_pod5_generation,
+    stable_live_pod5_paths,
+)
 
 
 RUN_STATES = frozenset({"armed", "starting", "running", "stopping", "stopped", "completed", "failed", "unknown"})
@@ -1015,10 +1021,11 @@ def _bounded_host_snapshot(record: OntInstrumentRun, payload: dict[str, Any]) ->
         approved_roots=_approved_output_roots(record),
     )
     snapshot = {
-        "schema": "bms.ont.host-run-snapshot.v1",
+        "schema": "bms.ont.host-run-snapshot.v2",
         "state": state,
         "acquisition_id": acquisition_id,
         "output_files": output_files,
+        "pod5_identities": live_pod5_identity_snapshot(output_files["pod5"]),
     }
     return state, output_files, {**snapshot, "observation_digest": _canonical_digest(snapshot)}
 
@@ -1080,6 +1087,20 @@ async def reconcile_instrument_run(run_id: str) -> dict[str, Any]:
             return await _run_response(session, record)
         previous = record.last_minknow_payload if isinstance(record.last_minknow_payload, dict) else {}
         if previous.get("observation_digest") == bounded_snapshot["observation_digest"]:
+            if state == "running" and live_conversion_enabled():
+                stable_paths = stable_live_pod5_paths(
+                    previous.get("pod5_identities"),
+                    bounded_snapshot.get("pod5_identities"),
+                )
+                if stable_paths:
+                    await register_live_pod5_chunks(
+                        session,
+                        run_id=record.id,
+                        observed_generation=record.observed_generation,
+                        stable_paths=stable_paths,
+                        identity_snapshot=bounded_snapshot["pod5_identities"],
+                    )
+                    await session.commit()
             return await _run_response(session, record)
         await _append_observation(
             session,

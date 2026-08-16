@@ -1386,6 +1386,10 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     ).strip()
     ont_acquisition_pressure = os.environ.get("BMS_ONT_RAW_SIGNAL_ACQUISITION_PRESSURE", "unknown").strip() or "unknown"
     ont_conversion_qualified = os.environ.get("BMS_ONT_BLOW5_CONVERSION_QUALIFIED", "0").strip() or "0"
+    ont_live_conversion_enabled = "1" if os.environ.get("BMS_ONT_LIVE_CONVERSION_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"} else "0"
+    ont_retention_policy = os.environ.get("BMS_ONT_RAW_SIGNAL_RETENTION_POLICY", "pod5_and_blow5").strip().lower()
+    if ont_retention_policy not in {"pod5_and_blow5", "blow5_only"}:
+        raise ValueError("BMS_ONT_RAW_SIGNAL_RETENTION_POLICY must be pod5_and_blow5 or blow5_only")
     dev_adapter_limits = render_systemd_resource_boundaries(DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE).replace(
         "\n", "\n            "
     )
@@ -1507,6 +1511,8 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment=BMS_ONT_RAW_SIGNAL_STAGING_ROOT={ont_staging_root}
         Environment=BMS_ONT_RAW_SIGNAL_ACQUISITION_PRESSURE={ont_acquisition_pressure}
         Environment=BMS_ONT_BLOW5_CONVERSION_QUALIFIED={ont_conversion_qualified}
+        Environment=BMS_ONT_LIVE_CONVERSION_ENABLED={ont_live_conversion_enabled}
+        Environment=BMS_ONT_RAW_SIGNAL_RETENTION_POLICY={ont_retention_policy}
         Environment=BMS_BUILD_SHA={build_revision}
         Environment=BMS_BUILD_ID={build_id}
         Environment=BMS_BUILD_TIME={build_time}

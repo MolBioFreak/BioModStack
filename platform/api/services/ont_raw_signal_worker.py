@@ -10,6 +10,9 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import select
+
+from database import OntInstrumentRun
 from services.ont_raw_signal import (
     EXTERNAL_BLOW5_VALIDATION_PROFILE_ID,
     claim_next_derivation,
@@ -41,6 +44,7 @@ class OntRawSignalWorker:
         self._session_factory = session_factory
         self._poll_interval = max(1.0, float(poll_interval))
         self._task: asyncio.Task[None] | None = None
+        self._monitor_task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
         self._child: asyncio.subprocess.Process | None = None
 
@@ -51,6 +55,9 @@ class OntRawSignalWorker:
             await recover_expired_derivations(session)
         self._stop.clear()
         self._task = asyncio.create_task(self._run(), name="ont-raw-signal-worker")
+        self._monitor_task = asyncio.create_task(
+            self._monitor_live_runs(), name="ont-live-pod5-monitor"
+        )
 
     async def stop(self) -> None:
         self._stop.set()
@@ -59,14 +66,58 @@ class OntRawSignalWorker:
             child.terminate()
             await child.wait()
         task = self._task
+        monitor_task = self._monitor_task
         self._task = None
-        if task is None:
-            return
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        self._monitor_task = None
+        for running_task in (task, monitor_task):
+            if running_task is None:
+                continue
+            running_task.cancel()
+            try:
+                await running_task
+            except asyncio.CancelledError:
+                pass
+
+    async def _reconcile_live_runs_once(self) -> int:
+        from services.ont_run_control import reconcile_instrument_run
+
+        async with self._session_factory() as session:
+            run_ids = list(
+                (
+                    await session.execute(
+                        select(OntInstrumentRun.id)
+                        .where(
+                            OntInstrumentRun.state.in_(("starting", "running", "stopping")),
+                            OntInstrumentRun.minknow_run_id.is_not(None),
+                        )
+                        .order_by(OntInstrumentRun.observed_at, OntInstrumentRun.id)
+                        .limit(100)
+                    )
+                ).scalars()
+            )
+        reconciled = 0
+        for run_id in run_ids:
+            try:
+                await reconcile_instrument_run(str(run_id))
+                reconciled += 1
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("ONT live POD5 monitor reconciliation failed: %s", run_id)
+        return reconciled
+
+    async def _monitor_live_runs(self) -> None:
+        while not self._stop.is_set():
+            try:
+                await self._reconcile_live_runs_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("ONT live POD5 monitor iteration failed")
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=self._poll_interval)
+            except asyncio.TimeoutError:
+                pass
 
     @staticmethod
     def _command_receipt(command: list[str], returncode: int, stdout: bytes, stderr: bytes) -> dict[str, Any]:

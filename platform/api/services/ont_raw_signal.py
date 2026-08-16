@@ -49,6 +49,8 @@ BLOW5_STAGING_ROOT_ENV = "BMS_ONT_RAW_SIGNAL_STAGING_ROOT"
 BLOW5_MIN_FREE_BYTES_ENV = "BMS_ONT_RAW_SIGNAL_MIN_FREE_BYTES"
 BLOW5_ACQUISITION_PRESSURE_ENV = "BMS_ONT_RAW_SIGNAL_ACQUISITION_PRESSURE"
 EXTERNAL_POD5_ROOT_ENV = "BMS_ONT_EXTERNAL_POD5_ROOT"
+LIVE_CONVERSION_ENABLED_ENV = "BMS_ONT_LIVE_CONVERSION_ENABLED"
+RAW_SIGNAL_RETENTION_POLICY_ENV = "BMS_ONT_RAW_SIGNAL_RETENTION_POLICY"
 BLOW5_DEFAULT_STAGING_ROOT = "/mnt/BioModStack/ont-raw-signal-staging"
 BLOW5_DEFAULT_MIN_FREE_BYTES = 20 * 1024 * 1024 * 1024
 
@@ -72,6 +74,58 @@ _READY = "ready"
 _PREPARABLE = "preparable"
 _UNAVAILABLE = "unavailable"
 RAW_SIGNAL_MAX_WAVEFORM_SAMPLES = 20_000
+
+
+def live_conversion_enabled() -> bool:
+    return os.getenv(LIVE_CONVERSION_ENABLED_ENV, "1").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def raw_signal_retention_policy() -> Literal["pod5_and_blow5", "blow5_only"]:
+    policy = os.getenv(RAW_SIGNAL_RETENTION_POLICY_ENV, "pod5_and_blow5").strip().lower()
+    if policy not in {"pod5_and_blow5", "blow5_only"}:
+        raise RuntimeError(f"{RAW_SIGNAL_RETENTION_POLICY_ENV} must be pod5_and_blow5 or blow5_only")
+    return policy  # type: ignore[return-value]
+
+
+def retention_disposition() -> str:
+    if raw_signal_retention_policy() == "pod5_and_blow5":
+        return "retain_pod5_and_blow5"
+    return "future_delete_after_verified_blow5_not_active_in_integrated_bms"
+
+
+def retention_deletion_enabled() -> bool:
+    """The integrated BMS build exposes the future policy seam without deleting acquisition evidence."""
+    return False
+
+
+def live_pod5_identity_snapshot(paths: list[str]) -> dict[str, dict[str, int]]:
+    """Capture bounded file identity used to recognize a closed MinKNOW POD5 chunk."""
+    snapshot: dict[str, dict[str, int]] = {}
+    for value in sorted(set(paths)):
+        path = Path(value)
+        try:
+            info = path.lstat()
+        except OSError:
+            continue
+        if path.suffix.lower() != ".pod5" or not stat.S_ISREG(info.st_mode) or path.is_symlink() or info.st_size < 1:
+            continue
+        snapshot[str(path)] = {
+            "device": info.st_dev,
+            "inode": info.st_ino,
+            "bytes": info.st_size,
+            "mtime_ns": info.st_mtime_ns,
+            "ctime_ns": info.st_ctime_ns,
+        }
+    return snapshot
+
+
+def stable_live_pod5_paths(
+    previous: dict[str, Any] | None,
+    current: dict[str, Any] | None,
+) -> list[Path]:
+    previous = previous if isinstance(previous, dict) else {}
+    current = current if isinstance(current, dict) else {}
+    return [Path(path) for path in sorted(current) if previous.get(path) == current[path]]
 
 
 def _external_pod5_root() -> Path:
@@ -315,6 +369,23 @@ def _require_sealed_generation(run: OntInstrumentRun, event: OntInstrumentRunEve
     _sealed_manifest(run, event.observed_generation)
 
 
+def _require_derivable_generation(
+    run: OntInstrumentRun,
+    event: OntInstrumentRunEvent,
+    source: OntRawSignalRepresentation,
+) -> None:
+    if source.source_kind != "minknow_live":
+        _require_sealed_generation(run, event)
+        return
+    receipts = source.validation_receipts if isinstance(source.validation_receipts, dict) else {}
+    if (
+        event.state != "running"
+        or receipts.get("stable_observations") != 2
+        or receipts.get("retention_policy") not in {"pod5_and_blow5", "blow5_only"}
+    ):
+        raise ValueError("live MinKNOW POD5 derivation requires a stable running-generation receipt")
+
+
 def _seal_native_pod5_artifacts(terminal_artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     artifacts: list[dict[str, Any]] = []
     for position, terminal_artifact in enumerate(terminal_artifacts):
@@ -391,6 +462,99 @@ async def register_native_pod5_generation(session: AsyncSession, *, run_id: str,
             automatic=True,
         )
     return [_public_representation(existing)]
+
+
+async def register_live_pod5_chunks(
+    session: AsyncSession,
+    *,
+    run_id: str,
+    observed_generation: int,
+    stable_paths: list[Path],
+    identity_snapshot: dict[str, dict[str, int]],
+) -> list[dict[str, Any]]:
+    """Register and queue newly closed MinKNOW POD5 chunks while acquisition continues."""
+    if not live_conversion_enabled() or not stable_paths:
+        return []
+    run, event = await _exact_generation(session, run_id, observed_generation)
+    if event.state != "running" or event.observed_generation != run.observed_generation:
+        return []
+    acquisition_id = (run.last_minknow_payload or {}).get("acquisition_id") if isinstance(run.last_minknow_payload, dict) else None
+    if not acquisition_id:
+        return []
+    prior = (
+        await session.execute(
+            select(OntRawSignalRepresentation).where(
+                OntRawSignalRepresentation.run_id == run_id,
+                OntRawSignalRepresentation.source_kind == "minknow_live",
+            )
+        )
+    ).scalars().all()
+    seen_identities = {
+        tuple(item.get(field) for field in ("device", "inode", "bytes", "mtime_ns", "ctime_ns"))
+        for representation in prior
+        for item in (representation.artifact_manifest or {}).get("artifacts", [])
+        if isinstance(item, dict)
+    }
+    registered: list[dict[str, Any]] = []
+    policy = raw_signal_retention_policy()
+    for position, path in enumerate(stable_paths):
+        expected = identity_snapshot.get(str(path))
+        if not isinstance(expected, dict):
+            continue
+        artifact = _file_artifact(path, f"live-pod5-{observed_generation}-{position}", kind="pod5")
+        if any(artifact.get(field) != expected.get(field) for field in ("device", "inode", "bytes", "mtime_ns", "ctime_ns")):
+            continue
+        identity = tuple(artifact.get(field) for field in ("device", "inode", "bytes", "mtime_ns", "ctime_ns"))
+        if identity in seen_identities:
+            continue
+        manifest = {
+            "schema": "bms.ont.raw-signal-live-chunk.v1",
+            "run_id": run_id,
+            "observed_generation": observed_generation,
+            "format": "pod5",
+            "acquisition_id": acquisition_id,
+            "artifacts": [artifact],
+        }
+        representation = OntRawSignalRepresentation(
+            id=_id("ont-raw-rep"),
+            run_id=run_id,
+            observed_generation=observed_generation,
+            role="source",
+            source_kind="minknow_live",
+            format="pod5",
+            source_fidelity="native_acquisition_live_chunk",
+            state=_UNAVAILABLE,
+            reason_code="live_pod5_chunk_queued",
+            artifact_manifest=manifest,
+            manifest_sha256=_digest(manifest),
+            parent_representation_ids=[],
+            parent_manifest_sha256s=[],
+            compression={},
+            runtime_identity={},
+            validation_receipts={
+                "stable_observations": 2,
+                "retention_policy": policy,
+                "retention_disposition": retention_disposition(),
+                "source_deletion_enabled": retention_deletion_enabled(),
+            },
+            acquisition_id=acquisition_id,
+            retention_pinned_at=_now(),
+            created_at=_now(),
+        )
+        session.add(representation)
+        await session.flush()
+        await request_blow5_derivation(
+            session,
+            run_id=run_id,
+            observed_generation=observed_generation,
+            source_representation_id=representation.id,
+            consumer_id="ont-live-minknow-conversion",
+            preference="auto",
+            automatic=True,
+        )
+        seen_identities.add(identity)
+        registered.append(_public_representation(representation))
+    return registered
 
 
 def _resolve_input_file(record: InputFile, expected_format: str) -> Path:
@@ -1119,6 +1283,11 @@ def _derivation_resource_snapshot(
     if marker.get("schema") == "bms.ont.external-raw-signal-registration.v1":
         snapshot["active_acquisition_pressure"] = "clear"
         snapshot["acquisition_pressure_source"] = "sealed_external_registration"
+    elif source.source_kind == "minknow_live":
+        snapshot["conversion_mode"] = "live_minknow_pod5_chunk"
+        snapshot["active_acquisition_pressure"] = "active"
+        snapshot["acquisition_pressure_source"] = "live_minknow_acquisition"
+        snapshot["retention_policy"] = raw_signal_retention_policy()
     return snapshot
 
 
@@ -1171,7 +1340,10 @@ def _qualification_gate(snapshot: dict[str, Any]) -> str | None:
         return "converter_container_runtime_unavailable"
     if snapshot["disk_free_bytes"] < snapshot["required_free_bytes"]:
         return "conversion_capacity_gate_failed"
-    if snapshot["active_acquisition_pressure"] != "clear":
+    live_chunk = snapshot.get("conversion_mode") == "live_minknow_pod5_chunk"
+    if snapshot["active_acquisition_pressure"] != "clear" and not (
+        live_chunk and snapshot["active_acquisition_pressure"] == "active" and live_conversion_enabled()
+    ):
         return "acquisition_pressure_not_proven_clear"
     return None
 
@@ -1522,10 +1694,10 @@ async def request_blow5_derivation(
     if not consumer_id or len(consumer_id) > 128:
         raise ValueError("consumer_id must be 1-128 characters")
     run, event = await _exact_generation(session, run_id, observed_generation)
-    _require_sealed_generation(run, event)
     source = await session.get(OntRawSignalRepresentation, source_representation_id)
     if source is None or source.run_id != run_id or source.observed_generation != observed_generation or source.format not in {"pod5", "blow5"}:
         raise ValueError("source representation is not POD5 or external BLOW5 for the exact dataset generation")
+    _require_derivable_generation(run, event, source)
     validation_only = source.format == "blow5"
     if validation_only and source.source_kind != "external_native":
         raise ValueError("validation-only admission is limited to external BLOW5")

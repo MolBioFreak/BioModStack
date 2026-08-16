@@ -1147,6 +1147,40 @@ async def test_reconcile_observes_active_then_completed_once_and_materializes_te
 
 
 @pytest.mark.asyncio
+async def test_reconcile_queues_a_pod5_chunk_after_two_identical_running_observations(
+    monkeypatch, tmp_path: Path
+) -> None:
+    pod5 = tmp_path / "chunk.pod5"
+    pod5.write_bytes(b"closed-pod5")
+    run_id = await _seed_server_observed_run(
+        state="starting", output_directories={"reads": str(tmp_path)}
+    )
+    snapshot = {
+        "status": "active",
+        "minknow_run_id": "PRIVATE-MINKNOW-RUN",
+        "acquisition_id": "PRIVATE-ACQUISITION",
+        "output_files": {"fastq": [], "pod5": [str(pod5)], "bam": []},
+    }
+    calls: list[dict] = []
+
+    async def fake_register(_session, **kwargs):
+        calls.append(kwargs)
+        return []
+
+    monkeypatch.setattr(ont_run_control, "request_host_agent", lambda *_args, **_kwargs: snapshot)
+    monkeypatch.setattr(ont_run_control, "register_live_pod5_chunks", fake_register)
+
+    first = await ont_run_control.reconcile_instrument_run(run_id)
+    second = await ont_run_control.reconcile_instrument_run(run_id)
+
+    assert first["state"] == "running"
+    assert second["observed_generation"] == first["observed_generation"]
+    assert len(calls) == 1
+    assert calls[0]["stable_paths"] == [pod5]
+    assert calls[0]["identity_snapshot"][str(pod5)]["bytes"] == len(b"closed-pod5")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("state", ["completed", "failed", "stopped"])
 async def test_reconcile_records_terminal_state_without_fabricating_empty_artifact_evidence(monkeypatch, state: str) -> None:
     run_id = await _seed_server_observed_run(state="running")

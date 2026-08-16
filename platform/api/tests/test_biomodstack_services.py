@@ -421,6 +421,8 @@ def test_render_user_units_exports_configured_dev_frontend_port(tmp_path: Path, 
     assert "Environment=BMS_COLABFOLD_DB=/srv/biomodstack/colabfold_db" in units[services.API_SERVICE]
     assert "Environment=BMS_WEIGHTS=/srv/biomodstack-dev/weights" not in units[services.API_SERVICE]
     assert "Environment=BMS_COLABFOLD_DB=/srv/biomodstack-dev/colabfold_db" not in units[services.API_SERVICE]
+    assert "Environment=BMS_ONT_LIVE_CONVERSION_ENABLED=1" in units[services.API_SERVICE]
+    assert "Environment=BMS_ONT_RAW_SIGNAL_RETENTION_POLICY=pod5_and_blow5" in units[services.API_SERVICE]
     assert "ExecStartPre=/usr/bin/mkdir -p /srv/biomodstack-dev" in units[services.API_SERVICE]
     assert "Environment=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:18279" in units[services.FRONTEND_SERVICE]
     assert "Environment=BMS_DEV_WEB_HOST_PORT=18278" in units[services.FRONTEND_SERVICE]
