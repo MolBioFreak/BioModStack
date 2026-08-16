@@ -399,6 +399,50 @@ class OperatorDashboardXJsonSafeEvidence(RootModel[JsonValue]):
         return self
 
 
+class OperatorDashboardXFailedLifecycleEvidence(RootModel[JsonValue]):
+    """Bounded robot evidence accepted only while the X lifecycle is failed-latched."""
+
+    @model_validator(mode="after")
+    def enforce_failed_projection_bounds(self):
+        remaining = 256
+
+        def walk(value: JsonValue, depth: int) -> None:
+            nonlocal remaining
+            remaining -= 1
+            if remaining < 0:
+                raise ValueError("failed X lifecycle evidence exceeds the item budget")
+            if depth > 8:
+                raise ValueError("failed X lifecycle evidence exceeds the depth limit")
+            if isinstance(value, str):
+                if len(value) > 512:
+                    raise ValueError("failed X lifecycle evidence string exceeds the limit")
+                return
+            if isinstance(value, float):
+                if not math.isfinite(value):
+                    raise ValueError("failed X lifecycle evidence contains a non-finite float")
+                return
+            if isinstance(value, dict):
+                if "omitted" in value:
+                    OperatorDashboardXOmissionMarker.model_validate(value)
+                    return
+                for key, item in value.items():
+                    if len(key) > 96:
+                        raise ValueError("failed X lifecycle evidence key exceeds the limit")
+                    walk(item, depth + 1)
+                return
+            if isinstance(value, list):
+                for item in value:
+                    walk(item, depth + 1)
+
+        walk(self.root, 0)
+        encoded = json.dumps(
+            self.root, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+        if len(encoded) > 8192:
+            raise ValueError("failed X lifecycle evidence exceeds the byte limit")
+        return self
+
+
 XIntent = Literal[
     "prepare",
     "reconcile_switch_masks",
@@ -2946,16 +2990,30 @@ class OperatorDashboardXLifecycle(BaseModel):
     generation: StrictInt | None
     board_lifecycle_generation: StrictInt | None
     reference_state: Literal["unknown", "referenced", "desynced"]
-    prepared_receipt: OperatorDashboardXPreparationReceipt | OperatorDashboardXOmissionMarker | None
+    prepared_receipt: (
+        OperatorDashboardXPreparationReceipt
+        | OperatorDashboardXOmissionMarker
+        | OperatorDashboardXFailedLifecycleEvidence
+        | None
+    )
     active_receipt: OperatorDashboardXActiveReceipt | OperatorDashboardXOmissionMarker | None
     pending_ticket: OperatorDashboardXPendingTicket | OperatorDashboardXOmissionMarker | None
     awaiting_observation_receipt_id: str | None = Field(max_length=160)
     terminal_state: None
-    last_failure: OperatorDashboardXLifecycleLastFailure | None
+    last_failure: OperatorDashboardXLifecycleLastFailure | OperatorDashboardXFailedLifecycleEvidence | None
     receipt_storage: Literal["robot_sqlite"]
     receipt_detail_on_request: Literal[True]
     recent_receipt_count: StrictInt = Field(ge=0)
     latest_receipt: OperatorDashboardXReceiptSummary | None
+
+    @model_validator(mode="after")
+    def bind_generic_evidence_to_failed_latch(self):
+        generic_evidence = isinstance(
+            self.prepared_receipt, OperatorDashboardXFailedLifecycleEvidence
+        ) or isinstance(self.last_failure, OperatorDashboardXFailedLifecycleEvidence)
+        if generic_evidence and self.state != "failed_latched":
+            raise ValueError("generic X lifecycle evidence requires failed_latched state")
+        return self
 
 
 class OperatorDashboardXLiveStatusSuccess(BaseModel):
@@ -3134,10 +3192,18 @@ class OperatorDashboardXAxis(BaseModel):
     status: OperatorDashboardAxis | None = None
     provider: OperatorDashboardXProvider
     snapshot_freshness: OperatorDashboardSnapshotFreshness
-    last_failure: OperatorDashboardXLifecycleLastFailure | None = None
+    last_failure: OperatorDashboardXLifecycleLastFailure | OperatorDashboardXFailedLifecycleEvidence | None = None
     latest_receipt: OperatorDashboardXReceiptSummary | None = None
     authority: str = Field(min_length=1, max_length=120)
     physical_position_verified: Literal[False]
+
+    @model_validator(mode="after")
+    def bind_generic_failure_to_failed_latch(self):
+        if isinstance(self.last_failure, OperatorDashboardXFailedLifecycleEvidence):
+            provider = self.provider.root
+            if not isinstance(provider, OperatorDashboardXProviderSuccess) or provider.lifecycle.state != "failed_latched":
+                raise ValueError("generic X-axis failure evidence requires failed_latched provider state")
+        return self
 
 
 class OperatorDashboardTemperature(BaseModel):
