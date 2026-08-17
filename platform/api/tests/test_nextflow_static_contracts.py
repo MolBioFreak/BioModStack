@@ -202,3 +202,47 @@ def test_direct_workflow_entrypoints_expose_unnamed_workflows() -> None:
     for workflow_id, rel_path in DIRECT_ENTRYPOINTS.items():
         entrypoint_text = (REPO_ROOT / rel_path).read_text(encoding="utf-8", errors="ignore")
         assert re.search(r"(?m)^\s*workflow\s*\{", entrypoint_text), workflow_id
+
+
+def test_protein_local_redesign_uses_peer_validator_suite_contract() -> None:
+    workflow_text = (REPO_ROOT / "workflows" / "protein_local_redesign.nf").read_text(encoding="utf-8")
+    esmfold_text = (REPO_ROOT / "modules" / "esmfold2_experimental.nf").read_text(encoding="utf-8")
+    model_text = (REPO_ROOT / "platform" / "api" / "config" / "models" / "protein_modification_experimental.yaml").read_text(encoding="utf-8")
+
+    assert "['boltz2', 'esmfold2', 'protenix_v2']" in workflow_text
+    assert "parseProteinLocalValidators(params.plr_structure_validators)" in workflow_text
+    assert "selectedValidators.contains('boltz2')" in workflow_text
+    assert "selectedValidators.contains('esmfold2')" in workflow_text
+    assert "selectedValidators.contains('protenix_v2')" in workflow_text
+    assert "FinalizeProteinLocalValidatorSuite" in workflow_text
+    assert "process EnforceProteinLocalValidatorSuite" in workflow_text
+    assert "validator_suite_complete" in workflow_text
+    assert "contract_root: 'validation/contracts'" in workflow_text
+    assert "artifact_root:" in workflow_text
+    assert "StageProteinLocalValidatedCandidates" in workflow_text
+    assert "validation/review_candidates" in workflow_text
+    assert "StageProteinLocalValidatedCandidates.out.candidates.map { 1 }" in workflow_text
+    assert "['complete', 'partial', 'failed']" in workflow_text
+    assert "validation/boltz2" in workflow_text
+    assert "process ESMFold2FromPdb" in esmfold_text
+    assert "validation/esmfold2" in esmfold_text
+    assert "plr_run_boltz_validation" not in workflow_text
+    assert "enum: [boltz2, esmfold2, protenix_v2]" in model_text
+
+
+def test_protein_local_validator_failure_policy_is_scoped_to_plr() -> None:
+    workflow_text = (REPO_ROOT / "workflows" / "protein_local_redesign.nf").read_text(encoding="utf-8")
+    boltz_text = (REPO_ROOT / "modules" / "boltz.nf").read_text(encoding="utf-8")
+    protenix_text = (REPO_ROOT / "modules" / "protenix.nf").read_text(encoding="utf-8")
+
+    scoped_policy = "params.containsKey('plr_validator_suite_active') && params.plr_validator_suite_active == true ? 'ignore' : 'terminate'"
+    assert scoped_policy in boltz_text
+    assert scoped_policy in protenix_text
+    assert "'validation/protenix_v2/' + input_sample.candidate_id" in protenix_text
+    assert "params.plr_structure_validators ? 'ignore'" not in boltz_text
+    assert "params.plr_structure_validators ? 'ignore'" not in protenix_text
+    assert "error(\"Boltz-2 produced" not in workflow_text
+    assert "boltz_completion.json" in boltz_text
+    assert "RunBoltz.out.completion" in workflow_text
+    assert "and Path('predictions', f'{candidate_id}_boltzpred.json').is_file()" in boltz_text
+    assert ") + '\\\\n'," in boltz_text

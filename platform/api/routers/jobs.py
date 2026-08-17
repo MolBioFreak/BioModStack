@@ -72,6 +72,7 @@ from services.md.launch_contract import MDLaunchError, materialize_md_job_spec, 
 from services.md.results import expected_analysis_implementation_sha256
 from services.md.state import MdStateError, create_md_run, create_replica_attempt
 from services.proteinbase_importer import import_proteinbase_bundle
+from services.nextflow import normalize_plr_structure_validators
 from services.rfd3_local_redesign import (
     normalize_local_redesign_params,
     materialize_local_redesign_request,
@@ -4934,6 +4935,33 @@ def _normalize_nanopore_modbase_for_validation(
     return normalized
 
 
+def _validate_plr_validator_availability(registry, params: dict) -> None:
+    selected = params.get("structure_validators")
+    if not isinstance(selected, list):
+        return
+    registry_ids = {
+        "boltz2": "boltz2",
+        "esmfold2": "esmfold2",
+        "protenix_v2": "protenix",
+    }
+    unavailable = [
+        validator
+        for validator in selected
+        if registry.get_model(registry_ids[validator]) is None
+    ]
+    if unavailable:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Selected structure validators are disabled or unavailable: {', '.join(unavailable)}",
+        )
+
+
+def _is_protein_local_redesign_job(job: Job) -> bool:
+    return job.model_id == "protein_local_redesign" or (
+        job.model_id == "protein_modification_experimental" and job.mode == "region_redesign"
+    )
+
+
 @router.get("", response_model=JobList)
 async def list_jobs(
     status: Optional[JobStatus] = None,
@@ -5305,6 +5333,11 @@ async def _create_job(
     }
     normalized_model_id = str(job_data.model_id or "").strip().lower()
     normalized_mode = str(job_data.mode or "").strip().lower()
+    if normalized_model_id == "protein_modification_experimental" and normalized_mode == "region_redesign":
+        try:
+            job_data.params = normalize_plr_structure_validators(job_data.params or {})
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     if normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign":
         if "workflow_adapter" in (job_data.params or {}) and _trusted_workflow_adapter is not True:
             raise HTTPException(
@@ -5383,6 +5416,9 @@ async def _create_job(
         registry.reload()
     except Exception as e:
         logger.warning(f"Failed to reload model registry before validation: {e}")
+
+    if normalized_model_id == "protein_modification_experimental" and normalized_mode == "region_redesign":
+        _validate_plr_validator_availability(registry, job_data.params or {})
 
     if job_data.model_id == "nanopore" and not ont_submission_trust.is_trusted_ont_job_creation():
         raise HTTPException(
@@ -8300,7 +8336,7 @@ async def resume_job(
         output_path = Path(job.output_dir)
         if not output_path.is_absolute():
             output_path = get_data_root() / output_path
-        if candidate_dir and job.model_id == "protein_local_redesign":
+        if candidate_dir and _is_protein_local_redesign_job(job):
             if job.awaiting_stage == "post_rfantibody":
                 param_overrides.setdefault("plr_backbone_input_pdbs", candidate_dir)
                 param_overrides.setdefault(
@@ -8309,8 +8345,6 @@ async def resume_job(
                 )
             elif job.awaiting_stage == "post_fampnn":
                 param_overrides.setdefault("plr_sequence_input_pdbs", candidate_dir)
-                if not _to_bool((job.params or {}).get("plr_run_boltz_validation")):
-                    param_overrides.setdefault("plr_final_candidate_dir", candidate_dir)
             elif job.awaiting_stage == "post_structure_validation":
                 param_overrides.setdefault("plr_validation_input_pdbs", candidate_dir)
                 param_overrides.setdefault("plr_final_candidate_dir", candidate_dir)
@@ -8545,7 +8579,7 @@ async def continue_protein_local_review(
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    if job.model_id != "protein_local_redesign":
+    if not _is_protein_local_redesign_job(job):
         raise HTTPException(status_code=422, detail="This continue endpoint only supports Protein Local Redesign jobs.")
     if not job.awaiting_input or not job.awaiting_stage:
         raise HTTPException(status_code=422, detail="Protein local redesign job is not currently paused for review.")
@@ -8593,8 +8627,6 @@ async def continue_protein_local_review(
         from_stage = "rfantibody"
     elif job.awaiting_stage == "post_fampnn":
         param_overrides["plr_sequence_input_pdbs"] = str(selection_dir)
-        if not _to_bool((job.params or {}).get("plr_run_boltz_validation")):
-            param_overrides["plr_final_candidate_dir"] = str(selection_dir)
         from_stage = "fampnn"
     elif job.awaiting_stage == "post_structure_validation":
         param_overrides.update({

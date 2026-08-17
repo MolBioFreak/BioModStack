@@ -283,10 +283,3 @@ params:
     enum: [skip, fampnn, mpnn]
     ui_group: Downstream stages
     ui_order: 70
-  - name: plr_run_boltz_validation
-    type: boolean
-    description: Run downstream structure validation after sequence design.
-    required: false
-    default: false
-    ui_group: Downstream stages
-    ui_order: 71

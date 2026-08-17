@@ -11,6 +11,7 @@ def formatFilterParams(params, paramPrefix, paramNames) {
 
 process PrepBoltz {
     label 'pyrosetta_tools'
+    errorStrategy { params.containsKey('plr_validator_suite_active') && params.plr_validator_suite_active == true ? 'ignore' : 'terminate' }
 
     input:
     path pdb_files
@@ -68,6 +69,7 @@ process PrepBoltzWithMSA {
 process RunBoltz {
     label 'Boltz'
     label 'gpu'
+    errorStrategy { params.containsKey('plr_validator_suite_active') && params.plr_validator_suite_active == true ? 'ignore' : 'terminate' }
     publishDir "${params.out_dir}/run/boltz", mode: 'copy', pattern: "*.log"
     tag "B${batch_id}"
 
@@ -76,6 +78,7 @@ process RunBoltz {
 
     output:
     tuple path("predictions/*.pdb"), path("predictions/*.json"), emit: pdbs_jsons
+    path "boltz_completion.json", emit: completion
     path ("predictions/*.npz"), emit: pae_npz, optional: true
     path ("*.log"), emit: logs
 
@@ -89,9 +92,7 @@ process RunBoltz {
         export HOME=tmp
         
         mkdir yamls
-        for file in \$(find *.yaml); do
-            cp -L "\$file" ./yamls/
-        done
+        cp -L -- *.yaml ./yamls/
 
         boltz predict \
             ./yamls/ \
@@ -129,6 +130,32 @@ process RunBoltz {
             # Copy affinity JSONs (generated when --sampling_steps_affinity is set)
             cp "\${dir}"/affinity_*.json predictions/ 2>/dev/null || :
         done
+
+        python3 - <<'PY'
+import json
+from pathlib import Path
+
+expected = sorted(path.stem for path in Path('yamls').glob('*.yaml'))
+completed = [
+    candidate_id
+    for candidate_id in expected
+    if Path('predictions', f'{candidate_id}_boltzpred.pdb').is_file()
+    and Path('predictions', f'{candidate_id}_boltzpred.json').is_file()
+]
+Path('boltz_completion.json').write_text(
+    json.dumps(
+        {
+            'schema_version': 1,
+            'validator': 'boltz2',
+            'expected_candidates': expected,
+            'completed_candidates': completed,
+        },
+        sort_keys=True,
+        separators=(',', ':'),
+    ) + '\\n',
+    encoding='utf-8',
+)
+PY
 
         """
 }

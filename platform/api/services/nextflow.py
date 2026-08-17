@@ -2902,6 +2902,37 @@ def resolve_nextflow_executable() -> str:
     )
 
 
+PLR_STRUCTURE_VALIDATORS = ("boltz2", "esmfold2", "protenix_v2")
+
+
+def normalize_plr_structure_validators(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate one closed Protein Local Redesign validator suite."""
+    normalized = dict(params or {})
+    selected = normalized.get("structure_validators")
+    if selected is None:
+        legacy = normalized.pop("run_boltz_validation", None)
+        if legacy is True:
+            selected = ["boltz2"]
+        elif legacy is False:
+            raise ValueError("structure_validators must select between one and three validators")
+        else:
+            selected = ["protenix_v2"]
+    else:
+        normalized.pop("run_boltz_validation", None)
+
+    if not isinstance(selected, list):
+        raise ValueError("structure_validators must be a list")
+    if not 1 <= len(selected) <= len(PLR_STRUCTURE_VALIDATORS):
+        raise ValueError("structure_validators must select between one and three validators")
+    if any(not isinstance(value, str) or value not in PLR_STRUCTURE_VALIDATORS for value in selected):
+        raise ValueError("structure_validators contains an unsupported validator")
+    if len(set(selected)) != len(selected):
+        raise ValueError("structure_validators contains duplicates")
+
+    normalized["structure_validators"] = list(selected)
+    return normalized
+
+
 def build_nextflow_command(
     model_id: str,
     mode: str,
@@ -2916,6 +2947,11 @@ def build_nextflow_command(
     """
     # Never mutate caller params; launch retries may reuse the same dict.
     params = dict(params or {})
+    if (
+        str(model_id or "").strip().lower() == "protein_modification_experimental"
+        and str(mode or "").strip().lower() == "region_redesign"
+    ):
+        params = normalize_plr_structure_validators(params)
 
     if str(model_id or "").strip() == "frustrampnn":
         if str(mode or "").strip() != "analyze":
@@ -3674,7 +3710,7 @@ def build_nextflow_command(
             'num_designs': 'plr_num_designs',
             'seq_method': 'plr_seq_method',
             'fix_fixed_sidechains': 'plr_fix_fixed_sidechains',
-            'run_boltz_validation': 'plr_run_boltz_validation',
+            'structure_validators': 'plr_structure_validators',
             'redesign_mode': 'plr_redesign_mode',
             'select_fixed_atoms': 'plr_select_fixed_atoms',
             'contig': 'plr_contig',
@@ -3711,6 +3747,9 @@ def build_nextflow_command(
                 if dest_key not in params:
                     params[dest_key] = params[src_key]
                 params.pop(src_key, None)
+
+        if params.get('plr_structure_validators'):
+            params['plr_validator_suite_active'] = True
 
         if 'plr_num_designs' in params and 'rfd_num_designs' not in params:
             params['rfd_num_designs'] = params['plr_num_designs']

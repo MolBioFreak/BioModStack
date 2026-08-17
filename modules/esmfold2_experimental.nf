@@ -88,3 +88,50 @@ process ESMFold2Predict {
         2>&1 | tee run_esmfold2.log
     """
 }
+
+
+// PDB-sequence-source variant used by governed redesign validators.
+process ESMFold2FromPdb {
+    tag "${candidate_name}"
+    label 'ESMFold2'
+    label 'gpu'
+    errorStrategy 'ignore'
+
+    publishDir "${params.out_dir}/validation/esmfold2/${candidate_name}", mode: 'copy', pattern: 'esmfold2_results/*'
+
+    input:
+    tuple val(producer_meta), path(source_pdb), val(candidate_name)
+
+    output:
+    tuple val(producer_meta), val('esmfold2'), path('esmfold2_results/*.cif'), path('esmfold2_results/*.metrics.json'), emit: typed_results
+
+    script:
+    def modelVariant = params.get('esmf_model_variant') ?: params.get('model_variant') ?: 'fast'
+    def modelIdOrPath = params.get('esmf_model_id_or_path') ?: params.get('model_id_or_path') ?: ''
+    def localFilesOnly = boolString(params.get('esmf_local_files_only') == null ? true : params.get('esmf_local_files_only'))
+    def numLoops = params.get('esmf_num_loops') ?: params.get('num_loops') ?: 1
+    def numSamplingSteps = params.get('esmf_num_sampling_steps') ?: params.get('sampling_steps') ?: 5
+    def numDiffusionSamples = params.get('esmf_num_diffusion_samples') ?: params.get('num_diffusion_samples') ?: 1
+    def seed = params.get('esmf_seed') ?: params.get('seed')
+    def seedArg = seed == null || seed.toString().trim().isEmpty() ? '' : "--seed ${seed}"
+    """
+    set -euo pipefail
+    mkdir -p esmfold2_results
+    python3 /scripts/bms_gpu_run_telemetry.py \
+        --label ESMFold2FromPdb \
+        --output-json esmfold2_results/${candidate_name}.telemetry.json \
+        -- python3 /scripts/run_esmfold2_inference.py \
+        --sequence-name ${shellQuote(candidate_name)} \
+        --pdb-sequence-path ${shellQuote(source_pdb)} \
+        --model-variant ${shellQuote(modelVariant)} \
+        --model-id-or-path ${shellQuote(modelIdOrPath)} \
+        --local-files-only ${localFilesOnly} \
+        --num-loops ${numLoops} \
+        --num-sampling-steps ${numSamplingSteps} \
+        --num-diffusion-samples ${numDiffusionSamples} \
+        ${seedArg} \
+        --device ${shellQuote(params.get('esmf_device') ?: params.get('device') ?: 'cuda')} \
+        --output-dir esmfold2_results \
+        2>&1 | tee esmfold2_results/run_esmfold2.log
+    """
+}

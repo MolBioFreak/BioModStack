@@ -19,7 +19,7 @@ if str(API_ROOT) not in sys.path:
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from services.nextflow import build_nextflow_command
+from services.nextflow import build_nextflow_command, normalize_plr_structure_validators
 from services import rfd3_local_redesign as rfd3_service
 from services.result_ingester import _local_redesign_validate_native_request_artifact
 from scripts.rfd3_local_redesign.contract import ContractError, build_request, request_sha256, write_request
@@ -470,6 +470,91 @@ def test_build_nextflow_command_maps_protein_local_redesign_params() -> None:
     assert "--boltz_recycling_steps" not in joined
     assert "--input_pdb /tmp/input.pdb" not in joined
     assert "--design_chains A" not in joined
+
+
+def test_experimental_protein_local_redesign_maps_validator_suite() -> None:
+    cmd = build_nextflow_command(
+        "protein_modification_experimental",
+        "region_redesign",
+        {
+            "input_pdb": "/tmp/input.pdb",
+            "design_chains": "A",
+            "structure_validators": ["esmfold2", "protenix_v2"],
+        },
+        "/tmp/out",
+        job_id="job-123",
+    )
+
+    joined = " ".join(cmd)
+    assert "--plr_structure_validators esmfold2,protenix_v2" in joined
+    assert "--plr_validator_suite_active true" in joined
+
+
+@pytest.mark.parametrize(
+    ("selected", "expected"),
+    [
+        (["protenix_v2"], ["protenix_v2"]),
+        (["esmfold2", "protenix_v2"], ["esmfold2", "protenix_v2"]),
+        (["boltz2", "esmfold2", "protenix_v2"], ["boltz2", "esmfold2", "protenix_v2"]),
+    ],
+)
+def test_protein_local_validator_selection_accepts_any_supported_subset(
+    selected: list[str], expected: list[str]
+) -> None:
+    normalized = normalize_plr_structure_validators({"structure_validators": selected})
+
+    assert normalized["structure_validators"] == expected
+
+
+def test_protein_local_validator_selection_defaults_to_protenix_v2() -> None:
+    normalized = normalize_plr_structure_validators({})
+
+    assert normalized["structure_validators"] == ["protenix_v2"]
+
+
+@pytest.mark.parametrize(
+    "selected",
+    [
+        [],
+        ["esmfold2", "esmfold2"],
+        ["unsupported"],
+        "esmfold2",
+        ["boltz2", "esmfold2", "protenix_v2", "unsupported"],
+    ],
+)
+def test_protein_local_validator_selection_rejects_invalid_suites(selected: object) -> None:
+    with pytest.raises(ValueError, match="structure_validators"):
+        normalize_plr_structure_validators({"structure_validators": selected})
+
+
+def test_experimental_region_redesign_uses_protein_local_review_contract() -> None:
+    from types import SimpleNamespace
+    from typing import Any, cast
+
+    from routers.jobs import _is_protein_local_redesign_job
+
+    assert _is_protein_local_redesign_job(
+        cast(Any, SimpleNamespace(model_id="protein_modification_experimental", mode="region_redesign"))
+    )
+    assert not _is_protein_local_redesign_job(
+        cast(Any, SimpleNamespace(model_id="protein_modification_experimental", mode="de_novo"))
+    )
+
+
+def test_protein_local_validator_selection_rejects_unavailable_models() -> None:
+    from fastapi import HTTPException
+
+    from routers.jobs import _validate_plr_validator_availability
+
+    class Registry:
+        def get_model(self, model_id: str) -> object | None:
+            return object() if model_id in {"esmfold2", "protenix"} else None
+
+    _validate_plr_validator_availability(
+        Registry(), {"structure_validators": ["esmfold2", "protenix_v2"]}
+    )
+    with pytest.raises(HTTPException, match="disabled or unavailable"):
+        _validate_plr_validator_availability(Registry(), {"structure_validators": ["boltz2"]})
 
 
 def test_native_rfd3_command_uses_exact_canonical_execution_controls() -> None:

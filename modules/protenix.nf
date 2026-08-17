@@ -377,11 +377,12 @@ process PrepProtenixComplex {
 process ProtenixFromComplex {
     label 'Protenix'
     label 'gpu'
+    errorStrategy { params.containsKey('plr_validator_suite_active') && params.plr_validator_suite_active == true ? 'ignore' : 'terminate' }
     publishDir "${params.out_dir}/run/protenix_complex", mode: 'copy', pattern: "*.log"
-    publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "msa_prepared/msa_report.json", saveAs: { ignoredFilename -> "protenix_complex_msa_report.json" }
-    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*.cif", saveAs: { filename -> filename.split('/')[-1] }
-    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*confidence*.json", saveAs: { filename -> filename.split('/')[-1] }
-    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*full_data*.json", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/${params.containsKey('plr_validator_suite_active') && params.plr_validator_suite_active == true ? 'validation/protenix_v2/' + input_sample.candidate_id : 'msa'}", mode: 'copy', pattern: "msa_prepared/msa_report.json", saveAs: { ignoredFilename -> params.containsKey('plr_validator_suite_active') && params.plr_validator_suite_active == true ? 'msa_report.json' : 'protenix_complex_msa_report.json' }
+    publishDir "${params.out_dir}/${params.containsKey('plr_validator_suite_active') && params.plr_validator_suite_active == true ? 'validation/protenix_v2/' + input_sample.candidate_id : 'pdb_files/predictions'}", mode: 'copy', pattern: "predictions/**/*.cif", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/${params.containsKey('plr_validator_suite_active') && params.plr_validator_suite_active == true ? 'validation/protenix_v2/' + input_sample.candidate_id : 'pdb_files/predictions'}", mode: 'copy', pattern: "predictions/**/*confidence*.json", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/${params.containsKey('plr_validator_suite_active') && params.plr_validator_suite_active == true ? 'validation/protenix_v2/' + input_sample.candidate_id : 'pdb_files/predictions'}", mode: 'copy', pattern: "predictions/**/*full_data*.json", saveAs: { filename -> filename.split('/')[-1] }
 
     input:
     tuple val(input_sample), path(complex_json)

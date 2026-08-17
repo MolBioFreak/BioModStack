@@ -11,6 +11,12 @@ import { componentIdFromIndex } from './ligandSelectorData';
 import { ModelDocumentationLinks } from './ModelDocumentationLinks';
 import { getModelByNumber, parseStructureFile, type Chain, type ParsedPDB } from '../utils/pdbUtils';
 import { getProteinLocalRedesignUiState } from './proteinLocalRedesignUiState';
+import {
+    PROTEIN_LOCAL_VALIDATORS,
+    normalizeProteinLocalValidators,
+    toggleProteinLocalValidator,
+    type ProteinLocalValidator,
+} from './proteinLocalRedesignValidators';
 import { useLiveGpuCatalog } from './useLiveGpuCatalog';
 
 interface ProteinLocalRedesignTemplateProps {
@@ -370,7 +376,7 @@ export function ProteinLocalRedesignTemplate({
     const [seqMethod, setSeqMethod] = useState<SequenceMethod>(isNativeLocalRedesign ? 'skip' : 'fampnn');
     const [seqsPerDesign, setSeqsPerDesign] = useState(8);
     const [fixFixedSidechains, setFixFixedSidechains] = useState(true);
-    const [runBoltzValidation, setRunBoltzValidation] = useState(true);
+    const [selectedValidators, setSelectedValidators] = useState<ProteinLocalValidator[]>(['protenix_v2']);
     const [boltzSamplingSteps, setBoltzSamplingSteps] = useState(200);
     const [boltzRecyclingSteps, setBoltzRecyclingSteps] = useState(3);
     const [interactiveGating, setInteractiveGating] = useState(true);
@@ -380,7 +386,7 @@ export function ProteinLocalRedesignTemplate({
     const proteinLocalRedesignUiState = getProteinLocalRedesignUiState(isNativeLocalRedesign, seqMethod);
     const workflowSteps = isNativeLocalRedesign
         ? ['Source Complex', 'Visual Region Pick', 'Native RFD3', 'Optional Sequence Design']
-        : ['Source Complex', 'Visual Region Pick', 'Sequence Redesign', 'Boltz Validation'];
+        : ['Source Complex', 'Visual Region Pick', 'Sequence Redesign', 'Structure Validation'];
 
     useEffect(() => {
         if (!initialValues) return;
@@ -405,7 +411,7 @@ export function ProteinLocalRedesignTemplate({
         if (initialValues.seq_method === 'fampnn' || initialValues.seq_method === 'mpnn') setSeqMethod(initialValues.seq_method);
         if (typeof initialValues.seqs_per_design === 'number') setSeqsPerDesign(initialValues.seqs_per_design);
         if (typeof initialValues.fix_fixed_sidechains === 'boolean') setFixFixedSidechains(initialValues.fix_fixed_sidechains);
-        if (typeof initialValues.run_boltz_validation === 'boolean') setRunBoltzValidation(initialValues.run_boltz_validation);
+        setSelectedValidators(normalizeProteinLocalValidators(initialValues));
         if (typeof initialValues.boltz_sampling_steps === 'number') setBoltzSamplingSteps(initialValues.boltz_sampling_steps);
         if (typeof initialValues.boltz_recycling_steps === 'number') setBoltzRecyclingSteps(initialValues.boltz_recycling_steps);
         if (typeof initialValues.interactive_gating === 'boolean') setInteractiveGating(initialValues.interactive_gating);
@@ -445,13 +451,6 @@ export function ProteinLocalRedesignTemplate({
         if (typeof initialValues.rfd_max_rog === 'number') setRfdMaxRog(String(initialValues.rfd_max_rog));
     }, [initialValues]);
 
-
-    useEffect(() => {
-        if (runBoltzValidation) return;
-        if (interactiveGateStage === 'post_structure_validation') {
-            setInteractiveGateStage('post_fampnn');
-        }
-    }, [interactiveGateStage, runBoltzValidation]);
 
     useEffect(() => {
         let cancelled = false;
@@ -918,9 +917,9 @@ export function ProteinLocalRedesignTemplate({
                 seq_method: seqMethod,
                 seqs_per_design: seqsPerDesign,
                 fix_fixed_sidechains: fixFixedSidechains,
-                run_boltz_validation: runBoltzValidation,
-                boltz_sampling_steps: boltzSamplingSteps,
-                boltz_recycling_steps: boltzRecyclingSteps,
+                structure_validators: selectedValidators,
+                boltz_sampling_steps: selectedValidators.includes('boltz2') ? boltzSamplingSteps : undefined,
+                boltz_recycling_steps: selectedValidators.includes('boltz2') ? boltzRecyclingSteps : undefined,
                 interactive_gating: interactiveGating,
                 interactive_gate_stage: interactiveGateStage,
                 rfd3_batches_per_design: rfd3BatchesPerDesign,
@@ -1725,15 +1724,10 @@ export function ProteinLocalRedesignTemplate({
                                 >
                                     <option value="post_rfantibody">RFD3 Remodel Backbones</option>
                                     <option value="post_fampnn">Sequence Redesign</option>
-                                    <option value="post_structure_validation" disabled={!runBoltzValidation}>
-                                        Boltz Validation
+                                    <option value="post_structure_validation">
+                                        Structure Validation
                                     </option>
                                 </select>
-                                {!runBoltzValidation && (
-                                    <p className="mt-2 text-xs text-[var(--text-secondary)]">
-                                        Validation pause is only available when Boltz validation is enabled.
-                                    </p>
-                                )}
                             </div>
                         </div>
                     </section>
@@ -1828,48 +1822,68 @@ export function ProteinLocalRedesignTemplate({
                         <div>
                             <h2 className="text-lg font-semibold">Validation</h2>
                             <p className="mt-1 text-sm text-[var(--text-secondary)]">
-                                Optionally pass the redesigned complexes through Boltz-2 after sequence optimization.
+                                Select one, two, or all three peer validators. Every selected validator receives the same redesigned candidates.
                             </p>
                         </div>
 
                         <div className="space-y-4">
-                            <label className="flex items-start gap-3 rounded-lg border p-3 text-sm" style={themedInsetStyle}>
-                                <input
-                                    type="checkbox"
-                                    checked={runBoltzValidation}
-                                    onChange={(event) => setRunBoltzValidation(event.target.checked)}
-                                    className="mt-0.5"
-                                />
-                                <span>Run Boltz-2 on redesigned complexes after sequence design.</span>
-                            </label>
-
-                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
-                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Boltz Sampling Steps</label>
-                                <input
-                                    type="number"
-                                    min={50}
-                                    max={1000}
-                                    value={boltzSamplingSteps}
-                                    onChange={(event) => setBoltzSamplingSteps(Number(event.target.value))}
-                                    disabled={!runBoltzValidation}
-                                    className="w-full rounded-lg border px-3 py-2 text-sm outline-none disabled:opacity-50"
-                                    style={themedInputStyle}
-                                />
+                            <div className="grid gap-3 md:grid-cols-3">
+                                {PROTEIN_LOCAL_VALIDATORS.map((validator) => {
+                                    const labels: Record<ProteinLocalValidator, string> = {
+                                        boltz2: 'Boltz-2',
+                                        esmfold2: 'ESMFold2',
+                                        protenix_v2: 'Protenix V2',
+                                    };
+                                    return (
+                                        <label
+                                            key={validator}
+                                            className="flex items-start gap-3 rounded-lg border p-3 text-sm"
+                                            style={selectedValidators.includes(validator) ? themedSelectedStyle('var(--accent-primary)') : themedInsetStyle}
+                                        >
+                                            <input
+                                                type="checkbox"
+                                                checked={selectedValidators.includes(validator)}
+                                                onChange={() => setSelectedValidators((current) => toggleProteinLocalValidator(current, validator))}
+                                                className="mt-0.5"
+                                            />
+                                            <span>{labels[validator]}</span>
+                                        </label>
+                                    );
+                                })}
                             </div>
+                            <p className="text-xs text-[var(--text-secondary)]">
+                                At least one validator is required. Protenix V2 is selected by default.
+                            </p>
 
-                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
-                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Boltz Recycling Steps</label>
-                                <input
-                                    type="number"
-                                    min={1}
-                                    max={12}
-                                    value={boltzRecyclingSteps}
-                                    onChange={(event) => setBoltzRecyclingSteps(Number(event.target.value))}
-                                    disabled={!runBoltzValidation}
-                                    className="w-full rounded-lg border px-3 py-2 text-sm outline-none disabled:opacity-50"
-                                    style={themedInputStyle}
-                                />
-                            </div>
+                            {selectedValidators.includes('boltz2') && (
+                                <div className="grid gap-4 md:grid-cols-2">
+                                    <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                                        <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Boltz Sampling Steps</label>
+                                        <input
+                                            type="number"
+                                            min={50}
+                                            max={1000}
+                                            value={boltzSamplingSteps}
+                                            onChange={(event) => setBoltzSamplingSteps(Number(event.target.value))}
+                                            className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
+                                            style={themedInputStyle}
+                                        />
+                                    </div>
+
+                                    <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                                        <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Boltz Recycling Steps</label>
+                                        <input
+                                            type="number"
+                                            min={1}
+                                            max={12}
+                                            value={boltzRecyclingSteps}
+                                            onChange={(event) => setBoltzRecyclingSteps(Number(event.target.value))}
+                                            className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
+                                            style={themedInputStyle}
+                                        />
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </section>
                     )}
@@ -1934,7 +1948,11 @@ export function ProteinLocalRedesignTemplate({
                             <div className="flex items-start justify-between gap-4">
                                 <dt className="text-[var(--text-secondary)]">Validation</dt>
                                 <dd className="text-right">
-                                    {isNativeLocalRedesign ? 'Not in native contract' : runBoltzValidation ? 'Boltz-2 enabled' : 'Skipped'}
+                                    {isNativeLocalRedesign
+                                        ? 'Not in native contract'
+                                        : selectedValidators.map((validator) => (
+                                            validator === 'boltz2' ? 'Boltz-2' : validator === 'esmfold2' ? 'ESMFold2' : 'Protenix V2'
+                                        )).join(', ')}
                                 </dd>
                             </div>
                             <div className="flex items-start justify-between gap-4">
