@@ -816,6 +816,7 @@ class OperatorDashboardXPreparationAttempt(BaseModel):
     board_lifecycle_generation: StrictInt | None
     board_preparation_verified: StrictBool
     initialize_without_motion_verified: StrictBool
+    board_lifecycle_reused: StrictBool = False
     physical_motion: Literal[False]
     motor_output_state: Literal["unknown"]
     motor_torque_verified: Literal[False]
