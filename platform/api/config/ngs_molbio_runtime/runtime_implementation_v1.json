@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "102ae041642c2bd7c16295342b83e8831d4e4dae8ba5c85ffba6fcae819ce059",
+  "content_sha256": "1d126b7bbd027b674e339829a2d97d7f7e1e1333d94777ec1edb7c193dd7b04c",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "77673329001f48e610f13ed115fed62f56d7d10b93cc5ee30cea033c34bb3659",
@@ -364,8 +364,8 @@
     },
     {
       "path": "platform/frontend/src/App.tsx",
-      "sha256": "29c0decd6a42f1eb89566b815dd543d38833df82cfc89c02e99455513db16c8f",
-      "size_bytes": 6373
+      "sha256": "d9d9fc77f1af71863466d8f6df4e4316bdde1b29d707608d51b09ca0536e90bb",
+      "size_bytes": 6206
     },
     {
       "path": "platform/frontend/src/components/NGSToolkit.tsx",
@@ -384,8 +384,8 @@
     },
     {
       "path": "platform/frontend/src/components/molbio-ngs/DomainExperimentWorkspace.tsx",
-      "sha256": "c77f8f487a2e564489a6eca338f13205b3a3cd6f55af14a727ad816f2d5b95ef",
-      "size_bytes": 50828
+      "sha256": "41ddd2a6b0d9202ad548cc7441d2af44bfac402993a75b42ce25c0cc6a50c5d4",
+      "size_bytes": 50893
     },
     {
       "path": "platform/frontend/src/components/molbio-ngs/ExperimentReferenceLinks.tsx",
@@ -399,8 +399,8 @@
     },
     {
       "path": "platform/frontend/src/components/molbio-ngs/NgsMolBioProjectHub.tsx",
-      "sha256": "39dfcd2f51f624cc052c4cb0678e1e5a96035ee1b55e64901f04797977e2922a",
-      "size_bytes": 25492
+      "sha256": "28dc44fc26ff00bf90b018c5a7768adb614e7a2be9dd0a2b3866d2deade6eee9",
+      "size_bytes": 25942
     },
     {
       "path": "platform/frontend/src/components/molbio-ngs/DomainWorkflowOperator.tsx",
@@ -487,8 +487,8 @@
     "content_sha256": "5a4b82639eaacc84a90575da7e69d03f6d77ee83d8c60e9f7e19c7944aef808c",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
   },
-  "successor_source_commit": "b22f4787774c98f912eca6f3722d5e4785c7a485",
-  "successor_source_tree": "9a9c9dde186db4e4bfc35aa0c4bfb3644d97ce4d",
+  "successor_source_commit": "5a82b1ac9487ec20b8473393f0b6d56cad8b6810",
+  "successor_source_tree": "723d4a59bb36076ed3568db31ff99d550415914e",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
