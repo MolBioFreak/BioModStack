@@ -244,5 +244,7 @@ def test_protein_local_validator_failure_policy_is_scoped_to_plr() -> None:
     assert "error(\"Boltz-2 produced" not in workflow_text
     assert "boltz_completion.json" in boltz_text
     assert "RunBoltz.out.completion" in workflow_text
+    assert "params.containsKey('plr_region_padding') ? params.plr_region_padding : 2" in workflow_text
+    assert "params.plr_region_padding ?: 2" not in workflow_text
     assert "and Path('predictions', f'{candidate_id}_boltzpred.json').is_file()" in boltz_text
     assert ") + '\\\\n'," in boltz_text

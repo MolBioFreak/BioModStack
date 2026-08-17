@@ -257,7 +257,7 @@ process ResolveProteinLocalRegion {
         --region_mode ${params.plr_region_mode ?: 'manual_ranges'} \
         --redesign_ranges '${redesignRanges}' \
         --interface_cutoff ${params.plr_interface_cutoff ?: 6.0} \
-        --region_padding ${params.plr_region_padding ?: 2} \
+        --region_padding ${params.containsKey('plr_region_padding') ? params.plr_region_padding : 2} \
         --output_seed_pdb resolved_design_chain.pdb \
         --output_manifest region_manifest.json
     """
