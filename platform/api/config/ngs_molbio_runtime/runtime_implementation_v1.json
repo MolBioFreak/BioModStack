@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "bd8f847732f2b09228c9c0a0dbe21ec6bc0448198ccb52d71a9800ccfe5f8ef3",
+  "content_sha256": "102ae041642c2bd7c16295342b83e8831d4e4dae8ba5c85ffba6fcae819ce059",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "77673329001f48e610f13ed115fed62f56d7d10b93cc5ee30cea033c34bb3659",
@@ -404,8 +404,8 @@
     },
     {
       "path": "platform/frontend/src/components/molbio-ngs/DomainWorkflowOperator.tsx",
-      "sha256": "1ba1fb22ed3524d99e012a06a19ca25d00e39d2a0882dc605b19e7841ec28a65",
-      "size_bytes": 121428
+      "sha256": "4fb72f345b6b8a753cd178a028af8890de42a0ff0723560907345bb53678e1cb",
+      "size_bytes": 121482
     },
     {
       "path": "platform/frontend/src/components/NanoporeTemplate.tsx",
@@ -487,8 +487,8 @@
     "content_sha256": "5a4b82639eaacc84a90575da7e69d03f6d77ee83d8c60e9f7e19c7944aef808c",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
   },
-  "successor_source_commit": "9ee5acd5bc6508ee93749b8a6532515fe2ae9b33",
-  "successor_source_tree": "23fd02f141ef670701b4566ef6715977b033b3d5",
+  "successor_source_commit": "b22f4787774c98f912eca6f3722d5e4785c7a485",
+  "successor_source_tree": "9a9c9dde186db4e4bfc35aa0c4bfb3644d97ce4d",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
