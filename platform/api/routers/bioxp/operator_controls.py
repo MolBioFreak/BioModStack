@@ -76,40 +76,19 @@ def _quarantined_admission(action_id: str, ownership_generation: int, reason: st
     })
 
 
-async def _resolve_action_quarantine(
-    runtime: BioXpRuntime,
-    *,
-    action_id: str,
-    expected_connection_generation: int,
-    expected_ownership_generation: int,
-) -> str | None:
+def _resolve_action_quarantine(action_id: str) -> str | None:
     # Safety interrupts must not wait for a fresh full catalog while a motion
     # transaction is still holding the robot's provider-state lock. The robot
     # invocation still enforces the connection and ownership generations and
     # dispatches only the finite X/Z stop and aggregate-abort actions.
     if action_id in {"oem.x.stop", "oem.abort_all", "oem.z.stop", "oem.z.abort"}:
         return None
-    try:
-        payload = await runtime.connection.request_active_query(
-            "operator_control_catalog",
-            expected_generation=expected_connection_generation,
-            require_fresh=True,
-        )
-    except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
-        raise _translate_robot_error(exc) from exc
-    catalog = _validate(OperatorControlCatalog, payload)
-    if catalog.ownership_generation != expected_ownership_generation:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "BioXP robot ownership generation changed: "
-                f"expected {expected_ownership_generation}, current {catalog.ownership_generation}"
-            ),
-        )
-    for action in catalog.actions:
-        if action.action_id == action_id:
-            return OPERATOR_SEMANTIC_QUARANTINE_BY_PATH.get(action.informational_path)
-    return None
+    # The action-ID quarantine registry is the local authority for these two
+    # routes. The robot admission request below still enforces both connection
+    # and ownership generations. Avoid a full live catalog read before every
+    # admission because the cockpit requests several signed X admissions at
+    # once and the catalog itself acquires the robot provider-state lock.
+    return OPERATOR_SEMANTIC_QUARANTINE_BY_ACTION_ID.get(action_id)
 
 
 def _translate_robot_error(exc: Exception) -> HTTPException:
@@ -211,12 +190,7 @@ async def operator_action_admission(
     request: OperatorAdmissionRequest,
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> OperatorAdmission:
-    quarantine_reason = await _resolve_action_quarantine(
-        runtime,
-        action_id=action_id,
-        expected_connection_generation=request.expected_connection_generation,
-        expected_ownership_generation=request.expected_ownership_generation,
-    )
+    quarantine_reason = _resolve_action_quarantine(action_id)
     if quarantine_reason is not None:
         return _quarantined_admission(
             action_id,
