@@ -224,7 +224,11 @@ export default function DomainDatasetOperator({
             const project = await getProject(projectId);
             const attachment = await attachExistingEntity(projectId, globalExperimentId, domainExperimentId, {
                 adapter_id: 'bms.molbio.member-molecular-revision.adapter.v1',
-                entity_id: new URLSearchParams({ sequence_id: sequenceId, revision_id: member.entity_id }).toString(),
+                entity_id: new URLSearchParams({
+                    sequence_id: sequenceId,
+                    revision_id: member.entity_id,
+                    domain_experiment_id: domainExperimentId,
+                }).toString(),
                 operation: 'attach_reference',
                 role: 'references',
                 note: 'Dataset membership authority for an exact Experiment-linked molecular revision.',

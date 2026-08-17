@@ -2261,8 +2261,9 @@ async def _exact_member_domain_owner(
     session: AsyncSession,
     *,
     receipt_id: str,
+    expected_domain_id: str | None = None,
 ) -> str:
-    rows = list((await session.execute(
+    statement = (
         select(MolBioNGSDomainStateRevision.global_domain_experiment_id)
         .join(
             MolBioNGSDomainStateMember,
@@ -2271,11 +2272,18 @@ async def _exact_member_domain_owner(
         .where(MolBioNGSDomainStateMember.receipt_id == receipt_id)
         .distinct()
         .limit(2)
-    )).scalars().all())
+    )
+    if expected_domain_id is not None:
+        statement = statement.where(
+            MolBioNGSDomainStateRevision.global_domain_experiment_id == expected_domain_id
+        )
+    rows = list((await session.execute(statement)).scalars().all())
     if len(rows) != 1:
         raise AdapterError(
             "source_contract_invalid",
-            "exact member receipt does not resolve to one Domain owner",
+            "exact member receipt is not attached to the selected Domain"
+            if expected_domain_id is not None
+            else "exact member receipt does not resolve to one Domain owner",
         )
     return str(rows[0])
 
@@ -2284,6 +2292,7 @@ async def _exact_local_member_authority(
     session: AsyncSession,
     *,
     member: ExternalMemberReceipt,
+    expected_domain_id: str | None = None,
 ) -> tuple[str, str]:
     """Resolve one persisted native receipt and its sole Domain owner.
 
@@ -2372,6 +2381,7 @@ async def _exact_local_member_authority(
     domain_id = await _exact_member_domain_owner(
         session,
         receipt_id=canonical_receipt_id,
+        expected_domain_id=expected_domain_id,
     )
     return domain_id, canonical_receipt_id
 
@@ -2413,12 +2423,23 @@ class ExactMolecularRevisionMemberAdapter:
 
     async def verify(self, core_session: AsyncSession, entity_id: str) -> dict[str, Any]:
         del core_session
-        identity = _parse_composite_identity(entity_id, ("sequence_id", "revision_id"))
+        try:
+            parsed = parse_qs(entity_id, strict_parsing=True, keep_blank_values=True)
+        except ValueError as exc:
+            raise AdapterError("source_contract_invalid", "molecular revision identity is malformed") from exc
+        required = frozenset({"sequence_id", "revision_id"})
+        keys = frozenset(parsed)
+        if keys not in {required, required | {"domain_experiment_id"}} or any(
+            len(values) != 1 or not values[0] for values in parsed.values()
+        ):
+            raise AdapterError("source_contract_invalid", "molecular revision identity has an invalid key shape")
+        identity = {key: parsed[key][0] for key in required}
+        expected_domain_id = parsed.get("domain_experiment_id", [None])[0]
         async with self._sessions() as session:
             member = await _resolve_exact_member(resolve_molecular_revision_receipt(session, **identity))
         async with self._domain_sessions() as domain_session:
             domain_id, native_receipt_id = await _exact_local_member_authority(
-                domain_session, member=member
+                domain_session, member=member, expected_domain_id=expected_domain_id
             )
         return _exact_member_receipt(
             self, requested_entity_id=entity_id, member=member,
