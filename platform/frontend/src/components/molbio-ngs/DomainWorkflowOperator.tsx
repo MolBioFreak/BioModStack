@@ -32,7 +32,6 @@ import {
     type PreparationLaunchRequest,
     type PreparedLaunchContext,
 } from '../../lib/projectManager';
-import ExperimentReferenceLinks from './ExperimentReferenceLinks';
 
 interface DomainWorkflowOperatorProps {
     projectId: string;
@@ -2202,13 +2201,6 @@ export default function DomainWorkflowOperator({
                     <Link className={BUTTON_CLASS} to={projectReturnUri}>Return to Project</Link>
                 </div>
                 <ErrorBanner error={runGroupQuery.error} />
-                <div className="mt-4">
-                    <ExperimentReferenceLinks
-                        domainExperimentId={domainExperimentId}
-                        stateRevisionId={selectedStateRevisionId || currentStateRevisionId}
-                        title="Exact molecular references for this Domain Plans/Runs context"
-                    />
-                </div>
                 {runGroup && (
                     <div className="mt-4 space-y-3">
                         <dl className="grid gap-2 md:grid-cols-4">
