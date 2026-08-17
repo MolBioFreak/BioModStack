@@ -42,14 +42,6 @@ interface AxisControls {
     controls: readonly Control[];
 }
 
-type XObservationDraft = Readonly<{
-    physicalMotionObserved: boolean;
-    expectedDirectionObserved: boolean;
-    homeEndpointObserved: boolean;
-    stoppedObserved: boolean;
-    note: string;
-}>;
-
 const AXES: readonly AxisControls[] = [
     {
         axis: 'x',
@@ -138,13 +130,6 @@ export function BioXpCockpit() {
     });
     const [freshnessMinutes, setFreshnessMinutes] = useState('30');
     const [freshnessDisabled, setFreshnessDisabled] = useState(false);
-    const [xObservation, setXObservation] = useState<XObservationDraft>({
-        physicalMotionObserved: false,
-        expectedDirectionObserved: false,
-        homeEndpointObserved: false,
-        stoppedObserved: false,
-        note: '',
-    });
     const catalog = !linkConnected || operatorCatalog.isError ? undefined : operatorCatalog.data;
     const dashboard = !linkConnected || dashboardQuery.isError ? undefined : dashboardQuery.data;
     const ownershipGeneration = catalog?.ownership_generation ?? 0;
@@ -267,24 +252,6 @@ export function BioXpCockpit() {
     const xPosition = xStatus?.position_steps ?? xLiveStatus?.position_steps ?? 'unknown';
     const xReference = xStatus?.reference ?? xProvider?.lifecycle?.reference_state ?? xProvider?.reference_state ?? 'unknown';
     const xLifecycle = xProvider?.lifecycle?.state ?? xProvider?.state ?? 'unknown';
-    const xAwaitingObservationReceiptId = xLifecycle === 'awaiting_operator_observation'
-        ? xProvider?.lifecycle?.awaiting_observation_receipt_id ?? null
-        : null;
-    const xObservationAction = operatorActionById('oem.x.observe');
-    const xObservationPassReady = xObservation.physicalMotionObserved
-        && xObservation.expectedDirectionObserved
-        && xObservation.homeEndpointObserved
-        && xObservation.stoppedObserved
-        && xObservation.note.trim().length > 0;
-    useEffect(() => {
-        setXObservation({
-            physicalMotionObserved: false,
-            expectedDirectionObserved: false,
-            homeEndpointObserved: false,
-            stoppedObserved: false,
-            note: '',
-        });
-    }, [xAwaitingObservationReceiptId]);
     const xAuthority = xProvider?.authority ?? xAxisDashboard?.authority ?? 'unknown';
     const xLeftSwitchState = xStatus?.left_switch_state ?? xLiveStatus?.left_switch_state ?? 'unknown';
     const xRightSwitchState = xStatus?.right_switch_state ?? xLiveStatus?.right_switch_state ?? 'unknown';
@@ -308,20 +275,6 @@ export function BioXpCockpit() {
         mutation = invokeOperatorAction,
     ) => {
         mutation.mutate({ actionId, connectionGeneration: generation, ownershipGeneration, inputs });
-    };
-
-    const recordXObservation = (verdict: 'pass' | 'fail') => {
-        if (!xAwaitingObservationReceiptId || !xObservation.note.trim()) return;
-        if (verdict === 'pass' && !xObservationPassReady) return;
-        invokeAction('oem.x.observe', {
-            command_id: xAwaitingObservationReceiptId,
-            verdict,
-            physical_motion_observed: xObservation.physicalMotionObserved,
-            expected_direction_observed: xObservation.expectedDirectionObserved,
-            home_endpoint_observed: xObservation.homeEndpointObserved,
-            stopped_observed: xObservation.stoppedObserved,
-            note: xObservation.note.trim(),
-        });
     };
 
     const claimTransport = () => invokeAction('meta.activate_motion', {});
@@ -681,27 +634,6 @@ export function BioXpCockpit() {
                                             </div>
                                             {xLastFailure != null && <details className="mt-2"><summary className="cursor-pointer text-red-200">Last X failure</summary><pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-red-200">{JSON.stringify(xLastFailure, null, 2)}</pre></details>}
                                             {xLatestReceipt != null && <details className="mt-2"><summary className="cursor-pointer">Latest X authority receipt</summary><pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-sky-200/80">{JSON.stringify(xLatestReceipt, null, 2)}</pre></details>}
-                                            {xAwaitingObservationReceiptId && (
-                                                <section className="mt-3 rounded border border-amber-600/70 bg-amber-950/30 p-3 text-amber-100" data-x-observation-control>
-                                                    <h5 className="font-semibold">Record the physical X Home observation</h5>
-                                                    <p className="mt-1">Receipt <span className="font-mono">{xAwaitingObservationReceiptId}</span> remains desynced until you record what you saw. A PASS requires every observation below.</p>
-                                                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                                                        <label className="flex items-center gap-2"><input type="checkbox" checked={xObservation.physicalMotionObserved} onChange={(event) => setXObservation((current) => ({ ...current, physicalMotionObserved: event.target.checked }))} /> Physical motion observed</label>
-                                                        <label className="flex items-center gap-2"><input type="checkbox" checked={xObservation.expectedDirectionObserved} onChange={(event) => setXObservation((current) => ({ ...current, expectedDirectionObserved: event.target.checked }))} /> Expected direction observed</label>
-                                                        <label className="flex items-center gap-2"><input type="checkbox" checked={xObservation.homeEndpointObserved} onChange={(event) => setXObservation((current) => ({ ...current, homeEndpointObserved: event.target.checked }))} /> Home endpoint observed</label>
-                                                        <label className="flex items-center gap-2"><input type="checkbox" checked={xObservation.stoppedObserved} onChange={(event) => setXObservation((current) => ({ ...current, stoppedObserved: event.target.checked }))} /> Stopped at completion</label>
-                                                    </div>
-                                                    <label className="mt-2 block">
-                                                        Observation note
-                                                        <textarea value={xObservation.note} onChange={(event) => setXObservation((current) => ({ ...current, note: event.target.value }))} rows={2} className="mt-1 w-full rounded border border-amber-700 bg-slate-950 p-2 text-slate-100" placeholder="Describe exactly what you observed." />
-                                                    </label>
-                                                    <div className="mt-2 flex flex-wrap gap-2">
-                                                        <button type="button" disabled={!linkConnected || xObservationAction?.enabled !== true || invokeOperatorAction.isPending || !xObservationPassReady} onClick={() => recordXObservation('pass')} className="rounded bg-emerald-700 px-3 py-2 text-sm font-semibold disabled:opacity-35">Record PASS observation</button>
-                                                        <button type="button" disabled={!linkConnected || xObservationAction?.enabled !== true || invokeOperatorAction.isPending || !xObservation.note.trim()} onClick={() => recordXObservation('fail')} className="rounded bg-red-700 px-3 py-2 text-sm font-semibold disabled:opacity-35">Record FAIL observation</button>
-                                                    </div>
-                                                    {xObservationAction?.enabled !== true && <p className="mt-2 text-amber-200">Observation unavailable: {xObservationAction?.disabled_reason ?? xObservationAction?.unavailable_reason ?? 'Robot action unavailable.'}</p>}
-                                                </section>
-                                            )}
                                         </div>
                                         )}
                                         {axis === 'z' && (
