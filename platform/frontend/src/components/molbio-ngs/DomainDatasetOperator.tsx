@@ -214,10 +214,17 @@ export default function DomainDatasetOperator({
     });
     const attachReferenceMutation = useMutation({
         mutationFn: async (member: DomainStateMember) => {
+            const params = member.reopen_destination?.params;
+            const sequenceId = params && typeof params === 'object' && !Array.isArray(params)
+                ? (params as Record<string, unknown>).sequence_id
+                : null;
+            if (typeof sequenceId !== 'string' || !sequenceId) {
+                throw new Error('Exact molecular sequence identity is unavailable for Dataset attachment.');
+            }
             const project = await getProject(projectId);
             const attachment = await attachExistingEntity(projectId, globalExperimentId, domainExperimentId, {
                 adapter_id: 'bms.molbio.member-molecular-revision.adapter.v1',
-                entity_id: member.entity_id,
+                entity_id: new URLSearchParams({ sequence_id: sequenceId, revision_id: member.entity_id }).toString(),
                 operation: 'attach_reference',
                 role: 'references',
                 note: 'Dataset membership authority for an exact Experiment-linked molecular revision.',
