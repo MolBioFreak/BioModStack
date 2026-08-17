@@ -267,7 +267,7 @@ export default function NgsMolBioProjectHub() {
                     {showDetails && <div className="mt-3 grid gap-3 rounded-lg border border-border-primary bg-surface-secondary p-3 sm:grid-cols-2">
                         <label className="text-xs text-content-secondary sm:col-span-2">Description<textarea className={`${INPUT} mt-1 min-h-16`} value={projectDescription} onChange={(event) => setProjectDescription(event.target.value)} /></label>
                         {mode === 'local-new' && <>
-                            <label className="text-xs text-content-secondary">Owner<input className={`${INPUT} mt-1`} value={projectOwner} onChange={(event) => setProjectOwner(event.target.value)} /></label>
+                            <label className="text-xs text-content-secondary">Owner <span className="text-content-muted">(leave blank to use authenticated principal)</span><input className={`${INPUT} mt-1`} value={projectOwner} onChange={(event) => setProjectOwner(event.target.value)} placeholder="Exact authenticated principal only" /></label>
                             <label className="text-xs text-content-secondary">Contributors, comma separated<input className={`${INPUT} mt-1`} value={contributors} onChange={(event) => setContributors(event.target.value)} /></label>
                             <label className="text-xs text-content-secondary">Start date<input type="date" className={`${INPUT} mt-1`} value={startDate} onChange={(event) => setStartDate(event.target.value)} /></label>
                             <label className="text-xs text-content-secondary">Target end date<input type="date" className={`${INPUT} mt-1`} value={targetEndDate} onChange={(event) => setTargetEndDate(event.target.value)} /></label>
