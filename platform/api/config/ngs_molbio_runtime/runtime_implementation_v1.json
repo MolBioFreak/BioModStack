@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "015c60f6d171c30cf87aff715a0f243d8de835322b52b1b38189ac755b5f8e08",
+  "content_sha256": "6e15f1ed5cd78113fba1c042d4e81df8ae2c4d8de356bc8f80105c9e1a7de409",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "77673329001f48e610f13ed115fed62f56d7d10b93cc5ee30cea033c34bb3659",
@@ -379,8 +379,8 @@
     },
     {
       "path": "platform/frontend/src/components/molbio-ngs/ExperimentReferenceLibrary.tsx",
-      "sha256": "8e5a6f6bc6e3a53e5296d3cff8db8eafea896cd0e5ce089d021625ecd549bcbf",
-      "size_bytes": 14226
+      "sha256": "30225602a8350833989b30f6cd6ec1fcd9d11e9fb2c76f20af674a6f8523d2aa",
+      "size_bytes": 14214
     },
     {
       "path": "platform/frontend/src/components/molbio-ngs/NgsMolBioProjectHub.tsx",
@@ -472,8 +472,8 @@
     "content_sha256": "83af9726831a20da4357147ce8d9d97e2e3acb238dffd264901c0b2b5017e70a",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
   },
-  "successor_source_commit": "46c1589ce9da2786f0e1cd223a19369939cd062e",
-  "successor_source_tree": "b1041222e33fc9c70866001c598e23223cb67e18",
+  "successor_source_commit": "1cb7a1ff2eae6d22bb20dd270d401457899e1cea",
+  "successor_source_tree": "12746ccca70e0e3f4b5f865d3268709848ebe1aa",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
