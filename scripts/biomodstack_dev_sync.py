@@ -24,6 +24,7 @@ from typing import Literal
 SYNC_SERVICE = "biomodstack-dev-sync.service"
 SYNC_TIMER = "biomodstack-dev-sync.timer"
 SYNC_INTERVAL_SECONDS = 60
+SYNC_QUEUE_FILENAME = "dev-sync-queue.json"
 DEFAULT_CANONICAL_ROOT = Path("/home/dalab/biomodstack/dev-test-canonical")
 DEFAULT_STATE_DIR = Path.home() / ".local" / "state" / "biomodstack"
 SyncDecision = Literal[
@@ -167,10 +168,9 @@ def _active_development_work(root: Path) -> tuple[bool, int]:
     return count > 0, count
 
 
-def _write_receipt(state_dir: Path, payload: dict[str, object]) -> None:
-    state_dir.mkdir(parents=True, exist_ok=True)
-    path = state_dir / "dev-sync.json"
-    fd, temporary_name = tempfile.mkstemp(prefix=".dev-sync-", dir=state_dir, text=True)
+def _write_json_file(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary_name = tempfile.mkstemp(prefix=".dev-sync-", dir=path.parent, text=True)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2, sort_keys=True)
@@ -181,6 +181,38 @@ def _write_receipt(state_dir: Path, payload: dict[str, object]) -> None:
     finally:
         if os.path.exists(temporary_name):
             os.unlink(temporary_name)
+
+
+def _write_receipt(state_dir: Path, payload: dict[str, object]) -> None:
+    _write_json_file(state_dir / "dev-sync.json", payload)
+
+
+def _read_queued_revision(state_dir: Path) -> str | None:
+    path = state_dir / SYNC_QUEUE_FILENAME
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Development sync queue is unreadable: {path}") from exc
+    revision = payload.get("queued_revision") if isinstance(payload, dict) else None
+    if not isinstance(revision, str) or len(revision) != 40:
+        raise RuntimeError(f"Development sync queue is malformed: {path}")
+    return revision
+
+
+def _write_queued_revision(state_dir: Path, revision: str) -> None:
+    _write_json_file(
+        state_dir / SYNC_QUEUE_FILENAME,
+        {"queued_revision": revision},
+    )
+
+
+def _clear_queued_revision(state_dir: Path) -> None:
+    try:
+        (state_dir / SYNC_QUEUE_FILENAME).unlink()
+    except FileNotFoundError:
+        pass
 
 
 def sync_once(root: Path, state_dir: Path) -> SyncDecision:
@@ -196,6 +228,7 @@ def sync_once(root: Path, state_dir: Path) -> SyncDecision:
         local = _git(root, "rev-parse", "HEAD")
         _git(root, "fetch", "--quiet", "origin", "+refs/heads/test:refs/remotes/origin/test")
         remote = _git(root, "rev-parse", "refs/remotes/origin/test")
+        queued_revision = _read_queued_revision(state_dir)
         ancestry = _run(
             root,
             "git",
@@ -215,6 +248,12 @@ def sync_once(root: Path, state_dir: Path) -> SyncDecision:
             remote_descends_from_local=ancestry,
             active_work=active_work,
         )
+        pending_revision = remote if local != remote or deployed != remote else None
+        if pending_revision is None:
+            _clear_queued_revision(state_dir)
+        elif queued_revision != pending_revision:
+            _write_queued_revision(state_dir, pending_revision)
+        queued_revision = pending_revision
         receipt: dict[str, object] = {
             "decision": decision,
             "local_revision": local,
@@ -222,6 +261,8 @@ def sync_once(root: Path, state_dir: Path) -> SyncDecision:
             "deployed_revision_before": deployed,
             "active_work_count": active_work_count,
             "poll_interval_seconds": SYNC_INTERVAL_SECONDS,
+            "queue_state": "pending" if queued_revision is not None else "empty",
+            "queued_revision": queued_revision,
         }
         if decision.startswith("blocked-"):
             _write_receipt(state_dir, receipt)
@@ -231,6 +272,9 @@ def sync_once(root: Path, state_dir: Path) -> SyncDecision:
             return decision
 
         if decision == "idle":
+            _clear_queued_revision(state_dir)
+            receipt["queue_state"] = "empty"
+            receipt["queued_revision"] = None
             _write_receipt(state_dir, receipt)
             return decision
 
@@ -244,6 +288,14 @@ def sync_once(root: Path, state_dir: Path) -> SyncDecision:
         if decision == "fast-forward-deploy":
             _git(root, "merge", "--ff-only", "refs/remotes/origin/test")
 
+        active_work, active_work_count = _active_development_work(root)
+        if active_work:
+            receipt["decision"] = "deferred-active-work"
+            receipt["active_work_count"] = active_work_count
+            receipt["local_revision_after"] = _git(root, "rev-parse", "HEAD")
+            _write_receipt(state_dir, receipt)
+            return "deferred-active-work"
+
         manager = root / "scripts" / "manage_desktop_services.py"
         _run(root, sys.executable, str(manager), "restart", "--runtime", "dev")
         deployed_after = _deployed_revision(root)
@@ -253,6 +305,9 @@ def sync_once(root: Path, state_dir: Path) -> SyncDecision:
             )
         receipt["deployed_revision_after"] = deployed_after
         receipt["status"] = "deployed"
+        receipt["queue_state"] = "empty"
+        receipt["queued_revision"] = None
+        _clear_queued_revision(state_dir)
         _write_receipt(state_dir, receipt)
         return decision
 
