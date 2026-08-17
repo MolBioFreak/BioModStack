@@ -109,6 +109,7 @@ DEVELOPMENT_WORKFLOW_ADAPTER_HEALTH_URL = f"http://127.0.0.1:{DEVELOPMENT_WORKFL
 PRODUCTION_WORKFLOW_ADAPTER_HEALTH_URL = f"http://127.0.0.1:{PRODUCTION_WORKFLOW_ADAPTER_PORT}/api/workflow-adapter/health"
 WORKFLOW_ADAPTER_HEALTH_URL = PRODUCTION_WORKFLOW_ADAPTER_HEALTH_URL
 DEFAULT_HTTP_WAIT_TIMEOUT_SECONDS = 30.0
+DEV_HTTP_WAIT_TIMEOUT_SECONDS = 120.0
 CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS = 180.0
 
 BROWSER_LAUNCH_SURFACE = "browser"
@@ -2094,6 +2095,9 @@ def should_cleanup_legacy_listeners_before_start(
 
 def runtime_http_wait_timeout_seconds(runtime_mode: str | None = None) -> float:
     mode = resolve_runtime_mode(runtime_mode)
+    if mode == DEV_RUNTIME_MODE:
+        # Development adapter staging can exceed the ordinary health window.
+        return DEV_HTTP_WAIT_TIMEOUT_SECONDS
     if mode == CONTAINER_RUNTIME_MODE:
         return CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS
     return DEFAULT_HTTP_WAIT_TIMEOUT_SECONDS
