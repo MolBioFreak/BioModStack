@@ -357,7 +357,7 @@ export default function DomainDatasetOperator({
                                     media_type: null,
                                     metadata: { display_label: member.entity_id, group_label: null, condition_label: null, tags: ['experiment-reference'] },
                                 }])}
-                            >Add {member.entity_id.slice(0, 8)} · {member.generation_or_revision.slice(0, 8)}</button>)}
+                            >Add {member.entity_id.slice(0, 8)} · {member.source_generation_or_revision.slice(0, 8)}</button>)}
                             {attachedReferenceMembers.length === 0 && <span className="text-xs text-content-muted">Attach references in Molecular Inputs first.</span>}
                         </div>
                     </div>}
