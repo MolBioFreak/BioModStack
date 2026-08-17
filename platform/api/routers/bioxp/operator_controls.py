@@ -15,6 +15,8 @@ from services.bioxp.operator_models import (
     OperatorAssessmentRequest,
     OperatorControlCatalog,
     OperatorDashboard,
+    PipetteReadbackRequest,
+    PipetteReadbackResponse,
     PipetteApplicationPlanRequest,
     PipetteApplicationPlanResponse,
     PipetteApplicationStatus,
@@ -144,6 +146,24 @@ async def operator_dashboard(
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
     return _validate(OperatorDashboard, payload)
+
+
+@router.post("/operator-controls/pipettes/readback", response_model=PipetteReadbackResponse)
+async def pipette_readback(
+    request: PipetteReadbackRequest,
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+) -> PipetteReadbackResponse:
+    snapshot = runtime.connection.snapshot()
+    try:
+        payload = await runtime.connection.request_active_query(
+            "pipette_readback",
+            expected_generation=snapshot.generation,
+            require_fresh=True,
+            json_data=request.model_dump(),
+        )
+    except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
+        raise _translate_robot_error(exc) from exc
+    return _validate(PipetteReadbackResponse, payload)
 
 
 @router.get("/operator-controls/pipettes/application/status", response_model=PipetteApplicationStatus)

@@ -187,7 +187,10 @@ export default function DomainExperimentWorkspace() {
     const projectAuthorityQuery = useQuery({
         queryKey: ['ngs-molbio-project-authority', workspaceId],
         enabled: Boolean(workspaceId),
-        queryFn: ({ signal }) => getProject(workspaceId, signal),
+        queryFn: ({ signal }) => {
+            if (!workspaceId) throw new Error('workspace_id is required');
+            return getProject(workspaceId, signal);
+        },
         retry: false,
     });
     const requestedSection = new URLSearchParams(window.location.search).get('section');

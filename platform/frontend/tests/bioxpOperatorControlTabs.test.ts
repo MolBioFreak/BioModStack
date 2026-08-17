@@ -71,6 +71,7 @@ test('browser uses fixed BMS routes and action ids, never arbitrary robot paths'
     for (const routeToken of [
         '/api/bioxp/operator-controls/catalog',
         '/api/bioxp/operator-controls/dashboard',
+        '/api/bioxp/operator-controls/pipettes/readback',
         '/api/bioxp/operator-controls/pipettes/application/status',
         '/api/bioxp/operator-controls/pipettes/application/plan',
         '/api/bioxp/operator-controls/actions/',
@@ -84,9 +85,9 @@ test('browser uses fixed BMS routes and action ids, never arbitrary robot paths'
 test('dedicated four-channel pipette surface stays plan-only and renders evidence phases', () => {
     assert.match(source, /BioXpPipetteControlPanel/);
     for (const label of [
-        'Four-Channel Pipette Control', 'Channel', 'tip loaded', 'tip location',
-        'Load tip workflow', 'Move to waste', 'Detect fluid', 'Plunger up', 'Plunger down',
-        'Build no-motion plan', 'Safety gate', 'OEM plan evidence',
+        'Four-channel pipette controls', 'Channel', 'Hardware tip readback', 'Hardware pressure',
+        'Load tip physically', 'Move to waste physically', 'Detect fluid physically', 'Plunger up physically', 'Plunger down physically',
+        'Build no-motion plan', 'Robot-owned blocker', 'Active hardware readback', 'Read live hardware',
     ]) assert.match(pipettePanel, new RegExp(label, 'i'));
     for (const token of [
         'controller_acknowledged', 'completion_verified', 'physical_effect_verified',

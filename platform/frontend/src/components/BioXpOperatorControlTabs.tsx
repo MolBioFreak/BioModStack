@@ -340,6 +340,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
                 generation={generation}
                 connected={connected && authoritativeCatalog !== undefined}
                 pipettes={authoritativeCatalog?.dashboard.pipettes}
+                freshness={authoritativeCatalog?.dashboard.snapshot.freshness}
             />
 
             {pane === 'logs' ? (

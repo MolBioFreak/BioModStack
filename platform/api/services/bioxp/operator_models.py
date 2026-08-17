@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import math
 import re
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, RootModel, StrictBool, StrictFloat, StrictInt, field_validator, model_validator
 
@@ -3221,58 +3221,308 @@ class OperatorDashboardTemperature(BaseModel):
     available: StrictBool
 
 
-class OperatorDashboardPipetteChannel(BaseModel):
+class OperatorDashboardPipetteTransportDetails(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    source: Literal["OEM Novo.Devices.CanInterfaceBoard over one shared NovoRouter"]
+    vid: Literal["0x03eb"]
+    pid: Literal["0x2423"]
+    alt: StrictInt
+    shared_bioxp_usb_runtime: StrictBool
+
+
+class OperatorDashboardPipetteHardwareEvidence(BaseModel):
+    """Known readback fields plus JSON-safe raw driver evidence."""
+
     model_config = ConfigDict(extra="allow", strict=True)
-    channel: StrictInt = Field(ge=0, le=3)
-    available: StrictBool
-    initialized: StrictBool | None = None
+    ok: StrictBool
+    hardware_truth_level: Literal["hardware_query", "unparsed_hardware_reply", "no_readback"] | None = None
+    reply_received: StrictBool | None = None
+    semantic_ok: StrictBool | None = None
     tip_loaded: StrictBool | None = None
-    tip_location: StrictInt | None = Field(default=None, ge=-1, le=3)
-    liquid_level_ul: StrictFloat | StrictInt | None = None
-    front_air_level_ul: StrictFloat | StrictInt | None = None
-    rear_air_level_ul: StrictFloat | StrictInt | None = None
     pressure: StrictFloat | StrictInt | None = None
-    last_error: str | None = Field(default=None, max_length=1000)
+    error: str | None = Field(default=None, max_length=2000)
+
+
+class OperatorDashboardPipetteLastError(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    channel: Literal[0, 1, 2, 3]
+    error_code: StrictInt
+    source: Literal["ClassPipetteCollection.handlePipetteMessage"]
+
+
+class PipetteReceiptTruth(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    delivery_verified: StrictBool
+    controller_acknowledged: StrictBool
+    completion_verified: StrictBool
+    hardware_precondition_verified: StrictBool
+    hardware_postcondition_verified: StrictBool
+    physical_effect_verified: Literal[False]
+    physical_effect_claim_suppressed: Literal[True]
+
+
+class PipetteReceiptSourceIdentity(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    repository_root: str = Field(min_length=1, max_length=4096)
+    source_sha256: dict[str, str]
+    registry_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    evidence_authority: dict[str, JsonValue]
+    authority_verified: StrictBool
+
+    @field_validator("source_sha256")
+    @classmethod
+    def validate_source_sha256(cls, value: dict[str, str]) -> dict[str, str]:
+        if not value or any(re.fullmatch(r"[0-9a-f]{64}", digest) is None for digest in value.values()):
+            raise ValueError("source_sha256 values must be lowercase SHA-256 digests")
+        return value
+
+
+class PipetteReceiptDeploymentIdentity(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    deployed_sha: str | None = Field(default=None, pattern=r"^[0-9a-f]{40,64}$")
+    deployed_sha_verified: StrictBool
+    runtime_sha_verified: StrictBool
+    status: str = Field(min_length=1, max_length=240)
+
+
+class PipetteReceipt(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
+    schema_name: Literal["bioxp.pipette.receipt.v1"] = Field(alias="schema")
+    receipt_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    created_at: str = Field(min_length=1, max_length=120)
+    operation: str = Field(min_length=1, max_length=120)
+    requested_inputs: dict[str, JsonValue]
+    effective_inputs: dict[str, JsonValue]
+    result: dict[str, JsonValue]
+    truth: PipetteReceiptTruth
+    runtime_binding: dict[str, JsonValue]
+    ownership_epoch: StrictInt
+    source_identity: PipetteReceiptSourceIdentity
+    deployment_identity: PipetteReceiptDeploymentIdentity
+
+
+class OperatorDashboardPipetteChannel(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    ok: StrictBool
+    transport: Literal["novo_usb_can"]
+    channel: Literal[0, 1, 2, 3]
+    bitrate: StrictInt
+    pipette_id: Literal[0, 1, 2, 3]
+    transport_details: OperatorDashboardPipetteTransportDetails
+    available: StrictBool
+    initialized: StrictBool
+    software_initialized: StrictBool
+    tip_loaded: StrictBool
+    software_tip_loaded: StrictBool
+    pressure_profile: str | None = Field(default=None, max_length=120)
+    top_speed: StrictFloat | StrictInt
+    last_command: str | None = Field(default=None, max_length=240)
+    last_transaction: dict[str, JsonValue] | None
+    pipette_message_state: dict[str, JsonValue]
+    oem_initialization_counter: StrictInt
+    oem_diagnosis: str | None = Field(default=None, max_length=2000)
+    oem_error_queue: list[StrictInt]
+    oem_process_error_code: StrictInt | None
+    hardware_tip_status: OperatorDashboardPipetteHardwareEvidence | None
+    hardware_pressure: OperatorDashboardPipetteHardwareEvidence | None
+    hardware_truth_level: str = Field(min_length=1, max_length=120)
+    ack_required: Literal[True]
+    delivery_verified: StrictBool
+    controller_acknowledged: StrictBool | None
+    completion_verified: StrictBool
+    hardware_precondition_verified: StrictBool
+    hardware_postcondition_verified: StrictBool
+    state_reconciled: StrictBool
+    state_reconciliation_source: str | None = Field(default=None, max_length=240)
+    physical_effect_verified: Literal[False]
+    response_timeout_s: StrictFloat | StrictInt
+    liquid_level_ul: StrictFloat | StrictInt
+    front_air_level_ul: StrictFloat | StrictInt
+    rear_air_level_ul: StrictFloat | StrictInt
+
+    @model_validator(mode="after")
+    def validate_channel_identity(self):
+        if self.pipette_id != self.channel:
+            raise ValueError("pipette_id must equal channel")
+        return self
 
 
 class OperatorDashboardPipettes(BaseModel):
-    model_config = ConfigDict(extra="allow", strict=True)
-    ok: StrictBool
-    channels: list[OperatorDashboardPipetteChannel] = Field(max_length=4)
-    live_query_performed: StrictBool | None = None
-    truth_source: str | None = Field(default=None, max_length=160)
-    controller_acknowledged: StrictBool | None = None
-    completion_verified: StrictBool | None = None
-    physical_effect_verified: StrictBool | None = None
-    latest_receipt: dict[str, Any] | None = None
-    application: dict[str, Any] | None = None
-
-
-class PipetteApplicationPlanRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    operation: Literal["load_tip", "move_to_waste", "detect_fluid", "plunger_up", "plunger_down"]
-    tip_tray: str | None = Field(default=None, max_length=120)
-    tip_well: str | None = Field(default=None, max_length=32)
-    tip_type: StrictInt | None = None
-    tip_location: StrictInt | None = Field(default=None, ge=0, le=3)
+    ok: StrictBool
+    transport: Literal["novo_usb_can"]
+    channels: list[OperatorDashboardPipetteChannel] = Field(min_length=4, max_length=4)
+    channel_count: Literal[4]
+    group_status_spacing_ms: Literal[30]
+    live_query_performed: Literal[False]
+    last_group_transaction: dict[str, JsonValue] | None
+    liquid_mutation_enabled: StrictBool
+    tip_type: StrictInt
+    tip_location: StrictInt
+    allow_to_stop: StrictBool
+    fluid_detection_timestamps: dict[str, StrictFloat | None]
+    last_error: OperatorDashboardPipetteLastError | None
+    physical_effect_verified: Literal[False]
+    latest_receipt: PipetteReceipt | None = None
+    application: "PipetteApplicationStatus | None" = None
+
+    @model_validator(mode="after")
+    def validate_four_channel_group(self):
+        if {channel.channel for channel in self.channels} != {0, 1, 2, 3}:
+            raise ValueError("pipette channels must be the unique IDs 0, 1, 2, and 3")
+        if set(self.fluid_detection_timestamps) != {"0", "1", "2", "3"}:
+            raise ValueError("fluid_detection_timestamps must contain exactly channels 0..3")
+        return self
+
+
+class PipetteReadbackRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    include_data: StrictBool = False
+
+
+class PipetteReadbackChannel(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    channel: Literal[0, 1, 2, 3]
+    semantic_ok: StrictBool
+    firmware: dict[str, JsonValue]
+    status: dict[str, JsonValue]
+    tip: dict[str, JsonValue]
+    pressure: dict[str, JsonValue] | None
+    data: dict[str, JsonValue] | None
+
+
+class PipetteReadbackResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    ok: StrictBool
+    semantic_ok: StrictBool
+    available: StrictBool
+    channel_count: Literal[4]
+    channels_constructed_unconditionally: list[Literal[0, 1, 2, 3]] = Field(min_length=4, max_length=4)
+    channels: list[PipetteReadbackChannel] = Field(min_length=4, max_length=4)
+    include_data: StrictBool
+    live_query_performed: Literal[True]
+    truth_source: Literal["live_hardware_queries"]
+    delivery_verified: Literal[False]
+    controller_acknowledged: Literal[False]
+    completion_verified: Literal[False]
+    hardware_postcondition_verified: Literal[False]
+    physical_effect_verified: Literal[False]
+    oem_source_anchor: Literal["ClassPipetteCollection constructor/readback; ClassPipette QueryFirmware/Q1/?31/?57/getData"]
+    receipt_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    receipt_truth: PipetteReceiptTruth
+
+    @model_validator(mode="after")
+    def validate_four_channel_readback(self):
+        expected = [0, 1, 2, 3]
+        if self.channels_constructed_unconditionally != expected:
+            raise ValueError("channels_constructed_unconditionally must be [0, 1, 2, 3]")
+        if [channel.channel for channel in self.channels] != expected:
+            raise ValueError("active readback channels must be the ordered unique IDs 0..3")
+        if self.include_data is False and any(channel.data is not None for channel in self.channels):
+            raise ValueError("channel data must be null when include_data is false")
+        if self.include_data is True and any(channel.data is None for channel in self.channels):
+            raise ValueError("channel data must be present when include_data is true")
+        return self
+
+
+class PipetteLoadTipPlanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    operation: Literal["load_tip"]
+    tip_tray: str = Field(min_length=1, max_length=120)
+    tip_well: str = Field(min_length=1, max_length=32)
+    tip_type: StrictInt
+    tip_location: Literal[0, 1, 2, 3]
     home_z_after: StrictBool = True
-    fluid_class: Literal["TC", "MS", "OC", "RC", "STRIP"] | None = None
+
+
+class PipetteMoveToWastePlanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    operation: Literal["move_to_waste"]
+
+
+class PipetteDetectFluidPlanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    operation: Literal["detect_fluid"]
+    fluid_class: Literal["TC", "MS", "OC", "RC", "STRIP"]
+
+
+class PipettePlungerUpPlanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    operation: Literal["plunger_up"]
+
+
+class PipettePlungerDownPlanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    operation: Literal["plunger_down"]
+
+
+PipetteApplicationPlanRequest = Annotated[
+    PipetteLoadTipPlanRequest
+    | PipetteMoveToWastePlanRequest
+    | PipetteDetectFluidPlanRequest
+    | PipettePlungerUpPlanRequest
+    | PipettePlungerDownPlanRequest,
+    Field(discriminator="operation"),
+]
+
+
+class PipetteApplicationDependency(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    bound: StrictBool
+    authority: str | None = Field(default=None, max_length=240)
+    generation: StrictInt
+    state: dict[str, JsonValue]
+    blockers: list[str] = Field(max_length=32)
 
 
 class PipetteApplicationStatus(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    ok: Literal[True]
+    ok: StrictBool
     mode: Literal["plan_only"]
     execution_admitted: Literal[False]
     physical_effect_verified: Literal[False]
     operations: list[Literal["load_tip", "move_to_waste", "detect_fluid", "plunger_up", "plunger_down"]] = Field(min_length=5, max_length=5)
+    dependencies: dict[str, PipetteApplicationDependency] = Field(min_length=6, max_length=6)
+    required_dependencies: list[str] = Field(min_length=6, max_length=6)
+    missing_dependencies: list[str] = Field(max_length=6)
+    dependency_blockers: list[str] = Field(max_length=64)
+    dependencies_satisfied: StrictBool
     blocker: Literal["physical_pipette_execution_not_authorized"]
+
+    @field_validator("operations")
+    @classmethod
+    def validate_operations(cls, value: list[str]) -> list[str]:
+        if set(value) != {"load_tip", "move_to_waste", "detect_fluid", "plunger_up", "plunger_down"}:
+            raise ValueError("operations must contain each supported no-motion application operation exactly once")
+        return value
+
+    @model_validator(mode="after")
+    def validate_dependency_status(self):
+        expected = {"deck", "gantry", "z", "pressure", "pipette", "machine_state"}
+        if set(self.dependencies) != expected or set(self.required_dependencies) != expected:
+            raise ValueError("application status must contain all six exact dependencies")
+        if not set(self.missing_dependencies).issubset(expected):
+            raise ValueError("application status has an unknown missing dependency")
+        satisfied = not self.missing_dependencies and not self.dependency_blockers
+        if self.dependencies_satisfied != satisfied or self.ok != satisfied:
+            raise ValueError("application dependency status is internally inconsistent")
+        return self
+
+
+class PipetteApplicationStep(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    action: str = Field(min_length=1, max_length=240)
+    mutates: StrictBool
+    location_id: StrictInt | None = None
+    wire_command: str | None = Field(default=None, max_length=120)
+    current: StrictInt | None = None
+    owner: Literal["deck", "gantry", "z", "pressure", "pipette", "machine_state"]
 
 
 class PipetteApplicationPlanResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    ok: Literal[True]
-    operation: str = Field(min_length=1, max_length=80)
+    ok: StrictBool
+    operation: Literal["load_tip", "move_to_waste", "detect_fluid", "plunger_up", "plunger_down"]
     mode: Literal["plan_only"]
     execution_admitted: Literal[False]
     motion_commanded: Literal[False]
@@ -3281,13 +3531,39 @@ class PipetteApplicationPlanResponse(BaseModel):
     completion_verified: Literal[False]
     physical_effect_verified: Literal[False]
     state_reconciled: Literal[False]
-    requested_inputs: dict[str, Any]
+    requested_inputs: dict[str, JsonValue]
     effective_inputs: None = None
-    steps: list[dict[str, Any]] = Field(min_length=1, max_length=32)
+    steps: list[PipetteApplicationStep] = Field(min_length=1, max_length=32)
+    dependencies: dict[str, PipetteApplicationDependency] = Field(min_length=1, max_length=6)
+    required_dependencies: list[str] = Field(min_length=1, max_length=6)
+    missing_dependencies: list[str] = Field(max_length=6)
+    dependency_blockers: list[str] = Field(max_length=64)
+    dependencies_satisfied: StrictBool
     required_completion_evidence: list[str] = Field(max_length=32)
-    constants: dict[str, Any]
+    constants: dict[str, JsonValue]
     oem_source_anchor: str = Field(min_length=1, max_length=1000)
-    blocker: Literal["physical_pipette_execution_not_authorized"]
+    blocker: Literal["physical_pipette_execution_not_authorized", "application_dependencies_unbound"]
+    receipt_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    receipt_truth: PipetteReceiptTruth
+
+    @model_validator(mode="after")
+    def validate_plan_dependencies(self):
+        required = set(self.required_dependencies)
+        if set(self.dependencies) != required:
+            raise ValueError("application plan dependency map must match required_dependencies")
+        if not set(self.missing_dependencies).issubset(required):
+            raise ValueError("application plan has an unknown missing dependency")
+        satisfied = not self.missing_dependencies and not self.dependency_blockers
+        if self.dependencies_satisfied != satisfied or self.ok != satisfied:
+            raise ValueError("application plan dependency status is internally inconsistent")
+        expected_blocker = (
+            "physical_pipette_execution_not_authorized"
+            if satisfied
+            else "application_dependencies_unbound"
+        )
+        if self.blocker != expected_blocker:
+            raise ValueError("application plan blocker does not match dependency status")
+        return self
 
 
 class OperatorDashboard(BaseModel):

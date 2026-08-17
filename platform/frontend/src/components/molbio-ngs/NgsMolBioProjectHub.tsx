@@ -232,6 +232,11 @@ export default function NgsMolBioProjectHub() {
         () => localProjects.find((project) => project.id === selectedLocalProjectId) ?? null,
         [localProjects, selectedLocalProjectId],
     );
+    const selectedResearchObjective = selectedLocalProject?.payload?.research_objective;
+    const selectedProjectDescription = selectedLocalProject?.description
+        || (typeof selectedResearchObjective === 'string' || typeof selectedResearchObjective === 'number'
+            ? String(selectedResearchObjective)
+            : 'No objective recorded.');
     const error = createMutation.error ?? linkMutation.error ?? localProjectsQuery.error ?? globalProjectsQuery.error ?? localHierarchyQuery.error ?? shareableResultsQuery.error;
 
     return (
@@ -290,7 +295,7 @@ export default function NgsMolBioProjectHub() {
 
                 <div className="rounded-xl border border-border-primary bg-surface p-4">
                     <label className="text-xs text-content-secondary">Local NGS/MolBio Project<select className={`${INPUT} mt-1`} value={selectedLocalProjectId} onChange={(event) => setSelectedLocalProjectId(event.target.value)}><option value="">Select local Project</option>{localProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
-                    {selectedLocalProject && <p className="mt-2 text-xs text-content-muted">{selectedLocalProject.description || selectedLocalProject.payload?.research_objective || 'No objective recorded.'}</p>}
+                    {selectedLocalProject && <p className="mt-2 text-xs text-content-muted">{selectedProjectDescription}</p>}
                     <div className="mt-3 space-y-2">
                         {(localHierarchyQuery.data?.domains ?? []).map(({ experiment, domain }) => (
                             <button key={domain.id} type="button" className="flex w-full items-center justify-between gap-3 rounded-lg border border-border-primary px-3 py-2 text-left hover:border-primary/60" onClick={() => updateQueryParams({ workspace_id: selectedLocalProjectId, global_experiment_id: experiment.id, domain_experiment_id: domain.id, state_revision_id: null, ownership_scope: 'ngs_molbio_local' })}>

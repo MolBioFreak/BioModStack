@@ -220,57 +220,147 @@ export interface BioXpOperatorDashboard {
         motor: number;
     };
     temperatures: Array<{ sensor: string; label: string; unit: '°C'; temperature_c: number | null; available: boolean }>;
-    pipettes: {
-        ok: boolean;
-        channels: BioXpPipetteChannel[];
-        live_query_performed?: boolean | null;
-        truth_source?: string | null;
-        controller_acknowledged?: boolean | null;
-        completion_verified?: boolean | null;
-        physical_effect_verified?: boolean | null;
-        error?: string;
-    };
+    pipettes: BioXpPipettes;
     snapshot: { snapshot_id: string | null; freshness: { state?: string; age_s?: number | null; fresh_for_s?: number | null }; collection_triggered: false };
 }
 
-export interface BioXpPipetteChannel {
-    channel: number;
-    available: boolean;
-    initialized?: boolean | null;
+export interface BioXpPipetteHardwareEvidence {
+    ok: boolean;
+    hardware_truth_level?: 'hardware_query' | 'unparsed_hardware_reply' | 'no_readback' | null;
+    reply_received?: boolean | null;
+    semantic_ok?: boolean | null;
     tip_loaded?: boolean | null;
-    tip_location?: number | null;
-    position_steps?: number | null;
-    liquid_level_ul?: number | null;
-    front_air_level_ul?: number | null;
-    rear_air_level_ul?: number | null;
     pressure?: number | null;
-    last_error?: string | null;
+    error?: string | null;
+    [key: string]: unknown;
+}
+
+export interface BioXpPipetteReceipt {
+    schema: 'bioxp.pipette.receipt.v1';
+    receipt_id: string;
+    created_at: string;
+    operation: string;
+    truth: {
+        delivery_verified: boolean;
+        controller_acknowledged: boolean;
+        completion_verified: boolean;
+        hardware_precondition_verified: boolean;
+        hardware_postcondition_verified: boolean;
+        physical_effect_verified: false;
+        physical_effect_claim_suppressed: true;
+    };
+}
+
+export interface BioXpPipetteChannel {
+    channel: 0 | 1 | 2 | 3;
+    pipette_id: 0 | 1 | 2 | 3;
+    available: boolean;
+    initialized: boolean;
+    software_initialized: boolean;
+    tip_loaded: boolean;
+    software_tip_loaded: boolean;
+    hardware_truth_level: string;
+    hardware_tip_status: BioXpPipetteHardwareEvidence | null;
+    hardware_pressure: BioXpPipetteHardwareEvidence | null;
+    oem_diagnosis: string | null;
+    oem_error_queue: number[];
+    liquid_level_ul: number;
+    front_air_level_ul: number;
+    rear_air_level_ul: number;
+    last_command: string | null;
+}
+
+export interface BioXpPipettes {
+    ok: boolean;
+    transport: 'novo_usb_can';
+    channels: BioXpPipetteChannel[];
+    channel_count: 4;
+    live_query_performed: false;
+    liquid_mutation_enabled: boolean;
+    allow_to_stop: boolean;
+    last_error: { channel: 0 | 1 | 2 | 3; error_code: number; source: 'ClassPipetteCollection.handlePipetteMessage' } | null;
+    last_group_transaction: Record<string, unknown> | null;
+    latest_receipt?: BioXpPipetteReceipt | null;
+    application?: BioXpPipetteApplicationStatus | null;
+    physical_effect_verified: false;
+}
+
+export interface BioXpPipetteReadbackRequest {
+    include_data?: boolean;
+}
+
+export interface BioXpPipetteReadbackChannel {
+    channel: 0 | 1 | 2 | 3;
+    semantic_ok: boolean;
+    firmware: Record<string, unknown>;
+    status: Record<string, unknown>;
+    tip: Record<string, unknown>;
+    pressure: Record<string, unknown> | null;
+    data: Record<string, unknown> | null;
+}
+
+export interface BioXpPipetteReadback {
+    ok: boolean;
+    semantic_ok: boolean;
+    available: boolean;
+    channel_count: 4;
+    channels_constructed_unconditionally: [0, 1, 2, 3];
+    channels: [BioXpPipetteReadbackChannel, BioXpPipetteReadbackChannel, BioXpPipetteReadbackChannel, BioXpPipetteReadbackChannel];
+    include_data: boolean;
+    live_query_performed: true;
+    truth_source: 'live_hardware_queries';
+    delivery_verified: false;
+    controller_acknowledged: false;
+    completion_verified: false;
+    hardware_postcondition_verified: false;
+    physical_effect_verified: false;
+    oem_source_anchor: 'ClassPipetteCollection constructor/readback; ClassPipette QueryFirmware/Q1/?31/?57/getData';
+    receipt_id: string;
+    receipt_truth: BioXpPipetteReceipt['truth'];
 }
 
 export type BioXpPipetteApplicationOperation = 'load_tip' | 'move_to_waste' | 'detect_fluid' | 'plunger_up' | 'plunger_down';
+export type BioXpPipetteApplicationDependencyName = 'deck' | 'gantry' | 'z' | 'pressure' | 'pipette' | 'machine_state';
+
+export interface BioXpPipetteApplicationDependency {
+    bound: boolean;
+    authority: string | null;
+    generation: number;
+    state: Record<string, unknown>;
+    blockers: string[];
+}
 
 export interface BioXpPipetteApplicationStatus {
-    ok: true;
+    ok: boolean;
     mode: 'plan_only';
     execution_admitted: false;
     physical_effect_verified: false;
     operations: BioXpPipetteApplicationOperation[];
+    dependencies: Record<BioXpPipetteApplicationDependencyName, BioXpPipetteApplicationDependency>;
+    required_dependencies: BioXpPipetteApplicationDependencyName[];
+    missing_dependencies: BioXpPipetteApplicationDependencyName[];
+    dependency_blockers: string[];
+    dependencies_satisfied: boolean;
     blocker: 'physical_pipette_execution_not_authorized';
 }
 
-export interface BioXpPipetteApplicationPlanRequest {
-    operation: BioXpPipetteApplicationOperation;
-    tip_tray?: string;
-    tip_well?: string;
-    tip_type?: number;
-    tip_location?: number;
-    home_z_after?: boolean;
-    fluid_class?: 'TC' | 'MS' | 'OC' | 'RC' | 'STRIP';
-}
+export type BioXpPipetteApplicationPlanRequest =
+    | {
+        operation: 'load_tip';
+        tip_tray: string;
+        tip_well: string;
+        tip_type: number;
+        tip_location: 0 | 1 | 2 | 3;
+        home_z_after?: boolean;
+    }
+    | { operation: 'move_to_waste' }
+    | { operation: 'detect_fluid'; fluid_class: 'TC' | 'MS' | 'OC' | 'RC' | 'STRIP' }
+    | { operation: 'plunger_up' }
+    | { operation: 'plunger_down' };
 
 export interface BioXpPipetteApplicationPlan {
-    ok: true;
-    operation: string;
+    ok: boolean;
+    operation: BioXpPipetteApplicationOperation;
     mode: 'plan_only';
     execution_admitted: false;
     motion_commanded: false;
@@ -281,11 +371,18 @@ export interface BioXpPipetteApplicationPlan {
     state_reconciled: false;
     requested_inputs: Record<string, unknown>;
     effective_inputs: null;
-    steps: Array<Record<string, unknown>>;
+    steps: Array<Record<string, unknown> & { owner: BioXpPipetteApplicationDependencyName }>;
+    dependencies: Partial<Record<BioXpPipetteApplicationDependencyName, BioXpPipetteApplicationDependency>>;
+    required_dependencies: BioXpPipetteApplicationDependencyName[];
+    missing_dependencies: BioXpPipetteApplicationDependencyName[];
+    dependency_blockers: string[];
+    dependencies_satisfied: boolean;
     required_completion_evidence: string[];
     constants: Record<string, unknown>;
     oem_source_anchor: string;
-    blocker: 'physical_pipette_execution_not_authorized';
+    blocker: 'physical_pipette_execution_not_authorized' | 'application_dependencies_unbound';
+    receipt_id: string;
+    receipt_truth: BioXpPipetteReceipt['truth'];
 }
 
 export interface BioXpOperatorAdmission {
@@ -654,6 +751,15 @@ export const useBioXpOperatorDashboard = (connectionGeneration: number, enabled 
     refetchInterval: enabled && connectionGeneration > 0 ? 15_000 : false,
     refetchIntervalInBackground: false,
     retry: false,
+});
+
+export const useReadBioXpPipetteReadback = () => useMutation({
+    mutationFn: async (request: BioXpPipetteReadbackRequest) => (
+        await api.post<BioXpPipetteReadback>(
+            '/api/bioxp/operator-controls/pipettes/readback',
+            request,
+        )
+    ).data,
 });
 
 export const useBioXpPipetteApplicationStatus = (connectionGeneration: number, enabled = true) => useQuery({

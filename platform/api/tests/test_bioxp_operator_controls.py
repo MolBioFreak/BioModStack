@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 import pytest
 
 from routers import bioxp
@@ -14,6 +15,7 @@ from services.bioxp.errors import ConnectionStateError, RobotResponseError
 from services.bioxp.operator_models import (
     OperatorActionHistory,
     OperatorActionReceipt,
+    OperatorDashboard,
     OperatorDashboardXFailure,
     OperatorDashboardXReference,
 )
@@ -22,6 +24,113 @@ from services.bioxp.robot_client import DEFAULT_ROBOT_ROUTES
 
 REGISTRY = "1" * 64
 LOCK = "2" * 64
+
+
+def pipette_channel(channel: int) -> dict:
+    return {
+        "ok": True,
+        "transport": "novo_usb_can",
+        "channel": channel,
+        "bitrate": 0,
+        "pipette_id": channel,
+        "transport_details": {
+            "source": "OEM Novo.Devices.CanInterfaceBoard over one shared NovoRouter",
+            "vid": "0x03eb",
+            "pid": "0x2423",
+            "alt": 1,
+            "shared_bioxp_usb_runtime": True,
+        },
+        "available": True,
+        "initialized": False,
+        "software_initialized": False,
+        "tip_loaded": False,
+        "software_tip_loaded": False,
+        "pressure_profile": "1R",
+        "top_speed": 1000.0,
+        "last_command": None,
+        "last_transaction": None,
+        "pipette_message_state": {},
+        "oem_initialization_counter": 0,
+        "oem_diagnosis": None,
+        "oem_error_queue": [],
+        "oem_process_error_code": None,
+        "hardware_tip_status": None,
+        "hardware_pressure": None,
+        "hardware_truth_level": "cached_transport_state",
+        "ack_required": True,
+        "delivery_verified": False,
+        "controller_acknowledged": None,
+        "completion_verified": False,
+        "hardware_precondition_verified": False,
+        "hardware_postcondition_verified": False,
+        "state_reconciled": False,
+        "state_reconciliation_source": None,
+        "physical_effect_verified": False,
+        "response_timeout_s": 60.0,
+        "liquid_level_ul": 0.0,
+        "front_air_level_ul": 0.0,
+        "rear_air_level_ul": 0.0,
+    }
+
+
+def pipette_group() -> dict:
+    return {
+        "ok": True,
+        "transport": "novo_usb_can",
+        "channels": [pipette_channel(channel) for channel in range(4)],
+        "channel_count": 4,
+        "group_status_spacing_ms": 30,
+        "live_query_performed": False,
+        "last_group_transaction": None,
+        "liquid_mutation_enabled": False,
+        "tip_type": 201,
+        "tip_location": -1,
+        "allow_to_stop": True,
+        "fluid_detection_timestamps": {str(channel): None for channel in range(4)},
+        "last_error": None,
+        "physical_effect_verified": False,
+    }
+
+
+def pipette_readback(*, include_data: bool = False) -> dict:
+    return {
+        "ok": True,
+        "semantic_ok": True,
+        "available": True,
+        "channel_count": 4,
+        "channels_constructed_unconditionally": [0, 1, 2, 3],
+        "channels": [
+            {
+                "channel": channel,
+                "semantic_ok": True,
+                "firmware": {"ok": True, "value": "1.0"},
+                "status": {"ok": True, "error_code": 0},
+                "tip": {"ok": True, "hardware_truth_level": "hardware_query", "tip_loaded": False},
+                "pressure": None,
+                "data": {"?40": {"ok": True, "value": 40}} if include_data else None,
+            }
+            for channel in range(4)
+        ],
+        "include_data": include_data,
+        "live_query_performed": True,
+        "truth_source": "live_hardware_queries",
+        "delivery_verified": False,
+        "controller_acknowledged": False,
+        "completion_verified": False,
+        "hardware_postcondition_verified": False,
+        "physical_effect_verified": False,
+        "oem_source_anchor": "ClassPipetteCollection constructor/readback; ClassPipette QueryFirmware/Q1/?31/?57/getData",
+        "receipt_id": "a" * 32,
+        "receipt_truth": {
+            "delivery_verified": False,
+            "controller_acknowledged": False,
+            "completion_verified": False,
+            "hardware_precondition_verified": False,
+            "hardware_postcondition_verified": False,
+            "physical_effect_verified": False,
+            "physical_effect_claim_suppressed": True,
+        },
+    }
 
 
 def test_x_dashboard_accepts_generation_drift_failure_context() -> None:
@@ -135,7 +244,7 @@ def catalog():
             "motor": 1,
         },
         "temperatures": [{"sensor": "tc_temp_c", "label": "Thermal cycler block", "unit": "°C", "temperature_c": 37.0, "available": True}],
-        "pipettes": {"ok": True, "channels": [{"channel": 0, "available": True}]},
+        "pipettes": pipette_group(),
         "snapshot": {"snapshot_id": "snap-1", "freshness": {"state": "fresh", "age_s": 1.0, "fresh_for_s": 30.0}, "collection_triggered": False},
     }
     return {
@@ -391,16 +500,31 @@ class FakeRobotClient:
         self.responses = {
             "operator_control_catalog": catalog(),
             "operator_dashboard": catalog()["dashboard"],
+            "pipette_readback": pipette_readback(),
             "pipette_application_status": {
-                "ok": True,
+                "ok": False,
                 "mode": "plan_only",
                 "execution_admitted": False,
                 "physical_effect_verified": False,
                 "operations": ["load_tip", "move_to_waste", "detect_fluid", "plunger_up", "plunger_down"],
+                "dependencies": {
+                    name: {
+                        "bound": name != "gantry",
+                        "authority": f"test.{name}" if name != "gantry" else None,
+                        "generation": 7,
+                        "state": {"ready": name != "gantry"},
+                        "blockers": [] if name != "gantry" else ["gantry_reference_unavailable"],
+                    }
+                    for name in ("deck", "gantry", "z", "pressure", "pipette", "machine_state")
+                },
+                "required_dependencies": ["deck", "gantry", "machine_state", "pipette", "pressure", "z"],
+                "missing_dependencies": ["gantry"],
+                "dependency_blockers": ["gantry:unbound"],
+                "dependencies_satisfied": False,
                 "blocker": "physical_pipette_execution_not_authorized",
             },
             "pipette_application_plan": {
-                "ok": True,
+                "ok": False,
                 "operation": "detect_fluid",
                 "mode": "plan_only",
                 "execution_admitted": False,
@@ -412,11 +536,29 @@ class FakeRobotClient:
                 "state_reconciled": False,
                 "requested_inputs": {"fluid_class": "RC"},
                 "effective_inputs": None,
-                "steps": [{"action": "resolve_fluid_target", "mutates": False}],
+                "steps": [{"action": "resolve_fluid_target", "mutates": False, "owner": "deck"}],
+                "dependencies": {
+                    "deck": {"bound": True, "authority": "test.deck", "generation": 7, "state": {"ready": True}, "blockers": []},
+                    "gantry": {"bound": False, "authority": None, "generation": 7, "state": {"ready": False}, "blockers": ["gantry_reference_unavailable"]},
+                },
+                "required_dependencies": ["deck", "gantry"],
+                "missing_dependencies": ["gantry"],
+                "dependency_blockers": ["gantry:unbound"],
+                "dependencies_satisfied": False,
                 "required_completion_evidence": ["controller_fluid_completion"],
                 "constants": {"supported_offset_classes": ["TC", "MS", "OC", "RC", "STRIP"]},
                 "oem_source_anchor": "ControlLib fluid detection",
-                "blocker": "physical_pipette_execution_not_authorized",
+                "blocker": "application_dependencies_unbound",
+                "receipt_id": "0123456789abcdef0123456789abcdef",
+                "receipt_truth": {
+                    "delivery_verified": False,
+                    "controller_acknowledged": False,
+                    "completion_verified": False,
+                    "hardware_precondition_verified": False,
+                    "hardware_postcondition_verified": False,
+                    "physical_effect_verified": False,
+                    "physical_effect_claim_suppressed": True,
+                },
             },
             "operator_action_admission": {"action_id": "motion.home_xy", "ownership_generation": 7, "enabled": False, "disabled_reason": "Motion is inactive. Activate motion before moving this motor.", "dependencies": [{"key": "motion_enabled", "label": "Motion enabled", "met": False, "reason": "Motion is inactive. Activate motion before moving this motor."}]},
             "invoke_operator_action": receipt(),
@@ -504,6 +646,7 @@ def test_robot_409_translation_preserves_structured_detail():
 def test_robot_client_uses_fixed_operator_routes_only():
     assert DEFAULT_ROBOT_ROUTES["operator_control_catalog"][:2] == ("GET", "/operator/control-catalog")
     assert DEFAULT_ROBOT_ROUTES["operator_dashboard"][:2] == ("GET", "/operator/dashboard")
+    assert DEFAULT_ROBOT_ROUTES["pipette_readback"][:2] == ("POST", "/liquid/readback")
     assert DEFAULT_ROBOT_ROUTES["pipette_application_status"][:2] == ("GET", "/liquid/application/status")
     assert DEFAULT_ROBOT_ROUTES["pipette_application_plan"][:2] == ("POST", "/liquid/application/plan")
     assert DEFAULT_ROBOT_ROUTES["operator_action_admission"][:2] == ("POST", "/operator/actions/{action_id}/admission")
@@ -530,6 +673,150 @@ def test_typed_pipette_application_proxy_is_plan_only(monkeypatch):
     assert [call[0] for call in runtime.connection.client.calls[-2:]] == [
         "pipette_application_status",
         "pipette_application_plan",
+    ]
+
+
+def test_typed_pipette_active_readback_proxy_forwards_fixed_request(monkeypatch):
+    client, runtime = make_client(monkeypatch, mutations=False)
+
+    response = client.post(
+        "/api/bioxp/operator-controls/pipettes/readback",
+        json={"include_data": False},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["channels_constructed_unconditionally"] == [0, 1, 2, 3]
+    assert response.json()["live_query_performed"] is True
+    assert runtime.connection.client.calls == [
+        ("pipette_readback", {"json_data": {"include_data": False}}),
+    ]
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda payload: payload["channels"].pop(),
+        lambda payload: payload["channels"].__setitem__(3, copy.deepcopy(payload["channels"][2])),
+        lambda payload: payload["channels"][0].__setitem__("invented", True),
+        lambda payload: payload.__setitem__("controller_acknowledged", True),
+        lambda payload: payload["receipt_truth"].__setitem__("physical_effect_verified", True),
+        lambda payload: payload.__setitem__("truth_source", "cached_transport_state"),
+    ],
+)
+def test_pipette_active_readback_rejects_malformed_or_inflated_evidence(monkeypatch, mutate):
+    client, runtime = make_client(monkeypatch, mutations=False)
+    payload = pipette_readback()
+    mutate(payload)
+    runtime.connection.client.responses["pipette_readback"] = payload
+
+    response = client.post(
+        "/api/bioxp/operator-controls/pipettes/readback",
+        json={"include_data": False},
+    )
+
+    assert response.status_code == 502
+
+
+def test_pipette_active_readback_request_rejects_unknown_fields(monkeypatch):
+    client, runtime = make_client(monkeypatch, mutations=False)
+
+    response = client.post(
+        "/api/bioxp/operator-controls/pipettes/readback",
+        json={"include_data": False, "operation": "aspirate"},
+    )
+
+    assert response.status_code == 422
+    assert runtime.connection.client.calls == []
+
+
+def test_pipette_dashboard_accepts_exact_closed_four_channel_projection():
+    parsed = OperatorDashboard.model_validate(catalog()["dashboard"])
+
+    assert [channel.channel for channel in parsed.pipettes.channels] == [0, 1, 2, 3]
+    assert parsed.pipettes.live_query_performed is False
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda group: group["channels"].pop(),
+        lambda group: group["channels"].append(pipette_channel(3)),
+        lambda group: group["channels"].__setitem__(3, pipette_channel(2)),
+        lambda group: group["channels"][1].__setitem__("pipette_id", 2),
+        lambda group: group["channels"][0].__setitem__("position_steps", 123),
+        lambda group: group.__setitem__("physical_effect_verified", True),
+        lambda group: group["channels"][0].__setitem__("physical_effect_verified", True),
+        lambda group: group["channels"][0].__setitem__("hardware_pressure", "not-evidence"),
+        lambda group: group.__setitem__("application", {
+            "ok": True,
+            "mode": "plan_only",
+            "execution_admitted": False,
+            "physical_effect_verified": False,
+            "operations": ["load_tip"] * 5,
+            "blocker": "physical_pipette_execution_not_authorized",
+        }),
+        lambda group: group.__setitem__("unexpected", "invented"),
+    ],
+)
+def test_pipette_dashboard_rejects_malformed_or_phase_inflated_projection(mutate):
+    dashboard = copy.deepcopy(catalog()["dashboard"])
+    mutate(dashboard["pipettes"])
+
+    with pytest.raises(ValidationError):
+        OperatorDashboard.model_validate(dashboard)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"operation": "move_to_waste", "home_z_after": True},
+        {"operation": "move_to_waste", "fluid_class": "RC"},
+        {"operation": "detect_fluid"},
+        {"operation": "detect_fluid", "fluid_class": "RC", "tip_location": 0},
+        {"operation": "load_tip", "tip_tray": "tray", "tip_well": "A1", "tip_type": 201},
+        {"operation": "plunger_up", "fluid_class": "RC"},
+    ],
+)
+def test_pipette_plan_request_rejects_irrelevant_or_missing_operation_fields(monkeypatch, payload):
+    client, runtime = make_client(monkeypatch, mutations=False)
+
+    response = client.post(
+        "/api/bioxp/operator-controls/pipettes/application/plan",
+        json=payload,
+    )
+
+    assert response.status_code == 422
+    assert runtime.connection.client.calls == []
+
+
+@pytest.mark.parametrize(
+    ("payload", "forwarded"),
+    [
+        ({"operation": "move_to_waste"}, {"operation": "move_to_waste"}),
+        (
+            {"operation": "detect_fluid", "fluid_class": "RC"},
+            {"operation": "detect_fluid", "fluid_class": "RC"},
+        ),
+        ({"operation": "plunger_down"}, {"operation": "plunger_down"}),
+    ],
+)
+def test_pipette_plan_forwards_only_selected_operation_fields(monkeypatch, payload, forwarded):
+    client, runtime = make_client(monkeypatch, mutations=False)
+    runtime.connection.client.responses["pipette_application_plan"]["operation"] = payload["operation"]
+    runtime.connection.client.responses["pipette_application_plan"]["requested_inputs"] = (
+        {"direction": payload["operation"].removeprefix("plunger_")}
+        if payload["operation"].startswith("plunger_")
+        else {key: value for key, value in forwarded.items() if key != "operation"}
+    )
+
+    response = client.post(
+        "/api/bioxp/operator-controls/pipettes/application/plan",
+        json=payload,
+    )
+
+    assert response.status_code == 200
+    assert runtime.connection.client.calls == [
+        ("pipette_application_plan", {"json_data": forwarded}),
     ]
 
 
