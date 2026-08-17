@@ -156,7 +156,10 @@ export default function NgsMolBioProjectHub() {
             return { projectId, experiment, domain };
         },
         onSuccess: ({ projectId, experiment, domain }) => {
-            void queryClient.invalidateQueries({ queryKey: ['ngs-molbio-projects'] });
+            void Promise.all([
+                queryClient.invalidateQueries({ queryKey: ['ngs-molbio-projects'] }),
+                queryClient.invalidateQueries({ queryKey: ['ngs-molbio-project-authority', projectId] }),
+            ]);
             setProjectName('');
             setExperimentName('');
             setObjective('');
