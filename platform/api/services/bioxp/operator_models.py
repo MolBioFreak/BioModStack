@@ -540,8 +540,8 @@ class OperatorDashboardXTmclFrame(BaseModel):
     classification: str = Field(min_length=1, max_length=80)
     arbitration_id: StrictInt
     dlc: StrictInt
-    data: list[StrictInt] = Field(default_factory=list, max_length=64)
-    raw: list[StrictInt] = Field(default_factory=list, max_length=64)
+    data: list[StrictInt | OperatorDashboardXOmissionMarker] = Field(default_factory=list, max_length=64)
+    raw: list[StrictInt | OperatorDashboardXOmissionMarker] = Field(default_factory=list, max_length=64)
     received_at: StrictFloat | StrictInt
 
 
@@ -550,8 +550,8 @@ class OperatorDashboardXTmclSkippedFrame(BaseModel):
     classification: str = Field(min_length=1, max_length=80)
     arbitration_id: StrictInt | None = None
     dlc: StrictInt | None = None
-    data: list[StrictInt] | None = Field(default=None, max_length=64)
-    raw: list[StrictInt] = Field(default_factory=list, max_length=64)
+    data: list[StrictInt | OperatorDashboardXOmissionMarker] | None = Field(default=None, max_length=64)
+    raw: list[StrictInt | OperatorDashboardXOmissionMarker] = Field(default_factory=list, max_length=64)
     received_at: StrictFloat | StrictInt
     error: str | None = Field(default=None, max_length=1000)
 
@@ -561,7 +561,7 @@ class OperatorDashboardXTmclMultipart(BaseModel):
     present: StrictBool
     part_count: StrictInt = Field(ge=0)
     parts: list[OperatorDashboardXTmclFrame] = Field(default_factory=list, max_length=256)
-    reassembled_data: list[StrictInt] = Field(default_factory=list, max_length=4096)
+    reassembled_data: list[StrictInt | OperatorDashboardXOmissionMarker] = Field(default_factory=list, max_length=4096)
     reassembly_policy: str = Field(min_length=1, max_length=160)
     oem_chunk_index_equivalence: str = Field(min_length=1, max_length=80)
 
@@ -585,9 +585,9 @@ class OperatorDashboardXTmclProvenance(BaseModel):
     tx_timestamp: StrictFloat | StrictInt
     tx_write_completed_at: StrictFloat | StrictInt
     timeout_ms: StrictInt = Field(ge=0)
-    tx_raw: list[StrictInt] = Field(default_factory=list, max_length=4096)
+    tx_raw: list[StrictInt | OperatorDashboardXOmissionMarker] = Field(default_factory=list, max_length=4096)
     tx_frame_count: StrictInt | None = Field(default=None, ge=0)
-    tx_frames: list[list[StrictInt]] | None = Field(default=None, max_length=256)
+    tx_frames: list[list[StrictInt | OperatorDashboardXOmissionMarker]] | None = Field(default=None, max_length=256)
     tx_write_timestamps: list[StrictFloat | StrictInt] | None = Field(default=None, max_length=256)
     tx_write_policy: str | None = Field(default=None, max_length=160)
     command_family: str | None = Field(default=None, max_length=80)
@@ -601,7 +601,7 @@ class OperatorDashboardXTmclProvenance(BaseModel):
     receive_timestamp: StrictFloat | StrictInt | None = None
     observed_rx_id: StrictInt | None = None
     observed_rx_dlc: StrictInt | None = None
-    observed_rx_raw: list[StrictInt] | None = Field(default=None, max_length=4096)
+    observed_rx_raw: list[StrictInt | OperatorDashboardXOmissionMarker] | None = Field(default=None, max_length=4096)
     observed_status: StrictInt | None = None
     frames: list[OperatorDashboardXTmclFrame] = Field(default_factory=list, max_length=256)
     ack_received: StrictBool | None = None
@@ -621,7 +621,7 @@ class OperatorDashboardXTmclAck(BaseModel):
     board: StrictInt
     cmd: StrictInt
     value: StrictInt
-    raw: list[StrictInt] = Field(max_length=64)
+    raw: list[StrictInt | OperatorDashboardXOmissionMarker] = Field(max_length=64)
     provenance: OperatorDashboardXTmclProvenance
 
 
