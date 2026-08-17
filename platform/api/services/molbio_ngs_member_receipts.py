@@ -308,6 +308,33 @@ async def persist_member_receipt(
     if canonical_sha256 != receipt.receipt_sha256:
         raise ValueError("member receipt canonical digest mismatch")
     parsed = parse_canonical_member_receipt(receipt.canonical_receipt)
+    existing = await session.get(MolBioNGSMemberReceipt, parsed["receipt_id"])
+    if existing is not None:
+        stable_identity = {
+            "source_store_id": parsed["source_store_id"],
+            "entity_kind": parsed["entity_kind"],
+            "entity_id": parsed["entity_id"],
+            "source_generation_or_revision": parsed["source_generation_or_revision"],
+            "content_digest": parsed["content_digest"],
+            "schema_name": RECEIPT_SCHEMA_NAME,
+            "schema_version": RECEIPT_SCHEMA_VERSION,
+            "availability": parsed["availability"],
+            "reopen_destination": _canonical(parsed["reopen_destination"]),
+        }
+        existing_identity = {
+            "source_store_id": existing.source_store_id,
+            "entity_kind": existing.entity_kind,
+            "entity_id": existing.entity_id,
+            "source_generation_or_revision": existing.source_generation_or_revision,
+            "content_digest": existing.content_digest,
+            "schema_name": existing.schema_name,
+            "schema_version": existing.schema_version,
+            "availability": existing.availability,
+            "reopen_destination": existing.reopen_destination,
+        }
+        if existing_identity != stable_identity:
+            raise ValueError("member receipt deterministic identity collision")
+        return existing
     row = MolBioNGSMemberReceipt(
         receipt_id=parsed["receipt_id"],
         source_store_id=parsed["source_store_id"],
