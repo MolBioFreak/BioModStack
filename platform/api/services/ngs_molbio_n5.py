@@ -344,7 +344,14 @@ async def _verified_member(
         raise ValidationFailure("Dataset member belongs to another Domain or is not attached")
     try:
         persisted = json.loads(receipt.acknowledgement_json or "{}")
-        fresh = await registry.get(receipt.verification_authority).verify(core_session, receipt.entity_id)
+        verification_entity_id = receipt.entity_id
+        if receipt.verification_authority == "bms.molbio.member-molecular-revision.adapter.v1":
+            verification_entity_id = (
+                f"{verification_entity_id}&domain_experiment_id={domain_id}"
+            )
+        fresh = await registry.get(receipt.verification_authority).verify(
+            core_session, verification_entity_id
+        )
     except (json.JSONDecodeError, AdapterError) as exc:
         raise ValidationFailure(f"Dataset member native authority failed: {exc}") from exc
     owner = fresh.get("metadata", {}).get("global_domain_experiment_id")
