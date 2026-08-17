@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+    attachExistingEntity,
     archiveDomainDataset,
     createDomainDataset,
     getDomainDataset,
     getDomainDatasetRevision,
+    getProject,
     listDomainDatasetKinds,
     listDomainDatasetRevisionMembers,
     listDomainDatasetRevisions,
@@ -210,6 +212,26 @@ export default function DomainDatasetOperator({
             setSelectedDatasetId(created.dataset_id);
         },
     });
+    const attachReferenceMutation = useMutation({
+        mutationFn: async (member: DomainStateMember) => {
+            const project = await getProject(projectId);
+            const attachment = await attachExistingEntity(projectId, globalExperimentId, domainExperimentId, {
+                adapter_id: 'bms.molbio.member-molecular-revision.adapter.v1',
+                entity_id: member.entity_id,
+                operation: 'attach_reference',
+                role: 'references',
+                note: 'Dataset membership authority for an exact Experiment-linked molecular revision.',
+                expected_head_generation: project.head_generation,
+            });
+            return { member, receiptId: attachment.source_receipt_id };
+        },
+        onSuccess: ({ member, receiptId }) => setMembers((current) => [...current, {
+            receipt_id: receiptId,
+            role: 'molecular_expected_construct',
+            media_type: null,
+            metadata: { display_label: member.entity_id, group_label: null, condition_label: null, tags: ['experiment-reference'] },
+        }]),
+    });
     const reviseMutation = useMutation({
         mutationFn: () => reviseDomainDataset(
             ...scope,
@@ -238,6 +260,7 @@ export default function DomainDatasetOperator({
         ?? pagedMembersQuery.error
         ?? stateRevisionQuery.error
         ?? createMutation.error
+        ?? attachReferenceMutation.error
         ?? reviseMutation.error
         ?? lifecycleMutation.error;
     const revisionSelectedForPreparation = selectedRevisionId && selectedRevisionIds.includes(selectedRevisionId);
@@ -350,13 +373,8 @@ export default function DomainDatasetOperator({
                                 key={member.receipt_id}
                                 type="button"
                                 className={BUTTON_CLASS}
-                                disabled={members.some((draft) => draft.receipt_id === member.receipt_id)}
-                                onClick={() => setMembers((current) => [...current, {
-                                    receipt_id: member.receipt_id,
-                                    role: 'molecular_expected_construct',
-                                    media_type: null,
-                                    metadata: { display_label: member.entity_id, group_label: null, condition_label: null, tags: ['experiment-reference'] },
-                                }])}
+                                disabled={attachReferenceMutation.isPending || members.some((draft) => draft.metadata.display_label === member.entity_id)}
+                                onClick={() => attachReferenceMutation.mutate(member)}
                             >Add {member.entity_id.slice(0, 8)} · {member.source_generation_or_revision.slice(0, 8)}</button>)}
                             {attachedReferenceMembers.length === 0 && <span className="text-xs text-content-muted">Attach references in Molecular Inputs first.</span>}
                         </div>
