@@ -2442,7 +2442,10 @@ class ExactMolecularRevisionMemberAdapter:
                 domain_session, member=member, expected_domain_id=expected_domain_id
             )
         return _exact_member_receipt(
-            self, requested_entity_id=urlencode(identity), member=member,
+            self, requested_entity_id=urlencode({
+                "sequence_id": identity["sequence_id"],
+                "revision_id": identity["revision_id"],
+            }), member=member,
             reopen_uri=_query_uri("/designer", **identity),
             metadata={
                 "sequence_id": identity["sequence_id"],
