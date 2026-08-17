@@ -52,7 +52,7 @@ function defaultStatePayload(): DomainStateRevisionPayload {
             required_terminal_manifest: true,
         },
         analysis_policy: {
-            allowed_workflow_ids: ['ngs.ont.plasmid_qc', 'ngs.ont.construct_screening', 'ngs.ont.fastq_qc'],
+            allowed_workflow_ids: ['ont_plasmid_qc', 'ont_construct_screening', 'ont_fastq_qc'],
             required_manifest_schemas: ['biomodstack.construct_verification.v2'],
         },
         assessment_policy: {
