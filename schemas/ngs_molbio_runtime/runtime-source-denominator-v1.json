@@ -6,6 +6,7 @@
     "docs/specs/2026-08-12-ngs-molbio-global-project-integration-sow.md",
     "platform/api/config/ngs_molbio/adapter_registry_v1.json",
     "platform/api/config/ngs_molbio/capability_inventory_v1.json",
+    "platform/api/config/ngs_molbio/dataset_kind_registry_v1.json",
     "platform/api/config/ngs_molbio/schema_registry_v1.json",
     "platform/api/database.py",
     "platform/api/experiment_database.py",
@@ -48,6 +49,7 @@
     "platform/api/services/molbio_ngs_evidence.py",
     "platform/api/services/molbio_ngs_member_receipts.py",
     "platform/api/services/molbio_ngs_references.py",
+    "platform/api/services/molbio_sequence_import.py",
     "platform/api/services/ngs_molbio_capabilities.py",
     "platform/api/services/ngs_molbio_connector.py",
     "platform/api/services/ngs_molbio_n5.py",
@@ -66,6 +68,7 @@
     "platform/frontend/src/components/experiments/GlobalExperimentContext.tsx",
     "platform/frontend/src/components/molbio-ngs/DomainDatasetOperator.tsx",
     "platform/frontend/src/components/molbio-ngs/DomainExperimentWorkspace.tsx",
+    "platform/frontend/src/components/molbio-ngs/ExperimentReferenceLinks.tsx",
     "platform/frontend/src/components/molbio-ngs/ExperimentReferenceLibrary.tsx",
     "platform/frontend/src/components/molbio-ngs/NgsMolBioProjectHub.tsx",
     "platform/frontend/src/components/molbio-ngs/DomainWorkflowOperator.tsx",
@@ -85,5 +88,5 @@
     "scripts/build_ngs_molbio_runtime_implementation_record.py",
     "scripts/run_ngs_molbio_payload_ownership_audit.py"
   ],
-  "content_sha256": "83af9726831a20da4357147ce8d9d97e2e3acb238dffd264901c0b2b5017e70a"
+  "content_sha256": "5a4b82639eaacc84a90575da7e69d03f6d77ee83d8c60e9f7e19c7944aef808c"
 }

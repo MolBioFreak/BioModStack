@@ -32,6 +32,7 @@ import {
     type PreparationLaunchRequest,
     type PreparedLaunchContext,
 } from '../../lib/projectManager';
+import ExperimentReferenceLinks from './ExperimentReferenceLinks';
 
 interface DomainWorkflowOperatorProps {
     projectId: string;
@@ -2287,6 +2288,11 @@ export default function DomainWorkflowOperator({
                             <input className={INPUT_CLASS} value={cancelReason} onChange={(event) => setCancelReason(event.target.value)} aria-label="Cancellation reason" />
                             <button type="button" className={BUTTON_CLASS} disabled={!canMutate || cancelMutation.isPending || TERMINAL_STATES.has(runGroup.state) || !cancelReason.trim()} onClick={() => cancelMutation.mutate()}>Cancel Run Group</button>
                         </div>
+                        <ExperimentReferenceLinks
+                            domainExperimentId={domainExperimentId}
+                            stateRevisionId={selectedStateRevisionId || currentStateRevisionId}
+                            title="References used by this Experiment result context"
+                        />
                         <div className="rounded-md border border-border-primary p-3">
                             <h4 className="text-xs font-semibold uppercase tracking-wide text-content-muted">Terminal receipt result reopen</h4>
                             {receiptIds.length === 0 ? <p className="mt-2 text-xs text-content-muted">No result receipt IDs are present on terminal attempts yet.</p> : (

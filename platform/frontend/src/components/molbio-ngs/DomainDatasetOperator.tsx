@@ -16,6 +16,7 @@ import {
     type DomainDatasetMember,
     type DomainDatasetMemberDraft,
 } from '../../lib/projectManager';
+import { fetchMolBioNgsStateRevision, type DomainStateMember } from '../../lib/api';
 
 interface DomainDatasetOperatorProps {
     projectId: string;
@@ -23,6 +24,7 @@ interface DomainDatasetOperatorProps {
     domainExperimentId: string;
     canMutate: boolean;
     mutationBlocker: string | null;
+    currentStateRevisionId: string | null;
     selectedRevisionIds: string[];
     onSelectedRevisionIdsChange: (revisionIds: string[]) => void;
 }
@@ -82,6 +84,7 @@ export default function DomainDatasetOperator({
     domainExperimentId,
     canMutate,
     mutationBlocker,
+    currentStateRevisionId,
     selectedRevisionIds,
     onSelectedRevisionIdsChange,
 }: DomainDatasetOperatorProps) {
@@ -128,6 +131,12 @@ export default function DomainDatasetOperator({
         queryKey: ['domain-dataset-revision-members', ...scope, selectedDatasetId, selectedRevisionId],
         queryFn: ({ signal }) => listDomainDatasetRevisionMembers(...scope, selectedDatasetId, selectedRevisionId, signal),
         enabled: Boolean(selectedDatasetId && selectedRevisionId && revisionQuery.data?.members_uri),
+        retry: false,
+    });
+    const stateRevisionQuery = useQuery({
+        queryKey: ['molbio-ngs-state-revision', domainExperimentId, currentStateRevisionId],
+        queryFn: () => fetchMolBioNgsStateRevision(domainExperimentId, currentStateRevisionId as string),
+        enabled: Boolean(currentStateRevisionId),
         retry: false,
     });
 
@@ -177,6 +186,9 @@ export default function DomainDatasetOperator({
         return Array.from(new Map(options.map((option) => [option.role, option])).values());
     }, [selectedKind]);
     const exactMembers = revisionQuery.data?.members ?? pagedMembersQuery.data?.items ?? [];
+    const attachedReferenceMembers = (stateRevisionQuery.data?.members ?? []).filter(
+        (member: DomainStateMember) => member.entity_kind === 'molecular_revision',
+    );
 
     const invalidateDatasets = async () => {
         await Promise.all([
@@ -224,6 +236,7 @@ export default function DomainDatasetOperator({
         ?? revisionsQuery.error
         ?? revisionQuery.error
         ?? pagedMembersQuery.error
+        ?? stateRevisionQuery.error
         ?? createMutation.error
         ?? reviseMutation.error
         ?? lifecycleMutation.error;
@@ -329,6 +342,25 @@ export default function DomainDatasetOperator({
                 <section className="rounded-lg border border-border-primary bg-surface-secondary p-4">
                     <h3 className="text-sm font-semibold text-content-primary">Publish an immutable Dataset revision</h3>
                     <p className="mt-1 text-xs text-content-muted">Order is scientific authority: ordinal is derived from row position and cannot be typed independently.</p>
+                    {selectedKind?.dataset_kind === 'ngs_molbio.molecular_construct_cohort.v1' && <div className="mt-3 rounded-md border border-border-primary bg-surface p-3">
+                        <p className="text-xs font-semibold text-content-primary">Experiment reference memberships</p>
+                        <p className="mt-1 text-xs text-content-muted">A Dataset can include zero or several exact Experiment-linked references. A workflow that needs one reference requires a primary-reference choice at launch.</p>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                            {attachedReferenceMembers.map((member: DomainStateMember) => <button
+                                key={member.receipt_id}
+                                type="button"
+                                className={BUTTON_CLASS}
+                                disabled={members.some((draft) => draft.receipt_id === member.receipt_id)}
+                                onClick={() => setMembers((current) => [...current, {
+                                    receipt_id: member.receipt_id,
+                                    role: 'molecular_expected_construct',
+                                    media_type: null,
+                                    metadata: { display_label: member.entity_id, group_label: null, condition_label: null, tags: ['experiment-reference'] },
+                                }])}
+                            >Add {member.entity_id.slice(0, 8)} · {member.generation_or_revision.slice(0, 8)}</button>)}
+                            {attachedReferenceMembers.length === 0 && <span className="text-xs text-content-muted">Attach references in Molecular Inputs first.</span>}
+                        </div>
+                    </div>}
                     <div className="mt-3 space-y-3">
                         {members.map((member, index) => (
                             <div key={`${index}-${member.receipt_id}`} className="rounded-md border border-border-primary bg-surface p-3">

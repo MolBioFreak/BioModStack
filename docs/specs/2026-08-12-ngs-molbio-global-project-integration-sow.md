@@ -28,11 +28,15 @@ The accepted operator path is:
 ```text
 create NGS/MolBio Domain Experiment
 → initialize a verified local binding
-→ create or import immutable molecular material
-→ select samples and several exact revisions from the shared MolBio and NGS reference library
+→ create or import immutable molecular material through one shared reference-entry window
+→ select an existing exact revision, upload FASTA/GenBank, paste FASTA/raw nucleotides, or retrieve a versioned NCBI accession
+→ reuse an existing exact molecular revision when normalized sequence bytes have the same digest while retaining the new NGS import operation and source provenance
+→ attach several exact revisions to the owning Experiment and optionally to 0..N Dataset revisions
+→ require an explicit primary-reference choice at launch for workflows that consume one reference
 → save an exact local scientific-state revision
 → launch ONT/NGS work in that exact context
 → attach terminal evidence
+→ expose exact molecular-viewer reference links on Domain and NGS result surfaces
 → reopen PCR, comparison, QC, alignment, run, and evidence authority
 → restart
 → reopen the complete Project at the same revisions

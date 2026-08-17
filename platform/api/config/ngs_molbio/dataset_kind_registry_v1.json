@@ -1,6 +1,6 @@
 {
   "baseline_source_commit": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
-  "content_sha256": "1b2c6bfc93425bdbf1c24c747a9ed432ce3f55b335c122a6c8ebfd8c0851a1a4",
+  "content_sha256": "4fb40dc5743bf55474ad4ae4cb24e6bdca4a257094ecac9f4e9b02192a2f6d82",
   "entries": [
     {
       "allowed_domain_kinds": [
@@ -55,11 +55,11 @@
         "exact_operation_plus_ordered_inputs_outputs"
       ],
       "dataset_kind": "ngs_molbio.molecular_construct_cohort.v1",
-      "enabled": false,
-      "label": "Molecular construct cohort",
+      "enabled": true,
+      "label": "Molecular reference cohort",
       "maximum_members": 10000,
       "minimum_members": 0,
-      "owner_contract_state": "closed"
+      "owner_contract_state": "operational"
     },
     {
       "allowed_domain_kinds": [

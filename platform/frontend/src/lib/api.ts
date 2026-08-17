@@ -2747,6 +2747,9 @@ export interface MolBioSequenceImportPayload {
     topology_default: 'circular' | 'linear';
     topology_overrides?: Record<number, 'circular' | 'linear'>;
     idempotency_key: string;
+    origin_surface?: 'molbio' | 'ngs';
+    source_provider?: 'upload' | 'paste' | 'ncbi' | 'library';
+    source_id?: string;
 }
 
 export interface MolBioSequenceImportPreviewRecord {
@@ -2778,8 +2781,24 @@ export interface MolBioSequenceImportCommitResponse {
         sequence_id: string;
         name: string;
         revision_id?: string;
+        reused_existing_revision?: boolean;
     }>;
 }
+
+export interface MolBioAnnotationSourceArtifact {
+    content: string;
+    file_name: string;
+    media_type: string;
+    source: {
+        provider: 'ncbi' | 'addgene';
+        source_id: string;
+        source_url: string;
+        artifact_sha256: string;
+    };
+}
+
+export const fetchNcbiSequenceArtifact = (accession: string) =>
+    api.get<MolBioAnnotationSourceArtifact>(`/api/molbio/annotation-sources/ncbi/${encodeURIComponent(accession)}`);
 
 export const previewMolBioSequenceImport = (payload: MolBioSequenceImportPayload) =>
     api.post<MolBioSequenceImportPreviewResponse>('/api/molbio/sequences/import/preview', payload);

@@ -43,8 +43,19 @@ export default function NgsMolBioProjectHub() {
     const { workspaceId, updateQueryParams } = useGlobalExperimentContext();
     const [mode, setMode] = useState<OwnershipMode>('local-new');
     const [projectName, setProjectName] = useState('');
+    const [projectDescription, setProjectDescription] = useState('');
+    const [projectOwner, setProjectOwner] = useState('');
+    const [contributors, setContributors] = useState('');
+    const [tags, setTags] = useState('');
+    const [startDate, setStartDate] = useState('');
+    const [targetEndDate, setTargetEndDate] = useState('');
     const [experimentName, setExperimentName] = useState('');
     const [objective, setObjective] = useState('');
+    const [scientificQuestion, setScientificQuestion] = useState('');
+    const [hypothesis, setHypothesis] = useState('');
+    const [successCriteria, setSuccessCriteria] = useState('');
+    const [priority, setPriority] = useState<'low' | 'normal' | 'high' | 'critical'>('normal');
+    const [showDetails, setShowDetails] = useState(false);
     const [selectedLocalProjectId, setSelectedLocalProjectId] = useState('');
     const [targetGlobalProjectId, setTargetGlobalProjectId] = useState('');
     const [selectedExperimentIds, setSelectedExperimentIds] = useState<string[]>([]);
@@ -124,8 +135,14 @@ export default function NgsMolBioProjectHub() {
                 const project = await createProject({
                     schema: 'bms.project.v1',
                     name: projectName,
+                    description: projectDescription.trim() || undefined,
                     research_objective: objective,
+                    owner: projectOwner.trim() || null,
+                    contributors: contributors.split(',').map((value) => value.trim()).filter(Boolean),
+                    tags: tags.split(',').map((value) => value.trim()).filter(Boolean),
                     status: 'active',
+                    start_date: startDate || null,
+                    target_end_date: targetEndDate || null,
                     project_scope: 'ngs_molbio_local',
                     change_summary: 'Created in the NGS/MolBio Project layer',
                 });
@@ -136,8 +153,13 @@ export default function NgsMolBioProjectHub() {
                 schema: 'bms.global-experiment.v1',
                 name: experimentName,
                 objective,
-                scientific_question: objective,
+                scientific_question: scientificQuestion.trim() || objective,
+                hypothesis: hypothesis.trim() || null,
+                description: projectDescription.trim() || undefined,
                 status: 'planned',
+                priority,
+                tags: tags.split(',').map((value) => value.trim()).filter(Boolean),
+                success_criteria: successCriteria.split('\n').map((value) => value.trim()).filter(Boolean),
                 change_summary: mode === 'global' ? 'Created inside broader BMS Project' : 'Created inside local NGS/MolBio Project',
             });
             const domain = await createDomainExperiment(projectId, experiment.id, {
@@ -147,7 +169,7 @@ export default function NgsMolBioProjectHub() {
                 name: experimentName,
                 objective,
                 status: 'planned',
-                tags: [],
+                tags: tags.split(',').map((value) => value.trim()).filter(Boolean),
                 source_receipt_ids: [],
                 dataset_revision_ids: [],
                 change_summary: 'Created from two-tier NGS/MolBio Project authoring',
@@ -161,8 +183,18 @@ export default function NgsMolBioProjectHub() {
                 queryClient.invalidateQueries({ queryKey: ['ngs-molbio-project-authority', projectId] }),
             ]);
             setProjectName('');
+            setProjectDescription('');
+            setProjectOwner('');
+            setContributors('');
+            setTags('');
+            setStartDate('');
+            setTargetEndDate('');
             setExperimentName('');
             setObjective('');
+            setScientificQuestion('');
+            setHypothesis('');
+            setSuccessCriteria('');
+            setPriority('normal');
             updateQueryParams({
                 workspace_id: projectId,
                 global_experiment_id: experiment.id,
@@ -231,7 +263,22 @@ export default function NgsMolBioProjectHub() {
                         <label className="text-xs text-content-secondary">Contained Experiment name <span className="text-error">(required)</span><input required className={`${INPUT} mt-1`} value={experimentName} onChange={(event) => setExperimentName(event.target.value)} placeholder="Experiment" /></label>
                         <label className="text-xs text-content-secondary sm:col-span-2">Scientific objective <span className="text-error">(required)</span><textarea required className={`${INPUT} mt-1 min-h-20`} value={objective} onChange={(event) => setObjective(event.target.value)} /></label>
                     </div>
-                    <p className="mt-2 text-xs text-content-muted">Create the Project and its first contained Experiment. Add several shared reference sequences from the Experiment workspace after creation.</p>
+                    <button type="button" className={`${BUTTON} mt-3`} onClick={() => setShowDetails((value) => !value)}>{showDetails ? 'Hide Project and Experiment details' : 'Add Project and Experiment details'}</button>
+                    {showDetails && <div className="mt-3 grid gap-3 rounded-lg border border-border-primary bg-surface-secondary p-3 sm:grid-cols-2">
+                        <label className="text-xs text-content-secondary sm:col-span-2">Description<textarea className={`${INPUT} mt-1 min-h-16`} value={projectDescription} onChange={(event) => setProjectDescription(event.target.value)} /></label>
+                        {mode === 'local-new' && <>
+                            <label className="text-xs text-content-secondary">Owner<input className={`${INPUT} mt-1`} value={projectOwner} onChange={(event) => setProjectOwner(event.target.value)} /></label>
+                            <label className="text-xs text-content-secondary">Contributors, comma separated<input className={`${INPUT} mt-1`} value={contributors} onChange={(event) => setContributors(event.target.value)} /></label>
+                            <label className="text-xs text-content-secondary">Start date<input type="date" className={`${INPUT} mt-1`} value={startDate} onChange={(event) => setStartDate(event.target.value)} /></label>
+                            <label className="text-xs text-content-secondary">Target end date<input type="date" className={`${INPUT} mt-1`} value={targetEndDate} onChange={(event) => setTargetEndDate(event.target.value)} /></label>
+                        </>}
+                        <label className="text-xs text-content-secondary sm:col-span-2">Tags, comma separated<input className={`${INPUT} mt-1`} value={tags} onChange={(event) => setTags(event.target.value)} /></label>
+                        <label className="text-xs text-content-secondary sm:col-span-2">Scientific question<textarea className={`${INPUT} mt-1 min-h-16`} value={scientificQuestion} onChange={(event) => setScientificQuestion(event.target.value)} placeholder="Defaults to the objective" /></label>
+                        <label className="text-xs text-content-secondary sm:col-span-2">Hypothesis<textarea className={`${INPUT} mt-1 min-h-16`} value={hypothesis} onChange={(event) => setHypothesis(event.target.value)} /></label>
+                        <label className="text-xs text-content-secondary">Priority<select className={`${INPUT} mt-1`} value={priority} onChange={(event) => setPriority(event.target.value as typeof priority)}><option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option><option value="critical">Critical</option></select></label>
+                        <label className="text-xs text-content-secondary sm:col-span-2">Success criteria, one per line<textarea className={`${INPUT} mt-1 min-h-20`} value={successCriteria} onChange={(event) => setSuccessCriteria(event.target.value)} /></label>
+                    </div>}
+                    <p className="mt-2 text-xs text-content-muted">Create the owner hierarchy here. The Experiment workspace then provides one reference-entry window for existing library revisions, FASTA or GenBank uploads, pasted sequences, and NCBI accessions.</p>
                     <button type="button" className={`${BUTTON} mt-3`} disabled={createMutation.isPending} onClick={() => createMutation.mutate()}>
                         {createMutation.isPending ? 'Creating…' : mode === 'local-new' ? 'Create local Project and first Experiment' : mode === 'local-existing' ? 'Add contained Experiment' : 'Create global NGS/MolBio Experiment'}
                     </button>

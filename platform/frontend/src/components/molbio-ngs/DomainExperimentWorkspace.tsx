@@ -756,6 +756,7 @@ export default function DomainExperimentWorkspace() {
                 domainExperimentId={domainExperimentId}
                 canMutate={datasetMutationBlocker === null}
                 mutationBlocker={datasetMutationBlocker}
+                currentStateRevisionId={stateQuery.data?.current_state_revision_id ?? null}
                 selectedRevisionIds={selectedDatasetRevisionIds}
                 onSelectedRevisionIdsChange={updateSelectedDatasetRevisionIds}
             />

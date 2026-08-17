@@ -42,6 +42,7 @@ import { SequenceQcManifestPanel } from './ngs/SequenceQcManifestPanel';
 import { useSequenceQcManifest } from './ngs/useSequenceQcManifest';
 import { useThemeColors, useThemePlotlyLayout } from './useThemeColors';
 import { useGlobalExperimentContext } from './experiments/GlobalExperimentContext';
+import ExperimentReferenceLinks from './molbio-ngs/ExperimentReferenceLinks';
 
 type ToolkitView = NgsToolkitView;
 type LogTab = 'parsed' | 'command' | 'stderr' | 'nextflow';
@@ -2095,7 +2096,7 @@ function formatParamValue(value: unknown): string {
 
 export function NGSToolkit() {
     const queryClient = useQueryClient();
-    const { updateQueryParams, contextHref } = useGlobalExperimentContext();
+    const { updateQueryParams, contextHref, domainExperimentId, stateRevisionId } = useGlobalExperimentContext();
     const location = useLocation();
     const navigate = useNavigate();
     const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
@@ -4233,6 +4234,12 @@ export function NGSToolkit() {
                                         <div className="text-[var(--text-primary)]">{new Date(selectedJob.created_at).toLocaleString()}</div>
                                     </div>
                                 </div>
+
+                                <ExperimentReferenceLinks
+                                    domainExperimentId={domainExperimentId}
+                                    stateRevisionId={stateRevisionId}
+                                    title="Exact molecular references for this NGS result"
+                                />
 
                                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                                     {[
