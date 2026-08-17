@@ -5453,7 +5453,12 @@ async def _create_job(
         job_data.params = _normalize_structure_runtime_paths(job_data.model_id, job_data.params)
         job_data.params = _normalize_structure_geometry_params(job_data.params)
         job_data.params = _normalize_boltz_no_msa_quality_params(job_data.model_id, job_data.mode, job_data.params)
-        if not (normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign"):
+        is_protein_local_redesign = (
+            normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign"
+        ) or (
+            normalized_model_id == "protein_modification_experimental" and normalized_mode == "region_redesign"
+        )
+        if not is_protein_local_redesign:
             job_data.params = _normalize_antibody_job_params(job_data.params)
 
         if normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign":

@@ -69,9 +69,14 @@ def test_native_request_artifact_must_equal_the_immutable_request(tmp_path: Path
         )
 
 
-def test_native_job_ingress_bypasses_antibody_defaults_before_contract_validation() -> None:
+def test_all_protein_local_ingress_bypasses_antibody_defaults_before_contract_validation() -> None:
     jobs_source = (API_ROOT / "routers" / "jobs.py").read_text(encoding="utf-8")
-    expected = '''if not (normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign"):
+    expected = '''is_protein_local_redesign = (
+            normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign"
+        ) or (
+            normalized_model_id == "protein_modification_experimental" and normalized_mode == "region_redesign"
+        )
+        if not is_protein_local_redesign:
             job_data.params = _normalize_antibody_job_params(job_data.params)
 
         if normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign":'''
@@ -480,6 +485,7 @@ def test_experimental_protein_local_redesign_maps_validator_suite() -> None:
             "input_pdb": "/tmp/input.pdb",
             "design_chains": "A",
             "structure_validators": ["esmfold2", "protenix_v2"],
+            "msa_provider": "local",
         },
         "/tmp/out",
         job_id="job-123",
@@ -488,6 +494,7 @@ def test_experimental_protein_local_redesign_maps_validator_suite() -> None:
     joined = " ".join(cmd)
     assert "--plr_structure_validators esmfold2,protenix_v2" in joined
     assert "--plr_validator_suite_active true" in joined
+    assert "--protenix_msa_backend local" in joined
 
 
 @pytest.mark.parametrize(

@@ -158,6 +158,62 @@ class GPUProcess(BaseModel):
     memory_mb: int
 
 
+def _infer_gpu_process_label(proc_name: str, cmdline: Optional[List[str]]) -> str:
+    """Infer a model label only from the live process identity."""
+    base_name = proc_name or ""
+    cmdline_list = cmdline or []
+    cmdline_str = " ".join(cmdline_list)
+    haystack = f"{base_name} {cmdline_str}".lower()
+
+    patterns = [
+        ("dorado_basecall_server", "Dorado Basecall Server"),
+        ("dorado-basecall-server", "Dorado Basecall Server"),
+        ("dorado_basecall", "Dorado Basecall Server"),
+        ("basecall_manager", "Basecall Manager"),
+        ("run_esmfold2", "ESMFold2"),
+        ("esmfold2", "ESMFold2"),
+        ("run_protenix_inference", "Protenix V2"),
+        ("protenix", "Protenix V2"),
+        ("seq_design.py", "FAMPNN"),
+        ("fampnn", "FAMPNN"),
+        ("thermompnn", "ThermoMPNN"),
+        ("ppiflow", "PPIFlow"),
+        ("rfdiffusion_inference.py", "RFantibody"),
+        ("rfantibody", "RFantibody"),
+        ("boltzgen", "BoltzGen"),
+        ("boltz", "Boltz-2"),
+        ("af2_backprop", "AF2 Backprop"),
+        ("alphafold", "AlphaFold2"),
+        ("af2", "AlphaFold2"),
+        ("diffdock", "DiffDock"),
+        ("unidock", "Uni-Dock"),
+        ("frustrampnn", "FrustraMPNN"),
+        ("frustra", "FrustraMPNN"),
+        ("ligandmpnn", "LigandMPNN"),
+        ("proteinmpnn", "ProteinMPNN"),
+        ("mpnn", "ProteinMPNN"),
+        ("rfd3", "RFdiffusion3"),
+        ("rfdiffusion", "RFdiffusion"),
+        ("rf3", "RoseTTAFold3"),
+        ("openmm", "OpenMM"),
+        ("antiberty", "AntiBERTy"),
+        ("anarcii", "ANARCII"),
+        ("immunebuilder", "ImmuneBuilder"),
+    ]
+    for key, label in patterns:
+        if key in haystack:
+            return label
+
+    if base_name.lower() in ["python", "python3", "python3.10", "python3.11"]:
+        if len(cmdline_list) > 1:
+            script_idx = 2 if cmdline_list[1] == "-m" and len(cmdline_list) > 2 else 1
+            script = os.path.basename(cmdline_list[script_idx])
+            if script:
+                return script
+    pretty_name = re.sub(r"[_-]+", " ", base_name).strip()
+    return pretty_name or base_name
+
+
 class GPUStatusEnhanced(BaseModel):
     """Enhanced GPU status with all metrics."""
     index: int
@@ -2050,64 +2106,6 @@ def _collect_gpu_stats() -> tuple[List[GPUStatusEnhanced], Optional[str]]:
             except pynvml.NVMLError:
                 clock_graphics = clock_memory = clock_max_graphics = clock_max_memory = 0
 
-            def _infer_process_label(proc_name: str, cmdline: Optional[List[str]]) -> str:
-                """Infer a human-friendly label from process name/cmdline."""
-                base_name = proc_name or ""
-                cmdline_list = cmdline or []
-                cmdline_str = " ".join(cmdline_list)
-                haystack = f"{base_name} {cmdline_str}".lower()
-
-                # Order matters: more specific first to avoid false matches
-                patterns = [
-                    ("dorado_basecall_server", "Dorado Basecall Server"),
-                    ("dorado-basecall-server", "Dorado Basecall Server"),
-                    ("dorado_basecall", "Dorado Basecall Server"),
-                    ("basecall_manager", "Basecall Manager"),
-                    ("fampnn", "FAMPNN"),
-                    ("seq_design.py", "FAMPNN"),
-                    ("thermompnn", "ThermoMPNN"),
-                    ("ppiflow", "PPIFlow"),
-                    ("rfdiffusion_inference.py", "RFantibody"),
-                    ("rfantibody", "RFantibody"),
-                    ("boltzgen", "BoltzGen"),
-                    ("boltz", "Boltz-2"),
-                    ("af2_backprop", "AF2 Backprop"),
-                    ("alphafold", "AlphaFold2"),
-                    ("af2", "AlphaFold2"),
-                    ("diffdock", "DiffDock"),
-                    ("unidock", "Uni-Dock"),
-                    # MPNN variants - specific first, generic last
-                    ("fampnn", "FAMPNN"),
-                    ("frustrampnn", "FrustraMPNN"),
-                    ("frustra", "FrustraMPNN"),
-                    ("ligandmpnn", "LigandMPNN"),
-                    ("thermompnn", "ThermoMPNN"),
-                    ("proteinmpnn", "ProteinMPNN"),
-                    ("mpnn", "ProteinMPNN"),  # Generic fallback
-                    ("rfd3", "RFdiffusion3"),
-                    ("rfdiffusion", "RFdiffusion"),
-                    ("rf3", "RoseTTAFold3"),
-                    ("openmm", "OpenMM"),
-                    ("antiberty", "AntiBERTy"),
-                    ("anarcii", "ANARCII"),
-                    ("immunebuilder", "ImmuneBuilder"),
-                ]
-                for key, label in patterns:
-                    if key in haystack:
-                        return label
-
-                # If it's a generic python process, try to show the script name
-                if base_name.lower() in ["python", "python3", "python3.10", "python3.11"]:
-                    if cmdline_list and len(cmdline_list) > 1:
-                        script_idx = 1
-                        if cmdline_list[1] == "-m" and len(cmdline_list) > 2:
-                            script_idx = 2
-                        script = os.path.basename(cmdline_list[script_idx])
-                        if script:
-                            return script
-                pretty_name = re.sub(r"[_-]+", " ", base_name).strip()
-                return pretty_name or base_name
-
             # Processes
             processes = []
             try:
@@ -2118,7 +2116,7 @@ def _collect_gpu_stats() -> tuple[List[GPUStatusEnhanced], Optional[str]]:
                         p = psutil.Process(proc.pid)
                         proc_name = p.name()
                         cmdline = p.cmdline()
-                        proc_name = _infer_process_label(proc_name, cmdline)
+                        proc_name = _infer_gpu_process_label(proc_name, cmdline)
                     except:
                         proc_name = f"PID {proc.pid}"
 
@@ -2130,41 +2128,6 @@ def _collect_gpu_stats() -> tuple[List[GPUStatusEnhanced], Optional[str]]:
             except pynvml.NVMLError:
                 pass
 
-            # Post-process: Rename "python" / "python3" with better labels
-            # Use model_type from active reservations if available
-            if i in reservations and reservations[i] > 0:
-                # Get model type(s) for this GPU
-                model_types = []
-                if i in gpu_job_info:
-                    for job_name, model_type in gpu_job_info[i]:
-                        model_types.append(model_type)
-
-                # Create display name
-                if model_types:
-                    # Map model types to display names - MPNN variants explicitly listed
-                    MODEL_DISPLAY = {
-                        'boltz': 'Boltz-2', 'boltz_batch': 'Boltz-2 Batch',
-                        'rf3': 'RoseTTAFold3', 'af2': 'AlphaFold2',
-                        'rfdiffusion': 'RFdiffusion', 'rfantibody': 'RFantibody',
-                        # MPNN variants
-                        'fampnn': 'FAMPNN', 'frustrampnn': 'FrustraMPNN',
-                        'ligandmpnn': 'LigandMPNN', 'thermompnn': 'ThermoMPNN',
-                        'mpnn': 'ProteinMPNN', 'proteinmpnn': 'ProteinMPNN',
-                        # Other
-                        'diffdock': 'DiffDock', 'unidock': 'Uni-Dock',
-                        'boltzgen': 'BoltzGen', 'antibody_child': 'Antibody Validation',
-                    }
-                    display_names = [MODEL_DISPLAY.get(m, m) for m in model_types]
-                    process_label = ", ".join(display_names[:2])  # Max 2 labels
-                    if len(display_names) > 2:
-                        process_label += f" +{len(display_names) - 2}"
-                else:
-                    process_label = "Job (Allocated)"
-                
-                for p in processes:
-                    if p.name in ["python", "python3"]:
-                        p.name = process_label
-            
             # Get hardware limits for this GPU. If explicit constraints are not
             # discoverable, collapse the display range to the live cap instead
             # of fabricating writable defaults.

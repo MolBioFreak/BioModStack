@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 import { getProteinLocalRedesignUiState } from '../src/components/proteinLocalRedesignUiState';
 
@@ -37,4 +39,15 @@ test('legacy local redesign keeps its existing downstream stage controls', () =>
             sequenceSectionLabel: 'Sequence Redesign',
         },
     );
+});
+
+test('queue stage labels identify each protein local model', () => {
+    const source = readFileSync(
+        fileURLToPath(new URL('../src/components/JobQueuePanel.tsx', import.meta.url)),
+        'utf8',
+    );
+    assert.match(source, /'runrfd3': 'RFD3'/);
+    assert.match(source, /'fampnn': 'FA-MPNN'/);
+    assert.match(source, /'esmfold2frompdb': 'ESMFold2'/);
+    assert.match(source, /'protenix': 'Protenix'/);
 });

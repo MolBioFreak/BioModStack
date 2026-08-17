@@ -3750,6 +3750,17 @@ def build_nextflow_command(
 
         if params.get('plr_structure_validators'):
             params['plr_validator_suite_active'] = True
+            raw_validators = params['plr_structure_validators']
+            validator_tokens = raw_validators if isinstance(raw_validators, list) else str(raw_validators).split(',')
+            selected_validators = {
+                str(token).strip().lower()
+                for token in validator_tokens
+                if str(token).strip()
+            }
+            if 'protenix_v2' in selected_validators and not params.get('protenix_msa_backend'):
+                requested_msa_provider = str(params.get('msa_provider', '')).strip().lower()
+                if requested_msa_provider in {'local', 'colabfold_api'}:
+                    params['protenix_msa_backend'] = requested_msa_provider
 
         if 'plr_num_designs' in params and 'rfd_num_designs' not in params:
             params['rfd_num_designs'] = params['plr_num_designs']
