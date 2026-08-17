@@ -15,6 +15,7 @@ import {
     type JsonObject,
 } from '../../lib/projectManager';
 import { useGlobalExperimentContext } from '../experiments/GlobalExperimentContext';
+import DomainExperimentWorkspace from './DomainExperimentWorkspace';
 
 const INPUT = 'w-full rounded-lg border border-border-primary bg-surface px-3 py-2 text-sm text-content-primary';
 const BUTTON = 'rounded-lg border border-border-primary bg-surface px-3 py-2 text-xs font-semibold text-content-primary hover:border-primary/60 disabled:cursor-not-allowed disabled:opacity-40';
@@ -240,8 +241,9 @@ export default function NgsMolBioProjectHub() {
     const error = createMutation.error ?? linkMutation.error ?? localProjectsQuery.error ?? globalProjectsQuery.error ?? localHierarchyQuery.error ?? shareableResultsQuery.error;
 
     return (
-        <section className="mb-4 rounded-2xl border border-border-primary bg-surface-secondary/80 p-4 shadow-sm">
-            <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="w-full max-w-none rounded-2xl border border-border-primary bg-surface-secondary/80 shadow-sm">
+            <section className="p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                     <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">Two-tier ownership</p>
                     <h2 className="mt-1 text-lg font-semibold text-content-primary">NGS/MolBio Projects</h2>
@@ -334,6 +336,9 @@ export default function NgsMolBioProjectHub() {
             )}
 
             {error && <p className="mt-3 rounded-lg border border-error/40 bg-error/10 px-3 py-2 text-xs text-error">{projectManagerErrorMessage(error)}</p>}
-        </section>
+            </section>
+
+            <DomainExperimentWorkspace />
+        </div>
     );
 }

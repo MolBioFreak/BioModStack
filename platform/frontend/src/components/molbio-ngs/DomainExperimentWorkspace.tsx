@@ -801,7 +801,7 @@ export default function DomainExperimentWorkspace() {
     };
 
     return (
-        <div className="w-full max-w-none border-b border-border-primary bg-surface px-3 py-4 sm:px-5 lg:px-6">
+        <div className="w-full max-w-none px-4 pb-4 sm:px-5 lg:px-6">
             <div className="mx-0 w-full max-w-none space-y-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>

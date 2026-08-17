@@ -3,7 +3,6 @@ import { Navigate, Routes, Route, useLocation, useParams } from 'react-router-do
 import { HotkeysProvider } from '@blueprintjs/core';
 import { Layout } from './components/Layout';
 import { GlobalExperimentProvider } from './components/experiments/GlobalExperimentContext';
-import DomainExperimentWorkspace from './components/molbio-ngs/DomainExperimentWorkspace';
 import NgsMolBioProjectHub from './components/molbio-ngs/NgsMolBioProjectHub';
 import { useResolvedBmsFeatures } from './runtime/installFeatures';
 
@@ -88,23 +87,21 @@ function App() {
             <Route
               path="/designer"
               element={(
-                <div className="w-full max-w-none">
-                  <NgsMolBioProjectHub />
-                  <DomainExperimentWorkspace />
-                  <MolBioToolkitV2 />
-                </div>
-              )}
+                  <div className="w-full max-w-none">
+                    <NgsMolBioProjectHub />
+                    <MolBioToolkitV2 />
+                  </div>
+                )}
             />
             {/* NGS Data Visualization Toolkit - Nanopore-focused orchestration surface */}
             <Route
               path="/ngs"
               element={(
-                <div className="w-full max-w-none">
-                  <NgsMolBioProjectHub />
-                  <DomainExperimentWorkspace />
-                  <NGSToolkit />
-                </div>
-              )}
+                  <div className="w-full max-w-none">
+                    <NgsMolBioProjectHub />
+                    <NGSToolkit />
+                  </div>
+                )}
             />
             {/* Isolated Stats Toolkit rendered inside the BioModStack workspace. */}
             <Route path="/stats" element={<StatsToolkitLauncher />} />
