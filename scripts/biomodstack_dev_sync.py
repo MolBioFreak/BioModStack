@@ -25,6 +25,7 @@ SYNC_SERVICE = "biomodstack-dev-sync.service"
 SYNC_TIMER = "biomodstack-dev-sync.timer"
 SYNC_INTERVAL_SECONDS = 60
 SYNC_QUEUE_FILENAME = "dev-sync-queue.json"
+SYNC_CONTROL_FILENAME = "dev-sync-control.json"
 DEFAULT_CANONICAL_ROOT = Path("/home/dalab/biomodstack/dev-test-canonical")
 DEFAULT_STATE_DIR = Path.home() / ".local" / "state" / "biomodstack"
 SyncDecision = Literal[
@@ -32,6 +33,7 @@ SyncDecision = Literal[
     "blocked-diverged",
     "blocked-health-unavailable",
     "deferred-active-work",
+    "paused",
     "fast-forward-deploy",
     "deploy-current",
     "idle",
@@ -215,6 +217,31 @@ def _clear_queued_revision(state_dir: Path) -> None:
         pass
 
 
+def _read_deployment_paused(state_dir: Path) -> bool:
+    path = state_dir / SYNC_CONTROL_FILENAME
+    if not path.exists():
+        return False
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Development sync control is unreadable: {path}") from exc
+    paused = payload.get("deployment_paused") if isinstance(payload, dict) else None
+    if not isinstance(paused, bool):
+        raise RuntimeError(f"Development sync control is malformed: {path}")
+    return paused
+
+
+def set_deployment_paused(state_dir: Path, paused: bool) -> None:
+    state_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = state_dir / "dev-sync.lock"
+    with lock_path.open("a+", encoding="utf-8") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        _write_json_file(
+            state_dir / SYNC_CONTROL_FILENAME,
+            {"deployment_paused": paused},
+        )
+
+
 def sync_once(root: Path, state_dir: Path) -> SyncDecision:
     root = root.resolve()
     if not (root / ".git").exists() and not (root / ".git").is_file():
@@ -229,6 +256,7 @@ def sync_once(root: Path, state_dir: Path) -> SyncDecision:
         _git(root, "fetch", "--quiet", "origin", "+refs/heads/test:refs/remotes/origin/test")
         remote = _git(root, "rev-parse", "refs/remotes/origin/test")
         queued_revision = _read_queued_revision(state_dir)
+        deployment_paused = _read_deployment_paused(state_dir)
         ancestry = _run(
             root,
             "git",
@@ -260,6 +288,7 @@ def sync_once(root: Path, state_dir: Path) -> SyncDecision:
             "remote_revision": remote,
             "deployed_revision_before": deployed,
             "active_work_count": active_work_count,
+            "deployment_paused": deployment_paused,
             "poll_interval_seconds": SYNC_INTERVAL_SECONDS,
             "queue_state": "pending" if queued_revision is not None else "empty",
             "queued_revision": queued_revision,
@@ -267,6 +296,10 @@ def sync_once(root: Path, state_dir: Path) -> SyncDecision:
         if decision.startswith("blocked-"):
             _write_receipt(state_dir, receipt)
             raise RuntimeError(f"Development sync {decision}: canonical={local} origin/test={remote}")
+        if deployment_paused:
+            receipt["decision"] = "paused"
+            _write_receipt(state_dir, receipt)
+            return "paused"
         if decision == "deferred-active-work":
             _write_receipt(state_dir, receipt)
             return decision
@@ -352,6 +385,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Sync canonical BioModStack Development from origin/test every 60 seconds")
     parser.add_argument("--once", action="store_true", help="run one synchronization transaction")
     parser.add_argument("--install", action="store_true", help="install and enable the 60-second user timer")
+    control_group = parser.add_mutually_exclusive_group()
+    control_group.add_argument("--pause-deploy", action="store_true", help="pause automatic Development deployment")
+    control_group.add_argument("--resume-deploy", action="store_true", help="resume automatic Development deployment and poll now")
     parser.add_argument("--root", type=Path, default=Path(os.getenv("BMS_DEV_CANONICAL_ROOT", DEFAULT_CANONICAL_ROOT)))
     parser.add_argument("--state-dir", type=Path, default=DEFAULT_STATE_DIR)
     parser.add_argument("--systemd-dir", type=Path, default=Path.home() / ".config" / "systemd" / "user")
@@ -361,11 +397,20 @@ def main() -> int:
             install_sync_units(args.root, args.systemd_dir, state_dir=args.state_dir)
             print(f"Installed {SYNC_TIMER}: origin/test is checked every {SYNC_INTERVAL_SECONDS} seconds")
             return 0
+        if args.pause_deploy:
+            set_deployment_paused(args.state_dir, True)
+            print("Paused automatic Development deployment; polling continues")
+            return 0
+        if args.resume_deploy:
+            set_deployment_paused(args.state_dir, False)
+            _run(args.root, "systemctl", "--user", "start", SYNC_SERVICE)
+            print("Resumed automatic Development deployment and started one poll")
+            return 0
         if args.once:
             decision = sync_once(args.root, args.state_dir)
             print(json.dumps({"decision": decision, "poll_interval_seconds": SYNC_INTERVAL_SECONDS}, sort_keys=True))
             return 0
-        parser.error("one of --once or --install is required")
+        parser.error("one of --once, --install, --pause-deploy, or --resume-deploy is required")
     except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
