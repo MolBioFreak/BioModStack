@@ -32,10 +32,10 @@ This spec freezes the fix contract for these deficiencies, aligned to the source
 
 | Identity | Frozen value |
 |---|---|
-| Worktree | `/home/dalab/worktrees/bms-x-oem-terminal-20260817` |
-| Base HEAD | `aec08cb6439f9c48d216522d2a9e1a5c26b393f0` |
-| Base HEAD tree | `c330a3ce6fc1fe5a841a9f90ca6aa2b0a02e8654` |
-| `origin/test` at base | `aec08cb6439f9c48d216522d2a9e1a5c26b393f0`; exact match |
+| Worktree | `/home/dalab/worktrees/bms-x-oem-terminal-20260817` (frozen 2026-08-18; implementation proceeds in a fresh worktree) |
+| Base HEAD (freeze) | `aa5d4580e6ebf0f8713c4838da1f54f97f8416b5` |
+| Base HEAD tree (freeze) | `d9de7c69755729ec61b8c831648638669f4bd226` |
+| `origin/test` at freeze | `aa5d4580e6ebf0f8713c4838da1f54f97f8416b5`; exact match |
 | `platform/frontend/src/lib/bioxpClient.ts` | blob `f7b95423528736477a54c6ae919731f48473f522` |
 | `platform/frontend/src/components/BioXpCockpit.tsx` | blob `4a72b6bda511a00038a0efe3581c74f7e5d46659` |
 | `platform/api/routers/bioxp/operator_controls.py` | blob `318bfda978284c5585c43e197dab12f212a1ee4c` |
