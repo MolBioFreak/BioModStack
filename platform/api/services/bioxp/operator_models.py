@@ -1484,6 +1484,7 @@ class OperatorDashboardXMoveXYAxisEvidence(BaseModel):
     controller_error_events: list[OperatorDashboardXBusEvent]
     position: OperatorDashboardXYPositionReadback
     position_verified: StrictBool
+    position_delta_steps: StrictInt | None = None
     terminal_speed: OperatorDashboardXYSpeedReadback
     terminal_speed_verified: StrictBool
     ok: StrictBool
@@ -2409,6 +2410,7 @@ class OperatorDashboardXIssuedMoveFailure(BaseModel):
     target_event_128_verified: StrictBool | None = None
     target_event_128_observed: StrictBool | None = None
     target_position_verified: StrictBool | None = None
+    target_position_delta_steps: StrictInt | None = None
     controller_terminal_state_verified: StrictBool | None = None
     physical_effect_verified: StrictBool | None = None
     safety_stop: OperatorDashboardXExactStopResult | OperatorDashboardXOmissionMarker | None = None
@@ -2509,6 +2511,7 @@ class OperatorDashboardXRelativeMoveFailure(BaseModel):
     target_events: list[OperatorDashboardXBusEvent] | OperatorDashboardXOmissionMarker | None = None
     target_event_128_verified: StrictBool | None = None
     target_position_verified: StrictBool | None = None
+    target_position_delta_steps: StrictInt | None = None
     safety_stop: OperatorDashboardXExactStopResult | OperatorDashboardXOmissionMarker | None = None
     reference_desync: OperatorDashboardXReferenceAuthorityEffect | None = None
     acceleration_set: OperatorDashboardXParameterWrite | OperatorDashboardXOmissionMarker | None = None
