@@ -713,6 +713,10 @@ export function BioXpCockpit() {
                     connected={linkConnected && operatorCatalog.data !== undefined}
                     pipettes={operatorCatalog.data?.dashboard.pipettes}
                     freshness={operatorCatalog.data?.dashboard.snapshot.freshness}
+                    actions={catalog?.actions}
+                    catalogLoading={operatorCatalog.isLoading}
+                    invokePending={invokeOperatorAction.isPending}
+                    invokeAction={(actionId, inputs) => invokeAction(actionId, inputs)}
                 />
                 {invokeOperatorAction.error && (
                     <p role="alert" className="mt-3 whitespace-pre-wrap break-words text-sm text-red-300">{bioXpErrorText(invokeOperatorAction.error)}</p>

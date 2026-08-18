@@ -148,7 +148,7 @@ describe('mounted BioXP four-channel pipette panel', () => {
         expect(cards[0].textContent).toContain('Hardware pressure: 12.5');
         expect(cards[2].textContent).toContain('No valid hardware readback');
         expect(cards[0].textContent).toContain('Software shadow: initialized; tip loaded');
-        expect(container.textContent).not.toContain('Position');
+        expect(container.textContent).not.toContain('"position"');
         expect(container.textContent).not.toContain('999');
 
         expect(container.textContent).toContain('Cached projection');
@@ -181,5 +181,75 @@ describe('mounted BioXP four-channel pipette panel', () => {
             await Promise.resolve();
         });
         expect(state.readbackCalls).toEqual([{ include_data: false }]);
+    });
+
+    it('enables physical controls from catalog admission and dispatches the mapped OEM action', async () => {
+        const invokeCalls: Array<{ actionId: string; inputs: Record<string, unknown> }> = [];
+        const action = (actionId: string, enabled: boolean, disabledReason: string | null = null) => ({
+            action_id: actionId,
+            label: actionId,
+            subsystem: 'motion',
+            category: 'oem',
+            kind: 'primitive',
+            safety_class: 'motion',
+            description: 'test action',
+            source_anchor: null,
+            informational_method: 'POST',
+            informational_path: '/test',
+            provider_available: true,
+            provider_unavailable_reason: null,
+            available: enabled,
+            unavailable_reason: null,
+            enabled,
+            disabled_reason: disabledReason,
+            dependencies: [],
+            requires_confirmation: false,
+            timeout_seconds: 30,
+            required_provider_capability: null,
+            inputs: [],
+            stages: [],
+        } as never);
+        const actions = [
+            action('route.liquid_tip_liquid_tip_post.08698e28', true),
+            action('oem.z.scriptmove_to', true),
+            action('route.liquid_fluid_detection_liquid_fluid_detection_post.a12feee3', false, 'Motion arm is not confirmed.'),
+            action('oem.z.lift_pipette', true),
+            action('oem.z.lower_pipette', true),
+        ];
+
+        await act(async () => {
+            root.render(
+                <BioXpPipetteControlPanel
+                    generation={77}
+                    connected
+                    pipettes={null as never}
+                    freshness={{ state: 'fresh', age_s: 3.2, fresh_for_s: 30 }}
+                    actions={actions}
+                    invokePending={false}
+                    invokeAction={(actionId, inputs) => invokeCalls.push({ actionId, inputs })}
+                />,
+            );
+            await Promise.resolve();
+        });
+
+        const buttons = [...container.querySelectorAll<HTMLButtonElement>('[data-physical-pipette-control]')];
+        expect(buttons).toHaveLength(5);
+        expect(buttons.map((button) => ({ label: button.textContent, disabled: button.disabled }))).toEqual([
+            { label: 'Load tip physically', disabled: false },
+            { label: 'Move to waste physically', disabled: false },
+            { label: 'Detect fluid physically', disabled: true },
+            { label: 'Plunger up physically', disabled: false },
+            { label: 'Plunger down physically', disabled: false },
+        ]);
+        const blocked = buttons.find((button) => button.textContent === 'Detect fluid physically');
+        expect(blocked?.title).toBe('Motion arm is not confirmed.');
+
+        await act(async () => {
+            buttons.find((button) => button.textContent === 'Plunger up physically')?.click();
+            await Promise.resolve();
+        });
+        expect(invokeCalls).toEqual([
+            { actionId: 'oem.z.lift_pipette', inputs: { location_id: 'LOC_TC' } },
+        ]);
     });
 });

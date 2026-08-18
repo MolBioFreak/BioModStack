@@ -2,6 +2,7 @@ import { useState } from 'react';
 
 import {
     bioXpErrorText,
+    type BioXpOperatorActionSpec,
     type BioXpOperatorDashboard,
     type BioXpPipetteApplicationOperation,
     type BioXpPipetteApplicationPlanRequest,
@@ -19,6 +20,10 @@ type Props = {
     connected?: boolean;
     pipettes?: BioXpOperatorDashboard['pipettes'];
     freshness?: SnapshotFreshness;
+    actions?: BioXpOperatorActionSpec[];
+    catalogLoading?: boolean;
+    invokePending?: boolean;
+    invokeAction?: (actionId: string, inputs: Record<string, unknown>) => void;
 };
 
 const OPERATIONS: BioXpPipetteApplicationOperation[] = [
@@ -28,6 +33,14 @@ const OPERATIONS: BioXpPipetteApplicationOperation[] = [
     'plunger_up',
     'plunger_down',
 ];
+
+const PHYSICAL_ACTION_IDS = [
+    'route.liquid_tip_liquid_tip_post.08698e28',
+    'oem.z.scriptmove_to',
+    'route.liquid_fluid_detection_liquid_fluid_detection_post.a12feee3',
+    'oem.z.lift_pipette',
+    'oem.z.lower_pipette',
+] as const;
 
 const PHYSICAL_CONTROLS = [
     'Load tip physically',
@@ -83,7 +96,7 @@ function ChannelCard({ channelId, channel }: { channelId: 0 | 1 | 2 | 3; channel
     );
 }
 
-export function BioXpPipetteControlPanel({ generation = 0, connected = true, pipettes, freshness }: Props) {
+export function BioXpPipetteControlPanel({ generation = 0, connected = true, pipettes, freshness, actions = [], catalogLoading = false, invokePending = false, invokeAction }: Props) {
     const status = useBioXpPipetteApplicationStatus(generation, connected);
     const planner = usePlanBioXpPipetteApplication();
     const readback = useReadBioXpPipetteReadback();
@@ -95,7 +108,35 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
     const [tipLocation, setTipLocation] = useState<0 | 1 | 2 | 3>(0);
     const [homeZAfter, setHomeZAfter] = useState(true);
     const [fluidClass, setFluidClass] = useState<'TC' | 'MS' | 'OC' | 'RC' | 'STRIP'>('TC');
+    const [plungerLocation, setPlungerLocation] = useState('LOC_TC');
     const [localError, setLocalError] = useState<string | null>(null);
+
+    const actionById = (actionId: string) => actions.find((action) => action.action_id === actionId);
+    const physicalActionEnabled = (actionId: string) => actionById(actionId)?.enabled === true;
+    const physicalActionReason = (actionId: string, fallback: string) => (
+        actionById(actionId)?.disabled_reason ?? actionById(actionId)?.unavailable_reason ?? fallback
+    );
+    const physicalInputsFor = (control: typeof PHYSICAL_CONTROLS[number]): Record<string, unknown> => {
+        switch (control) {
+            case 'Load tip physically':
+                return { action: 'load' };
+            case 'Move to waste physically':
+                return { location_id: 'WASTE_BIN' };
+            case 'Detect fluid physically':
+                return { dry_run: false };
+            case 'Plunger up physically':
+                return { location_id: plungerLocation };
+            case 'Plunger down physically':
+                return { location_id: plungerLocation, overpress: false };
+        }
+    };
+    const physicalActionIdFor = (control: typeof PHYSICAL_CONTROLS[number]) => PHYSICAL_ACTION_IDS[PHYSICAL_CONTROLS.indexOf(control)];
+    const dispatchPhysical = (control: typeof PHYSICAL_CONTROLS[number]) => {
+        if (!invokeAction) return;
+        const actionId = physicalActionIdFor(control);
+        if (actionById(actionId)?.enabled !== true) return;
+        invokeAction(actionId, physicalInputsFor(control));
+    };
 
     const application = pipettes?.application ?? status.data;
     const blocker = application?.blocker ?? 'physical_pipette_execution_not_authorized';
@@ -138,7 +179,7 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
             <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                     <h3 className="font-semibold text-amber-100">Four-channel pipette controls</h3>
-                    <p className="mt-1 text-xs text-amber-200">Cached/software state and nested hardware-query evidence are shown separately. Physical application execution remains robot-owned and blocked.</p>
+                    <p className="mt-1 text-xs text-amber-200">Cached/software state and nested hardware-query evidence are shown separately. Physical controls dispatch robot-owned OEM actions through the same admission gate as the X/Y/Z and gripper controls; the no-motion application planner stays plan-only.</p>
                 </div>
                 <div className="text-right text-xs text-slate-300">
                     <p>Cached projection · live query performed {String(pipettes?.live_query_performed ?? false)}</p>
@@ -197,11 +238,36 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
                 </p>
             )}
             <div className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
-                {PHYSICAL_CONTROLS.map((label) => (
-                    <button key={label} type="button" data-physical-pipette-control disabled className="rounded border border-slate-700 bg-slate-900 px-2 py-2 text-xs text-slate-500 disabled:cursor-not-allowed">
-                        {label}
-                    </button>
-                ))}
+                {PHYSICAL_CONTROLS.map((label) => {
+                    const actionId = physicalActionIdFor(label);
+                    const enabled = physicalActionEnabled(actionId);
+                    const reason = physicalActionReason(actionId, 'Robot-owned exact OEM pipette action.');
+                    return (
+                        <button
+                            key={label}
+                            type="button"
+                            data-physical-pipette-control
+                            disabled={!connected || catalogLoading || invokePending || !enabled}
+                            title={enabled ? 'Robot-owned exact OEM pipette action' : reason}
+                            onClick={() => dispatchPhysical(label)}
+                            className={enabled
+                                ? 'rounded border border-amber-600 bg-amber-800 px-2 py-2 text-xs text-amber-50 hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-35'
+                                : 'rounded border border-slate-700 bg-slate-900 px-2 py-2 text-xs text-slate-500 disabled:cursor-not-allowed'}
+                        >{label}</button>
+                    );
+                })}
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-300">
+                <label className="flex items-center gap-2">
+                    Plunger Z location
+                    <input
+                        value={plungerLocation}
+                        onChange={(event) => setPlungerLocation(event.target.value.trim().toUpperCase())}
+                        placeholder="LOC_TC"
+                        className="w-40 rounded bg-slate-900 px-2 py-1 font-mono text-xs"
+                    />
+                </label>
+                <span className="text-slate-500">PositionTable location for plunger up/down Z moves (e.g. LOC_TC, WASTE_BIN).</span>
             </div>
 
             <div className="mt-4 rounded border border-slate-700 bg-slate-950/40 p-3">
