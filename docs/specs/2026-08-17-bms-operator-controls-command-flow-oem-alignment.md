@@ -2,7 +2,7 @@
 
 **Work package:** WP-BMS-CF-20260817 — BMS-side command-flow alignment only
 
-**Date:** 2026-08-17
+**Date:** 2026-08-17 (amended 2026-08-18: R-A4/R-A5 added — history endpoint resilience and depth toggle, per operator report of run log showing 8 entries and breaking entirely)
 
 **Release claim:** none; this is an implementation and acceptance contract, not runtime or physical proof. No "resolved" claim follows from this document alone.
 
@@ -12,8 +12,9 @@ The BioXp operator controls currently exhibit two operator-visible deficiencies 
 
 1. UI lag: several seconds of refetch churn after every move action, blocking the next command.
 2. Single-command serialization: a successive move while one is active is rejected (fail-closed `409`), and controls re-enable only after a dashboard poll, although the OEM robot layer accepts back-to-back commands with event-driven handoff.
+3. Run-log history: the cockpit hard-slices history to 8 entries (`BioXpCockpit.tsx:165`), and the history endpoint can break entirely (live BMS `502`) when stored failed receipts do not round-trip the strict receipt contract.
 
-This spec freezes the fix contract for these two deficiencies, aligned to the source-proven OEM fast multi-command model. It deliberately touches nothing else in the frozen 2026-08-12 Serial-206 parity matrix.
+This spec freezes the fix contract for these deficiencies, aligned to the source-proven OEM fast multi-command model. It deliberately touches nothing else in the frozen 2026-08-12 Serial-206 parity matrix.
 
 ## 2. Frozen authority and base
 
@@ -63,6 +64,8 @@ Live robot release at spec date: immutable dir `bioxp_release_831d99d`, HEAD `83
 3. Each admission and catalog call acquires the robot provider-state lock and performs fresh board reads (position, switches, lifecycle); the calls serialize on the lock at ~0.5-0.7 s each.
 4. Net effect: 6-8 serialized lock-acquiring robot round trips per action completion, producing a 3-5 s window in which the UI is refetching and the next command's admission waits.
 5. A successive single-axis move while one is physically active is rejected (`409`, fail-closed). Controls re-enable only after a dashboard poll (adaptive 1-10 s cadence) shows the receipt cleared.
+6. Live BMS `GET /operator-controls/history` 502s while the robot's `GET /actions/history` returns 200 with 100 rows. Root cause pinned: `operator_models.py:3858-3864` rejects serial-206 X receipts that carry controller-level evidence (`controller_acknowledged` or `controller_terminal_state_verified`) without an authority receipt identity, except one whitelisted automatic-prerequisite shape. Three stored failed receipts (post-deploy window 2026-08-18 02:53-02:55 UTC, moves that failed before authority binding) fall outside the whitelist, so the whole history response fails validation and the cockpit renders an empty run log.
+7. The cockpit hard-caps the run log at 8 entries (`BioXpCockpit.tsx:165` `slice(0, 8)`). The BMS history route (`operator_controls.py:278-291`) accepts no `limit` parameter and relays the robot default; the robot route (`operator_controls.py:1911-1914`) already supports `limit` (default 100), and the robot DB holds 189 receipts. The depth cap is a UI and relay artifact, not a data limit.
 
 ## 4. OEM reference model (source-proven)
 
@@ -80,7 +83,9 @@ Live robot release at spec date: immutable dir `bioxp_release_831d99d`, HEAD `83
 
 **R-A2. Post-action invalidation narrowing.** After an invoked action, the client invalidates only the dashboard and history query groups. Catalog and admission state remain cached and refresh only under the R-A1 lifecycle-change trigger. Target: at most two robot round trips per action completion (dashboard + receipt).
 
-**R-A3. Active-move receipt polling.** While a receipt is non-terminal, the cockpit polls the receipt endpoint at 250-500 ms and re-enables the affected controls from the receipt terminal state, not from the dashboard poll. Target: controls re-enabled within 1 s after the robot marks the receipt terminal.
+**R-A4. History endpoint resilience (live 502).** BMS history validation must accept stored failed/rejected serial-206 X receipts whose controller evidence is not authority-bound: `controller_acknowledged`/`controller_terminal_state_verified` with `authority_receipt_id: null` is valid when `status` is `failed` or `rejected` and the failure detail shape is preserved. The strict gate stays for successful/queued/dispatched rows and for all other receipts. The three live 502 rows from Section 3.6 become permanent regression fixtures. No robot change; the robot already serves these rows with 200.
+
+**R-A5. History depth control.** The BMS history route accepts `limit` (default 100, clamped to 200) and passes it to the robot's existing `limit` parameter. The cockpit replaces the hard `slice(0, 8)` with a selector offering 8 / 25 / 50 / 100 entries, defaulting to 25. The selector is a plain UI toggle; history data already exists in the robot DB (189 receipts at spec date).
 
 ### WP-B: successive-move queue (robot + BMS; amends one frozen matrix item; gated on physical validation)
 
@@ -105,13 +110,15 @@ WP-A (verifiable without physical motion):
 2. Time from receipt terminal to controls re-enabled is <= 1 s, measured in the browser against the live BMS API.
 3. All existing BMS API tests (including `test_bioxp_operator_controls.py`, 45+ tests) and frontend component tests pass; strict model contract validation passes.
 4. Live timing re-measured against the Section 2.4 baseline; the post-action churn window drops from 3-5 s to <= 1 s.
+5. `GET /operator-controls/history` returns 200 with the three legacy failed rows (Section 3.6) present and validated; regression tests cover them; the run log renders instead of breaking.
+6. History depth: BMS relay passes `limit` through; the cockpit selector offers 8 / 25 / 50 / 100 and the run log shows the selected depth (default 25).
 
 WP-B (requires physical validation by Christian before any closure claim):
 
-5. A successive single-axis move while one is active returns 200 `queued` (not 409); the queued receipt reaches `dispatched` then `completed`.
-6. Dispatch gap after the prior receipt terminal is <= 200 ms plus transport time (measured in robot receipts).
-7. Stop/abort clears the queue; bounded depth enforced; dashboard shows queue state.
-8. Robot and BMS test suites pass; live read-only verification; then Christian-run physical validation (successive fast moves) before closure.
+7. A successive single-axis move while one is active returns 200 `queued` (not 409); the queued receipt reaches `dispatched` then `completed`.
+8. Dispatch gap after the prior receipt terminal is <= 200 ms plus transport time (measured in robot receipts).
+9. Stop/abort clears the queue; bounded depth enforced; dashboard shows queue state.
+10. Robot and BMS test suites pass; live read-only verification; then Christian-run physical validation (successive fast moves) before closure.
 
 ## 8. Rollout
 
