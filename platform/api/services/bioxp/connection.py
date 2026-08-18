@@ -107,6 +107,7 @@ class BioXpConnectionService:
         self._ownership: dict[str, Any] | None = None
         self._last_error: str | None = None
         self._active_probe_task: asyncio.Task[None] | None = None
+        self._snapshot_refresh_task: asyncio.Task[None] | None = None
 
     async def save_profile(self, profile: BioXpProfile) -> BioXpSnapshot:
         canonical = self.target_policy.validate(profile.api_url)
@@ -170,6 +171,7 @@ class BioXpConnectionService:
                 self._last_error = error
                 raise ConnectionStateError(error)
             self._start_active_probe_locked()
+            self._start_snapshot_refresh_locked()
         return self.snapshot()
 
     async def probe(self) -> BioXpSnapshot:
@@ -419,6 +421,7 @@ class BioXpConnectionService:
 
     async def _deactivate_locked(self, *, increment: bool) -> None:
         await self._stop_active_probe_locked()
+        await self._stop_snapshot_refresh_locked()
         async with self._safety_interrupt_lock:
             if self._client is not None:
                 await self._client.close()
@@ -460,6 +463,58 @@ class BioXpConnectionService:
             raise
         except (ConnectionStateError, TargetPolicyError):
             return
+
+    def _start_snapshot_refresh_locked(self) -> None:
+        if self.active_probe_interval_seconds is None or self._client is None:
+            return
+        self._snapshot_refresh_task = asyncio.create_task(
+            self._snapshot_refresh_loop(),
+            name="bioxp-canonical-snapshot-refresh",
+        )
+
+    async def _stop_snapshot_refresh_locked(self) -> None:
+        task = self._snapshot_refresh_task
+        self._snapshot_refresh_task = None
+        if task is None or task is asyncio.current_task():
+            return
+        task.cancel()
+        try:
+            same_loop = task.get_loop() is asyncio.get_running_loop()
+        except RuntimeError:
+            same_loop = False
+        if same_loop:
+            with suppress(asyncio.CancelledError):
+                await task
+
+    async def _snapshot_refresh_loop(self) -> None:
+        assert self.active_probe_interval_seconds is not None
+        try:
+            while True:
+                await asyncio.sleep(self.active_probe_interval_seconds)
+                await self._snapshot_refresh_once()
+        except asyncio.CancelledError:
+            raise
+        except (ConnectionStateError, TargetPolicyError):
+            return
+
+    async def _snapshot_refresh_once(self) -> None:
+        client = self._client
+        generation = self._generation
+        if client is None or self._active_target is None:
+            raise ConnectionStateError("BioXP saved profile is not actively connected")
+        try:
+            # Full probe: robot-owned canonical snapshot is auto-collected by the
+            # client when its cached evidence is missing or stale, keeping the
+            # operator admission gate (door, axes, gripper) continuously fresh.
+            payload = await client.probe()
+        except Exception as exc:
+            async with self._transition_lock:
+                if client is self._client and generation == self._generation:
+                    self._record_probe_failure(exc)
+            return
+        async with self._transition_lock:
+            if client is self._client and generation == self._generation:
+                self._apply_probe_payload(payload)
 
     def _clear_observation(self) -> None:
         self._observed_at = None

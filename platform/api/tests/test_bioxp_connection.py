@@ -562,7 +562,9 @@ def test_stale_hardware_cache_does_not_relabel_live_runtime_probe_as_stale(tmp_p
     assert "stale" in snapshot.hardware_evidence_error.lower()
 
 
-def test_connection_and_active_monitor_are_status_only_and_stop_on_disconnect(tmp_path: Path) -> None:
+def test_connection_and_active_monitor_are_status_only_while_snapshot_refresh_runs_and_both_stop_on_disconnect(
+    tmp_path: Path,
+) -> None:
     _, BioXpProfile, _, _ = _load()
     clients: list[FakeRobotClient] = []
 
@@ -579,12 +581,14 @@ def test_connection_and_active_monitor_are_status_only_and_stop_on_disconnect(tm
 
         assert service.snapshot().observation_fresh is True
         assert clients[0].status_only_probes >= 3
-        assert clients[0].probes == 0
+        assert clients[0].probes >= 3
 
         await service.disconnect()
-        stopped_at = clients[0].status_only_probes
+        stopped_status = clients[0].status_only_probes
+        stopped_full = clients[0].probes
         await asyncio.sleep(0.04)
-        assert clients[0].status_only_probes == stopped_at
+        assert clients[0].status_only_probes == stopped_status
+        assert clients[0].probes == stopped_full
 
     asyncio.run(scenario())
 

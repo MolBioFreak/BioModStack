@@ -83,7 +83,12 @@ test('browser uses fixed BMS routes and action ids, never arbitrary robot paths'
 });
 
 test('dedicated four-channel pipette surface stays plan-only and renders evidence phases', () => {
-    assert.match(source, /BioXpPipetteControlPanel/);
+    assert.match(cockpit, /BioXpPipetteControlPanel/);
+    assert.ok(
+        cockpit.lastIndexOf('BioXpPipetteControlPanel') > cockpit.indexOf('Thermal Door'),
+        'pipette panel must render beneath the Thermal Door card',
+    );
+    assert.doesNotMatch(source, /BioXpPipetteControlPanel/);
     for (const label of [
         'Four-channel pipette controls', 'Channel', 'Hardware tip readback', 'Hardware pressure',
         'Load tip physically', 'Move to waste physically', 'Detect fluid physically', 'Plunger up physically', 'Plunger down physically',

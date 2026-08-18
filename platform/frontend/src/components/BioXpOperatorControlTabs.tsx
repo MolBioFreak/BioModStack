@@ -11,7 +11,6 @@ import {
     useBioXpOperatorControlCatalog,
     useInvokeBioXpOperatorAction,
 } from '../lib/bioxpClient';
-import { BioXpPipetteControlPanel } from './BioXpPipetteControlPanel';
 
 type Pane = 'primitive' | 'meta' | 'logs';
 type ReceiptBoundObservation = {
@@ -336,12 +335,6 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
                 </dl>
             )}
             {contractError && <p className="mt-3 text-sm text-red-300">Catalog unavailable: {contractError}</p>}
-            <BioXpPipetteControlPanel
-                generation={generation}
-                connected={connected && authoritativeCatalog !== undefined}
-                pipettes={authoritativeCatalog?.dashboard.pipettes}
-                freshness={authoritativeCatalog?.dashboard.snapshot.freshness}
-            />
 
             {pane === 'logs' ? (
                 <div className="mt-4 space-y-2">
