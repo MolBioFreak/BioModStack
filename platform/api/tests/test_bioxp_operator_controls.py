@@ -766,6 +766,119 @@ def test_pipette_dashboard_rejects_malformed_or_phase_inflated_projection(mutate
         OperatorDashboard.model_validate(dashboard)
 
 
+def test_pipette_dashboard_rejects_reordered_distinct_channels():
+    dashboard = copy.deepcopy(catalog()["dashboard"])
+    dashboard["pipettes"]["channels"] = [
+        pipette_channel(3),
+        pipette_channel(2),
+        pipette_channel(1),
+        pipette_channel(0),
+    ]
+
+    with pytest.raises(ValidationError, match="ordered"):
+        OperatorDashboard.model_validate(dashboard)
+
+
+def _real_hardware_tip_evidence() -> dict:
+    return {
+        "ok": True,
+        "hardware_truth_level": "hardware_query",
+        "reply_received": True,
+        "semantic_ok": True,
+        "tip_loaded": False,
+        "pressure": None,
+        "error": None,
+        "delivery_verified": True,
+        "controller_acknowledged": False,
+        "completion_verified": False,
+        "board_id": 0x50B,
+        "payload": [0x20, 0x60, ord("0")],
+        "dlc": 3,
+        "command_name": "query_tip_status",
+        "ack_required": True,
+        "tx_ok": True,
+        "immediate_ack_received": False,
+        "semantic_query_response_verified": True,
+        "completion_deferred": False,
+        "completion_owner_token": None,
+        "ack": {"ok": True, "received": True, "dlc": 3, "data": [0x20, 0x60, ord("0")], "outcome": "completion"},
+        "provenance": {"channel": 0, "outcome": "completion", "frames": []},
+        "pipette_message_state": {},
+        "ascii_command": "?31",
+        "length": 3,
+        "observed_at": 1785434400.0,
+        "reader_generation": 1,
+        "oem_source_anchor": "ClassPipette.QueryTipStatus: ?31",
+    }
+
+
+def test_pipette_dashboard_hardware_evidence_closed_model_accepts_exact_producer_envelope():
+    from services.bioxp.operator_models import OperatorDashboardPipetteHardwareEvidence
+
+    parsed = OperatorDashboardPipetteHardwareEvidence.model_validate(_real_hardware_tip_evidence())
+    assert parsed.ok is True
+    assert parsed.reader_generation == 1
+    assert parsed.tip_loaded is False
+
+
+def test_pipette_dashboard_hardware_evidence_closed_model_rejects_unknown_keys():
+    from services.bioxp.operator_models import OperatorDashboardPipetteHardwareEvidence
+
+    evidence = _real_hardware_tip_evidence()
+    evidence["invented"] = True
+    with pytest.raises(ValidationError):
+        OperatorDashboardPipetteHardwareEvidence.model_validate(evidence)
+
+
+def test_pipette_receipt_source_identity_requires_exact_producer_source_role_keys():
+    from services.bioxp.operator_models import PipetteReceiptSourceIdentity
+
+    base = {
+        "repository_root": "/opt/bioxp",
+        "source_sha256": {
+            "pipette_models": "1" * 64,
+            "pipette_transport": "2" * 64,
+            "pipette_receipts": "3" * 64,
+            "can_driver": "4" * 64,
+            "novo_router": "5" * 64,
+            "novo_usb_can": "6" * 64,
+            "pipette_service": "7" * 64,
+            "pipette_spec": "8" * 64,
+        },
+        "registry_sha256": REGISTRY,
+        "evidence_authority": {
+            "evidence_lock_path": "/opt/bioxp/oem/evidence_lock.json",
+            "evidence_lock_sha256": LOCK,
+            "evidence_lock_schema": "bioxp.oem_evidence_lock.v4",
+            "acquisition_id": "acq-1",
+            "evidence_lock_identity_verified": True,
+        },
+        "authority_verified": True,
+    }
+    parsed = PipetteReceiptSourceIdentity.model_validate(base)
+    assert parsed.authority_verified is True
+
+    extra = copy.deepcopy(base)
+    extra["source_sha256"]["invented"] = "9" * 64
+    with pytest.raises(ValidationError):
+        PipetteReceiptSourceIdentity.model_validate(extra)
+
+    missing = copy.deepcopy(base)
+    missing["source_sha256"].pop("can_driver")
+    with pytest.raises(ValidationError):
+        PipetteReceiptSourceIdentity.model_validate(missing)
+
+    bad_authority = copy.deepcopy(base)
+    bad_authority["evidence_authority"]["invented"] = True
+    with pytest.raises(ValidationError):
+        PipetteReceiptSourceIdentity.model_validate(bad_authority)
+
+    unverified = copy.deepcopy(base)
+    unverified["authority_verified"] = False
+    with pytest.raises(ValidationError):
+        PipetteReceiptSourceIdentity.model_validate(unverified)
+
+
 @pytest.mark.parametrize(
     "payload",
     [

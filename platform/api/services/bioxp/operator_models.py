@@ -3234,9 +3234,9 @@ class OperatorDashboardPipetteTransportDetails(BaseModel):
 
 
 class OperatorDashboardPipetteHardwareEvidence(BaseModel):
-    """Known readback fields plus JSON-safe raw driver evidence."""
+    """Closed, typed readback evidence exactly matching the BioXP producer envelope."""
 
-    model_config = ConfigDict(extra="allow", strict=True)
+    model_config = ConfigDict(extra="forbid", strict=True)
     ok: StrictBool
     hardware_truth_level: Literal["hardware_query", "unparsed_hardware_reply", "no_readback"] | None = None
     reply_received: StrictBool | None = None
@@ -3244,6 +3244,27 @@ class OperatorDashboardPipetteHardwareEvidence(BaseModel):
     tip_loaded: StrictBool | None = None
     pressure: StrictFloat | StrictInt | None = None
     error: str | None = Field(default=None, max_length=2000)
+    delivery_verified: StrictBool | None = None
+    controller_acknowledged: StrictBool | None = None
+    completion_verified: StrictBool | None = None
+    board_id: StrictInt | None = None
+    payload: list[StrictInt] | None = None
+    dlc: StrictInt | None = None
+    command_name: str | None = Field(default=None, max_length=240)
+    ack_required: StrictBool | None = None
+    tx_ok: StrictBool | None = None
+    immediate_ack_received: StrictBool | None = None
+    semantic_query_response_verified: StrictBool | None = None
+    completion_deferred: StrictBool | None = None
+    completion_owner_token: str | None = Field(default=None, max_length=240)
+    ack: dict[str, JsonValue] | None = None
+    provenance: dict[str, JsonValue] | None = None
+    pipette_message_state: dict[str, JsonValue] | None = None
+    ascii_command: str | None = Field(default=None, max_length=240)
+    length: StrictInt | None = None
+    observed_at: StrictFloat | StrictInt | None = None
+    reader_generation: StrictInt | None = None
+    oem_source_anchor: str | None = Field(default=None, max_length=240)
 
 
 class OperatorDashboardPipetteLastError(BaseModel):
@@ -3264,18 +3285,46 @@ class PipetteReceiptTruth(BaseModel):
     physical_effect_claim_suppressed: Literal[True]
 
 
+class PipetteReceiptEvidenceAuthority(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    evidence_lock_path: str = Field(min_length=1, max_length=4096)
+    evidence_lock_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    evidence_lock_schema: Literal["bioxp.oem_evidence_lock.v4"]
+    acquisition_id: str = Field(min_length=1, max_length=240)
+    evidence_lock_identity_verified: Literal[True]
+
+
+_PIPETTE_SOURCE_ROLES = frozenset(
+    {
+        "pipette_models",
+        "pipette_transport",
+        "pipette_receipts",
+        "can_driver",
+        "novo_router",
+        "novo_usb_can",
+        "pipette_service",
+        "pipette_spec",
+    }
+)
+
+
 class PipetteReceiptSourceIdentity(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     repository_root: str = Field(min_length=1, max_length=4096)
     source_sha256: dict[str, str]
     registry_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    evidence_authority: dict[str, JsonValue]
-    authority_verified: StrictBool
+    evidence_authority: PipetteReceiptEvidenceAuthority
+    authority_verified: Literal[True]
 
     @field_validator("source_sha256")
     @classmethod
     def validate_source_sha256(cls, value: dict[str, str]) -> dict[str, str]:
-        if not value or any(re.fullmatch(r"[0-9a-f]{64}", digest) is None for digest in value.values()):
+        if set(value) != _PIPETTE_SOURCE_ROLES:
+            raise ValueError(
+                "source_sha256 must contain exactly the producer source-role key set: "
+                + ", ".join(sorted(_PIPETTE_SOURCE_ROLES))
+            )
+        if any(re.fullmatch(r"[0-9a-f]{64}", digest) is None for digest in value.values()):
             raise ValueError("source_sha256 values must be lowercase SHA-256 digests")
         return value
 
@@ -3371,8 +3420,8 @@ class OperatorDashboardPipettes(BaseModel):
 
     @model_validator(mode="after")
     def validate_four_channel_group(self):
-        if {channel.channel for channel in self.channels} != {0, 1, 2, 3}:
-            raise ValueError("pipette channels must be the unique IDs 0, 1, 2, and 3")
+        if [channel.channel for channel in self.channels] != [0, 1, 2, 3]:
+            raise ValueError("pipette channels must be the ordered unique IDs [0, 1, 2, 3]")
         if set(self.fluid_detection_timestamps) != {"0", "1", "2", "3"}:
             raise ValueError("fluid_detection_timestamps must contain exactly channels 0..3")
         return self
