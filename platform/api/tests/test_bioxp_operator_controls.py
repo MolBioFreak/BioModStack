@@ -1999,6 +1999,89 @@ def test_history_accepts_robot_authority_fingerprint(monkeypatch):
     assert response.json()["receipts"][0]["authority_fingerprint"] == fingerprint
 
 
+def test_history_returns_200_with_live_legacy_failed_x_rows(monkeypatch):
+    """R-A4 endpoint regression: the three live 2026-08-18 stored rows that
+    502ed the history endpoint must validate and appear in the response."""
+    live_rows = [
+        {
+            **receipt(action_id="oem.x.move_absolute", command_id="operator_1787095402672_8bf5ce277249"),
+            "status": "failed",
+            "controller_acknowledged": True,
+            "controller_terminal_state_verified": False,
+            "authority_receipt_id": None,
+            "authority_receipt_status": None,
+            "response": {
+                "http_status": 409,
+                "body": {
+                    "detail": {
+                        "automatic_prerequisites": [],
+                        "axis": "x",
+                        "failure": "x_observed_commissioning_required_before_automatic_home",
+                        "ok": False,
+                        "requested_motion_dispatched": False,
+                        "state": "prepared_unreferenced",
+                    },
+                },
+            },
+        },
+        {
+            **receipt(action_id="oem.x.move_absolute", command_id="operator_1787095175302_d20e621d98f4"),
+            "status": "failed",
+            "controller_acknowledged": True,
+            "controller_terminal_state_verified": False,
+            "authority_receipt_id": None,
+            "authority_receipt_status": None,
+            "response": {
+                "http_status": 409,
+                "body": {
+                    "detail": {
+                        "automatic_prerequisites": [],
+                        "axis": "x",
+                        "failure": "x_observed_commissioning_required_before_automatic_home",
+                        "ok": False,
+                        "requested_motion_dispatched": False,
+                        "state": "prepared_unreferenced",
+                    },
+                },
+            },
+        },
+        {
+            **receipt(action_id="oem.x.move_steps", command_id="operator_1787021198696_f134f45312b3"),
+            "status": "failed",
+            "controller_acknowledged": True,
+            "controller_terminal_state_verified": False,
+            "authority_receipt_id": None,
+            "authority_receipt_status": None,
+            "response": {
+                "http_status": 409,
+                "body": {
+                    "detail": {
+                        "automatic_prerequisites": [],
+                        "axis": "x",
+                        "failure": "x_observed_commissioning_required_before_automatic_home",
+                        "ok": False,
+                        "requested_motion_dispatched": False,
+                        "state": "prepared_unreferenced",
+                    },
+                },
+            },
+        },
+    ]
+    client, runtime = make_client(monkeypatch)
+    runtime.connection.client.responses["operator_action_history"] = {
+        "schema_version": "bioxp.operator_action_history.v1",
+        "receipts": live_rows,
+    }
+
+    response = client.get("/api/bioxp/operator-controls/history")
+
+    assert response.status_code == 200, response.text
+    served = {row["command_id"] for row in response.json()["receipts"]}
+    assert "operator_1787095402672_8bf5ce277249" in served
+    assert "operator_1787095175302_d20e621d98f4" in served
+    assert "operator_1787021198696_f134f45312b3" in served
+
+
 def test_history_accepts_robot_startup_reconciliation_receipts(monkeypatch):
     client, runtime = make_client(monkeypatch)
     reconciled = {
@@ -2169,3 +2252,66 @@ def test_catalog_removes_non_oem_session_field_and_keeps_latest_startup_status(m
     assert "/oem/startup/status/latest" in paths
     assert "/oem/startup/status/{session_id}" not in paths
     assert all(input_row["name"] != "session_id" for row in actions for input_row in row["inputs"])
+
+
+def test_history_accepts_failed_x_receipt_without_authority_when_nothing_dispatched():
+    """R-A4 regression: the three live 2026-08-18 rows (failure
+    x_observed_commissioning_required_before_automatic_home) must validate and
+    appear in history instead of 502ing the whole endpoint."""
+    failed = receipt(action_id="oem.x.move_absolute", command_id="operator_1787095402672_8bf5ce277249")
+    failed.update({
+        "status": "failed",
+        "controller_acknowledged": True,
+        "controller_terminal_state_verified": False,
+        "physical_effect_verified": False,
+        "authority_receipt_id": None,
+        "authority_receipt_status": None,
+        "authority_fingerprint": None,
+        "response": {
+            "http_status": 409,
+            "body": {
+                "detail": {
+                    "automatic_prerequisites": [],
+                    "axis": "x",
+                    "failure": "x_observed_commissioning_required_before_automatic_home",
+                    "ok": False,
+                    "requested_motion_dispatched": False,
+                    "state": "prepared_unreferenced",
+                },
+            },
+        },
+    })
+
+    parsed = OperatorActionReceipt.model_validate(failed)
+
+    assert parsed.status == "failed"
+    assert parsed.authority_receipt_id is None
+    assert parsed.controller_acknowledged is True
+
+
+def test_history_rejects_failed_x_receipt_without_authority_when_motion_dispatched():
+    """R-A4 guard: controller evidence without an authority identity still
+    rejects when the response proves a dispatch happened."""
+    dispatched = receipt(action_id="oem.x.move_steps", command_id="operator-dispatch-no-authority")
+    dispatched.update({
+        "status": "failed",
+        "controller_acknowledged": True,
+        "controller_terminal_state_verified": False,
+        "authority_receipt_id": None,
+        "authority_receipt_status": None,
+        "authority_fingerprint": None,
+        "response": {
+            "http_status": 409,
+            "body": {
+                "detail": {
+                    "axis": "x",
+                    "failure": "x_some_dispatch_failure",
+                    "ok": False,
+                    "requested_motion_dispatched": True,
+                },
+            },
+        },
+    })
+
+    with pytest.raises(ValueError):
+        OperatorActionReceipt.model_validate(dispatched)

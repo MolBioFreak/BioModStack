@@ -3845,14 +3845,12 @@ class OperatorActionReceipt(BaseModel):
             else None
         )
         failed_automatic_prerequisite = bool(
-            self.status == "failed"
+            self.status in {"failed", "rejected"}
             and self.action_id in {"oem.x.move_steps", "oem.x.move_absolute"}
             and self.authority_receipt_id is None
             and self.authority_receipt_status is None
             and isinstance(failed_response_detail, dict)
             and failed_response_detail.get("ok") is False
-            and failed_response_detail.get("failure") == "x_automatic_prerequisite_failed"
-            and failed_response_detail.get("failed_stage") in {"auto_prepare", "auto_home"}
             and failed_response_detail.get("requested_motion_dispatched") is False
         )
         if (
