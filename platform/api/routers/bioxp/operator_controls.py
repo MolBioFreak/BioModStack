@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import ValidationError
 
 from services.bioxp.errors import ConnectionStateError, RobotResponseError, RobotTransportError
@@ -277,6 +277,7 @@ async def invoke_operator_action(
 
 @router.get("/operator-controls/history", response_model=OperatorActionHistory)
 async def operator_action_history(
+    limit: int = Query(default=100, ge=1, le=200),
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> OperatorActionHistory:
     snapshot = runtime.connection.snapshot()
@@ -285,6 +286,7 @@ async def operator_action_history(
             "operator_action_history",
             expected_generation=snapshot.generation,
             require_fresh=True,
+            params={"limit": limit},
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc

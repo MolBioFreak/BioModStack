@@ -814,10 +814,14 @@ export const bioXpReceiptIsNonTerminal = (receipt: { status?: unknown } | null |
     && receipt.status !== 'rejected'
     && receipt.status !== 'blocked';
 
-export const useBioXpOperatorActionHistory = (connectionGeneration: number, enabled = true) => useQuery({
-    queryKey: [...operatorHistoryKey, connectionGeneration, enabled],
+export const useBioXpOperatorActionHistory = (
+    connectionGeneration: number,
+    enabled = true,
+    limit = 100,
+) => useQuery({
+    queryKey: [...operatorHistoryKey, connectionGeneration, enabled, limit],
     queryFn: async () => (
-        await api.get<BioXpOperatorActionHistory>('/api/bioxp/operator-controls/history')
+        await api.get<BioXpOperatorActionHistory>(`/api/bioxp/operator-controls/history?limit=${limit}`)
     ).data,
     enabled: enabled && connectionGeneration > 0,
     gcTime: 0,

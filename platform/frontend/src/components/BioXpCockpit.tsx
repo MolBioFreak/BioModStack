@@ -104,8 +104,9 @@ export function BioXpCockpit() {
     const linkConnected = active && connection?.reachable !== false;
     const configured = connection?.configured === true;
     const generation = connection?.generation ?? 0;
+    const [historyLimit, setHistoryLimit] = useState<8 | 25 | 50 | 100>(25);
     const dashboardQuery = useBioXpOperatorDashboard(generation, linkConnected);
-    const historyQuery = useBioXpOperatorActionHistory(generation, linkConnected);
+    const historyQuery = useBioXpOperatorActionHistory(generation, linkConnected, historyLimit);
     const connect = useConnectBioXp();
     const disconnect = useDisconnectBioXp();
     const operatorCatalog = useBioXpOperatorControlCatalog(
@@ -166,8 +167,8 @@ export function BioXpCockpit() {
         ? dashboardMotion.enabled ? 'Enabled — Z provider ready; each command verifies live controller state' : `Blocked${dashboardMotion.reason ? ` — ${dashboardMotion.reason}` : ''}`
         : 'Unavailable';
     const recentCommands = useMemo(
-        () => (!linkConnected || historyQuery.isError ? [] : (historyQuery.data?.receipts ?? [])).slice(0, 8),
-        [historyQuery.data?.receipts, historyQuery.isError, linkConnected],
+        () => (!linkConnected || historyQuery.isError ? [] : (historyQuery.data?.receipts ?? [])).slice(0, historyLimit),
+        [historyQuery.data?.receipts, historyQuery.isError, linkConnected, historyLimit],
     );
     useEffect(() => {
         resetInvokeOperatorAction();
@@ -800,7 +801,20 @@ export function BioXpCockpit() {
             <section className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                     <h2 className="text-lg font-semibold">Recent Robot Actions</h2>
-                    <span className="text-xs text-slate-500">Latest 8 robot-owned receipts</span>
+                    <label className="flex items-center gap-2 text-xs text-slate-400">
+                        Entries
+                        <select
+                            className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-slate-100"
+                            value={historyLimit}
+                            onChange={(event) => setHistoryLimit(Number(event.target.value) as 8 | 25 | 50 | 100)}
+                            aria-label="Recent robot actions depth"
+                        >
+                            <option value={8}>8</option>
+                            <option value={25}>25</option>
+                            <option value={50}>50</option>
+                            <option value={100}>100</option>
+                        </select>
+                    </label>
                 </div>
                 {recentCommands.length === 0 ? (
                     <p className="mt-2 text-sm text-slate-400">No robot action receipts recorded.</p>

@@ -2082,6 +2082,28 @@ def test_history_returns_200_with_live_legacy_failed_x_rows(monkeypatch):
     assert "operator_1787021198696_f134f45312b3" in served
 
 
+def test_history_passes_limit_to_robot(monkeypatch):
+    client, runtime = make_client(monkeypatch)
+    runtime.connection.client.responses["operator_action_history"] = {
+        "schema_version": "bioxp.operator_action_history.v1",
+        "receipts": [],
+    }
+    response = client.get("/api/bioxp/operator-controls/history?limit=50")
+    assert response.status_code == 200, response.text
+    assert runtime.connection.client.calls[-1][1]["params"] == {"limit": 50}
+
+
+def test_history_defaults_limit_to_100_when_omitted(monkeypatch):
+    client, runtime = make_client(monkeypatch)
+    runtime.connection.client.responses["operator_action_history"] = {
+        "schema_version": "bioxp.operator_action_history.v1",
+        "receipts": [],
+    }
+    response = client.get("/api/bioxp/operator-controls/history")
+    assert response.status_code == 200, response.text
+    assert runtime.connection.client.calls[-1][1]["params"] == {"limit": 100}
+
+
 def test_history_accepts_robot_startup_reconciliation_receipts(monkeypatch):
     client, runtime = make_client(monkeypatch)
     reconciled = {

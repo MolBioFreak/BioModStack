@@ -95,6 +95,7 @@ const state = vi.hoisted(() => ({
         },
         error: null,
     },
+    historyCalls: [] as number[],
 }));
 
 const dep = (key: string, met: boolean, reason: string | null = null) => ({ key, met, reason });
@@ -203,7 +204,10 @@ vi.mock('../../src/lib/bioxpClient', () => ({
         error: null,
     }),
     useBioXpOperatorDashboard: () => state.dashboard,
-    useBioXpOperatorActionHistory: () => state.history,
+    useBioXpOperatorActionHistory: (...args: unknown[]) => {
+        state.historyCalls.push(args[2] as number);
+        return state.history;
+    },
     bioXpReceiptIsNonTerminal: (receipt: { status?: unknown } | null | undefined): boolean =>
         typeof receipt?.status === 'string'
         && receipt.status !== 'completed'
@@ -251,9 +255,9 @@ const setXAbsolute = async (value: string) => {
     });
 };
 
-const xReceipt = (status: string) => ({
+const xReceipt = (status: string, index = 0) => ({
     schema_version: 'bioxp.operator_action_receipt.v1',
-    command_id: 'cmd_x',
+    command_id: `cmd_x_${index}`,
     action_id: 'oem.x.move_steps',
     kind: 'primitive',
     safety_class: 'motion',
@@ -288,6 +292,7 @@ const xReceipt = (status: string) => ({
 beforeEach(() => {
     state.admissionCalls = 0;
     state.invokeCalls = [];
+    state.historyCalls = [];
     state.history.data.receipts = [];
     state.dashboard.data.x_axis.latest_receipt = null;
     state.catalog.data.actions = [
@@ -499,6 +504,35 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
         expect(movePositive.disabled).toBe(false);
         expect(home.disabled).toBe(false);
+        expect(state.admissionCalls).toBe(0);
+    });
+
+    it('passes the selected depth to the history query and renders that many receipts (R-A5)', async () => {
+        state.history.data.receipts = Array.from({ length: 30 }, (_, i) => xReceipt('completed', i));
+
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+
+        expect(state.historyCalls.at(-1)).toBe(25);
+
+        const select = [...container.querySelectorAll('select')]
+            .find((node) => node.getAttribute('aria-label') === 'Recent robot actions depth') as HTMLSelectElement;
+        expect(select).not.toBeUndefined();
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')?.set;
+        setter?.call(select, '50');
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+        await act(async () => {
+            await Promise.resolve();
+        });
+
+        expect(state.historyCalls.at(-1)).toBe(50);
+        const historySection = [...container.querySelectorAll('section')]
+            .find((node) => node.querySelector('h2')?.textContent === 'Recent Robot Actions') as HTMLElement;
+        const receiptArticles = [...historySection.querySelectorAll('article')]
+            .filter((node) => node.textContent?.includes('oem.x.move_steps'));
+        expect(receiptArticles.length).toBe(30);
         expect(state.admissionCalls).toBe(0);
     });
 });
