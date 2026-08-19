@@ -1972,7 +1972,7 @@ def test_history_and_operator_assessment_are_robot_authoritative(monkeypatch):
     assert assessed.json()["operator_assessment_idempotency_key"] == "assess-12345678"
     assert assessed.json()["operator_assessed_at"] == 1785434400.0
     assert runtime.connection.client.calls == [
-        ("operator_action_history", {}),
+        ("operator_action_history", {"params": {"limit": 100}}),
         ("assess_operator_action", {
             "path_params": {"command_id": "cmd-1"},
             "json_data": {
