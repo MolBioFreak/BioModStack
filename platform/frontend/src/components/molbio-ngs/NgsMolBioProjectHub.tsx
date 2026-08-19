@@ -57,6 +57,7 @@ export default function NgsMolBioProjectHub() {
     const [successCriteria, setSuccessCriteria] = useState('');
     const [priority, setPriority] = useState<'low' | 'normal' | 'high' | 'critical'>('normal');
     const [showDetails, setShowDetails] = useState(false);
+    const [showExpose, setShowExpose] = useState(false);
     const [selectedLocalProjectId, setSelectedLocalProjectId] = useState('');
     const [targetGlobalProjectId, setTargetGlobalProjectId] = useState('');
     const [selectedExperimentIds, setSelectedExperimentIds] = useState<string[]>([]);
@@ -242,26 +243,23 @@ export default function NgsMolBioProjectHub() {
 
     return (
         <div className="w-full max-w-none rounded-2xl border border-border-primary bg-surface-secondary/80 shadow-sm">
-            <section className="p-4">
+            <section className="p-3">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                     <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">Two-tier ownership</p>
-                    <h2 className="mt-1 text-lg font-semibold text-content-primary">NGS/MolBio Projects</h2>
-                    <p className="mt-1 max-w-4xl text-xs leading-5 text-content-secondary">
-                        Projects contain Experiments. Experiments reference real or in-silico Data, record Workflow Receipts about execution, and expose data-bearing Results. Local Projects are complete standalone authorities for Mol Bio and NGS. They can optionally share selected Experiments and Results with several broader Projects.
-                    </p>
+                    <h2 className="mt-1 text-lg font-semibold text-content-primary" title="Projects contain Experiments. Local Projects are complete standalone authorities for Mol Bio and NGS and can optionally share selected Experiments and Results with broader Projects.">NGS/MolBio Projects</h2>
                 </div>
                 <a href="/projects" className={BUTTON}>Open broader Project Manager</a>
             </div>
 
-            <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
-                <div className="rounded-xl border border-border-primary bg-surface p-4">
+            <div className="mt-2 grid gap-3 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
+                <div className="rounded-xl border border-border-primary bg-surface p-3">
                     <div className="flex flex-wrap gap-2">
                         <button type="button" onClick={() => setMode('local-new')} className={`${BUTTON} ${mode === 'local-new' ? 'border-primary bg-primary/10' : ''}`}>New local NGS/MolBio Project</button>
                         <button type="button" onClick={() => setMode('local-existing')} disabled={!selectedLocalProjectId} className={`${BUTTON} ${mode === 'local-existing' ? 'border-primary bg-primary/10' : ''}`}>Add Experiment to selected local Project</button>
                         <button type="button" onClick={() => setMode('global')} className={`${BUTTON} ${mode === 'global' ? 'border-primary bg-primary/10' : ''}`}>Experiment in broader Project</button>
                     </div>
-                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
                         {mode === 'local-new' && (
                             <label className="text-xs text-content-secondary">Project name <span className="text-error">(required)</span><input required className={`${INPUT} mt-1`} value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="Focused sequencing Project" /></label>
                         )}
@@ -272,9 +270,9 @@ export default function NgsMolBioProjectHub() {
                             <label className="text-xs text-content-secondary">Owning broader Project <span className="text-error">(required)</span><select required className={`${INPUT} mt-1`} value={targetGlobalProjectId} onChange={(event) => setTargetGlobalProjectId(event.target.value)}><option value="">Select Project</option>{globalProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
                         )}
                         <label className="text-xs text-content-secondary">Contained Experiment name <span className="text-error">(required)</span><input required className={`${INPUT} mt-1`} value={experimentName} onChange={(event) => setExperimentName(event.target.value)} placeholder="Experiment" /></label>
-                        <label className="text-xs text-content-secondary sm:col-span-2">Scientific objective <span className="text-error">(required)</span><textarea required className={`${INPUT} mt-1 min-h-20`} value={objective} onChange={(event) => setObjective(event.target.value)} /></label>
+                        <label className="text-xs text-content-secondary sm:col-span-2">Scientific objective <span className="text-error">(required)</span><textarea required className={`${INPUT} mt-1 min-h-16`} value={objective} onChange={(event) => setObjective(event.target.value)} /></label>
                     </div>
-                    <button type="button" className={`${BUTTON} mt-3`} onClick={() => setShowDetails((value) => !value)}>{showDetails ? 'Hide Project and Experiment details' : 'Add Project and Experiment details'}</button>
+                    <button type="button" className={`${BUTTON} mt-2`} onClick={() => setShowDetails((value) => !value)}>{showDetails ? 'Hide Project and Experiment details' : 'Add Project and Experiment details'}</button>
                     {showDetails && <div className="mt-3 grid gap-3 rounded-lg border border-border-primary bg-surface-secondary p-3 sm:grid-cols-2">
                         <label className="text-xs text-content-secondary sm:col-span-2">Description<textarea className={`${INPUT} mt-1 min-h-16`} value={projectDescription} onChange={(event) => setProjectDescription(event.target.value)} /></label>
                         {mode === 'local-new' && <>
@@ -289,16 +287,15 @@ export default function NgsMolBioProjectHub() {
                         <label className="text-xs text-content-secondary">Priority<select className={`${INPUT} mt-1`} value={priority} onChange={(event) => setPriority(event.target.value as typeof priority)}><option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option><option value="critical">Critical</option></select></label>
                         <label className="text-xs text-content-secondary sm:col-span-2">Success criteria, one per line<textarea className={`${INPUT} mt-1 min-h-20`} value={successCriteria} onChange={(event) => setSuccessCriteria(event.target.value)} /></label>
                     </div>}
-                    <p className="mt-2 text-xs text-content-muted">Create the owner hierarchy here. The Experiment workspace then provides one reference-entry window for existing library revisions, FASTA or GenBank uploads, pasted sequences, and NCBI accessions.</p>
-                    <button type="button" className={`${BUTTON} mt-3`} disabled={createMutation.isPending} onClick={() => createMutation.mutate()}>
+                    <button type="button" className={`${BUTTON} mt-2`} disabled={createMutation.isPending} onClick={() => createMutation.mutate()}>
                         {createMutation.isPending ? 'Creating…' : mode === 'local-new' ? 'Create local Project and first Experiment' : mode === 'local-existing' ? 'Add contained Experiment' : 'Create global NGS/MolBio Experiment'}
                     </button>
                 </div>
 
-                <div className="rounded-xl border border-border-primary bg-surface p-4">
+                <div className="rounded-xl border border-border-primary bg-surface p-3">
                     <label className="text-xs text-content-secondary">Local NGS/MolBio Project<select className={`${INPUT} mt-1`} value={selectedLocalProjectId} onChange={(event) => setSelectedLocalProjectId(event.target.value)}><option value="">Select local Project</option>{localProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
                     {selectedLocalProject && <p className="mt-2 text-xs text-content-muted">{selectedProjectDescription}</p>}
-                    <div className="mt-3 space-y-2">
+                    <div className="mt-2 space-y-2">
                         {(localHierarchyQuery.data?.domains ?? []).map(({ experiment, domain }) => (
                             <button key={domain.id} type="button" className="flex w-full items-center justify-between gap-3 rounded-lg border border-border-primary px-3 py-2 text-left hover:border-primary/60" onClick={() => updateQueryParams({ workspace_id: selectedLocalProjectId, global_experiment_id: experiment.id, domain_experiment_id: domain.id, state_revision_id: null, ownership_scope: 'ngs_molbio_local' })}>
                                 <span><span className="block text-xs font-semibold text-content-primary">{experiment.name}</span><span className="block text-[11px] text-content-muted">NGS/MolBio Domain Experiment</span></span>
@@ -311,8 +308,12 @@ export default function NgsMolBioProjectHub() {
             </div>
 
             {selectedLocalProjectId && (
-                <div className="mt-4 rounded-xl border border-border-primary bg-surface p-4">
-                    <h3 className="text-sm font-semibold text-content-primary">Optional: expose local Experiments and Results to a broader Project</h3>
+                <div className="mt-3 rounded-xl border border-border-primary bg-surface p-3">
+                    <button type="button" className="flex w-full items-center justify-between gap-2 text-left" onClick={() => setShowExpose((value) => !value)}>
+                        <span className="text-sm font-semibold text-content-primary">Optional: expose local Experiments and Results to a broader Project</span>
+                        <span className="text-xs text-content-muted">{showExpose ? 'Hide' : 'Show'}</span>
+                    </button>
+                    {showExpose && (<>
                     <p className="mt-1 text-xs text-content-secondary">This local Project needs no broader association. When useful, each explicit link adds governed membership and lineage. Native Data and Result payloads remain single-copy in their owning stores.</p>
                     <div className="mt-3 grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1fr)_auto]">
                         <div className="space-y-2">
@@ -331,7 +332,8 @@ export default function NgsMolBioProjectHub() {
                         <select className={INPUT} value={targetGlobalProjectId} onChange={(event) => setTargetGlobalProjectId(event.target.value)}><option value="">Select broader Project</option>{globalProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select>
                         <button type="button" className={BUTTON} disabled={linkMutation.isPending || !targetGlobalProjectId || selectedExperimentIds.length === 0} onClick={() => linkMutation.mutate()}>{linkMutation.isPending ? 'Linking…' : 'Create governed link'}</button>
                     </div>
-                    <div className="mt-3 flex flex-wrap gap-2">{(linksQuery.data ?? []).map((link) => <span key={link.link_id} className="rounded-full border border-border-primary px-2 py-1 text-[11px] text-content-muted">Global Project {link.global_project_id.slice(0, 8)} · {link.experiment_ids.length} Experiment{link.experiment_ids.length === 1 ? '' : 's'} · {link.result_ids.length} Result{link.result_ids.length === 1 ? '' : 's'}</span>)}</div>
+                    <div className="mt-2 flex flex-wrap gap-2">{(linksQuery.data ?? []).map((link) => <span key={link.link_id} className="rounded-full border border-border-primary px-2 py-1 text-[11px] text-content-muted">Global Project {link.global_project_id.slice(0, 8)} · {link.experiment_ids.length} Experiment{link.experiment_ids.length === 1 ? '' : 's'} · {link.result_ids.length} Result{link.result_ids.length === 1 ? '' : 's'}</span>)}</div>
+                    </>)}
                 </div>
             )}
 

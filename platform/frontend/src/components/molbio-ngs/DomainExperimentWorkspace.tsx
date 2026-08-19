@@ -802,17 +802,11 @@ export default function DomainExperimentWorkspace() {
 
     return (
         <div className="w-full max-w-none px-4 pb-4 sm:px-5 lg:px-6">
-            <div className="mx-0 w-full max-w-none space-y-4">
+            <div className="mx-0 w-full max-w-none space-y-3">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent">{isLocalProject ? 'Local NGS/MolBio-owned context' : 'Broader Project-owned NGS/MolBio context'}</p>
-                        <h2 className="text-xl font-bold text-content">Domain Experiment workspace</h2>
-                        <p className="mt-1 max-w-4xl text-sm text-content-secondary">
-                            Inspect immutable scientific state, prepare and launch governed Workflow Plans, reopen Workflow Receipts, and inspect data-bearing Results.
-                            {isLocalProject
-                                ? ' The NGS/MolBio layer owns this complete standalone Project and its contained Experiments. Optional governed links can expose selected Experiments and Results to several broader Projects.'
-                                : ' The broader Project Manager owns this Project and contains this NGS/MolBio Experiment. The domain store owns native scientific Data and Results.'}
-                        </p>
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">{isLocalProject ? 'Local NGS/MolBio-owned context' : 'Broader Project-owned NGS/MolBio context'}</p>
+                        <h2 className="mt-0.5 text-lg font-bold text-content" title="Inspect immutable scientific state, prepare and launch governed Workflow Plans, reopen Workflow Receipts, and inspect data-bearing Results.">Domain Experiment workspace</h2>
                     </div>
                     <div className="flex flex-wrap items-center justify-end gap-2">
                         {selectedDomainExperiment && (

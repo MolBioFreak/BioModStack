@@ -2260,7 +2260,7 @@ export function MolBioToolkitV2() {
                 className={`molbio-toolkit w-full flex bg-slate-900 text-slate-100 overflow-hidden ${isViewerFullscreen ? 'fixed inset-0 z-[70] h-full' : ''}`}
                 style={isViewerFullscreen
                     ? undefined
-                    : { height: 'clamp(32rem, calc(100vh - 12rem), 48rem)' }}
+                    : { height: 'clamp(36rem, calc(100vh - 8rem), 96rem)' }}
                 data-molbio-viewer-fullscreen={isViewerFullscreen ? 'true' : 'false'}
             >
                 {/* Left: Sequence Library */}
