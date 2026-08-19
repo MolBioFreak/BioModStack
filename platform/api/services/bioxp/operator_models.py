@@ -3857,6 +3857,7 @@ class OperatorActionReceipt(BaseModel):
             serial206_x_action
             and (self.controller_acknowledged or self.controller_terminal_state_verified)
             and self.authority_receipt_id is None
+            and self.safety_class != "read_only"
             and not failed_automatic_prerequisite
         ):
             raise ValueError("serial-206 X controller evidence requires an authority receipt identity")

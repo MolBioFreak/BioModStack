@@ -2082,6 +2082,78 @@ def test_history_returns_200_with_live_legacy_failed_x_rows(monkeypatch):
     assert "operator_1787021198696_f134f45312b3" in served
 
 
+def test_history_accepts_read_only_x_receipt_without_authority(monkeypatch):
+    client, runtime = make_client(monkeypatch)
+    read_only = {
+        "schema_version": "bioxp.operator_action_receipt.v1",
+        "command_id": "operator_1787103228184_ca9e71649b36",
+        "action_id": "oem.x.status",
+        "kind": "primitive",
+        "safety_class": "read_only",
+        "status": "completed",
+        "idempotency_key": "readonly-probe-0001",
+        "idempotency_replay_enabled": True,
+        "ownership_generation": 1,
+        "started_at": "2026-08-19T01:33:44.000000Z",
+        "finished_at": "2026-08-19T01:33:44.530000Z",
+        "duration_ms": 530.0,
+        "request_received_at": 1787103228.0,
+        "admission_completed_at": 1787103228.002,
+        "provider_entry_at": 1787103228.002,
+        "provider_returned_at": 1787103228.53,
+        "remote_acknowledged": True,
+        "controller_acknowledged": True,
+        "controller_terminal_state_verified": False,
+        "physical_effect_verified": False,
+        "machine_assessment": "pass",
+        "inputs": {},
+        "response": {"http_status": 200, "body": {"ok": True}},
+        "authority_receipt_id": None,
+        "authority_receipt_status": None,
+    }
+    runtime.connection.client.responses["operator_action_history"] = {
+        "schema_version": "bioxp.operator_action_history.v1",
+        "receipts": [read_only],
+    }
+    response = client.get("/api/bioxp/operator-controls/history?limit=100")
+    assert response.status_code == 200, response.text
+    assert response.json()["receipts"][0]["command_id"] == "operator_1787103228184_ca9e71649b36"
+
+
+def test_history_rejects_dispatch_capable_x_receipt_without_authority(monkeypatch):
+    client, runtime = make_client(monkeypatch)
+    dispatched = {
+        "schema_version": "bioxp.operator_action_receipt.v1",
+        "command_id": "operator_1787000000000_000000000000",
+        "action_id": "oem.x.move_steps",
+        "kind": "primitive",
+        "safety_class": "motion",
+        "status": "completed",
+        "idempotency_key": "dispatch-probe-0001",
+        "idempotency_replay_enabled": True,
+        "ownership_generation": 1,
+        "started_at": "2026-08-19T01:33:44.000000Z",
+        "finished_at": "2026-08-19T01:33:44.530000Z",
+        "duration_ms": 530.0,
+        "remote_acknowledged": True,
+        "controller_acknowledged": True,
+        "controller_terminal_state_verified": False,
+        "physical_effect_verified": True,
+        "machine_assessment": "pass",
+        "inputs": {"steps": 10},
+        "response": {"http_status": 200, "body": {"ok": True}},
+        "authority_receipt_id": None,
+        "authority_receipt_status": None,
+    }
+    runtime.connection.client.responses["operator_action_history"] = {
+        "schema_version": "bioxp.operator_action_history.v1",
+        "receipts": [dispatched],
+        "authority_fingerprint": "a" * 64,
+    }
+    response = client.get("/api/bioxp/operator-controls/history?limit=100")
+    assert response.status_code == 502
+
+
 def test_history_passes_limit_to_robot(monkeypatch):
     client, runtime = make_client(monkeypatch)
     runtime.connection.client.responses["operator_action_history"] = {
