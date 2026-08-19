@@ -107,7 +107,11 @@ export function BioXpCockpit() {
     const historyQuery = useBioXpOperatorActionHistory(generation, linkConnected);
     const connect = useConnectBioXp();
     const disconnect = useDisconnectBioXp();
-    const operatorCatalog = useBioXpOperatorControlCatalog(generation, linkConnected);
+    const operatorCatalog = useBioXpOperatorControlCatalog(
+        generation,
+        linkConnected,
+        dashboardQuery.data?.x_axis?.provider?.lifecycle?.state ?? dashboardQuery.data?.x_axis?.provider?.state ?? null,
+    );
     const invokeOperatorAction = useInvokeBioXpOperatorAction();
     const emergencyAction = useInvokeBioXpOperatorAction();
 

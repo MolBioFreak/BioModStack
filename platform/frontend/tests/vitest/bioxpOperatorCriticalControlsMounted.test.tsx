@@ -4,23 +4,29 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
     admissionArgs: [] as unknown[],
+    admissionData: null as null | Record<string, unknown>,
     invokeCalls: [] as Array<Record<string, unknown>>,
+    invokeMock: null as null | Record<string, unknown>,
     catalog: {
         data: {
             machine_serial: '206',
             ownership_generation: 2,
             source_authority_verified: true,
-            dashboard: {
-                x_axis: {
-                    provider: {
-                        lifecycle: {
-                            state: 'referenced_ready',
-                            awaiting_observation_receipt_id: null,
-                        },
+            actions: [] as Array<Record<string, unknown>>,
+        },
+        error: null,
+    },
+    dashboard: {
+        data: {
+            x_axis: {
+                provider: {
+                    state: 'referenced_ready',
+                    lifecycle: {
+                        state: 'referenced_ready',
+                        awaiting_observation_receipt_id: null,
                     },
                 },
             },
-            actions: [] as Array<Record<string, unknown>>,
         },
         error: null,
     },
@@ -58,6 +64,7 @@ const action = (
 
 vi.mock('../../src/lib/bioxpClient', () => ({
     useBioXpOperatorControlCatalog: () => state.catalog,
+    useBioXpOperatorDashboard: () => state.dashboard,
     useBioXpOperatorActionHistory: () => ({ data: { receipts: [] }, error: null }),
     useBioXpOperatorActionAdmission: (...args: unknown[]) => {
         state.admissionArgs = args;

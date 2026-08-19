@@ -731,8 +731,12 @@ export const useBioXpStatus = (enabled = true) => useQuery({
 });
 
 
-export const useBioXpOperatorControlCatalog = (connectionGeneration: number, enabled = true) => useQuery({
-    queryKey: [...operatorCatalogKey, connectionGeneration, enabled],
+export const useBioXpOperatorControlCatalog = (
+    connectionGeneration: number,
+    enabled = true,
+    lifecycleState?: string | null,
+) => useQuery({
+    queryKey: [...operatorCatalogKey, connectionGeneration, enabled, lifecycleState ?? null],
     queryFn: async () => (
         await api.get<BioXpOperatorControlCatalog>('/api/bioxp/operator-controls/catalog')
     ).data,
@@ -787,8 +791,9 @@ export const useBioXpOperatorActionAdmission = (
     ownershipGeneration: number,
     inputs: Record<string, unknown> | null,
     enabled = true,
+    lifecycleState?: string | null,
 ) => useQuery({
-    queryKey: ['bioxp', 'operator-controls', 'admission', actionId, connectionGeneration, ownershipGeneration, inputs],
+    queryKey: ['bioxp', 'operator-controls', 'admission', actionId, connectionGeneration, ownershipGeneration, inputs, lifecycleState ?? null],
     queryFn: async () => (
         await api.post<BioXpOperatorAdmission>(
             `/api/bioxp/operator-controls/actions/${encodeURIComponent(actionId ?? '')}/admission`,
@@ -991,9 +996,6 @@ export const useInvokeBioXpOperatorAction = () => {
                 }),
             );
             void Promise.all([
-                queryClient.invalidateQueries({ queryKey: statusKey }),
-                queryClient.invalidateQueries({ queryKey: operatorAdmissionKey }),
-                queryClient.invalidateQueries({ queryKey: operatorCatalogKey }),
                 queryClient.invalidateQueries({ queryKey: operatorDashboardKey }),
                 queryClient.invalidateQueries({ queryKey: operatorHistoryKey }),
             ]);
@@ -1036,9 +1038,6 @@ export const useAssessBioXpOperatorAction = () => {
                 }),
             );
             void Promise.all([
-                queryClient.invalidateQueries({ queryKey: statusKey }),
-                queryClient.invalidateQueries({ queryKey: operatorAdmissionKey }),
-                queryClient.invalidateQueries({ queryKey: operatorCatalogKey }),
                 queryClient.invalidateQueries({ queryKey: operatorDashboardKey }),
                 queryClient.invalidateQueries({ queryKey: operatorHistoryKey }),
             ]);

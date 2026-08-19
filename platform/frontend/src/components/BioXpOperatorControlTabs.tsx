@@ -9,6 +9,7 @@ import {
     useAssessBioXpOperatorAction,
     useBioXpOperatorActionAdmission,
     useBioXpOperatorControlCatalog,
+    useBioXpOperatorDashboard,
     useInvokeBioXpOperatorAction,
 } from '../lib/bioxpClient';
 
@@ -117,7 +118,12 @@ function ReceiptCard({ receipt }: { receipt: BioXpOperatorActionReceipt }) {
 }
 
 export function BioXpOperatorControlTabs({ generation, connected }: { generation: number; connected: boolean }) {
-    const catalogQuery = useBioXpOperatorControlCatalog(generation, connected);
+    const dashboardQuery = useBioXpOperatorDashboard(generation, connected);
+    const catalogQuery = useBioXpOperatorControlCatalog(
+        generation,
+        connected,
+        dashboardQuery.data?.x_axis?.provider?.lifecycle?.state ?? dashboardQuery.data?.x_axis?.provider?.state ?? null,
+    );
     const historyQuery = useBioXpOperatorActionHistory(generation, connected);
     const invoke = useInvokeBioXpOperatorAction();
     const assess = useAssessBioXpOperatorAction();
@@ -181,6 +187,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
         authoritativeCatalog?.ownership_generation ?? 0,
         normalizedForAdmission,
         connected,
+        dashboardQuery.data?.x_axis?.provider?.lifecycle?.state ?? dashboardQuery.data?.x_axis?.provider?.state ?? null,
     );
     const actionEnabled = admission.error ? false : (admission.data?.enabled ?? (selected ? selected.enabled : false));
     const disabledReason = admission.data?.disabled_reason ?? (selected ? selected.disabled_reason : null) ?? 'Robot did not admit this action.';
@@ -189,7 +196,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
         ? invoke.data ?? authoritativeHistory.receipts[0]
         : undefined;
     const latestReceiptCommandId = latestReceipt?.command_id ?? null;
-    const xLifecycle = authoritativeCatalog?.dashboard.x_axis.provider.lifecycle;
+    const xLifecycle = dashboardQuery.data?.x_axis?.provider?.lifecycle ?? null;
     const awaitingXObservationReceiptId = xLifecycle?.state === 'awaiting_operator_observation'
         ? xLifecycle.awaiting_observation_receipt_id ?? null
         : null;
