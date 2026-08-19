@@ -743,6 +743,8 @@ export const useBioXpOperatorControlCatalog = (
     enabled: enabled && connectionGeneration > 0,
     gcTime: 0,
     retry: false,
+    refetchInterval: enabled && connectionGeneration > 0 ? 15_000 : false,
+    refetchIntervalInBackground: false,
 });
 
 export const useBioXpOperatorDashboard = (connectionGeneration: number, enabled = true) => useQuery({
@@ -1008,6 +1010,7 @@ export const useInvokeBioXpOperatorAction = () => {
                 }),
             );
             void Promise.all([
+                queryClient.invalidateQueries({ queryKey: operatorCatalogKey }),
                 queryClient.invalidateQueries({ queryKey: operatorDashboardKey }),
                 queryClient.invalidateQueries({ queryKey: operatorHistoryKey }),
             ]);
