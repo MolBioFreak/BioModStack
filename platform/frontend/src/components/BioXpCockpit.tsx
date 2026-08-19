@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import {
     bioXpErrorText,
+    bioXpReceiptIsNonTerminal,
     useBioXpStatus,
     useConnectBioXp,
     useDisconnectBioXp,
@@ -251,12 +252,14 @@ export function BioXpCockpit() {
     const xBoardGeneration = xProvider?.current_board_lifecycle_generation ?? 'unknown';
     const xBoardGenerationFresh = xProvider?.board_generation_fresh;
     const xLastFailure = xAxisDashboard?.last_failure ?? xProvider?.lifecycle?.last_failure;
-    const xLatestReceipt = xAxisDashboard?.latest_receipt ?? xProvider?.lifecycle?.latest_receipt;
-    const xReceiptActive = xLatestReceipt != null
-        && xLatestReceipt.status !== 'completed'
-        && xLatestReceipt.status !== 'failed'
-        && xLatestReceipt.status !== 'rejected'
-        && xLatestReceipt.status !== 'blocked';
+    const xHistoryReceipt = historyQuery.data?.receipts?.[0]?.action_id?.startsWith('oem.x.')
+        ? historyQuery.data.receipts[0]
+        : null;
+    const xReceipt = xHistoryReceipt
+        ?? xAxisDashboard?.latest_receipt
+        ?? xProvider?.lifecycle?.latest_receipt
+        ?? null;
+    const xReceiptActive = bioXpReceiptIsNonTerminal(xReceipt);
     const xOwnershipDrift = linkConnected && generation !== ownershipGeneration;
     const xMotionGateReason = (): string | null => {
         if (!linkConnected) return 'BioXP link is not connected.';
@@ -264,7 +267,7 @@ export function BioXpCockpit() {
         if (dashboardMotion && dashboardMotion.enabled === false) {
             return dashboardMotion.reason ?? 'Robot motion is blocked.';
         }
-        if (xReceiptActive) return `X command ${xLatestReceipt.intent ?? 'in progress'} is ${xLatestReceipt.status}.`;
+        if (xReceiptActive) return `X command ${typeof xReceipt?.intent === 'string' ? xReceipt.intent : 'in progress'} is ${String(xReceipt?.status)}.`;
         return null;
     };
     const xLifecycleBlocksMoves = (xLifecycle !== 'prepared_unreferenced' && xLifecycle !== 'referenced_ready')
@@ -661,7 +664,7 @@ export function BioXpCockpit() {
                                                 <button type="button" className="rounded bg-red-950 px-3 py-2 text-sm font-semibold text-red-100 ring-1 ring-red-600 hover:bg-red-900 disabled:opacity-35" disabled={!linkConnected || operatorActionById('oem.abort_all')?.enabled !== true || emergencyAction.isPending} title={actionUnavailableReason('oem.abort_all', 'Aggregate OEM abort unavailable.')} onClick={abortXAggregate}>Aggregate Abort (all OEM boards)</button>
                                             </div>
                                             {xLastFailure != null && <details className="mt-2"><summary className="cursor-pointer text-red-200">Last X failure</summary><pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-red-200">{JSON.stringify(xLastFailure, null, 2)}</pre></details>}
-                                            {xLatestReceipt != null && <details className="mt-2"><summary className="cursor-pointer">Latest X authority receipt</summary><pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-sky-200/80">{JSON.stringify(xLatestReceipt, null, 2)}</pre></details>}
+                                            {xReceipt != null && <details className="mt-2"><summary className="cursor-pointer">Latest X authority receipt</summary><pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-sky-200/80">{JSON.stringify(xReceipt, null, 2)}</pre></details>}
                                         </div>
                                         )}
                                         {axis === 'z' && (

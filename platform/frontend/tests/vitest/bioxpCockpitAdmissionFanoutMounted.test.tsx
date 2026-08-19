@@ -89,6 +89,12 @@ const state = vi.hoisted(() => ({
         },
         error: null,
     },
+    history: {
+        data: {
+            receipts: [] as Array<Record<string, unknown>>,
+        },
+        error: null,
+    },
 }));
 
 const dep = (key: string, met: boolean, reason: string | null = null) => ({ key, met, reason });
@@ -197,7 +203,13 @@ vi.mock('../../src/lib/bioxpClient', () => ({
         error: null,
     }),
     useBioXpOperatorDashboard: () => state.dashboard,
-    useBioXpOperatorActionHistory: () => ({ data: { receipts: [] }, error: null }),
+    useBioXpOperatorActionHistory: () => state.history,
+    bioXpReceiptIsNonTerminal: (receipt: { status?: unknown } | null | undefined): boolean =>
+        typeof receipt?.status === 'string'
+        && receipt.status !== 'completed'
+        && receipt.status !== 'failed'
+        && receipt.status !== 'rejected'
+        && receipt.status !== 'blocked',
     useBioXpOperatorControlCatalog: () => state.catalog,
     useBioXpOperatorActionAdmission: (...args: unknown[]) => {
         state.admissionCalls += 1;
@@ -239,9 +251,45 @@ const setXAbsolute = async (value: string) => {
     });
 };
 
+const xReceipt = (status: string) => ({
+    schema_version: 'bioxp.operator_action_receipt.v1',
+    command_id: 'cmd_x',
+    action_id: 'oem.x.move_steps',
+    kind: 'primitive',
+    safety_class: 'motion',
+    status,
+    idempotency_key: 'ik_x',
+    idempotency_replay_enabled: false,
+    ownership_generation: 1,
+    started_at: '2026-08-18T00:00:00.000Z',
+    finished_at: status === 'completed' ? '2026-08-18T00:00:01.000Z' : null,
+    duration_ms: status === 'completed' ? 1000 : null,
+    request_received_at: null,
+    lock_acquired_at: null,
+    admission_completed_at: null,
+    provider_entry_at: null,
+    provider_returned_at: null,
+    receipt_persist_started_at: null,
+    remote_acknowledged: false,
+    controller_acknowledged: false,
+    controller_terminal_state_verified: false,
+    physical_effect_verified: false,
+    automatic_retry: null,
+    physical_outcome: null,
+    persistence_fallback: null,
+    machine_assessment: 'unverified',
+    operator_assessment: null,
+    operator_note: null,
+    operator_assessment_idempotency_key: null,
+    response: null,
+    stage_receipts: [],
+});
+
 beforeEach(() => {
     state.admissionCalls = 0;
     state.invokeCalls = [];
+    state.history.data.receipts = [];
+    state.dashboard.data.x_axis.latest_receipt = null;
     state.catalog.data.actions = [
         xMoveAction(),
         xAbsoluteAction(),
@@ -409,6 +457,48 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         const goAbsolute = [...article.querySelectorAll('button')].find((button) => button.textContent === 'Go absolute') as HTMLButtonElement;
         expect(goAbsolute.disabled).toBe(true);
         expect(goAbsolute.title).toContain('Requested X target must be an integer from 60 through 90263.');
+        expect(state.admissionCalls).toBe(0);
+    });
+
+    it('keeps X controls disabled while the receipt endpoint reports a non-terminal X move (R-A3)', async () => {
+        state.history.data.receipts = [xReceipt('acknowledged')];
+
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+
+        const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
+        const buttons = [...article.querySelectorAll('button')] as HTMLButtonElement[];
+        const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const home = buttons.find((button) => button.textContent === 'Home') as HTMLButtonElement;
+
+        expect(movePositive.disabled).toBe(true);
+        expect(movePositive.title).toContain('acknowledged');
+        expect(home.disabled).toBe(true);
+        expect(state.admissionCalls).toBe(0);
+    });
+
+    it('re-enables X controls from the terminal receipt even when the dashboard snapshot lags (R-A3)', async () => {
+        state.history.data.receipts = [xReceipt('completed')];
+        state.dashboard.data.x_axis.latest_receipt = {
+            command_id: 'cmd_x',
+            intent: 'x_move_steps',
+            status: 'acknowledged',
+        };
+
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+
+        const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
+        const buttons = [...article.querySelectorAll('button')] as HTMLButtonElement[];
+        const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const home = buttons.find((button) => button.textContent === 'Home') as HTMLButtonElement;
+
+        expect(movePositive.disabled).toBe(false);
+        expect(home.disabled).toBe(false);
         expect(state.admissionCalls).toBe(0);
     });
 });

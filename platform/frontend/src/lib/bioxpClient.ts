@@ -807,6 +807,13 @@ export const useBioXpOperatorActionAdmission = (
     retry: false,
 });
 
+export const bioXpReceiptIsNonTerminal = (receipt: { status?: unknown } | null | undefined): boolean =>
+    typeof receipt?.status === 'string'
+    && receipt.status !== 'completed'
+    && receipt.status !== 'failed'
+    && receipt.status !== 'rejected'
+    && receipt.status !== 'blocked';
+
 export const useBioXpOperatorActionHistory = (connectionGeneration: number, enabled = true) => useQuery({
     queryKey: [...operatorHistoryKey, connectionGeneration, enabled],
     queryFn: async () => (
@@ -815,6 +822,7 @@ export const useBioXpOperatorActionHistory = (connectionGeneration: number, enab
     enabled: enabled && connectionGeneration > 0,
     gcTime: 0,
     retry: false,
+    refetchInterval: (query) => bioXpReceiptIsNonTerminal(query.state.data?.receipts?.[0] ?? null) ? 400 : false,
 });
 
 export const useBioXpCameraStatus = (
