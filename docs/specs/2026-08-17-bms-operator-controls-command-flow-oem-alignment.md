@@ -83,6 +83,8 @@ Live robot release at spec date: immutable dir `bioxp_release_831d99d`, HEAD `83
 
 **R-A2. Post-action invalidation narrowing.** After an invoked action, the client invalidates only the dashboard and history query groups. Catalog and admission state remain cached and refresh only under the R-A1 lifecycle-change trigger. Target: at most two robot round trips per action completion (dashboard + receipt).
 
+**R-A3. Active-move receipt polling.** While a receipt is non-terminal, the cockpit polls the receipt endpoint at 250-500 ms and re-enables the affected controls from the receipt terminal state, not from the dashboard poll. Target: controls re-enabled within 1 s after the robot marks the receipt terminal.
+
 **R-A4. History endpoint resilience (live 502).** BMS history validation must accept stored failed/rejected serial-206 X receipts whose controller evidence is not authority-bound: `controller_acknowledged`/`controller_terminal_state_verified` with `authority_receipt_id: null` is valid when `status` is `failed` or `rejected` and the failure detail shape is preserved. The strict gate stays for successful/queued/dispatched rows and for all other receipts. The three live 502 rows from Section 3.6 become permanent regression fixtures. No robot change; the robot already serves these rows with 200.
 
 **R-A5. History depth control.** The BMS history route accepts `limit` (default 100, clamped to 200) and passes it to the robot's existing `limit` parameter. The cockpit replaces the hard `slice(0, 8)` with a selector offering 8 / 25 / 50 / 100 entries, defaulting to 25. The selector is a plain UI toggle; history data already exists in the robot DB (189 receipts at spec date).
