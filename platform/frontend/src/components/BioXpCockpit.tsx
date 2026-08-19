@@ -261,10 +261,8 @@ export function BioXpCockpit() {
         ?? xProvider?.lifecycle?.latest_receipt
         ?? null;
     const xReceiptActive = bioXpReceiptIsNonTerminal(xReceipt);
-    const xOwnershipDrift = linkConnected && generation !== ownershipGeneration;
     const xMotionGateReason = (): string | null => {
         if (!linkConnected) return 'BioXP link is not connected.';
-        if (xOwnershipDrift) return 'Robot ownership generation changed; reconnect the BioXP link.';
         if (dashboardMotion && dashboardMotion.enabled === false) {
             return dashboardMotion.reason ?? 'Robot motion is blocked.';
         }

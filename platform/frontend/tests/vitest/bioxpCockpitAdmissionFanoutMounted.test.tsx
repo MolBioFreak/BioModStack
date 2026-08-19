@@ -89,6 +89,7 @@ const state = vi.hoisted(() => ({
         },
         error: null,
     },
+    connectionGeneration: 1,
     history: {
         data: {
             receipts: [] as Array<Record<string, unknown>>,
@@ -196,7 +197,7 @@ vi.mock('../../src/lib/bioxpClient', () => ({
                 active: true,
                 reachable: true,
                 configured: true,
-                generation: 1,
+                generation: state.connectionGeneration,
                 freshness_budget_seconds: 1800,
                 last_error: null,
             },
@@ -533,6 +534,24 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         const receiptArticles = [...historySection.querySelectorAll('article')]
             .filter((node) => node.textContent?.includes('oem.x.move_steps'));
         expect(receiptArticles.length).toBe(30);
+        expect(state.admissionCalls).toBe(0);
+    });
+
+    it('keeps X controls usable when the connection token differs from the robot ownership generation (regression)', async () => {
+        state.connectionGeneration = 3189298922692611;
+        state.history.data.receipts = [];
+
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+
+        const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
+        const buttons = [...article.querySelectorAll('button')] as HTMLButtonElement[];
+        const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const home = buttons.find((button) => button.textContent === 'Home') as HTMLButtonElement;
+        expect(movePositive.disabled).toBe(false);
+        expect(home.disabled).toBe(false);
         expect(state.admissionCalls).toBe(0);
     });
 });
