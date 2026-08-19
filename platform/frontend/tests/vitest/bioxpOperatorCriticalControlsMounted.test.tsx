@@ -10,6 +10,16 @@ const state = vi.hoisted(() => ({
             machine_serial: '206',
             ownership_generation: 2,
             source_authority_verified: true,
+            dashboard: {
+                x_axis: {
+                    provider: {
+                        lifecycle: {
+                            state: 'referenced_ready',
+                            awaiting_observation_receipt_id: null,
+                        },
+                    },
+                },
+            },
             actions: [] as Array<Record<string, unknown>>,
         },
         error: null,
@@ -51,15 +61,19 @@ vi.mock('../../src/lib/bioxpClient', () => ({
     useBioXpOperatorActionHistory: () => ({ data: { receipts: [] }, error: null }),
     useBioXpOperatorActionAdmission: (...args: unknown[]) => {
         state.admissionArgs = args;
-        return { data: { enabled: true, disabled_reason: null, dependencies: [] }, error: null };
+        state.admissionData ??= { data: { enabled: true, disabled_reason: null, dependencies: [] }, error: null };
+        return state.admissionData;
     },
-    useInvokeBioXpOperatorAction: () => ({
-        data: undefined,
-        error: null,
-        isPending: false,
-        mutate: (payload: Record<string, unknown>) => state.invokeCalls.push(payload),
-        reset: vi.fn(),
-    }),
+    useInvokeBioXpOperatorAction: () => {
+        state.invokeMock ??= {
+            data: undefined,
+            error: null,
+            isPending: false,
+            mutate: (payload: Record<string, unknown>) => state.invokeCalls.push(payload),
+            reset: vi.fn(),
+        };
+        return state.invokeMock;
+    },
     useAssessBioXpOperatorAction: () => ({ data: undefined, error: null, isPending: false, mutate: vi.fn() }),
     bioXpErrorText: (error: unknown) => String(error),
 }));

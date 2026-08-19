@@ -8,7 +8,6 @@ import {
     useUpdateBioXpFreshness,
 
     useBioXpOperatorActionHistory,
-    useBioXpOperatorActionAdmission,
     useBioXpOperatorControlCatalog,
     useBioXpOperatorDashboard,
     useInvokeBioXpOperatorAction,
@@ -200,32 +199,12 @@ export function BioXpCockpit() {
     const xPositiveInputs = useMemo(() => ({ steps: Math.abs(manualSteps.x) }), [manualSteps.x]);
     const xAbsoluteInputs = useMemo(() => ({ position_steps: absoluteTargets.x }), [absoluteTargets.x]);
     const xHomeInputs = useMemo(() => ({}), []);
-    const xNegativeAdmission = useBioXpOperatorActionAdmission('oem.x.move_steps', generation, ownershipGeneration, xNegativeInputs, linkConnected);
-    const xPositiveAdmission = useBioXpOperatorActionAdmission('oem.x.move_steps', generation, ownershipGeneration, xPositiveInputs, linkConnected);
-    const xAbsoluteAdmission = useBioXpOperatorActionAdmission('oem.x.move_absolute', generation, ownershipGeneration, xAbsoluteInputs, linkConnected);
-    const xHomeAdmission = useBioXpOperatorActionAdmission('oem.x.manual_panel_home', generation, ownershipGeneration, xHomeInputs, linkConnected);
     const xRelativeMagnitudeInRange = Number.isInteger(manualSteps.x)
         && Math.abs(manualSteps.x) >= 1
         && Math.abs(manualSteps.x) <= xRelativeMaximum;
-    const xAdmissionReason = (admission: typeof xNegativeAdmission, fallback: string) => admission.isError
-        ? fallback
-        : admission.isFetching
-            ? 'Checking exact robot admission.'
-            : admission.data?.enabled === true
-                ? null
-                : admission.data?.disabled_reason ?? fallback;
-    const xNegativeDisabledReason = !xRelativeMagnitudeInRange
-        ? `Requested X relative magnitude must be an integer from 1 through ${xRelativeMaximum}.`
-        : xAdmissionReason(xNegativeAdmission, 'Robot rejected this signed negative X move.');
-    const xPositiveDisabledReason = !xRelativeMagnitudeInRange
-        ? `Requested X relative magnitude must be an integer from 1 through ${xRelativeMaximum}.`
-        : xAdmissionReason(xPositiveAdmission, 'Robot rejected this signed positive X move.');
-    const xAbsoluteDisabledReason = xAdmissionReason(xAbsoluteAdmission, `Robot rejected X target ${absoluteTargets.x}.`);
-    const xHomeDisabledReason = xAdmissionReason(xHomeAdmission, 'Robot rejected X Home.');
-    const xNegativeEnabled = xNegativeDisabledReason === null;
-    const xPositiveEnabled = xPositiveDisabledReason === null;
-    const xAbsoluteEnabled = xAbsoluteDisabledReason === null;
-    const xHomeEnabled = xHomeDisabledReason === null;
+    const xAbsoluteTargetInRange = Number.isInteger(absoluteTargets.x)
+        && absoluteTargets.x >= xAbsoluteMinimum
+        && absoluteTargets.x <= xAbsoluteMaximum;
     const zAbsoluteAction = operatorActionById('oem.z.move_absolute');
     const zAbsoluteInput = zAbsoluteAction?.inputs.find((input) => input.name === 'position_steps');
     const zAbsoluteMinimum = typeof zAbsoluteInput?.minimum === 'number' ? zAbsoluteInput.minimum : 0;
@@ -269,6 +248,50 @@ export function BioXpCockpit() {
     const xBoardGenerationFresh = xProvider?.board_generation_fresh;
     const xLastFailure = xAxisDashboard?.last_failure ?? xProvider?.lifecycle?.last_failure;
     const xLatestReceipt = xAxisDashboard?.latest_receipt ?? xProvider?.lifecycle?.latest_receipt;
+    const xReceiptActive = xLatestReceipt != null
+        && xLatestReceipt.status !== 'completed'
+        && xLatestReceipt.status !== 'failed'
+        && xLatestReceipt.status !== 'rejected'
+        && xLatestReceipt.status !== 'blocked';
+    const xOwnershipDrift = linkConnected && generation !== ownershipGeneration;
+    const xMotionGateReason = (): string | null => {
+        if (!linkConnected) return 'BioXP link is not connected.';
+        if (xOwnershipDrift) return 'Robot ownership generation changed; reconnect the BioXP link.';
+        if (dashboardMotion && dashboardMotion.enabled === false) {
+            return dashboardMotion.reason ?? 'Robot motion is blocked.';
+        }
+        if (xReceiptActive) return `X command ${xLatestReceipt.intent ?? 'in progress'} is ${xLatestReceipt.status}.`;
+        return null;
+    };
+    const xLifecycleBlocksMoves = (xLifecycle !== 'prepared_unreferenced' && xLifecycle !== 'referenced_ready')
+        ? `Current X lifecycle state '${xLifecycle}'; expected 'prepared_unreferenced' or 'referenced_ready'.`
+        : null;
+    const xActionStaticBlocker = (actionId: string): string | null => {
+        const action = operatorActionById(actionId);
+        if (!action) return 'Robot action unavailable.';
+        if (action.provider_available !== true) return action.provider_unavailable_reason ?? 'Robot action unavailable.';
+        const blocker = (action.dependencies ?? []).find((dependency) =>
+            dependency.key !== 'x_relative_oem_envelope'
+            && dependency.key !== 'x_target_oem_envelope'
+            && dependency.met !== true,
+        );
+        if (blocker) return blocker.reason ?? action.disabled_reason ?? 'Robot action unavailable.';
+        return null;
+    };
+    const xNegativeDisabledReason = !xRelativeMagnitudeInRange
+        ? `Requested X relative magnitude must be an integer from 1 through ${xRelativeMaximum}.`
+        : xMotionGateReason() ?? xLifecycleBlocksMoves ?? xActionStaticBlocker('oem.x.move_steps');
+    const xPositiveDisabledReason = !xRelativeMagnitudeInRange
+        ? `Requested X relative magnitude must be an integer from 1 through ${xRelativeMaximum}.`
+        : xMotionGateReason() ?? xLifecycleBlocksMoves ?? xActionStaticBlocker('oem.x.move_steps');
+    const xAbsoluteDisabledReason = !xAbsoluteTargetInRange
+        ? `Requested X target must be an integer from ${xAbsoluteMinimum} through ${xAbsoluteMaximum}.`
+        : xMotionGateReason() ?? xLifecycleBlocksMoves ?? xActionStaticBlocker('oem.x.move_absolute');
+    const xHomeDisabledReason = xMotionGateReason() ?? xActionStaticBlocker('oem.x.manual_panel_home');
+    const xNegativeEnabled = xNegativeDisabledReason === null;
+    const xPositiveEnabled = xPositiveDisabledReason === null;
+    const xAbsoluteEnabled = xAbsoluteDisabledReason === null;
+    const xHomeEnabled = xHomeDisabledReason === null;
 
     const invokeAction = (
         actionId: string,
@@ -687,11 +710,11 @@ export function BioXpCockpit() {
                                     const admissionEnabled = isXNegative ? xNegativeEnabled : isXPositive ? xPositiveEnabled : isXHome ? xHomeEnabled : action?.enabled === true;
                                     const enabled = admissionEnabled;
                                     const unavailableReason = isXNegative
-                                        ? xNegativeDisabledReason ?? 'Robot-owned exact negative X admission.'
+                                        ? xNegativeDisabledReason ?? 'Robot verifies this exact X move at dispatch.'
                                         : isXPositive
-                                            ? xPositiveDisabledReason ?? 'Robot-owned exact positive X admission.'
+                                            ? xPositiveDisabledReason ?? 'Robot verifies this exact X move at dispatch.'
                                             : isXHome
-                                                ? xHomeDisabledReason ?? 'Robot-owned exact X Home admission.'
+                                                ? xHomeDisabledReason ?? 'Robot verifies this exact X Home at dispatch.'
                                                 : action?.disabled_reason ?? action?.unavailable_reason ?? 'Robot action unavailable.';
                                     return (
                                         <button

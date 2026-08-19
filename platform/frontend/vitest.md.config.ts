@@ -11,7 +11,7 @@ export default defineConfig({
             './tests/vitest/mdQueuePanel.test.tsx',
             './tests/vitest/boltzApiNativeControls.test.tsx',
             './tests/vitest/stateLandscapeWorkspacePanel.test.tsx',
-            './tests/vitest/bioxpCockpitMounted.test.tsx',
+            './tests/vitest/bioxpCockpitAdmissionFanoutMounted.test.tsx',
             './tests/vitest/bioxpCameraMounted.test.tsx',
             './tests/vitest/bioxpOperatorGenerationPayload.test.ts',
             './tests/vitest/bioxpOperatorCriticalControlsMounted.test.tsx',
