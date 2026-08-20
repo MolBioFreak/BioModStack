@@ -261,12 +261,15 @@ export function BioXpCockpit() {
         ?? xProvider?.lifecycle?.latest_receipt
         ?? null;
     const xReceiptActive = bioXpReceiptIsNonTerminal(xReceipt);
-    const xMotionGateReason = (): string | null => {
+    const xQueue = dashboard?.successive_move_queue?.x ?? null;
+    const xQueueFull = (xQueue?.depth ?? 0) >= 8;
+    const xMotionGateReason = (allowSuccessive = false): string | null => {
         if (!linkConnected) return 'BioXP link is not connected.';
         if (dashboardMotion && dashboardMotion.enabled === false) {
             return dashboardMotion.reason ?? 'Robot motion is blocked.';
         }
-        if (xReceiptActive) return `X command ${typeof xReceipt?.intent === 'string' ? xReceipt.intent : 'in progress'} is ${String(xReceipt?.status)}.`;
+        if (xQueueFull) return 'X successive-move queue is full (8 queued moves). Wait for the active move or use Stop to clear the queue.';
+        if (xReceiptActive && !allowSuccessive) return `X command ${typeof xReceipt?.action_id === 'string' ? xReceipt.action_id : 'in progress'} is ${String(xReceipt?.status)}.`;
         return null;
     };
     const xLifecycleBlocksMoves = (xLifecycle !== 'prepared_unreferenced' && xLifecycle !== 'referenced_ready')
@@ -286,13 +289,13 @@ export function BioXpCockpit() {
     };
     const xNegativeDisabledReason = !xRelativeMagnitudeInRange
         ? `Requested X relative magnitude must be an integer from 1 through ${xRelativeMaximum}.`
-        : xMotionGateReason() ?? xLifecycleBlocksMoves ?? xActionStaticBlocker('oem.x.move_steps');
+        : xMotionGateReason(true) ?? xLifecycleBlocksMoves ?? xActionStaticBlocker('oem.x.move_steps');
     const xPositiveDisabledReason = !xRelativeMagnitudeInRange
         ? `Requested X relative magnitude must be an integer from 1 through ${xRelativeMaximum}.`
-        : xMotionGateReason() ?? xLifecycleBlocksMoves ?? xActionStaticBlocker('oem.x.move_steps');
+        : xMotionGateReason(true) ?? xLifecycleBlocksMoves ?? xActionStaticBlocker('oem.x.move_steps');
     const xAbsoluteDisabledReason = !xAbsoluteTargetInRange
         ? `Requested X target must be an integer from ${xAbsoluteMinimum} through ${xAbsoluteMaximum}.`
-        : xMotionGateReason() ?? xLifecycleBlocksMoves ?? xActionStaticBlocker('oem.x.move_absolute');
+        : xMotionGateReason(true) ?? xLifecycleBlocksMoves ?? xActionStaticBlocker('oem.x.move_absolute');
     const xHomeDisabledReason = xMotionGateReason() ?? xActionStaticBlocker('oem.x.manual_panel_home');
     const xNegativeEnabled = xNegativeDisabledReason === null;
     const xPositiveEnabled = xPositiveDisabledReason === null;
@@ -684,6 +687,20 @@ export function BioXpCockpit() {
                                             {dashboard?.z_axis.last_failure != null && <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap text-red-200">{JSON.stringify(dashboard.z_axis.last_failure, null, 2)}</pre>}
                                         </div>
                                     )}
+                                </div>
+                            )}
+                            {Object.entries(dashboard?.successive_move_queue ?? {})
+                                .filter(([, queue]) => queue.state !== 'idle' || queue.depth > 0)
+                                .length > 0 && (
+                                <div className="mt-2 rounded border border-amber-800/60 bg-amber-950/20 p-2 text-xs text-amber-100" data-testid="successive-move-queue">
+                                    <p className="font-semibold">Robot successive-move queue</p>
+                                    {Object.entries(dashboard?.successive_move_queue ?? {})
+                                        .filter(([, queue]) => queue.state !== 'idle' || queue.depth > 0)
+                                        .map(([queueAxis, queue]) => (
+                                            <p key={queueAxis} className="mt-1">
+                                                <strong>{queueAxis.toUpperCase()}:</strong> {queue.state} · {queue.depth} queued{queue.head_action_id ? ` · head ${queue.head_action_id}` : ''}{queue.active_command_id ? ` · active ${queue.active_command_id}` : ''}
+                                            </p>
+                                        ))}
                                 </div>
                             )}
                             <div className="mt-3 flex flex-wrap gap-2">

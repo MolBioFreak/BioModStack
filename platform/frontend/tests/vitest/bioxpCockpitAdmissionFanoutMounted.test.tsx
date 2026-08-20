@@ -86,6 +86,7 @@ const state = vi.hoisted(() => ({
                     state: 'referenced_ready',
                 },
             },
+            successive_move_queue: {},
         },
         error: null,
     },
@@ -214,7 +215,8 @@ vi.mock('../../src/lib/bioxpClient', () => ({
         && receipt.status !== 'completed'
         && receipt.status !== 'failed'
         && receipt.status !== 'rejected'
-        && receipt.status !== 'blocked',
+        && receipt.status !== 'blocked'
+        && receipt.status !== 'cleared',
     useBioXpOperatorControlCatalog: () => state.catalog,
     useBioXpOperatorActionAdmission: (...args: unknown[]) => {
         state.admissionCalls += 1;
@@ -296,6 +298,7 @@ beforeEach(() => {
     state.historyCalls = [];
     state.history.data.receipts = [];
     state.dashboard.data.x_axis.latest_receipt = null;
+    state.dashboard.data.successive_move_queue = {};
     state.catalog.data.actions = [
         xMoveAction(),
         xAbsoluteAction(),
@@ -466,8 +469,11 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(state.admissionCalls).toBe(0);
     });
 
-    it('keeps X controls disabled while the receipt endpoint reports a non-terminal X move (R-A3)', async () => {
+    it('queues successive X moves while an X command is active and keeps Home fail-closed (R-B1/R-B2)', async () => {
         state.history.data.receipts = [xReceipt('acknowledged')];
+        state.dashboard.data.successive_move_queue = {
+            x: { active_command_id: 'cmd_prev', depth: 1, head_action_id: 'oem.x.move_steps', state: 'queued' },
+        };
 
         await act(async () => {
             root.render(<BioXpCockpit />);
@@ -479,9 +485,35 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
         const home = buttons.find((button) => button.textContent === 'Home') as HTMLButtonElement;
 
-        expect(movePositive.disabled).toBe(true);
-        expect(movePositive.title).toContain('acknowledged');
+        expect(movePositive.disabled).toBe(false);
+        expect(movePositive.title).not.toContain('in progress');
         expect(home.disabled).toBe(true);
+        expect(home.title).toContain('acknowledged');
+
+        const queueStrip = article.querySelector('[data-testid="successive-move-queue"]') as HTMLElement;
+        expect(queueStrip).not.toBeNull();
+        expect(queueStrip.textContent).toContain('X:');
+        expect(queueStrip.textContent).toContain('oem.x.move_steps');
+        expect(state.admissionCalls).toBe(0);
+    });
+
+    it('disables X moves when the successive-move queue is full (R-B1 depth bound)', async () => {
+        state.history.data.receipts = [xReceipt('acknowledged')];
+        state.dashboard.data.successive_move_queue = {
+            x: { active_command_id: 'cmd_prev', depth: 8, head_action_id: 'oem.x.move_steps', state: 'queued' },
+        };
+
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+
+        const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
+        const buttons = [...article.querySelectorAll('button')] as HTMLButtonElement[];
+        const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+
+        expect(movePositive.disabled).toBe(true);
+        expect(movePositive.title).toContain('queue is full');
         expect(state.admissionCalls).toBe(0);
     });
 

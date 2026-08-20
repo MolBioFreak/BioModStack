@@ -193,6 +193,13 @@ export interface BioXpOperatorDashboardXAxis {
     physical_position_verified: false;
 }
 
+export interface BioXpOperatorSuccessiveMoveQueueAxis {
+    active_command_id: string | null;
+    depth: number;
+    head_action_id: string | null;
+    state: 'running' | 'queued' | 'idle';
+}
+
 export interface BioXpOperatorDashboard {
     schema_version: 'bioxp.operator_dashboard.v1';
     ownership_generation: number;
@@ -222,6 +229,7 @@ export interface BioXpOperatorDashboard {
     temperatures: Array<{ sensor: string; label: string; unit: '°C'; temperature_c: number | null; available: boolean }>;
     pipettes: BioXpPipettes;
     snapshot: { snapshot_id: string | null; freshness: { state?: string; age_s?: number | null; fresh_for_s?: number | null }; collection_triggered: false };
+    successive_move_queue: Record<string, BioXpOperatorSuccessiveMoveQueueAxis>;
 }
 
 export interface BioXpPipetteHardwareEvidence {
@@ -649,7 +657,6 @@ const fullLifecycleContractKey = ['bioxp', 'oem-full-lifecycle', 'contract'] as 
 const operatorCatalogKey = ['bioxp', 'operator-controls', 'catalog'] as const;
 const operatorDashboardKey = ['bioxp', 'operator-controls', 'dashboard'] as const;
 const operatorHistoryKey = ['bioxp', 'operator-controls', 'history'] as const;
-const operatorAdmissionKey = ['bioxp', 'operator-controls', 'admission'] as const;
 
 function cameraImageFromResponse(response: {
     data: Blob;
@@ -814,7 +821,8 @@ export const bioXpReceiptIsNonTerminal = (receipt: { status?: unknown } | null |
     && receipt.status !== 'completed'
     && receipt.status !== 'failed'
     && receipt.status !== 'rejected'
-    && receipt.status !== 'blocked';
+    && receipt.status !== 'blocked'
+    && receipt.status !== 'cleared';
 
 export const useBioXpOperatorActionHistory = (
     connectionGeneration: number,

@@ -16,6 +16,7 @@ export default defineConfig({
             './tests/vitest/bioxpOperatorGenerationPayload.test.ts',
             './tests/vitest/bioxpOperatorCriticalControlsMounted.test.tsx',
             './tests/vitest/bioxpOperatorPipetteMounted.test.tsx',
+            './tests/vitest/bioxpReceiptTerminality.test.ts',
             './tests/vitest/ontInstrumentPanel.test.tsx',
             './tests/vitest/pooledAssignmentReviewPanel.test.tsx',
             './tests/vitest/conformationalMappingViewerBehavior.test.tsx',
