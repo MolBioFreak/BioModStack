@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "97f668cb11179231aa37789b969819c578f53e411adc49296e388c0588bb2afc",
+  "content_sha256": "9fdc34627fb72a387b8542b07151f36f6f4ecc2211e70864113ae607fc3442fa",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "77673329001f48e610f13ed115fed62f56d7d10b93cc5ee30cea033c34bb3659",
@@ -446,6 +446,11 @@
       "path": "platform/frontend/src/App.tsx",
       "sha256": "d9d9fc77f1af71863466d8f6df4e4316bdde1b29d707608d51b09ca0536e90bb",
       "size_bytes": 6206
+    },
+    {
+      "path": "platform/frontend/src/components/MolBioToolkit/MolBioToolkitV2.tsx",
+      "sha256": "bfeb7ff172f46600619830a41f2148cc60d99c14f31270aa18bf158909f13004",
+      "size_bytes": 138633
     },
     {
       "path": "platform/frontend/src/components/NGSToolkit.tsx",
