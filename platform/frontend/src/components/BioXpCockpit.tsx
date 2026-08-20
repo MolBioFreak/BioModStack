@@ -643,7 +643,7 @@ export function BioXpCockpit() {
                                             />
                                             <button
                                                 type="button"
-                                                disabled={!linkConnected || (axis === 'x' ? !xAbsoluteEnabled : axis === 'z' ? !zAbsoluteEnabled : operatorActionForPath('/motion/oem/manual/absolute')?.enabled !== true) || invokeOperatorAction.isPending}
+                                                disabled={!linkConnected || (axis === 'x' ? !xAbsoluteEnabled : axis === 'z' ? !zAbsoluteEnabled : operatorActionForPath('/motion/oem/manual/absolute')?.enabled !== true)}
                                                 title={axis === 'x' ? xAbsoluteDisabledReason ?? 'Robot-owned exact OEM X absolute move' : axis === 'z' ? zAbsoluteDisabledReason ?? 'Robot-owned exact OEM absolute move' : undefined}
                                                 onClick={() => runAbsolute(axis)}
                                                 className={actionClass}
