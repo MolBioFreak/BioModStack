@@ -743,7 +743,7 @@ export function BioXpCockpit() {
                                         <button
                                             key={operation}
                                             type="button"
-                                            disabled={!linkConnected || operatorCatalog.isLoading || invokeOperatorAction.isPending || !enabled}
+                                            disabled={!linkConnected || operatorCatalog.isLoading || !enabled}
                                             title={enabled ? 'Robot-owned exact OEM action' : unavailableReason}
                                             onClick={() => runControl(axis, operation)}
                                             className={actionClass}

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({
     admissionCalls: 0,
     invokeCalls: [] as Array<Record<string, unknown>>,
+    invokePending: false,
     catalog: {
         data: {
             machine_serial: '206',
@@ -162,6 +163,24 @@ const xAbsoluteAction = () => ({
     stages: [],
 });
 
+const zHomeAction = () => ({
+    ...xMoveAction(),
+    action_id: 'oem.z.manual_home',
+    label: 'Z OEM Home',
+    subsystem: 'motion.z',
+    informational_path: '/motion/oem/manual/home',
+    enabled: true,
+    disabled_reason: null,
+    unavailable_reason: null,
+    dependencies: [
+        dep('provider_available', true),
+        dep('serial206_z_lifecycle', true),
+        dep('transport_live', true),
+        dep('operation_allows_motion', true),
+    ],
+    inputs: [],
+});
+
 const xHomeAction = () => ({
     action_id: 'oem.x.manual_panel_home',
     label: 'X Home',
@@ -225,7 +244,7 @@ vi.mock('../../src/lib/bioxpClient', () => ({
     useInvokeBioXpOperatorAction: () => ({
         data: undefined,
         error: null,
-        isPending: false,
+        isPending: state.invokePending,
         mutate: (payload: Record<string, unknown>) => state.invokeCalls.push(payload),
         reset: vi.fn(),
     }),
@@ -295,6 +314,7 @@ const xReceipt = (status: string, index = 0) => ({
 beforeEach(() => {
     state.admissionCalls = 0;
     state.invokeCalls = [];
+    state.invokePending = false;
     state.historyCalls = [];
     state.history.data.receipts = [];
     state.dashboard.data.x_axis.latest_receipt = null;
@@ -303,6 +323,7 @@ beforeEach(() => {
         xMoveAction(),
         xAbsoluteAction(),
         xHomeAction(),
+        zHomeAction(),
         {
             action_id: 'oem.x.stop',
             label: 'X Stop',
@@ -515,6 +536,49 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(movePositive.disabled).toBe(true);
         expect(movePositive.title).toContain('queue is full');
         expect(state.admissionCalls).toBe(0);
+    });
+
+    it('keeps moves and cross-axis Home submittable while a command is pending (successive entry)', async () => {
+        state.invokePending = true;
+
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+
+        const xArticle = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
+        const xButtons = [...xArticle.querySelectorAll('button')] as HTMLButtonElement[];
+        const xMovePositive = xButtons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const xHome = xButtons.find((button) => button.textContent === 'Home') as HTMLButtonElement;
+        const zArticle = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('Z Axis')) as HTMLElement;
+        const zButtons = [...zArticle.querySelectorAll('button')] as HTMLButtonElement[];
+        const zHome = zButtons.find((button) => button.textContent === 'OEM Z Home') as HTMLButtonElement;
+
+        expect(xMovePositive.disabled).toBe(false);
+        expect(xHome.disabled).toBe(false);
+        expect(zHome.disabled).toBe(false);
+        expect(state.invokeCalls).toHaveLength(0);
+    });
+
+    it('submits a successive move while the prior move is pending', async () => {
+        state.invokePending = true;
+
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+
+        const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
+        const buttons = [...article.querySelectorAll('button')] as HTMLButtonElement[];
+        const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+
+        await act(async () => {
+            movePositive.click();
+            await Promise.resolve();
+        });
+
+        expect(state.invokeCalls).toHaveLength(1);
+        expect(state.invokeCalls[0]).toMatchObject({ actionId: 'oem.x.move_steps' });
     });
 
     it('re-enables X controls from the terminal receipt even when the dashboard snapshot lags (R-A3)', async () => {
